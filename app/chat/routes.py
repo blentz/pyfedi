@@ -26,7 +26,7 @@ def chat_home(conversation_id=None):
             return redirect(url_for('chat.empty'))
         if current_user.banned or not current_user.verified or not current_user.can_send_pm:
             return redirect(url_for('chat.denied'))
-        conversation = Conversation.query.get_or_404(conversation_id)
+        conversation = db.session.get(Conversation, conversation_id) or abort(404)
         if not conversation.is_member(current_user):
             # unlike the GET path below, an admin may not write into a conversation
             # they are not part of
@@ -45,7 +45,7 @@ def chat_home(conversation_id=None):
             else:
                 return redirect(url_for('chat.empty'))
         else:
-            conversation = Conversation.query.get_or_404(conversation_id)
+            conversation = db.session.get(Conversation, conversation_id) or abort(404)
             conversation.read = True
             if not current_user.is_admin() and not conversation.is_member(current_user):
                 abort(400)
@@ -81,7 +81,7 @@ def chat_home(conversation_id=None):
 @login_required
 @trustworthy_account_required
 def new_message(to):
-    recipient = User.query.get_or_404(to)
+    recipient = db.session.get(User, to) or abort(404)
 
     if not current_user.can_send_pm_to(recipient):
         return redirect(url_for('chat.denied'))
@@ -134,10 +134,10 @@ def empty():
 @bp.route('/chat/ban_from_mod/<int:user_id>/<int:community_id>', methods=['GET'])
 @login_required
 def ban_from_mod(user_id, community_id):
-    community = Community.query.get_or_404(community_id)
+    community = db.session.get(Community, community_id) or abort(404)
     if not (community.is_moderator() or community.is_owner() or current_user.is_admin()):
         abort(401)
-    banned_user = User.query.get_or_404(user_id)
+    banned_user = db.session.get(User, user_id) or abort(404)
     active_ban = CommunityBan.query.filter_by(user_id=user_id, community_id=community_id).order_by(
         desc(CommunityBan.created_at)).first()
     user_link = 'u/' + banned_user.user_name
@@ -154,7 +154,7 @@ def ban_from_mod(user_id, community_id):
 @bp.route('/chat/<int:conversation_id>/options', methods=['GET', 'POST'])
 @login_required
 def chat_options(conversation_id):
-    conversation = Conversation.query.get_or_404(conversation_id)
+    conversation = db.session.get(Conversation, conversation_id) or abort(404)
     if not (current_user.is_admin() or conversation.is_member(current_user)):
         abort(400)
     return render_template('chat/chat_options.html', conversation=conversation)
@@ -163,7 +163,7 @@ def chat_options(conversation_id):
 @bp.route('/chat/<int:conversation_id>/delete', methods=['POST'])
 @login_required
 def chat_delete(conversation_id):
-    conversation = Conversation.query.get_or_404(conversation_id)
+    conversation = db.session.get(Conversation, conversation_id) or abort(404)
     if current_user.is_admin() or conversation.is_member(current_user):
         Report.query.filter(Report.suspect_conversation_id == conversation.id).delete()
         db.session.delete(conversation)
@@ -175,7 +175,7 @@ def chat_delete(conversation_id):
 @bp.route('/chat/<int:conversation_id>/leave', methods=['POST'])
 @login_required
 def chat_leave(conversation_id):
-    conversation = Conversation.query.get_or_404(conversation_id)
+    conversation = db.session.get(Conversation, conversation_id) or abort(404)
     if conversation.is_member(current_user):
         # Leave conversation
         db.session.execute(text("UPDATE conversation_member SET joined = :state WHERE user_id = :person_id AND conversation_id = :conversation_id"),
@@ -212,7 +212,7 @@ def block_instance(instance_id):
 @bp.route('/chat/<int:conversation_id>/report', methods=['GET', 'POST'])
 @login_required
 def chat_report(conversation_id):
-    conversation = Conversation.query.get_or_404(conversation_id)
+    conversation = db.session.get(Conversation, conversation_id) or abort(404)
     if not (current_user.is_admin() or conversation.is_member(current_user)):
         abort(400)
     form = ReportConversationForm()
@@ -259,7 +259,7 @@ def chat_report(conversation_id):
 @login_required
 def chat_conversation(conversation_id):
     # reload a conversation when an SSE message arrives. See notifs.js
-    conversation = Conversation.query.get_or_404(conversation_id)
+    conversation = db.session.get(Conversation, conversation_id) or abort(404)
     if current_user.is_admin() or conversation.is_member(current_user):
         messages = conversation.messages.order_by(ChatMessage.created_at).all()
         for message in messages:

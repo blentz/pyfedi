@@ -82,7 +82,7 @@ def _seed():
     alice = make_user(instance, 'alice', local=True)
     bob = make_user(instance, 'bob', local=True)
     carol = make_user(instance, 'carol', local=True)
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.private_instance = False
     db.session.commit()
     return instance, alice, bob, carol
@@ -183,7 +183,7 @@ def _make_admin(user):
     """
     from app.constants import ROLE_ADMIN
     from app.models import Role, user_role
-    role = Role.query.get(ROLE_ADMIN)
+    role = db.session.get(Role, ROLE_ADMIN)
     if role is None:
         role = Role(id=ROLE_ADMIN, name='Admin', weight=0)
         db.session.add(role)
@@ -394,8 +394,8 @@ def test_reading_a_conversation_marks_only_the_readers_own_messages_read(app, db
 
     assert response.status_code == 200
     db.session.expire_all()
-    assert ChatMessage.query.get(to_alice.id).read is True
-    assert ChatMessage.query.get(from_alice.id).read is False
+    assert db.session.get(ChatMessage, to_alice.id).read is True
+    assert db.session.get(ChatMessage, from_alice.id).read is False
     assert render.call_args.kwargs['conversation'].id == conversation.id
 
 
@@ -542,11 +542,11 @@ def test_opening_a_conversation_clears_only_that_conversations_notifications(app
 
     assert response.status_code == 200
     db.session.expire_all()
-    assert Notification.query.get(mine.id).read is True
-    assert Notification.query.get(elsewhere.id).read is False
-    assert Notification.query.get(also_elsewhere.id).read is False
-    assert Notification.query.get(someone_elses.id).read is False
-    assert User.query.get(alice.id).unread_notifications == 2
+    assert db.session.get(Notification, mine.id).read is True
+    assert db.session.get(Notification, elsewhere.id).read is False
+    assert db.session.get(Notification, also_elsewhere.id).read is False
+    assert db.session.get(Notification, someone_elses.id).read is False
+    assert db.session.get(User, alice.id).unread_notifications == 2
 
 
 # --------------------------------------------------------------------------
@@ -734,8 +734,8 @@ def test_the_refresh_marks_only_the_readers_own_messages_read(app, db_session):
     assert response.status_code == 200
     assert render.call_args.args[0] == 'chat/_messages.html'
     db.session.expire_all()
-    assert ChatMessage.query.get(to_alice.id).read is True
-    assert ChatMessage.query.get(from_alice.id).read is False
+    assert db.session.get(ChatMessage, to_alice.id).read is True
+    assert db.session.get(ChatMessage, from_alice.id).read is False
 
 
 def test_an_admin_may_refresh_a_conversation_they_are_not_in(app, db_session):
@@ -1052,8 +1052,8 @@ def test_reporting_a_conversation_writes_the_report_and_notifies_every_admin(app
     # burnt seat is notified along with the two roles
     assert sorted(n.user_id for n in notified) == sorted([1, carol.id, dave.id])
     assert all(n.url == '/admin/reports' and n.author_id == alice.id for n in notified)
-    assert User.query.get(carol.id).unread_notifications == 1
-    assert User.query.get(dave.id).unread_notifications == 1
+    assert db.session.get(User, carol.id).unread_notifications == 1
+    assert db.session.get(User, dave.id).unread_notifications == 1
 
 
 def test_reporting_joins_the_reasons_in_the_order_they_were_submitted(app, db_session):

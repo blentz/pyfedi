@@ -91,7 +91,7 @@ def register(app):
     @app.cli.command("admin-keys")
     def admin_keys():
         private_key, public_key = RsaKeys.generate_keypair()
-        u: User = User.query.get(1)
+        u: User = db.session.get(User, 1)
         u.private_key = private_key
         u.public_key = public_key
         db.session.commit()
@@ -267,7 +267,7 @@ def register(app):
         new_password = input("New password for user ID 1: ")
         if len(new_password) < 8:
             print("Password is too short, it needs to be 8 or more characters.")
-        admin_user = User.query.get(1)
+        admin_user = db.session.get(User, 1)
         admin_user.set_password(new_password)
         db.session.commit()
         print('Password has been set.')
@@ -309,7 +309,7 @@ def register(app):
 
                 for row in result:
                     if row.id != 1:
-                        existing_instance = Instance.query.get(row.id)
+                        existing_instance = db.session.get(Instance, row.id)
 
                         if existing_instance:
                             existing_instance.domain = row.domain
@@ -337,7 +337,7 @@ def register(app):
                 
                 for row in result:
                     # Check if user exists, update or create
-                    existing_user = User.query.get(row.person_id)
+                    existing_user = db.session.get(User, row.person_id)
                     
                     if existing_user:
                         existing_user.user_name = row.name
@@ -422,7 +422,7 @@ def register(app):
                     # since we can't easily determine the actual creator from Lemmy schema
                     creator_id = 1
 
-                    existing_community = Community.query.get(row.id)
+                    existing_community = db.session.get(Community, row.id)
                     
                     if existing_community:
                         existing_community.name = row.name
@@ -573,7 +573,7 @@ def register(app):
                     else:
                         post_type = POST_TYPE_ARTICLE
 
-                    existing_post = Post.query.get(row.id)
+                    existing_post = db.session.get(Post, row.id)
                     
                     if existing_post:
                         existing_post.user_id = user_id
@@ -650,7 +650,7 @@ def register(app):
                         print(f"  Skipping comment {row.id} - missing user or post")
                         continue
 
-                    post = Post.query.get(piefed_post_id)
+                    post = db.session.get(Post, piefed_post_id)
                     if not post:
                         print(f"  Skipping comment {row.id} - post {piefed_post_id} not found")
                         continue
@@ -690,7 +690,7 @@ def register(app):
                     else:
                         root_id = None
 
-                    existing_comment = PostReply.query.get(row.id)
+                    existing_comment = db.session.get(PostReply, row.id)
                     
                     if existing_comment:
                         existing_comment.user_id = user_id
@@ -794,16 +794,16 @@ def register(app):
                     # update the community stats in the db
                     try:
                         if interval == day:
-                            c = Community.query.get(community_id)
+                            c = db.session.get(Community, community_id)
                             c.active_daily = count
                         elif interval == week:
-                            c = Community.query.get(community_id)
+                            c = db.session.get(Community, community_id)
                             c.active_weekly = count
                         elif interval == month:
-                            c = Community.query.get(community_id)
+                            c = db.session.get(Community, community_id)
                             c.active_monthly = count
                         elif interval == half_year:
-                            c = Community.query.get(community_id)
+                            c = db.session.get(Community, community_id)
                             c.active_6monthly = count
                         # commit to the db
                         db.session.commit()
@@ -1059,7 +1059,7 @@ def register(app):
                         post.edited_at = None
                         post.title = render_from_tpl(post.title)
                         if post.type == POST_TYPE_POLL:
-                            poll = Poll.query.get(post.id)
+                            poll = db.session.get(Poll, post.id)
                             time_difference = poll.end_poll - post.created_at
                             poll.end_poll += time_difference
                         db.session.commit()
@@ -1123,8 +1123,8 @@ def register(app):
         current_instance = None
         for instances_and_community in instances_and_communities:
             if current_instance is None or current_instance.id != instances_and_community[0]:
-                current_instance = Instance.query.get(instances_and_community[0])
-            community = Community.query.get(instances_and_community[1])
+                current_instance = db.session.get(Instance, instances_and_community[0])
+            community = db.session.get(Community, instances_and_community[1])
 
             announce_id = f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}"
             actor = community.public_url()
@@ -1154,12 +1154,12 @@ def register(app):
             targets_data = {'gen': '0'}
             with force_locale(get_recipient_language(pending_reminder.user_id)):
                 if pending_reminder.reminder_type == 1:
-                    post = db.session.query(Post).get(pending_reminder.reminder_destination)
+                    post = db.session.get(Post, pending_reminder.reminder_destination)
                     title = _('Reminder: %(title)s', title=post.title)
                     url = f'/post/{post.id}'
                     targets_data['post_id'] = post.id
                 elif pending_reminder.reminder_type == 2:
-                    post_reply = db.session.query(PostReply).get(pending_reminder.reminder_destination)
+                    post_reply = db.session.get(PostReply, pending_reminder.reminder_destination)
                     title = _('Reminder: comment on %(title)s', title=post_reply.post.title, )
                     url = f'/post/{post_reply.post.id}/comment/{post_reply.id}'
                     targets_data['comment_id'] = post_reply.id
@@ -1223,7 +1223,7 @@ def register(app):
         # Get all feeds that need checking
         feeds = RssFeed.query.filter(RssFeed.next_check < utcnow(), RssFeed.error_count < 30).all()
 
-        g.site = Site.query.get(1)
+        g.site = db.session.get(Site, 1)
 
         for feed in feeds:
             try:
@@ -1494,7 +1494,7 @@ def register(app):
             file_ids = list(db.session.execute(
                 text(f'select id from "file" where source_url like \'https://{server_name}/static%\'')).scalars())
             for file_id in file_ids:
-                file = File.query.get(file_id)
+                file = db.session.get(File, file_id)
                 content_type = guess_mime_type(file.source_url)
                 extra_args = {'ContentType': content_type}
                 if current_app.config.get('S3_STORAGE_CLASS'):
@@ -1554,7 +1554,7 @@ def register(app):
             session = get_task_session()
             try:
                 with patch_db_session(session):
-                    site = Site.query.get(1)
+                    site = db.session.get(Site, 1)
                     users_to_notify = User.query.join(Notification, User.id == Notification.user_id).filter(
                         User.ap_id == None,
                         Notification.created_at > User.last_seen,
@@ -1754,8 +1754,8 @@ def register(app):
                     for j in range(i + 1, len(all_user_ids)):
                         other_user_id = all_user_ids[j]
                         if jaccard_similarity(current_user_upvotes, other_user_id) >= 95:
-                            first_user = User.query.get(first_user_id)
-                            other_user = User.query.get(other_user_id)
+                            first_user = db.session.get(User, first_user_id)
+                            other_user = db.session.get(User, other_user_id)
                             print(f'{first_user.link()} votes the same as {other_user.link()}')
 
     @app.cli.command("migrate_community_notifs")
@@ -2192,7 +2192,7 @@ def register(app):
                     else:
                         warnings.append("   ⚠️  SERVER_NAME not properly configured for federation")
 
-                    admin = User.query.get(1)
+                    admin = db.session.get(User, 1)
                     if admin and admin.private_key and admin.public_key:
                         print("   ✅ Admin user configured")
                     else:

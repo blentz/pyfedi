@@ -135,7 +135,7 @@ def test_ban_user_api_without_purge_bans_and_logs(app, db_session):
                      SRC_API, bearer(s.admin))
 
     db.session.expire_all()
-    assert db.session.query(User).get(s.target.id).banned is True
+    assert db.session.get(User, s.target.id).banned is True
     entry = db.session.query(ModLog).one()
     assert entry.action == 'ban_user'
     assert entry.reason == 'spam'
@@ -158,7 +158,7 @@ def test_ban_user_without_purge_does_not_delete_the_target(app, db_session):
                      SRC_API, bearer(s.admin))
 
     db.session.expire_all()
-    target = db.session.query(User).get(s.target.id)
+    target = db.session.get(User, s.target.id)
     assert target.deleted is False
     assert db.session.query(ModLog).one().action == 'ban_user'
 
@@ -217,7 +217,7 @@ def test_ban_user_api_does_not_flash(app, db_session):
 
     assert flashed == []
     db.session.expire_all()
-    assert db.session.query(User).get(s.target.id).banned is True
+    assert db.session.get(User, s.target.id).banned is True
     assert db.session.query(ModLog).one().action == 'ban_user'
 
 
@@ -377,7 +377,7 @@ def test_unban_user_api_clears_banned_and_deleted(app, db_session):
                               bearer(s.admin))
 
     db.session.expire_all()
-    target = db.session.query(User).get(s.target.id)
+    target = db.session.get(User, s.target.id)
     assert target.banned is False
     assert target.deleted is False
     assert [key for key, _kwargs in calls] == ['unban_from_site']
@@ -401,7 +401,7 @@ def test_unban_user_web_takes_the_same_dict_shaped_input(app, db_session):
             unban_user({'person_id': s.target.id}, SRC_WEB, None)
 
     db.session.expire_all()
-    assert db.session.query(User).get(s.target.id).banned is False
+    assert db.session.get(User, s.target.id).banned is False
     _key, kwargs = calls[0]
     assert kwargs['mod_id'] == s.admin.id
 
@@ -480,7 +480,7 @@ def test_ban_user_purging_a_local_target_deletes_it_through_the_purge_task(
 
     db.session.expire_all()
     assert no_real_purge == [(s.target.id, False)]
-    assert db.session.query(User).get(s.target.id).deleted_by == s.admin.id
+    assert db.session.get(User, s.target.id).deleted_by == s.admin.id
     assert db.session.query(ModLog).one().action == 'delete_user'
 
 
@@ -539,7 +539,7 @@ def test_ban_user_purging_a_remote_target_takes_the_local_deletion_path(
 
     db.session.expire_all()
     assert no_real_purge == []
-    target = db.session.query(User).get(s.target.id)
+    target = db.session.get(User, s.target.id)
     assert target.deleted is True
     assert target.deleted_by == s.admin.id
     assert db.session.query(ModLog).one().action == 'delete_user'
@@ -874,5 +874,5 @@ def test_ban_user_purging_a_remote_target_deletes_the_targets_posts_and_replies(
 
     db.session.expire_all()
     assert no_real_purge == []
-    assert db.session.query(Post).get(post.id).deleted is True
-    assert db.session.query(PostReply).get(reply.id).deleted is True
+    assert db.session.get(Post, post.id).deleted is True
+    assert db.session.get(PostReply, reply.id).deleted is True

@@ -801,13 +801,19 @@ class TestDeleteOldSoftDeletedContent:
 
 
 class _GhostReplySession:
-    """Wraps a real task session so `.query(PostReply).get(ghost_id)` returns
-    `None` for one chosen id, standing in for that row having been deleted by
-    ANOTHER session between the raw `SELECT` at
-    `delete_old_soft_deleted_content:261-266` and the ORM lookup at `:269`.
-    Every other call -- `.query(Post)`, `.query(PostReply)` for any other id,
-    `.execute`, `.delete`, `.commit`, `.rollback`, `.close` -- forwards to the
-    real session untouched.
+    """Wraps a real task session so a lookup of one chosen PostReply id returns
+    `None`, standing in for that row having been deleted by ANOTHER session
+    between the raw `SELECT` at `delete_old_soft_deleted_content:261-266` and
+    the ORM lookup at `:269`. Every other call -- `.query(Post)`, a lookup of
+    any other id, `.execute`, `.delete`, `.commit`, `.rollback`, `.close` --
+    forwards to the real session untouched.
+
+    BOTH lookup shapes are intercepted. Production moved from
+    `session.query(PostReply).get(id)` to `session.get(PostReply, id)` in
+    sub-project 71, and a double that knew only the old shape stopped standing
+    in for anything: the ghost row was found, deleted, and the test failed on
+    an assertion about the real row. `.query()` is kept so the double still
+    describes the call it replaced.
     """
 
     def __init__(self, real_session, ghost_id):
@@ -816,6 +822,11 @@ class _GhostReplySession:
 
     def __getattr__(self, name):
         return getattr(self._real, name)
+
+    def get(self, entity, ident, *args, **kwargs):
+        if entity is PostReply and ident == self._ghost_id:
+            return None
+        return self._real.get(entity, ident, *args, **kwargs)
 
     def query(self, *entities, **kwargs):
         real_query = self._real.query(*entities, **kwargs)

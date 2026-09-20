@@ -1093,11 +1093,20 @@ def test_edit_community_icon_block_orphaned_icon_id_clears_without_delete(
     delete_calls = []
     monkeypatch.setattr(File, 'delete_from_disk', lambda self, *a, **kw: delete_calls.append(self.id))
 
-    class _AlwaysMissingQuery:
-        def get(self, ident):
-            return None
+    # The lookup under test is `db.session.get(File, ...)` since sub-project
+    # 71, so the double sits on the SESSION rather than on `File.query`. A
+    # double still shaped like the old API would silently stop standing in for
+    # anything: the row would be found and the assertion below would be about
+    # the wrong branch. Only File lookups answer None; everything else the
+    # function does still reaches the real session.
+    _real_session_get = db.session.get
 
-    monkeypatch.setattr(File, 'query', _AlwaysMissingQuery())
+    def _file_is_missing(entity, ident, *args, **kwargs):
+        if entity is File:
+            return None
+        return _real_session_get(entity, ident, *args, **kwargs)
+
+    monkeypatch.setattr(db.session, 'get', _file_is_missing)
     api_input = _api_input(icon_url='https://icon.example/totally-different.png', banner_url=None)
 
     edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
@@ -1287,11 +1296,20 @@ def test_edit_community_banner_block_orphaned_image_id_clears_without_delete(
     delete_calls = []
     monkeypatch.setattr(File, 'delete_from_disk', lambda self, *a, **kw: delete_calls.append(self.id))
 
-    class _AlwaysMissingQuery:
-        def get(self, ident):
-            return None
+    # The lookup under test is `db.session.get(File, ...)` since sub-project
+    # 71, so the double sits on the SESSION rather than on `File.query`. A
+    # double still shaped like the old API would silently stop standing in for
+    # anything: the row would be found and the assertion below would be about
+    # the wrong branch. Only File lookups answer None; everything else the
+    # function does still reaches the real session.
+    _real_session_get = db.session.get
 
-    monkeypatch.setattr(File, 'query', _AlwaysMissingQuery())
+    def _file_is_missing(entity, ident, *args, **kwargs):
+        if entity is File:
+            return None
+        return _real_session_get(entity, ident, *args, **kwargs)
+
+    monkeypatch.setattr(db.session, 'get', _file_is_missing)
     api_input = _api_input(icon_url=None, banner_url='https://banner.example/totally-different.png')
 
     edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
@@ -1576,7 +1594,7 @@ def test_edit_community_language_loop_appends_valid_skips_invalid(
     db.session.add(english)
     db.session.commit()
     nonexistent_id = english.id + 10000
-    assert Language.query.get(nonexistent_id) is None, 'test setup must pick a truly absent id'
+    assert db.session.get(Language, nonexistent_id) is None, 'test setup must pick a truly absent id'
     api_input = _api_input(discussion_languages=[english.id, nonexistent_id])
 
     edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
@@ -2455,7 +2473,7 @@ def test_make_community_discussion_languages_loop_appends_valid_skips_invalid(
     _seed_und_language()
     user = _keyed_user(s.instance, 'languagecreator')
     nonexistent_id = english.id + 10000
-    assert Language.query.get(nonexistent_id) is None, 'test setup must pick a truly absent id'
+    assert db.session.get(Language, nonexistent_id) is None, 'test setup must pick a truly absent id'
     api_input = _api_input(name='languagecommunity',
                            discussion_languages=[english.id, nonexistent_id])
 

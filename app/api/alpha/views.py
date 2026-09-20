@@ -30,7 +30,7 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
               bookmarked_posts=None, post_subscriptions=None, communities_joined=None, read_posts=None, content_filters=None,
               usernotes=None, unread_counts=None, interacted_at=None) -> dict:
     if isinstance(post, int):
-        post = Post.query.get(post)
+        post = db.session.get(Post, post)
         if post is None:
             raise NoResultFound
 
@@ -218,7 +218,7 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
             if hasattr(g, 'user'):
                 user = g.user
             else:
-                user = User.query.get(user_id)
+                user = db.session.get(User, user_id)
             can_auth_user_moderate = post.community.is_moderator(user)
             v2.update({'can_auth_user_moderate': can_auth_user_moderate})
 
@@ -338,7 +338,7 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
 def user_view(user: User | int, variant, stub=False, user_id=None, flair_community_id=None, usernotes=None) -> dict:
 
     if isinstance(user, int):
-        user = User.query.get(user)
+        user = db.session.get(User, user)
 
     # Variant 1 - models/person/person.dart
     if variant == 1:
@@ -372,7 +372,7 @@ def user_view(user: User | int, variant, stub=False, user_id=None, flair_communi
             try:
                 extra_fields = user.extra_fields
             except DetachedInstanceError:  # when loading archived posts and their replies, temporary detatched users are created. See convert_archived_replies_to_tree()
-                extra_fields = User.query.get(user.id).extra_fields
+                extra_fields = db.session.get(User, user.id).extra_fields
             num_extra_fields = 0
             for field in extra_fields:
                 user_field = {}
@@ -712,7 +712,7 @@ def reply_view(reply: PostReply | int, variant: int, user_id=None,
                         add_community_in_view=True,
                         read_comment_ids=None) -> dict:
     if isinstance(reply, int):
-        reply = PostReply.query.get(reply)
+        reply = db.session.get(PostReply, reply)
 
     if read_comment_ids is None:
         read_comment_ids = []
@@ -1000,7 +1000,7 @@ def instance_view(instance: Instance | int, variant) -> dict:
 def feed_view(feed: Feed | int, variant: int, user_id, subscribed, include_communities, communities_moderating,
               banned_from, communities_joined, blocked_community_ids, blocked_instance_ids, ) -> dict:
     if isinstance(feed, int):
-        feed = Feed.query.get(feed)
+        feed = db.session.get(Feed, feed)
 
     if variant == 1:
         include = ['id', 'user_id', 'title', 'name', 'machine_name', 'description', 'description_html', 'nsfw', 'nsfl',
@@ -1019,7 +1019,7 @@ def feed_view(feed: Feed | int, variant: int, user_id, subscribed, include_commu
             if not user_id:
                 raise Exception("insufficient permissions")
             if not user_id == feed.user_id:
-                user = User.query.get(user_id)
+                user = db.session.get(User, user_id)
                 if not user.is_admin():
                     raise Exception("insufficient permissions")
             
@@ -1135,7 +1135,7 @@ def private_message_view(cm: ChatMessage, variant, report=None) -> dict:
 
 def conversation_information_view(conversation: int | Conversation, variant=1) -> dict:
     if isinstance(conversation, int):
-        conversation = Conversation.query.get(conversation)
+        conversation = db.session.get(Conversation, conversation)
     
     conversation_id = conversation.id
     members = []
@@ -1158,7 +1158,7 @@ def conversation_information_view(conversation: int | Conversation, variant=1) -
 
 def conversation_report_view(report: int | Report, variant=1) -> dict:
     if isinstance(report, int):
-        report = Report.query.get(report)
+        report = db.session.get(Report, report)
     
     if not report.suspect_conversation_id:
         raise Exception("report is not for a conversation")
@@ -1183,7 +1183,7 @@ def conversation_report_view(report: int | Report, variant=1) -> dict:
         # ConversationReport schema
         return v1
     
-    conversation = Conversation.query.get(conversation_id)
+    conversation = db.session.get(Conversation, conversation_id)
 
     v2 = dict()
     v2["conversation_report"] = v1
@@ -1200,7 +1200,7 @@ def topic_view(topic: Topic | int, variant: int, communities_moderating, banned_
                communities_joined, blocked_community_ids, blocked_instance_ids,
                include_communities) -> dict:
     if isinstance(topic, int):
-        topic = Topic.query.get(topic)
+        topic = db.session.get(Topic, topic)
 
     if variant == 1:
         include = ['id', 'machine_name', 'name', 'num_communities', 'parent_id', 'show_posts_in_children']
@@ -1279,7 +1279,7 @@ def site_view(user) -> dict:
 
 def site_instance_chooser_view():
     logo = g.site.logo if g.site.logo else '/static/images/piefed_logo_icon_t_75.png'
-    language = Language.query.get(g.site.language_id)
+    language = db.session.get(Language, g.site.language_id)
     defed_list = BannedInstances.query.filter(or_(BannedInstances.domain == 'hexbear.net',
                                                   BannedInstances.domain == 'lemmygrad.ml',
                                                   BannedInstances.domain == 'hilariouschaos.com',

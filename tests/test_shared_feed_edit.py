@@ -43,7 +43,7 @@ def _site_ctx(app, user):
     The row itself is minted by _seed via make_site().
     """
     with web_ctx(app, user):
-        g.site = Site.query.get(1)
+        g.site = db.session.get(Site, 1)
         yield
 
 
@@ -210,7 +210,7 @@ def test_going_private_counts_only_this_feeds_members(app, db_session):
         with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
             edit_feed(_form(public=False), s.feed, SRC_WEB)
 
-    assert Feed.query.get(s.feed.id).subscriptions_count == 1
+    assert db.session.get(Feed, s.feed.id).subscriptions_count == 1
     assert FeedMember.query.filter_by(feed_id=s.other_feed.id).count() == 2
 
 
@@ -235,7 +235,7 @@ def test_edit_feed_refuses_a_stranger_without_writing_anything(app, db_session):
     own, so this is the only gate there is.
     """
     s = _seed()
-    stored_title = Feed.query.get(s.feed.id).title
+    stored_title = db.session.get(Feed, s.feed.id).title
 
     with _site_ctx(app, s.stranger):
         with pytest.raises(Exception, match='incorrect_login'):
@@ -243,7 +243,7 @@ def test_edit_feed_refuses_a_stranger_without_writing_anything(app, db_session):
         assert s.feed.title == stored_title
         db.session.commit()
 
-    assert Feed.query.get(s.feed.id).title == stored_title
+    assert db.session.get(Feed, s.feed.id).title == stored_title
 
 
 def test_edit_feed_lets_the_owner_through(app, db_session):
@@ -254,7 +254,7 @@ def test_edit_feed_lets_the_owner_through(app, db_session):
         with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
             edit_feed(_form(title='Owner edit'), s.feed, SRC_WEB)
 
-    assert Feed.query.get(s.feed.id).title == 'Owner edit'
+    assert db.session.get(Feed, s.feed.id).title == 'Owner edit'
 
 
 def test_edit_feed_lets_an_admin_through(app, db_session):
@@ -274,7 +274,7 @@ def test_edit_feed_lets_an_admin_through(app, db_session):
         with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
             edit_feed(_form(title='Admin edit'), s.feed, SRC_WEB)
 
-    assert Feed.query.get(s.feed.id).title == 'Admin edit'
+    assert db.session.get(Feed, s.feed.id).title == 'Admin edit'
 
 
 def test_edit_feed_from_scratch_skips_the_ownership_check_entirely(app, db_session):
@@ -296,7 +296,7 @@ def test_edit_feed_from_scratch_skips_the_ownership_check_entirely(app, db_sessi
         with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
             edit_feed(_form(title='No check at all'), s.feed, SRC_WEB, from_scratch=True)
 
-    assert Feed.query.get(s.feed.id).title == 'No check at all'
+    assert db.session.get(Feed, s.feed.id).title == 'No check at all'
 
 
 # --------------------------------------------------------------------------
@@ -336,7 +336,7 @@ def test_edit_feed_api_arm_writes_every_derived_field(app, db_session):
     raw = 'first line\r\nsecond line'
 
     with app.test_request_context('/'):
-        g.site = Site.query.get(1)
+        g.site = db.session.get(Site, 1)
         # Site.enable_nsfw and enable_nsfl default False on the row make_site()
         # mints, and :365/:367 guard the writes on them, so a test that wants to
         # observe the flags has to turn the site's own switches on first. Both
@@ -347,7 +347,7 @@ def test_edit_feed_api_arm_writes_every_derived_field(app, db_session):
             edit_feed(_api_payload(title='API edit', description=raw, nsfw=True,
                                    show_child_posts=False), s.feed, SRC_API, auth='Bearer x')
 
-    edited = Feed.query.get(s.feed.id)
+    edited = db.session.get(Feed, s.feed.id)
     assert edited.title == 'API edit'
     assert edited.description == piefed_markdown_to_lemmy_markdown(raw) != raw
     # description_html is built from the RAW description (:311 passes
@@ -392,7 +392,7 @@ def test_edit_feed_slugifies_the_url_and_only_when_one_is_given(app, db_session,
         with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
             edit_feed(_form(url=url_value, public=public), s.feed, SRC_WEB)
 
-    edited = Feed.query.get(s.feed.id)
+    edited = db.session.get(Feed, s.feed.id)
     assert edited.name == expected_name
     # machine_name is written from the same url at :308 and is left alone
     # otherwise. The factory never sets it, so "left alone" is None -- asserted
@@ -414,7 +414,7 @@ def test_edit_feed_sets_parent_feed_id_only_when_one_is_given(app, db_session, p
         with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
             edit_feed(_form(parent_feed_id=given), s.feed, SRC_WEB)
 
-    edited = Feed.query.get(s.feed.id)
+    edited = db.session.get(Feed, s.feed.id)
     if parent_given is True:
         assert edited.parent_feed_id == parent.id != edited.id
     else:
@@ -441,7 +441,7 @@ def test_edit_feed_renaming_leaves_the_activitypub_identity_behind(app, db_sessi
         with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
             edit_feed(_form(url='renamedfeed'), s.feed, SRC_WEB)
 
-    edited = Feed.query.get(s.feed.id)
+    edited = db.session.get(Feed, s.feed.id)
     assert edited.name == 'renamedfeed'
     assert edited.ap_profile_id == before[0]
     assert edited.ap_public_url == before[1]
@@ -493,7 +493,7 @@ def _api_ctx(app, user):
     straight from the payload, which is the shape under test.
     """
     with app.test_request_context('/'):
-        g.site = Site.query.get(1)
+        g.site = db.session.get(Site, 1)
         g.site.enable_nsfw = g.site.enable_nsfl = True
         with patch('app.shared.feed.authorise_api_user', return_value=user):
             yield
@@ -537,7 +537,7 @@ def test_edit_feed_replaces_the_icon_only_when_the_url_really_changed(
                 patch('app.models.File.delete_from_disk') as unlink:
             edit_feed(_api_payload(icon_url=incoming), s.feed, SRC_API, auth='Bearer x')
 
-    edited = Feed.query.get(s.feed.id)
+    edited = db.session.get(Feed, s.feed.id)
     if expect_replaced:
         # Was a PIN; INVERTED once the assignment moved to the relationship.
         #
@@ -553,7 +553,7 @@ def test_edit_feed_replaces_the_icon_only_when_the_url_really_changed(
         assert sizer.call_args.args == (edited.icon_id, 40, 250, 'feeds', False)
         assert unlink.call_count == (1 if attach else 0)
         if attach:
-            assert File.query.get(before_icon_id) is None
+            assert db.session.get(File, before_icon_id) is None
     else:
         assert edited.icon_id == before_icon_id
         assert sizer.call_count == 0
@@ -589,14 +589,14 @@ def test_edit_feed_replaces_the_banner_only_when_the_url_really_changed(
                 patch('app.models.File.delete_from_disk') as unlink:
             edit_feed(_api_payload(banner_url=incoming), s.feed, SRC_API, auth='Bearer x')
 
-    edited = Feed.query.get(s.feed.id)
+    edited = db.session.get(Feed, s.feed.id)
     if expect_replaced:
         assert edited.image_id != before_image_id
-        assert File.query.get(edited.image_id).source_url == incoming
+        assert db.session.get(File, edited.image_id).source_url == incoming
         assert sizer.call_args.args == (edited.image_id, 878, 1600, 'feeds', False)
         assert unlink.call_count == (1 if attach else 0)
         if attach:
-            assert File.query.get(before_image_id) is None
+            assert db.session.get(File, before_image_id) is None
     else:
         assert edited.image_id == before_image_id
         assert sizer.call_count == 0
@@ -617,7 +617,7 @@ def test_edit_feed_stores_an_icon_only_when_the_url_is_one(app, db_session, is_i
             edit_feed(_api_payload(icon_url='https://example.test/thing'), s.feed,
                       SRC_API, auth='Bearer x')
 
-    assert (Feed.query.get(s.feed.id).icon_id is not None) is is_image
+    assert (db.session.get(Feed, s.feed.id).icon_id is not None) is is_image
 
 
 def test_edit_feed_from_scratch_stores_the_icon_without_consulting_the_detector(app, db_session):
@@ -648,9 +648,9 @@ def test_edit_feed_from_scratch_stores_the_icon_without_consulting_the_detector(
             edit_feed(_api_payload(icon_url='https://example.test/scratch.png'), s.feed,
                       SRC_API, auth='Bearer x', from_scratch=True)
 
-    edited = Feed.query.get(s.feed.id)
+    edited = db.session.get(Feed, s.feed.id)
     assert edited.icon_id != existing.id
-    assert File.query.get(existing.id) is None
+    assert db.session.get(File, existing.id) is None
     assert unlink.call_count == 1
 
 
@@ -684,8 +684,8 @@ def test_edit_feed_cannot_be_given_an_old_file_id_whose_row_has_vanished(app, db
     icon_id = icon.id
     db.session.delete(icon)
     db.session.commit()
-    assert File.query.get(icon_id) is None
-    assert Feed.query.get(s.feed.id).icon_id is None
+    assert db.session.get(File, icon_id) is None
+    assert db.session.get(Feed, s.feed.id).icon_id is None
 
     banner = _attach_banner(s.feed)
     banner_id = banner.id
@@ -693,7 +693,7 @@ def test_edit_feed_cannot_be_given_an_old_file_id_whose_row_has_vanished(app, db
     with pytest.raises(IntegrityError, match='feed_image_id_fkey'):
         db.session.commit()
     db.session.rollback()
-    assert File.query.get(banner_id) is not None
+    assert db.session.get(File, banner_id) is not None
 
 
 # --------------------------------------------------------------------------
@@ -724,7 +724,7 @@ def test_edit_feed_writes_the_nsfw_flags_only_when_the_site_allows_them(
         with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
             edit_feed(_form(nsfw=False, nsfl=False), s.feed, SRC_WEB)
 
-    edited = Feed.query.get(s.feed.id)
+    edited = db.session.get(Feed, s.feed.id)
     assert edited.nsfw is (False if site_nsfw else True)
     assert edited.nsfl is (False if site_nsfl else True)
 
@@ -759,7 +759,7 @@ def test_edit_feed_clears_the_members_only_on_the_public_to_private_transition(
 
     remaining = FeedMember.query.filter_by(feed_id=s.feed.id, is_owner=False).count()
     assert remaining == (0 if expect_block else 1)
-    assert Feed.query.get(s.feed.id).public is now_public
+    assert db.session.get(Feed, s.feed.id).public is now_public
 
 
 @pytest.mark.parametrize('is_admin', [True, False])
@@ -787,7 +787,7 @@ def test_edit_feed_lets_only_an_admin_change_the_instance_feed_flag(app, db_sess
                 patch('app.shared.feed.cache.delete_memoized') as bust:
             edit_feed(_form(is_instance_feed=True), s.feed, SRC_WEB)
 
-    assert Feed.query.get(s.feed.id).is_instance_feed is is_admin
+    assert db.session.get(Feed, s.feed.id).is_instance_feed is is_admin
     # The menu bust is identified by its ARGUMENT, not by a call count: :335's
     # `if not feed.image_id:` fires delete_memoized(Feed.header_image, feed) on
     # every row here, so a count assertion would be measuring that instead.
@@ -797,13 +797,13 @@ def test_edit_feed_lets_only_an_admin_change_the_instance_feed_flag(app, db_sess
 
     # Second half: the same editor submitting False. Only the admin arm can
     # clear it, and a hardcoded True would keep it set.
-    feed = Feed.query.get(s.feed.id)
+    feed = db.session.get(Feed, s.feed.id)
     feed.is_instance_feed = True
     db.session.commit()
     with _site_ctx(app, editor):
         with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
             edit_feed(_form(is_instance_feed=False), feed, SRC_WEB)
-    assert Feed.query.get(s.feed.id).is_instance_feed is not is_admin
+    assert db.session.get(Feed, s.feed.id).is_instance_feed is not is_admin
 
 
 def test_edit_feed_adds_and_removes_communities_by_the_set_difference(app, db_session):
@@ -850,7 +850,7 @@ def test_edit_feed_stores_a_banner_only_when_the_url_is_one(app, db_session, is_
             edit_feed(_api_payload(banner_url='https://example.test/thing'), s.feed,
                       SRC_API, auth='Bearer x')
 
-    assert (Feed.query.get(s.feed.id).image_id is not None) is is_image
+    assert (db.session.get(Feed, s.feed.id).image_id is not None) is is_image
 
 
 def test_edit_feed_from_scratch_keeps_the_old_banner_row(app, db_session):
@@ -875,7 +875,7 @@ def test_edit_feed_from_scratch_keeps_the_old_banner_row(app, db_session):
             edit_feed(_api_payload(banner_url='https://example.test/scratch-banner.png'),
                       s.feed, SRC_API, auth='Bearer x', from_scratch=True)
 
-    edited = Feed.query.get(s.feed.id)
+    edited = db.session.get(Feed, s.feed.id)
     assert edited.image_id != old_id
-    assert File.query.get(old_id) is not None
+    assert db.session.get(File, old_id) is not None
     assert unlink.call_count == 0

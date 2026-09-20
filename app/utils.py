@@ -1749,7 +1749,7 @@ def blocked_users(user_id) -> List[int]:
 
 @cache.memoize(timeout=86400)
 def blocked_phrases() -> List[str]:
-    site = db.session.query(Site).get(1)
+    site = db.session.get(Site, 1)
     if site.blocked_phrases:
         blocked_phrases = []
         for phrase in site.blocked_phrases.split('\n'):
@@ -1765,7 +1765,7 @@ def blocked_phrases() -> List[str]:
 
 @cache.memoize(timeout=86400)
 def blocked_referrers() -> List[str]:
-    site = db.session.query(Site).get(1)
+    site = db.session.get(Site, 1)
     if site.auto_decline_referrers:
         return [referrer for referrer in site.auto_decline_referrers.split('\n') if referrer != '']
     else:
@@ -2440,7 +2440,7 @@ def can_downvote(user, community: Community, communities_banned_from_list=None) 
     try:
         site = g.site
     except:
-        site = Site.query.get(1)
+        site = db.session.get(Site, 1)
 
     if not site.enable_downvotes:
         return False
@@ -2506,7 +2506,7 @@ def can_create_post(user, content: Community) -> bool:
             return False
     else:
         if not hasattr(g, 'site'):
-            g.site = db.session.query(Site).get(1)
+            g.site = db.session.get(Site, 1)
         if get_setting('use_allowlist') and g.site.allowlist_mode == ALLOWLIST_INTENSE:
             if not instance_allowed(user.ap_domain):
                 return False
@@ -2555,7 +2555,7 @@ def can_create_post_reply(user, content: Community) -> bool:
             return False
     else:
         if not hasattr(g, 'site'):
-            g.site = db.session.query(Site).get(1)
+            g.site = db.session.get(Site, 1)
         if get_setting('use_allowlist') and g.site.allowlist_mode == ALLOWLIST_INTENSE:
             if not instance_allowed(user.ap_domain):
                 return False
@@ -2741,7 +2741,7 @@ def user_filters_replies(user_id):
 
 @cache.memoize(timeout=300)
 def user_filters_languages(user_id):
-    user = User.query.get(user_id)
+    user = db.session.get(User, user_id)
     if user.read_language_ids and len(user.read_language_ids) > 0:
         return user.read_language_ids
     else:
@@ -2893,7 +2893,7 @@ def community_moderators(community_id):
                                             CommunityMember.is_moderator
                                         ))
                                         ).all()
-    community = Community.query.get(community_id)
+    community = db.session.get(Community, community_id)
     if community.user_id not in [mod.user_id for mod in mods]:
         mods.append(CommunityMember(user_id=community.user_id, is_owner=True, community_id=community.id))
     return mods
@@ -3230,7 +3230,7 @@ def current_theme():
     if hasattr(g, 'site'):
         site = g.site
     else:
-        site = Site.query.get(1)
+        site = db.session.get(Site, 1)
     if current_user.is_authenticated:
         if current_user.theme is not None and current_user.theme != '':
             return current_user.theme
@@ -3523,9 +3523,9 @@ def site_language_id(site=None):
 
 def site_language_code(site=None):
     if site is not None and site.language_id:
-        return db.session.query(Language).get(site.language_id).code
+        return db.session.get(Language, site.language_id).code
     if g and hasattr(g, 'site') and g.site.language_id:
-        return db.session.query(Language).get(g.site.language_id).code
+        return db.session.get(Language, g.site.language_id).code
     else:
         english = db.session.query(Language).filter(Language.code == 'en').first()
         return english.code if english else ''
@@ -3622,7 +3622,7 @@ def authorise_api_user(auth, return_type=None, id_match=None) -> User | dict | i
         if RevokedToken.query.filter_by(jti=decoded.get('jti')).first():
             raise Exception('incorrect_login')
         user_id = decoded['sub']
-        user = User.query.get(user_id)
+        user = db.session.get(User, user_id)
         if user is None:
             raise Exception('incorrect_login')
         if user.ap_id is not None or user.verified is False or user.banned is True or user.deleted is True:
@@ -4321,7 +4321,7 @@ def store_files_in_s3():
 
 def move_file_to_s3(file_id, s3):
     if store_files_in_s3():
-        file: File = File.query.get(file_id)
+        file: File = db.session.get(File, file_id)
         if file:
             if file.thumbnail_path and not file.thumbnail_path.startswith('http') and file.thumbnail_path.startswith(
                     'app/static/media'):
@@ -4783,11 +4783,11 @@ def get_recipient_language(user_id: int) -> str:
     lang_to_use = ''
 
     # look up the user in the db based on the id
-    recipient = db.session.query(User).get(user_id)
+    recipient = db.session.get(User, user_id)
 
     # if the user has language_id set, use that
     if recipient.language_id:
-        lang = db.session.query(Language).get(recipient.language_id)
+        lang = db.session.get(Language, recipient.language_id)
         lang_to_use = lang.code
 
     # else if the user has interface_language use that
@@ -4950,7 +4950,7 @@ def archive_post(post_id: int, s3_connection):
                 filename = f'post_{post_id}{gibberish(5)}.json'
             else:
                 filename = f'post_{post_id}.json'
-            post = session.query(Post).get(post_id)
+            post = session.get(Post, post_id)
 
             if post is None:
                 return
@@ -4958,7 +4958,7 @@ def archive_post(post_id: int, s3_connection):
             # Delete thumbnail and medium sized versions if post has an image
             if post.image_id is not None:
 
-                image_file = session.query(File).get(post.image_id)
+                image_file = session.get(File, post.image_id)
                 if image_file:
 
                     # Delete thumbnail
@@ -5428,7 +5428,7 @@ def debug_checkpoint(name: str):
 @cache.memoize(timeout=60)
 def get_site_as_dict() -> dict:
     # return the Site as a dict so that it can be serialized by flask-caching
-    site = db.session.query(Site).get(1)
+    site = db.session.get(Site, 1)
     exclude = ['private_key']
     return { c.name: getattr(site, c.name) for c in site.__table__.columns if c.name not in exclude}
 
@@ -5442,12 +5442,12 @@ def localize_datetime(inp, locale='en'):
 
 def show_reason_why_no_federation(instance_id):
     if instance_id in blocked_instances(current_user.get_id()):
-        instance = Instance.query.get(instance_id)
+        instance = db.session.get(Instance, instance_id)
         flash(_('You have blocked %(instance_name)s which hosts this community so none of your posts or comments will be sent there.',
                 instance_name=instance.domain), 'warning')
 
     if instance_id in banned_instances(current_user.get_id()):
-        instance = Instance.query.get(instance_id)
+        instance = db.session.get(Instance, instance_id)
         flash(_('You have been banned from %(instance_name)s which hosts this community.',
                 instance_name=instance.domain), 'warning')
 

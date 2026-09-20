@@ -103,7 +103,7 @@ def link_form():
     which normally populates it for CreatePostForm.validate_nsfw, does not run
     for a bare test_request_context.
     """
-    g.site = db.session.query(Site).get(1)
+    g.site = db.session.get(Site, 1)
     form = CreateLinkForm()
     form.communities.choices = []
     form.language_id.choices = []
@@ -142,7 +142,7 @@ def video_form():
     request context, so the base fields are merged in as explicit formdata
     instead; `request.files` is untouched.
     """
-    g.site = db.session.query(Site).get(1)
+    g.site = db.session.get(Site, 1)
     form = CreateVideoForm(formdata=MultiDict({**BASE_SUBMISSION, **request.form.to_dict()}))
     form.communities.choices = [(1, 'a community')]
     form.language_id.choices = [(1, 'English')]
@@ -267,7 +267,7 @@ class TestVideoUrlIsCheckedToo:
 
     def test_the_form_as_a_whole_reports_invalid(self, app, db_session):
         with app.test_request_context('/', method='POST', data={'video_url': CRAFTED}):
-            g.site = db.session.query(Site).get(1)
+            g.site = db.session.get(Site, 1)
             form = CreateVideoForm(
                 formdata=MultiDict({**BASE_SUBMISSION, 'video_url': CRAFTED}))
             form.communities.choices = [(1, 'a community')]

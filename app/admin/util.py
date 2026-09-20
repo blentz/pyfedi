@@ -30,12 +30,12 @@ def unsubscribe_from_everything_then_delete_task(user_id):
         session = get_task_session()
         try:
             with patch_db_session(session):
-                user = User.query.get(user_id)
+                user = db.session.get(User, user_id)
                 if user:
                     # unsubscribe
                     communities = CommunityMember.query.filter_by(user_id=user_id).all()
                     for membership in communities:
-                        community = Community.query.get(membership.community_id)
+                        community = db.session.get(Community, membership.community_id)
                         unsubscribe_from_community(community, user)
 
                     # federate deletion of account
@@ -185,7 +185,7 @@ def move_community_images_to_here(community_id):
                         aws_secret_access_key=current_app.config['S3_ACCESS_SECRET'],
                     )
                     for post_id in post_ids:
-                        post = Post.query.get(post_id)
+                        post = db.session.get(Post, post_id)
                         if post.image.source_url and not post.image.source_url.startswith(
                                 f"https://{current_app.config['S3_PUBLIC_URL']}"):
                             if post.image.source_url.startswith('app/static/media'):
@@ -277,7 +277,7 @@ def move_community_images_to_here(community_id):
                                     continue
                 else:
                     for post_id in post_ids:
-                        post = Post.query.get(post_id)
+                        post = db.session.get(Post, post_id)
                         if post.image.source_url and not post.image.source_url.startswith(f"{current_app.config['SERVER_URL']}"):
                             if post.image.source_url.startswith('app/static/media'):
                                 # If it's already on this server but doesn't have SERVER_NAME in the URL, just update the URL

@@ -61,7 +61,7 @@ def delete_post(send_async, user_id, post_id, reason=None):
         session = get_task_session()
         try:
             with patch_db_session(session):
-                post = session.query(Post).get(post_id)
+                post = session.get(Post, post_id)
                 delete_object(user_id, post, is_post=True, reason=reason, session=session)
         except Exception:
             session.rollback()
@@ -76,7 +76,7 @@ def restore_post(send_async, user_id, post_id, reason=None):
         session = get_task_session()
         try:
             with patch_db_session(session):
-                post = session.query(Post).get(post_id)
+                post = session.get(Post, post_id)
                 delete_object(user_id, post, is_post=True, is_restore=True, reason=reason, session=session)
         except Exception:
             session.rollback()
@@ -116,7 +116,7 @@ def restore_community(send_async, user_id, community_id):
 
 
 def delete_object(user_id, object, is_post=False, is_restore=False, reason=None, session=None):
-    user = session.query(User).get(user_id)
+    user = session.get(User, user_id)
     if isinstance(object, Community):
         community = object
     else:
@@ -213,7 +213,7 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
             # it answers today is relying on a deprecation. The existing
             # `if user_details` below is still the one decision, which keeps
             # the skip on a branch a test can reach.
-            user_details = (session.query(User).get(follower.remote_user_id)
+            user_details = (session.get(User, follower.remote_user_id)
                             if follower.remote_user_id else None)
             if user_details:
                 payload['cc'].append(user_details.public_url())
@@ -242,7 +242,7 @@ def delete_posts_with_blocked_images(post_ids, user_id, send_async):
         try:
             with patch_db_session(session):
                 for post_id in post_ids:
-                    post = session.query(Post).get(post_id)
+                    post = session.get(Post, post_id)
                     if post:
                         if post.url:
                             post.calculate_cross_posts(delete_only=True)
@@ -251,7 +251,7 @@ def delete_posts_with_blocked_images(post_ids, user_id, send_async):
                         post.author.post_count -= 1
                         post.community.post_count -= 1
                         if post.image_id:
-                            file = session.query(File).get(post.image_id)
+                            file = session.get(File, post.image_id)
                             file.delete_from_disk()
                         session.commit()
 

@@ -18,7 +18,7 @@ def bulk_follow(user_id, to_follow):
         session = get_task_session()
         try:
             with patch_db_session(session):
-                following_user = session.query(User).get(user_id)
+                following_user = session.get(User, user_id)
                 auth_token = f"Bearer {following_user.encode_jwt_token()}"
                 for tf in to_follow:
                     user = search_for_user(tf)

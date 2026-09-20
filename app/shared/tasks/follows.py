@@ -40,7 +40,7 @@ def join_community(send_async, user_id, community_id, src):
     session = get_task_session()
     try:
         with patch_db_session(session):
-            user = session.query(User).get(user_id)
+            user = session.get(User, user_id)
             community = session.query(Community).filter_by(id=community_id).one()
 
             pre_load_message = {}
@@ -113,7 +113,7 @@ def leave_community(send_async, user_id, community_id):
     session = get_task_session()
     try:
         with patch_db_session(session):
-            user = session.query(User).get(user_id)
+            user = session.get(User, user_id)
             community = session.query(Community).filter_by(id=community_id).one()
 
             cache.delete_memoized(community_membership, user, community)
@@ -163,7 +163,7 @@ def leave_feed(send_async, user_id, feed_id):
     session = get_task_session()
     try:
         with patch_db_session(session):
-            user = session.query(User).get(user_id)
+            user = session.get(User, user_id)
             feed = session.query(Feed).filter_by(id=feed_id).one()
 
             cache.delete_memoized(feed_membership, user, feed)
@@ -216,8 +216,8 @@ def leave_feed(send_async, user_id, feed_id):
 def follow_user(to_follow_id, user_id, send_async=True):
     session = get_task_session()
     try:
-        to_follow: User = session.query(User).get(to_follow_id)
-        user: User = session.query(User).get(user_id)
+        to_follow: User = session.get(User, to_follow_id)
+        user: User = session.get(User, user_id)
         if not to_follow.is_local() and to_follow.instance.online():
             join_request = UserFollowRequest(user_id=user_id, follow_id=to_follow_id)
             session.add(join_request)
@@ -244,8 +244,8 @@ def follow_user(to_follow_id, user_id, send_async=True):
 def unfollow_user(to_follow_id, user_id, send_async=True):
     session = get_task_session()
     try:
-        to_follow: User = session.query(User).get(to_follow_id)
-        user: User = session.query(User).get(user_id)
+        to_follow: User = session.get(User, to_follow_id)
+        user: User = session.get(User, user_id)
         if not to_follow.is_local() and to_follow.instance.online():
             join_request = session.query(UserFollowRequest).filter(UserFollowRequest.user_id == int(user_id),
                                                                    UserFollowRequest.follow_id == int(to_follow_id)).first()

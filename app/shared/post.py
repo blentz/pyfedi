@@ -30,7 +30,7 @@ from app.utils import render_template, authorise_api_user, shorten_string, gibbe
 
 def vote_for_post(post_id: int, vote_direction, federate: bool, emoji: str, src, auth=None):
     if src == SRC_API:
-        post = db.session.query(Post).get(post_id)
+        post = db.session.get(Post, post_id)
         user = authorise_api_user(auth, return_type='model')
         if vote_direction == 'upvote' and not can_upvote(user, post.community):
             return user.id
@@ -49,7 +49,7 @@ def vote_for_post(post_id: int, vote_direction, federate: bool, emoji: str, src,
                 if existing_vote.effect < 0 and not can_downvote(user, post.community):
                     return user.id
     else:
-        post = db.session.query(Post).get_or_404(post_id)
+        post = db.session.get(Post, post_id) or abort(404)
         user = current_user
 
         if (vote_direction == 'upvote' and not can_upvote(user, post.community)) or (
@@ -284,7 +284,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
             # Handle single flair_id for RSS feeds and other API calls
             flair_id = input['flair_id']
             if isinstance(flair_id, int):
-                flair = [CommunityFlair.query.get(flair_id)]
+                flair = [db.session.get(CommunityFlair, flair_id)]
             else:
                 flair = CommunityFlair.query.filter(CommunityFlair.id.in_(flair_id)).all()
             flair = [f for f in flair if f is not None]
@@ -447,7 +447,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         if url != post.url or uploaded_file:
             url_changed = True
             if post.image_id:
-                remove_file = File.query.get(post.image_id)
+                remove_file = db.session.get(File, post.image_id)
                 if remove_file:
                     remove_file.delete_from_disk()
                 post.image_id = None
@@ -673,7 +673,14 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         post.type = POST_TYPE_VIDEO
     
     if url and post.image:
-        file = File.query.get(post.image_id)
+        # post.image is a RELATIONSHIP and is truthy the instant it is
+        # assigned; post.image_id is only synced at FLUSH, so it is still None
+        # here unless something upstream happened to emit SQL. Keeping that
+        # None out of the lookup rather than handing it over: SQLAlchemy warns
+        # that a fully NULL primary key identity "may raise an error in a
+        # future release" (the D845 shape). The None result, and therefore the
+        # behaviour of the `if file` below, is unchanged.
+        file = db.session.get(File, post.image_id) if post.image_id else None
         if file:
             file.alt_text = image_alt_text
 
@@ -766,7 +773,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
 # just for deletes by owner (mod deletes are classed as 'remove')
 def delete_post(post_id: int, federate_deletion, src, auth):
     if src == SRC_API:
-        post = db.session.query(Post).get(post_id)
+        post = db.session.get(Post, post_id)
         user_id = authorise_api_user(auth, id_match=post.user_id)
     else:
         if current_user:
@@ -776,7 +783,7 @@ def delete_post(post_id: int, federate_deletion, src, auth):
 
     from app import redis_client
     with redis_client.lock(f"lock:post:{post_id}", timeout=10, blocking_timeout=6):
-        post = db.session.query(Post).get(post_id)
+        post = db.session.get(Post, post_id)
         if post.url:
             post.calculate_cross_posts(delete_only=True)
 
@@ -807,12 +814,12 @@ def delete_post(post_id: int, federate_deletion, src, auth):
 
 def restore_post(post_id: int, src, auth):
     if src == SRC_API:
-        post = db.session.query(Post).get(post_id)
+        post = db.session.get(Post, post_id)
         user_id = authorise_api_user(auth, id_match=post.user_id)
     else:
         user_id = current_user.id
 
-    post = db.session.query(Post).get(post_id)
+    post = db.session.get(Post, post_id)
     if post.url:
         post.calculate_cross_posts()
 
@@ -843,8 +850,8 @@ def report_post(post: Post, input, src, auth=None):
         report_remote = input['report_remote']
     else:
         reporter_user = current_user
-        suspect_user = User.query.get(post.user_id)
-        source_instance = Instance.query.get(suspect_user.instance_id)
+        suspect_user = db.session.get(User, post.user_id)
+        source_instance = db.session.get(Instance, suspect_user.instance_id)
         reason = input.reasons_to_string(input.reasons.data)
         description = input.description.data
         notify_admins = ('5' in input.reasons.data or '6' in input.reasons.data or ('17' in input.reasons.data and post.community.instance.software.lower() != 'piefed'))
@@ -883,7 +890,7 @@ def report_post(post: Post, input, src, auth=None):
     already_notified = set()
     remote_instance_ids = set()
     for mod in post.community.moderators():
-        moderator = User.query.get(mod.user_id)
+        moderator = db.session.get(User, mod.user_id)
         if moderator:
             if moderator.is_local():
                 with force_locale(get_recipient_language(moderator.id)):
@@ -942,7 +949,7 @@ def lock_post(post_id: int, locked, src, auth=None):
     else:
         user = current_user
 
-    post = db.session.query(Post).get(post_id)
+    post = db.session.get(Post, post_id)
     if locked:
         comments_enabled = False
         modlog_type = 'lock_post'
@@ -978,11 +985,11 @@ def move_post(post_id: int, target_id: int, src, auth=None):
     else:
         user = current_user
 
-    post = db.session.query(Post).get(post_id)
+    post = db.session.get(Post, post_id)
 
     if post.community.is_moderator(user) or post.community.is_instance_admin(user) or user.is_admin_or_staff():
         old_community_id = post.community_id
-        target_community = db.session.query(Community).get(target_id)
+        target_community = db.session.get(Community, target_id)
 
         post.move_to(target_community)
         db.session.commit()
@@ -1009,7 +1016,7 @@ def sticky_post(post_id: int, featured: bool, src: int, auth=None):
     else:
         user = current_user
 
-    post = db.session.query(Post).get(post_id)
+    post = db.session.get(Post, post_id)
     community = post.community
 
     if post.community.is_moderator(user) or post.community.is_instance_admin(user) or user.is_admin_or_staff():
@@ -1041,7 +1048,7 @@ def hide_post(post_id: int, hidden: bool, src: int, auth=None):
     else:
         user = current_user
 
-    post = db.session.query(Post).get(post_id)
+    post = db.session.get(Post, post_id)
 
     if hidden:
         user.mark_post_as_hidden(post)
@@ -1062,7 +1069,7 @@ def mod_remove_post(post_id: int, reason, src, auth):
 
     from app import redis_client
     with redis_client.lock(f"lock:post:{post_id}", timeout=10, blocking_timeout=6):
-        post = db.session.query(Post).get(post_id)
+        post = db.session.get(Post, post_id)
 
         if not post.community.is_moderator(user) and not user.is_admin_or_staff():
             raise Exception('Does not have permission')
@@ -1105,7 +1112,7 @@ def mod_restore_post(post_id: int, reason, src, auth):
 
     from app import redis_client
     with redis_client.lock(f"lock:post:{post_id}", timeout=10, blocking_timeout=6):
-        post = db.session.query(Post).get(post_id)
+        post = db.session.get(Post, post_id)
         if not post.community.is_moderator(user) and not user.is_admin_or_staff():
             raise Exception('Does not have permission')
 
@@ -1173,7 +1180,7 @@ def vote_for_poll(post_id, votes, src, auth=None):
     if isinstance(votes, int):
         votes = [votes]
 
-    poll = Poll.query.get_or_404(post_id)
+    poll = db.session.get(Poll, post_id) or abort(404)
     poll_choice_ids = {row.id for row in
                        db.session.query(PollChoice).filter_by(post_id=post_id)}
     foreign = [choice_id for choice_id in votes if int(choice_id) not in poll_choice_ids]
@@ -1190,7 +1197,7 @@ def vote_for_poll(post_id, votes, src, auth=None):
         if not poll.has_voted(user.id):
             poll.vote_for_choice(votes[0], user.id)
             task_selector('vote_for_poll', post_id=post_id, user_id=user.id,
-                        choice_text=PollChoice.query.get(votes[0]).choice_text)
+                        choice_text=db.session.get(PollChoice, votes[0]).choice_text)
         else:
             if src == SRC_API:
                 raise Exception("User has already voted.")
@@ -1202,4 +1209,4 @@ def vote_for_poll(post_id, votes, src, auth=None):
             poll.vote_for_choice(int(choice_id), user.id)
             if not already_voted:
                 task_selector('vote_for_poll', post_id=post_id, user_id=user.id,
-                              choice_text=PollChoice.query.get(int(choice_id)).choice_text)
+                              choice_text=db.session.get(PollChoice, int(choice_id)).choice_text)

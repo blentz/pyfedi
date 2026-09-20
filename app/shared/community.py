@@ -121,7 +121,7 @@ def unblock_community(community_id: int, src, auth=None):
 def invite_with_chat(community_id: int, handle: str, src, auth=None):
     if src == SRC_API:
         user_id = authorise_api_user(auth)
-        user = User.query.get(user_id)
+        user = db.session.get(User, user_id)
     else:
         user = current_user
 
@@ -189,7 +189,7 @@ def create_invite_token(community, recipient, user) -> str:
 def invite_with_email(community_id: int, to: str, src, auth=None):
     if src == SRC_API:
         user_id = authorise_api_user(auth)
-        user = User.query.get(user_id)
+        user = db.session.get(User, user_id)
     else:
         user = current_user
 
@@ -270,7 +270,7 @@ def make_community(input, src, auth=None, uploaded_icon_file=None, uploaded_bann
     membership = CommunityMember(user_id=user.id, community_id=community.id, is_moderator=True, is_owner=True)
     db.session.add(membership)
     for language_choice in discussion_languages:
-        language = Language.query.get(language_choice)
+        language = db.session.get(Language, language_choice)
         if language:
             community.languages.append(language)
     # Always include the undetermined language, so posts with no language will be accepted
@@ -325,7 +325,7 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
         if community.icon_id and icon_url != community.icon.source_url:
             if icon_url != community.icon.medium_url():
                 icon_url_changed = True
-                remove_file = File.query.get(community.icon_id)
+                remove_file = db.session.get(File, community.icon_id)
                 if remove_file:
                     remove_file.delete_from_disk()
                 community.icon_id = None
@@ -334,7 +334,7 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
         if community.image_id and banner_url != community.image.source_url:
             if banner_url != community.image.medium_url():
                 banner_url_changed = True
-                remove_file = File.query.get(community.image_id)
+                remove_file = db.session.get(File, community.image_id)
                 if remove_file:
                     remove_file.delete_from_disk()
                 community.image_id = None
@@ -370,7 +370,7 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
 
     if not from_scratch:
         for language_choice in discussion_languages:
-            language = Language.query.get(language_choice)
+            language = db.session.get(Language, language_choice)
             if language:
                 community.languages.append(language)
         # Always include the undetermined language, so posts with no language will be accepted
@@ -490,7 +490,7 @@ def delete_community(community_id: int, src, auth=None):
     else:
         user = current_user
 
-    community = db.session.query(Community).get(community_id)
+    community = db.session.get(Community, community_id)
     if not (community.is_owner(user) or community.is_moderator(user) or user.is_admin_or_staff()):
         raise Exception('incorrect_login')
     if not community.is_local():
@@ -683,7 +683,7 @@ def get_comm_flair_list(community: Community | int | str) -> list:
 
 def comm_flair_ap_format(flair: CommunityFlair | int | str) -> dict:
     if isinstance(flair, int):
-        flair = CommunityFlair.query.get(flair)
+        flair = db.session.get(CommunityFlair, flair)
     elif isinstance(flair, str):
         flair = CommunityFlair.query.filter_by(ap_id=flair).first()
     

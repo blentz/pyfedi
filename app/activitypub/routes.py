@@ -57,7 +57,7 @@ def testredis_get():
 def webfinger():
     if requesting_domain := requestor_domain():
         if not hasattr(g, 'site'):
-            g.site = db.session.query(Site).get(1)
+            g.site = db.session.get(Site, 1)
         if get_setting('use_allowlist') and g.site.allowlist_mode == ALLOWLIST_INTENSE:
             if not instance_allowed(requesting_domain):
                 abort(403)
@@ -642,7 +642,7 @@ def shared_inbox():
     elif pause_federation == '666':
         return '', 410 # this instance has been permanently closed down, everyone should stop sending to it.
 
-    g.site = Site.query.get(1)  # g.site is not initialized by @app.before_request when request.path == '/inbox'
+    g.site = db.session.get(Site, 1)  # g.site is not initialized by @app.before_request when request.path == '/inbox'
     store_ap_json = g.site.log_activitypub_json or False
     saved_json = request_json if store_ap_json else None
 
@@ -1079,9 +1079,9 @@ def process_inbox_request(request_json, store_ap_json):
                             join_request = session.query(CommunityJoinRequest).filter_by(uuid=join_request_parts[-1]).first()
                         except Exception:  # old style join requests were just a number
                             session.rollback()
-                            join_request = session.query(CommunityJoinRequest).get(join_request_parts[-1])
+                            join_request = session.get(CommunityJoinRequest, join_request_parts[-1])
                         if join_request:
-                            requestor_user = session.query(User).get(join_request.user_id)
+                            requestor_user = session.get(User, join_request.user_id)
                     elif core_activity['object']['type'] == 'Follow':
                         requestor_user = find_actor_or_create_cached(core_activity['object']['actor'])
                         if requestor_user and requestor_user.banned:
@@ -1104,7 +1104,7 @@ def process_inbox_request(request_json, store_ap_json):
                                                              community_id=join_request.community_id,
                                                              joined_via_feed=joined_via_feed)
                                     session.add(member)
-                                    if User.query.get(join_request.user_id).bot is False:
+                                    if db.session.get(User, join_request.user_id).bot is False:
                                         community.subscriptions_count += 1
                                     community.last_active = utcnow()
                                     session.commit()
@@ -1220,7 +1220,7 @@ def process_inbox_request(request_json, store_ap_json):
                                 not 'published' in core_activity['object']):
                             post_being_replied_to = Post.get_by_ap_id(core_activity['object']['inReplyTo'])
                             if post_being_replied_to:
-                                poll_data = session.query(Poll).get(post_being_replied_to.id)
+                                poll_data = session.get(Poll, post_being_replied_to.id)
                                 choice = session.query(PollChoice).filter_by(post_id=post_being_replied_to.id,
                                                                     choice_text=core_activity['object']['name']).first()
                                 if poll_data and choice:
@@ -1434,7 +1434,7 @@ def process_inbox_request(request_json, store_ap_json):
                             # also autosubscribe any feedmembers to the new community
                             feed_members = session.query(FeedMember).filter_by(feed_id=feed.id).all()
                             for fm in feed_members:
-                                fm_user = session.query(User).get(fm.user_id)
+                                fm_user = session.get(User, fm.user_id)
                                 if fm_user.id == feed.user_id:
                                     continue
                                 if fm_user.is_local() and fm_user.feed_auto_follow:
@@ -1510,7 +1510,7 @@ def process_inbox_request(request_json, store_ap_json):
                             # who have feed_auto_leave enabled
                             feed_members = session.query(FeedMember).filter_by(feed_id=feed.id).all()
                             for fm in feed_members:
-                                fm_user = session.query(User).get(fm.user_id)
+                                fm_user = session.get(User, fm.user_id)
                                 if fm_user.id == feed.user_id:
                                     continue
                                 if fm_user.is_local() and fm_user.feed_auto_leave:
@@ -1974,7 +1974,7 @@ def announce_activity_to_followers(community: Community, creator: User, activity
     if is_flag:
         instances = community.following_instances(include_dormant=True, mod_hosts_only=True)
         if admin_instance_id != 1 and not any(i.id == admin_instance_id for i in instances):
-            admin_instance = db.session.query(Instance).get(admin_instance_id)
+            admin_instance = db.session.get(Instance, admin_instance_id)
             if admin_instance:
                 instances.append(admin_instance)
     else:
@@ -2145,7 +2145,7 @@ def user_followers(actor):
 
 @bp.route('/comment/<int:comment_id>', methods=['GET', 'HEAD'])
 def comment_ap(comment_id):
-    reply = PostReply.query.get_or_404(comment_id)
+    reply = db.session.get(PostReply, comment_id) or abort(404)
     if is_activitypub_request():
         if reply.community.local_only or reply.community.private:
             abort(403)
@@ -2174,7 +2174,7 @@ def post_ap2(post_id):
 @bp.route('/post/<int:post_id>', methods=['GET', 'HEAD', 'POST'])
 def post_ap(post_id):
     if (request.method == 'GET' or request.method == 'HEAD') and is_activitypub_request():
-        post: Post = Post.query.get_or_404(post_id)
+        post: Post = db.session.get(Post, post_id) or abort(404)
         if post.is_local():
             if post.community.local_only or post.community.private or post.status < POST_STATUS_PUBLISHED:
                 abort(403)
@@ -2217,7 +2217,7 @@ def post_nice(community_name, post_id, slug):
 @bp.route('/post/<int:post_id>/replies', methods=['GET'])
 def post_replies_ap(post_id):
     if (request.method == 'GET' or request.method == 'HEAD') and is_activitypub_request():
-        post = Post.query.get_or_404(post_id)
+        post = db.session.get(Post, post_id) or abort(404)
 
         if request.method == 'GET':
             replies = post_replies_for_ap(post.id)
@@ -2237,7 +2237,7 @@ def post_replies_ap(post_id):
 @bp.route('/post/<int:post_id>/context', methods=['GET'])
 def post_ap_context(post_id):
     if (request.method == 'GET' or request.method == 'HEAD') and is_activitypub_request():
-        post = Post.query.get_or_404(post_id)
+        post = db.session.get(Post, post_id) or abort(404)
         if post.deleted:
             abort(404)
         if request.method == 'GET':
@@ -2480,7 +2480,7 @@ def process_poll_vote(user, store_ap_json, request_json, announced):
         log_incoming_ap(id, APLOG_RATE, APLOG_FAILURE, saved_json, 'Unfound object ' + ap_id)
         return
     if not instance_banned(user.instance.domain):
-        poll = db.session.query(Poll).get(post.id)
+        poll = db.session.get(Poll, post.id)
         choice = db.session.query(PollChoice).filter(PollChoice.choice_text == choice_text,
                                                      PollChoice.post_id == post.id).first()
         if choice:
@@ -2536,7 +2536,7 @@ def process_question_answer(user, store_ap_json, request_json, announced):
 def process_chat(user, store_ap_json, core_activity, session):
     saved_json = core_activity if store_ap_json else None
     id = core_activity['id']
-    sender = session.query(User).get(user.id)
+    sender = session.get(User, user.id)
     recipient_ap_id = None
 
     # activity['object']['to'] must exist in the activity
@@ -2555,7 +2555,7 @@ def process_chat(user, store_ap_json, core_activity, session):
         
     recipient = find_actor_or_create_cached(recipient_ap_id)
     if recipient and recipient.is_local():
-        recipient = session.query(User).get(recipient.id)  # for some reason find_actor_or_create_cached was giving me a user from the wrong DB session, causing an exception later on.
+        recipient = session.get(User, recipient.id)  # for some reason find_actor_or_create_cached was giving me a user from the wrong DB session, causing an exception later on.
         if sender.created_very_recently() and user.ap_domain != 'fediseer.com':
             log_incoming_ap(id, APLOG_CHATMESSAGE, APLOG_FAILURE, saved_json, 'Sender is too new')
             return True
@@ -2763,7 +2763,7 @@ def feed_outbox(actor):
     # make the ap data json
     items = []
     for fi in feed_items:
-        c = Community.query.get(fi.community_id)
+        c = db.session.get(Community, fi.community_id)
         items.append(c.ap_public_url)
     result = {
         "@context": default_context(),
@@ -2801,7 +2801,7 @@ def feed_following(actor):
     # make the ap data json
     items = []
     for fi in feed_items:
-        c = Community.query.get(fi.community_id)
+        c = db.session.get(Community, fi.community_id)
         if c.local_only or c.private:
             continue
         items.append(c.public_url())
@@ -2829,7 +2829,7 @@ def feed_moderators_route(actor):
     if feed is not None:
         # currently feeds only have the one owner, but lets make this a list in case we want to 
         # expand that in the future
-        moderators = [db.session.query(User).get(feed.user_id)]
+        moderators = [db.session.get(User, feed.user_id)]
         moderators_data = {
             "@context": default_context(),
             "type": "OrderedCollection",

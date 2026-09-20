@@ -20,7 +20,7 @@ def get_feed_list(auth, data, user_id=None) -> dict:
 
     # get the user to check if the user has hide_read posts set later down the function
     if user_id:
-        user = User.query.get(user_id)
+        user = db.session.get(User, user_id)
         g.user = user
 
         blocked_community_ids = blocked_communities(user_id)
@@ -83,7 +83,7 @@ def get_feed(auth, data, user_id=None):
         user_id = authorise_api_user(auth)
 
     if user_id:
-        user = User.query.get(user_id)
+        user = db.session.get(User, user_id)
         g.user = user
 
         blocked_community_ids = blocked_communities(user_id)
@@ -102,7 +102,7 @@ def get_feed(auth, data, user_id=None):
         blocked_instance_ids = []
 
     if id:
-        feed = Feed.query.get(id)
+        feed = db.session.get(Feed, id)
     elif name:
         parts = name.split('@')
         feed = Feed.query.filter(Feed.name == parts[0], Feed.ap_domain == parts[1]).first()
@@ -126,7 +126,7 @@ def post_feed_follow(auth, data):
     follow = data['follow']
 
     user = authorise_api_user(auth, return_type='model')
-    feed = Feed.query.get(feed_id)
+    feed = db.session.get(Feed, feed_id)
 
     if not feed:
         raise Exception('could not find feed')
@@ -171,7 +171,7 @@ def post_feed(auth, data):
 
 def put_feed(auth, data):
     feed_id = data['feed_id']
-    feed = Feed.query.get(feed_id)
+    feed = db.session.get(Feed, feed_id)
     if not feed:
         raise Exception('not_found')
 
@@ -191,7 +191,7 @@ def put_feed(auth, data):
     else:
         feed_items = FeedItem.query.filter_by(feed_id=feed_id).all()
         ap_ids = [c.ap_id if c.ap_id else c.name + '@' + feed.ap_domain
-                  for fi in feed_items if (c := Community.query.get(fi.community_id))]
+                  for fi in feed_items if (c := db.session.get(Community, fi.community_id))]
         communities = '\n'.join(ap_ids)
 
     input_data = {'url': url, 'title': title, 'public': public, 'description': description,
@@ -208,7 +208,7 @@ def post_feed_delete(auth, data):
     deleted = data['deleted']
 
     user_id = authorise_api_user(auth)
-    feed = Feed.query.get(feed_id)
+    feed = db.session.get(Feed, feed_id)
     if not feed or feed.user_id != user_id:
         raise Exception('not_found')
 

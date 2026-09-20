@@ -356,7 +356,7 @@ def test_api_branch_normalises_absent_and_null_alt_text_to_empty(
               s.post, POST_TYPE_LINK, SRC_API, user=s.user, from_scratch=True)
 
     db.session.expire(s.post)
-    file = File.query.get(s.post.image_id)
+    file = db.session.get(File, s.post.image_id)
     assert file is not None
     assert file.alt_text == expected
 
@@ -1036,7 +1036,7 @@ def test_web_branch_alt_text_needs_both_hasattr_and_a_truthy_field(
               s.post, POST_TYPE_LINK, SRC_WEB, user=s.user)
 
     db.session.expire(s.post)
-    file = File.query.get(s.post.image_id)
+    file = db.session.get(File, s.post.image_id)
     assert file is not None
     assert file.alt_text == expected
 

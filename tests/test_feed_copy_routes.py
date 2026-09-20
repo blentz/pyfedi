@@ -168,7 +168,7 @@ def test_copying_a_feed_honours_the_sites_nsfw_switches(app, db_session,
     """
     instance, owner = _seed()
     source = _feed(owner)
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.enable_nsfw = site_nsfw
     site.enable_nsfl = site_nsfl
     db.session.commit()
@@ -201,7 +201,7 @@ def test_the_copy_form_prefills_nsfl_from_the_nsfl_column(app, db_session, site_
     """
     instance, owner = _seed()
     source = _feed(owner, nsfw=False, nsfl=True)
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.enable_nsfw = True
     site.enable_nsfl = site_nsfl
     db.session.commit()
@@ -562,7 +562,7 @@ def test_the_copy_form_prefills_every_field_from_the_source_feed(app, db_session
     source.description = 'A distinctive description'
     source.show_posts_in_children = True
     source.is_instance_feed = True
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.enable_nsfw = site.enable_nsfl = True
     db.session.commit()
 
@@ -591,7 +591,7 @@ def test_the_copy_form_disables_the_nsfw_box_the_site_forbids(app, db_session, s
     """:318-321's widget arm, the twin of :322-325's NSFL one."""
     instance, owner = _seed()
     source = _feed(owner)
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.enable_nsfw = site_nsfw
     db.session.commit()
 
@@ -745,7 +745,7 @@ def test_the_not_found_message_mentions_nsfw_only_when_the_site_blocks_it(app, d
     site's NSFW switch -- a feed that exists remotely but is NSFW is invisible
     to a site with NSFW off, so the second message explains that."""
     instance, owner = _seed()
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.enable_nsfw = enable_nsfw
     db.session.commit()
 
@@ -880,7 +880,7 @@ def test_looking_up_an_unknown_feed_while_logged_in_searches_for_it(app, db_sess
     """:698-713. The authenticated arm, its search, and the two not-found
     messages -- the same pair feed_add_remote carries, in a second copy."""
     instance, owner = _seed()
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.enable_nsfw = enable_nsfw
     db.session.commit()
 

@@ -632,7 +632,7 @@ def test_poll_vote_success_votes_logs_and_announces_only_when_not_announced(app,
 
     vote = PollChoiceVote.query.filter_by(user_id=voter.id, choice_id=choice.id).one()
     assert vote.post_id == post.id
-    assert PollChoice.query.get(choice.id).num_votes == 1
+    assert db.session.get(PollChoice, choice.id).num_votes == 1
     assert ActivityPubLog.query.one().result == 'success'
     assert len(calls) == 1
     args, kwargs = calls[0]
@@ -832,7 +832,7 @@ def test_question_answer_success_sets_answer_notifies_and_announces(app, db_sess
 
     process_question_answer(user, True, request_json, False)
 
-    assert PostReply.query.get(reply.id).answer is True
+    assert db.session.get(PostReply, reply.id).answer is True
     notif = Notification.query.one()
     assert notif.title == 'Answer was chosen'
     assert notif.user_id == reply.user_id
@@ -865,7 +865,7 @@ def test_question_answer_skips_notification_for_a_remote_reply_author(app, db_se
 
     process_question_answer(user, True, request_json, False)
 
-    assert PostReply.query.get(reply.id).answer is True
+    assert db.session.get(PostReply, reply.id).answer is True
     assert Notification.query.count() == 0
     assert reply.author.unread_notifications == 0
     assert ActivityPubLog.query.one().result == 'success'
@@ -885,7 +885,7 @@ def test_question_answer_refused_by_default_logs_cannot_set_answer(app, db_sessi
 
     process_question_answer(user, True, request_json, False)
 
-    assert PostReply.query.get(reply.id).answer is False
+    assert db.session.get(PostReply, reply.id).answer is False
     row = ActivityPubLog.query.one()
     assert row.result == 'ignored'
     assert row.exception_message == 'Cannot set answer'
@@ -927,7 +927,7 @@ def test_question_answer_granted_by_alternative_one_same_author(app, db_session,
 
     process_question_answer(user, True, request_json, False)
 
-    assert PostReply.query.get(reply.id).answer is True
+    assert db.session.get(PostReply, reply.id).answer is True
     assert ActivityPubLog.query.one().result == 'success'
 
 
@@ -952,7 +952,7 @@ def test_question_answer_granted_by_alternative_two_moderator(app, db_session, m
 
     process_question_answer(user, True, request_json, False)
 
-    assert PostReply.query.get(reply.id).answer is True
+    assert db.session.get(PostReply, reply.id).answer is True
     assert ActivityPubLog.query.one().result == 'success'
 
 
@@ -980,7 +980,7 @@ def test_question_answer_granted_by_alternative_three_reply_author_is_admin(app,
 
     process_question_answer(user, True, request_json, False)
 
-    assert PostReply.query.get(reply.id).answer is True
+    assert db.session.get(PostReply, reply.id).answer is True
     assert ActivityPubLog.query.one().result == 'success'
 
 
@@ -1007,7 +1007,7 @@ def test_question_answer_refused_for_a_banned_instance_despite_alternative_one(a
 
     process_question_answer(user, True, request_json, False)
 
-    assert PostReply.query.get(reply.id).answer is False
+    assert db.session.get(PostReply, reply.id).answer is False
     row = ActivityPubLog.query.one()
     assert row.result == 'ignored'
     assert row.exception_message == 'Cannot set answer'

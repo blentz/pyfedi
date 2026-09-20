@@ -116,7 +116,7 @@ def admin_home():
 @login_required
 def admin_site():
     form = SiteProfileForm()
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     if site is None:
         site = Site()
     if form.validate_on_submit():
@@ -276,7 +276,7 @@ def admin_site():
 def admin_misc():
     form = SiteMiscForm()
     close_form = CloseInstanceForm()
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     if site is None:
         site = Site()
     form.default_theme.choices = theme_list()
@@ -432,7 +432,7 @@ def admin_federation():
         for defederation_sub in DefederationSubscription.query.all():
             download_defeds(defederation_sub.id, defederation_sub.domain)
 
-        site = Site.query.get(1)    # g.site.* is read only so we need a local copy of the model to save into.
+        site = db.session.get(Site, 1)    # g.site.* is read only so we need a local copy of the model to save into.
         site.blocked_phrases = form.blocked_phrases.data
         site.allowlist_mode = int(form.allowlist_mode.data)
         set_setting('actor_blocked_words', form.blocked_actors.data)
@@ -553,7 +553,7 @@ def admin_federation_preload():
         #
         # Therefore, 'main_user_name=False' has been changed to 'admin_preload=True' below
 
-        user = User.query.get(1)
+        user = db.session.get(User, 1)
         pre_load_messages = []
         for community in community_urls_to_join:
             # get the relevant url bits
@@ -878,7 +878,7 @@ def admin_federation_remote_scan():
                 flash(_(message))
                 return redirect(url_for('admin.admin_federation_remote_scan'))
 
-        user = User.query.get(1)
+        user = db.session.get(User, 1)
         remote_scan_messages = []
         for community in community_urls_to_join:
             # get the relevant url bits
@@ -968,7 +968,7 @@ def admin_federation_mastodon_scan():
             return redirect(url_for('admin.admin_federation_mastodon_scan'))
 
         # Follow as user 1, matching the two community scans on this page.
-        user = User.query.get(1)
+        user = db.session.get(User, 1)
         if current_app.debug:
             bulk_follow(user.id, handles)
         else:
@@ -1241,7 +1241,7 @@ def admin_activities():
 @permission_required('change instance settings')
 @login_required
 def activity_json(activity_id):
-    activity = ActivityPubLog.query.get_or_404(activity_id)
+    activity = db.session.get(ActivityPubLog, activity_id) or abort(404)
 
     raw_json = activity.activity_json
 
@@ -1270,7 +1270,7 @@ def activity_json(activity_id):
 @permission_required('change instance settings')
 @login_required
 def activity_replay(activity_id):
-    activity = ActivityPubLog.query.get_or_404(activity_id)
+    activity = db.session.get(ActivityPubLog, activity_id) or abort(404)
     request_json = json.loads(activity.activity_json)
     replay_inbox_request(request_json)
 
@@ -1378,7 +1378,7 @@ def admin_communities_unmoderated():
 @login_required
 def admin_community_edit(community_id):
     form = EditCommunityForm()
-    community = Community.query.get_or_404(community_id)
+    community = db.session.get(Community, community_id) or abort(404)
     old_topic_id = community.topic_id if community.topic_id else None
     form.topic.choices = topics_for_form(0)
     form.languages.choices = languages_for_form(all_languages=True)
@@ -1426,7 +1426,7 @@ def admin_community_edit(community_id):
         db.session.execute(text('DELETE FROM "community_language" WHERE community_id = :community_id'),
                            {'community_id': community_id})
         for language_choice in form.languages.data:
-            community.languages.append(Language.query.get(language_choice))
+            community.languages.append(db.session.get(Language, language_choice))
         # Always include the undetermined language, so posts with no language will be accepted
         community.languages.append(Language.query.filter(Language.code == 'und').first())
         db.session.commit()
@@ -1435,7 +1435,7 @@ def admin_community_edit(community_id):
             if community.topic_id:
                 community.topic.num_communities = community.topic.communities.count()
             if old_topic_id:
-                topic = Topic.query.get(old_topic_id)
+                topic = db.session.get(Topic, old_topic_id)
                 if topic:
                     topic.num_communities = topic.communities.count()
             db.session.commit()
@@ -1476,7 +1476,7 @@ def admin_community_edit(community_id):
 @permission_required('administer all communities')
 @login_required
 def admin_community_delete(community_id):
-    community = Community.query.get_or_404(community_id)
+    community = db.session.get(Community, community_id) or abort(404)
 
     community.banned = True  # Unsubscribing everyone could take a long time so until that is completed hide this community from the UI by banning it.
     community.last_active = utcnow()
@@ -1501,11 +1501,11 @@ def unsubscribe_everyone_then_delete_task(community_id):
         session = get_task_session()
         try:
             with patch_db_session(session):
-                community = session.query(Community).get(community_id)
+                community = session.get(Community, community_id)
                 if not community.is_local():
                     members = session.query(CommunityMember).filter_by(community_id=community_id).all()
                     for member in members:
-                        user = session.query(User).get(member.user_id)
+                        user = session.get(User, member.user_id)
                         unsubscribe_from_community(community, user)
                     sleep(5)
                 else:
@@ -1621,7 +1621,7 @@ def admin_topic_add():
 @login_required
 def admin_topic_edit(topic_id):
     form = EditTopicForm()
-    topic = Topic.query.get_or_404(topic_id)
+    topic = db.session.get(Topic, topic_id) or abort(404)
     form.parent_id.choices = topics_for_form(topic_id)
     if form.validate_on_submit():
         countries = form.countries.data.split('\n')
@@ -1654,7 +1654,7 @@ def admin_topic_edit(topic_id):
 @permission_required('administer all communities')
 @login_required
 def admin_topic_delete(topic_id):
-    topic = Topic.query.get_or_404(topic_id)
+    topic = db.session.get(Topic, topic_id) or abort(404)
     topic.num_communities = topic.communities.count()
     if topic.num_communities == 0:
         db.session.delete(topic)
@@ -1815,7 +1815,7 @@ def admin_approve_registrations():
 @permission_required('approve registrations')
 @login_required
 def admin_approve_registrations_approve(user_id):
-    user = User.query.get_or_404(user_id)
+    user = db.session.get(User, user_id) or abort(404)
     registration = UserRegistration.query.filter_by(status=0, user_id=user_id).first()
     if registration:
         registration.status = 1
@@ -1835,7 +1835,7 @@ def admin_approve_registrations_approve(user_id):
 @permission_required('approve registrations')
 @login_required
 def admin_approve_registrations_denied(user_id):
-    user = User.query.get_or_404(user_id)
+    user = db.session.get(User, user_id) or abort(404)
     registration = UserRegistration.query.filter_by(status=0, user_id=user_id).first()
     if registration:
         # remove the registration attempt
@@ -1872,7 +1872,7 @@ def admin_approve_registrations_denied(user_id):
 @login_required
 def admin_user_edit(user_id):
     form = EditUserForm()
-    user = User.query.get_or_404(user_id)
+    user = db.session.get(User, user_id) or abort(404)
     if form.validate_on_submit():
         user.bot = form.bot.data
         user.bot_override = form.bot_override.data
@@ -1888,13 +1888,13 @@ def admin_user_edit(user_id):
             finalize_user_setup(user)
         user.verified = form.verified.data
         if form.remove_avatar.data and user.avatar_id:
-            file = File.query.get(user.avatar_id)
+            file = db.session.get(File, user.avatar_id)
             file.delete_from_disk()
             user.avatar_id = None
             db.session.delete(file)
 
         if form.remove_banner.data and user.cover_id:
-            file = File.query.get(user.cover_id)
+            file = db.session.get(File, user.cover_id)
             file.delete_from_disk()
             user.cover_id = None
             db.session.delete(file)
@@ -1902,7 +1902,7 @@ def admin_user_edit(user_id):
         # Update user roles. The UI only lets the user choose 1 role but the DB structure allows for multiple roles per user.
         if user_access('change user roles', current_user.id):
             db.session.execute(text('DELETE FROM user_role WHERE user_id = :user_id'), {'user_id': user.id})
-            user.roles.append(Role.query.get(form.role.data))
+            user.roles.append(db.session.get(Role, form.role.data))
             if form.role.data == 4:
                 flash(_("Permissions are cached for 50 seconds so new admin roles won't take effect immediately."))
 
@@ -1949,7 +1949,7 @@ def admin_user_resend_email(user_id):
     if not is_htmx:
         abort(400)
     
-    user = User.query.get_or_404(user_id)
+    user = db.session.get(User, user_id) or abort(404)
     
     # Create verification token if it doesn't exist already or else verification is impossible
     if not user.verification_token:
@@ -1985,7 +1985,7 @@ def admin_users_add():
         if profile_file and profile_file.filename != '':
             # remove old avatar
             if user.avatar_id:
-                file = File.query.get(user.avatar_id)
+                file = db.session.get(File, user.avatar_id)
                 file.delete_from_disk()
                 user.avatar_id = None
                 db.session.delete(file)
@@ -1998,7 +1998,7 @@ def admin_users_add():
         if banner_file and banner_file.filename != '':
             # remove old cover
             if user.cover_id:
-                file = File.query.get(user.cover_id)
+                file = db.session.get(File, user.cover_id)
                 file.delete_from_disk()
                 user.cover_id = None
                 db.session.delete(file)
@@ -2013,7 +2013,7 @@ def admin_users_add():
         user.hide_nsfl = form.hide_nsfl.data
 
         user.instance_id = 1
-        user.roles.append(Role.query.get(form.role.data))
+        user.roles.append(db.session.get(Role, form.role.data))
         db.session.add(user)
         db.session.commit()
         finalize_user_setup(user)
@@ -2032,7 +2032,7 @@ def admin_user_delete(user_id):
     if user_id == 1:
         flash(_('This user cannot be deleted.'))
         return redirect(referrer())
-    user = User.query.get_or_404(user_id)
+    user = db.session.get(User, user_id) or abort(404)
 
     user.banned = True  # Unsubscribing everyone could take a long time so until that is completed hide this user from the UI by banning it.
     user.last_active = utcnow()
@@ -2054,8 +2054,8 @@ def admin_user_delete_task(user_id, current_user_id):
         session = get_task_session()
         try:
             with patch_db_session(session):
-                user: User = session.query(User).get(user_id)
-                current_usr = session.query(User).get(current_user_id)
+                user: User = session.get(User, user_id)
+                current_usr = session.get(User, current_user_id)
                 if user:
                     if user.is_local():
                         if user.private_key is not None:  # They have a private key once the registration is fully completed
@@ -2207,7 +2207,7 @@ def admin_instances():
 @login_required
 def admin_instance_edit(instance_id):
     form = EditInstanceForm()
-    instance = Instance.query.get_or_404(instance_id)
+    instance = db.session.get(Instance, instance_id) or abort(404)
     if instance.software != 'piefed':
         del form.hide
     if form.validate_on_submit():
@@ -2279,8 +2279,8 @@ def admin_instance_create_offline():
 @permission_required('change instance settings')
 @login_required
 def admin_community_move(community_id, new_owner):
-    community = Community.query.get_or_404(community_id)
-    new_owner_user = User.query.get_or_404(new_owner)
+    community = db.session.get(Community, community_id) or abort(404)
+    new_owner_user = db.session.get(User, new_owner) or abort(404)
     form = MoveCommunityForm()
 
     form.new_owner.label.text = _('Set community owner to %(user_name)s', user_name=new_owner_user.link())
@@ -2351,7 +2351,7 @@ def admin_blocked_images():
 @login_required
 def admin_blocked_image_edit(image_id):
     form = EditBlockedImageForm()
-    image = BlockedImage.query.get_or_404(image_id)
+    image = db.session.get(BlockedImage, image_id) or abort(404)
     if form.validate_on_submit():
         image.hash = form.hash.data
         image.file_name = form.file_name.data
@@ -2421,7 +2421,7 @@ def admin_blocked_image_purge_posts():
 @permission_required('administer all communities')
 @login_required
 def admin_blocked_image_delete(image_id):
-    image = BlockedImage.query.get_or_404(image_id)
+    image = db.session.get(BlockedImage, image_id) or abort(404)
 
     db.session.delete(image)
     db.session.commit()
@@ -2462,7 +2462,7 @@ def admin_cms_page_add():
 @permission_required('edit cms pages')
 @login_required
 def admin_cms_page_edit(page_id):
-    page = CmsPage.query.get_or_404(page_id)
+    page = db.session.get(CmsPage, page_id) or abort(404)
     form = CmsPageForm(original_page=page, obj=page)
 
     if form.validate_on_submit():
@@ -2484,7 +2484,7 @@ def admin_cms_page_edit(page_id):
 @permission_required('edit cms pages')
 @login_required
 def admin_cms_page_delete(page_id):
-    page = CmsPage.query.get_or_404(page_id)
+    page = db.session.get(CmsPage, page_id) or abort(404)
     db.session.delete(page)
     db.session.commit()
     flash(_('Page deleted.'))
@@ -2523,7 +2523,7 @@ def admin_emoji_add():
 @permission_required('change instance settings')
 @login_required
 def admin_emoji_edit(emoji_id):
-    emoji = Emoji.query.get_or_404(emoji_id)
+    emoji = db.session.get(Emoji, emoji_id) or abort(404)
     form = EmojiForm(original_page=emoji, obj=emoji)
 
     if form.validate_on_submit():
@@ -2544,7 +2544,7 @@ def admin_emoji_edit(emoji_id):
 @permission_required('change instance settings')
 @login_required
 def admin_emoji_delete(emoji_id):
-    emoji = Emoji.query.get_or_404(emoji_id)
+    emoji = db.session.get(Emoji, emoji_id) or abort(404)
     db.session.delete(emoji)
     db.session.commit()
     cache.delete_memoized(get_emoji_replacements)
@@ -2556,7 +2556,7 @@ def admin_emoji_delete(emoji_id):
 @login_required
 @permission_required('change instance settings')
 def masquerade(user_id):
-    user = User.query.get(user_id)
+    user = db.session.get(User, user_id)
     if user is not None and user.is_local():
         login_user(user, False)
         return redirect('/')
@@ -2609,7 +2609,7 @@ def admin_media():
 @permission_required('administer all users')
 @login_required
 def admin_media_delete(file_id):
-    file = File.query.get_or_404(file_id)
+    file = db.session.get(File, file_id) or abort(404)
     process_file_delete(file.source_url, file.user.first().id)
     flash(_('File deleted.'))
     return redirect(referrer(url_for('admin.admin_media')))

@@ -118,7 +118,7 @@ def initialise_new_communities(feed):
         return
 
     for feed_item in feed.member_communities:
-        community = Community.query.get(feed_item.community_id)
+        community = db.session.get(Community, feed_item.community_id)
         if community and community.post_count == 0:
             if current_app.debug:
                 retrieve_mods_and_backfill(community.id, community.ap_domain, community.name)

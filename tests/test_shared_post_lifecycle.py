@@ -138,7 +138,7 @@ def seed_site_admin(s, name='siteadmin'):
     foreign key to role.id and the query matches on that id, not on the role's
     name.
     """
-    role = db.session.query(Role).get(ROLE_ADMIN)
+    role = db.session.get(Role, ROLE_ADMIN)
     if role is None:
         role = Role(id=ROLE_ADMIN, name='Admin', weight=0)
         db.session.add(role)

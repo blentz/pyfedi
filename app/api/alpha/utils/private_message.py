@@ -72,7 +72,7 @@ def get_private_message_conversation(auth, data):
         {"user_id": user_id, "state": True}).scalars()
     
     if 'conversation_id' in data:
-        conversation = Conversation.query.get(data['conversation_id'])
+        conversation = db.session.get(Conversation, data['conversation_id'])
         conversation_ids = [conversation.id]
         if conversation.id not in joined_conversations:
             raise Exception("User is not a member of this conversation")
@@ -106,7 +106,7 @@ def _get_single_conversation_history(conversation: int | Conversation, limit: in
     """
     
     if isinstance(conversation, int):
-        conversation = Conversation.query.get(conversation)
+        conversation = db.session.get(Conversation, conversation)
     
     private_messages = ChatMessage.query.filter(ChatMessage.conversation_id == conversation.id).\
                             order_by(desc(ChatMessage.created_at)).limit(limit).all()
@@ -117,7 +117,7 @@ def _get_single_conversation_history(conversation: int | Conversation, limit: in
 def post_leave_conversation(auth, data):
     user = authorise_api_user(auth, return_type="model")
     conversation_id = data["conversation_id"]
-    conversation = Conversation.query.get(conversation_id)
+    conversation = db.session.get(Conversation, conversation_id)
 
     if not conversation or not conversation.is_member(user):
         raise Exception("You are not a part of this conversation")
@@ -256,7 +256,7 @@ def post_private_message_conversation_report(auth, data):
     user = authorise_api_user(auth, return_type="model")
     conversation_id = data["conversation_id"]
     reason = data["reason"]
-    conversation = Conversation.query.get(conversation_id)
+    conversation = db.session.get(Conversation, conversation_id)
 
     if not (conversation or conversation.is_member(user) or user_access("administer all users", user.id)):
         raise Exception("You are not a part of this conversation")
@@ -315,7 +315,7 @@ def get_private_message_report_list(auth, data):
 
     report_list = []
     for report in reports.items:
-        private_message = ChatMessage.query.get(int(report.targets["suspect_message_id"]))
+        private_message = db.session.get(ChatMessage, int(report.targets["suspect_message_id"]))
         report_list.append(private_message_view(private_message, variant=3, report=report))
 
     reply_json = dict()
@@ -349,7 +349,7 @@ def get_private_message_conversation_report_list(auth, data):
 
     report_list = []
     for report in reports.items:
-        conversation = Conversation.query.get(report.suspect_conversation_id)
+        conversation = db.session.get(Conversation, report.suspect_conversation_id)
         message_history = _get_single_conversation_history(conversation, limit=message_history_limit)
         message_history = [private_message_view(message, variant=1) for message in message_history]
 
@@ -373,7 +373,7 @@ def put_private_message_report_resolve(auth, data):
     if not user_access("administer all users", user.id):
         raise Exception("incorrect login")
     
-    report = Report.query.get(report_id)
+    report = db.session.get(Report, report_id)
 
     if "suspect_message_id" not in report.targets:
         raise Exception("invalid target of resolution")
@@ -385,7 +385,7 @@ def put_private_message_report_resolve(auth, data):
     
     db.session.commit()
 
-    private_message = ChatMessage.query.get(report.targets["suspect_message_id"])
+    private_message = db.session.get(ChatMessage, report.targets["suspect_message_id"])
 
     return {"private_message_report_view": private_message_view(private_message, variant=3, report=report)}
 
@@ -399,7 +399,7 @@ def put_private_message_conversation_report_resolve(auth, data):
     if not user_access("administer all users", user.id):
         raise Exception("incorrect login")
     
-    report = Report.query.get(report_id)
+    report = db.session.get(Report, report_id)
 
     if not report.suspect_conversation_id:
         raise Exception("invalid target of resolution")

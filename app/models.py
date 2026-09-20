@@ -269,7 +269,7 @@ class Conversation(db.Model):
                     cm2.user_id = :user_id_2 AND
                     cm1.user_id <> cm2.user_id;"""
         ec = db.session.execute(text(sql), {'user_id_1': recipient.id, 'user_id_2': sender.id}).fetchone()
-        return db.session.query(Conversation).get(ec[0]) if ec else None
+        return db.session.get(Conversation, ec[0]) if ec else None
 
 
 conversation_member = db.Table('conversation_member',
@@ -537,7 +537,7 @@ class Topic(db.Model):
         return_value = [self.machine_name]
         parent_id = self.parent_id
         while parent_id is not None:
-            parent_topic = Topic.query.get(parent_id)
+            parent_topic = db.session.get(Topic, parent_id)
             if parent_topic is None:
                 break
             return_value.append(parent_topic.machine_name)
@@ -1488,7 +1488,7 @@ class User(UserMixin, db.Model):
                             algorithms=['HS256'])['reset_password']
         except:
             return
-        return User.query.get(id)
+        return db.session.get(User, id)
 
     def delete_dependencies(self):
         # Get cover and avatar file IDs before clearing references
@@ -1514,7 +1514,7 @@ class User(UserMixin, db.Model):
         for file_id in [cover_file_id, avatar_file_id]:
             if file_id is None:
                 continue
-            file = db.session.query(File).get(file_id)
+            file = db.session.get(File, file_id)
             if file is None:
                 continue
             
@@ -2181,7 +2181,7 @@ class Post(db.Model):
                             if recipient:
                                 blocked_senders = blocked_users(recipient.id)
                                 if post.user_id not in blocked_senders:
-                                    author = User.query.get(post.user_id).first()
+                                    author = db.session.get(User, post.user_id).first()
                                     targets_data = {'gen': '0',
                                                     'post_id': post.id,
                                                     'post_body': post.body,
@@ -3039,7 +3039,7 @@ class PostReply(db.Model):
         if in_reply_to is None or in_reply_to.parent_id is None:
             notification_target = post
         else:
-            notification_target = PostReply.query.get(in_reply_to.parent_id)
+            notification_target = db.session.get(PostReply, in_reply_to.parent_id)
 
         if notification_target.author.has_blocked_user(reply.user_id):
             raise PostReplyValidationError(_('Replier blocked'))
@@ -3047,7 +3047,7 @@ class PostReply(db.Model):
         if reply_already_exists(user_id=user.id, post_id=post.id, parent_id=reply.parent_id, body=reply.body):
             raise PostReplyValidationError(_('Duplicate reply'))
 
-        site = Site.query.get(1)
+        site = db.session.get(Site, 1)
         if site is None:
             site = Site()
 
@@ -3239,7 +3239,7 @@ class PostReply(db.Model):
         if self.parent_id is None:
             return self.post.ap_id
         else:
-            parent = PostReply.query.get(self.parent_id)
+            parent = db.session.get(PostReply, self.parent_id)
             return parent.ap_id
 
     # the AP profile of the person who wrote the parent object, which could be another PostReply or a Post
@@ -3247,7 +3247,7 @@ class PostReply(db.Model):
         if self.parent_id is None:
             return self.post.author.public_url()
         else:
-            parent = PostReply.query.get(self.parent_id)
+            parent = db.session.get(PostReply, self.parent_id)
             return parent.author.public_url()
 
     def tags_for_activitypub(self):
@@ -3818,7 +3818,7 @@ class Poll(db.Model):
         if not existing_vote:
             new_vote = PollChoiceVote(choice_id=choice_id, user_id=user_id, post_id=self.post_id)
             db.session.add(new_vote)
-            choice = PollChoice.query.get(choice_id)
+            choice = db.session.get(PollChoice, choice_id)
             choice.num_votes += 1
             self.latest_vote = utcnow()
             db.session.commit()
@@ -4073,7 +4073,7 @@ class Site(db.Model):
 #
 @login.user_loader
 def load_user(id):
-    return db.session.query(User).get(int(id))
+    return db.session.get(User, int(id))
 
 
 # --- Feeds Models ---
@@ -4214,7 +4214,7 @@ class Feed(db.Model):
         return_value = [self.machine_name]
         parent_id = self.parent_feed_id
         while parent_id is not None:
-            parent_feed = Feed.query.get(parent_id)
+            parent_feed = db.session.get(Feed, parent_id)
             if parent_feed is None:
                 break
             return_value.append(parent_feed.machine_name)
@@ -4223,11 +4223,11 @@ class Feed(db.Model):
         return '/'.join(return_value)
 
     def creator(self):
-        owner = User.query.get(self.user_id)
+        owner = db.session.get(User, self.user_id)
         return owner.ap_id if owner.ap_id else owner.user_name
 
     def parent_feed_name(self):
-        parent_feed = Feed.query.get(self.parent_feed_id)
+        parent_feed = db.session.get(Feed, self.parent_feed_id)
         return parent_feed.title if parent_feed else ""
 
     def subscribed(self, user_id: int) -> int:
@@ -4315,7 +4315,7 @@ class CommunityFlair(db.Model):
         if self.ap_id:
             return self.ap_id
 
-        community = db.session.query(Community).get(self.community_id)
+        community = db.session.get(Community, self.community_id)
 
         self.ap_id = community.local_url() + f"/tag/{self.id}"
         db.session.commit()
@@ -4491,7 +4491,7 @@ class RssFeedItem(db.Model):
 
     def delete_dependencies(self):
         from app import redis_client
-        post = Post.query.get(self.post_id)
+        post = db.session.get(Post, self.post_id)
         if post:
             with redis_client.lock(f"lock:post:{post.id}", timeout=30, blocking_timeout=30):
                 post.delete_dependencies()

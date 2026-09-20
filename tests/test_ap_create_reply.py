@@ -1209,7 +1209,7 @@ def test_a_mention_of_a_local_user_produces_a_notification(app, db_session, redi
     assert notification.notif_type == NOTIF_MENTION
     assert notification.subtype == 'comment_mention'
     assert notification.author_id == replier.id
-    refreshed = User.query.get(recipient.id)
+    refreshed = db.session.get(User, recipient.id)
     assert refreshed.unread_notifications == 1
 
 
@@ -1523,7 +1523,7 @@ def test_the_unread_counter_increments_rather_than_resets(app, db_session, redis
     reply = _create(community, post, replier, document=document)
 
     assert reply is not None
-    refreshed = User.query.get(recipient.id)
+    refreshed = db.session.get(User, recipient.id)
     assert refreshed.unread_notifications == 4
 
 
@@ -1584,7 +1584,7 @@ def test_a_recipient_blocked_by_the_sender_gets_no_notification(app, db_session,
 
     assert reply is not None
     assert Notification.query.count() == 0
-    refreshed = User.query.get(recipient.id)
+    refreshed = db.session.get(User, recipient.id)
     assert refreshed.unread_notifications == 0
 
 
@@ -2489,7 +2489,7 @@ def test_the_parents_notification_is_marked_read_for_the_new_replys_author(app, 
 
     notify_about_post_reply(parent, new_reply)
 
-    assert Notification.query.get(notif.id).read is True
+    assert db.session.get(Notification, notif.id).read is True
 
 
 def test_a_notification_about_a_different_comment_is_left_unread(app, db_session, redis_lock_only_double):
@@ -2513,7 +2513,7 @@ def test_a_notification_about_a_different_comment_is_left_unread(app, db_session
 
     notify_about_post_reply(parent, new_reply)
 
-    assert Notification.query.get(notif.id).read is False
+    assert db.session.get(Notification, notif.id).read is False
 
 
 def test_a_matching_notification_for_a_different_user_is_left_unread(app, db_session, redis_lock_only_double):
@@ -2538,7 +2538,7 @@ def test_a_matching_notification_for_a_different_user_is_left_unread(app, db_ses
 
     notify_about_post_reply(parent, new_reply)
 
-    assert Notification.query.get(notif.id).read is False
+    assert db.session.get(Notification, notif.id).read is False
 
 
 def test_the_authors_unread_total_is_recounted_not_incremented(app, db_session, redis_lock_only_double):

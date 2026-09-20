@@ -70,7 +70,7 @@ def _seed(private_instance=False):
     assert burn.id == 1
     owner = make_user(instance, 'feedowner', local=True)
     snooper = make_user(instance, 'snooper', local=True)
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.private_instance = private_instance
     db.session.commit()
     return instance, owner, snooper
@@ -520,7 +520,7 @@ def test_show_feeds_final_abort_is_unreachable(app, db_session):
 
     with app.test_request_context('/f/nothing'):
         from flask import g
-        g.site = Site.query.get(1)
+        g.site = db.session.get(Site, 1)
         with pytest.raises(AttributeError, match='public'):
             show_feed(None)
 

@@ -52,7 +52,7 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
 
     # get the user to check if the user has hide_read posts set later down the function
     if user_id:
-        user = User.query.get(user_id)
+        user = db.session.get(User, user_id)
         g.user = user   # save the currently logged in user into g, to save loading it up again and again in post_view.
 
     # user_id: the logged in user
@@ -68,7 +68,7 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
         search_by_community = True
         # check private community access
         if community_id:
-            community = Community.query.get(community_id)
+            community = db.session.get(Community, community_id)
         else:
             # parse community_name to get the community
             if '@' not in community_name:
@@ -235,7 +235,7 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
         elif feed_id:
             use_faster_query = False
             segregate_instance_stickies = False
-            feed = Feed.query.get(feed_id)
+            feed = db.session.get(Feed, feed_id)
             if feed.show_posts_in_children:  # include posts from child feeds
                 feed_ids = get_all_child_feed_ids(feed)
             else:
@@ -267,7 +267,7 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
         elif topic_id:
             use_faster_query = False
             segregate_instance_stickies = False
-            topic = Topic.query.get(topic_id)
+            topic = db.session.get(Topic, topic_id)
             if topic.show_posts_in_children:  # include posts from child feeds
                 topic_ids = get_all_child_topic_ids(topic)
             else:
@@ -700,7 +700,7 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
     # get the user to check if the user has hide_read posts set later down the function
 
     if user_id:
-        user = User.query.get(user_id)
+        user = db.session.get(User, user_id)
         g.user = user   # save the currently logged in user into g, to save loading it up again and again in post_view.
 
     # user_id: the logged in user
@@ -716,7 +716,7 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
         search_by_community = True
         # check private community access
         if community_id:
-            community = Community.query.get(community_id)
+            community = db.session.get(Community, community_id)
         else:
             # parse community_name to get the community
             if '@' not in community_name:
@@ -822,7 +822,7 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
                                                                               blocked_instance_ids))
             content_filters = user_filters_posts(user_id) if user_id else {}
         elif feed_id:
-            feed = Feed.query.get(feed_id)
+            feed = db.session.get(Feed, feed_id)
             if feed.show_posts_in_children:  # include posts from child feeds
                 feed_ids = get_all_child_feed_ids(feed)
             else:
@@ -847,7 +847,7 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
             content_filters = user_filters_posts(user_id) if user_id else {}
         elif feed_id:
             segregate_instance_stickies = False
-            feed = Feed.query.get(feed_id)
+            feed = db.session.get(Feed, feed_id)
             if feed.show_posts_in_children:  # include posts from child feeds
                 feed_ids = get_all_child_feed_ids(feed)
             else:
@@ -872,7 +872,7 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
             content_filters = user_filters_posts(user_id) if user_id else {}
         elif topic_id:
             segregate_instance_stickies = False
-            topic = Topic.query.get(topic_id)
+            topic = db.session.get(Topic, topic_id)
             if topic.show_posts_in_children:  # include posts from child feeds
                 topic_ids = get_all_child_topic_ids(topic)
             else:
@@ -1208,13 +1208,13 @@ def get_post_replies(auth, data):
         user = None
 
     if parent_id:
-        parent = PostReply.query.get(parent_id)
+        parent = db.session.get(PostReply, parent_id)
         if post_id is None:
             post_id = parent.post_id
-        post = Post.query.get(post_id)
+        post = db.session.get(Post, post_id)
         replies = get_comment_branch(post, parent.id, sort.lower(), user)
     else:
-        post = Post.query.get(post_id)
+        post = db.session.get(Post, post_id)
         replies = post_replies(post, sort.lower(), user)
 
     is_user_banned_from_community = post.community_id in user_details['user_ban_community_ids'] if user_details else False
@@ -1479,7 +1479,7 @@ def post_post(auth, data):
 
 def put_post(auth, data):
     post_id = data['post_id']
-    post = Post.query.get(post_id)
+    post = db.session.get(Post, post_id)
 
     title = data['title'] if 'title' in data else post.title
     body = data['body'] if 'body' in data else post.body
@@ -1544,7 +1544,7 @@ def post_post_report(auth, data):
     report_remote = data['report_remote'] if 'report_remote' in data else True
     input = {'reason': reason, 'description': description, 'report_remote': report_remote}
 
-    post = Post.query.get(post_id)
+    post = db.session.get(Post, post_id)
     user_id, report = report_post(post, input, SRC_API, auth)
 
     post_json = post_report_view(report=report, post_id=post_id, user_id=user_id)
@@ -1565,7 +1565,7 @@ def get_post_report_list(auth, data):
 
     if post_id:
         # Just get reports for a single post
-        post = Post.query.get(post_id)
+        post = db.session.get(Post, post_id)
         mods = post.community.moderators()
         mod_ids = [mod.user_id for mod in mods]
 
@@ -1576,7 +1576,7 @@ def get_post_report_list(auth, data):
             raise Exception('incorrect login')
     elif community_id:
         # Just get reports for a single community
-        community = Community.query.get(community_id)
+        community = db.session.get(Community, community_id)
         mods = community.moderators()
         mod_ids = [mod.user_id for mod in mods]
 
@@ -1626,12 +1626,12 @@ def put_post_report_resolve(auth, data):
     if not user:
         raise Exception("incorrect login")
     
-    report = Report.query.get(report_id)
+    report = db.session.get(Report, report_id)
     
     if not report.suspect_post_id and report.suspect_post_reply_id:
         raise Exception("invalid target of resolution")
     
-    community = Community.query.get(report.in_community_id)
+    community = db.session.get(Community, report.in_community_id)
     mods = community.moderators()
     mod_ids = [mod.user_id for mod in mods]
 
@@ -1679,7 +1679,7 @@ def post_post_feature(auth, data):
     elif feature_type == "Local":
         user = authorise_api_user(auth, 'model')
         user_id = user.id
-        post = Post.query.get(post_id)
+        post = db.session.get(Post, post_id)
         
         if user.is_admin():
             post.instance_sticky = featured
@@ -1733,7 +1733,7 @@ def get_post_like_list(auth, data):
         limit = current_app.config["PAGE_LENGTH"]
 
     user = authorise_api_user(auth, return_type='model')
-    post = Post.query.get(post_id)
+    post = db.session.get(Post, post_id)
 
     if post.community.is_moderator(user) or user.is_admin() or user.is_staff():
         banned_from_site_user_ids = list(db.session.execute(text('SELECT id FROM "user" WHERE banned = true')).scalars())
@@ -1762,7 +1762,7 @@ def put_post_set_flair(auth, data):
     post_id = data['post_id']
     flair_list = data['flair_id_list'] if 'flair_id_list' in data else []
 
-    post = Post.query.get(post_id)
+    post = db.session.get(Post, post_id)
     user = authorise_api_user(auth, return_type='model')
     
     if post.community.is_moderator(user) or user.is_admin_or_staff() or post.user_id == user.id:
@@ -1771,7 +1771,7 @@ def put_post_set_flair(auth, data):
 
         if flair_list:
             comm_flair = CommunityFlair.query.filter_by(community_id=post.community_id).all()
-            flair_objs = [CommunityFlair.query.get(flair_id) for flair_id in flair_list]
+            flair_objs = [db.session.get(CommunityFlair, flair_id) for flair_id in flair_list]
 
             for flair in flair_objs:
                 if flair in comm_flair:

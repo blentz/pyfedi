@@ -162,7 +162,7 @@ def fetch_remote_actor_data(url: str, retry_count=1):
             elif response.status_code == 401:
                 signed_response = None
                 try:
-                    site = db.session.query(Site).get(1)
+                    site = db.session.get(Site, 1)
                     signed_response = signed_get_request(url, site.private_key, f"{current_app.config['SERVER_URL']}/actor#main-key")
                     try:
                         return signed_response.json()

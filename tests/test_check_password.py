@@ -175,7 +175,7 @@ class TestAValidLegacyBcryptHashStillMigrates:
         assert user.check_password('the-old-password') is True
 
         db.session.expire_all()
-        assert not User.query.get(user.id).password_hash.startswith('$2b$')
+        assert not db.session.get(User, user.id).password_hash.startswith('$2b$')
 
     def test_it_does_not_stamp_password_updated_at(self, user):
         """revoke_sessions=False. The password did not change, only its

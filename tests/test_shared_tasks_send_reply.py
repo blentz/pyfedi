@@ -339,7 +339,7 @@ def _peer_instance(s):
     different instance row from the community's and change which domains
     :228 considers already-sent-to.
     """
-    return db.session.query(Instance).get(s.community.instance_id)
+    return db.session.get(Instance, s.community.instance_id)
 
 
 # ---------------------------------------------------------------------------

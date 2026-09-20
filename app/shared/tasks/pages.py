@@ -86,7 +86,7 @@ def edit_post(send_async, post_id):
 
 
 def send_post(post_id, edit=False, session=None):
-    post = session.query(Post).get(post_id)
+    post = session.get(Post, post_id)
     user = post.author
     community = post.community
 
@@ -346,7 +346,7 @@ def send_post(post_id, edit=False, session=None):
         # app/shared/tasks/deletes.py. The None is kept out of .get(), which
         # SQLAlchemy warns may stop answering None, and `if user_details`
         # below remains the single decision this loop makes.
-        user_details = (session.query(User).get(follower.remote_user_id)
+        user_details = (session.get(User, follower.remote_user_id)
                         if follower.remote_user_id else None)
         if user_details:
             create['cc'].append(user_details.public_url())
@@ -380,10 +380,10 @@ def move_post(send_async, user_id, old_community_id, new_community_id, post_id):
         session = get_task_session()
         try:
             with patch_db_session(session):
-                post = session.query(Post).get(post_id)
+                post = session.get(Post, post_id)
                 if post and not post.deleted:
-                    new_community = session.query(Community).get(new_community_id)
-                    old_community = session.query(Community).get(old_community_id)
+                    new_community = session.get(Community, new_community_id)
+                    old_community = session.get(Community, old_community_id)
                     move_object(session, user_id, post, origin=old_community, target=new_community)
         except Exception:
             session.rollback()
@@ -393,7 +393,7 @@ def move_post(send_async, user_id, old_community_id, new_community_id, post_id):
 
 
 def move_object(session, user_id, object, origin, target):
-    user = session.query(User).get(user_id)
+    user = session.get(User, user_id)
 
     if isinstance(origin, Community) and isinstance(target, Community):
         community = origin

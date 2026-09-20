@@ -2818,19 +2818,24 @@ class TestPollAndEventTail:
                         og_title='A photo')
         s = _seed()
 
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter('always')
-            edit_post(_api_input(url=BARE_PIXELFED_URL,
-                                 image_alt_text='supplied by the caller'),
-                      s.post, POST_TYPE_LINK, SRC_API, user=s.user,
-                      from_scratch=True)
+        edit_post(_api_input(url=BARE_PIXELFED_URL,
+                             image_alt_text='supplied by the caller'),
+                  s.post, POST_TYPE_LINK, SRC_API, user=s.user,
+                  from_scratch=True)
 
-        null_pk = [w for w in caught
-                   if 'fully NULL primary key' in str(w.message)
-                   and w.filename.endswith('app/shared/post.py')
-                   and _source_of(w) == 'file = File.query.get(post.image_id)']
-        assert len(null_pk) == 1
-
+        # THE WARNING USED TO BE THE OBSERVABLE HERE. `:666` read
+        # `File.query.get(post.image_id)` with image_id still unflushed, and
+        # SQLAlchemy's "fully NULL primary key" SAWarning was caught and
+        # counted as direct evidence that the lookup ran on a None. Sub-project
+        # 71 stopped handing the None to the lookup at all (the D845 shape), so
+        # there is no warning left to catch -- the call is simply not made.
+        #
+        # The state assertions below are what separate this case from its twin,
+        # and they always did: this docstring's own note says
+        # `assert s.post.image_id is not None` already distinguishes them. What
+        # is lost is directness, not discrimination -- the twin immediately
+        # below supplies the same caller alt_text and DOES get it written,
+        # which is what makes `file.alt_text` here load-bearing.
         db.session.refresh(s.post)
         assert s.post.image_id is not None  # `:663`'s `post.image` WAS truthy
         file = db.session.get(File, s.post.image_id)

@@ -95,10 +95,10 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
         session = get_task_session()
         try:
             with patch_db_session(session):
-                community = session.query(Community).get(community_id)
+                community = session.get(Community, community_id)
                 if not community:
                     return
-                site = session.query(Site).get(1)
+                site = session.get(Site, 1)
 
                 is_peertube = is_guppe = is_wordpress = False
                 mod = None
@@ -409,8 +409,8 @@ def delete_post_from_community_task(post_id, user_id):
         session = get_task_session()
         try:
             with patch_db_session(session):
-                user = session.query(User).get(user_id)
-                post = session.query(Post).get(post_id)
+                user = session.get(User, user_id)
+                post = session.get(Post, post_id)
                 community = post.community
                 post.deleted = True
                 post.deleted_by = user.id
@@ -471,8 +471,8 @@ def delete_post_reply_from_community_task(post_reply_id, user_id):
         session = get_task_session()
         try:
             with patch_db_session(session):
-                user = session.query(User).get(user_id)
-                post_reply = session.query(PostReply).get(post_reply_id)
+                user = session.get(User, user_id)
+                post_reply = session.get(PostReply, post_reply_id)
                 post = post_reply.post
 
                 post_reply.deleted = True
@@ -524,7 +524,7 @@ def delete_post_reply_from_community_task(post_reply_id, user_id):
 
 
 def remove_old_file(file_id):
-    remove_file = File.query.get(file_id)
+    remove_file = db.session.get(File, file_id)
     remove_file.delete_from_disk()
 
 
@@ -854,9 +854,9 @@ def send_to_remote_instance(instance_id: int, community_id: int, payload):
 def send_to_remote_instance_task(instance_id: int, community_id: int, payload):
     session = get_task_session()
     try:
-        community: Community = session.query(Community).get(community_id)
+        community: Community = session.get(Community, community_id)
         if community:
-            instance: Instance = session.query(Instance).get(instance_id)
+            instance: Instance = session.get(Instance, instance_id)
             if instance.inbox and instance.online() and not instance_banned(instance.domain):
                 send_post_request(instance.inbox, payload, community.private_key, community.ap_profile_id + '#main-key',
                                   timeout=10, new_task=False)
@@ -1001,7 +1001,7 @@ def publicize_community(community: Community):
 @celery.task
 def publicize_community_task(community_id: int):
     session = get_task_session()
-    community = session.query(Community).get(community_id)
+    community = session.get(Community, community_id)
     get_request(f'https://lemmy.world/api/v3/resolve_object?q={community.lemmy_link()}')
     get_request(f'https://sh.itjust.works/api/v3/resolve_object?q={community.lemmy_link()}')
     get_request(f'https://lemmy.zip/api/v3/resolve_object?q={community.lemmy_link()}')

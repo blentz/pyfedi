@@ -484,7 +484,7 @@ class TestProcessFileDelete:
 
             process_file_delete(source_url, 0)
 
-            assert File.query.get(file_id) is not None
+            assert db.session.get(File, file_id) is not None
             assert _user_file_row_exists(file_id)
 
     def test_user_id_with_no_matching_file_is_a_noop(self, app, db_session):
@@ -503,7 +503,7 @@ class TestProcessFileDelete:
 
             process_file_delete('https://example.test/nonexistent.png', user.id)
 
-            assert File.query.get(file_id) is not None
+            assert db.session.get(File, file_id) is not None
             assert _user_file_row_exists(file_id)
 
     def test_a_matching_file_is_deleted_from_db_and_disk(self, app, db_session):
@@ -543,7 +543,7 @@ class TestProcessFileDelete:
             try:
                 process_file_delete(source_url, user.id)
 
-                assert File.query.get(file_id) is None
+                assert db.session.get(File, file_id) is None
                 remaining = db.session.execute(
                     text('SELECT 1 FROM "user_file" WHERE file_id = :fid'), {'fid': file_id}).first()
                 assert remaining is None

@@ -80,7 +80,7 @@ def feed_new():
         # A 404 rather than an AttributeError: the id comes from a query string,
         # and the link carrying it may have been opened before the topic was
         # deleted. The rest of this file uses get_or_404 for the same reason.
-        topic = Topic.query.get_or_404(request.args.get('topic_id'))
+        topic = db.session.get(Topic, request.args.get('topic_id')) or abort(404)
         community_apids = []
         for community in topic.communities:
             community_apids.append(community.lemmy_link().replace('!', ''))
@@ -143,7 +143,7 @@ def feed_edit(feed_id: int):
     if current_user.banned:
         return show_ban_message()
     # load the feed
-    feed_to_edit: Feed = Feed.query.get_or_404(feed_id)
+    feed_to_edit: Feed = db.session.get(Feed, feed_id) or abort(404)
     # make sure the user owns this feed
     if feed_to_edit.user_id != current_user.id:
         abort(404)
@@ -207,7 +207,7 @@ def feed_edit(feed_id: int):
 @login_required
 def feed_delete(feed_id: int):
 
-    feed = Feed.query.get_or_404(feed_id)
+    feed = db.session.get(Feed, feed_id) or abort(404)
 
     delete_feed(feed_id, SRC_WEB)
 
@@ -227,7 +227,7 @@ def feed_copy(feed_id: int):
     if current_user.banned:
         return show_ban_message()
     # load the feed
-    feed_to_copy = Feed.query.get_or_404(feed_id)
+    feed_to_copy = db.session.get(Feed, feed_id) or abort(404)
     copy_feed_form = AddCopyFeedForm()
     copy_feed_form.parent_feed_id.choices = feeds_for_form(0, current_user.id)
 
@@ -315,7 +315,7 @@ def feed_copy(feed_id: int):
         for item in old_feed_items:
             if item.community_id not in member_of_ids and current_user.feed_auto_follow:
                 from app.community.routes import do_subscribe
-                community = Community.query.get(item.community_id)
+                community = db.session.get(Community, item.community_id)
                 actor = community.ap_id if community.ap_id else community.name
                 do_subscribe(actor, current_user.id, joined_via_feed=True)
 
@@ -356,7 +356,7 @@ def feed_copy(feed_id: int):
 @login_required
 def feed_notification(feed_id: int):
     # Toggle whether the current user is subscribed to notifications about this feed's posts or not
-    feed = Feed.query.get_or_404(feed_id)
+    feed = db.session.get(Feed, feed_id) or abort(404)
     existing_notification = NotificationSubscription.query.filter(NotificationSubscription.entity_id == feed.id,
                                                                   NotificationSubscription.user_id == current_user.id,
                                                                   NotificationSubscription.type == NOTIF_FEED).first()
@@ -386,9 +386,9 @@ def feed_add_community():
 
     # make sure the signed-in user owns the feed being added to, and -- when a
     # community is being moved out of another feed -- the feed it is moving from
-    if Feed.query.get(feed_id).user_id != user_id:
+    if db.session.get(Feed, feed_id).user_id != user_id:
         abort(404)
-    if current_feed_id != 0 and Feed.query.get(current_feed_id).user_id != user_id:
+    if current_feed_id != 0 and db.session.get(Feed, current_feed_id).user_id != user_id:
         abort(404)
 
     _feed_add_community(community_id, current_feed_id, feed_id, user_id)
@@ -484,7 +484,7 @@ def show_feed(feed):
     parent_id = feed.parent_feed_id
     parents = []
     while parent_id:
-        parent_feed = Feed.query.get(parent_id)
+        parent_feed = db.session.get(Feed, parent_id)
         parents.append(parent_feed)
         parent_id = parent_feed.parent_feed_id
 
@@ -538,7 +538,7 @@ def show_feed(feed):
 
         sub_feeds = Feed.query.filter_by(parent_feed_id=current_feed.id).order_by(Feed.name).all()
 
-        owner = User.query.get(feed.user_id)
+        owner = db.session.get(User, feed.user_id)
 
         # Voting history
         if current_user.is_authenticated:
@@ -618,7 +618,7 @@ def feed_create_post(feed_name):
     sub_communities = Community.query.filter_by(banned=False).filter(Community.id.in_(sub_feed_community_ids)).\
         order_by(Community.title).all()
     if request.form.get('community_id', '') != '':
-        community = Community.query.get_or_404(int(request.form.get('community_id')))
+        community = db.session.get(Community, int(request.form.get('community_id'))) or abort(404)
         return redirect(url_for('community.join_then_add', actor=community.link()))
     return render_template('feed/feed_create_post.html', communities=communities, sub_communities=sub_communities,
                            feed=feed,
@@ -696,7 +696,7 @@ def feed_unsubscribe(actor):
                             db.session.query(CommunityJoinRequest).filter_by(user_id=current_user.id,
                                                                              community_id=feed_item.community_id).delete()
                             cache.delete_memoized(community_membership, current_user,
-                                                  Community.query.get(feed_item.community_id))
+                                                  db.session.get(Community, feed_item.community_id))
                         db.session.commit()
 
                     flash(_('You have left %(feed_title)s', feed_title=feed.title))

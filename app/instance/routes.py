@@ -135,7 +135,7 @@ def instance_people(instance_domain):
     if instance_domain == 'all':
         ...
     elif instance_domain == 'local':
-        instance = Instance.query.get(1)
+        instance = db.session.get(Instance, 1)
     else:
         instance = Instance.query.filter(Instance.domain == instance_domain).first()
         if instance is None:
@@ -327,7 +327,7 @@ def instance_posts(instance_domain):
 @bp.route('/instance/<int:instance_id>/block', methods=['POST'])
 @login_required
 def instance_block(instance_id):
-    instance = Instance.query.get_or_404(instance_id)
+    instance = db.session.get(Instance, instance_id) or abort(404)
     block_remote_instance(instance_id, SRC_WEB)
     flash(_('Content from %(instance_domain)s will be hidden.', instance_domain=instance.domain))
 
@@ -344,7 +344,7 @@ def instance_block(instance_id):
 @bp.route('/instance/<int:instance_id>/unblock', methods=['POST'])
 @login_required
 def instance_unblock(instance_id):
-    instance = Instance.query.get_or_404(instance_id)
+    instance = db.session.get(Instance, instance_id) or abort(404)
     unblock_remote_instance(instance_id, SRC_WEB)
     flash(_('%(instance_domain)s has been unblocked.', instance_domain=instance.domain))
 

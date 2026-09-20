@@ -113,7 +113,7 @@ def convert_archived_replies_to_tree(archived_replies: list, post: Post) -> List
         
         # Language
         if reply_data.get('language_id'):
-            post_reply.language = Language.query.get(reply_data['language_id'])
+            post_reply.language = db.session.get(Language, reply_data['language_id'])
         
         return {
             'comment': post_reply,
@@ -202,7 +202,7 @@ def get_comment_branch(post: Post, comment_id: int, sort_by: str, viewer: User) 
                 return []
     
     # Fetch the specified parent comment and its replies
-    parent_comment = PostReply.query.get(comment_id)
+    parent_comment = db.session.get(PostReply, comment_id)
     if parent_comment is None:
         return []
 

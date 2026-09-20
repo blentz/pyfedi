@@ -34,7 +34,7 @@ def show_domain(domain_id):
         else:
             if not domain_id.isdigit():  # neither a name nor an id, so nothing to find
                 abort(404)
-            domain = Domain.query.get_or_404(domain_id)
+            domain = db.session.get(Domain, domain_id) or abort(404)
             if domain.banned:
                 domain = None
         if domain:
@@ -116,7 +116,7 @@ def show_domain_rss(domain_id):
         else:
             if not domain_id.isdigit():  # neither a name nor an id, so nothing to find
                 abort(404)
-            domain = Domain.query.get_or_404(domain_id)
+            domain = db.session.get(Domain, domain_id) or abort(404)
             if domain.banned:
                 domain = None
         if domain:
@@ -228,7 +228,7 @@ def unban_all():
 @bp.route('/d/<int:domain_id>/block', methods=['POST'])
 @login_required
 def domain_block(domain_id):
-    domain = Domain.query.get_or_404(domain_id)
+    domain = db.session.get(Domain, domain_id) or abort(404)
 
     block_domain(domain.name, SRC_WEB)
 
@@ -246,7 +246,7 @@ def domain_block(domain_id):
 @bp.route('/d/<int:domain_id>/unblock', methods=['POST'])
 @login_required
 def domain_unblock(domain_id):
-    domain = Domain.query.get_or_404(domain_id)
+    domain = db.session.get(Domain, domain_id) or abort(404)
 
     unblock_domain(domain.name, SRC_WEB)
 
@@ -272,7 +272,7 @@ def domain_unblock(domain_id):
 @login_required
 @permission_required('manage users')
 def domain_ban(domain_id):
-    domain = Domain.query.get_or_404(domain_id)
+    domain = db.session.get(Domain, domain_id) or abort(404)
     if domain:
         domain.banned = True
         db.session.commit()
@@ -285,7 +285,7 @@ def domain_ban(domain_id):
 @login_required
 @permission_required('manage users')
 def domain_unban(domain_id):
-    domain = Domain.query.get_or_404(domain_id)
+    domain = db.session.get(Domain, domain_id) or abort(404)
     if domain:
         domain.banned = False
         db.session.commit()

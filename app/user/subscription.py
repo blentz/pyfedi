@@ -112,7 +112,7 @@ def stripe_webhook():
     # Fulfill the purchase...
     if event['type'] == 'checkout.session.completed':
         stripe_session = event['data']['object']
-        u = User.query.get(stripe_session['client_reference_id'])
+        u = db.session.get(User, stripe_session['client_reference_id'])
         if u is None:   # could not find user, bail
             return 'Ok'
         u.stripe_customer_id = stripe_session['customer']

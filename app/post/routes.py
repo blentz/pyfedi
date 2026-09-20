@@ -71,7 +71,7 @@ from app.utils import render_template, markdown_to_html, validation_required, \
 @check_anoobis
 def show_post(post_id: int, sort, low_bandwidth, autoplay):
     with limiter.limit('30/minute'):
-        post = Post.query.get_or_404(post_id)
+        post = db.session.get(Post, post_id) or abort(404)
         community: Community = post.community
 
         if community.banned or post.deleted:
@@ -201,10 +201,10 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
             related_communities = Community.query.filter_by(topic_id=community.topic_id). \
                 filter(Community.id != community.id, Community.banned == False).order_by(Community.name)
             topics = []
-            previous_topic = Topic.query.get(community.topic_id)
+            previous_topic = db.session.get(Topic, community.topic_id)
             topics.append(previous_topic)
             while previous_topic.parent_id:
-                topic = Topic.query.get(previous_topic.parent_id)
+                topic = db.session.get(Topic, previous_topic.parent_id)
                 topics.append(topic)
                 previous_topic = topic
             topics = list(reversed(topics))
@@ -255,7 +255,7 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
         poll_total_votes = 0
         has_voted = False
         if post.type == POST_TYPE_POLL:
-            poll_data = Poll.query.get(post.id)
+            poll_data = db.session.get(Poll, post.id)
             if poll_data:
                 poll_choices = PollChoice.query.filter_by(post_id=post.id).order_by(PollChoice.sort_order).all()
                 poll_total_votes = poll_data.total_votes()
@@ -287,7 +287,7 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
         recipient_language_code = None
         recipient_language_name = None
         if recipient_language_id:
-            lang = Language.query.get(recipient_language_id)
+            lang = db.session.get(Language, recipient_language_id)
             if lang:
                 recipient_language_code = lang.code
                 recipient_language_name = lang.name
@@ -364,7 +364,7 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
 def post_lazy_replies(post_id, nonce):
     if request.method == 'OPTIONS':
         return ''
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     sort = request.args.get('sort', 'hot') if post.archived is None else 'hot'  # archived posts can only show comments sorted by 'hot'
     community = post.community
     user = current_user if current_user.is_authenticated else None
@@ -428,7 +428,7 @@ def post_lazy_replies(post_id, nonce):
 @block_bots
 def post_embed(post_id):
     with limiter.limit('30/minute'):
-        post = Post.query.get_or_404(post_id)
+        post = db.session.get(Post, post_id) or abort(404)
         community: Community = post.community
 
         if community.banned or post.deleted:
@@ -459,7 +459,7 @@ def post_embed(post_id):
 @bp.route('/post/<int:post_id>/embed_code', methods=['GET', 'HEAD'])
 @block_bots
 def post_embed_code(post_id):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     community = post.community
 
     # Breadcrumbs
@@ -471,10 +471,10 @@ def post_embed_code(post_id):
 
     if community.topic_id:
         topics = []
-        previous_topic = Topic.query.get(community.topic_id)
+        previous_topic = db.session.get(Topic, community.topic_id)
         topics.append(previous_topic)
         while previous_topic.parent_id:
-            topic = Topic.query.get(previous_topic.parent_id)
+            topic = db.session.get(Topic, previous_topic.parent_id)
             topics.append(topic)
             previous_topic = topic
         topics = list(reversed(topics))
@@ -520,7 +520,7 @@ def post_embed_code(post_id):
 @bp.route('/post/<int:post_id>/oembed', methods=['GET', 'HEAD'])
 def post_oembed(post_id):
     with limiter.limit('10/minute'):
-        post = Post.query.get_or_404(post_id)
+        post = db.session.get(Post, post_id) or abort(404)
         iframe_url = url_for('post.post_embed', post_id=post.id, _external=True)
         oembed = {
             "version": "1.0",
@@ -576,11 +576,11 @@ def comment_emoji_reaction(comment_id, vote_direction, federate):
         if request.headers.get('HX-Request'):
             return retval
         else:
-            comment = PostReply.query.get(comment_id)
+            comment = db.session.get(PostReply, comment_id)
             fallback = f'/post/{comment.post.id}'
             return redirect(f'{comment.post.slug if comment.post.slug else fallback}#comment_{comment.id}')
     else:
-        comment = PostReply.query.get(comment_id)
+        comment = db.session.get(PostReply, comment_id)
         return render_template('post/choose_emoji.html', post=comment.post, title=_('Choose an emoji'), form=form,
                                emojis=Emoji.query.order_by(Emoji.token).all())
 
@@ -611,7 +611,7 @@ def post_emoji_set(post_id):
 
         vote_for_post(post_id, 'upvote', federate, request.form.get('emoji'), SRC_WEB)
 
-        post = Post.query.get(post_id)
+        post = db.session.get(Post, post_id)
 
         return render_template('post/_post_reply_teaser_reactions.html', post_reply=post)
     else:
@@ -625,7 +625,7 @@ def comment_emoji_set(comment_id):
 
         vote_for_reply(comment_id, 'upvote', federate, request.form.get('emoji'), SRC_WEB)
 
-        post_reply = PostReply.query.get(comment_id)
+        post_reply = db.session.get(PostReply, comment_id)
 
         return render_template('post/_post_reply_teaser_reactions.html', post_reply=post_reply)
     else:
@@ -637,8 +637,8 @@ def comment_emoji_set(comment_id):
 @validation_required
 @approval_required
 def poll_vote(post_id):
-    post = Post.query.get_or_404(post_id)
-    poll_data = Poll.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
+    poll_data = db.session.get(Poll, post_id) or abort(404)
     votes = int(request.form.get('poll_choice')) if poll_data.mode == 'single' else request.form.getlist('poll_choice[]')
     vote_for_poll(post_id, votes, SRC_WEB)
     flash(_('Vote has been cast.'))
@@ -652,8 +652,8 @@ def poll_vote(post_id):
 def continue_discussion(post_id, comment_id):
     block_honey_pot()
 
-    post = Post.query.get_or_404(post_id)
-    comment = PostReply.query.get_or_404(comment_id)
+    post = db.session.get(Post, post_id) or abort(404)
+    comment = db.session.get(PostReply, comment_id) or abort(404)
 
     if post.community.banned or post.deleted or comment.deleted:
         if current_user.is_anonymous or not (current_user.is_authenticated and (current_user.is_admin() or current_user.is_staff())):
@@ -697,7 +697,7 @@ def continue_discussion(post_id, comment_id):
     poll_total_votes = 0
     has_voted = False
     if post.type == POST_TYPE_POLL:
-        poll_data = Poll.query.get(post.id)
+        poll_data = db.session.get(Poll, post.id)
         if poll_data:
             poll_choices = PollChoice.query.filter_by(post_id=post.id).order_by(PollChoice.sort_order).all()
             poll_total_votes = poll_data.total_votes()
@@ -711,7 +711,7 @@ def continue_discussion(post_id, comment_id):
     
     parent_id = None
     if comment.parent_id:
-        parent_comment = PostReply.query.get(comment.parent_id)
+        parent_comment = db.session.get(PostReply, comment.parent_id)
         if parent_comment and not parent_comment.deleted:
             parent_id = comment.parent_id
 
@@ -751,8 +751,8 @@ def continue_discussion(post_id, comment_id):
 @bp.route('/post/<int:post_id>/comment/<int:comment_id>/ajax/<nonce>', methods=['POST'])
 @login_required_if_private_instance
 def continue_discussion_ajax(post_id, comment_id, nonce):
-    post = Post.query.get_or_404(post_id)
-    comment = PostReply.query.get_or_404(comment_id)
+    post = db.session.get(Post, post_id) or abort(404)
+    comment = db.session.get(PostReply, comment_id) or abort(404)
 
     mods = post.community.moderators()
     if post.community.private_mods:
@@ -809,13 +809,13 @@ def add_reply(post_id: int, comment_id: int):
     # this route is used when JS is disabled
     if current_user.banned or current_user.ban_comments or user_ip_banned():
         return show_ban_message()
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
 
     if not post.comments_enabled:
         flash(_('Comments have been disabled.'), 'warning')
         return redirect(post.slug if post.slug else url_for('activitypub.post_ap', post_id=post_id))
 
-    in_reply_to = PostReply.query.get_or_404(comment_id)
+    in_reply_to = db.session.get(PostReply, comment_id) or abort(404)
     mods = post.community.moderators()
     is_moderator = current_user.is_authenticated and any(mod.user_id == current_user.id for mod in mods)
     if post.community.private_mods:
@@ -869,14 +869,14 @@ def add_reply_inline(post_id: int, comment_id: int, nonce):
     # to keep CSP happy and that nonce needs to be used by any replies to this reply so it's nonces all the way down.
     if current_user.banned or current_user.ban_comments or user_ip_banned():
         return _('You have been banned.')
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     if not can_create_post_reply(current_user, post.community):
         return _('You are not permitted to comment in this community')
 
     if not post.comments_enabled:
         return _('Comments have been disabled.')
 
-    in_reply_to = PostReply.query.get_or_404(comment_id)
+    in_reply_to = db.session.get(PostReply, comment_id) or abort(404)
 
     if in_reply_to.author.has_blocked_user(current_user.id):
         return _('You cannot reply to %(name)s', name=in_reply_to.author.display_name())
@@ -889,7 +889,7 @@ def add_reply_inline(post_id: int, comment_id: int, nonce):
         recipient_language_code = None
         recipient_language_name = None
         if recipient_language_id and (current_user.language_id and current_user.language_id != recipient_language_id):
-            lang = Language.query.get(recipient_language_id)
+            lang = db.session.get(Language, recipient_language_id)
             if lang:
                 recipient_language_code = lang.code
                 recipient_language_name = lang.name
@@ -946,7 +946,7 @@ def cancel_inline(comment_id:int):
 @bp.route('/post/<int:post_id>/<string:offer_markdown_source>/options_menu', methods=['GET'])
 @block_bots
 def post_options(post_id: int, offer_markdown_source: str):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     if post.deleted:
         if current_user.is_anonymous:
             abort(404)
@@ -964,8 +964,8 @@ def post_options(post_id: int, offer_markdown_source: str):
 @bp.route('/post/<int:post_id>/comment/<int:comment_id>/options_menu', methods=['GET'])
 @block_bots
 def post_reply_options(post_id: int, comment_id: int):
-    post = Post.query.get_or_404(post_id)
-    post_reply = PostReply.query.get_or_404(comment_id)
+    post = db.session.get(Post, post_id) or abort(404)
+    post_reply = db.session.get(PostReply, comment_id) or abort(404)
     if post.deleted or post_reply.deleted:
         if current_user.is_anonymous:
             abort(404)
@@ -986,7 +986,7 @@ def post_source(post_id: int, state: str):
     if not request.headers.get('HX-Request'):
         abort(400)
     
-    post = Post.query.get(post_id)
+    post = db.session.get(Post, post_id)
 
     if not post or state not in ['show', 'hide'] or (post.deleted and not current_user.is_admin()):
         post_body = markdown_to_html(_("Something went wrong and a post could not be found."))
@@ -1012,7 +1012,7 @@ def post_source(post_id: int, state: str):
 @bp.route('/post/<int:post_id>/edit', methods=['GET', 'POST'])
 @login_required
 def post_edit(post_id: int):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     post_type = post.type
     if post.type == POST_TYPE_ARTICLE:
         form = CreateDiscussionForm()
@@ -1159,7 +1159,7 @@ def post_edit(post_id: int):
 @bp.route('/post/<int:post_id>/delete', methods=['GET', 'POST'])
 @login_required
 def post_delete(post_id: int):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     community = post.community
     if post.user_id == current_user.id or community.is_moderator() or current_user.is_admin() or user_access('administer all communities', current_user.get_id()):
         if post.community.id in communities_banned_from(current_user.id) or user_ip_banned():
@@ -1193,7 +1193,7 @@ def post_delete(post_id: int):
 @bp.route('/post/<int:post_id>/restore', methods=['POST'])
 @login_required
 def post_restore(post_id: int):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     if post.user_id == current_user.id or post.community.is_moderator() or post.community.is_owner() or current_user.is_admin():
         if post.deleted_by == post.user_id:
             restore_post(post.id, SRC_WEB, None)
@@ -1207,7 +1207,7 @@ def post_restore(post_id: int):
 @bp.route('/post/<int:post_id>/purge', methods=['POST'])
 @login_required
 def post_purge(post_id: int):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     if not post.deleted:
         abort(404)
     if post.deleted_by == current_user.id or post.community.is_moderator() or current_user.is_admin():
@@ -1224,7 +1224,7 @@ def post_purge(post_id: int):
 @bp.route('/post_teaser/<int:post_id>/translate', methods=['POST'])
 @login_required
 def post_teaser_translate(post_id: int):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     if current_app.config['TRANSLATE_ENDPOINT']:
         recipient_language = get_recipient_language(current_user.id)
         source = post.language.code if post.language_id and post.language.code != 'und' else 'auto'
@@ -1240,7 +1240,7 @@ def post_teaser_translate(post_id: int):
 @bp.route('/post/<int:post_id>/translate', methods=['POST'])
 @login_required
 def post_translate(post_id: int):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     if current_app.config['TRANSLATE_ENDPOINT']:
         recipient_language = get_recipient_language(current_user.id)
         source = post.language.code if post.language_id and post.language.code != 'und' else 'auto'
@@ -1258,7 +1258,7 @@ def post_translate(post_id: int):
 @bp.route('/post_reply/<int:post_reply_id>/translate', methods=['POST'])
 @login_required
 def post_reply_translate(post_reply_id: int):
-    post_reply = PostReply.query.get_or_404(post_reply_id)
+    post_reply = db.session.get(PostReply, post_reply_id) or abort(404)
     if current_app.config['TRANSLATE_ENDPOINT']:
         recipient_language = get_recipient_language(current_user.id)
         source = post_reply.language.code if post_reply.language_id and post_reply.language.code != 'und' else 'auto'
@@ -1273,7 +1273,7 @@ def post_reply_translate(post_reply_id: int):
 @bp.route('/post/<int:post_id>/reminder', methods=['GET', 'POST'])
 @login_required
 def post_reminder(post_id: int):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     if post.community.id in communities_banned_from(current_user.id):
         abort(403)
     form = NewReminderForm()
@@ -1298,7 +1298,7 @@ def post_reminder(post_id: int):
 @bp.route('/post_reply/<int:post_reply_id>/reminder', methods=['GET', 'POST'])
 @login_required
 def post_reply_reminder(post_reply_id: int):
-    post_reply = PostReply.query.get_or_404(post_reply_id)
+    post_reply = db.session.get(PostReply, post_reply_id) or abort(404)
     if post_reply.community.id in communities_banned_from(current_user.id):
         abort(403)
     form = NewReminderForm()
@@ -1373,7 +1373,7 @@ def post_reply_remove_bookmark(post_id: int, comment_id: int):
 @bp.route('/post/<int:post_id>/report', methods=['GET', 'POST'])
 @login_required
 def post_report(post_id: int):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     form = ReportPostForm()
     if post.reports == -1:  # When a mod decides to ignore future reports, post.reports is set to -1
         flash(_('Moderators have already assessed reports regarding this post, no further reports are necessary.'),
@@ -1395,7 +1395,7 @@ def post_report(post_id: int):
 @bp.route('/post/<int:post_id>/block_user', methods=['POST'])
 @login_required
 def post_block_user(post_id: int):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     existing = UserBlock.query.filter_by(blocker_id=current_user.id, blocked_id=post.author.id).first()
     if not existing:
         db.session.add(UserBlock(blocker_id=current_user.id, blocked_id=post.author.id))
@@ -1425,7 +1425,7 @@ def post_block_user(post_id: int):
 @bp.route('/post/<int:post_id>/block_domain', methods=['POST'])
 @login_required
 def post_block_domain(post_id: int):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     existing = DomainBlock.query.filter_by(user_id=current_user.id, domain_id=post.domain_id).first()
     if not existing:
         db.session.add(DomainBlock(user_id=current_user.id, domain_id=post.domain_id))
@@ -1450,7 +1450,7 @@ def post_block_domain(post_id: int):
 @bp.route('/post/<int:post_id>/block_community', methods=['POST'])
 @login_required
 def post_block_community(post_id: int):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     existing = CommunityBlock.query.filter_by(user_id=current_user.id, community_id=post.community_id).first()
     if not existing:
         db.session.add(CommunityBlock(user_id=current_user.id, community_id=post.community_id))
@@ -1476,7 +1476,7 @@ def post_block_community(post_id: int):
 @bp.route('/post/<int:post_id>/block_instance', methods=['POST'])
 @login_required
 def post_block_instance(post_id: int):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     block_remote_instance(post.instance_id, SRC_WEB)
     flash(_('Content from %(name)s will be hidden.', name=post.instance.domain))
 
@@ -1497,7 +1497,7 @@ def post_block_instance(post_id: int):
 @bp.route('/post/<int:post_id>/mea_culpa', methods=['GET', 'POST'])
 @login_required
 def post_mea_culpa(post_id: int):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     form = MeaCulpaForm()
     if form.validate_on_submit():
         post.comments_enabled = False
@@ -1513,7 +1513,7 @@ def post_mea_culpa(post_id: int):
 @bp.route('/post/<int:post_id>/sticky/<mode>', methods=['GET', 'POST'])
 @login_required
 def post_sticky(post_id: int, mode):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     if post.community.is_moderator(current_user) or current_user.is_admin() or user_access('administer all communities', current_user.get_id()):
         sticky_post(post.id, mode == 'yes', SRC_WEB)
     if mode == 'yes':
@@ -1526,7 +1526,7 @@ def post_sticky(post_id: int, mode):
 @bp.route('/post/<int:post_id>/instance_sticky/<mode>', methods=['GET'])
 @login_required
 def post_instance_sticky(post_id: int, mode):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     
     if current_user.is_admin():
         if mode == 'yes':
@@ -1546,7 +1546,7 @@ def post_instance_sticky(post_id: int, mode):
 @bp.route('/post/<int:post_id>/hide/<mode>', methods=['POST'])
 @login_required
 def post_hide(post_id: int, mode):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     hide_post(post.id, mode == 'yes', SRC_WEB)
 
     # todo: remove post.id from redis cache used by get_deduped_post_ids() if "result_id" is in referrer()
@@ -1561,7 +1561,7 @@ def post_hide(post_id: int, mode):
 @bp.route('/post/<int:post_id>/set_flair', methods=['GET', 'POST'])
 @login_required
 def post_set_flair(post_id):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     if post.user_id == current_user.id or post.community.is_moderator(current_user) or current_user.is_staff() or current_user.is_admin() or user_access('administer all communities', current_user.get_id()):
 
         if request.headers.get("HX-Request"):
@@ -1573,7 +1573,7 @@ def post_set_flair(post_id):
                 if field.startswith("flair-"):
                     flair_sent.append(int(field.partition("flair-")[2]))
 
-            flair_objs = [CommunityFlair.query.get(flair_id) for flair_id in flair_sent]
+            flair_objs = [db.session.get(CommunityFlair, flair_id) for flair_id in flair_sent]
             comm_flair = CommunityFlair.query.filter(CommunityFlair.community_id == post.community_id).\
                 order_by(CommunityFlair.flair).all()
 
@@ -1637,7 +1637,7 @@ def post_set_flair(post_id):
 @bp.route('/post/<int:post_id>/get_flair', methods=['GET'])
 @login_required
 def post_flair_list(post_id):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     if post.user_id == current_user.id or post.community.is_moderator(current_user) or current_user.is_staff() or current_user.is_admin():
         curr_url = request.headers.get("HX-Current-Url")
         if "/post/" in curr_url or ("/c/" in curr_url and "/p/" in curr_url):
@@ -1649,7 +1649,7 @@ def post_flair_list(post_id):
         if not flair_choices:
             return ""
 
-        flair_objs = [CommunityFlair.query.get(choice[0]) for choice in flair_choices]
+        flair_objs = [db.session.get(CommunityFlair, choice[0]) for choice in flair_choices]
         post_flair = [flair.id for flair in post.flair]
 
         return render_template('post/_flair_choices.html', post_id=post.id, post_preview=post_preview,
@@ -1682,7 +1682,7 @@ def post_reply_collapse(post_id: int, post_reply_id: int, mode):
 @bp.route('/post/<int:post_id>/move', methods=['GET', 'POST'])
 @login_required
 def post_move(post_id: int):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     if current_user.id == post.user_id or post.community.is_moderator(current_user) or (post.community.is_local() and (post.community.is_admin_or_staff(current_user)  or user_access('administer all communities', current_user.get_id()))):
         form = MovePostForm()
         if form.validate_on_submit():
@@ -1748,8 +1748,8 @@ def post_search_community_suggestions():
 @bp.route('/post/<int:post_id>/comment/<int:comment_id>/report', methods=['GET', 'POST'])
 @login_required
 def post_reply_report(post_id: int, comment_id: int):
-    post = Post.query.get_or_404(post_id)
-    post_reply = PostReply.query.get_or_404(comment_id)
+    post = db.session.get(Post, post_id) or abort(404)
+    post_reply = db.session.get(PostReply, comment_id) or abort(404)
     form = ReportPostForm()
 
     if post_reply.reports == -1:  # When a mod decides to ignore future reports, post_reply.reports is set to -1
@@ -1775,8 +1775,8 @@ def post_reply_report(post_id: int, comment_id: int):
 @bp.route('/post/<int:post_id>/comment/<int:comment_id>/block_user', methods=['POST'])
 @login_required
 def post_reply_block_user(post_id: int, comment_id: int):
-    post = Post.query.get_or_404(post_id)
-    post_reply = PostReply.query.get_or_404(comment_id)
+    post = db.session.get(Post, post_id) or abort(404)
+    post_reply = db.session.get(PostReply, comment_id) or abort(404)
     existing = UserBlock.query.filter_by(blocker_id=current_user.id, blocked_id=post_reply.author.id).first()
     if not existing:
         db.session.add(UserBlock(blocker_id=current_user.id, blocked_id=post_reply.author.id))
@@ -1808,7 +1808,7 @@ def post_reply_block_user(post_id: int, comment_id: int):
 @bp.route('/post/<int:post_id>/comment/<int:comment_id>/block_instance', methods=['POST'])
 @login_required
 def post_reply_block_instance(post_id: int, comment_id: int):
-    post_reply = PostReply.query.get_or_404(comment_id)
+    post_reply = db.session.get(PostReply, comment_id) or abort(404)
     block_remote_instance(post_reply.instance_id, SRC_WEB)
     flash(_('Content from %(name)s will be hidden.', name=post_reply.instance.domain))
 
@@ -1819,7 +1819,7 @@ def post_reply_block_instance(post_id: int, comment_id: int):
         if post_reply.instance.domain in curr_url:
             resp.headers["HX-Redirect"] = url_for("main.index")
         elif "/post/" in curr_url or ("/c/" in curr_url and "/p/" in curr_url):
-            post = Post.query.get(post_id)
+            post = db.session.get(Post, post_id)
             if post is not None and post.instance_id == post_reply.instance_id:
                 resp.headers["HX-Redirect"] = url_for("main.index")
             else:
@@ -1828,15 +1828,15 @@ def post_reply_block_instance(post_id: int, comment_id: int):
             resp.headers["HX-Redirect"] = curr_url
 
         return resp
-    post = Post.query.get(post_id)
+    post = db.session.get(Post, post_id)
     return redirect(post.slug if post.slug else url_for('activitypub.post_ap', post_id=post_id))
 
 
 @bp.route('/post/<int:post_id>/comment/<int:comment_id>/distinguish', methods=['POST'])
 @login_required
 def post_reply_distinguish(post_id: int, comment_id: int):
-    post = Post.query.get_or_404(post_id)
-    post_reply = PostReply.query.get_or_404(comment_id)
+    post = db.session.get(Post, post_id) or abort(404)
+    post_reply = db.session.get(PostReply, comment_id) or abort(404)
 
     if (post.community.is_moderator() or post.community.is_owner()) and current_user.id == post_reply.user_id:
         if post_reply.distinguished:
@@ -1856,7 +1856,7 @@ def post_reply_source(post_id: int, comment_id: int, state: str):
     if not request.headers.get('HX-Request'):
         abort(400)
     
-    post_reply = PostReply.query.get(comment_id)
+    post_reply = db.session.get(PostReply, comment_id)
 
     if not post_reply or state not in ['show', 'hide'] or (post_reply.deleted and not current_user.is_admin()):
         reply_body = markdown_to_html(_("Something went wrong and a comment could not be found."))
@@ -1886,10 +1886,10 @@ def post_reply_source(post_id: int, comment_id: int, state: str):
 @bp.route('/post/<int:post_id>/comment/<int:comment_id>/edit', methods=['GET', 'POST'])
 @login_required
 def post_reply_edit(post_id: int, comment_id: int):
-    post = Post.query.get_or_404(post_id)
-    post_reply = PostReply.query.get_or_404(comment_id)
+    post = db.session.get(Post, post_id) or abort(404)
+    post_reply = db.session.get(PostReply, comment_id) or abort(404)
     if post_reply.parent_id:
-        comment = PostReply.query.get_or_404(post_reply.parent_id)
+        comment = db.session.get(PostReply, post_reply.parent_id) or abort(404)
     else:
         comment = None
     form = EditReplyForm()
@@ -1919,8 +1919,8 @@ def post_reply_edit(post_id: int, comment_id: int):
 @bp.route('/post/<int:post_id>/comment/<int:comment_id>/delete', methods=['GET', 'POST'])
 @login_required
 def post_reply_delete(post_id: int, comment_id: int):
-    post = Post.query.get_or_404(post_id)
-    post_reply = PostReply.query.get_or_404(comment_id)
+    post = db.session.get(Post, post_id) or abort(404)
+    post_reply = db.session.get(PostReply, comment_id) or abort(404)
     community = post.community
 
     form = ConfirmationMultiDeleteForm()
@@ -1939,7 +1939,7 @@ def post_reply_delete(post_id: int, comment_id: int):
                     {'parent_path': post_reply.path}).scalars()
                 for child_post_id in child_post_ids:
                     if child_post_id != 0:
-                        reply = PostReply.query.get_or_404(child_post_id)
+                        reply = db.session.get(PostReply, child_post_id) or abort(404)
 
                         if reply.user_id == current_user.id:
                             # User is deleting their own reply
@@ -1979,8 +1979,8 @@ def post_reply_delete(post_id: int, comment_id: int):
 @bp.route('/post/<int:post_id>/comment/<int:comment_id>/restore', methods=['POST'])
 @login_required
 def post_reply_restore(post_id: int, comment_id: int):
-    post = Post.query.get_or_404(post_id)
-    post_reply = PostReply.query.get_or_404(comment_id)
+    post = db.session.get(Post, post_id) or abort(404)
+    post_reply = db.session.get(PostReply, comment_id) or abort(404)
 
     if post_reply.user_id == current_user.id or post.community.is_moderator() or current_user.is_admin() or user_access('administer all communities', current_user.get_id()):
         if post_reply.deleted_by == post_reply.user_id:
@@ -2062,8 +2062,8 @@ def post_reply_restore(post_id: int, comment_id: int):
 @bp.route('/post/<int:post_id>/comment/<int:comment_id>/purge', methods=['POST'])
 @login_required
 def post_reply_purge(post_id: int, comment_id: int):
-    post = Post.query.get_or_404(post_id)
-    post_reply = PostReply.query.get_or_404(comment_id)
+    post = db.session.get(Post, post_id) or abort(404)
+    post_reply = db.session.get(PostReply, comment_id) or abort(404)
     if not post_reply.deleted:
         abort(404)
     if post_reply.deleted_by == current_user.id or post.community.is_moderator() or current_user.is_admin() or user_access('administer all communities', current_user.get_id()):
@@ -2104,7 +2104,7 @@ def post_reply_notification(post_reply_id: int):
 @login_required_if_private_instance
 @check_anoobis
 def post_cross_posts(post_id: int):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     if post.cross_posts:
         cross_posts = Post.query.filter(Post.id.in_(post.cross_posts))
         return render_template('post/post_cross_posts.html', cross_posts=cross_posts)
@@ -2116,7 +2116,7 @@ def post_cross_posts(post_id: int):
 @login_required
 @permission_required('change instance settings')
 def post_block_image(post_id: int):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     if post.type == POST_TYPE_IMAGE:
         form = ConfirmationForm()
         if form.validate_on_submit():
@@ -2147,7 +2147,7 @@ def post_block_image(post_id: int):
 @login_required
 @permission_required('change instance settings')
 def post_block_image_purge_posts(post_id: int):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     if request.method == 'POST':
         post_ids = request.form.getlist('post_ids')
 
@@ -2176,7 +2176,7 @@ def post_block_image_purge_posts(post_id: int):
 @bp.route('/post/<int:post_id>/voting_activity', methods=['GET'])
 @login_required
 def post_view_voting_activity(post_id: int):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
 
     if current_user.is_admin_or_staff() or post.community.is_moderator():
 
@@ -2205,7 +2205,7 @@ def post_view_voting_activity(post_id: int):
 @bp.route('/comment/<int:comment_id>/voting_activity', methods=['GET'])
 @login_required
 def post_reply_view_voting_activity(comment_id: int):
-    post_reply = PostReply.query.get_or_404(comment_id)
+    post_reply = db.session.get(PostReply, comment_id) or abort(404)
 
     if current_user.is_admin_or_staff() or post_reply.community.is_moderator():
 
@@ -2235,7 +2235,7 @@ def post_reply_view_voting_activity(comment_id: int):
 @login_required
 @permission_required('change instance settings')
 def post_fixup_from_remote(post_id: int):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
 
     # will fail for some MBIN objects for same reason that 'View original on ...' does
     # (ap_id is lowercase, but original URL was mixed-case and remote instance software is case-sensitive)
@@ -2263,7 +2263,7 @@ def post_fixup_from_remote(post_id: int):
 @bp.route('/post/<int:post_id>/cross-post', methods=['GET', 'POST'])
 @login_required
 def post_cross_post(post_id: int):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     form = CrossPostForm()
 
     if form.validate_on_submit():
@@ -2292,7 +2292,7 @@ def post_cross_post(post_id: int):
         breadcrumbs.append(breadcrumb)
 
         if request.cookies.get('cross_post_community_id'):
-            form.which_community.data = Community.query.get(int(request.cookies.get('cross_post_community_id'))).lemmy_link().replace('!', '')
+            form.which_community.data = db.session.get(Community, int(request.cookies.get('cross_post_community_id'))).lemmy_link().replace('!', '')
 
         return render_template('post/post_cross_post.html', title=_('Cross post'), form=form, post=post,
                                breadcrumbs=breadcrumbs)
@@ -2341,7 +2341,7 @@ def preview():
 @bp.route('/post/<int:post_id>/ical', methods=['GET'])
 def show_post_ical(post_id: int):
     with limiter.limit('30/minute'):
-        post = Post.query.get_or_404(post_id)
+        post = db.session.get(Post, post_id) or abort(404)
         if post.type != POST_TYPE_EVENT:
             abort(404)
         ical = Calendar(creator='PieFed')
@@ -2366,7 +2366,7 @@ def show_post_ical(post_id: int):
 
 @bp.route('/post/<int:post_id>/check_ai', methods=['POST'])
 def post_check_ai(post_id):
-    post = Post.query.get(post_id)
+    post = db.session.get(Post, post_id)
     if current_app.config['DETECT_AI_ENDPOINT']:
         is_ai = get_request(f"{current_app.config['DETECT_AI_ENDPOINT']}?url={post.ap_id}")
         if is_ai and is_ai.status_code == 200:
@@ -2401,7 +2401,7 @@ def post_check_ai(post_id):
 
 @bp.route('/post/<int:post_id>/set_ai', methods=['POST'])
 def post_set_ai(post_id):
-    post = Post.query.get(post_id)
+    post = db.session.get(Post, post_id)
     if current_user.is_authenticated and (current_user.is_admin_or_staff() or post.user_id == current_user.id or post.community.is_moderator()):
         post.ai_generated = True
         db.session.commit()
@@ -2417,7 +2417,7 @@ def post_set_read(post_id):
 
 @bp.route('/post_reply/<int:post_reply_id>/check_ai', methods=['POST'])
 def post_reply_check_ai(post_reply_id):
-    post_reply = PostReply.query.get(post_reply_id)
+    post_reply = db.session.get(PostReply, post_reply_id)
     if current_app.config['DETECT_AI_ENDPOINT']:
         if len(post_reply.body) > 100:
             is_ai = get_request(f"{current_app.config['DETECT_AI_ENDPOINT']}?url={post_reply.ap_id}")
@@ -2441,7 +2441,7 @@ def post_reply_check_ai(post_reply_id):
 
 @bp.route('/post_reply/<int:post_reply_id>/choose_answer', methods=['POST'])
 def post_reply_choose_answer(post_reply_id):
-    post_reply = PostReply.query.get(post_reply_id)
+    post_reply = db.session.get(PostReply, post_reply_id)
     if current_user.is_authenticated and (current_user.is_admin_or_staff() or post_reply.user_id == current_user.id or post_reply.community.is_moderator()):
         choose_answer(post_reply_id, src=SRC_WEB)
         return _('Done')
@@ -2451,7 +2451,7 @@ def post_reply_choose_answer(post_reply_id):
 
 @bp.route('/post_reply/<int:post_reply_id>/unchoose_answer', methods=['POST'])
 def post_reply_unchoose_answer(post_reply_id):
-    post_reply = PostReply.query.get(post_reply_id)
+    post_reply = db.session.get(PostReply, post_reply_id)
     if current_user.is_authenticated and (current_user.is_admin_or_staff() or post_reply.user_id == current_user.id or post_reply.community.is_moderator()):
         unchoose_answer(post_reply_id, src=SRC_WEB)
         return _('Done')
@@ -2461,7 +2461,7 @@ def post_reply_unchoose_answer(post_reply_id):
 
 @bp.route('/post/<int:post_id>/share_mastodon', methods=['GET', 'POST'])
 def post_share_mastodon(post_id):
-    post = Post.query.get_or_404(post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     form = ShareMastodonForm()
     if form.validate_on_submit():
         resp = make_response(redirect(f"https://{form.domain.data}/share?text={post.title}&url=https://{current_app.config['SERVER_NAME']}{post.slug}"))

@@ -333,7 +333,7 @@ def test_an_uploaded_image_is_saved_and_linked(db_session, chdir_upload, http_mo
     assert len(written) == 1
     db.session.refresh(s.post)
     assert s.post.image_id is not None
-    file = File.query.get(s.post.image_id)
+    file = db.session.get(File, s.post.image_id)
     assert '/app/' not in file.source_url
     assert '/static/media/posts/' in file.source_url
 
@@ -1897,7 +1897,7 @@ def test_an_s3_upload_removes_the_local_file(db_session, chdir_upload, http_mock
     assert session.client_instance.close_calls == 1
 
     db.session.refresh(s.post)
-    file = File.query.get(s.post.image_id)
+    file = db.session.get(File, s.post.image_id)
     assert file.source_url.startswith('https://cdn.example.test/posts/')
 
 

@@ -55,7 +55,7 @@ def _seed():
     assert burn.id == 1
     alice = make_user(instance, 'alice', local=True)
     bob = make_user(instance, 'bob', local=True)
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.private_instance = False
     db.session.commit()
     return instance, alice, bob
@@ -230,7 +230,7 @@ def test_a_private_instance_refuses_an_anonymous_reader(app, db_session):
     the reason every other row here opens the instance first.
     """
     instance, alice, bob = _seed()
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.private_instance = True
     db.session.commit()
     _tag()
@@ -654,7 +654,7 @@ def test_the_feed_address_and_its_name_name_the_tag_and_the_site(app, db_session
 def test_the_inoculation_block_appears_only_when_the_site_asks_for_it(app, db_session,
                                                                      show_inoculation_block):
     instance, alice, bob = _seed()
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.show_inoculation_block = show_inoculation_block
     db.session.commit()
     _tag()
@@ -911,7 +911,7 @@ def test_the_feeds_logo_is_the_sites_own_when_it_has_one(app, db_session, logo_1
     so branch coverage cannot tell them apart and only an assertion can.
     """
     instance, alice, bob = _seed()
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.logo_152 = logo_152
     db.session.commit()
     _tag()

@@ -40,7 +40,7 @@ def _seed():
     assert burn.id == 1
     alice = make_user(instance, 'alice', local=True)
     bob = make_user(instance, 'bob', local=True)
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.private_instance = False
     db.session.commit()
     return instance, alice, bob
@@ -249,7 +249,7 @@ def _make_admin(user):
     """Both notions of admin (fact 308)."""
     from app.constants import ROLE_ADMIN
     from app.models import Role, user_role
-    role = Role.query.get(ROLE_ADMIN)
+    role = db.session.get(Role, ROLE_ADMIN)
     if role is None:
         role = Role(id=ROLE_ADMIN, name='Admin', weight=0)
         db.session.add(role)

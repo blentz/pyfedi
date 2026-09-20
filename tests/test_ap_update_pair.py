@@ -88,7 +88,7 @@ def _seed_reply(software='lemmy'):
     that wants de-duplication asks for it.
     """
     post = _seed_post(software=software)
-    author = db.session.query(User).get(post.user_id)
+    author = db.session.get(User, post.user_id)
     reply = make_post_reply(post, author, body='before')
     db.session.commit()
     return reply
@@ -740,7 +740,7 @@ def test_a_reply_mention_of_a_blocked_sender_is_suppressed(app, db_session, redi
     """
     reply = _seed_reply()
     recipient = _seed_local_recipient()
-    author = db.session.query(User).get(reply.user_id)
+    author = db.session.get(User, reply.user_id)
     make_user_block(recipient, author)
 
     update_post_reply_from_activity(reply, _update(
@@ -903,7 +903,7 @@ def _seed_microblog_chain(length=2):
     top.path = [0, top.id]
     db.session.commit()
     chain = [top]
-    author = db.session.query(User).get(top.user_id)
+    author = db.session.get(User, top.user_id)
     for _ in range(length - 1):
         parent = chain[-1]
         child = make_post_reply(parent.post, author, body='child')
@@ -2355,7 +2355,7 @@ def test_a_post_mention_of_a_blocked_sender_is_suppressed(app, db_session, redis
     """
     post = _seed_post()
     recipient = _seed_local_recipient()
-    author = db.session.query(User).get(post.user_id)
+    author = db.session.get(User, post.user_id)
     make_user_block(recipient, author)
 
     update_post_from_activity(post, _update(name='t', content='x', tag=[_mention()], type='Note'))

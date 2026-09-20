@@ -1,4 +1,5 @@
 import pytest
+from app import db
 
 
 def test_api_get_community(app, api_baseline):
@@ -26,7 +27,7 @@ def test_api_get_community(app, api_baseline):
     assert anon_response is not None and anon_response['community_view']['community']['id'] == community.id
 
     user_id = api_baseline.user1.id
-    user = User.query.get(user_id)
+    user = db.session.get(User, user_id)
     assert user is not None and hasattr(user, 'id')
     jwt = user.encode_jwt_token()
     assert jwt is not None

@@ -47,7 +47,7 @@ def _seed():
     instance = make_instance('test.piefed.local', software='piefed')
     burn = make_user(instance, 'burnseat', local=True)
     assert burn.id == 1
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.private_instance = False
     db.session.commit()
     return instance, burn

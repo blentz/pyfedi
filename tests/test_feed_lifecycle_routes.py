@@ -135,7 +135,7 @@ def test_edit_form_prefills_nsfl_from_the_nsfl_column(app, db_session, site_nsfl
     instance, owner, stranger = _seed()
     feed = _feed(owner, nsfw=False, nsfl=True)
     assert feed.nsfw is not feed.nsfl
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.enable_nsfw = True
     site.enable_nsfl = site_nsfl
     db.session.commit()
@@ -189,7 +189,7 @@ def test_creating_a_feed_honours_the_sites_nsfw_switches(app, db_session,
     webfinger.
     """
     instance, owner, stranger = _seed()
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.enable_nsfw = site_nsfw
     site.enable_nsfl = site_nsfl
     db.session.commit()
@@ -225,7 +225,7 @@ def test_creating_a_feed_from_a_missing_topic_is_a_404(app, db_session):
     this file does for a missing feed.
     """
     instance, owner, stranger = _seed()
-    assert Topic.query.get(999) is None
+    assert db.session.get(Topic, 999) is None
 
     with app.test_client() as client:
         login(client, owner)
@@ -313,7 +313,7 @@ def test_unsubscribing_leaves_each_community_through_the_shared_function(app, db
     # The member's OTHER subscription survives -- :647's delete names this feed.
     assert FeedMember.query.filter_by(user_id=member.id).count() == 1
     # And the feed's own counter goes DOWN, from the 2 the fixture seeded.
-    assert Feed.query.get(feed.id).subscriptions_count == 1
+    assert db.session.get(Feed, feed.id).subscriptions_count == 1
 
 
 def test_unsubscribing_leaves_alone_a_community_the_user_joined_themselves(app, db_session):
@@ -459,7 +459,7 @@ def test_the_create_form_disables_the_nsfw_boxes_the_site_forbids(app, db_sessio
     about the server-side rule this round added: these two are the browser-side
     hint, and covering them says which is which."""
     instance, owner, stranger = _seed()
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.enable_nsfw = site_nsfw
     site.enable_nsfl = site_nsfl
     db.session.commit()
@@ -609,7 +609,7 @@ def test_the_edit_form_prefills_every_field_from_the_feed(app, db_session):
     feed.parent_feed_id = parent.id
     feed.public = False
     feed.is_instance_feed = True
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.enable_nsfw = site.enable_nsfl = True
     db.session.commit()
 
@@ -678,7 +678,7 @@ def test_saving_an_edit_redirects_by_whether_the_url_changed(app, db_session, ne
 
     assert response.status_code == 302
     assert response.headers['Location'] == expected_location
-    assert Feed.query.get(feed.id).name == new_url
+    assert db.session.get(Feed, feed.id).name == new_url
 
 
 # --------------------------------------------------------------------------
@@ -728,7 +728,7 @@ def test_deleting_an_instance_feed_busts_the_instance_menu(app, db_session,
                                    data={'csrf_token': csrf(app, client)})
 
     assert response.status_code == 302
-    assert Feed.query.get(feed.id) is None
+    assert db.session.get(Feed, feed.id) is None
     busted = [call.args[0] for call in bust.call_args_list]
     assert (menu_instance_feeds in busted) is is_instance_feed
 
@@ -800,7 +800,7 @@ def test_saving_a_private_edit_appends_the_owner_to_the_url(app, db_session):
                                    headers={'Referer': 'https://test.piefed.local/x'})
 
     assert response.status_code == 302
-    assert Feed.query.get(feed.id).name == 'lifecyclefeed/feedowner'
+    assert db.session.get(Feed, feed.id).name == 'lifecyclefeed/feedowner'
 
 
 def _remote_feed_membership(member, domain='remote.example', name='remotefeed',
@@ -934,7 +934,7 @@ def test_a_feed_owner_is_refused_and_keeps_their_membership(app, db_session):
     assert response.status_code == 302
     assert flash_stub.call_count == 1
     assert FeedMember.query.filter_by(user_id=owner.id, feed_id=feed.id).count() == 1
-    assert Feed.query.get(feed.id).subscriptions_count == 7
+    assert db.session.get(Feed, feed.id).subscriptions_count == 7
 
 
 def test_unsubscribing_from_a_feed_that_is_not_there_is_a_404(app, db_session):
@@ -996,7 +996,7 @@ def test_saving_an_edit_with_no_url_leaves_the_name_alone(app, db_session):
 
     assert response.status_code == 302
     assert response.headers['Location'] == 'https://test.piefed.local/x'
-    assert Feed.query.get(feed.id).name == 'lifecyclefeed'
+    assert db.session.get(Feed, feed.id).name == 'lifecyclefeed'
 
 
 def test_unsubscribing_when_you_were_never_subscribed_does_nothing(app, db_session):
@@ -1014,5 +1014,5 @@ def test_unsubscribing_when_you_were_never_subscribed_does_nothing(app, db_sessi
         response = client.get(f'/feed/{feed.name}/unsubscribe')
 
     assert response.status_code == 302
-    assert Feed.query.get(feed.id).subscriptions_count == 4
+    assert db.session.get(Feed, feed.id).subscriptions_count == 4
     assert FeedMember.query.filter_by(feed_id=feed.id).count() == 0

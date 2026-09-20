@@ -38,7 +38,7 @@ def vote_for_reply(reply_id: int, vote_direction, federate: bool, emoji: str | N
                 if existing_vote.effect < 0 and not can_downvote(user, reply.community):
                     return user.id
     else:
-        reply = db.session.query(PostReply).get_or_404(reply_id)
+        reply = db.session.get(PostReply, reply_id) or abort(404)
         user = current_user
 
     if user.banned or user_ip_banned():
@@ -322,8 +322,8 @@ def report_reply(reply, input, src, auth=None):
         report_remote = input['report_remote']
     else:
         reporter_user = current_user
-        suspect_user = User.query.get(reply.user_id)
-        source_instance = Instance.query.get(suspect_user.instance_id)
+        suspect_user = db.session.get(User, reply.user_id)
+        source_instance = db.session.get(Instance, suspect_user.instance_id)
         reason = input.reasons_to_string(input.reasons.data)
         description = input.description.data
         notify_admins = ('5' in input.reasons.data or '6' in input.reasons.data)
@@ -359,7 +359,7 @@ def report_reply(reply, input, src, auth=None):
     already_notified = set()
     remote_instance_ids = set()
     for mod in reply.community.moderators():
-        moderator = User.query.get(mod.user_id)
+        moderator = db.session.get(User, mod.user_id)
         if moderator:
             if moderator.is_local():
                 with force_locale(get_recipient_language(moderator.id)):
@@ -495,7 +495,7 @@ def lock_post_reply(post_reply_id, locked, src, auth=None):
         post_reply = db.session.query(PostReply).filter_by(id=post_reply_id).one()
     else:
         user = current_user
-        post_reply = db.session.query(PostReply).get(post_reply_id)
+        post_reply = db.session.get(PostReply, post_reply_id)
 
     if locked:
         replies_enabled = False
@@ -534,7 +534,7 @@ def set_collapse_post_reply(post_reply_id, collapsible, src, auth=None):
         post_reply = db.session.query(PostReply).filter_by(id=post_reply_id).one()
     else:
         user = current_user
-        post_reply = db.session.query(PostReply).get(post_reply_id)
+        post_reply = db.session.get(PostReply, post_reply_id)
 
     if post_reply.community.is_moderator(user) or post_reply.community.is_instance_admin(user) or user.is_admin_or_staff():
         post_reply.collapsible = collapsible
@@ -561,7 +561,7 @@ def choose_answer(post_reply_id, src, auth=None):
     else:
         user = current_user
 
-    post_reply = PostReply.query.get(post_reply_id)
+    post_reply = db.session.get(PostReply, post_reply_id)
     post_reply.answer = True
     with force_locale(get_recipient_language(post_reply.user_id)):
         title = _('Your answer was chosen as an answer to %(post_title)s',
@@ -592,7 +592,7 @@ def unchoose_answer(post_reply_id, src, auth=None):
     else:
         user = current_user
 
-    post_reply = PostReply.query.get(post_reply_id)
+    post_reply = db.session.get(PostReply, post_reply_id)
     post_reply.answer = False
     db.session.commit()
 

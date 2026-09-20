@@ -357,7 +357,7 @@ class CreateImageForm(CreatePostForm):
         if uploaded_file and uploaded_file.filename != '' and not uploaded_file.filename.endswith('.svg') and not uploaded_file.filename.endswith('.gif'):
             Image.MAX_IMAGE_PIXELS = 89478485
 
-            site = Site.query.get(1)
+            site = db.session.get(Site, 1)
             if site is None:
                 site = Site()
 
@@ -387,7 +387,7 @@ class CreateImageForm(CreatePostForm):
                 return False
             uploaded_file.seek(0)
         if self.communities:
-            community = Community.query.get(self.communities.data)
+            community = db.session.get(Community, self.communities.data)
             if community.is_local() and g.site.allow_local_image_posts is False:
                 self.communities.errors.append(_l('Images cannot be posted to local communities.'))
 
@@ -403,7 +403,7 @@ class EditImageForm(CreateImageForm):
             return False
 
         if self.communities:
-            community = Community.query.get(self.communities.data)
+            community = db.session.get(Community, self.communities.data)
             if community.is_local() and g.site.allow_local_image_posts is False:
                 self.communities.errors.append(_l('Images cannot be posted to local communities.'))
 
@@ -498,7 +498,7 @@ class CreateEventForm(SubmittedUrlMixin, CreatePostForm):
                 return False
             uploaded_file.seek(0)
             if self.communities:
-                community = Community.query.get(self.communities.data)
+                community = db.session.get(Community, self.communities.data)
                 if community.is_local() and g.site.allow_local_image_posts is False:
                     self.communities.errors.append(_l('Images cannot be posted to local communities.'))
 

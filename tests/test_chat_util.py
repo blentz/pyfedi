@@ -43,7 +43,7 @@ def _seed(software):
     sender.private_key = 'a-private-key'
     remote_instance = make_instance('remote.example', software=software)
     recipient = make_user(remote_instance, 'recipient', local=False)
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.private_instance = False
     db.session.commit()
     return sender, recipient
@@ -210,7 +210,7 @@ def _local_pair():
     sender = make_user(local, 'sender', local=True)
     sender.private_key = 'a-private-key'
     recipient = make_user(local, 'recipient', local=True)
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.private_instance = False
     db.session.commit()
     return sender, recipient
@@ -237,7 +237,7 @@ def test_editing_a_message_notifies_a_local_recipient(app, db_session):
     assert notification.url == f'/chat/{conversation.id}#message_{reply.id}'
     assert notification.targets == {'gen': '0', 'conversation_id': conversation.id,
                                     'message_id': reply.id}
-    assert User.query.get(recipient.id).unread_notifications == 1
+    assert db.session.get(User, recipient.id).unread_notifications == 1
 
 
 @pytest.mark.parametrize('software, ap_type, tagged', [

@@ -444,7 +444,7 @@ def put_user_save_user_settings(auth, data):
 
     if avatar:
         if user.avatar_id:
-            remove_file = File.query.get(user.avatar_id)
+            remove_file = db.session.get(File, user.avatar_id)
             if remove_file:
                 remove_file.delete_from_disk()
             user.avatar_id = None
@@ -455,7 +455,7 @@ def put_user_save_user_settings(auth, data):
         make_image_sizes(user.avatar_id, 40, 250, 'users')
     elif remove_avatar:
         if user.avatar_id:
-            remove_file = File.query.get(user.avatar_id)
+            remove_file = db.session.get(File, user.avatar_id)
             if remove_file:
                 remove_file.delete_from_disk()
             user.avatar_id = None
@@ -463,7 +463,7 @@ def put_user_save_user_settings(auth, data):
 
     if cover:
         if user.cover_id:
-            remove_file = File.query.get(user.cover_id)
+            remove_file = db.session.get(File, user.cover_id)
             if remove_file:
                 remove_file.delete_from_disk()
             user.cover_id = None
@@ -475,7 +475,7 @@ def put_user_save_user_settings(auth, data):
         cache.delete_memoized(User.cover_image, user)
     elif remove_cover:
         if user.cover_id:
-            remove_file = File.query.get(user.cover_id)
+            remove_file = db.session.get(File, user.cover_id)
             if remove_file:
                 remove_file.delete_from_disk()
             user.cover_id = None
@@ -503,7 +503,7 @@ def put_user_save_user_settings(auth, data):
                 if field['id'] not in user_field_ids:
                     raise Exception(f"Permission denied. Extra field {field['id']} belongs to different user")
                 
-                user_field = UserExtraField.query.get(field['id'])
+                user_field = db.session.get(UserExtraField, field['id'])
                 label = field['label'] if 'label' in field else None
                 text = field['text'] if 'text' in field else None
                 
@@ -701,8 +701,8 @@ def get_user_notifications(auth, data):
 def _process_notification_item(item):
     # for the NOTIF_USER
     if item.notif_type == NOTIF_USER:
-        author = User.query.get(item.author_id)
-        post = Post.query.get(item.targets['post_id'])
+        author = db.session.get(User, item.author_id)
+        post = db.session.get(Post, item.targets['post_id'])
         notification_json = {}
         notification_json['notif_id'] = item.id
         notification_json['notif_type'] = NOTIF_USER
@@ -715,9 +715,9 @@ def _process_notification_item(item):
         return notification_json
     # for the NOTIF_COMMUNITY
     elif item.notif_type == NOTIF_COMMUNITY:
-        author = User.query.get(item.author_id)
-        post = Post.query.get(item.targets['post_id'])
-        community = Community.query.get(item.targets['community_id'])
+        author = db.session.get(User, item.author_id)
+        post = db.session.get(Post, item.targets['post_id'])
+        community = db.session.get(Community, item.targets['community_id'])
         notification_json = {}
         notification_json['notif_id'] = item.id
         notification_json['notif_type'] = NOTIF_COMMUNITY
@@ -731,8 +731,8 @@ def _process_notification_item(item):
         return notification_json
     # for the NOTIF_TOPIC
     elif item.notif_type == NOTIF_TOPIC:
-        author = User.query.get(item.author_id)
-        post = Post.query.get(item.targets['post_id'])
+        author = db.session.get(User, item.author_id)
+        post = db.session.get(Post, item.targets['post_id'])
         notification_json = {}
         notification_json['notif_id'] = item.id
         notification_json['notif_type'] = NOTIF_TOPIC
@@ -745,9 +745,9 @@ def _process_notification_item(item):
         return notification_json
     # for the NOTIF_POST
     elif item.notif_type == NOTIF_POST:
-        author = User.query.get(item.author_id)
-        post = Post.query.get(item.targets['post_id'])
-        comment = PostReply.query.get(item.targets['comment_id'])
+        author = db.session.get(User, item.author_id)
+        post = db.session.get(Post, item.targets['post_id'])
+        comment = db.session.get(PostReply, item.targets['comment_id'])
         notification_json = {}
         notification_json['notif_id'] = item.id
         notification_json['notif_type'] = NOTIF_POST
@@ -762,9 +762,9 @@ def _process_notification_item(item):
         return notification_json
     # for the NOTIF_REPLY
     elif item.notif_type == NOTIF_REPLY:
-        author = User.query.get(item.author_id)
-        post = Post.query.get(item.targets['post_id'])
-        comment = PostReply.query.get(item.targets['comment_id'])
+        author = db.session.get(User, item.author_id)
+        post = db.session.get(Post, item.targets['post_id'])
+        comment = db.session.get(PostReply, item.targets['comment_id'])
         notification_json = {}
         notification_json['notif_id'] = item.id
         notification_json['notif_type'] = NOTIF_REPLY
@@ -780,8 +780,8 @@ def _process_notification_item(item):
         return notification_json
     # for the NOTIF_FEED
     elif item.notif_type == NOTIF_FEED:
-        author = User.query.get(item.author_id)
-        post = Post.query.get(item.targets['post_id'])
+        author = db.session.get(User, item.author_id)
+        post = db.session.get(Post, item.targets['post_id'])
         notification_json = {}
         notification_json['notif_id'] = item.id
         notification_json['notif_type'] = NOTIF_FEED
@@ -796,8 +796,8 @@ def _process_notification_item(item):
     elif item.notif_type == NOTIF_MENTION:
         notification_json = {}
         if item.subtype == 'post_mention':
-            author = User.query.get(item.author_id)
-            post = Post.query.get(item.targets['post_id'])
+            author = db.session.get(User, item.author_id)
+            post = db.session.get(Post, item.targets['post_id'])
             notification_json['author'] = user_view(user=author.id, variant=1, user_id=item.user_id)
             notification_json['post'] = post_view(post, variant=2)
             notification_json['post_id'] = post.id
@@ -808,8 +808,8 @@ def _process_notification_item(item):
             notification_json['status'] = 'Read' if item.read else 'Unread'
             return notification_json
         if item.subtype == 'comment_mention':
-            author = User.query.get(item.author_id)
-            comment = PostReply.query.get(item.targets['comment_id'])
+            author = db.session.get(User, item.author_id)
+            comment = db.session.get(PostReply, item.targets['comment_id'])
             notification_json['author'] = user_view(user=author.id, variant=1, user_id=item.user_id)
             notification_json['comment'] = reply_view(comment, variant=1)
             notification_json['comment_id'] = comment.id

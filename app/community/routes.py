@@ -81,7 +81,7 @@ def add_local():
     try:
         site = g.site
     except:
-        site = Site.query.get(1)
+        site = db.session.get(Site, 1)
 
     if not current_user.is_admin() and site.community_creation_admin_only:
         flash(_('Community creation has been restricted to admins on this site'))
@@ -147,7 +147,7 @@ def add_local():
         db.session.add(membership)
         # Languages of the community
         for language_choice in form.languages.data:
-            community.languages.append(Language.query.get(language_choice))
+            community.languages.append(db.session.get(Language, language_choice))
         # Always include the undetermined language, so posts with no language will be accepted
         community.languages.append(Language.query.filter(Language.code == 'und').first())
         db.session.commit()
@@ -576,10 +576,10 @@ def show_community(community: Community):
         related_communities = Community.query.filter_by(topic_id=community.topic_id). \
             filter(Community.id != community.id, Community.banned == False).order_by(Community.name)
         topics = []
-        previous_topic = Topic.query.get(community.topic_id)
+        previous_topic = db.session.get(Topic, community.topic_id)
         topics.append(previous_topic)
         while previous_topic.parent_id:
-            topic = Topic.query.get(previous_topic.parent_id)
+            topic = db.session.get(Topic, previous_topic.parent_id)
             topics.append(topic)
             previous_topic = topic
         topics = list(reversed(topics))
@@ -613,7 +613,7 @@ def show_community(community: Community):
             previous_feed = community_feeds[0]
             feeds.append(previous_feed)
             while previous_feed.parent_feed_id:
-                feed = Feed.query.get(previous_feed.parent_feed_id)
+                feed = db.session.get(Feed, previous_feed.parent_feed_id)
                 feeds.append(feed)
                 previous_feed = feed
             feeds = list(reversed(feeds))
@@ -822,7 +822,7 @@ def do_subscribe(actor, user_id, admin_preload=False, joined_via_feed=False):
             with patch_db_session(session):
                 remote = False
                 actor = actor.strip()
-                user = User.query.get(user_id)
+                user = db.session.get(User, user_id)
                 pre_load_message = {}
                 if '@' in actor:
                     community = Community.query.filter_by(ap_id=actor).first()
@@ -1012,7 +1012,7 @@ def add_post(actor, type=None):
         community = actor_to_community(actor)
     else:
         if request.form.get('communities'):
-            community = Community.query.get_or_404(request.form.get('communities'))
+            community = db.session.get(Community, request.form.get('communities')) or abort(404)
         else:
             community = actor_to_community(actor)
 
@@ -1124,7 +1124,7 @@ def add_post(actor, type=None):
 
         # The source query parameter is used when cross-posting - load the source post's content into the form
         if (post_type == POST_TYPE_LINK or post_type == POST_TYPE_VIDEO) and request.args.get('source'):
-            source_post = Post.query.get(request.args.get('source'))
+            source_post = db.session.get(Post, request.args.get('source'))
             if source_post.deleted:
                 abort(404)
             form.title.data = source_post.title
@@ -1165,7 +1165,7 @@ def add_post(actor, type=None):
 @bp.route('/community/<int:community_id>/report', methods=['GET', 'POST'])
 @login_required
 def community_report(community_id: int):
-    community = Community.query.get_or_404(community_id)
+    community = db.session.get(Community, community_id) or abort(404)
     form = ReportCommunityForm()
     if form.validate_on_submit():
         targets_data = {'gen': '0', 'suspect_community_id': community.id, 'reporter_id': current_user.id}
@@ -1180,7 +1180,7 @@ def community_report(community_id: int):
 
         # Notify admin
         # todo: find all instance admin(s). for now just load User.id == 1
-        admins = [User.query.get_or_404(1)]
+        admins = [db.session.get(User, 1) or abort(404)]
         for admin in admins:
             with force_locale(get_recipient_language(admin.id)):
                 notification = Notification(user_id=admin.id, title=gettext('A community has been reported'),
@@ -1209,7 +1209,7 @@ def community_edit(community_id: int):
     from app.admin.util import topics_for_form
     if current_user.banned:
         return show_ban_message()
-    community = Community.query.get_or_404(community_id)
+    community = db.session.get(Community, community_id) or abort(404)
     old_topic_id = community.topic_id if community.topic_id else None
     if community.is_owner() or current_user.is_admin() or community.is_moderator():
         form = EditCommunityForm()
@@ -1254,7 +1254,7 @@ def community_edit(community_id: int):
                     community.icon = file
                     # Only delete old icon after new one is successfully saved
                     if old_icon_id:
-                        old_icon_file = File.query.get(old_icon_id)
+                        old_icon_file = db.session.get(File, old_icon_id)
                         db.session.delete(old_icon_file)
                         old_icon_file.delete_from_disk()
             banner_file = request.files['banner_file']
@@ -1267,7 +1267,7 @@ def community_edit(community_id: int):
                     cache.delete_memoized(Community.header_image, community)
                     # Only delete old banner after new one is successfully saved
                     if old_banner_id:
-                        old_banner_file = File.query.get(old_banner_id)
+                        old_banner_file = db.session.get(File, old_banner_id)
                         db.session.delete(old_banner_file)
                         old_banner_file.delete_from_disk()
 
@@ -1275,7 +1275,7 @@ def community_edit(community_id: int):
             db.session.execute(text('DELETE FROM "community_language" WHERE community_id = :community_id'),
                                {'community_id': community_id})
             for language_choice in form.languages.data:
-                community.languages.append(Language.query.get(language_choice))
+                community.languages.append(db.session.get(Language, language_choice))
             # Always include the undetermined language, so posts with no language will be accepted
             community.languages.append(Language.query.filter(Language.code == 'und').first())
             db.session.commit()
@@ -1284,7 +1284,7 @@ def community_edit(community_id: int):
                 if community.topic_id:
                     community.topic.num_communities = community.topic.communities.count()
                 if old_topic_id:
-                    topic = Topic.query.get(old_topic_id)
+                    topic = db.session.get(Topic, old_topic_id)
                     if topic:
                         topic.num_communities = topic.communities.count()
                 db.session.commit()
@@ -1327,11 +1327,11 @@ def community_edit(community_id: int):
 @bp.route('/community/<int:community_id>/remove_icon', methods=['POST'])
 @login_required
 def remove_icon(community_id):
-    community = Community.query.get_or_404(community_id)
+    community = db.session.get(Community, community_id) or abort(404)
     if community.icon_id:
         community.icon.delete_from_disk()
         if community.icon_id:
-            file = File.query.get(community.icon_id)
+            file = db.session.get(File, community.icon_id)
             file.delete_from_disk()
             community.icon_id = None
             db.session.delete(file)
@@ -1342,11 +1342,11 @@ def remove_icon(community_id):
 @bp.route('/community/<int:community_id>/remove_header', methods=['POST'])
 @login_required
 def remove_header(community_id):
-    community = Community.query.get_or_404(community_id)
+    community = db.session.get(Community, community_id) or abort(404)
     if community.image_id:
         community.image.delete_from_disk()
         if community.image_id:
-            file = File.query.get(community.image_id)
+            file = db.session.get(File, community.image_id)
             file.delete_from_disk()
             community.image_id = None
             db.session.delete(file)
@@ -1374,7 +1374,7 @@ def flip_community_theme_allowed(community_id:int,user_id:int):
 def community_delete(community_id: int):
     if current_user.banned:
         return show_ban_message()
-    community = Community.query.get_or_404(community_id)
+    community = db.session.get(Community, community_id) or abort(404)
     if community.is_owner() or current_user.is_admin():
         form = DeleteCommunityForm()
         if form.validate_on_submit():
@@ -1405,7 +1405,7 @@ def community_delete(community_id: int):
 def community_mod_list(community_id: int):
     if current_user.banned:
         return show_ban_message()
-    community = Community.query.get_or_404(community_id)
+    community = db.session.get(Community, community_id) or abort(404)
     is_owner = community.is_owner()
     if is_owner or current_user.is_admin() or community.is_moderator(current_user):
 
@@ -1423,8 +1423,8 @@ def community_mod_list(community_id: int):
 @bp.route('/community/<int:community_id>/make_owner/<int:user_id>', methods=['POST'])
 @login_required
 def community_make_owner(community_id: int, user_id: int):
-    community = Community.query.get_or_404(community_id)
-    user = User.query.get_or_404(user_id)
+    community = db.session.get(Community, community_id) or abort(404)
+    user = db.session.get(User, user_id) or abort(404)
     
     if (community.is_owner() or current_user.is_admin_or_staff()) and community.is_moderator(user):
 
@@ -1459,8 +1459,8 @@ def community_make_owner(community_id: int, user_id: int):
 @bp.route('/community/<int:community_id>/remove_owner/<int:user_id>', methods=['POST'])
 @login_required
 def community_remove_owner(community_id: int, user_id: int):
-    community = Community.query.get_or_404(community_id)
-    user = User.query.get_or_404(user_id)
+    community = db.session.get(Community, community_id) or abort(404)
+    user = db.session.get(User, user_id) or abort(404)
 
     if ((current_user.is_admin_or_staff() and community.is_owner(user)) or 
         (community.is_owner() and community.is_moderator(user) and not community.is_owner(user)) or 
@@ -1514,7 +1514,7 @@ def community_add_moderator(community_id: int, user_id: int):
 def community_find_moderator(community_id: int):
     if current_user.banned:
         return show_ban_message()
-    community = Community.query.get_or_404(community_id)
+    community = db.session.get(Community, community_id) or abort(404)
     if community.is_owner() or current_user.is_admin():
         form = AddModeratorForm()
         potential_moderators = None
@@ -1545,7 +1545,7 @@ def community_remove_moderator(community_id: int, user_id: int):
 @bp.route('/community/<int:community_id>/block', methods=['POST'])
 @login_required
 def community_block(community_id: int):
-    community = Community.query.get_or_404(community_id)
+    community = db.session.get(Community, community_id) or abort(404)
     existing = CommunityBlock.query.filter_by(user_id=current_user.id, community_id=community_id).first()
     if not existing:
         db.session.add(CommunityBlock(user_id=current_user.id, community_id=community_id))
@@ -1560,7 +1560,7 @@ def community_block(community_id: int):
         if "/post/" in curr_url or ("/c/" in curr_url and "/p/" in curr_url):
             post_id = request.args.get('post_id', None)
             if post_id:
-                post = Post.query.get_or_404(post_id)
+                post = db.session.get(Post, post_id) or abort(404)
                 if post:
                     if post.community.id != community_id:
                         resp.headers['HX-Redirect'] = curr_url
@@ -1575,8 +1575,8 @@ def community_block(community_id: int):
 @bp.route('/community/<int:community_id>/<int:user_id>/ban_user_community', methods=['GET', 'POST'])
 @login_required
 def community_ban_user(community_id: int, user_id: int):
-    community = Community.query.get_or_404(community_id)
-    user = User.query.get_or_404(user_id)
+    community = db.session.get(Community, community_id) or abort(404)
+    user = db.session.get(User, user_id) or abort(404)
     existing = CommunityBan.query.filter_by(community_id=community.id, user_id=user.id).first()
 
     if (community.is_moderator() or current_user.is_admin_or_staff()) and not community.is_moderator(user):
@@ -1658,8 +1658,8 @@ def community_ban_user(community_id: int, user_id: int):
 @bp.route('/community/<int:community_id>/<int:user_id>/unban_user_community', methods=['GET', 'POST'])
 @login_required
 def community_unban_user(community_id: int, user_id: int):
-    community = Community.query.get_or_404(community_id)
-    user = User.query.get_or_404(user_id)
+    community = db.session.get(Community, community_id) or abort(404)
+    user = db.session.get(User, user_id) or abort(404)
 
     if (community.is_moderator() or current_user.is_admin_or_staff()) and not community.is_moderator(user):
         existing_ban = CommunityBan.query.filter_by(community_id=community.id, user_id=user.id).first()
@@ -1827,11 +1827,11 @@ def community_rss_feeds(actor):
 def community_rss_feed_edit(community_id, feed_id=None):
     if current_user.banned:
         return show_ban_message()
-    community = Community.query.get_or_404(community_id)
+    community = db.session.get(Community, community_id) or abort(404)
 
     if community is not None:
         if (community.is_moderator() or current_user.is_admin()) and current_app.config['RSS_FEEDS']:
-            rss_feed = RssFeed.query.get(feed_id) if feed_id else None
+            rss_feed = db.session.get(RssFeed, feed_id) if feed_id else None
             form = CommunityRssFeedEdit()
             form.flair.choices = [(-1, _('None'))] + flair_for_form(community_id)
             if form.validate_on_submit():
@@ -1868,10 +1868,10 @@ def community_rss_feed_edit(community_id, feed_id=None):
 def community_rss_feed_delete(community_id, feed_id):
     if current_user.banned:
         return show_ban_message()
-    community = Community.query.get_or_404(community_id)
+    community = db.session.get(Community, community_id) or abort(404)
 
     if community.is_moderator() or current_user.is_admin():
-        rss_feed = RssFeed.query.get_or_404(feed_id)
+        rss_feed = db.session.get(RssFeed, feed_id) or abort(404)
         form = DeleteCommunityRssFeedForm()
         if form.validate_on_submit():
             rss_feed.delete_dependencies()
@@ -1992,8 +1992,8 @@ def community_moderate_comments(actor):
 @bp.route('/community/<int:community_id>/<int:user_id>/kick_user_community', methods=['POST'])
 @login_required
 def community_kick_user(community_id: int, user_id: int):
-    community = Community.query.get_or_404(community_id)
-    user = User.query.get_or_404(user_id)
+    community = db.session.get(Community, community_id) or abort(404)
+    user = db.session.get(User, user_id) or abort(404)
 
     if community is not None:
         if current_user.is_admin():
@@ -2080,10 +2080,10 @@ def community_wiki_view(actor, slug):
 
             if community.topic_id:
                 topics = []
-                previous_topic = Topic.query.get(community.topic_id)
+                previous_topic = db.session.get(Topic, community.topic_id)
                 topics.append(previous_topic)
                 while previous_topic.parent_id:
-                    topic = Topic.query.get(previous_topic.parent_id)
+                    topic = db.session.get(Topic, previous_topic.parent_id)
                     topics.append(topic)
                     previous_topic = topic
                 topics = list(reversed(topics))
@@ -2119,7 +2119,7 @@ def community_wiki_view_revision(actor, slug, revision_id):
 
     if community is not None:
         page: CommunityWikiPage = CommunityWikiPage.query.filter_by(slug=slug, community_id=community.id).first()
-        revision: CommunityWikiPageRevision = CommunityWikiPageRevision.query.get_or_404(revision_id)
+        revision: CommunityWikiPageRevision = db.session.get(CommunityWikiPageRevision, revision_id) or abort(404)
         if page is None or revision is None:
             abort(404)
         else:
@@ -2132,10 +2132,10 @@ def community_wiki_view_revision(actor, slug, revision_id):
 
             if community.topic_id:
                 topics = []
-                previous_topic = Topic.query.get(community.topic_id)
+                previous_topic = db.session.get(Topic, community.topic_id)
                 topics.append(previous_topic)
                 while previous_topic.parent_id:
-                    topic = Topic.query.get(previous_topic.parent_id)
+                    topic = db.session.get(Topic, previous_topic.parent_id)
                     topics.append(topic)
                     previous_topic = topic
                 topics = list(reversed(topics))
@@ -2171,7 +2171,7 @@ def community_wiki_revert_revision(actor, slug, revision_id):
 
     if community is not None:
         page: CommunityWikiPage = CommunityWikiPage.query.filter_by(slug=slug, community_id=community.id).first()
-        revision: CommunityWikiPageRevision = CommunityWikiPageRevision.query.get_or_404(revision_id)
+        revision: CommunityWikiPageRevision = db.session.get(CommunityWikiPageRevision, revision_id) or abort(404)
         if page is None or revision is None:
             abort(404)
         else:
@@ -2198,7 +2198,7 @@ def community_wiki_edit(actor, page_id):
     community = actor_to_community(actor)
 
     if community is not None:
-        page: CommunityWikiPage = CommunityWikiPage.query.get_or_404(page_id)
+        page: CommunityWikiPage = db.session.get(CommunityWikiPage, page_id) or abort(404)
         if page.can_edit(current_user, community):
             low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
 
@@ -2241,7 +2241,7 @@ def community_wiki_revisions(actor, page_id):
     community = actor_to_community(actor)
 
     if community is not None:
-        page: CommunityWikiPage = CommunityWikiPage.query.get_or_404(page_id)
+        page: CommunityWikiPage = db.session.get(CommunityWikiPage, page_id) or abort(404)
         if page.can_edit(current_user, community):
             low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
 
@@ -2268,7 +2268,7 @@ def community_wiki_delete(actor, page_id):
     community = actor_to_community(actor)
 
     if community is not None:
-        page: CommunityWikiPage = CommunityWikiPage.query.get_or_404(page_id)
+        page: CommunityWikiPage = db.session.get(CommunityWikiPage, page_id) or abort(404)
         if page.can_edit(current_user, community):
             db.session.delete(page)
             db.session.commit()
@@ -2314,7 +2314,7 @@ def community_modlog(actor):
 @bp.route('/community/<int:community_id>/moderate_report/<int:report_id>/escalate', methods=['GET', 'POST'])
 @login_required
 def community_moderate_report_escalate(community_id, report_id):
-    community = Community.query.get_or_404(community_id)
+    community = db.session.get(Community, community_id) or abort(404)
     if community.is_moderator() or current_user.is_admin():
         report = Report.query.filter_by(in_community_id=community.id, id=report_id, status=REPORT_STATE_NEW).first()
         if report:
@@ -2343,7 +2343,7 @@ def community_moderate_report_escalate(community_id, report_id):
 @bp.route('/community/<int:community_id>/moderate_report/<int:report_id>/resolve', methods=['GET', 'POST'])
 @login_required
 def community_moderate_report_resolve(community_id, report_id):
-    community = Community.query.get_or_404(community_id)
+    community = db.session.get(Community, community_id) or abort(404)
     if community.is_moderator() or current_user.is_admin():
         report = Report.query.filter_by(in_community_id=community.id, id=report_id).first()
         if report:
@@ -2353,13 +2353,13 @@ def community_moderate_report_resolve(community_id, report_id):
 
                 # Reset the 'reports' counter on the comment, post or user
                 if report.suspect_post_reply_id:
-                    post_reply = PostReply.query.get(report.suspect_post_reply_id)
+                    post_reply = db.session.get(PostReply, report.suspect_post_reply_id)
                     post_reply.reports = 0
                 elif report.suspect_post_id:
-                    post = Post.query.get(report.suspect_post_id)
+                    post = db.session.get(Post, report.suspect_post_id)
                     post.reports = 0
                 elif report.suspect_user_id:
-                    user = User.query.get(report.suspect_user_id)
+                    user = db.session.get(User, report.suspect_user_id)
                     user.reports = 0
                 db.session.commit()
 
@@ -2388,19 +2388,19 @@ def community_moderate_report_resolve(community_id, report_id):
 @bp.route('/community/<int:community_id>/moderate_report/<int:report_id>/ignore', methods=['GET', 'POST'])
 @login_required
 def community_moderate_report_ignore(community_id, report_id):
-    community = Community.query.get_or_404(community_id)
+    community = db.session.get(Community, community_id) or abort(404)
     if community.is_moderator() or current_user.is_admin():
         report = Report.query.filter_by(in_community_id=community.id, id=report_id).first()
         if report:
             # Set the 'reports' counter on the comment, post or user to -1 to ignore all future reports
             if report.suspect_post_reply_id:
-                post_reply = PostReply.query.get(report.suspect_post_reply_id)
+                post_reply = db.session.get(PostReply, report.suspect_post_reply_id)
                 post_reply.reports = -1
             elif report.suspect_post_id:
-                post = Post.query.get(report.suspect_post_id)
+                post = db.session.get(Post, report.suspect_post_id)
                 post.reports = -1
             elif report.suspect_user_id:
-                user = User.query.get(report.suspect_user_id)
+                user = db.session.get(User, report.suspect_user_id)
                 user.reports = -1
             db.session.commit()
 
@@ -2478,10 +2478,10 @@ def community_flair(actor):
 @bp.route('/community/<int:community_id>/flair/<int:flair_id>', methods=['GET', 'POST'])
 @login_required
 def community_flair_edit(community_id, flair_id):
-    community = Community.query.get_or_404(community_id)
+    community = db.session.get(Community, community_id) or abort(404)
 
     if community.is_moderator() or current_user.is_admin():
-        flair = CommunityFlair.query.get(flair_id) if flair_id else None
+        flair = db.session.get(CommunityFlair, flair_id) if flair_id else None
         form = EditCommunityFlairForm()
         if form.validate_on_submit():
             if flair is None:
@@ -2524,7 +2524,7 @@ def community_flair_edit(community_id, flair_id):
 @bp.route('/community/<int:community_id>/flair/<int:flair_id>/delete', methods=['POST'])
 @login_required
 def community_flair_delete(community_id, flair_id):
-    community = Community.query.get_or_404(community_id)
+    community = db.session.get(Community, community_id) or abort(404)
 
     if community.is_moderator() or current_user.is_admin():
         db.session.execute(text('DELETE FROM "post_flair" WHERE flair_id = :flair_id'), {'flair_id': flair_id})
@@ -2563,7 +2563,7 @@ def community_leave_all():
 
     if joined_feed_ids:
         for feed_id in joined_feed_ids:
-            feed = Feed.query.get(feed_id)
+            feed = db.session.get(Feed, feed_id)
             subscription = feed_membership(current_user, feed)
             if subscription != SUBSCRIPTION_OWNER:
                 # send leave requests to celery - also handles db commits and cache busting
@@ -2719,7 +2719,7 @@ def check_url_already_posted():
 def community_changed():
     community_id = request.args.get('communities')
     if community_id:
-        community = Community.query.get(community_id)
+        community = db.session.get(Community, community_id)
         return flask.render_template('community/community_changed.html', community=community)
     else:
         return ''
@@ -2728,7 +2728,7 @@ def community_changed():
 @bp.route('/<int:community_id>/membership', methods=['GET', 'POST'])
 @login_required
 def community_membership_manage(community_id: int):
-    community = Community.query.get_or_404(community_id)
+    community = db.session.get(Community, community_id) or abort(404)
     form = EditCommunityMembership()
 
     flair_choices = []
@@ -2756,7 +2756,7 @@ def community_membership_manage(community_id: int):
 
 @bp.route('/get_sidebar/<int:community_id>')
 def get_sidebar(community_id):
-    community = Community.query.get(community_id)
+    community = db.session.get(Community, community_id)
     return flask.render_template('community/description.html', community=community, hide_community_actions=True)
 
 

@@ -300,7 +300,7 @@ def create_new_user_from_ldap(user_name, email, password, ip):
     db.session.commit()
     finalize_user_setup(user)
     if users_total() == 0:
-        user.roles.append(Role.query.get(4))
+        user.roles.append(db.session.get(Role, 4))
         db.session.commit()
     return user
 

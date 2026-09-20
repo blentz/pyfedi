@@ -26,7 +26,7 @@ def vote_for_post(send_async, user_id, post_id, vote_to_undo, vote_direction, fe
         session = get_task_session()
         try:
             with patch_db_session(session):
-                post = session.query(Post).get(post_id)
+                post = session.get(Post, post_id)
                 if federate:
                     send_vote(user_id, post, vote_to_undo, vote_direction, emoji)
         except Exception:
@@ -55,7 +55,7 @@ def vote_for_reply(send_async, user_id, reply_id, vote_to_undo, vote_direction, 
 def send_vote(user_id, object, vote_to_undo, vote_direction, emoji):
     session = get_task_session()
     try:
-        user = session.query(User).get(user_id)
+        user = session.get(User, user_id)
         community = object.community
         if community.local_only or community.private or not community.instance.online():
             return
@@ -176,8 +176,8 @@ def send_vote(user_id, object, vote_to_undo, vote_direction, emoji):
 def vote_for_poll(send_async, user_id, post_id, choice_text):
     session = get_task_session()
     try:
-        post = session.query(Post).get(post_id)
-        user = session.query(User).get(user_id)
+        post = session.get(Post, post_id)
+        user = session.get(User, user_id)
         if post:
             community = post.community
             if community.local_only or community.private or not community.instance.online():

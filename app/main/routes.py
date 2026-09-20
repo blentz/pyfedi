@@ -273,7 +273,7 @@ def add_post():
             default_community_id = possible_communities()["Others"][0][0]
     if default_community_id == -1:
         return ('', 204)
-    default_community = Community.query.get(default_community_id)
+    default_community = db.session.get(Community, default_community_id)
     return redirect(url_for('community.add_post', actor=default_community.link()))
 
 
@@ -701,7 +701,7 @@ def test():
     return markdown_to_html('Testing!\n\n![an image :: width=50](https://piefed.social/static/media/logo_8p7en.svg, https://media.piefed.social/posts/up/TR/upTRjfvFt2ma0hz.webp)\n\nthere we go')
 
     from flask import json
-    community = Community.query.get(33)
+    community = db.session.get(Community, 33)
     announce_activity = {
         'actor': community.ap_profile_id,
         'id': f'xyz{gibberish()}',
@@ -735,7 +735,7 @@ def test():
     db.session.commit()
     return 'Done'
 
-    user = User.query.get(1)
+    user = db.session.get(User, 1)
     send_registration_approved_email(user)
 
     markdown = """What light novels have you read in the past week? Something good? Bad? Let us know about it. 
@@ -759,7 +759,7 @@ And if you want to add your score to the database to help your fellow Bookworms 
         "type": "Delete"
     }
 
-    r = User.query.get(1)
+    r = db.session.get(User, 1)
 
     jsonld.set_document_loader(jsonld.requests_document_loader(timeout=5))
 
@@ -870,7 +870,7 @@ def share():
     form = ShareLinkForm()
     form.which_community.choices = possible_communities()
     if form.validate_on_submit():
-        community = Community.query.get_or_404(form.which_community.data)
+        community = db.session.get(Community, form.which_community.data) or abort(404)
         response = make_response(redirect(url_for('community.add_post', actor=community.link(), type='link', link=url,
                                                   title=request.args.get('title'))))
         response.set_cookie('cross_post_community_id', str(community.id), max_age=timedelta(days=28))
@@ -910,7 +910,7 @@ def protocol_handler():
             return redirect(url_for('main.index'))
 
         if 'post' in resp:
-            post = Post.query.get(resp['post']['post']['id'])
+            post = db.session.get(Post, resp['post']['post']['id'])
             return redirect(post.slug if post.slug else url_for('activitypub.post_ap', post_id=post.id))
         if 'comment' in resp:
             return redirect(url_for('activitypub.comment_ap', comment_id=resp['comment']['comment']['id']))
@@ -1126,7 +1126,7 @@ def service_worker():
 @bp.route('/manifest.json', methods=['GET'])
 @bp.route('/static/manifest.json', methods=['GET'])
 def static_manifest():
-    g.site = Site.query.get(1)
+    g.site = db.session.get(Site, 1)
     def get_manifest_for_os(os_family):
         base_dir = 'app/static/pwa_manifests'
         if os_family == 'mac os x':
@@ -1340,7 +1340,7 @@ def random():
                         limit 1"""
         community_id = db.session.execute(text(sql)).scalar_one_or_none()
     if community_id:
-        community = Community.query.get(community_id)
+        community = db.session.get(Community, community_id)
         flash(Markup(_('<a href="/r/random">Try another random community</a>')))
         return redirect(url_for('activitypub.community_profile', actor=community.link()))
     else:
@@ -1368,7 +1368,7 @@ def random_nsfw():
                 limit 1"""
         community_id = db.session.execute(text(sql)).scalar_one_or_none()
     if community_id:
-        community = Community.query.get(community_id)
+        community = db.session.get(Community, community_id)
         flash(Markup(_('<a href="/r/randnsfw">Try another random community</a>')))
         return redirect(url_for('activitypub.community_profile', actor=community.link()))
     else:

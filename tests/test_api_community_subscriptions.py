@@ -73,7 +73,7 @@ def test_api_community_subscriptions(app, api_baseline):
     from app.api.alpha.utils.community import put_community_subscribe
 
     user_id = api_baseline.user1.id
-    user = User.query.get(user_id)
+    user = db.session.get(User, user_id)
     assert user is not None and hasattr(user, 'id')
     jwt = user.encode_jwt_token()
     assert jwt is not None

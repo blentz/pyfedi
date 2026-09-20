@@ -26,7 +26,7 @@ def join_feed(actor, user_id, src=SRC_WEB):
     try:
         remote = False
         actor = actor.strip()
-        user = User.query.get(user_id)
+        user = db.session.get(User, user_id)
         if '@' in actor:
             feed = Feed.query.filter_by(ap_id=actor).first()
             remote = True
@@ -49,7 +49,7 @@ def join_feed(actor, user_id, src=SRC_WEB):
                 if user.feed_auto_follow:
                     feed_items = FeedItem.query.filter_by(feed_id=feed.id).all()
                     for fi in feed_items:
-                        community = Community.query.get(fi.community_id)
+                        community = db.session.get(Community, fi.community_id)
                         actor = community.ap_id if community.ap_id else community.name
                         if current_app.debug:
                             do_subscribe(actor, user.id, joined_via_feed=True)
@@ -115,7 +115,7 @@ def leave_feed(feed: int | Feed, src, auth=None, bulk_leave=False):
         feed_id = feed.id
     elif isinstance(feed, int):
         feed_id = feed
-        feed = db.session.query(Feed).get(feed_id)
+        feed = db.session.get(Feed, feed_id)
     
     user_id = authorise_api_user(auth) if src == SRC_API else current_user.id
 
@@ -136,7 +136,7 @@ def leave_feed(feed: int | Feed, src, auth=None, bulk_leave=False):
         if not bulk_leave:
             # Need to unsub from every community in the feed if the user has that option set
             # During bulk_leave, community memberships handled separately
-            user = db.session.query(User).get(user_id)
+            user = db.session.get(User, user_id)
             if user.feed_auto_leave:
                 feed_items = db.session.query(FeedItem).filter_by(feed_id=feed_id).all()
                 for feed_item in feed_items:
@@ -368,7 +368,7 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
         make_image_sizes(feed.image_id, 878, 1600, 'feeds', False)
         # Only delete old banner after new one is successfully saved
         if not from_scratch and old_banner_id and old_banner_id != feed.image_id:
-            remove_file = File.query.get(old_banner_id)
+            remove_file = db.session.get(File, old_banner_id)
             if remove_file:
                 remove_file.delete_from_disk()
                 db.session.delete(remove_file)
@@ -421,7 +421,7 @@ def delete_feed(feed_id: int, src, auth=None):
     else:
         user_id = current_user.id
 
-    feed = db.session.query(Feed).get(feed_id)
+    feed = db.session.get(Feed, feed_id)
 
     # does the user own the feed
     if feed.user_id != user_id:
@@ -455,14 +455,14 @@ def _feed_add_community(community_id: int, current_feed_id: int, feed_id: int, u
         db.session.commit()
 
         # also update the num_communities for the old feed
-        current_feed = Feed.query.get(current_feed_id)
+        current_feed = db.session.get(Feed, current_feed_id)
         current_feed.num_communities = current_feed.num_communities - 1
         db.session.add(current_feed)
         db.session.commit()
 
         # announce the change to any potential subscribers
         if current_feed.public:
-            community = Community.query.get(community_id)
+            community = db.session.get(Community, community_id)
             if current_app.debug:
                 announce_feed_add_remove_to_subscribers("Remove", current_feed.id, community.id)
             else:
@@ -474,14 +474,14 @@ def _feed_add_community(community_id: int, current_feed_id: int, feed_id: int, u
     db.session.commit()
 
     # also update the num_communities for the new feed
-    feed = Feed.query.get(feed_id)
+    feed = db.session.get(Feed, feed_id)
     feed.num_communities = feed.num_communities + 1
     db.session.add(feed)
     db.session.commit()
 
     # announce the change to any potential subscribers
     if feed.public:
-        community = Community.query.get(community_id)
+        community = db.session.get(Community, community_id)
         if current_app.debug:
             announce_feed_add_remove_to_subscribers("Add", feed.id, community.id)
         else:
@@ -489,11 +489,11 @@ def _feed_add_community(community_id: int, current_feed_id: int, feed_id: int, u
 
     # subscribe the user to the community if they are not already subscribed
     current_membership = CommunityMember.query.filter_by(user_id=user_id, community_id=community_id).first()
-    acting_user = User.query.get(user_id)
+    acting_user = db.session.get(User, user_id)
     if current_membership is None and acting_user.feed_auto_follow:
         # import do_subscribe here, otherwise we get import errors from circular import problems
         from app.community.routes import do_subscribe
-        community = Community.query.get(community_id)
+        community = db.session.get(Community, community_id)
         actor = community.ap_id if community.ap_id else community.name
         do_subscribe(actor, user_id, joined_via_feed=True)
 
@@ -504,17 +504,17 @@ def _feed_remove_community(community_id: int, current_feed_id: int):
     db.session.commit()
 
     # also update the num_communities for the old feed
-    current_feed = db.session.query(Feed).get(current_feed_id)
+    current_feed = db.session.get(Feed, current_feed_id)
     current_feed.num_communities = current_feed.num_communities - 1
     db.session.add(current_feed)
     db.session.commit()
 
-    community = db.session.query(Community).get(community_id)
+    community = db.session.get(Community, community_id)
     community_members = db.session.query(CommunityMember).filter_by(community_id=community.id).all()
     # make all local users un-follow the community - if user.feed_auto_leave, and the user joined the community
     # as a result of adding it to a feed
     for cm in community_members:
-        user = db.session.query(User).get(cm.user_id)
+        user = db.session.get(User, cm.user_id)
         if user.is_local() and user.feed_auto_leave and cm.joined_via_feed is not None and cm.joined_via_feed:
             subscription = community_membership(user, community)
             if subscription != SUBSCRIPTION_OWNER:
@@ -566,9 +566,9 @@ def _feed_remove_community(community_id: int, current_feed_id: int):
 @celery.task
 def announce_feed_add_remove_to_subscribers(action: str, feed_id: int, community_id: int):
     # find the feed
-    feed = Feed.query.get(feed_id)
+    feed = db.session.get(Feed, feed_id)
     # find the community
-    community = Community.query.get(community_id)
+    community = db.session.get(Community, community_id)
     # build the Announce json
     activity_json = {
         "@context": default_context(),
@@ -607,7 +607,7 @@ def announce_feed_add_remove_to_subscribers(action: str, feed_id: int, community
     session = get_task_session()
     try:
         for fm in feed_members:
-            fm_user = User.query.get(fm.user_id)
+            fm_user = db.session.get(User, fm.user_id)
             if fm_user.id == feed.user_id:
                 continue
             if fm_user.is_local() and fm_user.feed_auto_follow:
@@ -618,7 +618,7 @@ def announce_feed_add_remove_to_subscribers(action: str, feed_id: int, community
                 continue
 
             # if we get here the feedmember is a remote user
-            instance: Instance = session.query(Instance).get(fm_user.instance.id)
+            instance: Instance = session.get(Instance, fm_user.instance.id)
             if instance.inbox and instance.online() and not instance_banned(instance.domain):
                 send_post_request(instance.inbox, activity_json, feed.private_key, feed.ap_profile_id + '#main-key', timeout=10)
     except Exception:
@@ -631,9 +631,9 @@ def announce_feed_add_remove_to_subscribers(action: str, feed_id: int, community
 @celery.task
 def announce_feed_delete_to_subscribers(user_id, feed_id):
     # get the user
-    user = User.query.get(user_id)
+    user = db.session.get(User, user_id)
     # get the feed
-    feed = Feed.query.get(feed_id)
+    feed = db.session.get(Feed, feed_id)
     # create the delete json
     delete_json = {
         "@context": default_context(),
@@ -656,13 +656,13 @@ def announce_feed_delete_to_subscribers(user_id, feed_id):
     session = get_task_session()
     try:
         for fm in feed_members:
-            fm_user = session.query(User).get(fm.user_id)
+            fm_user = session.get(User, fm.user_id)
             if fm_user.id == feed.user_id:
                 continue
             if fm_user.is_local():
                 continue
             # if we get here the feedmember is a remote user
-            instance: Instance = session.query(Instance).get(fm_user.instance.id)
+            instance: Instance = session.get(Instance, fm_user.instance.id)
             if instance.inbox and instance.online() and not instance_banned(instance.domain):
                 send_post_request(instance.inbox, delete_json, user.private_key, user.ap_profile_id + '#main-key', timeout=10)
     except Exception:

@@ -10,7 +10,7 @@ from app.utils import shorten_string, gibberish, markdown_to_html, publish_sse_e
 
 
 def send_message(message: str, conversation_id: int, user: User = current_user, src=SRC_WEB) -> ChatMessage:
-    conversation = Conversation.query.get(conversation_id)
+    conversation = db.session.get(Conversation, conversation_id)
     reply = ChatMessage(sender_id=user.id, conversation_id=conversation.id,
                         body=message, body_html=markdown_to_html(message))
     conversation.updated_at = utcnow()

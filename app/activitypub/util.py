@@ -656,7 +656,7 @@ def refresh_user_profile_task(user_id):
     session = get_task_session()
     try:
         with patch_db_session(session):
-            user: User = session.query(User).get(user_id)
+            user: User = session.get(User, user_id)
             if user and user.instance_id and user.instance.online():
                 try:
                     actor_data = get_request(user.ap_public_url, headers={'Accept': 'application/activity+json'})
@@ -668,7 +668,7 @@ def refresh_user_profile_task(user_id):
                         return
                 except:
                     try:
-                        site = session.query(Site).get(1)
+                        site = session.get(Site, 1)
                         actor_data = signed_get_request(user.ap_public_url, site.private_key,
                                                         f"{current_app.config['SERVER_URL']}/actor#main-key")
                     except:
@@ -785,7 +785,7 @@ def refresh_community_profile_task(community_id, activity_json):
     session = get_task_session()
     try:
         with patch_db_session(session):
-            community: Community = session.query(Community).get(community_id)
+            community: Community = session.get(Community, community_id)
             if community and community.instance_id and community.instance.online():
                 if not activity_json:
                     try:
@@ -891,7 +891,7 @@ def refresh_community_profile_task(community_id, activity_json):
                                 community.languages.append(new_language)
                     if 'genAI' in activity_json and not community.ignore_remote_gen_ai:
                         community.ai_generated = activity_json['genAI']
-                    instance = session.query(Instance).get(community.instance_id)
+                    instance = session.get(Instance, community.instance_id)
                     if instance and instance.software == 'peertube':
                         community.restricted_to_mods = True
                     session.commit()
@@ -962,7 +962,7 @@ def refresh_community_profile_task(community_id, activity_json):
 
                                 # Remove people who are no longer mods
                                 for member in session.query(CommunityMember).filter_by(community_id=community.id, is_moderator=True).all():
-                                    member_user = session.query(User).get(member.user_id)
+                                    member_user = session.get(User, member.user_id)
                                     is_mod = False
                                     for actor in mods_data['orderedItems']:
                                         if isinstance(actor, dict):
@@ -1022,7 +1022,7 @@ def refresh_feed_profile_task(feed_id):
     session = get_task_session()
     try:
         with patch_db_session(session):
-            feed: Feed = session.query(Feed).get(feed_id)
+            feed: Feed = session.get(Feed, feed_id)
             if feed and feed.instance_id and feed.instance.online() and not feed.is_local():
                 try:
                     actor_data = get_request(feed.ap_public_url, headers={'Accept': 'application/activity+json'})
@@ -1139,7 +1139,7 @@ def refresh_feed_profile_task(feed_id):
                                 # right now, but that may change later so this is here for 
                                 # future proofing
                                 for member in session.query(FeedMember).filter_by(feed_id=feed.id, is_owner=True).all():
-                                    member_user = session.query(User).get(member.user_id)
+                                    member_user = session.get(User, member.user_id)
                                     is_owner = False
                                     for actor in owners_data['orderedItems']:
                                         if isinstance(actor, dict):
@@ -1317,7 +1317,7 @@ def actor_json_to_model(activity_json, address, server):
             mods_url = None
 
         # only allow nsfw communities if enabled for this instance
-        site = db.session.query(Site).get(1)  # can't use g.site because actor_json_to_model can be called from celery
+        site = db.session.get(Site, 1)  # can't use g.site because actor_json_to_model can be called from celery
         if 'sensitive' in activity_json and activity_json['sensitive'] and not site.enable_nsfw:
             return None
         if 'nsfl' in activity_json and activity_json['nsfl'] and not site.enable_nsfl:
@@ -1389,8 +1389,8 @@ def actor_json_to_model(activity_json, address, server):
         else:
             description_html = ''
 
-        community.show_popular = db.session.query(Instance).get(community.instance_id).popular
-        community.show_all = not db.session.query(Instance).get(community.instance_id).silenced
+        community.show_popular = db.session.get(Instance, community.instance_id).popular
+        community.show_all = not db.session.get(Instance, community.instance_id).silenced
 
         if description_html is not None and description_html != '':
             if not description_html.startswith('<'):  # PeerTube
@@ -1514,7 +1514,7 @@ def actor_json_to_model(activity_json, address, server):
             owners_url = None
 
         # only allow nsfw communities if enabled for this instance
-        site = db.session.query(Site).get(1)  # can't use g.site because actor_json_to_model can be called from celery
+        site = db.session.get(Site, 1)  # can't use g.site because actor_json_to_model can be called from celery
         if 'sensitive' in activity_json and activity_json['sensitive'] and not site.enable_nsfw:
             return None
         if 'nsfl' in activity_json and activity_json['nsfl'] and not site.enable_nsfl:
@@ -1736,7 +1736,7 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
         session = get_task_session()
         try:
             with patch_db_session(session):
-                file: File = session.query(File).get(file_id)
+                file: File = session.get(File, file_id)
                 if file and file.source_url:
                     if file.source_url.endswith('.gif'):    # don't resize gifs, it breaks their animation
                         return
@@ -1949,7 +1949,7 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
                                         s3.close()
                                     session.commit()
 
-                                    site = session.query(Site).get(1)
+                                    site = session.get(Site, 1)
                                     if site is None:
                                         site = Site()
 
@@ -2125,7 +2125,7 @@ def new_instance_profile_task(instance_id: int):
     session = get_task_session()
     try:
         with patch_db_session(session):
-            instance: Instance = session.query(Instance).get(instance_id)
+            instance: Instance = session.get(Instance, instance_id)
             protocol = 'https'
             try:
                 instance_data = get_request(f"{protocol}://{instance.domain}", headers={'Accept': 'application/activity+json'})
@@ -2609,7 +2609,7 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
     if post_id or parent_comment_id or root_id:
         # set depth to +1 of the parent depth
         if parent_comment_id:
-            parent_comment = PostReply.query.get(parent_comment_id)
+            parent_comment = db.session.get(PostReply, parent_comment_id)
             if parent_comment.author.has_blocked_user(user.id) or parent_comment.author.has_blocked_instance(user.instance_id):
                 log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, 'Parent comment author blocked replier')
                 return None
@@ -2621,7 +2621,7 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
         if post_id is None:
             log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, 'Could not find parent post')
             return None
-        post = Post.query.get(post_id)
+        post = db.session.get(Post, post_id)
 
         if post.archived:
             log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, 'Post is archived')
@@ -2749,7 +2749,7 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
 
                 blocked_senders = blocked_users(recipient.id)
                 if post_reply.user_id not in blocked_senders:
-                    author = User.query.get(post_reply.user_id)
+                    author = db.session.get(User, post_reply.user_id)
                     targets_data = {'gen': '0',
                                     'post_id': post_reply.post_id,
                                     'comment_id': post_reply.id,
@@ -2808,13 +2808,13 @@ def notify_about_post_task(post_id):
     try:
         with patch_db_session(session):
             # get the post by id
-            post = session.query(Post).get(post_id)
+            post = session.get(Post, post_id)
 
             # get the author
-            author = session.query(User).get(post.user_id)
+            author = session.get(User, post.user_id)
 
             # get the community
-            community = session.query(Community).get(post.community_id)
+            community = session.get(Community, post.community_id)
 
             # Send notifications based on subscriptions
             notifications_sent_to = set()
@@ -2839,7 +2839,7 @@ def notify_about_post_task(post_id):
                                                     subtype='new_post_from_followed_user',
                                                     targets=targets_data)
                     session.add(new_notification)
-                    user = session.query(User).get(notify_id)
+                    user = session.get(User, notify_id)
                     user.unread_notifications += 1
                     session.commit()
                     notifications_sent_to.add(notify_id)
@@ -2862,7 +2862,7 @@ def notify_about_post_task(post_id):
                                                     subtype='new_post_in_followed_community',
                                                     targets=targets_data)
                     session.add(new_notification)
-                    user = session.query(User).get(notify_id)
+                    user = session.get(User, notify_id)
                     user.unread_notifications += 1
                     session.commit()
                     notifications_sent_to.add(notify_id)
@@ -2870,7 +2870,7 @@ def notify_about_post_task(post_id):
             # NOTIF_TOPIC    
             topic_send_notifs_to = notification_subscribers(post.community.topic_id, NOTIF_TOPIC)
             if post.community.topic_id:
-                topic = session.query(Topic).get(post.community.topic_id)
+                topic = session.get(Topic, post.community.topic_id)
             for notify_id in topic_send_notifs_to:
                 blocked_senders = blocked_users(notify_id)
                 blocked_comms = blocked_communities(notify_id)
@@ -2893,7 +2893,7 @@ def notify_about_post_task(post_id):
                                                     subtype='new_post_in_followed_topic',
                                                     targets=targets_data)
                     session.add(new_notification)
-                    user = session.query(User).get(notify_id)
+                    user = session.get(User, notify_id)
                     user.unread_notifications += 1
                     session.commit()
                     notifications_sent_to.add(notify_id)
@@ -2927,7 +2927,7 @@ def notify_about_post_task(post_id):
                                                         subtype='new_post_in_followed_feed',
                                                         targets=targets_data)
                         session.add(new_notification)
-                        user = session.query(User).get(notify_id)
+                        user = session.get(User, notify_id)
                         user.unread_notifications += 1
                         session.commit()
                         notifications_sent_to.add(notify_id)
@@ -2942,9 +2942,9 @@ def notify_about_post_reply(parent_reply: Union[PostReply, None], new_reply: Pos
     from app import redis_client
     if parent_reply is None:  # This happens when a new_reply is a top-level comment, not a comment on a comment
         send_notifs_to = notification_subscribers(new_reply.post.id, NOTIF_POST)
-        post = Post.query.get(new_reply.post.id)
-        community = Community.query.get(post.community_id)
-        author = User.query.get(new_reply.user_id)
+        post = db.session.get(Post, new_reply.post.id)
+        community = db.session.get(Community, post.community_id)
+        author = db.session.get(User, new_reply.user_id)
         for notify_id in send_notifs_to:
             if new_reply.user_id != notify_id:
                 targets_data = {'gen': '0',
@@ -2963,7 +2963,7 @@ def notify_about_post_reply(parent_reply: Union[PostReply, None], new_reply: Pos
                                                 targets=targets_data)
                 with redis_client.lock(f"lock:user:{notify_id}", timeout=10, blocking_timeout=6):
                     db.session.add(new_notification)
-                    user = db.session.query(User).get(notify_id)
+                    user = db.session.get(User, notify_id)
                     user.unread_notifications += 1
                     db.session.commit()
     else:
@@ -2977,7 +2977,7 @@ def notify_about_post_reply(parent_reply: Union[PostReply, None], new_reply: Pos
         db.session.commit()
 
         with redis_client.lock(f"lock:user:{new_reply.user_id}", timeout=10, blocking_timeout=6):
-            user = db.session.query(User).get(new_reply.user_id)
+            user = db.session.get(User, new_reply.user_id)
             user.unread_notifications = Notification.query.filter_by(user_id=user.id, read=False).count()
             db.session.commit()
 
@@ -2985,7 +2985,7 @@ def notify_about_post_reply(parent_reply: Union[PostReply, None], new_reply: Pos
         send_notifs_to = set(notification_subscribers(parent_reply.id, NOTIF_REPLY))
         for notify_id in send_notifs_to:
             if new_reply.user_id != notify_id:
-                author = User.query.get(new_reply.user_id)
+                author = db.session.get(User, new_reply.user_id)
                 targets_data = {'gen': '0',
                                 'post_id': parent_reply.post.id,
                                 'parent_comment_id': new_reply.parent_id,
@@ -3005,7 +3005,7 @@ def notify_about_post_reply(parent_reply: Union[PostReply, None], new_reply: Pos
                         targets=targets_data)
                 db.session.add(new_notification)
                 with redis_client.lock(f"lock:user:{notify_id}", timeout=10, blocking_timeout=6):
-                    user = User.query.get(notify_id)
+                    user = db.session.get(User, notify_id)
                     user.unread_notifications += 1
                     db.session.commit()
 
@@ -3073,7 +3073,7 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
                     if profile_id and isinstance(profile_id, str) and profile_id.startswith('https://' + current_app.config['SERVER_NAME']):
                         profile_id = profile_id.lower()
                         if reply.parent_id:
-                            reply_parent = PostReply.query.get(reply.parent_id)
+                            reply_parent = db.session.get(PostReply, reply.parent_id)
                         else:
                             reply_parent = reply.post
                         if reply_parent and profile_id != reply_parent.author.ap_profile_id:
@@ -3119,7 +3119,7 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
                                     existing_notification = Notification.query.filter(Notification.user_id == recipient.id,
                                                                                       Notification.url == f"{current_app.config['SERVER_URL']}/comment/{reply.id}").first()
                                     if not existing_notification:
-                                        author = User.query.get(reply.user_id)
+                                        author = db.session.get(User, reply.user_id)
                                         targets_data = {'gen': '0',
                                                         'post_id': reply.post_id,
                                                         'comment_id': reply.id,
@@ -3241,7 +3241,7 @@ def update_post_from_activity(post: Post, request_json: dict):
                                 existing_notification = Notification.query.filter(Notification.user_id == recipient.id,
                                                                                   Notification.url == f"{current_app.config['SERVER_URL']}/post/{post.id}").first()
                                 if not existing_notification:
-                                    author = User.query.get(post.user_id)
+                                    author = db.session.get(User, post.user_id)
                                     targets_data = {'gen': '0',
                                                     'post_id': post.id,
                                                     'post_title': post.title,
@@ -3644,7 +3644,7 @@ def process_report(user, reported, request_json, session):
         if reported.reports == -1:
             return
         type = REPORT_TYPE_USER
-        source_instance = session.query(Instance).get(user.instance_id)
+        source_instance = session.get(Instance, user.instance_id)
         targets_data = {'gen': '0',
                         'suspect_user_id': reported.id,
                         'suspect_user_user_name': reported.ap_id if reported.ap_id else reported.user_name,
@@ -3676,8 +3676,8 @@ def process_report(user, reported, request_json, session):
         if reported.reports == -1:
             return
         type = REPORT_TYPE_POST
-        suspect_author = session.query(User).get(reported.author.id)
-        source_instance = session.query(Instance).get(user.instance_id)
+        suspect_author = session.get(User, reported.author.id)
+        source_instance = session.get(Instance, user.instance_id)
         targets_data = {'gen': '0',
                         'suspect_post_id': reported.id,
                         'suspect_user_id': reported.author.id,
@@ -3724,9 +3724,9 @@ def process_report(user, reported, request_json, session):
         if reported.reports == -1:
             return
         type = REPORT_TYPE_REPLY
-        post = session.query(Post).get(reported.post_id)
-        suspect_author = session.query(User).get(reported.author.id)
-        source_instance = session.query(Instance).get(user.instance_id)
+        post = session.get(Post, reported.post_id)
+        suspect_author = session.get(User, reported.author.id)
+        source_instance = session.get(Instance, user.instance_id)
         targets_data = {'gen': '0',
                         'suspect_comment_id': reported.id,
                         'suspect_user_id': reported.author.id,
@@ -4238,7 +4238,7 @@ def remote_object_to_json(uri):
         finally:
             object_request.close()
     elif object_request.status_code == 401:
-        site = Site.query.get(1)
+        site = db.session.get(Site, 1)
         try:
             object_request = signed_get_request(uri, site.private_key, f"{current_app.config['SERVER_URL']}/actor#main-key")
         except httpx.HTTPError:
@@ -4348,7 +4348,7 @@ def create_resolved_object(uri, post_data, uri_domain, community, announce_id, s
 def get_nodebb_replies_in_background(replies_uri_list, community_id):
     try:
         max = 10 if not current_app.debug else 2  # magic number alert
-        community = Community.query.get(community_id)
+        community = db.session.get(Community, community_id)
         if not community:
             return
         reply_count = 0
@@ -4530,7 +4530,7 @@ def verify_object_from_source(request_json) -> Tuple[Union[dict, None], Union[st
             return None, 'the object response was not JSON'
         object_request.close()
     elif object_request.status_code == 401:
-        site = Site.query.get(1)
+        site = db.session.get(Site, 1)
         try:
             object_request = signed_get_request(uri, site.private_key, f"{current_app.config['SERVER_URL']}/actor#main-key")
         except httpx.HTTPError:
@@ -4722,13 +4722,13 @@ def proactively_delete_content(community: Community, ap_id: str):
     deletor = None
     # Try to find a local moderator to send the Delete
     for moderator in community.moderators():
-        moderator_account = db.session.query(User).get(moderator.user_id)
+        moderator_account = db.session.get(User, moderator.user_id)
         if moderator_account.is_local():
             deletor = moderator_account
             break
     # Use admin account if there is not one.
     if deletor is None:
-        deletor = db.session.query(User).get(1)
+        deletor = db.session.get(User, 1)
     if deletor:
 
         delete_id = f"{current_app.config['SERVER_URL']}/activities/delete/{gibberish(15)}"

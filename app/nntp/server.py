@@ -476,7 +476,7 @@ class PieFedNNTPServer(NNTPServer):
                 blocked_or_banned_instances,
                 filtered_out_communities,
             )
-            user = User.query.get(user_id)
+            user = db.session.get(User, user_id)
             if not user:
                 return base
 
@@ -585,7 +585,7 @@ class PieFedNNTPServer(NNTPServer):
             from flask import g
             from app.models import Site
             from app.utils import get_setting
-            g.site = Site.query.get(1)
+            g.site = db.session.get(Site, 1)
             g.admin_ids = get_setting('admin_ids', [])
 
             if references:
@@ -605,13 +605,13 @@ class PieFedNNTPServer(NNTPServer):
                     post_id = db_id
                     parent_id = None
                     from app.models import Post
-                    parent_post = Post.query.get(post_id)
+                    parent_post = db.session.get(Post, post_id)
                     if not parent_post:
                         raise NNTPPostError(f"Parent post {post_id} not found")
                     community_id = parent_post.community_id
                 else:
                     from app.models import PostReply
-                    parent = PostReply.query.get(db_id)
+                    parent = db.session.get(PostReply, db_id)
                     if not parent:
                         log.error("Parent reply %d not found in DB", db_id)
                         raise NNTPPostError(f"Parent reply {db_id} not found")

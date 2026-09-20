@@ -279,7 +279,7 @@ def topic_create_post(topic_name):
         Community.title).all()
     community_id = request.form.get('community_id', type=int)
     if community_id:
-        community = Community.query.get_or_404(community_id)
+        community = db.session.get(Community, community_id) or abort(404)
         return redirect(url_for('community.join_then_add', actor=community.link()))
     return render_template('topic/topic_create_post.html', communities=communities, sub_communities=sub_communities,
                            topic=topic,
@@ -291,7 +291,7 @@ def topic_create_post(topic_name):
 @login_required
 def topic_notification(topic_id: int):
     # Toggle whether the current user is subscribed to notifications about this community's posts or not
-    topic = Topic.query.get_or_404(topic_id)
+    topic = db.session.get(Topic, topic_id) or abort(404)
     existing_notification = NotificationSubscription.query.filter(NotificationSubscription.entity_id == topic.id,
                                                                   NotificationSubscription.user_id == current_user.id,
                                                                   NotificationSubscription.type == NOTIF_TOPIC).first()

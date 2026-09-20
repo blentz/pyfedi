@@ -315,8 +315,7 @@ def test_a_banned_ip_at_the_real_index_counts(db_session, monkeypatch):
     check_user_application(s.application.id)
 
     db.session.expire_all()
-    assert db.session.query(UserRegistration).get(
-        s.application.id).warning == '1 instances have banned this account.'
+    assert db.session.get(UserRegistration, s.application.id).warning == '1 instances have banned this account.'
 
 
 def test_a_non_200_ip_response_counts_nothing(db_session, monkeypatch):
@@ -339,7 +338,7 @@ def test_a_non_200_ip_response_counts_nothing(db_session, monkeypatch):
     check_user_application(s.application.id)
 
     db.session.expire_all()
-    assert db.session.query(UserRegistration).get(s.application.id).warning is None
+    assert db.session.get(UserRegistration, s.application.id).warning is None
     assert [url for url, _data in client.posts] == [
         'https://real.example/api/is_ip_banned',
         'https://real.example/api/is_email_banned',
@@ -366,7 +365,7 @@ def test_an_empty_ip_result_list_counts_nothing(db_session, monkeypatch):
     check_user_application(s.application.id)
 
     db.session.expire_all()
-    assert db.session.query(UserRegistration).get(s.application.id).warning is None
+    assert db.session.get(UserRegistration, s.application.id).warning is None
     assert [url for url, _data in client.posts] == [
         'https://real.example/api/is_ip_banned',
         'https://real.example/api/is_email_banned',
@@ -396,7 +395,7 @@ def test_a_false_result_at_the_real_index_counts_nothing(db_session, monkeypatch
     check_user_application(s.application.id)
 
     db.session.expire_all()
-    assert db.session.query(UserRegistration).get(s.application.id).warning is None
+    assert db.session.get(UserRegistration, s.application.id).warning is None
     assert [url for url, _data in client.posts] == [
         'https://real.example/api/is_ip_banned',
         'https://real.example/api/is_email_banned',
@@ -439,8 +438,7 @@ def test_a_banned_email_counts(db_session, monkeypatch):
     check_user_application(s.application.id)
 
     db.session.expire_all()
-    assert db.session.query(UserRegistration).get(
-        s.application.id).warning == '1 instances have banned this account.'
+    assert db.session.get(UserRegistration, s.application.id).warning == '1 instances have banned this account.'
 
 
 def test_a_non_200_email_response_counts_nothing(db_session, monkeypatch):
@@ -461,7 +459,7 @@ def test_a_non_200_email_response_counts_nothing(db_session, monkeypatch):
     check_user_application(s.application.id)
 
     db.session.expire_all()
-    assert db.session.query(UserRegistration).get(s.application.id).warning is None
+    assert db.session.get(UserRegistration, s.application.id).warning is None
     assert [url for url, _data in client.posts] == [
         'https://real.example/api/is_ip_banned',
         'https://real.example/api/is_email_banned',
@@ -486,7 +484,7 @@ def test_an_empty_email_result_list_counts_nothing(db_session, monkeypatch):
     check_user_application(s.application.id)
 
     db.session.expire_all()
-    assert db.session.query(UserRegistration).get(s.application.id).warning is None
+    assert db.session.get(UserRegistration, s.application.id).warning is None
     assert [url for url, _data in client.posts] == [
         'https://real.example/api/is_ip_banned',
         'https://real.example/api/is_email_banned',
@@ -513,7 +511,7 @@ def test_a_false_result_at_the_real_email_index_counts_nothing(
     check_user_application(s.application.id)
 
     db.session.expire_all()
-    assert db.session.query(UserRegistration).get(s.application.id).warning is None
+    assert db.session.get(UserRegistration, s.application.id).warning is None
     assert [url for url, _data in client.posts] == [
         'https://real.example/api/is_ip_banned',
         'https://real.example/api/is_email_banned',
@@ -554,8 +552,7 @@ def test_both_legs_banned_counts_twice(db_session, monkeypatch):
     check_user_application(s.application.id)
 
     db.session.expire_all()
-    assert db.session.query(UserRegistration).get(
-        s.application.id).warning == '2 instances have banned this account.'
+    assert db.session.get(UserRegistration, s.application.id).warning == '2 instances have banned this account.'
 
 
 def test_a_failing_domain_does_not_stop_the_next_one(db_session, monkeypatch):
@@ -621,7 +618,7 @@ def test_the_warning_update_binds_its_parameters(db_session, monkeypatch):
     check_user_application(s.application.id)
 
     db.session.expire_all()
-    persisted = db.session.query(UserRegistration).get(s.application.id)
+    persisted = db.session.get(UserRegistration, s.application.id)
     assert persisted.warning == '2 instances have banned this account.'
 
 

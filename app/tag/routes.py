@@ -64,7 +64,7 @@ def show_tag(tag):
         if category and category == 'community' and category_id:
             posts = posts.filter(Post.community_id == category_id)
         elif category and category == 'topic' and category_id:
-            topic = Topic.query.get_or_404(category_id)
+            topic = db.session.get(Topic, category_id) or abort(404)
             # get posts from communities in that topic
             if topic.show_posts_in_children:  # include posts from child topics
                 topic_ids = get_all_child_topic_ids(topic)
@@ -78,7 +78,7 @@ def show_tag(tag):
             posts = posts.filter(Post.community_id.in_(community_ids))
         
         elif category and category == 'feed' and category_id:
-            feed = Feed.query.get_or_404(category_id)
+            feed = db.session.get(Feed, category_id) or abort(404)
             # get the feed_ids
             if feed.show_posts_in_children:  # include posts from child feeds
                 feed_ids = get_all_child_feed_ids(feed)
@@ -262,10 +262,10 @@ def tag_cloud(type, category_id: int):
     page = request.args.get('page', 1, type=int)
 
     if type == 'community':
-        community = Community.query.get_or_404(category_id)
+        community = db.session.get(Community, category_id) or abort(404)
         community_ids.append(community.id)
     elif type == 'topic':
-        topic = Topic.query.get_or_404(category_id)
+        topic = db.session.get(Topic, category_id) or abort(404)
         # get posts from communities in that topic
         if topic.show_posts_in_children:  # include posts from child topics
             topic_ids = get_all_child_topic_ids(topic)
@@ -281,7 +281,7 @@ def tag_cloud(type, category_id: int):
             text('SELECT id FROM community WHERE banned is false AND topic_id IN :topic_ids'),
             {'topic_ids': tuple(topic_ids)}).scalars())
     elif type == 'feed':
-        feed = Feed.query.get_or_404(category_id)
+        feed = db.session.get(Feed, category_id) or abort(404)
         # get the feed_ids
         if feed.show_posts_in_children:  # include posts from child feeds
             feed_ids = get_all_child_feed_ids(feed)
@@ -427,7 +427,7 @@ def tag_posts(tag_id):
         posts = posts.filter(Post.community_id == community_id)
 
     if topic_id := request.args.get('topic_id'):
-        topic = Topic.query.get_or_404(topic_id)
+        topic = db.session.get(Topic, topic_id) or abort(404)
         # get posts from communities in that topic
         if topic.show_posts_in_children:  # include posts from child topics
             topic_ids = get_all_child_topic_ids(topic)
@@ -438,7 +438,7 @@ def tag_posts(tag_id):
         posts = posts.filter(Post.community_id.in_(community_ids))
 
     if feed_id := request.args.get('feed_id'):
-        feed = Feed.query.get_or_404(feed_id)
+        feed = db.session.get(Feed, feed_id) or abort(404)
         # get the feed_ids
         if feed.show_posts_in_children:  # include posts from child feeds
             feed_ids = get_all_child_feed_ids(feed)

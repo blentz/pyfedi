@@ -58,7 +58,7 @@ def _seed():
     assert burn.id == 1
     alice = make_user(instance, 'alice', local=True)
     bob = make_user(instance, 'bob', local=True)
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.private_instance = False
     db.session.commit()
     return instance, alice, bob
@@ -146,7 +146,7 @@ def test_the_ban_pair_still_acts_on_a_tag_that_does_exist(app, db_session, actio
     response = client.post(f'/tag/solarstorm/{action}', data={'csrf_token': token})
 
     assert response.status_code == 302
-    assert Tag.query.get(tag.id).banned is banned_after
+    assert db.session.get(Tag, tag.id).banned is banned_after
 
 
 # --------------------------------------------------------------------------
@@ -355,7 +355,7 @@ def test_banning_a_tag_does_not_claim_to_have_deleted_anything(app, db_session):
         client.post('/tag/solarstorm/ban', data={'csrf_token': token})
         messages = get_flashed_messages()
 
-    assert Post.query.get(post.id) is not None
+    assert db.session.get(Post, post.id) is not None
     assert 'deleted' not in messages[0]
     assert 'solarstorm' in messages[0]
 
@@ -380,7 +380,7 @@ def test_the_tag_list_leaves_out_banned_tags(app, db_session):
 
 def test_a_private_instance_refuses_an_anonymous_reader_the_tag_list(app, db_session):
     instance, alice, bob = _seed()
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.private_instance = True
     db.session.commit()
     client = app.test_client()
@@ -599,7 +599,7 @@ def test_a_reader_without_the_permission_cannot_ban_a_tag(app, db_session, actio
     # answering 401 (app/utils.py:1961); the tag is what proves the refusal.
     assert response.status_code == 302
     assert '/permission_denied' in response.headers['Location']
-    assert Tag.query.get(tag.id).banned is False
+    assert db.session.get(Tag, tag.id).banned is False
 
 
 def test_the_tag_in_a_ban_url_is_matched_without_regard_to_case(app, db_session):
@@ -612,7 +612,7 @@ def test_the_tag_in_a_ban_url_is_matched_without_regard_to_case(app, db_session)
 
     client.post('/tag/SolarStorm/ban', data={'csrf_token': token})
 
-    assert Tag.query.get(tag.id).banned is True
+    assert db.session.get(Tag, tag.id).banned is True
 
 
 def test_an_unban_sends_the_moderator_to_the_tag_it_freed(app, db_session):
@@ -930,7 +930,7 @@ def test_the_post_list_is_rendered_from_its_own_template(app, db_session):
 
 def test_a_private_instance_refuses_an_anonymous_reader_the_post_list(app, db_session):
     instance, alice, bob = _seed()
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.private_instance = True
     db.session.commit()
     tag = _tag()

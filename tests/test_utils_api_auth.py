@@ -546,7 +546,7 @@ class TestAPasswordResetRevokesExistingApiTokens:
 
         # The request ran in its own app context, hence its own session.
         db.session.expire_all()
-        reloaded = User.query.get(user.id)
+        reloaded = db.session.get(User, user.id)
         # Proof the route really changed the password, not just redirected.
         assert reloaded.check_password('a-brand-new-password')
 

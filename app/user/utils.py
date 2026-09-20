@@ -31,7 +31,7 @@ def purge_user_then_delete_task(user_id, flush):
         session = get_task_session()
         try:
             with patch_db_session(session):
-                user = session.query(User).get(user_id)
+                user = session.get(User, user_id)
                 if user:
                     # posts
                     for post in user.posts:
@@ -42,14 +42,14 @@ def purge_user_then_delete_task(user_id, flush):
                     # unsubscribe
                     communities = session.query(CommunityMember).filter_by(user_id=user_id).all()
                     for membership in communities:
-                        community = session.query(Community).get(membership.community_id)
+                        community = session.get(Community, membership.community_id)
                         unsubscribe_from_community(community, user)
 
                     user.delete_dependencies()
                     user.purge_content(flush)
                     from app import redis_client
                     with redis_client.lock(f"lock:user:{user.id}", timeout=10, blocking_timeout=6):
-                        user = session.query(User).get(user_id)
+                        user = session.get(User, user_id)
                         user.deleted = True
                         session.commit()
 
@@ -132,7 +132,7 @@ def search_for_user(address: str, allow_fetch: bool = True):
                         else:
                             return None
                 if object_request.status_code == 401:
-                    site = db.session.query(Site).get(1)
+                    site = db.session.get(Site, 1)
                     for attempt in [1,2]:
                         try:
                             object_request = signed_get_request(links['href'], site.private_key, f"{current_app.config['SERVER_URL']}/actor#main-key")
@@ -278,9 +278,9 @@ def _get_user_posts_and_replies(user, page):
 
     for row in query_result:
         if row.type == "post":
-            returned_list.append(Post.query.get(row.id))
+            returned_list.append(db.session.get(Post, row.id))
         elif row.type == "reply":
-            returned_list.append(PostReply.query.get(row.id))
+            returned_list.append(db.session.get(PostReply, row.id))
 
     if len(returned_list) > per_page:
         next_page = True

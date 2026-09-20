@@ -406,7 +406,7 @@ def test_a_gone_instance_is_marked_and_its_queue_emptied(app, db_session, status
     _deliver(_Response(status_code=status, text='gone'))
 
     db.session.expire_all()
-    assert Instance.query.get(gone.id).gone_forever is True
+    assert db.session.get(Instance, gone.id).gone_forever is True
     assert [q.destination_domain for q in SendQueue.query.all()] == ['elsewhere.example']
 
 

@@ -88,8 +88,8 @@ def process_expired_bans():
             if community_membership_record:
                 community_membership_record.is_banned = False
 
-            blocked = session.query(User).get(expired_ban.user_id)
-            community = session.query(Community).get(expired_ban.community_id)
+            blocked = session.get(User, expired_ban.user_id)
+            community = session.get(Community, expired_ban.community_id)
 
             if blocked and blocked.is_local():
                 # Notify unbanned person
@@ -251,7 +251,7 @@ def delete_old_soft_deleted_content():
                 )
 
                 for post_id in post_ids:
-                    post = session.query(Post).get(post_id)
+                    post = session.get(Post, post_id)
                     if post and (post.image_id is None or post.image_id not in images_used_by_many_posts):
                         post.delete_dependencies()
                         session.delete(post)
@@ -266,7 +266,7 @@ def delete_old_soft_deleted_content():
                 )
 
                 for post_reply_id in post_reply_ids:
-                    post_reply = session.query(PostReply).get(post_reply_id)
+                    post_reply = session.get(PostReply, post_reply_id)
                     if post_reply:  # Check if still exists
                         post_reply.delete_dependencies()
                         if not post_reply.has_replies(include_deleted=True):
@@ -993,7 +993,7 @@ def archive_old_users():
 
 
 def archive_user(user_id, session):
-    user = session.query(User).get(user_id)
+    user = session.get(User, user_id)
     if user.avatar_id:
         avatar_file = user.avatar
         user.avatar_id = None

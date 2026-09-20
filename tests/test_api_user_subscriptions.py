@@ -10,7 +10,7 @@ def test_api_user_subscriptions(app, api_baseline):
     from app.api.alpha.utils.user import put_user_subscribe
 
     user_id = api_baseline.user1.id
-    user = User.query.get(user_id)
+    user = db.session.get(User, user_id)
     assert user is not None and hasattr(user, 'id')
     jwt = user.encode_jwt_token()
     assert jwt is not None
