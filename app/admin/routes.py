@@ -57,8 +57,17 @@ from app.admin import bp
 @bp.route('/', methods=['GET', 'POST'])
 @login_required
 def admin_home():
+    # Every other route on this blueprint carries @permission_required(...);
+    # this one carried nothing but @login_required, so any registered account
+    # could read the host's load averages, core count, disk usage, plugin list
+    # and overdue cron tasks. is_admin_or_staff() is the check the navigation
+    # already uses to decide whether to show this page's link at all
+    # (app/templates/base.html:268), so nobody who can reach it today loses it.
+    # NOT permission_required('change instance settings'): that would exclude
+    # staff holding only 'manage users' or 'administer all communities'.
     if not current_user.is_admin_or_staff():
         abort(403)
+
     load1, load5, load15 = os.getloadavg()
     if current_app.config["NUM_CPU"] and current_app.config["NUM_CPU"] != 0:
         num_cores = current_app.config["NUM_CPU"]
@@ -281,13 +290,14 @@ def admin_misc():
         site = Site()
     form.default_theme.choices = theme_list()
     form.language_id.choices = languages_for_form(all_languages=True)
-    if close_form.submit.data and close_form.validate():
+    if close_form.close_submit.data and close_form.validate():
         from app import redis_client
         redis_client.set('pause_federation', '666', ex=86400 * 365 * 10)
         site.registration_mode = 'Closed'
-        if close_form.announcement.data:
-            set_setting('announcement', close_form.announcement.data)
-            set_setting('announcement_html', markdown_to_html(close_form.announcement.data, anchors_new_tab=False, a_target=""))
+        # No `if close_form.announcement.data:` guard -- announcement carries
+        # DataRequired(), so validate() above has already refused an empty one.
+        set_setting('announcement', close_form.announcement.data)
+        set_setting('announcement_html', markdown_to_html(close_form.announcement.data, anchors_new_tab=False, a_target=""))
         db.session.commit()
         flash(_('Settings saved.'))
     elif form.validate_on_submit():

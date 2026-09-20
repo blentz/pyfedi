@@ -4,7 +4,8 @@ from sqlalchemy import func
 from wtforms import StringField, PasswordField, SubmitField, EmailField, BooleanField, TextAreaField, \
     SelectField, FileField, IntegerField, RadioField
 from wtforms.fields.choices import SelectMultipleField
-from wtforms.validators import ValidationError, DataRequired, EqualTo, Length, Optional
+from wtforms.validators import ValidationError, DataRequired, EqualTo, InputRequired, Length, \
+    NumberRange, Optional
 from flask_babel import _, lazy_gettext as _l
 
 from app.constants import DOWNVOTE_ACCEPT_ALL, DOWNVOTE_ACCEPT_MEMBERS, DOWNVOTE_ACCEPT_INSTANCE, \
@@ -71,7 +72,12 @@ class SiteMiscForm(FlaskForm):
     default_theme = SelectField(_l('Default theme'), coerce=str, render_kw={'class': 'form-select'})
     additional_css = TextAreaField(_l('Additional CSS'))
     additional_js = TextAreaField(_l('Additional JS'))
-    read_posts_cutoff = IntegerField(_l('Trim read posts table after this many days'))
+    # InputRequired + NumberRange, not bare IntegerField: admin_misc() does
+    # int(form.read_posts_cutoff.data) unguarded, so a submission that omits
+    # this key entirely leaves data None and the route raises TypeError. Not
+    # DataRequired(), which would reject a legitimate 0.
+    read_posts_cutoff = IntegerField(_l('Trim read posts table after this many days'),
+                                     validators=[InputRequired(), NumberRange(min=0)])
     filters = [('local', _l('Local')),
                ('popular', _l('Popular')),
                ('all', _l('All')),
@@ -122,7 +128,14 @@ class FederationForm(FlaskForm):
 
 class CloseInstanceForm(FlaskForm):
     announcement = TextAreaField(_l('Closing down announcement for home page'), validators=[DataRequired()])
-    submit = SubmitField(_l('Yes, close my instance'))
+    # Not 'submit': this form is rendered on the same page as SiteMiscForm, which
+    # also has a 'submit' field, and admin_misc() binds both forms to the same
+    # request body. A field named 'submit' here makes close_form.submit.data true
+    # for an ordinary misc-settings save, so a save that happens to carry an
+    # 'announcement' value closes the instance and pauses federation for ten
+    # years -- skipping the whole Danger Zone confirmation. PreLoadCommunitiesForm
+    # already uses this distinct-name convention for the same reason.
+    close_submit = SubmitField(_l('Yes, close my instance'))
 
 
 class PreLoadCommunitiesForm(FlaskForm):
