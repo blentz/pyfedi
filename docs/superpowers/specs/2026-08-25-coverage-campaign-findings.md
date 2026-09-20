@@ -15065,7 +15065,48 @@ thing this campaign has found.**
 
 **BASIS: the full suite, `6524 passed, 3 skipped, 255 warnings, 6 subtests passed in 755.74s`** -- delta reconciling, 6489 plus 35 -- and `All 61 module floors met.` `git diff --numstat` names exactly `app/auth/passkeys.py`.
 
-**Next free number: D891.**
+**Next free number: D891.** (**D891-D897 were taken by sub-project 78,
+below; the free number is now D898.**)
+
+## Sub-project 78: the admin API, the error handler that answers for it, and an authorization test that proved nothing
+
+**The round in one line: the priority moved to HOSTED-SITE SECURITY, both
+modules close at **100.0** and take floors -- **63 floors** -- one piece of
+dead code is removed, THREE security-relevant shapes are registered with
+measurements, and the mutation pass showed that the round's own authorization
+rows could not tell which permission the guard checks.**
+
+### 0. HOW THE TARGET WAS CHOSEN
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D891 | the campaign's target order | **THE REMAINING WORK WAS RANKED BY AUTHORIZATION DENSITY, NOT BY SIZE.** With hosted-site security made the highest priority and `app/cli.py` and `app/nntp/*` the lowest, every unfloored module was counted for `is_admin(`, `is_staff(`, `permission_required`, `user_access(`, `authorise_api_user`, `abort(401|403)` and `banned`. `app/admin/routes.py` leads with **160 constructs over 1400 missed statements**, `app/community/routes.py` follows with 143 over 1441 -- each a ten-round job, to be split as `app/tag/routes.py` was. This round took the same surface where it is small and COMPLETE: the admin API a remote caller can reach, plus the handler that turns every failure in it into a response. | **recorded; `app/admin/routes.py` is next** | The ranking |
+
+### 1. THE AUTHORIZATION TEST THAT PROVED NOTHING
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D892** | `app/utils.py:1650-1653`; `tests/test_admin_api.py` | **`user_access` RETURNS TRUE FOR USER ID 1 BEFORE CONSULTING ANY ROLE, AND THAT MADE THE ROUND'S FIRST THREE REFUSAL ROWS VACUOUS.** `if user_id == 1: return True`. Measured: `api_baseline.user1` has **no roles**, the database holds **no `role_permission` rows at all**, and `user_access('approve registrations', 1)` is still True -- as is `user_access('a permission that does not exist', 1)`. It is the instance-owner bootstrap and is not a defect, but three rows written as "an ordinary user is refused" used `user1` as the ordinary user and asserted nothing. They failed loudly, which is the only reason it was caught. **Fact 347.** | **rows rewritten against a roleless user; the rule pinned explicitly** | The probe, and the three failures |
+| **D893** | `tests/test_admin_api.py`; `app/api/alpha/utils/admin.py:13`, `:42` | **THE GUARD'S PERMISSION STRING WAS NOT LOAD-BEARING, AND ONLY THE MUTATION PASS SAID SO.** Replacing `user_access("approve registrations", ...)` with `user_access("some other permission", ...)` **survived all 34 rows**. D892's rule is why: the permitted caller was user 1, who passes every check, and the refused caller had no permissions, so failed every one -- **neither could distinguish one permission from another.** An admin endpoint could have been checking a permission every user holds and the suite would have been green. Closed with an approver who is not user 1 and holds ONLY `approve registrations`. **An authorization test needs a caller with EXACTLY the permission under test; "an admin" and "a nobody" together prove only that some check exists.** Fact 348. | **closed; the mutant now dies** | The mutant, before and after |
+
+### 2. THE DEAD CODE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D894 | `app/api/alpha/__init__.py:117-130` (before) | **A HELPER WITH NO CALLERS, WHOSE FALLBACK BRANCHES WERE THEMSELVES UNREACHABLE.** `_get_provided_value` was referenced nowhere in the repository -- and had it been called, its `form` and `args` branches could not run: `request.json` raises `UnsupportedMediaType` on a non-JSON request, the bare `except Exception` catches that, and `None` is returned before either is consulted. Measured: `PROBE m1 request.json on form data RAISED: UnsupportedMediaType`, `_get_provided_value -> None`; `PROBE m2 args -> None`. Two levels of dead code in an API error module. Removed, with the `request` import it was the last user of. | **fixed** | Both probes; the repo-wide reference count of zero |
+
+### 3. REGISTERED, NOT FIXED
+
+| ID | Where | What | Status |
+|---|---|---|---|
+| **D895** | `app/api/alpha/__init__.py:108-114` | **EVERY UNHANDLED EXCEPTION'S TEXT IS ECHOED TO THE CALLER.** The final `else` answers `{"code": 400, "message": str(e), ...}` for anything unmatched, so an internal failure's message -- which may name a table, a column, a constraint or a path -- reaches an unauthenticated client. Pinned in both directions: an application refusal (`"Insufficient permissions to manage registrations"`) and an internal one (`'relation "user_role" does not exist'`) come back identically. The branch is deliberate for the application's own strings, and `'incorrect_login'` and `'No object found.'` are specifically excluded from LOGGING, which shows the distinction was considered. | **registered -- what the API tells a caller about an internal error is a contract decision, and the clients consuming these messages are out of scope** |
+| D896 | `app/api/alpha/__init__.py:108-114` | **AN AUTHORIZATION REFUSAL ANSWERS 400, NOT 403.** `user_access` failing raises a plain `Exception`, which lands in the same `else` as a malformed request -- so a client cannot distinguish "you may not" from "you asked wrongly", and neither can monitoring. | **registered -- the status codes are the API's published contract** |
+| D897 | `app/api/alpha/utils/admin.py:16`, `:30` | **`limit` is taken from the caller unchecked** and passed to `paginate(per_page=limit)`, so a request may ask for an arbitrarily large page of registrations -- each carrying an applicant's email address and signup answer. Pinned as honoured, which is what makes the missing ceiling worth registering. | **registered -- a pagination policy that applies across the whole alpha API** |
+| (D897) | `app/api/alpha/utils/admin.py:66`, `:82` | **Two redundant statements on the denial path**, proved equivalent rather than contorted into kills: `db.session.delete(registration)` duplicates what `User.delete_dependencies()` already does (`app/models.py:1501`), and `new_user.deleted = True` writes a flag to a row deleted in the same transaction by code that never reads it. | **registered as equivalent mutants, with the mechanism asserted** |
+
+**BASIS: the full suite, `6560 passed, 3 skipped, 258 warnings, 6 subtests passed in 489.18s`** -- delta reconciling, 6524 plus 36 -- and `All 63 module floors met.` 30 of 32 mutants killed, 2 equivalent.
+
+**Next free number: D898.**
 
 ## Ratchet gotchas
 
