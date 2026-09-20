@@ -9391,6 +9391,43 @@ switch; replacing the `current_app` proxy also replaces every other config
 lookup and template global the route touches, and the row then passes for
 reasons unrelated to the branch.
 
+**373. A PAGINATION LOOP DRIVEN BY A REMOTE SERVER NEEDS A PAGE CAP.**
+`admin_federation_remote_scan` pages until a page comes back short, and the
+remote server decides how long every page is -- so a server that always answers
+with a full page kept the request running forever, holding a worker and growing
+the holding list without bound. `while <remote says there is more>` is not a
+loop with a bound; add one, and pin it by feeding the mock more pages than the
+cap and asserting the request count. See D933.
+
+**374. A NAME ASSIGNED ONLY INSIDE A LOOP IS UNBOUND WHEN THE LOOP DOES NOT
+MATCH.** `remote_instanceinfo_url` was set inside `for e in
+nodeinfo_dict['links']`, and the REMOTE server chooses what is in that list, so
+an empty one produced `UnboundLocalError` and a 500 the admin could not tell
+from a bug in their own instance. Initialise before the loop and check after
+it. See D932.
+
+**375. WHEN YOU FIX A DEFECT, GREP FOR ITS SHAPE BEFORE MOVING ON.** Slice C
+replaced `baseurl in <rows from banned_instances>` with `instance_banned()` in
+`admin_federation_preload`; the identical membership test was sitting in
+`admin_federation_remote_scan`, 100 lines away in the same file, and a third
+surface -- `admin_federation_mastodon_scan` -- had no check at all. One `grep`
+for the query string would have found all three in the same round. See D931,
+D934.
+
+**376. AN ANCHOR THAT MATCHES TWICE IS A FINDING, NOT JUST A CHORE.** D833's
+uniqueness pre-check exists to stop a mutation runner corrupting a file, but a
+mutant with no unique anchor is also telling you the code is duplicated: the
+lemmy and piefed scan branches turned out to be byte-identical for ~30 lines.
+Read the collision before working around it. See D935.
+
+**377. PARAMETERISE A THRESHOLD OVER EVERY BRANCH THAT IMPLEMENTS IT.** The
+three scan branches each have their own post and user minimums, reading
+different keys (`posts`/`users_active_week`, `post_count`/`active_weekly`,
+`entryCount`/`subscriptionsCount`). One row covering the lemmy pair would have
+left four mutants alive; parameterising the row over all three killed six.
+Slice D's 41-of-41 result came from this and from fact 371, not from anything
+about the code being simpler.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
