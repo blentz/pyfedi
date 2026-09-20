@@ -8940,6 +8940,40 @@ same `.scalars()` shape is still present in `show_tag` and `tag_posts`, where
 each reads it exactly once; both are one added read away from the same bug.
 See D839.
 
+**327. A REPAIR THAT MAKES TWO PATHS AGREE CAN DESTROY THE OBSERVABLE THAT
+DISTINGUISHED THEM.** `app/errors/handlers.py`'s 404 guard used to return a
+rendered page on one arm and the bare string `'not found'` on the other, so any
+row asserting the body could tell the arms apart. Sub-project 69 repaired that
+-- correctly -- and **both arms then answered 404 with the same page**. Six
+mutants, one per dropped operand of the guard, survived a suite whose rows
+asserted status and body, because after the repair those tell you nothing about
+which arm ran. The remaining observable was the side effect the guard exists
+for: the fast path SKIPS a `CmsPage` query. The rows had to plant a `CmsPage`
+**at** each guarded path and assert it is not served. **When a fix makes two
+branches return the same thing, re-derive what still distinguishes them and
+re-run the mutants -- the tests written before the fix may have stopped testing
+the guard without failing.** See D844. Related: fact 325, where the mutation
+result also meant something other than it first appeared.
+
+**328. THREE HANDLERS ARE ONLY REACHABLE FROM A REQUEST THAT FAILS, AND TWO
+OBVIOUS ROUTES IN ARE BLOCKED.** To exercise `app_errorhandler(401/429/500)`:
+`app.route` **cannot** be called after the first request -- the `app` fixture is
+session-scoped, so `AssertionError: The setup method 'route' can no longer be
+called on the application` -- and `app.handle_http_exception()` from a
+`test_request_context` skips the `before_request` hook that sets `g.site`, so
+`errors/401.html` and `errors/500.html`, which extend `base.html`, die with
+`UndefinedError: 'flask.ctx._AppCtxGlobals object' has no attribute 'site'`.
+Make an **existing** route fail instead: patch the `render_template` it uses
+with a `side_effect` and set `PROPAGATE_EXCEPTIONS = False` for the call
+(restore it in a `finally`, or every later test in the session swallows its own
+errors). The whole lifecycle then runs, which is the point.
+
+Note also that the `db.session.rollback()` in those handlers **is** observable,
+unlike D832's class: a session poisoned by a failed statement raises on its next
+query, and the rollback is what clears it. Poison it inside the `side_effect`,
+then assert a query works afterwards -- with a control row proving the poison
+works, or the assertion is about nothing.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
