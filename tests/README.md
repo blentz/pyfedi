@@ -9076,6 +9076,29 @@ with `or 'en'` at the source. Note `str(get_locale())` does NOT fix it -- it
 produces the string `'None'` -- and that spelling is already in use at
 `app/request_hooks.py:92`. See D864.
 
+**338. `Flask.logger` IS SHARED BY EVERY APP IN THE PROCESS, AND `create_app`
+ATTACHES AN SMTPHandler TO IT.** `Flask.logger` is
+`logging.getLogger(app.name)`, and every app built from this package is named
+`app` -- so an app a test builds and the session's `app` fixture are the SAME
+logger object, and handlers accumulate on it globally. `create_app` adds an
+`SMTPHandler` at `ERROR` level whenever `MAIL_SERVER` and `ERRORS_TO` are set,
+and **`MAIL_SUPPRESS_SEND` does not apply to it**: it is a `smtplib` client, not
+Flask-Mail. A row that builds such an app without cleaning up leaves every later
+test in the session one `app.logger.error(...)` from a real SMTP connection
+attempt. Restore the handler list in a FIXTURE, not a `finally` -- see
+`restores_the_shared_logger` in tests/test_app_factory.py, and the ordered pair
+of rows that assert the teardown ran. Building a second app is otherwise cheap:
+0.33s. See D871.
+
+**339. FOR A MODULE EVERYTHING IMPORTS, ONLY THE FULL-SUITE COVERAGE NUMBER
+MEANS ANYTHING.** Measured from its own test file alone, `app/__init__.py` reads
+84.1% with `get_ip_address` and `StripCookieVaryForAnonymous` apparently
+uncovered -- both are exercised by other suites, and `tests/test_client_ip.py`
+tests the first by name. A round that trusted the single-file number would have
+written rows for code that was already covered, and might have "repaired"
+something to make them pass. Take the target list from the full-suite JSON;
+use a scoped run only to iterate. See D872.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not

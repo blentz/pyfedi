@@ -14913,7 +14913,44 @@ caught by a probe rather than by an edit to production.**
 
 **BASIS: the full suite, `6371 passed, 3 skipped, 247 warnings, 6 subtests passed in 657.85s`** -- the delta reconciles, 6338 plus this round's 33 rows -- and `All 52 module floors met.`
 
-**Next free number: D869.**
+**Next free number: D869.** (**D869-D873 were taken by sub-project 74,
+below; the free number is now D874.**)
+
+## Sub-project 74: `app/__init__.py` -- the factory's configuration branches, and a logger the whole process shares
+
+**The round in one line: the app factory closes at **100.0** and takes a floor
+-- **53 floors** -- a 21-mutant pass killed **21 of 21**, and **NOTHING WAS
+REPAIRED**: every uncovered branch was configuration the test environment has
+never set. The hazard this round had to handle was not a defect in the module
+but a shared logger that would have left an SMTPHandler attached to every later
+test in the session.**
+
+### 0. NO PRODUCTION CHANGE, STATED PLAINLY
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D869 | `app/__init__.py` | **THE FIRST ROUND SINCE 66 TO REPAIR NOTHING, AND THAT IS A RESULT RATHER THAN AN OMISSION.** Every one of the 26 missing lines was a branch behind a config value no existing config sets -- `SENTRY_DSN`, `SERVE_API_DOCS`, three OAuth client ids, `MAIL_SERVER`/`ERRORS_TO`, `HTTP_PROTOCOL == 'mixed'` -- plus `get_locale`'s logged-in, session and handler arms. All reachable by building a second app from a `TestConfig` subclass, measured at **0.33s per build**. `git diff --numstat` names no file under `app/`. Three shapes were examined and registered rather than repaired. | **covered; no repair** | The probe; the full suite's own diff |
+| D870 | `app/__init__.py:28-47`; `coverage_floors.ini` | **THE MODULE CLOSES AT `[]`/`[]` AND TAKES A FLOOR OF 100 -- 53 floors.** `get_locale`'s two handlers are distinct and were covered separately: the OUTER one answers when there is no request context at all (`current_user` is `None` outside one, so `.is_authenticated` raises `AttributeError` -- measured), and the INNER one answers when the lookup itself fails, which needs `LANGUAGES` absent from the config since `current_app.config['LANGUAGES']` is a plain subscript. D864's `or 'en'` repair, made in sub-project 73 and covered there only indirectly through a reminder test two modules away, now has its own rows across both the no-header and unmatchable-header cases. **21 of 21 mutants killed.** | **floored at 100** | The `&&` chain; `All 53 module floors met.` |
+
+### 1. THE SHARED LOGGER
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D871 | `app/__init__.py:346`; `tests/test_app_factory.py` | **`Flask.logger` IS PROCESS-WIDE, AND THE FACTORY ATTACHES AN SMTPHandler TO IT.** `Flask.logger` is `logging.getLogger(app.name)` and every app built from this package is named `app`, so an app a test builds shares ONE logger object with the session's app: `PROBE e1 handlers: ['RotatingFileHandler', 'SMTPHandler', 'RotatingFileHandler']`. The factory adds an `SMTPHandler` at `ERROR` level whenever `MAIL_SERVER` and `ERRORS_TO` are set, and **`MAIL_SUPPRESS_SEND` does not reach it** -- it is a `smtplib` client, not Flask-Mail -- so a row that built such an app and did not clean up would leave every later test in the session one `app.logger.error(...)` away from a real connection attempt to `smtp.example`. Handled with a fixture rather than a `finally` per row, so a failing assertion cannot skip it, and with a pair of ordered rows that assert the teardown actually ran. **Fact 338.** | **contained by a fixture, and the fixture is itself asserted** | The probe's handler list |
+| D872 | `tests/test_app_factory.py` | **A PARTIAL COVERAGE RUN UNDERSTATED THIS MODULE AND NEARLY SENT THE ROUND AFTER TWO FUNCTIONS THAT WERE ALREADY COVERED.** Measured from this file alone, `app/__init__.py` reads 84.141% with `get_ip_address` (`:75-85`) and `StripCookieVaryForAnonymous` (`:118-133`) apparently missing. Both are covered by other suites -- `tests/test_client_ip.py` exists and tests the first by name. **For a module imported by everything, only the FULL-SUITE number means anything**, and the full-suite list never contained those lines. | **corrected before any row was written for them** | The two measurements side by side |
+
+### 2. REGISTERED, NOT FIXED
+
+| ID | Where | What | Status |
+|---|---|---|---|
+| D873 | `app/__init__.py:340-344` | **`ERRORS_TO` IS HANDED TO `SMTPHandler` UNSPLIT.** `SMTPHandler` wraps a `str` in a one-element list, so `'a@x.example,b@x.example'` becomes a SINGLE recipient containing a comma -- which no SMTP server accepts -- and the failure appears only when an error is first reported, which is exactly when nobody is watching. Found because an assertion in this round guessed `toaddrs == 'e@example.com'` and the real value is `['e@example.com']`. | **registered, and pinned as the behaviour it is** |
+| (D873) | `:29`, `:44`, `:46` | **`get_locale` has two bare `except:` clauses**, which catch `KeyboardInterrupt` and `SystemExit` with everything else; the outer one also wraps the `current_user` access, so a database failure while reading `interface_language` is answered `'en'`. | **registered -- pre-existing and shared with much of `app/`; both arms are covered either way** |
+| (D873) | `:349-350` | **`os.mkdir('logs')` is relative to the PROCESS's working directory**, so where the log lands depends on where the app was started from. | **registered as a deployment concern** |
+| (D873) | `:333-346` | **The error mailer is built from eight config values with no validation**: `MAIL_SERVER` without `MAIL_PORT` yields `mailhost=(server, None)`, which `SMTPHandler` accepts and fails on only at the first error. | **registered -- the configuration is an operator's, and the round would be guessing at the validation wanted** |
+
+**BASIS: the full suite, `6405 passed, 3 skipped, 247 warnings, 6 subtests passed in 533.23s`** -- the delta reconciles, 6371 plus this round's 34 rows -- and `All 53 module floors met.`
+
+**Next free number: D874.**
 
 ## Ratchet gotchas
 
