@@ -96,7 +96,7 @@ from app.constants import (
     ROLE_ADMIN, SRC_API, SRC_WEB,
 )
 from app.models import (
-    Domain, Event, File, Poll, PollChoice, PollChoiceVote, Role,
+    Domain, Event, File, Poll, PollChoice, PollChoiceVote, Role, utcnow,
 )
 from app.shared.post import edit_post
 from app.utils import store_files_in_s3
@@ -459,7 +459,7 @@ class TestScheduledGate:
             200, headers={'Content-Type': 'text/html'})
         _unreadable_page(http_mock, 'https://example.com/page')
         s = _seed()
-        future = datetime.utcnow() + timedelta(days=2)
+        future = utcnow() + timedelta(days=2)
 
         edit_post(_web_form(scheduled_for=future), s.post, POST_TYPE_LINK,
                   SRC_WEB, user=s.user, from_scratch=True)
@@ -477,7 +477,7 @@ class TestScheduledGate:
             200, headers={'Content-Type': 'text/html'})
         _unreadable_page(http_mock, 'https://example.com/page')
         s = _seed()
-        past = datetime.utcnow() - timedelta(days=2)
+        past = utcnow() - timedelta(days=2)
 
         edit_post(_web_form(scheduled_for=past), s.post, POST_TYPE_LINK,
                   SRC_WEB, user=s.user, from_scratch=True)

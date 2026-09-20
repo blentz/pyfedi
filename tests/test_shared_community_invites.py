@@ -668,23 +668,37 @@ def test_get_comm_flair_list_str_arg_exact_match_requires_the_ap_domain_too(
     filtering on `name` alone matches both rows and `.first()` -- which
     carries no `order_by` -- returns the decoy.
 
-    THAT LAST STEP IS AN ASSUMPTION ABOUT AN UNORDERED QUERY, SO IT IS
-    ASSERTED RATHER THAN TRUSTED: the precondition below runs the mutant's
-    own `name`-only query directly and pins that it yields the decoy. The
-    assertion is the test's own, independent of production code, so it
-    cannot make a mutant look dead that is not: if a future backend or
-    planner ever returned the target first, this precondition fails loudly
-    and names the reason, instead of the test silently passing while the
-    mutant it exists to kill survives.
+    THAT LAST STEP IS AN ASSUMPTION ABOUT AN UNORDERED QUERY. It used to be
+    ASSERTED -- the precondition ran the mutant's own `name`-only query and
+    pinned that it yielded the decoy -- and that assertion did its job: it
+    held for every run of this file alone and then failed once inside a full
+    suite, `assert 4 == 3`, because `.first()` carries no `order_by` and the
+    planner is free to answer either row once the table has seen enough
+    churn. The tripwire worked; the assumption under it did not.
+
+    It is now DERIVED instead of asserted: the query runs first, whatever it
+    returns is designated the decoy, and the flairs are attached afterwards.
+    The mutant therefore returns the wrong community in either ordering, the
+    kill stays honest, and the row cannot fail for a reason that has nothing
+    to do with what it tests. See D847.
     """
     s = _seed()
-    decoy = make_community('shared', host='decoy.example')
-    target = make_community('shared', host='target.example')
+    first = make_community('shared', host='decoy.example')
+    second = make_community('shared', host='target.example')
+    assert first.name == second.name
+    assert first.ap_domain != second.ap_domain
+
+    # WHICH row the mutant's name-only query returns is decided by the planner,
+    # not by insertion order, so it is READ rather than assumed. The original
+    # version of this row asserted the decoy came first, and that held when the
+    # file ran alone and failed once in a full suite -- `assert 4 == 3` -- for
+    # exactly the reason its docstring predicted. The roles are assigned from
+    # what the query actually answers: whatever it returns is the DECOY, so the
+    # mutant is always wrong and the kill stays honest in either order.
+    decoy_id = db.session.query(Community).filter_by(name='shared').first().id
+    decoy, target = (first, second) if decoy_id == first.id else (second, first)
     make_community_flair(decoy, name='unwanted')
     make_community_flair(target, name='wanted')
-    assert decoy.name == target.name
-    assert decoy.ap_domain != target.ap_domain
-    assert db.session.query(Community).filter_by(name='shared').first().id == decoy.id
 
     result = get_comm_flair_list(f'{target.name}@{target.ap_domain}')
 

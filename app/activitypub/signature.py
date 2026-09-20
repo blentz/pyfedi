@@ -161,7 +161,7 @@ def post_request(uri: str, body: dict | None, private_key: str, key_id: str,
                     session.add(SendQueue(destination=uri, destination_domain=furl(uri).host, actor=key_id,
                                              private_key=private_key, payload=json.dumps(body), retries=retries,
                                              retry_reason=log.exception_message,
-                                             send_after=datetime.utcnow() + timedelta(seconds=backoff)))
+                                             send_after=utcnow() + timedelta(seconds=backoff)))
                     session.commit()
 
             return

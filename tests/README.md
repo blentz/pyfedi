@@ -8974,6 +8974,31 @@ query, and the rollback is what clears it. Poison it inside the `side_effect`,
 then assert a query works afterwards -- with a control row proving the poison
 works, or the assertion is about nothing.
 
+**329. A REPAIR CAN MAKE A LIVE BRANCH UNREACHABLE, AND ONLY THE FLOOR WILL SAY
+SO.** Sub-project 70 replaced `session.query(User).get(follower.remote_user_id)`
+-- which warns when the nullable FK is NULL -- with an early
+`if not follower.remote_user_id: continue`. It reads correctly and every test
+passed. It also dropped the module from 100.0 to **99.602**, because the
+existing `if user_details:` false arm had been reached BY the null row, and with
+the row skipped earlier that arm is reachable only through a dangling FK the
+database forbids. The repair had converted a tested branch into dead code. The
+shape that keeps both arms alive is to guard the ARGUMENT, not the iteration:
+`user_details = (... .get(x) if x else None)`. **After any repair, re-read the
+module's coverage before committing** -- a floor that only rises is what turns a
+silently-worse repair into a loud failure. See D848.
+
+**330. AN UNORDERED `.first()` IN A TEST IS A FLAKE WITH A LONG FUSE.** A row in
+`tests/test_shared_community_invites.py` killed a mutant by relying on
+`.filter_by(name=...).first()` -- no `order_by` -- returning the decoy rather
+than the target. Its author asserted the assumption rather than trusting it, and
+the assertion held for every isolated run of that file before failing once
+inside a full suite (`assert 4 == 3`), because PostgreSQL is free to answer
+either row once the table has seen enough insert/delete churn. Running the file
+alone will NOT reproduce it. **Derive the ordering instead of asserting it**:
+run the query first, designate whatever it returns as the row you want to be
+wrong, and build the fixture around that -- then the kill is deterministic in
+either order. See D847.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not

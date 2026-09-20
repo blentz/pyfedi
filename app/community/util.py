@@ -331,7 +331,7 @@ def end_poll_date(end_choice):
     }
 
     if end_choice in delta_mapping:
-        return datetime.utcnow() + delta_mapping[end_choice]
+        return utcnow() + delta_mapping[end_choice]
     else:
         raise ValueError("Invalid choice")
 

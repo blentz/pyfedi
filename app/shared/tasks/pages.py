@@ -342,7 +342,12 @@ def send_post(post_id, edit=False, session=None):
 
     # send the amended copy of the Create to anyone who is following the User, but hasn't already received something
     for follower in followers:
-        user_details = session.query(User).get(follower.remote_user_id)
+        # remote_user_id is a nullable FK -- see the same shape in
+        # app/shared/tasks/deletes.py. The None is kept out of .get(), which
+        # SQLAlchemy warns may stop answering None, and `if user_details`
+        # below remains the single decision this loop makes.
+        user_details = (session.query(User).get(follower.remote_user_id)
+                        if follower.remote_user_id else None)
         if user_details:
             create['cc'].append(user_details.public_url())
 

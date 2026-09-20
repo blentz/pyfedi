@@ -13,7 +13,7 @@ from sqlalchemy import text
 from app.constants import POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_ARTICLE, POST_TYPE_VIDEO, POST_TYPE_POLL, \
     SUBSCRIPTION_MODERATOR, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, SUBSCRIPTION_PENDING, ROLE_ADMIN, VERSION, \
     POST_TYPE_EVENT
-from app.models import Site
+from app.models import Site, utcnow
 from app.utils import getmtime, gibberish, shorten_string, shorten_url, digits, user_access, community_membership, \
     can_upvote, can_downvote, shorten_number, ap_datetime, current_theme, community_link_to_href, \
     in_sorted_list, role_access, first_paragraph, person_link_to_href, feed_membership, html_to_text, remove_images, \
@@ -108,7 +108,7 @@ def register_request_hooks(app):
                 set_setting('admin_ids', g.admin_ids)
 
         if current_user.is_authenticated:
-            current_user.last_seen = datetime.utcnow()
+            current_user.last_seen = utcnow()
             current_user.email_unread_sent = False
         else:
             if 'Windows' in request.user_agent.string:

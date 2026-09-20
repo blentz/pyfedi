@@ -206,7 +206,15 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
     if is_post and followers and not reason:
         payload = undo if is_restore else delete
         for follower in followers:
-            user_details = session.query(User).get(follower.remote_user_id)
+            # remote_user_id is a nullable FK, so a follower row can carry no
+            # account at all. The None is kept OUT of .get() rather than handed
+            # to it: SQLAlchemy warns that a fully NULL primary key identity
+            # "may raise an error in a future release", so relying on the None
+            # it answers today is relying on a deprecation. The existing
+            # `if user_details` below is still the one decision, which keeps
+            # the skip on a branch a test can reach.
+            user_details = (session.query(User).get(follower.remote_user_id)
+                            if follower.remote_user_id else None)
             if user_details:
                 payload['cc'].append(user_details.public_url())
         instances = session.query(Instance).join(User, User.instance_id == Instance.id).join(UserFollower, UserFollower.remote_user_id == User.id)

@@ -32,7 +32,7 @@ from app.community.util import is_bad_name
 from app.constants import NOTIF_COMMUNITY, NOTIF_POST, NOTIF_REPLY, POST_STATUS_SCHEDULED, POST_STATUS_PUBLISHED, \
     POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_IMAGE, NOTIF_REMINDER, POST_TYPE_VIDEO, POST_TYPE_ARTICLE, SRC_API
 from app.email import send_email
-from app.models import CronJobLog, Settings, BannedInstances, Role, User, RolePermission, Domain, ActivityPubLog, \
+from app.models import CronJobLog, Settings, BannedInstances, Role, User, RolePermission, Domain, ActivityPubLog, utcnow, \
     utcnow, Site, Instance, File, Notification, Post, CommunityMember, NotificationSubscription, PostReply, Language, \
     Community, SendQueue, _store_files_in_s3, PostVote, Poll, \
     ActivityBatch, Reminder, RssFeed, RssFeedItem, Feed
@@ -1742,7 +1742,7 @@ def register(app):
     def detect_vote_manipulation():
         with app.app_context():
             print('Getting user ids...')
-            all_user_ids = [user.id for user in User.query.filter(User.last_seen > datetime.utcnow() - timedelta(days=7))]
+            all_user_ids = [user.id for user in User.query.filter(User.last_seen > utcnow() - timedelta(days=7))]
             print('Checking...')
             for i, first_user_id in enumerate(all_user_ids):
                 current_user_upvoted_posts = ['post/' + str(id) for id in recently_upvoted_posts(first_user_id)]

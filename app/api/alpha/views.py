@@ -11,7 +11,7 @@ from sqlalchemy.orm.exc import NoResultFound, DetachedInstanceError
 from app import cache, db
 from app.activitypub.util import active_month
 from app.constants import *
-from app.models import ChatMessage, Community, Language, Instance, Post, PostReply, User, \
+from app.models import ChatMessage, Community, Language, Instance, Post, PostReply, User, utcnow, \
     AllowedInstances, BannedInstances, utcnow, Site, Feed, FeedItem, Topic, CommunityFlair, \
     UserNote, Poll, Event, PollChoice, Conversation, Report
 from app.post.util import tags_to_string, flair_to_string
@@ -147,7 +147,7 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
                         text('SELECT interacted_at FROM "read_posts" WHERE read_post_id = :post_id and user_id = :user_id'),
                         {'post_id': post.id, 'user_id': user_id}).scalar()
                 else:
-                    since = interacted_at.get(post.id) or datetime.utcnow() - timedelta(days=1)
+                    since = interacted_at.get(post.id) or utcnow() - timedelta(days=1)
                 unread_comments = db.session.execute(text("""SELECT
                                     COUNT(pr.id) AS reply_count
                                 FROM

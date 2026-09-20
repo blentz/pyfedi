@@ -2723,7 +2723,7 @@ class Post(db.Model):
     # All the following post/comment ranking math is explained at https://medium.com/hacking-and-gonzo/how-reddit-ranking-algorithms-work-ef111e33d0d9
     def post_ranking(self, score, post_date: datetime):
         if post_date is None:
-            post_date = datetime.utcnow()
+            post_date = utcnow()
         if score is None:
             score = 1
         order = math.log(max(abs(score), 1), 10)

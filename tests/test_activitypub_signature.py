@@ -24,6 +24,7 @@ import pytest
 
 from app.activitypub.signature import (HttpSignature, VerificationFormatError,
                                        signature_part)
+from app.models import utcnow
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -396,10 +397,10 @@ def test_a_gone_instance_is_marked_and_its_queue_emptied(app, db_session, status
     gone = make_instance('remote.example', software='lemmy')
     db.session.add(SendQueue(destination='https://remote.example/inbox',
                              destination_domain='remote.example', actor='a', private_key='k',
-                             payload='{}', retries=0, send_after=datetime.utcnow()))
+                             payload='{}', retries=0, send_after=utcnow()))
     db.session.add(SendQueue(destination='https://elsewhere.example/inbox',
                              destination_domain='elsewhere.example', actor='a', private_key='k',
-                             payload='{}', retries=0, send_after=datetime.utcnow()))
+                             payload='{}', retries=0, send_after=utcnow()))
     db.session.commit()
 
     _deliver(_Response(status_code=status, text='gone'))
@@ -459,8 +460,8 @@ def test_the_backoff_is_capped_at_four_hours(app, db_session):
 
     db.session.expire_all()
     queued = SendQueue.query.one()
-    assert queued.send_after <= datetime.utcnow() + timedelta(seconds=15361)
-    assert queued.send_after >= datetime.utcnow() + timedelta(seconds=15000)
+    assert queued.send_after <= utcnow() + timedelta(seconds=15361)
+    assert queued.send_after >= utcnow() + timedelta(seconds=15000)
 
 
 def test_a_retryable_code_on_another_content_type_is_not_queued(app, db_session):
