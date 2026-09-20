@@ -15235,4 +15235,40 @@ rise every round through slice F; an interim floor would be a number with no
 meaning, exactly as `app/tag/routes.py` was left unfloored between
 sub-projects 66 and 68. The three functions in this slice are at `[]`.
 
-**Next free number: D912.**
+**Next free number: D912.** (**D912-D919 were taken by sub-project 79
+slice B, below; the free number is now D920.**)
+
+## Sub-project 79 (slice B): an upload path that changed disk before it knew what it had
+
+**The round in one line: `admin_site` closes at zero gaps and carried **FOUR
+production defects**, three of them the same mistake -- **a corrupt upload
+destroyed the site's existing logo**, **a `.SVG` upload 500'd and left its
+bytes in the served media root**, **a small PNG logo deleted itself**, and the
+mutation pass found that making `.SVG` work had quietly made the SANITIZE
+guard's case load-bearing in a way nothing tested.**
+
+### 1. THE PRODUCTION DEFECTS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D912** | `app/admin/routes.py:168-179`, `:300-303` | **A CORRUPT UPLOAD DESTROYED THE SITE'S EXISTING LOGO.** The route unlinked all five `site.logo*` files and the two `logo_512`/`logo_192` settings files **before** Pillow had seen the upload. An upload it could not decode then raised `UnidentifiedImageError`, `db.session.commit()` was never reached, and the row went on pointing at files that no longer existed -- so the site served a broken image on **every page** while the database said the logo was fine, and the only way back was another upload. The 500 was the visible half; the destroyed logo was the half nobody would connect to it. Fixed by capturing the superseded paths up front and unlinking them only once the replacement has been processed and assigned, plus a full decode check (`.load()`, not `.verify()` -- verify reads headers only and a truncated image raises later, inside `thumbnail()`, which is exactly the window this is about) that turns an undecodable upload into a 400 with its bytes removed. | **fixed** | `PROBE s5 old logo on disk before: True` / `RAISED: UnidentifiedImageError` / `row still points at: /static/media/existing_100.png` / `old logo on disk after: False` |
+| **D913** | `app/admin/routes.py:206` (before) | **`.SVG` WAS SANITIZED AS AN SVG AND THEN HANDED TO PILLOW.** `allowed_extensions` is checked with `.lower()`, the form's `FileAllowed` lowercases too, and the sanitize guard is case-insensitive -- but the branch predicate five lines later was `file_ext == '.svg'`. So a `.SVG` upload was accepted, sanitized, and then fell through to `Image.open`, raising and leaving the file in `app/static/media`, which is **served** and which nothing else ever cleans. That line was **the only `file_ext == '.svg'` in the repository without `.lower()`**; `app/community/util.py:558`, `:569` and `:723` all have it. An isolated slip, not a convention. | **fixed** | `PROBE s1 RAISED: UnidentifiedImageError ... 'app/static/media/logo_Vyucu.SVG'`, `PROBE s1 orphans left: ['logo_Vyucu.SVG']`, against the lowercase control `PROBE s2 status: 200 logo: /static/media/logo_grNN1.svg` |
+| **D914** | `app/admin/routes.py:236-247` | **A SMALL PNG LOGO DELETED ITSELF.** The `img.width > 100` false arm saves the image to `<base>.png` and then set `delete_original = True`, which unlinks `<base>{file_ext}` -- and for a PNG upload **those are the same path**. So a site icon of 100px or less, which is the common case, was committed as `site.logo` and removed from disk in the same request: a 404 on every page. A `.jpg` or `.webp` source was unaffected, because `<base>.png` is a different file. Found by the row that opened the path the route had just committed. Fixed by deleting the original only when it is genuinely a different file, pinned in both directions so the fix cannot decay into never deleting. | **fixed** | `FileNotFoundError: [Errno 2] No such file or directory: 'app/static/media/logo_qHkJy.png'` |
+| **D915** | `app/admin/routes.py:203` | **MAKING `.SVG` WORK MADE THE SANITIZE GUARD'S CASE LOAD-BEARING, AND ONLY THE MUTATION PASS SAID SO.** Before D913 a `.SVG` upload crashed in Pillow, so a case-sensitive sanitize guard was merely one of two ways to fail. After it, the branch stores the file **as uploaded** -- no re-encode -- and serves it from this origin on every page, so reverting the sanitize guard to `file_ext == '.svg'` would publish an unsanitized `.SVG` verbatim. The mutant doing exactly that **survived all 25 rows**, because the only unsanitizable-SVG row used a lowercase name. Closed by parameterising it over `hostile.svg` and `HOSTILE.SVG`. **A fix that widens what a branch accepts widens what every guard on that branch must cover.** | **closed; the mutant now dies** | The mutant, before and after |
+
+### 2. WHAT ELSE THE MUTATION PASS FOUND
+
+34 mutants; the measuring pass killed 31.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D916** | `tests/test_admin_site_profile.py` | **FACT 350 AGAIN, IN THE SAME ROUND THAT WROTE IT.** Both SVG rows asserted `(logo_180, logo_152, logo_32, logo_16) == ('', '', '', '')` against a **fresh** Site, whose raster columns are already empty -- so the mutant deleting the four assignments survived. Closed by giving the site a real logo first. Slice A registered this as D903 and wrote it up as fact 350; slice B reproduced it two files later, which is the useful part of recording it. | **closed; m10 dies** | The mutant |
+| D917 | `app/admin/routes.py:160` | `if uploaded_icon and uploaded_icon.filename != '':` is **equivalent** to `if uploaded_icon:`, proved rather than contorted into a kill: `werkzeug.datastructures.FileStorage.__bool__` is `bool(self.filename)`. Measured directly -- an empty-filename FileStorage is falsy, one with a filename is truthy. The redundant half is harmless and documents the intent. | **registered as an equivalent mutant, with the mechanism measured** | m21, the one survivor of 34 |
+
+### 3. REGISTERED, NOT FIXED
+
+| ID | Where | What | Why not this round |
+|---|---|---|---|
+| D918 | `app/admin/routes.py:161` vs `app/admin/forms.py` | **The route's own extension check is unreachable through the form.** `FileAllowed(['jpg', 'jpeg', 'png', 'webp', 'svg'])` is a strict SUBSET of `allowed_extensions`, which also lists `.gif` -- so the form refuses everything the route would refuse, and `abort(400)` at `:163` cannot be reached by any submission. Measured: `PROBE s4 gif status: 200 errors: {'icon': ['Images only!']}`. **Kept, not removed**: it is the second layer for a route that writes into a served directory, and a row exercises it by clearing the first layer and saying so, so deleting it as dead now fails a test. The `.gif` entry is the live question -- whether GIF site icons are wanted is a product decision. | A product decision about GIF, and a deliberate defence-in-depth guard that should not be deleted merely because the layer above it currently covers it. |
+| D919 | `app/admin/routes.py:159` | **`request.files['icon']` is a bare 400 with no form error** when the request has no file part, so any non-browser POST to this route fails with nothing to act on -- measured, `PROBE s3 no icon field, status: 400`. The status is right; the body is not. Same shape as D896. | Belongs with a decision about non-browser clients of the admin forms. |
+
