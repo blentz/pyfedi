@@ -14796,7 +14796,44 @@ into dead code.**
 
 **BASIS: the full suite, `6294 passed, 3 skipped, 7890 warnings, 6 subtests passed in 445.70s`**, and `All 49 module floors met.`
 
-**Next free number: D852.**
+**Next free number: D852.** (**D852-D856 were taken by sub-project 71,
+below; the free number is now D857.**)
+
+## Sub-project 71: the Query.get() migration -- 841 call sites, and a migrator the warning count audited
+
+**The round in one line: every legacy `Query.get()` and all 171 `get_or_404`
+call sites are migrated -- **841 rewrites across 109 files** -- taking the suite
+from **7,890 warnings to 247**, of which **NONE are ours**: the three that
+remain are `ldap3`, `httpx` and `botocore`. Five test failures were test DOUBLES
+still shaped like the old API, one was a test whose observable WAS the
+deprecation warning, and two live call sites the migrator silently missed were
+found by the warning count refusing to reach the floor it was predicted to
+reach.**
+
+### 0. THE MIGRATION
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D852 | `app/` and `tests/`, 109 files | **841 CALL SITES MIGRATED, AST-BASED RATHER THAN TEXTUAL.** `X.query.get(id)` and `db.session.query(X).get(id)` become `db.session.get(X, id)`; `session.query(X).get(id)` and the `db_session` FIXTURE form become `<session>.get(X, id)`; and all 171 `X.query.get_or_404(id)` become `db.session.get(X, id) or abort(404)`, which is what Flask-SQLAlchemy's own method does minus the legacy call it makes internally. **The textual version of the same migration reported 927 rewrites across 138 files** -- 97 more, in 30 more files -- because a text scan rewrites matches inside DOCSTRINGS and COMMENTS: `tests/conftest.py` documents `Site.query.get(1)` in prose, `app/` carries three commented-out calls, and `tests/test_domain_routes.py` holds a test whose SUBJECT is `get_or_404`. Locating every call as a real `ast.Call` node and rewriting by source offsets is what made the difference. | **complete; zero live legacy calls remain** | Both counts, side by side; `ast.parse` run over every file before it was written |
+| D853 | `app/shared/post.py:52`, `app/shared/reply.py:41` | **TWO LIVE SITES THE MIGRATOR MISSED, AND NO TEST COULD HAVE TOLD ME.** `db.session.query(Post).get_or_404(post_id)` is a shape the finder never handled: it matched `get_or_404` only in the `X.query.get_or_404(...)` form, and handled the session-query form only for plain `.get`. The migrator reported success on 839 rewrites with these two untouched, **both files are floored, and every test passed.** They were found because `flask_sqlalchemy/query.py:30` kept appearing in the warning summary after the round had claimed all 171 `get_or_404` sites were gone -- **the count refused to fall to the floor it had been predicted to reach, and that discrepancy was the only signal.** The ratchet's own detector is now WIDER than the migrator that produced it, so the shape cannot return unnoticed. | **fixed; ratchet widened** | The warning summary before and after; `flask_sqlalchemy` absent from the final run |
+
+### 1. WHAT BROKE, AND WHY NONE OF IT WAS A REGRESSION
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D854 | `tests/test_shared_tasks_maintenance_lifecycle.py`, `tests/test_shared_community_lifecycle.py` x2, `tests/test_shared_feed_wiring.py` | **FIVE FAILURES WERE TEST DOUBLES MODELLING THE OLD CALL SHAPE.** Production behaviour did not change; the fakes stopped intercepting it. `_GhostReplySession` wrapped `.query(PostReply).get(id)` to simulate a row deleted by another session mid-task -- with production calling `session.get(...)`, the ghost was found and really deleted, and the test failed on an assertion about a DIFFERENT row. Two `_AlwaysMissingQuery` doubles patched `File.query` to fake an orphaned FK and simply stopped faking. A `MagicMock` session configured through `.query(model).get(...)` answered bare mocks, so `fm_user.is_local()` was truthy, the member was skipped, and the test failed with `DID NOT RAISE` rather than anything about the rollback it exists for. **A test double is a copy of an API's shape, and a migration invalidates it exactly as it invalidates a call.** Each now covers both shapes. | **all five fixed** | Each double re-run against the migrated code |
+| D855 | `tests/test_shared_post_url.py`; `app/shared/post.py:676` | **A TEST WHOSE OBSERVABLE WAS THE DEPRECATION WARNING ITSELF -- AND A SECOND INSTANCE OF D845.** The row proved that `post.image_id` was still unflushed by CATCHING the "fully NULL primary key" `SAWarning` and matching its source line text. It failed on the text, not the warning: `db.session.get(File, None)` **still emits it**, which is how the round learned the migration does not fix that class. The site is D845's shape again -- `if url and post.image:` guards on the RELATIONSHIP, which is truthy the instant it is assigned, while the lookup uses `post.image_id`, which is synced only at FLUSH. Repaired the same way, and the test now asserts on state, as its own docstring had already noted was sufficient. | **fixed; observable replaced** | `PROBE v1 db.session.get(File, None) -> None` with the warning still raised |
+
+### 2. REGISTERED, NOT FIXED
+
+| ID | Where | What | Status |
+|---|---|---|---|
+| D856 | `app/shared/post.py:675-679` | **THE CALLER'S `image_alt_text` IS HONOURED OR DROPPED DEPENDING ON WHETHER SOMETHING UPSTREAM HAPPENED TO EMIT SQL.** `post.image_id` is synced at flush, and whether a flush has occurred by `:676` depends on whether `calculate_cross_posts` returned early -- which it does for a bare-domain URL and does not for a URL with a path. So the same API call with the same alt text writes it for one url and silently drops it for another. The two tests either side of this line pin both outcomes as current behaviour. | **registered -- this round preserved the behaviour exactly while removing the warning; whether the alt text SHOULD depend on the url's path is a product question, not a migration's** |
+| (D856) | third party | 3 sites remain: `ldap3`/`pyasn1` `tagMap`/`typeMap`, `httpx`'s `content=` deprecation, `botocore`'s own `datetime.utcnow()`. | **registered -- a dependency bump, not a coverage round. `flask_sqlalchemy` is no longer among them, which was D851's cap and is now lifted** |
+
+**BASIS: the full suite, `6293 passed, 3 skipped, 247 warnings, 6 subtests passed in 459.32s`**, and `All 49 module floors met.` The count is one lower than sub-project 70's 6294 because the ceiling file's two tests became one: an exact-equality ceiling is meaningless once the ceiling is zero.
+
+**Next free number: D857.**
 
 ## Ratchet gotchas
 
