@@ -9172,6 +9172,26 @@ listing (`grep -oE "^ +/[^:]+:[0-9]+: [A-Za-z]+Warning"` over the warnings
 summary) and confirm nothing under `app/` or `tests/` appears, rather than
 assuming either way. See D890.
 
+**347. USER ID 1 PASSES EVERY `user_access` CHECK.** `app/utils.py:1650-1653`
+short-circuits: `if user_id == 0: return False` then `if user_id == 1: return
+True`, before any role is consulted. It is the instance-owner bootstrap, and it
+means **`api_baseline.user1` is omnipotent**: it has no roles, the test database
+holds no `role_permission` rows, and `user_access('anything at all', 1)` is
+still True. **Any authorization row using `user1` as the unprivileged party
+asserts nothing.** Build a separate user for the refused side, and assert
+`user.id != 1` in the helper that makes it. See D892.
+
+**348. AN AUTHORIZATION TEST NEEDS A CALLER WITH EXACTLY THE PERMISSION UNDER
+TEST.** Testing a guard with "an admin" on one side and "a user with no
+permissions" on the other proves only that SOME check exists -- not which. In
+sub-project 78 the permitted caller was user 1 (passes everything, fact 347)
+and the refused caller was roleless (fails everything), so a mutant changing
+`user_access("approve registrations", ...)` to
+`user_access("some other permission", ...)` **survived all 34 rows**: an admin
+endpoint could have been checking a permission every user holds, with the suite
+green. Grant the caller exactly one permission -- the one the guard names --
+and the string becomes load-bearing. See D893.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
