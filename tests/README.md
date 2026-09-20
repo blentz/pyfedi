@@ -9140,6 +9140,38 @@ proved a blocked COMMUNITY was hidden. Sub-project 72 hit the same shape with
 side by side, assume covering one leaves the other untested until a mutant says
 otherwise.** See D882.
 
+**344. A `lazy='dynamic'` RELATIONSHIP IS ALWAYS TRUTHY.** `User.passkeys` is
+`db.relationship('Passkey', lazy='dynamic', ...)`, so the attribute is an
+`AppenderQuery` rather than a list -- and a query object is truthy whether or
+not it would return rows. `if not user.passkeys:` in
+`app/auth/passkeys.py` was therefore ALWAYS False and its whole arm was dead,
+while the `else` beside it produced a near-identical refusal that hid the fact.
+Use `.count()`, or `.first() is None`. `User` carries other dynamic
+relationships; grep for `lazy='dynamic'` before writing a truthiness test
+against one. See D884.
+
+**345. WHEN A LIBRARY IS MOCKED, ITS ARGUMENTS ARE THE BEHAVIOUR.** The
+WebAuthn verifier cannot be exercised for real in this suite -- a genuine
+assertion needs a signing key and a live credential -- so
+`verify_authentication_response` is patched. That makes the OUTCOME
+uninformative: with the verifier stubbed, a wrong `expected_rp_id`, a wrong
+`expected_origin` or a missing `expected_challenge` still "verifies", and
+sub-project 77 reached 100% coverage with all three free to change. **Assert the
+call's arguments whenever the call is the security property.** That is not a
+violation of the campaign's "never assert a mock was called" rule -- it is the
+documented exception, for the case where the call IS the thing under test. See
+D889.
+
+**346. A RISING WARNING COUNT AFTER A COVERAGE ROUND IS NOT AUTOMATICALLY A
+REGRESSION -- BUT ALWAYS ATTRIBUTE IT.** Sub-project 77 took the suite from 247
+warnings to 255. All eight new instances came from
+`flask_login/login_manager.py:488`, reached because `login_user(remember=True)`
+on the passkey path was covered for the first time: new coverage reaches new
+third-party code, which emits its own deprecations. Check the distinct-site
+listing (`grep -oE "^ +/[^:]+:[0-9]+: [A-Za-z]+Warning"` over the warnings
+summary) and confirm nothing under `app/` or `tests/` appears, rather than
+assuming either way. See D890.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not

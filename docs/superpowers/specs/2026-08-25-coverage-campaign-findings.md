@@ -15028,7 +15028,44 @@ states and registered rather than changed.**
 
 **BASIS: the full suite, `6489 passed, 3 skipped, 247 warnings, 6 subtests passed in 475.12s`** -- delta reconciling, 6466 plus 23 -- and `All 59 module floors met.`
 
-**Next free number: D884.**
+**Next free number: D884.** (**D884-D890 were taken by sub-project 77,
+below; the free number is now D891.**)
+
+## Sub-project 77: the passkey pair -- a guard that never guarded, dead code in an auth path, and three bindings nothing asserted
+
+**The round in one line: both WebAuthn modules close at **100.0** and take
+floors -- **61 floors** -- TWO defects are repaired, a 37-mutant pass killed
+**37 of 37**, and the five survivors of the measuring pass were all
+SECURITY-CRITICAL ARGUMENTS the rows had failed to assert. Two further shapes
+are registered with evidence rather than repaired, one of them the most serious
+thing this campaign has found.**
+
+### 0. THE TWO REPAIRS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D884 | `app/auth/passkeys.py:67` | **`if not user.passkeys:` WAS ALWAYS FALSE.** `User.passkeys` is `db.relationship('Passkey', lazy='dynamic', ...)` (`app/models.py:1083`), so the attribute is an **`AppenderQuery`** -- a query object, truthy whether or not it would return rows. Probed on a user with none: `type: AppenderQuery`, `count: 0`, `bool(user.passkeys): True`, `"not user.passkeys" -> False`. The message `'No passkeys found for …'` could not be produced by the application at all; the `else` arm ran instead, looped over zero passkeys and reported `'No valid passkeys found for …'` -- **the same refusal by a different route, which is why nothing ever looked wrong.** `allowed_credentials`, two functions above in the same file, already used the correct `.count()`. Sub-project 45's class. | **fixed** | The probe; both messages pinned, so a repair collapsing them would fail |
+| D885 | `app/auth/passkeys.py:74-81` (before) | **FIVE LINES OF DEAD CODE IN AN AUTHENTICATION PATH.** `if isinstance(passkey.public_key, str):` guarded a nested base64-decode with a `.encode('utf-8')` fallback. It cannot execute: `Passkey.public_key` is `LargeBinary`, the ORM refuses a `str` (`TypeError: can't escape str to binary`), and a value written through raw SQL as `'plain text'::bytea` **still reads back as `bytes`** -- `PROBE j1 isinstance str: False`. So the branch was always False for any row loaded from the database. Removed per D822 and D874, after proving it rather than assuming it. | **fixed** | Three measurements: the column type, the ORM's refusal, and the raw-SQL round trip |
+
+### 1. REGISTERED, AND ONE OF THEM IS SERIOUS
+
+| ID | Where | What | Status |
+|---|---|---|---|
+| **D886** | `app/auth/passkeys.py:89`, `:93` | **THE CLONED-AUTHENTICATOR CHECK IS DISABLED.** `verify_authentication_response(..., credential_current_sign_count=0)` is hardcoded while `passkey.counter += 1` is maintained on the next line but one. WebAuthn's signature counter exists so a relying party can detect a **cloned authenticator**: the RP stores the last count and refuses a response that does not exceed it. Passing `0` accepts every count. Measured: a passkey stored with `counter=41` is verified against `credential_current_sign_count: 0` and then incremented to `42`. **The value is written on every login and never read.** | **registered -- and NOT a one-line fix. The stored counters are themselves wrong: incremented by one rather than set from the authenticator's reported count, which `verify_registration_response` returns and `app/user/passkeys.py:107` discards (D887). Switching the check on against those numbers would reject real authenticators whose true count has outrun the stored one. It needs a migration decision** |
+| D887 | `app/user/passkeys.py:107-109` | **THE AUTHENTICATOR'S INITIAL `sign_count` IS DISCARDED AT REGISTRATION.** The new `Passkey` takes the column default of 0 however many times its authenticator has already been used. D886's other half: the counter this application keeps was never the authenticator's. | **registered with D886, as one decision** |
+| D888 | `app/auth/passkeys.py:39` | **THE OPTIONS ENDPOINT ENUMERATES USERNAMES.** `/auth/passkeys/login_options` answers `{"error": "Could not find user nobody"}` for an unknown name and a real challenge for a known one, so an unauthenticated caller can test whether an account exists. **The verification endpoint in the same file deliberately does not do this** -- `:104` gives a missing user exactly the message a user with no working credential gets -- so the asymmetry is between two endpoints written by the same hand. Both behaviours are pinned. | **registered -- what the endpoint tells an unknown caller is a product decision about the login UX, and the browser code consuming it is out of scope** |
+| (D888) | `app/user/passkeys.py:38`, `:86` | **`login_required(csrf=False)` on both registration endpoints**, while the delete route beside them enforces CSRF. Typical for WebAuthn JSON endpoints, where the challenge is the anti-replay measure, but it is an undocumented exemption. | **registered; the asymmetry is what the test helper's docstring records** |
+
+### 2. THE MUTANTS THAT FOUND THE UNASSERTED BINDINGS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D889 | `tests/test_passkeys.py` | **FIVE SURVIVORS, AND ALL FIVE WERE SECURITY-CRITICAL ARGUMENTS NOTHING ASSERTED.** The measuring pass killed 32 of 37. The survivors replaced `expected_rp_id`, `expected_origin` and `expected_challenge` on the LOGIN path with wrong values, dropped `remember=True`, and changed the registration `rp_id` -- and every row still passed. **The library is mocked, so a wrong host or a missing challenge still "verifies"**: asserting the outcome proves nothing about the binding, and those three arguments ARE the security property. The registration side already asserted its equivalents; the login side did not. **100% coverage, every row green, and three of the arguments that bind a credential to this site were free to change.** | **all five closed; 37 of 37** | The two pass logs |
+| D890 | the suite's warning count | **THE COUNT ROSE 247 -> 255 AND THE CAUSE WAS CHECKED RATHER THAN WAVED THROUGH.** Every new instance is `flask_login/login_manager.py:488` calling `datetime.utcnow()`, reached because `login_user(user, remember=True)` on the passkey path is covered for the first time. **Zero warning sites in `app/` or `tests/`**; all four remaining are third-party (`ldap3`, `httpx`, `botocore`, and now `flask_login`). A rising warning count after a coverage round is not automatically a regression -- but it is always worth attributing. | **third-party; no ours** | The distinct-site listing, before and after |
+
+**BASIS: the full suite, `6524 passed, 3 skipped, 255 warnings, 6 subtests passed in 755.74s`** -- delta reconciling, 6489 plus 35 -- and `All 61 module floors met.` `git diff --numstat` names exactly `app/auth/passkeys.py`.
+
+**Next free number: D891.**
 
 ## Ratchet gotchas
 
