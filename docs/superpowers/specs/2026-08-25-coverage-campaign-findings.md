@@ -15272,3 +15272,59 @@ guard's case load-bearing in a way nothing tested.**
 | D918 | `app/admin/routes.py:161` vs `app/admin/forms.py` | **The route's own extension check is unreachable through the form.** `FileAllowed(['jpg', 'jpeg', 'png', 'webp', 'svg'])` is a strict SUBSET of `allowed_extensions`, which also lists `.gif` -- so the form refuses everything the route would refuse, and `abort(400)` at `:163` cannot be reached by any submission. Measured: `PROBE s4 gif status: 200 errors: {'icon': ['Images only!']}`. **Kept, not removed**: it is the second layer for a route that writes into a served directory, and a row exercises it by clearing the first layer and saying so, so deleting it as dead now fails a test. The `.gif` entry is the live question -- whether GIF site icons are wanted is a product decision. | A product decision about GIF, and a deliberate defence-in-depth guard that should not be deleted merely because the layer above it currently covers it. |
 | D919 | `app/admin/routes.py:159` | **`request.files['icon']` is a bare 400 with no form error** when the request has no file part, so any non-browser POST to this route fails with nothing to act on -- measured, `PROBE s3 no icon field, status: 400`. The status is right; the body is not. Same shape as D896. | Belongs with a decision about non-browser clients of the admin forms. |
 
+**BASIS (slice B): the full suite, `6625 passed, 3 skipped, 258 warnings, 6
+subtests passed in 498.66s`**, chained with `&&` to `All 63 module floors met.`
+6598 + 27 collected in `tests/test_admin_site_profile.py` = 6625, exactly.
+
+**Next free number: D920.** (**D920-D930 were taken by sub-project 79
+slice C, below; the free number is now D931.**)
+
+## Sub-project 79 (slice C): the federation allow/block surface, and two ways past a ban
+
+**The round in one line: the four functions that maintain the instance's allow
+and block lists close at zero gaps, and the slice carried **FIVE production
+defects** -- **two ways for a defederated instance to keep federating**, **one
+malformed blocklist entry that took federation down instance-wide**, **an
+allowlist import that had never imported anything**, and a preload that could
+subscribe to communities on a banned instance.**
+
+### 1. TWO WAYS PAST A BAN
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D920** | `app/utils.py:2356-2366` | **A WILDCARD BAN WAS COMPILED AS AN UNESCAPED REGEX, WHICH BANNED TOO MUCH AND COULD TAKE FEDERATION DOWN.** Mastodon publishes bans like `cum.**mp`, where each `*` stands for one character, and PieFed honours them by `cond.domain.replace('*', '[a-zA-Z0-9]')` interpolated straight into a pattern. Every `.` in the entry was therefore a metacharacter -- a ban on `ev*l.com` also banned `evilXcom`, an instance the admin never named -- and an entry holding any other metacharacter **did not compile at all**. `instance_banned` re-raises, and it gates inbound activity processing and outbound delivery, so **one typo in the admin's blocklist box made every federation check raise, instance-wide**. `re.PatternError` is caught nowhere on that path. Fixed with `re.escape` followed by reinstating the wildcard, so `ev*l.com` is `^ev[a-zA-Z0-9]l\.com$`. | **fixed** | `PROBE f3 instance_banned('evilXcom') -> True`; `PROBE f4 pattern='ev*l.co(m' RAISED: PatternError missing ), unterminated subpattern at position 18` |
+| **D921** | `app/utils.py:2672-2681` | **A BANNED INSTANCE RE-FEDERATED BY ADDING ONE CHARACTER.** `inbox_domain` is documented as "the single implementation of a normalisation": it lower-cases and drops the port, and it did not strip the root label's trailing dot. `evil.com.` is the fully-qualified form of `evil.com` -- DNS resolves the two identically and TLS works either way -- but it is a different string, so an instance presenting its actor ids as `https://evil.com./users/x` missed its own row in `banned_instances` and was processed normally. The allowlist direction failed safe (an unrecognised string is simply not on the list), which is why this only ever showed as a ban bypass. Fixed where the rest of the normalisation already lives, so every caller gets it. | **fixed** | `PROBE f5 actor='https://evil.com/users/x' inbox_domain='evil.com' banned=True` against `actor='https://evil.com./users/x' inbox_domain='evil.com.' banned=False` |
+
+### 2. THE SILENT FEATURE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D922** | `app/admin/routes.py:1129` (before) | **THE ALLOWLIST IMPORT HAD NEVER IMPORTED ANYTHING.** `instances_allowed = contents_json['allowed_instances']` followed by `if isinstance(instance_allowed, list) and len(instance_allowed) > 0:` -- **`instance_allowed`, singular, is the FUNCTION imported from `app.utils` at the top of the file.** It is never a list, so the condition was False for every file ever imported, and the `and` short-circuited before `len()` on a function could raise. An instance in allowlist mode federates with nobody it has not listed, so the operator imported their peer list, saw no error, and had no peers. One character, in a name that reads correctly at a glance, in a branch nothing exercised. | **fixed** | The mutant restoring it fails only the two allowlist-import rows, which is the whole evidence that nothing else ever touched this branch |
+
+### 3. TWO MORE, BOTH ABOUT TRUSTING A SECOND IMPLEMENTATION
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D923** | `app/admin/routes.py:1119-1231` | **A FILE MISSING ONE SECTION LEFT THE IMPORT HALF-APPLIED AND RAISED.** Each of the five sections commits on its own, and each read its key with `contents_json['...']`, so a ban list without (say) `banned_users` applied the first four and then raised `KeyError` -- and in debug mode the route calls this synchronously, so the admin got a 500 over a partly-updated database. Now `.get(key, [])` throughout: a section with nothing to import is a no-op, which is what a partial file means. | **fixed** | The mutants restoring two of the five keys fail six rows between them |
+| **D924** | `app/admin/routes.py:544-557` | **"PRELOAD COMMUNITIES" HAD ITS OWN IDEA OF WHICH INSTANCES ARE BANNED.** It read `SELECT domain FROM banned_instances` into a list and tested `community['baseurl'] in banned_urls`. A Mastodon-style wildcard ban is a **pattern**, not a domain, so `'evil.com' in ['ev*l.com']` is False; and the membership test did no normalisation, so it also missed anything whose case or trailing dot differed. The result was that preload could subscribe this instance to communities on an instance it had defederated. Replaced with `instance_banned()`, which is memoized for 150 seconds per domain, so the cost is one query per distinct instance rather than one per community -- and there is now one implementation of "is this instance banned" instead of two. | **fixed** | The pin asserts both a plain and a wildcard ban; only the wildcard one fails against the old code |
+
+### 4. WHAT THE MUTATION PASS FOUND
+
+52 mutants over both files; the measuring pass killed 43, and **eight of the
+nine survivors were real gaps in this round's own rows.** The pattern in them is
+worth naming: **six of the eight were boundaries and anchors -- the edges of a
+predicate rather than its middle.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D925** | `tests/test_instance_ban_matching.py` | **THE WILDCARD'S CHARACTER CLASS AND ITS RIGHT ANCHOR WERE BOTH FREE TO CHANGE.** Widening `[a-zA-Z0-9]` to `.` survived, because every row substituted a letter or a digit; and dropping the `$` survived, because `re.match` anchors only the START and no row asked about a domain with the ban as a PREFIX. The second is the sharper one: unanchored, a ban on `ev*l.com` also matches `evil.com.attacker.example`, a domain the attacker owns. Closed with a row for each. | **closed; m02 and m04 die** | The two mutants |
+| D926 | `tests/test_instance_ban_matching.py` | The fail-closed answer for an absent domain -- `instance_banned(None)` and `instance_banned('')` are True, the 2026-08-29 inversion this file's own docstring cites -- had **no row in this file**, so the mutant restoring the old fail-open answer survived. A defect's own regression test is not automatically inherited by the next file to touch the function. | **closed; m09 dies** | m09 |
+| D927 | `tests/test_admin_federation.py` | Four more boundaries and one argument: `posts < 100` and `users_active_week < 500` both survived becoming `<=`; the GET pre-fill arm survived running on POST, because no row submitted a federation form the form REFUSES; the import's `.lower()` survived, because no row uploaded `BANS.JSON`; and `admin_preload=True` survived being dropped from the background `do_subscribe`, because the row asserted the call COUNT and not the arguments. | **all closed** | m27, m28, m35, m45, m48 |
+| D928 | `app/admin/routes.py:1229-1231` | `except Exception: session.rollback(); raise` is **equivalent**, proved rather than contorted into a kill: `get_task_session()` returns `Session(bind=db.engine)`, an independent session, and the `finally: session.close()` already discards uncommitted work and returns the connection. The rollback is belt-and-braces and reads as intent. | **registered as an equivalent mutant, with the mechanism read off `get_task_session`** | m22, the one survivor of 52 |
+
+### 5. REGISTERED, NOT FIXED
+
+| ID | Where | What | Why not this round |
+|---|---|---|---|
+| D929 | `app/admin/routes.py:448`, `:454` | `cache.delete_memoized(instance_allowed, allow.strip())` invalidates the key equal to **what the admin typed**, while the row is stored `.lower()`ed and real lookups are memoized under whatever string the PEER sent. The invalidation therefore rarely hits the entry it means to. The 150-second `@cache.memoize` bounds the staleness, which is the only reason this is not a P. | A caching-key decision spanning every caller of these two functions, not just the admin form. |
+| D930 | `app/admin/routes.py:1040-1046` | **The uploaded ban list is saved into `app/static/media/`, which is SERVED, and is never deleted.** The name is 15 characters of `gibberish` so it is not enumerable, but the file holds the instance's full ban list including banned users' ap_ids, and every import leaves another one. The same line also produces a doubled extension (`<gibberish>.json.json`), because `new_filename` already carries `.json`. | A retention decision about admin uploads, and the same shape as D918's "written into a served directory" -- better settled once for both. |

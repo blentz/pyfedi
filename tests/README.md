@@ -9325,6 +9325,72 @@ attribute 'csrf_token'`. That is a template-rendering failure with nothing to
 do with the behaviour under test, and patching it also gives the row access to
 the form object and its errors -- which fact 356 requires anyway.
 
+**364. A DOMAIN INTERPOLATED INTO A REGEX IS A DOMAIN THE ADMIN CAN CRASH YOU
+WITH.** `instance_banned` built a pattern from a blocklist entry with no
+escaping, so every `.` in a wildcard ban matched any character and any other
+metacharacter made `re.compile` raise -- out of a function that gates every
+inbound activity and every outbound delivery, and that re-raises. `re.escape`
+first, then reinstate the one wildcard you meant:
+`re.escape(domain).replace(r'\*', '[a-zA-Z0-9]')`. See D920.
+
+**365. `re.match` ANCHORS ONLY THE START.** A pattern built as `'^' + ... + '$'`
+needs both ends asserted by a test, because dropping the `$` is invisible to any
+row whose input is exactly the banned string. Unanchored, a ban on `ev*l.com`
+also matches `evil.com.attacker.example` -- a domain the attacker owns. Ask for
+a prefix case and a suffix case whenever a test covers a pattern match. See
+D925.
+
+**366. NORMALISE THE TRAILING DOT.** `evil.com.` is the fully-qualified form of
+`evil.com`: DNS resolves them identically and TLS works either way, so a peer
+can present either. They are different STRINGS, so a banned instance re-
+federated by adding one character to its actor ids. Strip it where the rest of
+the host normalisation lives -- `inbox_domain` -- so every caller gets it, and
+strip it LAST so it applies to bare domains and to URLs alike. See D921.
+
+**367. A NAME THAT DIFFERS BY ONE LETTER FROM AN IMPORTED SYMBOL WILL NOT RAISE.**
+`isinstance(instance_allowed, list)` where the local was `instances_allowed`:
+the singular is a FUNCTION imported at the top of the module, so the guard was
+False for every input and the `and` short-circuited before `len()` on a
+function could raise. The whole allowlist import had never done anything, with
+no error, on any instance. **A branch nothing covers and nothing errors on is
+indistinguishable from a branch that works.** See D922.
+
+**368. WHERE ONE QUESTION HAS TWO IMPLEMENTATIONS, THE SECOND ONE IS WRONG.**
+`admin_federation_preload` asked "is this instance banned?" with
+`community['baseurl'] in <rows from banned_instances>`, while every other caller
+asks `instance_banned()`. The membership test missed every WILDCARD ban -- a
+pattern is not a domain -- and did no normalisation, so preload could subscribe
+to communities on a defederated instance. Call the function, and take the
+memoized cost. See D924.
+
+**369. `.get(key, [])` WHEN EACH SECTION COMMITS SEPARATELY.** `import_bans_task`
+commits after each of its five sections and read each key with `[...]`, so a
+file missing one key applied the earlier sections and then raised -- a partly
+updated database AND an exception, which in debug mode is a 500 in the admin's
+face. Either make the whole thing one transaction or make a missing section a
+no-op; the one thing to avoid is a partial write that also fails. See D923.
+
+**370. A DEFECT'S REGRESSION TEST IS NOT INHERITED BY THE NEXT FILE TO TOUCH THE
+FUNCTION.** The fail-closed answer for an absent domain is pinned elsewhere in
+the suite, so the mutant restoring the old fail-open behaviour survived a
+mutation pass scoped to this round's two files. Scoping a mutation pass to the
+round's own files is right -- it measures the round -- but a survivor means "no
+row HERE", not "no row anywhere", and the cheap resolution is to add the row
+rather than to widen the pass. See D926.
+
+**371. ASSERT THE ARGUMENTS, NOT THE CALL COUNT.** `do_subscribe.delay(...,
+admin_preload=True)` survived losing its keyword because the row asserted
+`call_count == 2`. That flag exists because subscribing as the admin's
+alt_profile makes the later unsubscribe fail, which is exactly the kind of
+consequence a count cannot see. This is D889's lesson in a new place: when a
+call is mocked, the arguments ARE the behaviour.
+
+**372. `patch.dict(app.config, {'DEBUG': True})`, NOT `patch('...current_app')`.**
+`current_app.debug` reads `config['DEBUG']`, so patching the config is the whole
+switch; replacing the `current_app` proxy also replaces every other config
+lookup and template global the route touches, and the row then passes for
+reasons unrelated to the branch.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
