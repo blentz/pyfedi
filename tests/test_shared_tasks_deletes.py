@@ -1068,6 +1068,35 @@ def test_a_follower_row_with_no_resolvable_account_is_skipped_in_the_cc_list(
     assert len(community_route.calls) == 1
 
 
+def test_every_resolvable_follower_is_named_in_the_cc_list(db_session, http_mock):
+    """`:217`'s arc back to `:208` -- the loop CONTINUING after an append.
+
+    Every other row here has at most one resolvable follower, so the append
+    ran on the last iteration and the loop fell out of the bottom rather than
+    going round again. Two are seeded, and both have to appear: a loop that
+    stopped after the first would still satisfy a one-follower assertion.
+
+    The guard added for the NULL remote_user_id (SAWarning, sub-project 70)
+    is what made this arc reachable-but-uncovered; the ratchet caught the drop
+    from 100 to 99.602 and this row is the answer to it.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    community_route = http_mock.post(PEER_INBOX).respond(200, json={})
+    first_route, _first_inst, first_fan = _personal_follower(
+        s, http_mock, inbox=OTHER_INBOX, domain='fan.example')
+    second_route, _second_inst, second_fan = _personal_follower(
+        s, http_mock, inbox='https://second.example/inbox', domain='second.example')
+
+    delete_post(None, s.user.id, s.post.id)
+
+    cc = _sent_activity(first_route)['cc']
+    assert first_fan.public_url() in cc
+    assert second_fan.public_url() in cc
+    assert len(community_route.calls) == 1
+    assert len(second_route.calls) == 1
+
+
 def test_a_reply_delete_does_not_reach_the_authors_followers(db_session, http_mock):
     """`:206`'s `is_post` conjunct. The fan-out is for posts only; a reply
     delete goes to the community and stops."""

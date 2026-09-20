@@ -115,12 +115,12 @@ class TestRoundInvisibleDigits:
 
 class TestLocalizeDatetime:
     def test_a_recent_time_reads_as_relative(self, app):
-        result = localize_datetime(datetime.utcnow() - timedelta(hours=2))
+        result = localize_datetime(utcnow() - timedelta(hours=2))
         assert 'hour' in result
 
     def test_an_unknown_locale_falls_back_to_english(self, app):
         """The except ValueError arm."""
-        result = localize_datetime(datetime.utcnow() - timedelta(hours=2), locale='nonsense')
+        result = localize_datetime(utcnow() - timedelta(hours=2), locale='nonsense')
         assert 'hour' in result
 
 
