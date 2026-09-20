@@ -165,24 +165,18 @@ def admin_site():
             directory = 'app/static/media'
             ensure_directory_exists(directory)
 
-            # Remove existing logo files
-            if os.path.isfile(f'app{site.logo}'):
-                os.unlink(f'app{site.logo}')
-            if os.path.isfile(f'app{site.logo_180}'):
-                os.unlink(f'app{site.logo_180}')
-            if os.path.isfile(f'app{site.logo_152}'):
-                os.unlink(f'app{site.logo_152}')
-            if os.path.isfile(f'app{site.logo_32}'):
-                os.unlink(f'app{site.logo_32}')
-            if os.path.isfile(f'app{site.logo_16}'):
-                os.unlink(f'app{site.logo_16}')
-            # Remove existing 512x512 and 192x192 logo files
-            logo_512 = get_setting('logo_512', '')
-            logo_192 = get_setting('logo_192', '')
-            if logo_512 and os.path.isfile(f'app{logo_512}'):
-                os.unlink(f'app{logo_512}')
-            if logo_192 and os.path.isfile(f'app{logo_192}'):
-                os.unlink(f'app{logo_192}')
+            # The files the current logo occupies, captured but NOT yet
+            # removed. Unlinking them here -- which is what this did -- meant
+            # that any failure below destroyed the site's existing logo while
+            # the row went on pointing at it: an upload Pillow cannot decode
+            # raised UnidentifiedImageError, db.session.commit() was never
+            # reached, and the site served a broken image on every page with no
+            # way back but another upload. They are removed at the end, once
+            # the replacement has been processed and assigned.
+            superseded = [f'app{path}' for path in
+                          (site.logo, site.logo_180, site.logo_152, site.logo_32,
+                           site.logo_16, get_setting('logo_512', ''),
+                           get_setting('logo_192', '')) if path]
 
             # Save logo file
             base_filename = f'logo_{gibberish(5)}'
@@ -195,15 +189,33 @@ def admin_site():
             # returns False, and abort(400) is what the extension check above
             # does with an upload this route will not accept.
             #
-            # The predicate here is .lower(), unlike the '.svg' branch below:
-            # '.SVG' passes the allowed_extensions check (which lowercases) but
-            # not that branch, so it used to be handed to Image.open, raise, and
-            # leave the uploaded bytes in the media root. Sanitizing on the
-            # case-insensitive form covers that too.
+            # The predicate is .lower() because allowed_extensions is checked
+            # with .lower() and the form's FileAllowed lowercases too, so '.SVG'
+            # reaches here and must be sanitized like any other SVG.
             if file_ext.lower() == '.svg' and not sanitize_svg(f'{directory}/{base_filename}{file_ext}'):
                 abort(400)
 
-            if file_ext == '.svg':
+            # Decode the upload BEFORE anything is destroyed or derived from
+            # it. .load() and not .verify(): verify() reads headers only, and a
+            # truncated image passes it and then raises inside thumbnail()
+            # further down -- past the point where the superseded files have
+            # been removed. An upload that cannot be decoded is a 400 with its
+            # bytes deleted, which is what the extension check above already
+            # does with an upload this route will not accept.
+            if file_ext.lower() != '.svg':
+                try:
+                    Image.open(f'{directory}/{base_filename}{file_ext}').load()
+                except Exception:
+                    os.unlink(f'{directory}/{base_filename}{file_ext}')
+                    abort(400)
+
+            # .lower(), like the sanitize guard above and like every other
+            # '.svg' predicate in the repository. Without it a '.SVG' upload --
+            # which allowed_extensions and the form's FileAllowed both accept,
+            # because both lowercase -- was sanitized as an SVG and then handed
+            # to Image.open, raising and leaving the file in the served media
+            # root with nothing to remove it.
+            if file_ext.lower() == '.svg':
                 # For SVG uploads, clear all logo fields and settings
                 site.logo = f'/static/media/{base_filename}{file_ext}'
                 site.logo_180 = ''
@@ -224,7 +236,15 @@ def admin_site():
                 else:
                     img.save(f'{directory}/{base_filename}.png')
                     site.logo = f'/static/media/{base_filename}.png'
-                    delete_original = True
+                    # Only when the original is a DIFFERENT file. This arm
+                    # writes <base>.png, which for a .png upload is the
+                    # uploaded file itself -- so an unconditional delete here
+                    # unlinked the logo it had just stored, and a site icon of
+                    # 100px or less (the common case) became a 404 on every
+                    # page. A .jpg or .webp source is a different path and is
+                    # still removed.
+                    delete_original = (f'{directory}/{base_filename}.png' !=
+                                       f'{directory}/{base_filename}{file_ext}')
 
                 # Save multiple copies of the logo - different sizes, all as PNG
                 img = Image.open(f'{directory}/{base_filename}{file_ext}')
@@ -260,6 +280,11 @@ def admin_site():
 
             if delete_original:
                 os.unlink(f'app/static/media/{base_filename}{file_ext}')
+
+            # Only now, with the replacement processed and assigned.
+            for superseded_path in superseded:
+                if os.path.isfile(superseded_path):
+                    os.unlink(superseded_path)
 
         db.session.commit()
         cache.delete_memoized(get_site_as_dict)
