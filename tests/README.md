@@ -9266,6 +9266,65 @@ database does not seed. Assert `field.choices` in the helper rather than
 skipping, and assert `render.call_args.kwargs['form'].errors == {}` in rows
 that depend on a POST having validated.
 
+**357. DO NOT CHANGE DISK STATE BEFORE YOU KNOW THE UPLOAD IS USABLE.**
+`admin_site` unlinked the seven files the current logo occupied and only then
+handed the upload to Pillow, so an undecodable upload destroyed the existing
+logo and left the row pointing at it. Capture what is to be superseded, process
+the replacement, assign it, and delete last. The same ordering rule is why the
+decode check uses `Image.open(...).load()` and not `.verify()`: `verify()`
+reads headers only, and a truncated image passes it and then raises inside
+`thumbnail()` -- after the deletions. See D912.
+
+**358. A DERIVED FILENAME CAN COLLIDE WITH ITS OWN SOURCE.** `admin_site`'s
+small-image arm saves to `<base>.png` and then deleted `<base>{file_ext}` --
+the same path whenever the upload was a PNG, so the logo it had just stored was
+unlinked in the same request. Whenever a routine writes a derived file next to
+its source and then cleans the source up, compare the two paths rather than
+assuming they differ. Pin both directions: "the source is still there" is
+satisfied by never deleting anything. See D914.
+
+**359. A FIX THAT WIDENS WHAT A BRANCH ACCEPTS WIDENS WHAT EVERY GUARD ON THAT
+BRANCH MUST COVER.** Making the `.svg` branch case-insensitive was correct, and
+it turned the case of the SANITIZE guard above it from redundant into
+load-bearing: before, a `.SVG` upload crashed in Pillow; after, it is stored
+verbatim and served from this origin. The mutant reverting that guard survived
+every row, because the only unsanitizable-SVG row used a lowercase name. After
+widening a branch, re-ask what each guard protecting it now has to hold for.
+See D915.
+
+**360. AN UPLOAD ROW MUST BUILD A REAL FILE OF THE FORMAT IT CLAIMS.** A stub
+of bytes named `.png` exercises the error path, not the success path, and reads
+as though it covered both. `_png()` in `tests/test_admin_site_profile.py`
+renders an actual PNG with Pillow; the route then decodes it and writes six
+thumbnails, each of which is asserted separately, because a single `site.logo`
+assertion passes while five derivatives are missing.
+
+**361. WHERE TWO LAYERS GUARD THE SAME THING, THE INNER ONE NEEDS A ROW THAT
+RELAXES THE OUTER.** `SiteProfileForm.icon`'s `FileAllowed` list is a strict
+subset of the route's `allowed_extensions`, so the route's `abort(400)` cannot
+be reached by any submission. That is a reason to TEST it deliberately, not to
+delete it: it is the second layer on a route that writes into a served
+directory. The row clears the form validator, says in its docstring that it is
+doing so, and checks the route refuses on its own -- so deleting the inner
+guard as dead now fails a test. `SiteProfileForm.icon` is an `UnboundField`
+until the form is instantiated, so the validators are in
+`SiteProfileForm.icon.kwargs['validators']`, not on the attribute. See D918.
+
+**362. EVERY POST TO `/admin/site` MUST BE MULTIPART.** The route reads
+`request.files['icon']` unconditionally, and `request.files` raises
+`BadRequestKeyError` for a request with no file part at all -- so a plain
+form-encoded POST is a bare 400 before any of the behaviour under test runs,
+and a row written that way asserts nothing. Rows that do not care about the
+upload still pass an empty icon part. See D919.
+
+**363. PATCH `render_template` FOR ANY ROW THAT RENDERS AN ADMIN FORM
+TEMPLATE.** `tests/conftest.py` sets `WTF_CSRF_ENABLED` False, so FlaskForm
+does not declare a `csrf_token` field, and a template calling
+`form.csrf_token` raises `jinja2.exceptions.UndefinedError: ... has no
+attribute 'csrf_token'`. That is a template-rendering failure with nothing to
+do with the behaviour under test, and patching it also gives the row access to
+the form object and its errors -- which fact 356 requires anyway.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
