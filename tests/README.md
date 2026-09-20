@@ -9025,6 +9025,24 @@ signal was a number that did not reach where it had been predicted to reach.
 Predict the floor before a mechanical change, compare against it afterwards, and
 treat the gap as a defect rather than as noise. See D853.
 
+**333. `hasattr` CANNOT SEE A WTFORMS FIELD REMOVAL.** `RegistrationForm.__init__`
+calls `delattr(self, 'captcha')` when the site turns the captcha off. WTForms'
+`__delattr__` takes the field out of the form's registry but leaves the name
+resolving to **`None`** rather than raising, so `hasattr(form, 'captcha')` is
+True whether or not the field was removed -- a row asserting it is False fails
+against correct code, which is how sub-project 72 first read a working
+`delattr` as a defect. Assert on **`form._fields`**, or on the names the form
+iterates: those are what the template walks and what validation reads. See D859.
+
+**334. A CASE-FOLDING TEST THAT ONLY VARIES THE INPUT TESTS HALF THE
+COMPARISON.** `func.lower(User.email) == func.lower(email.data.strip())` folds
+BOTH sides. A fixture that stores `taken@example.com` and submits
+`TAKEN@Example.COM` exercises only the input's `lower()`: the stored side is
+already lowercase, so dropping `func.lower(User.email)` changes nothing and the
+mutant survives. Sub-project 72 had this at three sites -- the email lookup, the
+community-name lookup, and by extension any `func.lower(Column)` in the repo.
+**Store the mixed case, not just submit it.** See D860.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
