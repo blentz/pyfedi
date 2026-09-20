@@ -22,8 +22,12 @@ def not_found_error(error):
     if cms_page:
         return render_template('cms_page.html', page=cms_page)
 
-    # Fall back to standard 404 page
-    return 'not found', 404
+    # Fall back to standard 404 page. This used to return the bare string
+    # 'not found', which meant the branch above -- the one that exists to SKIP
+    # the rendered page for static files and asset paths -- was the only one
+    # that rendered it, and a person who mistyped a URL got nine bytes of
+    # unstyled text.
+    return render_template('errors/404.html'), 404
 
 
 @bp.app_errorhandler(500)
