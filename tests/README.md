@@ -9043,6 +9043,39 @@ mutant survives. Sub-project 72 had this at three sites -- the email lookup, the
 community-name lookup, and by extension any `func.lower(Column)` in the repo.
 **Store the mixed case, not just submit it.** See D860.
 
+**335. WTFORMS BINDS AN INLINE VALIDATOR BY NAME AND SAYS NOTHING WHEN IT
+CANNOT.** `validate_<field name>` is looked up against the form's fields; if no
+field has that name, the method is simply never called and **nothing warns**.
+`app/user/forms.py` carried `validate_matrix_user_id` for a field called
+`matrixuserid`, so every Matrix ID was accepted and the method's lines read as
+uncovered with no explanation. `tests/test_post_and_user_forms.py` now asserts
+over the AST of all of `app/` that every undecorated `validate_*` names a real
+field -- ignore DECORATED methods (marshmallow's `@validates_schema` binds
+differently) and accept any call ending in `Field` (`DateTimeLocalField` was
+missing from a first attempt and produced a false positive). See D863, D868.
+
+**336. `Optional()` READS `raw_data`, NOT `data` -- SO SETTING `.data` IN A TEST
+DISABLES THE FIELD'S VALIDATORS.** WTForms' `Optional` inspects
+`field.raw_data`, which is populated by FORMDATA and left empty when a test
+assigns `field.data = ...` directly. It then clears the field's errors and
+raises `StopValidation`, so every validator after it -- including the form's own
+`validate_<name>` -- never runs, and the field reports no errors no matter what
+it contains. Build the form with `formdata=MultiDict({...})` when the assertion
+is about validation. Its `string_check` also strips, so a whitespace-only value
+is blank to it as well, which makes an inline empty-guard unreachable through a
+form and worth exercising by direct call. See D865, D866.
+
+**337. `app.get_locale()` CAN RETURN `None`.**
+`request.accept_languages.best_match(...)` returns `None` rather than raising
+when a request sends no `Accept-Language` header or one matching nothing, and
+the function's `except:` fallback only catches exceptions. Callers that pass the
+result somewhere strict get a failure at a distance: `dateparser.parse(...,
+languages=[None])` raises, and in `validate_remind_at` a bare `except Exception`
+turned that into "Invalid." for every reminder anyone tried to set. Repaired
+with `or 'en'` at the source. Note `str(get_locale())` does NOT fix it -- it
+produces the string `'None'` -- and that spelling is already in use at
+`app/request_hooks.py:92`. See D864.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
