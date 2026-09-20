@@ -81,7 +81,11 @@ class RegistrationForm(FlaskForm):
         if password.data == 'password' or password.data == '12345678' or password.data == '1234567890':
             raise ValidationError(_l('This password is too common.'))
 
-        if len(password.data) == 128:
+        # `>`, not `==`. The `==` this replaces rejected a password of exactly
+        # 128 characters -- the maximum the field's own title advertises -- and
+        # admitted 129 and 130, so the guard was wrong in both directions at
+        # once.
+        if len(password.data) > 128:
             raise ValidationError(_l('Maximum password length is 128 characters.'))
 
         first_char = password.data[0]  # the first character in the string
@@ -93,9 +97,6 @@ class RegistrationForm(FlaskForm):
                 all_the_same = False
         if all_the_same:
             raise ValidationError(_l('This password is not secure.'))
-
-        if password.data == 'password' or password.data == '12345678' or password.data == '1234567890':
-            raise ValidationError(_l('This password is too common.'))
 
     def filter_user_name(self, user_name):
         if isinstance(user_name, str):
