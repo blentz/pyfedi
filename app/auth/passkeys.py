@@ -64,21 +64,25 @@ def passkey_verification():
         User.banned == False,
     ).first()
     if user:
-        if not user.passkeys:
+        # .count(), not truthiness: User.passkeys is lazy='dynamic', so the
+        # attribute is an AppenderQuery and `not user.passkeys` was always
+        # False -- this message could never be produced. allowed_credentials
+        # above already uses the correct spelling.
+        if not user.passkeys.count():
             error_message = f'No passkeys found for {username}'
         else:
             challenge = cache.get(f'challenge_{user.id}')
             success = False
             for passkey in user.passkeys:
                 try:
-                    # Use the public_key directly - could be bytes or base64 string
-                    if isinstance(passkey.public_key, str):
-                        try:
-                            credential_public_key = base64.b64decode(passkey.public_key)
-                        except Exception:
-                            credential_public_key = passkey.public_key.encode('utf-8')
-                    else:
-                        credential_public_key = passkey.public_key
+                    # Passkey.public_key is LargeBinary, so this is always bytes.
+                    # The str handling that used to sit here -- base64-decode,
+                    # falling back to .encode('utf-8') -- could not run: the ORM
+                    # refuses to write a str to the column ("can't escape str to
+                    # binary") and a value inserted as 'text'::bytea in raw SQL
+                    # still reads back as bytes, so isinstance(..., str) was
+                    # always False for any row loaded from the database.
+                    credential_public_key = passkey.public_key
 
                     verify_authentication_response(
                         credential=auth_credential,
