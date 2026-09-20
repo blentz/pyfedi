@@ -14870,7 +14870,50 @@ assertions turned out to be wrong about correct code.**
 
 **BASIS: the full suite, `6338 passed, 3 skipped, 247 warnings, 6 subtests passed in 450.56s`** -- the delta reconciles, 6293 plus this round's 45 rows -- and `All 50 module floors met.`
 
-**Next free number: D863.**
+**Next free number: D863.** (**D863-D868 were taken by sub-project 73,
+below; the free number is now D869.**)
+
+## Sub-project 73: `app/post/forms.py` and `app/user/forms.py` -- a validator that never ran, and a locale that was None
+
+**The round in one line: both modules close at **100.0** and take floors -- **52
+floors** -- TWO defects are repaired, one of them a guard WTForms never bound
+and the other a `get_locale()` that returns `None` and silently broke the whole
+reminder feature; a 21-mutant pass killed **20 with the last proved equivalent**;
+and FOUR of the round's own assumptions were wrong about correct code, each
+caught by a probe rather than by an edit to production.**
+
+### 0. THE TWO REPAIRS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D863 | `app/user/forms.py:47` | **A VALIDATOR WTFORMS NEVER BOUND.** The field is `matrixuserid`; the method was `validate_matrix_user_id`. WTForms binds an inline validator by name -- it looks for `validate_<field name>` -- and says nothing at all when there is no such field, so the method had **never executed once** and any Matrix ID was accepted: `PROBE y1 validator sought by wtforms: validate_matrixuserid -> False`, `validator actually defined: validate_matrix_user_id -> True`, `matrixuserid errors: []` for a value with no `@` anywhere in it. Sub-project 45's class -- a guard that does not guard -- and the reason the method's lines read as uncovered: no test could reach them because no code path did. **The rename alone would have been WRONG**: the field is `Optional()` and the method rejects the empty string, so binding it without an empty guard would have made a Matrix ID mandatory for every profile save, for every user who has never touched Matrix. | **fixed, both halves** | The probe; the guard's two halves exercised directly, since neither is reachable through a form |
+| D864 | `app/__init__.py:28-40` | **`get_locale()` RETURNS `None`, AND THAT BROKE EVERY REMINDER.** `request.accept_languages.best_match(current_app.config['LANGUAGES'])` returns `None` -- it does not raise -- when the request carries no `Accept-Language` header, or one matching nothing in `LANGUAGES`. The `except:` fallback to `'en'` only catches exceptions, so the `None` went back to callers as if it were a locale: `PROBE d1 no Accept-Language -> None`, `unmatchable -> None`, `with Accept-Language -> 'en'`. `app/post/forms.py:111` then calls `dateparser.parse(..., languages=[None])`, which raises, and that function's bare `except Exception` reports it to the user as **"Invalid."** -- so a reminder typed as "in 2 weeks" was refused, for every client that does not send the header. `app/post/routes.py:1284` has the same call with NO handler, so the fix had to land before the form's, or a working form would have produced a 500 instead. | **fixed at the source** | Three probes across header states; `str(get_locale())` at `app/request_hooks.py:92` is the existing correct-looking call that hides the same `None` as the string `'None'` |
+
+### 1. FOUR ASSUMPTIONS THAT WERE WRONG ABOUT CORRECT CODE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D865 | `tests/test_post_and_user_forms.py` | **THE ROUND'S FIRST REPAIR OF D864 WAS WRONG, AND SO WERE THREE OF ITS ASSERTIONS.** (1) D864 was first "fixed" as `languages=[str(get_locale())]` at two call sites, on the assumption that `get_locale` was flask_babel's and returned a `Locale` object. It is **the app's own** function (`from app import get_locale`) and already returns a string -- so `str(None)` is `'None'`, which dateparser rejects just as hard. Both edits were reverted and the fault repaired where it is. (2) `timezone.choices` is an OrderedDict of GROUPS, not a flat list, and there is **no bare `'UTC'`** among its 505 Olson names. (3) `reasons_to_string` follows the **submitted** order, not the form's -- the outer loop is over `reason_data` -- so the docstring claiming otherwise was backwards. (4) **`Optional()` reads `field.raw_data`, not `field.data`**: a test that assigns `.data` leaves `raw_data` empty, so Optional clears the field's errors and ends its chain before any inline validator runs. That is why the P1 pins still showed no errors after the rename was already correct. **Each was found by probing, not by editing production to match the test.** | **all four corrected in the tests** | The probes, one per assumption |
+| D866 | `app/user/forms.py:57`; `tests/` | **`Optional()` MAKES BOTH HALVES OF THE EMPTY GUARD UNREACHABLE THROUGH A FORM.** Its `string_check` strips before testing, so a field of only spaces is blank to it as well -- which is why the mutant dropping `not data.strip()` survived a whitespace-only row submitted as formdata. Both halves are defensive rather than dead: the validator is an ordinary method, and a caller reaching it with `None` (what a field built without formdata carries) or with padding gets a return instead of a spurious "start with @". Exercised directly, with the row saying so. | **closed; 20 of 21 killed** | The mutant, before and after |
+| D867 | `app/post/forms.py:113-116` | **ONE EQUIVALENT MUTANT, AND THE CATCH-ALL HANDLER IS WHY.** Dropping `x is None` from `if x is None or pendulum.instance(x).in_tz('UTC') < utcnow(naive=False)` cannot be killed: without it `pendulum.instance(None)` raises, the bare `except Exception` catches that, and it raises `ValidationError('Invalid.')` -- the same class, the same message, from the same input. **R3 seen from the mutation side: a catch-all handler makes the guard in front of it unkillable.** Proved rather than contorted into a kill. | **equivalent; registered** | The mutant re-run and reported as a survivor on purpose |
+
+### 2. THE GUARD THIS ROUND ADDS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D868 | `tests/test_post_and_user_forms.py` | **EVERY INLINE VALIDATOR IN `app/` IS NOW ASSERTED TO NAME A FIELD THAT EXISTS.** D863 was invisible because WTForms reports nothing when a `validate_<name>` matches no field. The new row walks the AST of every module under `app/`. **Its first version reported FOUR dead validators and three were false positives**: two marshmallow `@validates_schema` methods in `app/api/alpha/schema.py`, which bind by decorator rather than by name, and `CreatePostForm.validate_scheduled_for`, whose field is a `DateTimeLocalField` the first field-type list did not contain. The row therefore ignores decorated methods and accepts any call to something ending in `Field` -- and reports exactly one, which is now zero. | **added; 0 unwired** | Both scan runs |
+
+### 3. REGISTERED, NOT FIXED
+
+| ID | Where | What | Status |
+|---|---|---|---|
+| (D868) | `app/post/forms.py:47`, `app/user/forms.py:187`, `app/chat/forms.py:33`, `app/community/forms.py:579` | **`reasons_to_string` is copied verbatim into four form classes**, with the `reason_choices` list it reads. | **registered -- a refactor across four modules, two of which this round does not touch. Both copies in scope are covered, so the duplication is pinned rather than merely present** |
+| (D868) | `app/post/forms.py:106-107` | **`import dateparser` and `import pendulum` inside the validator**, against the campaign's standing top-of-file rule. | **registered -- two of the 216 pre-existing violations** |
+| (D868) | `app/post/forms.py:108-116` | **The `ValidationError` is raised INSIDE the try and re-caught by the bare `except Exception`.** A genuine parser failure and a badly typed date are reported identically. D864 is exactly what that hid. | **registered -- changing what a crash tells the user is a product decision, and D867 records that it also costs a mutant** |
+
+**BASIS: the full suite, `6371 passed, 3 skipped, 247 warnings, 6 subtests passed in 657.85s`** -- the delta reconciles, 6338 plus this round's 33 rows -- and `All 52 module floors met.`
+
+**Next free number: D869.**
 
 ## Ratchet gotchas
 
