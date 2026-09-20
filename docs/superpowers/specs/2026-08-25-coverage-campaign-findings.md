@@ -15380,3 +15380,47 @@ sweep at this size. Two things made it so, and both are worth recording:
 | ID | Where | What | Status |
 |---|---|---|---|
 | D936 | `app/admin/routes.py:653`, `:701`, and three dry-run summaries | **D815's SHAPE, FOR THE THIRD TIME**, registered as R2/D910 in slice A and left alone there because that slice did not otherwise touch the lines. This slice does. Four `flash(_(f'...'))` sites interpolated the URL into the string **before** gettext saw it, so the catalogue was asked for a string containing this instance's own data and could never match; the three dry-run summaries did the same with an f-string built several lines earlier. The four URL messages now use named parameters. The three summaries are flashed **untranslated**, with a comment saying why: they are diagnostics assembled from seven runtime counts, and pretending they are translatable is what produced the defect. | **fixed** |
+
+**BASIS (slice D): the full suite, `6750 passed, 3 skipped, 258 warnings, 6
+subtests passed in 566.55s`**, chained with `&&` to `All 63 module floors met.`
+6702 + 48 collected in `tests/test_admin_federation_scan.py` = 6750, exactly.
+
+**Next free number: D937.** (**D937-D943 were taken by sub-project 79
+slice E, below; the free number is now D944.**)
+
+## Sub-project 79 (slice E): who may do what
+
+**The round in one line: twenty-two lines — `admin_permissions` and
+`masquerade` — carried **THREE production defects**, all three from one
+decision: **the page read the set of permissions it offers out of the rows it
+was about to delete**, so unticking two boxes could delete a permission from
+the instance permanently.**
+
+### 1. THE PRODUCTION DEFECTS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D937** | `app/admin/routes.py:2165-2168` (before) | **UNCHECKING EVERY BOX FOR A PERMISSION DELETED IT FROM THE INSTANCE, PERMANENTLY.** The page listed its permissions with `SELECT DISTINCT permission FROM role_permission`, deleted those rows, and re-added only the ticked ones — so unticking every box for a permission removed the last row naming it, and the next render had nothing to draw a checkbox from. The permission was gone from the page and **could never be granted to anyone again**: a one-way door on a security control, reachable by unticking two boxes and pressing Save. Fixed with `ROLE_PERMISSIONS` in `app/constants.py` — a permission nobody currently holds is still a permission. | **fixed** | `PROBE p1 before: ['approve registrations', 'change user roles', 'manage users']` / `after unchecking "approve registrations": ['change user roles', 'manage users']` / `offered on the page now: ['change user roles', 'manage users']` |
+| **D938** | `app/admin/routes.py:2166` (before) | **A SAVE SILENTLY STRIPPED EVERY ROLE THE PAGE DOES NOT EDIT.** `DELETE FROM "role_permission"` cleared the whole table, and only roles 3 and 4 were written back. Any other role — an instance's own `Moderator`, say — lost every permission it had, on a save that changed nothing about Staff or Admin and reported `Settings saved`. Fixed by scoping the delete to `EDITABLE_ROLE_IDS`. | **fixed** | A `Moderator` role holding `manage users`: `[('manage users',)]` before, `[]` after |
+| **D939** | `app/admin/routes.py:2170-2172` (before) | **THE PERMISSION CACHE WAS INVALIDATED WITH THE WRONG KEY, FOR HALF THE USERS.** `cache.delete_memoized(user_access, permission, staff_user_id)` — but `permission` was the SELECT's `Row`, repr `('change instance settings',)`, not the string `user_access` is memoized under, so the invalidation matched nothing and a revoked permission kept working for the length of the 50-second timeout after the admin was told `Settings saved`. The same loop only ever collected users holding role **3**, so an admin whose permissions changed was never invalidated at all. | **fixed** | `PROBE p3 type: Row repr: ('change instance settings',)` |
+
+### 2. THE DURABLE ARTEFACT
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D940** | `tests/test_role_permissions.py` | **A RATCHET SO THE VOCABULARY CANNOT DRIFT FROM THE CODE.** Replacing a data-derived list with a constant trades one failure mode for another: the constant goes stale. The test walks every `.py` under `app/` with `ast`, collects the literal first argument of every `permission_required(...)` and `user_access(...)` call, and asserts the set equals `ROLE_PERMISSIONS` **in both directions** — a permission the code checks but the constant omits is unreachable (nobody can be granted it, and the check can never pass), which is D937 again by another route; a permission in the constant that nothing checks is dead UI. `ast` and not a regex, because a regex cannot tell a call from the same words in a docstring and this test file's own prose names most of these strings. The failure names the call sites. | **added** | Mutants m15 and m16 add and remove a permission; both die |
+
+### 3. WHAT THE MUTATION PASS FOUND
+
+22 mutants, 21 killed on the measuring pass.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D941** | `app/admin/routes.py:2582` | **`login_user(user, False)` SURVIVED BECOMING `login_user(user, True)`.** The second argument is `remember`: with it True, masquerading writes a `remember_token` cookie and the administrator is **still logged in as the target after closing the browser**, with nothing on screen to say so. For a feature that has no confirmation, no audit record and no way back except logging in again, "ends with the session" is the only containment there is. The existing row asserted **who** is logged in, which is identical either way. Closed by asserting no `remember_token` is set. | **closed; the mutant now dies** | The mutant, before and after |
+
+### 4. REGISTERED, NOT FIXED
+
+| ID | Where | What | Why not this round |
+|---|---|---|---|
+| D942 | `app/admin/routes.py:2575-2581` | **`masquerade` writes no audit record.** An account holding `change instance settings` can become any local user, act as them, and leave nothing behind saying it happened — not in the modlog, not in `ActivityPubLog`, nowhere. The guard is correct and the feature is legitimate; the absence of a trail is the gap. | An audit-log decision that should cover the whole admin blueprint rather than one route. |
+| D943 | throughout `app/admin/routes.py` | **The decorator order is inconsistent across the blueprint.** `masquerade` is `@login_required` outside `@permission_required(...)`; `admin_misc`, `admin_site`, `admin_federation` and the rest are the other way round. An anonymous visitor therefore gets the login page on some admin routes and `/auth/permission_denied` on others — the latter being both less useful and a slightly louder answer than it needs to be. | A blueprint-wide consistency change, best made once with a row that asserts it for every rule — the shape D901 already uses. |
