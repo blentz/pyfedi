@@ -14990,7 +14990,45 @@ its own tests, none of which a failing test would have surfaced.**
 | (D878) | `app/translation.py:1` | **The file is a vendored copy** of LibreTranslate's own client rather than a dependency. | **registered so the next reader knows edits here do not flow upstream** |
 | (D878) | `app/main/util.py:17-48` | **`sidebar_active_communities` and `sidebar_new_communities` are the same function twice**, differing only in a date cutoff and the final `order_by`. | **registered -- both copies are covered, so the duplication is pinned rather than merely present** |
 
-**Next free number: D879.**
+**Next free number: D879.** (**D879-D883 were taken by sub-project 76,
+below; the free number is now D884.**)
+
+## Sub-project 76: the three smallest `app/api/alpha/utils` modules -- and an invalid token nobody is told about
+
+**The round in one line: `domain.py` (25.000), `topic.py` (18.367) and
+`upload.py` (25.000) all close at **100.0** and take floors -- **59 floors** --
+a 23-mutant pass killed **23 of 23**, `git diff --numstat app/` is EMPTY, and
+the round's finding is an authentication shape that was probed in all three
+states and registered rather than changed.**
+
+### 0. NO PRODUCTION CHANGE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D879 | three modules | **NOTHING IN `tests/` REFERENCED ANY OF THE THREE, AND NONE OF THEM IS DEFECTIVE.** 23 rows close all three; `git diff --numstat app/` names no file. The two shapes in `upload.py` that read like defects were probed and registered -- D880 and D881 -- rather than repaired inside a coverage round. Second no-change round in three, after 74; sub-project 75 is the reminder that the scoping is a prediction rather than a promise. | **covered; no repair** | The empty production diff |
+
+### 1. THE AUTHENTICATION SHAPE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D880 | `app/api/alpha/utils/upload.py:12-18`, `:48-54` | **AN INVALID BEARER TOKEN IS SILENTLY ACCEPTED WHEN THE CALLER ALSO HAS A BROWSER SESSION.** Both `post_upload_image` and `post_image_delete` wrap `authorise_api_user` in a bare `except Exception` and fall back to `current_user`. Probed across all three states: `PROBE g1 bad token + session -> {'url': 'u.png'}`, uploaded as `<User user1_1>`; `PROBE g2 bad token, no session -> Exception incorrect_login`; `PROBE g3 good token -> accepted`. So a client sending a **wrong** token is never told -- it is accepted as the session user and never learns to refresh. **The asymmetry with its own neighbours is what makes this visible**: `post_upload_community_image` and `post_upload_user_image` call `authorise_api_user` bare, with no fallback, and refuse a bad token whether or not a session exists. Both behaviours are pinned. | **registered -- what an invalid token should do is an authentication decision, not a coverage round's. The decision now starts from evidence** | Three probes; four rows, two per endpoint, plus two on the scoped endpoints that refuse |
+| D881 | `app/api/alpha/utils/upload.py:21-29` | **A PER-USER QUERY RUNS ON EVERY IMAGE UPLOAD AND ITS RESULT IS DISCARDED.** `total_size` is summed from a `SELECT file_id, size FROM user_file WHERE user_id = :user_id` and never read, because the quota check that consumed it is commented out two lines below with "don't check quota on image uploads until I can sort this out properly". D736's family: a computation whose only consumer is gone. | **registered -- deleting it would also delete the quota check's scaffolding, which the comment says is coming back** | A row that seeds a `user_file` row and asserts the upload still succeeds, which is all the sum can affect today |
+
+### 2. THE MUTANT THAT FOUND AN ADJACENT FILTER
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D882 | `app/api/alpha/utils/topic.py:28`; `tests/test_api_small_utils.py` | **COVERING ONE PER-USER FILTER SAID NOTHING ABOUT THE ONE BESIDE IT.** The measuring pass left one survivor of 23: `blocked_instance_ids = blocked_or_banned_instances(user_id)` replaced by `[]`. The suite already covered `blocked_community_ids` -- a community the reader had blocked was correctly absent from the topic's community list -- but the two are fetched by **different helpers** and passed to `topic_view` as **different arguments**, so the covered one carried no information about the other. Closed with a community on a blocked INSTANCE. **The same shape as sub-project 72's `func.lower()` rows**: two adjacent filters, one assertion, and the mutation pass is what separates them. | **closed; 23 of 23** | The mutant, before and after |
+
+### 3. TWO FIXTURE FAULTS WORTH NAMING
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D883 | `tests/test_api_small_utils.py` | **A `LocalProxy` READ OUTSIDE ITS CONTEXT IS `None`, AND THE ASSERTION FAILS AS THOUGH THE CODE WERE WRONG.** `upload.py`'s fallback passes `current_user` ITSELF to `process_upload`, so `upload.call_args.kwargs['user']` holds the proxy rather than a User. Asserted after the `test_request_context` had exited it resolved to `None` and raised `AttributeError: 'NoneType' object has no attribute 'id'` -- against correct code. **Assert inside the context, or capture the id while it is still bound.** Fact 342. Separately, `user_file.file_id` is a real foreign key, so a raw INSERT needs a `File` row behind it rather than a literal id. | **both corrected in the tests** | The two failures, each read before anything was changed |
+
+**BASIS: the full suite, `6489 passed, 3 skipped, 247 warnings, 6 subtests passed in 475.12s`** -- delta reconciling, 6466 plus 23 -- and `All 59 module floors met.`
+
+**Next free number: D884.**
 
 ## Ratchet gotchas
 
