@@ -14833,7 +14833,44 @@ reach.**
 
 **BASIS: the full suite, `6293 passed, 3 skipped, 247 warnings, 6 subtests passed in 459.32s`**, and `All 49 module floors met.` The count is one lower than sub-project 70's 6294 because the ceiling file's two tests became one: an exact-equality ceiling is meaningless once the ceiling is zero.
 
-**Next free number: D857.**
+**Next free number: D857.** (**D857-D862 were taken by sub-project 72,
+below; the free number is now D863.**)
+
+## Sub-project 72: `app/auth/forms.py` -- a maximum that rejected itself, and a check written twice
+
+**The round in one line: the lowest-covered form file in the repo goes from
+**58.91** to **100.0** (`[]`/`[]`) and takes a floor -- **50 floors** -- TWO
+defects are repaired, one of them a length guard that refused the only length it
+should allow while admitting everything past the limit; a 30-mutant pass killed
+**29 of 30** with the last proved equivalent; and one of the round's own
+assertions turned out to be wrong about correct code.**
+
+### 0. THE TWO REPAIRS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D857 | `app/auth/forms.py:84-85` | **THE PASSWORD LENGTH GUARD WAS WRONG IN BOTH DIRECTIONS AT ONCE.** `if len(password.data) == 128` -- `==`, not `>`. Measured across the boundary: `PROBE w1 len=127 errors=[]`, `len=128 errors=['Maximum password length is 128 characters.']`, `len=129 errors=[]`, `len=130 errors=[]`. So a password of **exactly the maximum the field's own title advertises** ("Minimum length 8, maximum 128") was refused **with a message quoting that maximum**, while 129 and 130 passed the check that exists to stop them. The field validator behind it is `Length(min=8, max=129)`, which admits 129 as well, so **a 129-character password was accepted by the whole form while a 128-character one was refused.** Repaired to `>`, which makes the effective maximum the advertised one. | **fixed** | The four-length probe; the repair pinned at all four, plus a row proving the field validator agrees at 128 so the refusal did not merely move | 
+| D858 | `app/auth/forms.py:97-98` (before) | **THE COMMON-PASSWORD CHECK WAS WRITTEN TWICE AND THE SECOND COPY WAS UNREACHABLE.** `if password.data == 'password' or ... == '12345678' or ... == '1234567890'` appeared character for character at `:81-82` and again at `:97-98`, on data nothing between them modifies. `:97` is reachable only when `:81` was false, so `:98` can never run: coverage reported the arc `[97, 98]` missing and no test could close it. Deleted rather than pragma'd, which is the choice D822 made for the same shape. **A duplicate that raises the same message from the same input is invisible to every behavioural assertion** -- which is why it survived -- so the covering row asserts on the SOURCE. | **fixed** | `PROBE w2 the common-password check appears twice: True`; a common password raises exactly one error |
+
+### 1. THE MUTANTS, AND AN ASSERTION THAT WAS WRONG ABOUT CORRECT CODE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D859 | `tests/test_auth_forms.py` | **THE ROUND'S OWN CAPTCHA ROW FAILED AGAINST CORRECT CODE, BECAUSE IT ASSERTED THE WRONG OBSERVABLE.** `RegistrationForm.__init__` calls `delattr(self, 'captcha')` when the setting is off, and the first version of the covering row asserted `hasattr(form, 'captcha') is False`. It failed -- and the code was right. WTForms' `__delattr__` removes the field from the form's registry but leaves the NAME resolving to `None` rather than raising: `PROBE x1 hasattr captcha: True`, `type: <class 'NoneType'>`, `in form._fields: False`, and the form iterates nine fields with no captcha among them. **`hasattr` is true either way, so a test written on it cannot see the removal at all.** Rewritten onto `form._fields` and the iterated field list, which are what the template walks and what validation reads. | **test corrected; production untouched** | The probe, all four lines |
+| D860 | `app/auth/forms.py`; `coverage_floors.ini` | **THE MODULE CLOSES AT 100.0 AND TAKES A FLOOR -- 50 floors.** A 30-mutant pass killed **26 on the measuring pass**; three survivors were fixture gaps and one is equivalent. The three: `get_setting('captcha_enabled', True)`'s DEFAULT was invisible because both captcha rows patched `get_setting` outright, so no row saw a site that had never stored the setting; and `func.lower()` on the STORED side of both the email and the community-name lookups did nothing detectable, because every fixture in the file seeded a lowercase value. **Three assertions that were about the input and never about the column.** Closed with rows that store capitals and one that stores no setting at all: **29 of 30.** | **floored at 100** | The two pass logs; `All 50 module floors met.` |
+| D861 | `app/auth/forms.py:87` | **ONE EQUIVALENT MUTANT, PROVED RATHER THAN ASSUMED.** Seeding `first_char` from `password.data[-1]` instead of `[0]` survives, and cannot be killed: the loop asks whether every character equals the seed, so if they all do, both ends hold the same character and both seeds answer True; if they do not, two characters differ and some character differs from either seed, so both answer False. No input separates them. The proof row asserts the two seedings agree across four passwords -- all-same, differing at the end, differing at the start, and alternating -- and ties that to the validator's own answer. | **equivalent; registered** | The mutant re-run and reported as a survivor on purpose |
+
+### 2. REGISTERED, NOT FIXED
+
+| ID | Where | What | Status |
+|---|---|---|---|
+| D862 | `app/auth/forms.py:80` against `:16` | **`validate_password` REWRITES THE SUBMITTED PASSWORD** -- `password.data = password.data.strip()` -- so `'  secretpw  '` is registered as `'secretpw'`: `PROBE w4 password after validate: 'secretpw'`. **`LoginForm` does not strip**, so the password the user set is not the password they can log in with. A bigger defect than either repaired here. | **registered -- repairing it changes what is stored for future registrations and needs the login path decided with it, which is not a coverage round's call. Pinned as current behaviour so the decision starts from evidence** |
+| (D862) | `:16`, `:113` | **`LoginForm.password` carries `Length(min=8, max=129)`** while `ResetPasswordForm.password` carries none, so an account whose password predates the rule, or exceeds 129 characters, cannot log in at all -- the form refuses before any credential check. | **registered -- the same family and the same reason as D862** |
+| (D862) | `:81` | **The common-password list is three literals inline**, not a list or a file, so extending it means editing a condition. | **registered for whoever adds the fourth** |
+
+**BASIS: the full suite, `6338 passed, 3 skipped, 247 warnings, 6 subtests passed in 450.56s`** -- the delta reconciles, 6293 plus this round's 45 rows -- and `All 50 module floors met.`
+
+**Next free number: D863.**
 
 ## Ratchet gotchas
 
