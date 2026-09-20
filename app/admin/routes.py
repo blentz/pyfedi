@@ -517,7 +517,6 @@ def admin_federation_preload():
         resp.close()
 
         already_known = list(db.session.execute(text('SELECT ap_public_url FROM "community"')).scalars())
-        banned_urls = list(db.session.execute(text('SELECT domain FROM "banned_instances"')).scalars())
 
         total_count = already_known_count = nsfw_count = low_content_count = low_active_users_count = banned_count = bad_words_count = 0
         candidate_communities = []
@@ -545,8 +544,19 @@ def admin_federation_preload():
                 low_active_users_count += 1
                 continue
 
-            # sort out any instances we have already banned
-            elif community['baseurl'] in banned_urls:
+            # sort out any instances we have already banned.
+            #
+            # instance_banned(), not a membership test against the raw
+            # banned_instances rows: that second implementation missed every
+            # WILDCARD ban -- a Mastodon-style 'ev*l.com' is a pattern, not a
+            # domain, so `'evil.com' in banned_urls` is False -- and did no
+            # normalisation, so it also missed anything whose case or trailing
+            # dot differed from the stored row. The result was that "preload
+            # communities" could subscribe this instance to communities on an
+            # instance it had defederated. It is memoized for 150 seconds per
+            # domain, so the cost is one query per distinct instance rather
+            # than one per community.
+            elif instance_banned(community['baseurl']):
                 banned_count += 1
                 continue
 
@@ -1122,11 +1132,24 @@ def import_bans_task(filename):
                 contents = file_get_contents(filename)
                 contents_json = json.loads(contents)
 
+                # .get(key, []) throughout, not contents_json[key]. Each
+                # section below commits on its own, so a file missing one key
+                # used to leave the database partly updated AND raise -- the
+                # worst of both. A section with nothing to import is now a
+                # no-op, which is what a partial file means.
+
                 # import allowed_instances
                 if get_setting('use_allowlist'):
                     # check for allowed_instances existing and being more than 0 entries
-                    instances_allowed = contents_json['allowed_instances']
-                    if isinstance(instance_allowed, list) and len(instance_allowed) > 0:
+                    # `instances_allowed`, not `instance_allowed`. The latter is
+                    # the FUNCTION imported from app.utils, so isinstance(...,
+                    # list) was False for every file and the whole allowlist
+                    # import silently did nothing -- an instance in allowlist
+                    # mode could import a ban list and get no allowed instances
+                    # from it, with no error. The `and` short-circuited, so
+                    # len() on a function never ran and nothing raised.
+                    instances_allowed = contents_json.get('allowed_instances', [])
+                    if isinstance(instances_allowed, list) and len(instances_allowed) > 0:
                         # get the existing allows and their domains
                         already_allowed_instances = []
                         already_allowed = AllowedInstances.query.all()
@@ -1148,7 +1171,7 @@ def import_bans_task(filename):
                 # import banned_instances
                 else:
                     # check for banned_instances existing and being more than 0 entries
-                    instance_bans = contents_json['banned_instances']
+                    instance_bans = contents_json.get('banned_instances', [])
                     if isinstance(instance_bans, list) and len(instance_bans) > 0:
                         # get the existing bans and their domains
                         already_banned_instances = []
@@ -1170,7 +1193,7 @@ def import_bans_task(filename):
 
                 # import banned_domains
                 # check for banned_domains existing and being more than 0 entries
-                domain_bans = contents_json['banned_domains']
+                domain_bans = contents_json.get('banned_domains', [])
                 if isinstance(domain_bans, list) and len(domain_bans) > 0:
                     # get the existing bans and their domains
                     already_banned_domains = []
@@ -1192,7 +1215,7 @@ def import_bans_task(filename):
 
                 # import banned_tags
                 # check for banned_tags existing and being more than 0 entries
-                tag_bans = contents_json['banned_tags']
+                tag_bans = contents_json.get('banned_tags', [])
                 if isinstance(tag_bans, list) and len(tag_bans) > 0:
                     # get the existing bans and their domains
                     already_banned_tags = []
@@ -1214,7 +1237,7 @@ def import_bans_task(filename):
 
                 # import banned_users
                 # check for banned_users existing and being more than 0 entries
-                user_bans = contents_json['banned_users']
+                user_bans = contents_json.get('banned_users', [])
                 if isinstance(user_bans, list) and len(user_bans) > 0:
                     # get the existing bans and their domains
                     already_banned_users = []

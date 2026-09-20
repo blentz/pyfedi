@@ -2354,7 +2354,16 @@ def instance_banned(domain: str) -> bool:
             return True
 
         # Mastodon sometimes bans with a * in the domain name, meaning "any letter", e.g. "cum.**mp"
-        regex_patterns = [re.compile(f"^{cond.domain.replace('*', '[a-zA-Z0-9]')}$") for cond in
+        #
+        # re.escape first, then reinstate the wildcard. Interpolating the domain
+        # raw made every '.' in a wildcard ban a metacharacter, so 'ev*l.com'
+        # banned 'evilXcom' as well as 'evXl.com' -- and an entry that also held
+        # a regex metacharacter did not compile at all: 'ev*l.co(m' raised
+        # re.PatternError out of this function, which re-raises. This gates
+        # inbound activity processing and outbound delivery, so one malformed
+        # entry in the admin blocklist box took federation down instance-wide.
+        regex_patterns = [re.compile('^' + re.escape(cond.domain).replace(r'\*', '[a-zA-Z0-9]') + '$')
+                          for cond in
                           session.query(BannedInstances).filter(BannedInstances.domain.like('%*%')).all()]
         return any(pattern.match(domain) for pattern in regex_patterns)
     except Exception:
@@ -2668,7 +2677,15 @@ def inbox_domain(inbox: str) -> str:
             # calls .strip() on the result and instance_banned matches it
             # against a regex, neither of which accepts None.
             return ''
-    return inbox
+    # The root label's trailing dot is stripped LAST, so it is removed whether
+    # the value arrived as a URL or as a bare domain. 'evil.com.' is the
+    # fully-qualified form of 'evil.com' -- DNS resolves the two identically and
+    # TLS works either way -- but it is a different string, so a banned instance
+    # that presented its actor ids as 'https://evil.com./users/x' missed its own
+    # row in banned_instances and federated normally. The allowlist direction
+    # failed safe (an unrecognised string is simply not on the list), which is
+    # why this only ever showed up as a ban bypass.
+    return inbox.rstrip('.')
 
 
 def awaken_dormant_instance(instance):
