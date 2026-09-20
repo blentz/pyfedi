@@ -9428,6 +9428,49 @@ left four mutants alive; parameterising the row over all three killed six.
 Slice D's 41-of-41 result came from this and from fact 371, not from anything
 about the code being simpler.
 
+**378. `CACHE_TYPE` IS `NullCache` IN TESTS, SO NO STALENESS IS OBSERVABLE.**
+`tests/conftest.py:68` sets it, and `@cache.memoize` therefore stores nothing:
+a revoked permission reads correctly whether or not anything was invalidated,
+and a mutant that breaks `cache.delete_memoized` passes every row that watches
+the effect. Assert the CALL instead -- that the function, the key and every
+affected id are what `user_access` is memoized under -- which is fact 371's
+rule arriving from the other direction. See D939.
+
+**379. A VOCABULARY DERIVED FROM ITS OWN DATA CAN ONLY SHRINK.**
+`admin_permissions` listed the permissions it offers with `SELECT DISTINCT
+permission FROM role_permission` and then deleted those rows, so unticking
+every box for a permission removed the last row naming it and the page could
+never offer it again. Whenever a form's OPTIONS come from the same table the
+form rewrites, ask what happens when the last row goes. A permission nobody
+holds is still a permission; the set belongs in code. See D937.
+
+**380. REPLACING DERIVED DATA WITH A CONSTANT NEEDS A RATCHET IN THE SAME
+COMMIT.** The constant is only right on the day it is written. Walk the source
+with `ast`, collect the literal arguments of the calls that consume it, and
+assert the two sets are equal in both directions -- unreachable values and dead
+values are different bugs and both are worth naming. `ast`, not a regex: a
+regex cannot tell a call from the same words in a docstring, and a test file
+about permissions is full of the strings it is looking for. See D940.
+
+**381. A SCOPED `DELETE` IS PART OF AN EDIT FORM'S CONTRACT.** The permissions
+page rewrote roles 3 and 4 but deleted the whole `role_permission` table, so
+every other role was silently stripped on every save. Where a form replaces a
+subset, the delete must name that subset -- and the test must include a row
+outside it, because a row that only checks the edited subset passes either way.
+See D938.
+
+**382. THE SECOND POSITIONAL ARGUMENT TO `login_user` IS `remember`.**
+`login_user(user, False)` in `masquerade` is load-bearing: `True` writes a
+`remember_token` cookie and the administrator stays logged in as the target
+after closing the browser. A row asserting WHO is logged in cannot see the
+difference; assert that no `remember_token` appears in `Set-Cookie`. See D941.
+
+**383. `User.get_id()` RETURNS AN `int`.** Flask-Login's own `UserMixin`
+returns `str(self.id)`, and `app/models.py:1163` does not, so
+`session['_user_id']` holds whichever type last wrote it -- a string when a
+test sets it by hand, an int after a real `login_user`. `load_user` does
+`int(id)`, so both work; comparisons in tests need `str()` on both sides.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
