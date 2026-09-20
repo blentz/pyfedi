@@ -14719,7 +14719,41 @@ defect rather than at a gap in the tests.**
 | (D841) | `:335-359` | **The co-occurrence block is one query per tag**, up to 50 per request, each carrying a subquery. | **registered with the campaign's other N+1 findings — the round that rewrites it should have a benchmark** |
 | (D841) | `:74`, `:384` | **`show_tag` and `tag_posts` build `community_ids` from the same `.scalars()` cursor.** Neither is defective today because each reads it exactly once, but they are one added read away from D839. | **registered as a shape, not a defect — named so the next reader of either function knows why the third one calls `list()`** |
 
-**Next free number: D842.**
+**Next free number: D842.** (**D842-D844 were taken by sub-project 69,
+below; the free number is now D845.**)
+
+## Sub-project 69: the error handlers, a 404 that was backwards, and two one-line closures
+
+**The round in one line: three modules too small to be rounds of their own are
+taken together -- `app/errors/handlers.py` 81.481, `app/admin/constants.py` 90.0
+and `app/nntp/__init__.py` 0.0 all reach `[]`/`[]`; **`app/errors` CLOSES**, four
+floors are added for 49; ONE defect is repaired; and a 20-mutant pass killed
+**20 of 20** -- after six survivors showed that the repair had made the two
+halves of a guard indistinguishable by every assertion the round had written.**
+
+### 0. THE REPAIR
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D842 | `app/errors/handlers.py:26` | **THE ORDINARY 404 WAS A NINE-BYTE STRING, AND THE BRANCH THAT EXISTS TO SKIP THE PAGE WAS THE ONLY ONE THAT RENDERED IT.** `return 'not found', 404` sat under the comment `# Fall back to standard 404 page`. Above it, the fast path for static files, `/api/`, `/.well-known/`, `/admin/`, `/auth/` and a tuple of asset extensions returned `render_template('errors/404.html'), 404`. So `PROBE q1 body: b'not found'` for a mistyped URL, and `PROBE q2 body starts: b'\n<p>Oops, something is broken!</p>...'` for a missing image -- **exactly backwards**, since an asset request is the one case where rendering a page is wasted and a person typing a URL is the one case where it is not. | **fixed** | Both probes; the fast-path rows keep the repair honest by asserting the same page from the other arm |
+
+### 1. THE MEASUREMENT, AND A REPAIR THAT ERASED ITS OWN OBSERVABLE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D843 | `app/errors/handlers.py`; `app/admin/constants.py`; `app/nntp/__init__.py`; `coverage_floors.ini` | **THREE MODULES CLOSE AT `[]`/`[]` AND `app/errors` IS COMPLETE at 49 floors.** Bundled deliberately: 4 missing lines, 1 and 2 respectively is not a round each, and the alternative was three rounds of ceremony around one assertion apiece. `app/errors/__init__.py` was already at 100 and is floored here so the package is held as a package. **`app/nntp/__init__.py` reaching 100 does NOT close `app/nntp`** -- `server.py` (815 lines) and `nntpserver.py` (1034) are both at 0.0 and are their own sub-project; a per-module floor is what the ratchet is for, and saying so here stops the next reader reading 100 as a closed package. **BASIS: the full suite, `6287 passed, 3 skipped, 8373 warnings, 6 subtests passed in 450.07s`**, delta reconciling again (6259 plus 28), and `All 49 module floors met.` | **three modules closed, package closed** | The `&&` chain; the checker re-run after the floors landed |
+| D844 | `app/errors/handlers.py:11-18`; `tests/test_error_handlers.py` | **THE REPAIR MADE SIX MUTANTS UNKILLABLE BY EVERY ASSERTION THE ROUND HAD WRITTEN, AND THE MUTATION PASS IS WHAT SAID SO.** Before D842 the two arms of the 404 guard returned visibly different things -- a rendered page and a bare string -- so a test asserting the body could tell them apart. **After the repair both arms answer 404 with the same page**, and the only remaining difference is that the fast path SKIPS the `CmsPage` query. Six mutants, one per dropped operand (`/api/`, `/.well-known/`, `/admin/`, `/auth/`, the whole extension tuple, and `.woff2` alone), survived a suite whose rows asserted status and body. Closed by planting a `CmsPage` AT each guarded path and asserting it is **not** served -- the query's absence, which is what the guard is for. `.woff2` needs its own row because `.woff` is not a suffix of it. **The general shape: a repair that makes two paths agree destroys the observable that distinguished them, and the tests written before it can silently stop testing the guard.** Fact 327. | **all six closed; 20/20 killed** | The two pass logs, before and after the rows were rewritten |
+
+### 2. REGISTERED, NOT FIXED
+
+| ID | Where | What | Status |
+|---|---|---|---|
+| (D844) | `:16-17` | **The extension check is case-sensitive**, so `/nosuch.PNG` misses the fast path and pays for a `CmsPage` query. Before D842 it also changed the response; now it does not. | **registered -- a performance shape once D842 landed, not a correctness one** |
+| (D844) | `:9`, against `:30`, `:36` | **The 404 handler does not roll back** while the 500 and 401 handlers do. | **registered as a question, not a bug: a 404 is raised by `abort()` far more often than by a failure, and a blanket rollback there would discard work the request meant to keep** |
+| (D844) | `:1` | **The handlers use `flask.render_template`, not `app/utils.py`'s theme-aware one**, so error pages get no theme, no protocol replacement and no ETag handling. | **registered -- no theme in the repo ships an `errors/` template, so the theme-aware version falls through to the same file today. Checked rather than missed** |
+| (D844) | `app/templates/errors/429.html` | **The 429 page is plain text** -- `b'\n429 - Too Many Requests\n'` -- while 401 and 500 render full pages. | **registered -- a template, not this module** |
+
+**Next free number: D845.**
 
 ## Ratchet gotchas
 
