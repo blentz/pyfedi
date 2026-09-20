@@ -42,7 +42,7 @@ def _seed():
     assert burn.id == 1
     alice = make_user(instance, 'alice', local=True)
     bob = make_user(instance, 'bob', local=True)
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.private_instance = False
     db.session.commit()
     return instance, alice, bob
@@ -588,7 +588,7 @@ def test_the_subject_of_the_cloud_is_named_for_the_template(app, db_session, cat
 
 def test_a_private_instance_refuses_an_anonymous_reader_the_cloud(app, db_session):
     instance, alice, bob = _seed()
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.private_instance = True
     db.session.commit()
     community = make_community('microblogs')

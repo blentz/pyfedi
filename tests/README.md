@@ -8999,6 +8999,32 @@ run the query first, designate whatever it returns as the row you want to be
 wrong, and build the fixture around that -- then the kill is deterministic in
 either order. See D847.
 
+**331. MIGRATE WITH AN AST, NOT A REGEX -- AND EXPECT THE TEST DOUBLES TO BREAK.**
+Sub-project 71 moved 841 call sites off SQLAlchemy's legacy `Query.get()`. The
+textual version of the same rewrite reported **927** changes in 138 files; the
+AST version reported 841 in 109. The 86-site difference was entirely
+DOCSTRINGS, COMMENTS and one test whose subject is the old API -- prose a regex
+cannot tell from code. Locate each call as an `ast.Call` node, rewrite by source
+offsets, and `ast.parse` the result before writing it.
+
+Then expect failures that are not regressions. Five of this round's six were
+TEST DOUBLES: a fake session wrapping `.query(X).get(id)`, two `File.query`
+replacements faking an orphaned FK, and a `MagicMock` configured through
+`.query(model).get(...)`. **A double is a copy of an API's shape, so a migration
+invalidates it exactly as it invalidates a call** -- and a double that stops
+intercepting does not fail loudly, it silently stops standing in for anything
+and the test fails somewhere else entirely. See D852 and D854.
+
+**332. A WARNING COUNT THAT WILL NOT FALL TO THE PREDICTED FLOOR IS A FINDING.**
+After sub-project 71 had migrated "all 171" `get_or_404` sites,
+`flask_sqlalchemy/query.py:30` was still in the warning summary. Two live calls
+remained -- `db.session.query(Post).get_or_404(post_id)` -- in a shape the
+migrator's own finder did not handle. **Both files were floored at 100% and
+every test passed**, so nothing in the suite could have reported it; the only
+signal was a number that did not reach where it had been predicted to reach.
+Predict the floor before a mechanical change, compare against it afterwards, and
+treat the gap as a defect rather than as noise. See D853.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not

@@ -125,7 +125,7 @@ def make_site_admin(s, name='site-admin'):
     make_site()
     admin = make_user(s.local_instance, name, local=True)
     db.session.commit()
-    role = db.session.query(Role).get(ROLE_ADMIN)
+    role = db.session.get(Role, ROLE_ADMIN)
     if role is None:
         role = Role(id=ROLE_ADMIN, name='Admin', weight=0)
         db.session.add(role)

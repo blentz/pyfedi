@@ -715,7 +715,21 @@ def test_announce_delete_rolls_back_and_re_raises_on_failure(app, db_session):
             query.get.return_value = s.instance
         return query
 
+    def fake_get(model, ident, *args, **kwargs):
+        """The same mapping for `session.get(Model, id)`, which is what
+        production calls since sub-project 71. Without it the fake answers a
+        bare MagicMock, `fm_user.is_local()` is truthy, the member is skipped
+        before send_post_request is reached, and this test fails with DID NOT
+        RAISE rather than with anything about the rollback it exists for.
+        """
+        if model is User:
+            return remote
+        if model is Instance:
+            return s.instance
+        return MagicMock()
+
     fake_session.return_value.query.side_effect = fake_query
+    fake_session.return_value.get.side_effect = fake_get
 
     try:
         with patch('app.shared.feed.instance_banned', return_value=False):
@@ -1603,7 +1617,7 @@ def test_feed_remove_community_only_sweeps_members_of_that_community(app, db_ses
     # subscriptions_count a second time. Found by running the mutant: the
     # first version of this test asserted only the two memberships and the
     # mutant survived it.
-    assert Community.query.get(s.community.id).subscriptions_count == 4
+    assert db.session.get(Community, s.community.id).subscriptions_count == 4
 
 
 def test_feed_remove_community_unsubscribes_only_the_member_it_is_processing(app, db_session):

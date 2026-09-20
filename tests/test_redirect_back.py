@@ -135,7 +135,7 @@ class TestFeedDeleteRedirect:
                                     headers={'Referer': 'https://test.piefed.local/f/somewhere'})
         assert response.status_code == 302
         assert response.headers['Location'] == 'https://test.piefed.local/f/somewhere'
-        assert db.session.query(Feed).get(feed.id) is None
+        assert db.session.get(Feed, feed.id) is None
 
     def test_without_a_referrer_the_index_is_used(self, app, db_session):
         instance = make_instance('test.piefed.local', software='piefed')
@@ -182,7 +182,7 @@ class TestFeedAddCommunityRedirect:
                                  headers={'Referer': 'https://test.piefed.local/f/somewhere'})
         assert response.status_code == 302
         assert response.headers['Location'] == 'https://test.piefed.local/f/somewhere'
-        assert db.session.query(Feed).get(feed.id).num_communities == 1
+        assert db.session.get(Feed, feed.id).num_communities == 1
 
     def test_without_a_referrer_the_index_is_used(self, app, db_session):
         user, feed, community = self._setup()

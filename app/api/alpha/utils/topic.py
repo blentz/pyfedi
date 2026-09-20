@@ -21,7 +21,7 @@ def get_topic_list(auth, data, user_id=None) -> dict:
 
     # get the user to check if the user has hide_read posts set later down the function
     if user_id:
-        user = User.query.get(user_id)
+        user = db.session.get(User, user_id)
         g.user = user
 
         blocked_community_ids = blocked_communities(user_id)

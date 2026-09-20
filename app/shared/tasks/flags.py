@@ -42,7 +42,7 @@ def report_post(send_async, user_id, post_id, summary, instance_ids):
         session = get_task_session()
         try:
             with patch_db_session(session):
-                post = session.query(Post).get(post_id)
+                post = session.get(Post, post_id)
                 report_object(session, user_id, post, summary, instance_ids)
         except Exception:
             session.rollback()
@@ -52,7 +52,7 @@ def report_post(send_async, user_id, post_id, summary, instance_ids):
 
 
 def report_object(session, user_id, object, summary, instance_ids):
-    user = session.query(User).get(user_id)
+    user = session.get(User, user_id)
     community = object.community
     if community.local_only or community.private or not community.instance.online():
         return

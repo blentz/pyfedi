@@ -45,7 +45,7 @@ def put_registration_approve(auth, data):
     new_user_id = data["user_id"]
     approve = data["approve"]
     
-    new_user = User.query.get(new_user_id)
+    new_user = db.session.get(User, new_user_id)
     registration = UserRegistration.query.filter_by(status=0, user_id=new_user_id).first()
 
     if not registration:

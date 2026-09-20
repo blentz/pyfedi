@@ -56,7 +56,7 @@ def show_people():
 @bp.route('/user/<int:user_id>', methods=['GET'])
 @login_required_if_private_instance
 def show_profile_by_id(user_id):
-    user = User.query.get_or_404(user_id)
+    user = db.session.get(User, user_id) or abort(404)
     return show_profile(user)
 
 
@@ -356,7 +356,7 @@ def edit_profile(actor):
             if file:
                 current_user.avatar = file
                 if old_avatar:
-                    old_file = File.query.get(old_avatar)
+                    old_file = db.session.get(File, old_avatar)
                     db.session.delete(old_file)
                 db.session.commit()
                 if old_avatar:
@@ -373,7 +373,7 @@ def edit_profile(actor):
                 current_user.cover = file
                 cache.delete_memoized(User.cover_image, current_user)
                 if old_banner:
-                    old_banner_file = File.query.get(old_banner)
+                    old_banner_file = db.session.get(File, old_banner)
                     db.session.delete(old_banner_file)
                 db.session.commit()
                 if old_banner:
@@ -421,7 +421,7 @@ def remove_avatar():
     if current_user.avatar_id:
         current_user.avatar.delete_from_disk()
         if current_user.avatar_id:
-            file = File.query.get(current_user.avatar_id)
+            file = db.session.get(File, current_user.avatar_id)
             file.delete_from_disk()
             current_user.avatar_id = None
             db.session.delete(file)
@@ -435,7 +435,7 @@ def remove_cover():
     if current_user.cover_id:
         current_user.cover.delete_from_disk()
         if current_user.cover_id:
-            file = File.query.get(current_user.cover_id)
+            file = db.session.get(File, current_user.cover_id)
             file.delete_from_disk()
             current_user.cover_id = None
             db.session.delete(file)
@@ -551,7 +551,7 @@ def export_user_settings(user):
 
     notes = []
     for user_note in UserNote.query.filter(UserNote.user_id == user.id):
-        target = User.query.get(user_note.target_id)
+        target = db.session.get(User, user_note.target_id)
         if target:
             notes.append({'target': target.profile_id(), 'body': user_note.body})
     user_dict['user_notes'] = notes
@@ -1046,7 +1046,7 @@ def report_profile(actor):
                 goto = safe_redirect_target(request.args.get('redirect'), f'/u/{actor}')
                 return redirect(goto)
 
-            source_instance = Instance.query.get(user.instance_id)
+            source_instance = db.session.get(Instance, user.instance_id)
             targets_data = {'gen': '0',
                             'suspect_user_id': user.id,
                             'suspect_user_user_name': user.ap_id if user.ap_id else user.user_name,
@@ -1136,7 +1136,7 @@ def delete_profile(actor):
 @bp.route('/user/community/<int:community_id>/unblock', methods=['POST'])
 @login_required
 def user_community_unblock(community_id):
-    community = Community.query.get_or_404(community_id)
+    community = db.session.get(Community, community_id) or abort(404)
     existing_block = CommunityBlock.query.filter_by(user_id=current_user.id, community_id=community.id).first()
     if existing_block:
         db.session.delete(existing_block)
@@ -1162,7 +1162,7 @@ def user_community_unblock(community_id):
 @bp.route('/user/flair/<int:flair_id>/unblock', methods=['POST'])
 @login_required
 def user_flair_unblock(flair_id):
-    flair = CommunityFlair.query.get_or_404(flair_id)
+    flair = db.session.get(CommunityFlair, flair_id) or abort(404)
     existing_block = CommunityFlairBlock.query.filter_by(user_id=current_user.id, community_flair_id=flair.id).first()
     if existing_block:
         db.session.delete(existing_block)
@@ -1213,12 +1213,12 @@ def delete_account():
 
 @celery.task
 def send_deletion_requests(user_id):
-    user = User.query.get(user_id)
+    user = db.session.get(User, user_id)
     if user:
         # unsubscribe
         communities = CommunityMember.query.filter_by(user_id=user_id).all()
         for membership in communities:
-            community = Community.query.get(membership.community_id)
+            community = db.session.get(Community, membership.community_id)
             unsubscribe_from_community(community, user)
 
         instances = Instance.query.filter(Instance.dormant == False, Instance.gone_forever == False).all()
@@ -1293,7 +1293,7 @@ def notifications():
 @bp.route('/notification/<int:notification_id>/goto', methods=['GET', 'POST'])
 @login_required
 def notification_goto(notification_id):
-    notification = Notification.query.get_or_404(notification_id)
+    notification = db.session.get(Notification, notification_id) or abort(404)
     if notification.user_id == current_user.id:
         if not notification.read:
             current_user.unread_notifications -= 1
@@ -1313,7 +1313,7 @@ def notification_goto(notification_id):
 @bp.route('/notification/<int:notification_id>/delete', methods=['GET', 'POST'])
 @login_required
 def notification_delete(notification_id):
-    notification = Notification.query.get_or_404(notification_id)
+    notification = db.session.get(Notification, notification_id) or abort(404)
     if notification.user_id == current_user.id:
         if not notification.read:
             current_user.unread_notifications -= 1
@@ -1327,7 +1327,7 @@ def notification_delete(notification_id):
 @bp.route('/notification/<int:notification_id>/read', methods=['POST'])
 @login_required
 def notification_read(notification_id):
-    notification = Notification.query.get_or_404(notification_id)
+    notification = db.session.get(Notification, notification_id) or abort(404)
     if notification.user_id == current_user.id:
         if not notification.read:
             current_user.unread_notifications -= 1
@@ -1342,7 +1342,7 @@ def notification_read(notification_id):
 @bp.route('/notification/<int:notification_id>/unread', methods=['POST'])
 @login_required
 def notification_unread(notification_id):
-    notification = Notification.query.get_or_404(notification_id)
+    notification = db.session.get(Notification, notification_id) or abort(404)
     if notification.user_id == current_user.id:
         if notification.read:
             current_user.unread_notifications += 1
@@ -1389,7 +1389,7 @@ def import_settings_task(user_id, redis_key):
         try:
             with patch_db_session(session):
                 from app import redis_client
-                user = session.query(User).get(user_id)
+                user = session.get(User, user_id)
                 contents = redis_client.get(redis_key)
                 contents_json = json.loads(contents)
 
@@ -1597,7 +1597,7 @@ def user_settings_filters_add():
 @bp.route('/user/settings/filters/<int:filter_id>/edit', methods=['GET', 'POST'])
 @login_required
 def user_settings_filters_edit(filter_id):
-    content_filter = Filter.query.get_or_404(filter_id)
+    content_filter = db.session.get(Filter, filter_id) or abort(404)
     if current_user.id != content_filter.user_id:
         abort(401)
     form = KeywordFilterEditForm()
@@ -1635,7 +1635,7 @@ def user_settings_filters_edit(filter_id):
 @bp.route('/user/settings/filters/<int:filter_id>/delete', methods=['POST'])
 @login_required
 def user_settings_filters_delete(filter_id):
-    content_filter = Filter.query.get_or_404(filter_id)
+    content_filter = db.session.get(Filter, filter_id) or abort(404)
     if current_user.id != content_filter.user_id:
         abort(401)
     db.session.delete(content_filter)
@@ -2124,7 +2124,7 @@ def edit_user_note(actor):
 
 @bp.route('/user/<int:user_id>/preview')
 def user_preview(user_id):
-    user = User.query.get_or_404(user_id)
+    user = db.session.get(User, user_id) or abort(404)
     return_to = request.args.get('return_to')
     if (user.deleted or user.banned) and current_user.is_anonymous:
         abort(404)
@@ -2377,7 +2377,7 @@ def user_files():
 @bp.route('/user/files/delete/<int:file_id>', methods=['GET', 'POST'])
 @login_required
 def user_file_delete(file_id):
-    file = File.query.get_or_404(file_id)
+    file = db.session.get(File, file_id) or abort(404)
     form = DeleteFileForm()
     if form.validate_on_submit():
         process_file_delete(file.source_url, current_user.id)
@@ -2460,7 +2460,7 @@ def user_follow_requests():
 @bp.route('/user/follow_request/<int:user_id>/accept', methods=['POST'])
 @login_required
 def user_follow_request_accept(user_id):
-    remote_user = User.query.get(user_id)
+    remote_user = db.session.get(User, user_id)
     follow_request = UserFollower.query.filter(UserFollower.local_user_id == current_user.id,
                                                UserFollower.remote_user_id == user_id,
                                                UserFollower.is_inward == True).first()
@@ -2483,7 +2483,7 @@ def user_follow_request_accept(user_id):
 @bp.route('/user/follow_request/<int:user_id>/reject', methods=['POST'])
 @login_required
 def user_follow_request_reject(user_id):
-    remote_user = User.query.get(user_id)
+    remote_user = db.session.get(User, user_id)
     follow_request = UserFollower.query.filter(UserFollower.local_user_id == current_user.id,
                                                UserFollower.remote_user_id == user_id,
                                                UserFollower.is_inward == True).first()

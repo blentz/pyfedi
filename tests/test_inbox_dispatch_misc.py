@@ -350,7 +350,7 @@ def test_a_move_by_the_post_author_moves_the_post(app, db_session, monkeypatch):
     dispatch(activity)
 
     db.session.expire_all()
-    assert Post.query.get(post.id).community_id == target_community.id
+    assert db.session.get(Post, post.id).community_id == target_community.id
     row = ActivityPubLog.query.one()
     assert row.result == 'success'
     assert row.exception_message == f'{author.user_name} moved post to {target_community.link()}'
@@ -377,7 +377,7 @@ def test_a_move_by_a_moderator_of_the_origin_community_moves_the_post(app, db_se
     dispatch(activity)
 
     db.session.expire_all()
-    assert Post.query.get(post.id).community_id == target_community.id
+    assert db.session.get(Post, post.id).community_id == target_community.id
     assert ActivityPubLog.query.one().result == 'success'
 
 
@@ -408,7 +408,7 @@ def test_a_move_by_an_instance_admin_of_the_origin_instance_moves_the_post(app, 
     dispatch(activity)
 
     db.session.expire_all()
-    assert Post.query.get(post.id).community_id == target_community.id
+    assert db.session.get(Post, post.id).community_id == target_community.id
     assert ActivityPubLog.query.one().result == 'success'
 
 
@@ -481,7 +481,7 @@ def test_a_move_by_an_admin_role_scoped_to_the_origin_instance_but_whose_own_acc
     dispatch(activity)
 
     db.session.expire_all()
-    assert Post.query.get(post.id).community_id == origin_community.id
+    assert db.session.get(Post, post.id).community_id == origin_community.id
     assert ActivityPubLog.query.count() == 0
 
 
@@ -507,7 +507,7 @@ def test_a_move_by_an_unrelated_user_does_nothing(app, db_session, monkeypatch):
     dispatch(activity)
 
     db.session.expire_all()
-    assert Post.query.get(post.id).community_id == origin_community.id
+    assert db.session.get(Post, post.id).community_id == origin_community.id
     assert ActivityPubLog.query.count() == 0
 
 
@@ -539,7 +539,7 @@ def test_a_move_whose_post_is_unknown_locally_is_resolved_remotely(app, db_sessi
         # exactly mirroring how the real resolve_remote_post_from_search
         # (a plain ORM query, app/activitypub/util.py) would hand back a
         # task-session-bound row in production.
-        return Post.query.get(post_id)
+        return db.session.get(Post, post_id)
 
     monkeypatch.setattr(activitypub_routes, 'resolve_remote_post_from_search', fake_resolve)
     monkeypatch.setattr(activitypub_routes, 'announce_activity_to_followers', lambda *a, **k: None)
@@ -553,7 +553,7 @@ def test_a_move_whose_post_is_unknown_locally_is_resolved_remotely(app, db_sessi
 
     assert resolve_calls == [f'https://{instance.domain}/objects/unknown-locally']
     db.session.expire_all()
-    assert Post.query.get(post.id).community_id == target_community.id
+    assert db.session.get(Post, post.id).community_id == target_community.id
     assert ActivityPubLog.query.one().result == 'success'
 
 

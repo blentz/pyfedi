@@ -29,7 +29,7 @@ def unsticky_post(send_async, user_id, post_id):
         session = get_task_session()
         try:
             with patch_db_session(session):
-                post = session.query(Post).get(post_id)
+                post = session.get(Post, post_id)
                 remove_object(session, user_id, post)
         except Exception:
             session.rollback()
@@ -54,7 +54,7 @@ def remove_mod(send_async, user_id, mod_id, community_id):
 
 
 def remove_object(session, user_id, object, community_id=None):
-    user = session.query(User).get(user_id)
+    user = session.get(User, user_id)
     if not community_id:
         community = object.community
     else:

@@ -70,7 +70,7 @@ def _seed_login_user(name='loginuser', password='correct horse battery'):
     Instance row has to exist first -- the same arrangement as
     tests/test_redirect_targets.py:80-89.
     """
-    if not Instance.query.get(1):
+    if not db.session.get(Instance, 1):
         make_instance('test.piefed.local', software='piefed')
     burn = make_user(None, 'burn-the-id-1-seat', local=True)
     assert burn.id == 1, 'the id-1 exemption at :57 moved; re-derive this'
@@ -323,7 +323,7 @@ def test_log_user_in_exempts_the_id_1_account_from_every_ban_check(app, db_sessi
     touch :57's first conjunct. This test must keep passing unchanged, which
     is what makes it evidence about :57 rather than about :59.
     """
-    if not Instance.query.get(1):
+    if not db.session.get(Instance, 1):
         make_instance('test.piefed.local', software='piefed')
     first = make_user(None, 'firstaccount', local=True)
     assert first.id == 1
@@ -360,7 +360,7 @@ def test_log_user_in_stamps_last_seen_and_ip(app, db_session, monkeypatch):
             log_user_in({'username': 'loginuser', 'password': s.password}, SRC_API)
 
     db.session.expire_all()
-    stored = db.session.query(User).get(s.user.id)
+    stored = db.session.get(User, s.user.id)
     assert stored.ip_address == '198.51.100.9'
     assert stored.last_seen is not None
 

@@ -15,7 +15,7 @@ def test_api_post_subscriptions(app, api_baseline):
     g.admin_ids = []
 
     user_id = api_baseline.user1.id
-    user = User.query.get(user_id)
+    user = db.session.get(User, user_id)
     assert user is not None and hasattr(user, 'id')
     jwt = user.encode_jwt_token()
     assert jwt is not None

@@ -20,7 +20,7 @@ and a cookie needs the app's SERVER_NAME as its domain.
 import pytest
 from unittest.mock import patch
 
-from flask import session
+from flask import abort, session
 from flask_wtf.csrf import generate_csrf
 
 from app import db
@@ -53,7 +53,7 @@ def _seed():
     assert burn.id == 1
     alice = make_user(instance, 'alice', local=True)
     bob = make_user(instance, 'bob', local=True)
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.private_instance = False
     db.session.commit()
     return instance, alice, bob
@@ -538,7 +538,7 @@ def test_an_admin_can_save_a_warning(app, db_session):
 
     assert response.status_code == 200
     db.session.expire_all()
-    saved = Domain.query.get(domain.id)
+    saved = db.session.get(Domain, domain.id)
     assert saved.post_warning == 'this site paywalls'
     assert saved.warning_type == 1
 
@@ -561,7 +561,7 @@ def test_an_ordinary_reader_cannot_save_a_warning(app, db_session):
     assert response.status_code == 200
     assert render.call_args.kwargs['form'] is None
     db.session.expire_all()
-    assert Domain.query.get(domain.id).post_warning == 'untouched'
+    assert db.session.get(Domain, domain.id).post_warning == 'untouched'
 
 
 def _make_admin(user):
@@ -570,7 +570,7 @@ def _make_admin(user):
     """
     from app.constants import ROLE_ADMIN
     from app.models import Role, user_role
-    role = Role.query.get(ROLE_ADMIN)
+    role = db.session.get(Role, ROLE_ADMIN)
     if role is None:
         role = Role(id=ROLE_ADMIN, name='Admin', weight=0)
         db.session.add(role)
@@ -893,7 +893,7 @@ def test_banning_a_domain_hides_it_and_purges_its_content(app, db_session):
     assert response.status_code == 302
     assert response.headers['Location'] == '/domains'
     db.session.expire_all()
-    assert Domain.query.get(domain.id).banned is True
+    assert db.session.get(Domain, domain.id).banned is True
     assert Post.query.filter_by(domain_id=domain.id, deleted=False).count() == 0
 
 
@@ -910,7 +910,7 @@ def test_unbanning_a_domain_makes_it_visible_again(app, db_session):
     assert response.status_code == 302
     assert response.headers['Location'] == f'/d/{domain.id}'
     db.session.expire_all()
-    assert Domain.query.get(domain.id).banned is False
+    assert db.session.get(Domain, domain.id).banned is False
 
 
 @pytest.mark.parametrize('path', ['ban', 'unban'])
@@ -926,7 +926,7 @@ def test_banning_needs_the_manage_users_permission(app, db_session, path):
     assert response.status_code == 302
     assert response.headers['Location'] == '/auth/permission_denied'
     db.session.expire_all()
-    assert Domain.query.get(domain.id).banned is False
+    assert db.session.get(Domain, domain.id).banned is False
 
 
 def test_unban_all_clears_every_ban_at_once(app, db_session):
@@ -970,18 +970,27 @@ def test_the_guards_after_get_or_404_can_never_be_false(app, db_session):
 
     `domain_ban` and `domain_unban` both read
 
-        domain = Domain.query.get_or_404(domain_id)
+        domain = db.session.get(Domain, domain_id) or abort(404)
         if domain:
             ...
 
-    and `get_or_404` RAISES for a missing row rather than returning one that is
-    falsy -- which the 404 rows above already show from the outside. So the
-    guard cannot be false, and the implicit `None` return it hides would be a
-    500 rather than a refusal: a Flask view that falls off the end is
-    `TypeError: The view function did not return a valid response` (fact 306).
+    and the `or abort(404)` RAISES for a missing row rather than letting a
+    falsy one through -- which the 404 rows above already show from the
+    outside. So the guard cannot be false, and the implicit `None` return it
+    hides would be a 500 rather than a refusal: a Flask view that falls off the
+    end is `TypeError: The view function did not return a valid response`
+    (fact 306).
+
+    THE FORM CHANGED IN SUB-PROJECT 71 AND THE ARGUMENT DID NOT. Production
+    used to read `Domain.query.get_or_404(domain_id)`, and this test
+    demonstrated the claim on that call. Flask-SQLAlchemy's get_or_404 calls
+    the legacy Query.get() internally, so those 171 call sites each emitted a
+    LegacyAPIWarning from inside a dependency -- warnings no rewrite of our own
+    lookups could reach. The replacement raises NotFound the same way, which is
+    what this row now demonstrates.
 
     Demonstrated on the call itself rather than argued, since no request can
-    reach the arc: get_or_404 raises NotFound, and a real row is truthy.
+    reach the arc: abort(404) raises NotFound, and a real row is truthy.
 
     Registered as D787 rather than deleted, following D758 and D773.
     """
@@ -991,8 +1000,8 @@ def test_the_guards_after_get_or_404_can_never_be_false(app, db_session):
 
     with app.test_request_context('/'):
         with pytest.raises(NotFound):
-            Domain.query.get_or_404(9999)
-        assert bool(Domain.query.get_or_404(domain.id)) is True
+            db.session.get(Domain, 9999) or abort(404)
+        assert bool(db.session.get(Domain, domain.id) or abort(404)) is True
 
 
 def test_an_ordinary_reader_does_not_see_the_ban_controls(app, db_session):

@@ -1,4 +1,5 @@
 from flask import g
+from app import db
 
 
 def test_api_get_site(app, api_baseline):
@@ -10,7 +11,7 @@ def test_api_get_site(app, api_baseline):
     assert anon_response is not None and 'version' in anon_response
     assert 'my_user' not in anon_response
 
-    user = User.query.get(api_baseline.user1.id)
+    user = db.session.get(User, api_baseline.user1.id)
     assert user is not None and hasattr(user, 'id')
     jwt = user.encode_jwt_token()
     assert jwt is not None

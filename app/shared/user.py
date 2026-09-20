@@ -141,14 +141,14 @@ def subscribe_user(person_id: int, subscribe, src, auth=None):
 def ban_user(input, src, auth=None):
     if src == SRC_API:
         user = authorise_api_user(auth, return_type='model')
-        to_ban: User = db.session.query(User).get(input['person_id'])
+        to_ban: User = db.session.get(User, input['person_id'])
         purge_content = input['purge_content']
         ban_ip_address = input['ban_ip_address']
         reason = input['reason']
         flush_cdn = False
     else:
         user = current_user
-        to_ban = db.session.query(User).get(input.person_id)
+        to_ban = db.session.get(User, input.person_id)
         purge_content = input.purge.data
         ban_ip_address = input.ip_address.data
         reason = input.reason.data
@@ -206,10 +206,10 @@ def ban_user(input, src, auth=None):
 def unban_user(input, src, auth=None):
     if src == SRC_API:
         user = authorise_api_user(auth, return_type='model')
-        to_unban: User = db.session.query(User).get(input['person_id'])
+        to_unban: User = db.session.get(User, input['person_id'])
     else:
         user = current_user
-        to_unban: User = db.session.query(User).get(input['person_id'])
+        to_unban: User = db.session.get(User, input['person_id'])
 
     to_unban.banned = False
     to_unban.deleted = False
@@ -227,7 +227,7 @@ def follow_user(follow_id: int, src, auth=None):
     else:
         user = current_user
 
-    to_follow: User = db.session.query(User).get(follow_id)
+    to_follow: User = db.session.get(User, follow_id)
 
     is_accepted = False
     if to_follow.is_local():
@@ -274,7 +274,7 @@ def unfollow_user(follow_id: int, src, auth=None):
     else:
         user = current_user
 
-    to_unfollow: User = db.session.query(User).get(follow_id)
+    to_unfollow: User = db.session.get(User, follow_id)
 
     user.num_following -= 1
     to_unfollow.num_followers -= 1
@@ -301,7 +301,7 @@ def bot_challenge_user(user_id: int, src, auth=None):
     else:
         user = current_user
 
-    recipient = db.session.query(User).get(user_id)
+    recipient = db.session.get(User, user_id)
     existing_challenge = BotChallenge.query.filter(BotChallenge.user_id == user_id).first()
     if existing_challenge:
         if existing_challenge.is_a_bot is False:

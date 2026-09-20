@@ -179,7 +179,7 @@ def test_leave_feed_deletes_the_join_request_row(app, db_session):
                                            feed_id=s.feed.id).count() == 0
     assert FeedJoinRequest.query.filter_by(user_id=bystander.id,
                                            feed_id=s.feed.id).count() == 1
-    assert Feed.query.get(s.feed.id).subscribed(s.member.id) != SUBSCRIPTION_PENDING
+    assert db.session.get(Feed, s.feed.id).subscribed(s.member.id) != SUBSCRIPTION_PENDING
 
 
 # --------------------------------------------------------------------------
@@ -440,7 +440,7 @@ def test_delete_feed_aborts_404_for_a_user_who_does_not_own_the_feed(app, db_ses
         with pytest.raises(NotFound):
             delete_feed(s.feed.id, SRC_WEB)
 
-    assert Feed.query.get(s.feed.id) is not None
+    assert db.session.get(Feed, s.feed.id) is not None
 
 
 def test_delete_feed_resolves_the_api_caller_through_authorise_api_user(app, db_session):
@@ -458,12 +458,12 @@ def test_delete_feed_resolves_the_api_caller_through_authorise_api_user(app, db_
         with patch('app.shared.feed.authorise_api_user', return_value=s.member.id):
             with pytest.raises(NotFound):
                 delete_feed(s.feed.id, SRC_API, auth='Bearer x')
-    assert Feed.query.get(s.feed.id) is not None
+    assert db.session.get(Feed, s.feed.id) is not None
 
     with app.test_request_context('/'):
         with patch('app.shared.feed.authorise_api_user', return_value=s.owner.id):
             delete_feed(s.feed.id, SRC_API, auth='Bearer x')
-    assert Feed.query.get(s.feed.id) is None
+    assert db.session.get(Feed, s.feed.id) is None
 
 
 @pytest.mark.parametrize('public, debug, expect_inline, expect_delayed', [
@@ -538,7 +538,7 @@ def test_delete_feed_removes_the_feed_and_its_items(app, db_session, num_communi
     with web_ctx(app, s.owner):
         delete_feed(s.feed.id, SRC_WEB)
 
-    assert Feed.query.get(s.feed.id) is None
+    assert db.session.get(Feed, s.feed.id) is None
     assert FeedItem.query.filter_by(feed_id=s.feed.id).count() == 0
     assert FeedMember.query.filter_by(feed_id=s.feed.id).count() == 0
     assert FeedMember.query.filter_by(feed_id=other_feed_id).count() == 1
@@ -580,7 +580,7 @@ def test_leave_feed_accepts_a_feed_id_as_well_as_a_feed(app, db_session):
     assert FeedMember.query.filter_by(user_id=s.member.id, feed_id=s.feed.id).count() == 0
     assert FeedMember.query.filter_by(user_id=other_user.id, feed_id=s.feed.id).count() == 1
     assert FeedMember.query.filter_by(user_id=s.member.id, feed_id=other_feed.id).count() == 1
-    assert Feed.query.get(s.feed.id).subscriptions_count == 6
+    assert db.session.get(Feed, s.feed.id).subscriptions_count == 6
 
 
 def test_leave_feed_rejects_an_argument_that_is_neither_a_feed_nor_an_int(app, db_session):
@@ -637,7 +637,7 @@ def test_leave_feed_refuses_the_owner_on_the_web_path_without_raising(app, db_se
         assert leave_feed(s.feed, SRC_WEB) is None
 
     assert FeedMember.query.filter_by(user_id=s.owner.id, feed_id=s.feed.id).count() == 1
-    assert Feed.query.get(s.feed.id).subscriptions_count == 7
+    assert db.session.get(Feed, s.feed.id).subscriptions_count == 7
 
 
 @pytest.mark.parametrize('bulk_leave', [True, False])
@@ -868,7 +868,7 @@ def test_make_feed_stores_an_image_only_when_the_url_is_one(app, db_session, fie
     made = Feed.query.filter_by(name='apifeed').one()
     stored_id = getattr(made, id_attr)
     if expect_file:
-        stored = File.query.get(stored_id)
+        stored = db.session.get(File, stored_id)
         assert stored.source_url == url_value
         assert stored.id != decoy.id
         assert sizer.call_args.args == (stored_id, sizes[0], sizes[1], 'feeds', False)
@@ -985,7 +985,7 @@ def test_join_feed_subscribes_a_local_user_to_a_local_feed(app, db_session):
             join_feed('localjoinfeed', member_id)
 
     assert FeedMember.query.filter_by(user_id=member_id, feed_id=feed_id).count() == 1
-    assert Feed.query.get(feed_id).subscriptions_count == 8
+    assert db.session.get(Feed, feed_id).subscriptions_count == 8
     assert bust.call_count == 3
 
 
@@ -1024,7 +1024,7 @@ def test_join_feed_does_nothing_twice_for_an_existing_member(app, db_session):
         join_feed('localjoinfeed', member_id)
 
     assert FeedMember.query.filter_by(user_id=member_id, feed_id=feed_id).count() == 1
-    assert Feed.query.get(feed_id).subscriptions_count == 7
+    assert db.session.get(Feed, feed_id).subscriptions_count == 7
 
 
 @pytest.mark.parametrize('src, expect_flash', [(SRC_WEB, True), (SRC_API, False)])

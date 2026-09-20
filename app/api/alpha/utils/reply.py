@@ -473,7 +473,7 @@ def post_reply(auth, data):
         language_id = site_language_id()
 
     input = {'body': body, 'notify_author': True, 'language_id': language_id}
-    post = Post.query.get(post_id)
+    post = db.session.get(Post, post_id)
 
     user_id, reply = make_reply(input, post, parent_id, SRC_API, auth)
 
@@ -483,7 +483,7 @@ def post_reply(auth, data):
 
 def put_reply(auth, data):
     reply_id = data['comment_id']
-    reply = PostReply.query.get(reply_id)
+    reply = db.session.get(PostReply, reply_id)
 
     body = data['body'] if 'body' in data else reply.body
     language_id = data['language_id'] if 'language_id' in data else reply.language_id
@@ -494,7 +494,7 @@ def put_reply(auth, data):
         distinguished = False
 
     input = {'body': body, 'notify_author': True, 'language_id': language_id, 'distinguished': distinguished}
-    post = Post.query.get(reply.post_id)
+    post = db.session.get(Post, reply.post_id)
 
     user_id, reply = edit_reply(input, reply, post, SRC_API, auth)
 
@@ -522,7 +522,7 @@ def post_reply_report(auth, data):
     report_remote = data['report_remote'] if 'report_remote' in data else True
     input = {'reason': reason, 'description': description, 'report_remote': report_remote}
 
-    reply = PostReply.query.get(reply_id)
+    reply = db.session.get(PostReply, reply_id)
     user_id, report = report_reply(reply, input, SRC_API, auth)
 
     reply_json = reply_report_view(report=report, reply_id=reply_id, user_id=user_id)
@@ -543,7 +543,7 @@ def get_reply_report_list(auth, data):
 
     if comment_id:
         # Just get reports for a single comment
-        reply = PostReply.query.get(comment_id)
+        reply = db.session.get(PostReply, comment_id)
         mods = reply.community.moderators()
         mod_ids = [mod.user_id for mod in mods]
 
@@ -553,7 +553,7 @@ def get_reply_report_list(auth, data):
             raise Exception('incorrect login')
     elif community_id:
         # Just get reports for a single community
-        community = Community.query.get(community_id)
+        community = db.session.get(Community, community_id)
         mods = community.moderators()
         mod_ids = [mod.user_id for mod in mods]
 
@@ -599,12 +599,12 @@ def put_reply_report_resolve(auth, data):
     if not user:
         raise Exception("incorrect login")
     
-    report = Report.query.get(report_id)
+    report = db.session.get(Report, report_id)
     
     if not report.suspect_post_reply_id:
         raise Exception("invalid target of resolution")
     
-    community = Community.query.get(report.in_community_id)
+    community = db.session.get(Community, report.in_community_id)
     mods = community.moderators()
     mod_ids = [mod.user_id for mod in mods]
 
@@ -646,7 +646,7 @@ def post_reply_mark_as_read(auth, data):
 
     # no real support for this. Just marking the Notification for the reply really
     # notification has its own id, which would be handy, but reply_view is currently just returning the reply.id for that
-    reply = PostReply.query.get(reply_id)
+    reply = db.session.get(PostReply, reply_id)
 
     reply_url = '#comment_' + str(reply.id)
     mention_url = '/comment/' + str(reply.id)
@@ -691,8 +691,8 @@ def post_reply_mark_as_answer(auth, data):
     user_details = authorise_api_user(auth, return_type='dict')
     user_id = user_details['id']
 
-    reply = db.session.query(PostReply).get(reply_id)
-    user = User.query.get(user_id)
+    reply = db.session.get(PostReply, reply_id)
+    user = db.session.get(User, user_id)
     if not (user.is_admin_or_staff() or reply.user_id == user.id
             or reply.community.is_moderator(user)):
         raise Exception('Does not have permission')
@@ -702,7 +702,7 @@ def post_reply_mark_as_answer(auth, data):
     else:
         unchoose_answer(reply_id, SRC_API, auth)
 
-    reply = PostReply.query.get(reply_id)
+    reply = db.session.get(PostReply, reply_id)
     recipient = user_view(user=user_id, variant=1)
     vote_effect = 0
     if in_sorted_list(user_details['upvoted_reply_ids'], reply_id):
@@ -728,7 +728,7 @@ def post_reply_distinguish(auth, data):
 
     user_id = authorise_api_user(auth)
 
-    reply = PostReply.query.get(reply_id)
+    reply = db.session.get(PostReply, reply_id)
     author = reply.author
 
     if not author.id == user_id:
@@ -767,7 +767,7 @@ def get_reply_like_list(auth, data):
         limit = current_app.config["PAGE_LENGTH"]
 
     user = authorise_api_user(auth, return_type='model')
-    post_reply = PostReply.query.get(comment_id)
+    post_reply = db.session.get(PostReply, comment_id)
 
     if post_reply.community.is_moderator(user) or user.is_admin() or user.is_staff():
         banned_from_site_user_ids = list(db.session.execute(text('SELECT id FROM "user" WHERE banned = true')).scalars())

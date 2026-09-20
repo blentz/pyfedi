@@ -54,7 +54,7 @@ def _seed():
     assert burn.id == 1
     alice = make_user(instance, 'alice', local=True)
     bob = make_user(instance, 'bob', local=True)
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.private_instance = False
     db.session.commit()
     return instance, alice, bob
@@ -929,7 +929,7 @@ def test_a_notification_for_an_unknown_topic_is_a_404(app, db_session):
 def test_a_suggestion_is_sent_to_the_site_contact(app, db_session):
     instance, alice, bob = _seed()
     _aged(alice)
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.contact_email = 'admin@test.piefed.local'
     db.session.commit()
     client = app.test_client()

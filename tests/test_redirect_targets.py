@@ -84,7 +84,7 @@ def local_user(name):
     creates the Site row, not the Instance row, so the first caller has to make
     it.
     """
-    if not Instance.query.get(1):
+    if not db.session.get(Instance, 1):
         make_instance('test.piefed.local', software='piefed')
     return make_user(None, name, local=True)
 

@@ -59,7 +59,7 @@ def _seed():
     instance = make_instance('test.piefed.local', software='piefed')
     burn = make_user(instance, 'burnseat', local=True)
     assert burn.id == 1
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.private_instance = False
     db.session.commit()
     return instance
@@ -240,7 +240,7 @@ def test_a_handle_resolves_its_host_before_the_instance_gate(app, db_session):
     with app.test_request_context('/'):
         assert validate_remote_actor('alice@remote.example') is True
 
-    Instance.query.get(peer.id).dormant = False
+    db.session.get(Instance, peer.id).dormant = False
     db.session.query(Instance).filter_by(id=peer.id).update({'gone_forever': False})
     db.session.commit()
 

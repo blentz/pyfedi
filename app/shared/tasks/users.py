@@ -14,7 +14,7 @@ from app.utils import get_setting, get_task_session
 def check_user_application(application_id, send_async=True):
     session = get_task_session()
     try:
-        application = session.query(UserRegistration).get(application_id)
+        application = session.get(UserRegistration, application_id)
         if not application or not application.user:
             return
 

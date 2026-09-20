@@ -352,7 +352,7 @@ def test_no_csp_header_on_a_304_response(app, db_session):
     """
     instance = make_instance('test.piefed.local', software='piefed')
     user = make_user(instance, 'etaguser', local=True)
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     current_etag = f"home_{hash(site.last_active)}"
 
     with app.test_client() as client:

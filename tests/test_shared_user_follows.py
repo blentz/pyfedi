@@ -202,8 +202,8 @@ def test_follow_then_unfollow_a_manually_approving_target_drives_counters_negati
         follow_user(s.target.id, SRC_API, bearer(s.follower))
     db_session.expire_all()
 
-    follower = db_session.query(User).get(s.follower.id)
-    target = db_session.query(User).get(s.target.id)
+    follower = db_session.get(User, s.follower.id)
+    target = db_session.get(User, s.target.id)
     assert follower.num_following == 0
     assert target.num_followers == 0
 
@@ -215,8 +215,8 @@ def test_follow_then_unfollow_a_manually_approving_target_drives_counters_negati
     assert calls == []
     db_session.expire_all()
 
-    follower = db_session.query(User).get(s.follower.id)
-    target = db_session.query(User).get(s.target.id)
+    follower = db_session.get(User, s.follower.id)
+    target = db_session.get(User, s.target.id)
     assert follower.num_following == -1
     assert target.num_followers == -1
 

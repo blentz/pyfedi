@@ -96,10 +96,10 @@ def unban_from_community(send_async, user_id, mod_id, community_id, expiry, reas
 def ban_person(session, user_id, mod_id, community_id, expiry, reason: str, remove_data: bool, is_undo=False):
     if expiry is None:
         expiry = datetime.datetime(year=2100, month=1, day=1)
-    user = session.query(User).get(user_id)
-    mod = session.query(User).get(mod_id)
+    user = session.get(User, user_id)
+    mod = session.get(User, mod_id)
     if community_id:    # community ban
-        community = session.query(Community).get(community_id)
+        community = session.get(Community, community_id)
         communities = [community] if community.is_local() else []
         if community.local_only or community.private or not community.instance.online():
             return

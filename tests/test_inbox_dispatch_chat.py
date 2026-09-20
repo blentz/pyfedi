@@ -367,7 +367,7 @@ def test_a_message_containing_a_blocked_phrase_is_refused(app, db_session, monke
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, sender, recipient = seed_chat_pair()
     sender.created = utcnow() - timedelta(days=2)
-    db_session.query(Site).get(1).blocked_phrases = 'buymynft\nspamword'
+    db_session.get(Site, 1).blocked_phrases = 'buymynft\nspamword'
     db.session.commit()
 
     dispatch(chat_activity(sender, to=recipient.ap_profile_id,
@@ -387,7 +387,7 @@ def test_a_message_containing_no_blocked_phrase_is_delivered(app, db_session, mo
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, sender, recipient = seed_chat_pair()
     sender.created = utcnow() - timedelta(days=2)
-    db_session.query(Site).get(1).blocked_phrases = 'buymynft\nspamword'
+    db_session.get(Site, 1).blocked_phrases = 'buymynft\nspamword'
     db.session.commit()
     record_moderation(monkeypatch, 'publish_sse_event')
 
@@ -469,7 +469,7 @@ def test_a_new_message_is_stored_with_both_body_forms_and_notifies(app, db_sessi
     notification = db_session.query(Notification).one()
     assert notification.user_id == recipient_id
     assert notification.title.startswith('New message from')
-    assert db_session.query(User).get(recipient_id).unread_notifications == 1
+    assert db_session.get(User, recipient_id).unread_notifications == 1
 
     log = ActivityPubLog.query.one()
     assert log.result == 'success'
@@ -629,4 +629,4 @@ def test_the_inner_is_local_check_can_never_be_false(app, db_session, monkeypatc
     db.session.expire_all()
     assert len(calls['publish_sse_event']) == 1
     assert db_session.query(Notification).count() == 1
-    assert db_session.query(User).get(recipient_id).unread_notifications == 1
+    assert db_session.get(User, recipient_id).unread_notifications == 1

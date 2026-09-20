@@ -59,7 +59,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
         feed_dict["user_id"] = user_id
         feed_dict["include_communities"] = False
         if user_id:
-            user = User.query.get(user_id)
+            user = db.session.get(User, user_id)
             g.user = user
 
             feed_dict["blocked_community_ids"] = blocked_communities(user_id)
@@ -253,7 +253,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
                 raise Exception('No object found.')
             
             # Since this is a local request, just search for the post by id
-            object = Post.query.get(post_id)
+            object = db.session.get(Post, post_id)
 
             if not object:
                 raise Exception('No object found.')
@@ -274,7 +274,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
                 raise Exception('No object found.')
             
             # Since this is a local request, just search for the comment by id
-            object = PostReply.query.get(comment_id)
+            object = db.session.get(PostReply, comment_id)
 
             if not object:
                 raise Exception('No object found.')

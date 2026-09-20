@@ -13,6 +13,7 @@ Counted by reading the source rather than by catching warnings at runtime,
 because a deprecated call on a line no test reaches still ships -- app/nntp's
 two are exactly that shape, and a runtime count would score them zero.
 """
+import ast
 import re
 from pathlib import Path
 
@@ -62,13 +63,51 @@ UTCNOW = re.compile(r'\bdatetime\.utcnow\(\)')
 # sub-project. See sub-project 70's R1.
 UTCNOW_EXEMPT = {'app/nntp/nntpserver.py', 'app/nntp/server.py'}
 
-# SQLAlchemy's legacy Query.get(). Ceiling rather than zero because the
-# migration is sub-project 71; this stops the count GROWING in the meantime.
-# Note get_or_404 is deliberately not matched here: it is Flask-SQLAlchemy's
-# own method, and 71 replaces its call sites too.
-LEGACY_GET = re.compile(r'\.query\.get\(|\bsession\.query\([A-Za-z_]+\)\.get\(')
+# SQLAlchemy's legacy Query.get(), and Flask-SQLAlchemy's get_or_404 which
+# calls it internally. Sub-project 71 migrated all 830 call sites, so the
+# ceiling is now ZERO.
+#
+# COUNTED FROM THE AST, not by regex. A textual count scores comments and
+# docstrings: 94 lines still mention the old API in prose -- three of them
+# commented-out code in app/ -- and none of them is a call. The migration
+# itself was AST-based for the same reason; a text rewrite would have edited
+# tests/conftest.py's documentation and a test whose subject IS get_or_404.
+LEGACY_GET_CEILING = 0
 
-LEGACY_GET_CEILING = 752
+# Only this file, and only because it quotes the old API in its own messages.
+# tests/test_domain_routes.py used to be exempt too -- it holds a test about
+# the get_or_404 guard -- but that test now demonstrates the replacement
+# production actually uses, so nothing there needs excusing.
+LEGACY_EXEMPT = {'tests/test_no_deprecated_apis.py'}
+
+
+def _legacy_calls(path):
+    """Every live `X.query.get(...)`, `X.query.get_or_404(...)` and
+    `<session>.query(X).get(...)` in one file, as `path:lineno`.
+    """
+    found = []
+    for node in ast.walk(ast.parse(path.read_text())):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        func = node.func
+        if func.attr not in ('get', 'get_or_404'):
+            continue
+        owner = func.value
+        if (isinstance(owner, ast.Attribute) and owner.attr == 'query'
+                and isinstance(owner.value, ast.Name)
+                and owner.value.id[:1].isupper()):
+            found.append(node.lineno)
+        elif (isinstance(owner, ast.Call)
+              and isinstance(owner.func, ast.Attribute)
+              and owner.func.attr == 'query' and len(owner.args) == 1
+              and isinstance(owner.args[0], ast.Name)):
+            # Both `.get(...)` AND `.get_or_404(...)` on a session query. The
+            # migration's own finder handled get_or_404 only in the
+            # `X.query.get_or_404(...)` form and missed two live sites in this
+            # shape; they were found by the warning count failing to reach the
+            # third-party floor, not by the migrator.
+            found.append(node.lineno)
+    return found
 
 
 def test_no_new_uses_of_deprecated_utcnow():
@@ -93,28 +132,25 @@ def test_the_two_nntp_exemptions_are_still_the_only_ones():
         'app/nntp/nntpserver.py', 'app/nntp/server.py']
 
 
-def test_legacy_query_get_does_not_grow():
-    """A ceiling, not a floor. Sub-project 71 drives this to zero by replacing
-    Query.get() with db.session.get() and get_or_404 with
-    db.session.get(...) or abort(404).
+def test_no_legacy_query_get_calls_remain():
+    """Zero, held at zero. Sub-project 71 migrated 830 call sites:
+    `X.query.get(id)` and `db.session.query(X).get(id)` became
+    `db.session.get(X, id)`, `session.query(X).get(id)` became
+    `session.get(X, id)`, and all 171 `get_or_404` sites became
+    `db.session.get(X, id) or abort(404)` -- which is what Flask-SQLAlchemy's
+    own get_or_404 does, minus the legacy call it makes internally.
     """
-    hits = _count(LEGACY_GET, 'app', 'tests')
+    hits = []
+    for path, _text in _sources('app', 'tests'):
+        relative = path.relative_to(ROOT).as_posix()
+        if relative in LEGACY_EXEMPT:
+            continue
+        hits += [f'{relative}:{line}' for line in _legacy_calls(path)]
 
     assert len(hits) <= LEGACY_GET_CEILING, (
-        f'legacy Query.get() count rose to {len(hits)}, above the ceiling of '
-        f'{LEGACY_GET_CEILING}. Use db.session.get(Model, id) instead.')
-
-
-def test_the_legacy_ceiling_is_not_slack():
-    """A ceiling far above the real count would let the number grow silently.
-    This pins it within one of the truth, so lowering the count means lowering
-    the ceiling in the same commit.
-    """
-    hits = _count(LEGACY_GET, 'app', 'tests')
-
-    assert len(hits) == LEGACY_GET_CEILING, (
-        f'count is {len(hits)} but the ceiling is {LEGACY_GET_CEILING}; move '
-        f'the ceiling down to match in the same commit that lowered the count.')
+        f'legacy Query.get() is back at {len(hits)} site(s): {hits[:10]}. '
+        f'Use db.session.get(Model, id), or '
+        f'db.session.get(Model, id) or abort(404) in place of get_or_404.')
 
 
 @pytest.mark.parametrize('module, line', [

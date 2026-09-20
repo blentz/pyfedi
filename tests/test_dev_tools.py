@@ -61,7 +61,7 @@ def _seed():
     assert burn.id == 1
     alice = make_user(instance, 'alice', local=True)
     grant_permission(alice, 'change instance settings')
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.private_instance = False
     db.session.commit()
     return instance, alice
@@ -277,7 +277,7 @@ def test_the_tools_page_renders_its_four_forms(app, db_session, dev_mode):
 def test_the_inoculation_block_follows_the_site_setting(app, db_session, dev_mode):
     """Both arms of the conditional that picks one at random or None."""
     instance, alice = _seed()
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     client = app.test_client()
     login(client, alice)
 
@@ -372,8 +372,8 @@ def test_deleting_dev_communities_unsubscribes_and_removes_them(app, db_session,
     deleted_ids = sorted(call.args[0] for call in deleter.call_args_list)
     assert deleted_ids == sorted([dev_one.id, dev_two.id])
     db.session.expire_all()
-    assert Community.query.get(dev_one.id).banned is True
-    assert Community.query.get(keeper.id).banned is False
+    assert db.session.get(Community, dev_one.id).banned is True
+    assert db.session.get(Community, keeper.id).banned is False
     assert '2' in str(flashed.call_args.args[0])
 
 

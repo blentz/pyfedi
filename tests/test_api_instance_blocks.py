@@ -3,6 +3,7 @@ from flask import g
 from sqlalchemy import desc
 
 from app.models import Community, User
+from app import db
 
 
 def test_api_instance_blocks(app, api_baseline):
@@ -16,7 +17,7 @@ def test_api_instance_blocks(app, api_baseline):
     g.admin_ids = []
 
     user_id = api_baseline.user1.id
-    user = User.query.get(user_id)
+    user = db.session.get(User, user_id)
     assert user is not None and hasattr(user, 'id')
     jwt = user.encode_jwt_token()
     assert jwt is not None

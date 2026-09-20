@@ -180,7 +180,7 @@ def submitted(app, form_cls, data, post_env, formdata=None):
     """
     community, language = post_env
     with app.test_request_context('/', method='POST', data=data):
-        g.site = db.session.query(Site).get(1)
+        g.site = db.session.get(Site, 1)
         form = form_cls() if formdata is None else form_cls(formdata=formdata)
         form.communities.choices = [(community.id, community.title)]
         form.language_id.choices = [(language.id, language.name)]
@@ -304,7 +304,7 @@ class TestCsrfIsEnforcedOnceTheResultIsGuarded:
         form_cls, builder = FORMS[name]
         with csrf_on(app):
             with app.test_request_context('/', method='POST', data=builder(post_env)):
-                g.site = db.session.query(Site).get(1)
+                g.site = db.session.get(Site, 1)
                 combined = MultiDict(request.form)
                 combined['csrf_token'] = generate_csrf()
                 # Flask-WTF only merges request.files into the formdata when it
@@ -437,7 +437,7 @@ class TestEachOverridesOwnCheckStillWorks:
         message the template will render). Reported, not fixed here; this test
         pins today's behaviour so the change is visible when it is fixed.
         """
-        site = db.session.query(Site).get(1)
+        site = db.session.get(Site, 1)
         site.allow_local_image_posts = False
         db.session.commit()
         for form_cls in (CreateImageForm, EditImageForm):

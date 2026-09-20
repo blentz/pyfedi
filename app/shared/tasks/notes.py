@@ -123,7 +123,7 @@ def send_reply(reply_id, parent_id, edit=False, session=None):
             else:
                 existing_notification = None
             if not existing_notification:
-                author = session.query(User).get(user.id)
+                author = session.get(User, user.id)
                 targets_data = {'gen':'0',
                                 'post_id':reply.post_id,
                                 'author_user_name': author.ap_id if author.ap_id else author.user_name,
@@ -242,8 +242,8 @@ def unchoose_answer(send_async, post_reply_id, user_id):
 def send_answer(post_reply_id, user_id, is_undo):
     session = get_task_session()
     try:
-        user = session.query(User).get(user_id)
-        post_reply = session.query(PostReply).get(post_reply_id)
+        user = session.get(User, user_id)
+        post_reply = session.get(PostReply, post_reply_id)
 
         if post_reply.community.local_only or post_reply.community.private or not post_reply.community.instance.online():
             return

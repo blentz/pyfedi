@@ -1609,7 +1609,7 @@ class TestMakeReply:
         s = _seed_for_reply()
         _clear_creation_guards(s.actor)
         from app.models import Site
-        site = db.session.query(Site).get(1)
+        site = db.session.get(Site, 1)
         site.blocked_phrases = 'forbiddenword'
         db.session.commit()
         before = db.session.query(PostReply).count()

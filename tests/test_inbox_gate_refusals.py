@@ -591,7 +591,7 @@ def test_a_disallowed_actor_is_refused_under_strong_allowlist(app, signing_peer,
     sits before `HttpSignature.precheck` (688), like every Task 3 outcome.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.allowlist_mode = ALLOWLIST_STRONG
     db.session.commit()
     activity = inbox_activity(signing_peer)
@@ -639,7 +639,7 @@ def test_a_dict_shaped_actor_is_refused_under_strong_allowlist(app, signing_peer
     dispatched = []
     monkeypatch.setattr('app.activitypub.routes.process_inbox_request',
                         lambda *args, **kwargs: dispatched.append(args))
-    site = Site.query.get(1)
+    site = db.session.get(Site, 1)
     site.allowlist_mode = ALLOWLIST_STRONG
     db.session.commit()
     activity = inbox_activity(signing_peer)

@@ -187,7 +187,7 @@ def post_community_leave_all(auth):
 
     if joined_feed_ids:
         for feed_id in joined_feed_ids:
-            feed = Feed.query.get(feed_id)
+            feed = db.session.get(Feed, feed_id)
             subscription = feed_membership(user, feed)
             if subscription != SUBSCRIPTION_OWNER:
                 # send leave requests to celery - also handles db commits and cache busting, ignore returned value
@@ -346,7 +346,7 @@ def get_community_moderate_bans(auth, data):
 def put_community_moderate_unban(auth, data):
     # get the user to unban
     user_id = data['user_id']
-    blocked = User.query.get(user_id)
+    blocked = db.session.get(User, user_id)
 
     # get the community from the data
     community = Community.query.filter_by(id=data['community_id']).one()
@@ -414,7 +414,7 @@ def put_community_moderate_unban(auth, data):
 def post_community_moderate_ban(auth, data):
     # get the user to ban
     user_id = data['user_id']
-    blocked = User.query.get(user_id)
+    blocked = db.session.get(User, user_id)
 
     # get the community from the data
     community = Community.query.filter_by(id=data['community_id']).one()
@@ -501,10 +501,10 @@ def post_community_moderate_post_nsfw(auth, data):
 
     # get the post from the data
     post_id = int(data['post_id'])
-    post = Post.query.get(post_id)
+    post = db.session.get(Post, post_id)
 
     # get the community from the post
-    community = Community.query.get(post.community_id)
+    community = db.session.get(Community, post.community_id)
 
     # validate that the user is a mod or owner of the community, or an instance admin
     if not (community.is_owner(mod_user) or community.is_moderator(mod_user) or mod_user.is_admin_or_staff()):
@@ -540,7 +540,7 @@ def post_community_mod(auth, data):
 
 def post_community_flair_create(auth, data):
     user = authorise_api_user(auth, return_type='model')
-    community = Community.query.get(data['community_id'])
+    community = db.session.get(Community, data['community_id'])
 
     if not (community.is_owner(user) or community.is_moderator(user) or user.is_admin_or_staff()):
         raise Exception('insufficient permissions')
@@ -587,12 +587,12 @@ def post_community_flair_create(auth, data):
 
 def put_community_flair_edit(auth, data):
     user = authorise_api_user(auth, return_type='model')
-    flair = CommunityFlair.query.get(data['flair_id'])
+    flair = db.session.get(CommunityFlair, data['flair_id'])
 
     if not flair:
         raise Exception(f"No matching flair with id={data['flair_id']} found.")
     
-    community = Community.query.get(flair.community_id)
+    community = db.session.get(Community, flair.community_id)
 
     if not (community.is_owner(user) or community.is_moderator(user) or user.is_admin_or_staff()):
         raise Exception('insufficient permissions')
@@ -627,12 +627,12 @@ def put_community_flair_edit(auth, data):
 
 def post_community_flair_delete(auth, data):
     user = authorise_api_user(auth, return_type='model')
-    flair = CommunityFlair.query.get(data['flair_id'])
+    flair = db.session.get(CommunityFlair, data['flair_id'])
 
     if not flair:
         raise Exception(f"No matching flair with id={data['flair_id']} found.")
     
-    community = Community.query.get(flair.community_id)
+    community = db.session.get(Community, flair.community_id)
 
     if not (community.is_owner(user) or community.is_moderator(user) or user.is_admin_or_staff()):
         raise Exception('insufficient permissions')
