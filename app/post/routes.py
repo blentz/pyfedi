@@ -121,6 +121,19 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
             if post.community.private and post.community_id not in community_membership_private(current_user.id):
                 abort(403)
 
+        # D1084. An unpublished post is the author's alone until its time
+        # comes: the scheduled-posts page is scoped to `Post.user_id ==
+        # current_user.id` (app/user/routes.py), and the ActivityPub
+        # representation of the same post answers 403 for `post.status <
+        # POST_STATUS_PUBLISHED` (app/activitypub/routes.py). The HTML page
+        # rendered it to anyone who guessed the id. Measured: `PROBE af2
+        # scheduled status: 200 | body visible: True`.
+        if post.status < POST_STATUS_PUBLISHED:
+            if current_user.is_anonymous or not (current_user.id == post.user_id or
+                                                 community.is_moderator() or
+                                                 current_user.is_admin_or_staff()):
+                abort(404)
+
         # If nothing has changed since their last visit, return HTTP 304
         current_etag = f"{post.id}{sort}_{hash(post.last_active)}"
         if current_user.is_anonymous and request_etag_matches(current_etag):
@@ -296,7 +309,13 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
         if current_user.is_authenticated:
             user = current_user
             if current_user.hide_read_posts:
-                main_post_id = [post.id] + post.cross_posts if post.cross_posts is not None else []
+                # D1087. The conditional bound LOOSER than the concatenation:
+                # `[post.id] + post.cross_posts if ... else []` reads as
+                # `([post.id] + post.cross_posts) if ... else []`, so a post
+                # with no cross-posts -- the ordinary case -- was marked read
+                # with an EMPTY list and the setting did nothing at all.
+                # Measured: `assert [] == [1]`.
+                main_post_id = [post.id] + (post.cross_posts if post.cross_posts is not None else [])
                 mark_post_read(main_post_id, True, current_user.id)
         else:
             user = None
@@ -364,10 +383,16 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
                                    user_pronouns=user_pronouns(),
                                    hide_community_actions = community.name == 'microblogs',
                                    )
-        response.headers.set('Link',
+        # D1086. `Headers.set` REPLACES every existing value for the name, so
+        # the second of these two calls deleted the first: the page advertised
+        # its oembed alternate and NOT its ActivityPub one, and a client
+        # discovering the object from the HTML had nothing to follow.
+        # Measured: `PROBE ah1 Link headers:` one oembed link and the site's
+        # rsl licence, which survives only because `after_request` uses `add`.
+        response.headers.add('Link',
                              f'<https://{current_app.config["SERVER_NAME"]}/post/{post.id}>; rel="alternate"; type="application/activity+json"')
         oembed_url = url_for('post.post_oembed', post_id=post.id, _external=True)
-        response.headers.set('Link', f'<{oembed_url}>; rel="alternate"; type="application/json+oembed"')
+        response.headers.add('Link', f'<{oembed_url}>; rel="alternate"; type="application/json+oembed"')
         if current_user.is_anonymous:
             response.headers.set('ETag', f"{post.id}{sort}_{hash(post.last_active)}")
             response.headers.set('Vary', 'Accept, Accept-Language')
