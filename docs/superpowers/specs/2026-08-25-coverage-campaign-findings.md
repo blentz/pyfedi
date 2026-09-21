@@ -16133,3 +16133,43 @@ block this instance**.**
 |---|---|---|---|---|
 | **D1054** | `tests/test_user_settings.py` | Two real gaps and one invalid mutant. The corrupt-hours row asserted only that the response was a 302, so treating an unparseable cookie as a limit of **1** rather than 0 -- which silently holds the account to a restriction it cannot see -- passed it; the row now asserts the new value reaches the cookie. The `session['ui_language']` mutant produced `NO SUMMARY` rather than a verdict, because its anchor omitted the leading indentation and the deletion left an IndentationError: **a mutant that cannot run is not a survivor, and the runner's `'failed' in summary` test reads one as the other.** | **both closed; the runner's blind spot recorded** | `m8`, `m5` |
 | **D1055** | `app/user/routes.py:1826` | An **equivalent** mutant: `instance.id == 1 or instance.domain == current_app.config['SERVER_NAME']` -- the id arm cannot decide anything, because this instance's own row is id 1 AND carries `SERVER_NAME` as its domain. Kept as defence against an installation where those two facts come apart. | **registered as an equivalent mutant** | `m13` SURVIVED with a row that builds the state |
+
+**Next free number: D1056.**
+
+## Slice D: a profile's RSS feed, and the file-upload page
+
+**The round in one line: two functions close at zero gaps and carried **SIX
+production defects** -- **a private community's posts escaped through the
+author's public RSS feed**, a deleted account was still syndicated, most link
+posts were silently missing from every user feed, and **the storage quota could
+not refuse an upload**.**
+
+### 1. WHAT THE FEED SYNDICATED
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1057** | `app/user/routes.py:2231` | **A PRIVATE COMMUNITY'S POSTS APPEARED IN THE AUTHOR'S PUBLIC FEED.** `user.posts` is every post the account has made, whatever community it is in, and this route never looked at the community at all -- while `show_community_rss` refuses a private community outright (D1013). **D998's family at a third surface**: the cross-post form, the sidebar fragment, and now the author's own feed. Posts in a banned community went the same way and are filtered with them. | **fixed** | `PROBE x2 private post listed: True` |
+| **D1056** | `app/user/routes.py:2225` | A **deleted** account's posts were still syndicated. `find_local_user` filters `banned` but not `deleted` (`app/activitypub/actor.py:29`), and `show_profile` refuses the page itself -- so the feed outlived the profile. | **fixed** | `PROBE x1 post listed: True` |
+| **D1059** | `app/user/routes.py:2262` | **`if post.body_html is None: continue` DROPPED THE POST FROM THE FEED.** A link or image post ordinarily has no body, so most of them were silently missing from every user feed on the instance -- an absence nobody would report as a bug, because a feed that is short looks like an author who posts rarely. An entry with no description is a valid entry; only an unencodable body is a reason to skip one. | **fixed** | `PROBE x4 with body listed: True | bodyless listed: False` |
+| **D1058** | `app/user/routes.py:2243`, `:2245`, `:2254` | The feed's id, alternate link and self link were all `/c/{actor}` -- a COMMUNITY url -- in a feed about a person. **Only one of the three is observable through this route**, and the test says so: feedgen's RSS writer emits no atom id, and the channel `<link>` carries whichever link was set last, which is the self link. The other two are corrected because they are wrong, not because a row can see them. | **fixed; one of three pinned** | The self-link pin fails; the id and alternate pins do not |
+
+### 2. A QUOTA THAT COULD NOT REFUSE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1060** | `app/user/routes.py:2496` | **THE STORAGE QUOTA WAS CHECKED ONLY ON THE RENDER PATH** -- after the POST had stored everything and returned a redirect. So the message it flashes announced that the limit had been passed rather than refusing anything, and `process_upload` has no quota check of its own (`app/shared/upload.py`). An account could exceed its quota indefinitely, one submission at a time. **D1001's shape**: a limit that records a complaint after the fact. The `_('...', 'error')` on that flash also passed the category as a gettext ARGUMENT rather than to `flash`, so it was never styled as an error. | **fixed** | `PROBE x5 status: 302 files now: 3`, from an account already over quota |
+| **D1062** | `app/user/routes.py:2505` | The URL box holds 10,000 characters -- roughly a thousand lines -- and each line became a `File` row. D993's family again: a list from a form with no cap on its length. Capped at 25 per submission. | **fixed** | The row fails with the cap removed |
+
+### 3. REGISTERED, NOT FIXED
+
+| ID | Where | What | Why not this round |
+|---|---|---|---|
+| **D1061** | `app/user/routes.py:2508` | A file added **by URL** is recorded with `size=0`, so it never counts towards the storage quota however many are added. Recording a real size means fetching the remote file, which is an outbound request driven by user input -- the thing D1025 and D1046 were just closed for. The count cap (D1062) bounds the damage; the sizing question is a product decision about whether remote files should be fetched at all. | Needs a decision about fetching, not a code change. |
+
+### 4. WHAT THE MUTATION PASS FOUND
+
+21 mutants; the measuring pass killed 19.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1063** | `tests/test_user_profile_feed.py` | Two real gaps, and the second is a trap worth the entry. The enclosure rows only ever used a media url, so `not type.startswith('text/')` could be deleted unseen. And the blank-line row put its blank lines at the END of the box -- but `form.urls.data.strip()` removes trailing whitespace BEFORE the split, so a trailing blank line never reaches the loop and a row built from one tests nothing. The blank lines have to sit BETWEEN two urls. | **both closed** | `m9`, `m17` |
