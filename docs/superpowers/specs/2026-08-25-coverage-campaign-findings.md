@@ -15699,3 +15699,54 @@ found the same way or not at all. Both shapes are mechanically detectable.
 | **D988** | application-wide | **D955'S SHAPE HAS 45 CANDIDATE SITES**, of which the triage leaves **eleven still matching it**: `community.unsubscribe`, `community.join_then_add`, `community.community_wiki_revert_revision`, `feed.feed_notification`, `feed.feed_unsubscribe`, `topic.topic_notification`, `user.remove_avatar`, `user.remove_cover`, `user.notification_goto`, `user.notification_delete` and `user.notifications_all_read`. The rest are read paths that also write (a counter, a last-seen stamp), or GETs by protocol -- an OAuth callback the provider redirects to, an unsubscribe link from an email carrying its own token. **Each of the eleven is left to the slice that covers its blueprint**, because changing a route's methods means changing every template that links to it, and doing eleven of those blind is how a fix becomes an outage. | **inventoried; one fixed, eleven scheduled** | The AST sweep |
 | **D989** | `tests/test_mutating_get_routes.py` | **THE RATCHET, and what it does NOT claim.** It enumerates every route that accepts GET and reaches a `db.session` write with no `validate_on_submit()` gating it, and freezes the set: a NEW one fails the test and must be justified, a FIXED one fails it too and must be removed from the list. **`KNOWN_GET_MUTATORS` is an inventory, not a safety claim** -- most entries are correct -- and the docstring says so, because D973 is the finding about a ratchet that claimed more than it checked. A second row names the three routes this campaign has fixed, so a later change cannot quietly reintroduce one and have it accepted as a new entry; a third asserts every listed endpoint still exists, because a frozen set of names goes stale silently when a route is renamed. | **added; 46 rows** | Reverting D987 fails two of the three rows, naming `post.post_instance_sticky` |
 | **D990** | application-wide | **D907'S SHAPE HAS 21 SITES**, across `app/admin/routes.py` (4), `app/community/routes.py` (6), `app/post/routes.py` (9), `app/user/routes.py` (1) and `app/auth/onboarding.py` (1) -- every one a `if form.validate_on_submit(): ... else: <pre-fill the form from the database>`, where the `else` also runs for a submission the form REFUSED and silently discards what the user typed. Four have been fixed as they were covered. **No ratchet yet**: unlike the GET sweep, the detector cannot tell a genuine pre-fill arm from an `else` that legitimately renders something, and a ratchet that has to be taught 21 exceptions before it can fail is a claim rather than a check. The inventory is recorded here so the remaining seventeen are fixed as their slices land rather than rediscovered. | **inventoried; four fixed, seventeen scheduled** | The AST sweep |
+
+**BASIS (the sweep): the full suite, `7102 passed, 3 skipped, 258 warnings, 6
+subtests passed in 540.73s`**, chained with `&&` to `All 64 module floors met.`
+7056 + 46 collected in `tests/test_mutating_get_routes.py` = 7102, exactly.
+
+**Next free number: D991.** (**D991-D997 were taken by sub-project 80
+slice D, below; the free number is now D998.**)
+
+## Slice D: membership -- joining, leaving and inviting
+
+**The round in one line: six functions close at zero gaps and carried **FIVE
+production defects** -- **a community ban did not prevent joining, at two
+separate gates**, an actor taken from the URL was dereferenced without a nil
+check in **three places**, and the invite box was an **unbounded outbound email
+primitive** any account could drive.**
+
+### 1. A COMMUNITY BAN DID NOT PREVENT JOINING
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D991** | `app/community/routes.py:858-885` | **BOTH BAN CHECKS IN `do_subscribe` FELL THROUGH INTO THE JOIN.** The function asks twice. The direct `CommunityBan` read flashed *"You cannot join this community"* and then carried on to create the membership. The first gate -- `community.id in communities_banned_from(user.id)` -- aborts for a web caller, but its `admin_preload` arm recorded `user_banned: True` and **also carried on**, so a bulk importer subscribed accounts to communities they are banned from while reporting that it could not. That first gate reads a list memoized for **86400 seconds**, invalidated in exactly one place (`community_ban_user`), so a ban arriving by federation or from any other tool leaves it stale for a day -- and the direct read that should have caught that was inert. **The second site was found by writing a coverage row, not by reading**: the row asserted the message AND the membership, and the message was right. | **fixed, both arms** | `PROBE n1 flashed: []` / `PROBE n1 banned user is now a member? True`; and the admin arm's row failing on `assert not _is_member(...)` |
+
+### 2. AN ACTOR FROM THE URL, DEREFERENCED
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D992** | `app/community/routes.py:851`, `:2812`, `:1007` | **THREE INSTANCES IN ONE FILE.** `search_for_community` and `actor_to_community` both return `None` for a handle they cannot resolve, and `do_subscribe` read `.banned`, `community_invite_accept` read `.is_member(...)` and `join_then_add` read `.id` on the next line. Each is a 500 on an ordinary mistake -- a stale invite link, a mistyped community name, a remote instance that has gone. `do_subscribe` already has a "community not found" path at the bottom of the function which was never reached. | **fixed, all three** | `PROBE n2 RAISED: AttributeError 'NoneType' object has no attribute 'banned'` |
+
+### 3. AN UNBOUNDED OUTBOUND EMAIL PRIMITIVE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D993** | `app/community/forms.py:InviteCommunityForm` | **ANY ACCOUNT COULD MAKE THE INSTANCE SEND UNLIMITED EMAIL.** `community_invite` splits the box on newlines and calls `invite_with_email` once per line, from this instance's own mail server. The form carried `DataRequired()` and a check for commas -- no length limit and no cap on lines. `Community.invitations` defaults to `0` and `can_invite()` returns True for anyone when it is 0, so on a default community the only limits were the ban check and `created_very_recently()`. An account that waits could paste ten thousand addresses and spend the instance's mail reputation. Capped at 20 per submission, counted after blank lines are dropped, with the limit in the message. | **fixed** | The form's own source: `to = TextAreaField(..., validators=[DataRequired()])` and a `validate_to` that only rejected commas |
+
+### 4. REGISTERED, NOT FIXED
+
+| ID | Where | What | Why not this round |
+|---|---|---|---|
+| D994 | `app/community/routes.py:921`, `:1002` | `unsubscribe` and `join_then_add` are two of D988's eleven mutating GETs, and **both carry a deliberate comment**: `# POST is used by htmx, GET when JS is disabled`. The CSRF is real -- an attacker can make somebody leave a community -- but removing the GET removes the no-JS path. **A product decision, not a mechanical fix**, and the reason is now attached to the D988 entry rather than left for the next reader to rediscover. | Needs a decision about no-JS support. |
+| D995 | `app/community/routes.py:1045`; `app/utils.py:1683`; `app/models.py:781` | **THREE INDEPENDENT ANSWERS TO "IS THIS USER BANNED HERE" IN ONE REQUEST PATH.** `join_then_add` ends with `community.user_is_banned(current_user)`, which runs its own query and whose own comment says to prefer the cached helper; `do_subscribe` reads the `CommunityBan` row; and the memoized `communities_banned_from` reads a third. D924 and fact 368 are about exactly this, and D991 is what it costs -- two of the three were wrong in the same function. | The consolidation touches every caller of all three, which is its own round. |
+
+### 5. WHAT THE MUTATION PASS FOUND
+
+37 mutants; the measuring pass killed 31 -- the lowest of this sub-project, and
+the four real gaps were all the same kind: **a guard whose false arm is only
+reachable through state the rows did not construct.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D996** | `tests/test_community_membership.py` | Four survivors, four states nobody had built. `do_subscribe`'s inner `if not existing_membership:` is reachable only when the OUTER guard does not recognise the membership as current -- `User.subscribed()` returns `SUBSCRIPTION_BANNED` for a `CommunityMember` with `is_banned=True` (`app/models.py:1435`) and the outer guard only skips `MEMBER` and `PENDING`, so a membership flagged by a ban since lifted at the `CommunityBan` level reaches it; without the check that user gets **two** `CommunityMember` rows and `subscribed()` answers from whichever it finds first. The feed loop's `!= SUBSCRIPTION_OWNER` needed a row with an OWNED feed, not merely a subscribed one. The `if request.method == 'GET':` around the "You left" flash needed a POST row asserting **nothing** was flashed. And `join_then_add`'s outer guard turned out to gate the flash as well as the join, so an existing member was told "You joined" on every visit to the post form -- the only thing distinguishing it from the `existing_member` check inside it. | **all four closed** | The four mutants |
+| D997 | `app/community/routes.py:2740`, `:2748` | Two **equivalent** mutants in `community_leave_all`, proved from the source rather than contorted into kills. `if subscription is not False and subscription < SUBSCRIPTION_MODERATOR:` cannot be false, because the list it iterates comes from `joined_communities()`, which already filters `CommunityMember.is_moderator == False, CommunityMember.is_owner == False` (`app/utils.py:2847`) -- so every community reaching the check is a plain membership. And `if joined_feed_ids:` guards a `for` loop over the same list, which is a no-op when it is empty. Both are defence in depth against a change upstream, and both are honest survivors. | **registered as equivalent mutants** | `app/utils.py:2847`'s filter |

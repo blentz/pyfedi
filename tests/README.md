@@ -9766,6 +9766,67 @@ the meta tag. Eleven such changes with no per-route rows is how a security fix
 becomes an outage. Inventory them, fix each in the slice that covers its
 blueprint, and let the ratchet hold the line meanwhile.
 
+**424. A GUARD THAT FLASHES AND FALLS THROUGH IS NOT A GUARD.**
+`do_subscribe` read the `CommunityBan` row, flashed "You cannot join this
+community", and then created the membership anyway -- and the first gate's
+bulk-import arm recorded `user_banned: True` and did the same. Both read as
+refusals. When covering a branch that reports a refusal, assert the refusal
+TOOK EFFECT as well as that it was reported; the second site here was found
+only because the row checked both. See D991.
+
+**425. A MEMOIZED AUTHORIZATION LIST IS A GATE WITH A CLOCK ON IT.**
+`communities_banned_from` is `@cache.memoize(timeout=86400)` and is invalidated
+in exactly one place. A ban that arrives any other way -- federated in, or
+written by a tool that does not know to invalidate -- leaves the gate open for
+a day. Where a cached list is the only check, the uncached one behind it has to
+work; where both exist, test the second with the first patched to return the
+stale answer, which is what a real 24-hour cache does. See D991.
+
+**426. AN ACTOR TAKEN FROM A URL IS `None` UNTIL PROVEN OTHERWISE.**
+`actor_to_community` and `search_for_community` both return None for a handle
+they cannot resolve, and three functions in `app/community/routes.py`
+dereferenced the result on the next line. A stale invite link or a mistyped
+community name is an ordinary event, not an exceptional one. Grep a blueprint
+for `actor_to_community(` and check the line after each. See D992.
+
+**427. AN UNBOUNDED LOOP OVER USER INPUT THAT SENDS EMAIL IS A SPAM RELAY.**
+`community_invite` called `invite_with_email` once per line of a textarea with
+no cap, from a route any account can reach on a default community. Count the
+recipients in the validator, drop blank lines before counting, and put the
+limit in the message. The same question is worth asking of every loop that
+sends, fetches or writes once per element of something a user submitted. See
+D993.
+
+**428. THE SAME QUESTION ANSWERED THREE WAYS IS TWO WRONG ANSWERS WAITING.**
+One request path through `join_then_add` consults a memoized list, a direct
+`CommunityBan` query and `Community.user_is_banned()` -- and D991 was two of
+the three failing to act. Fact 368 said to keep one implementation; this is
+what the second and third cost. See D995.
+
+**429. A GUARD'S FALSE ARM MAY NEED STATE NOTHING ELSE PRODUCES.** Four of the
+six survivors in slice D were guards whose false arm is reachable only through
+a state the rows had not built: a `CommunityMember` flagged `is_banned` whose
+`CommunityBan` row is gone (`User.subscribed()` then returns
+`SUBSCRIPTION_BANNED`, which the outer guard does not skip), a feed the user
+OWNS rather than merely follows, a POST where the row had only sent GET. Ask
+what makes each condition false, and build exactly that -- the shape is fact
+350's, one level deeper.
+
+**430. A GUARD OFTEN PROTECTS MORE THAN THE STATEMENT UNDER IT.**
+`join_then_add`'s `if not current_user.subscribed(...)` gates the join AND the
+"You joined" flash, so removing it still produced no duplicate membership --
+the `existing_member` check inside caught that -- but did tell an existing
+member they had just joined. When a mutant on a guard survives, check every
+statement it dominates, not just the one the guard appears to be about.
+
+**431. A FILTER UPSTREAM CAN MAKE A GUARD DOWNSTREAM UNFALSIFIABLE.**
+`community_leave_all`'s `subscription < SUBSCRIPTION_MODERATOR` cannot be false,
+because `joined_communities()` already excludes moderators and owners
+(`app/utils.py:2847`). That is a legitimate equivalent mutant and worth
+registering rather than chasing: the guard is defence in depth against the
+upstream filter changing. Read the producer before assuming the consumer's
+check is testable.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
