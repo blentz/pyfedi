@@ -16243,3 +16243,32 @@ and say why. Recorded as fact 488.
 |---|---|---|---|---|
 | **D1069** | `tests/test_user_profile_page.py` | Three real gaps, all the same question as D1032's: **"only this person's?"** The public-feed list, the `following` query's own `User.banned == False`, and the post-alerts arm's `user_id` scoping could each be deleted without a row noticing, because every row had one user's data in it. The alerts case is the sharpest: the file HAD a "somebody else's alerts are not listed" row, but it used the **communities** arm, and the mutation was in the **posts** arm -- six near-identical queries, one row. | **all three closed** | `m6`, `m10`, `m20` |
 | **D1070** | `app/user/routes.py:119` | An **equivalent** mutant: `canonical = user.ap_public_url if user.ap_public_url else None` is `user.ap_public_url`, because the false arm evaluates to the same None the expression already has. Harmless, and left as written rather than "fixed" -- the conditional says out loud that None is expected. | **registered as an equivalent mutant** | `m11` SURVIVED with a row for each side |
+
+**Next free number: D1071.**
+
+## Slice G: files, single notifications, unsubscribes, follow requests
+
+**The round in one line: thirteen functions close at zero gaps and carried
+**TWO production defects** -- **every uploaded file's URL was enumerable by any
+logged-in account**, and **rejecting a follow request recorded it as
+accepted**.**
+
+### 1. EVERY UPLOADED FILE'S URL, BY WALKING THE IDS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1071** | `app/user/routes.py:2510`; `app/templates/user/file_delete.html:20` | **THE DELETE CONFIRMATION PAGE RENDERED ANY FILE.** `<img src="{{ file.source_url }}">` for whatever id was in the URL, with nothing tying the file to the caller -- and ids are sequential, so walking them disclosed the URL of **every uploaded file on the instance**, including ones an account uploaded and never posted. **The deletion was never the hole**: `process_file_delete` scopes its DELETE by user (`app/shared/upload.py:128`), which is exactly why reading the delete route and stopping at "the delete is safe" would have missed this. The page is the disclosure. | **fixed** | `PROBE aa1 status: 200 url leaked: True`, from an account with no relationship to the file |
+
+### 2. REJECTING A FOLLOW REQUEST ACCEPTED IT
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1072** | `app/user/routes.py:2653` | **`user_follow_request_reject` SET `is_accepted = True`.** It is a copy of the accept route, and the copy was finished everywhere except the one line that matters: the activity it sends says `"type": "Reject"`, and the row it writes says accepted. So the two instances ended up disagreeing -- the remote side believed the follow was refused, and this side listed the rejected person as a follower of somebody who believed they had turned them away (`show_profile` selects `is_accepted == True`). **The correct value is written in the column's own comment** -- `None = request sent. True = accepted. False = Rejected` -- and is what `app/activitypub/routes.py:1185` writes for an inbound rejection. | **fixed** | The rows fail with the value put back, including one asserting the rejected account stays out of the followers list |
+
+### 3. WHAT THE MUTATION PASS FOUND
+
+23 mutants; the measuring pass killed **all 23** -- the first slice this
+sub-project with no survivors, and the reason is worth recording: the rows for
+these thirteen functions were written after D1032, D1063 and D1069 had each
+been "only this person's?" misses, so every listing row in the file was built
+with a second account's data in it from the start.

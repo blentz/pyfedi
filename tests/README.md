@@ -10181,6 +10181,30 @@ later, in the same module. After fixing a parse or a guard, grep the module for
 the same expression before closing the finding -- the habit has to be a step,
 not a memory.
 
+**491. A SAFE WRITE DOES NOT MAKE A SAFE PAGE.** `user_file_delete`'s DELETE is
+scoped by user inside `process_file_delete`, so reading the route and checking
+the destructive call would have concluded it was fine. The disclosure was the
+confirmation page, which rendered the file for any id (D1071). Ask what a route
+SHOWS as well as what it changes.
+
+**492. A COPIED ROUTE KEEPS THE ORIGINAL'S VALUES.** `user_follow_request_reject`
+is `user_follow_request_accept` with the activity type changed and the stored
+value left behind, so it sent a Reject and recorded an acceptance (D1072). When
+two routes are near-identical, diff them: the line that was supposed to differ
+is the one to check first.
+
+**493. THE COLUMN COMMENT IS THE SPECIFICATION.**
+`is_accepted = db.Column(db.Boolean)  # None = request sent. True = accepted.
+False = Rejected` said exactly what the reject route should write, and another
+module already wrote it. A fix that has to invent a convention is usually a fix
+that has not found the existing one.
+
+**494. THE HABIT PAID.** Slice G's mutation pass killed all 23 on the first
+run -- the first clean pass of this sub-project. The rows were written after
+three separate "only this person's?" misses (D1032, D1063, D1069), so every
+listing row was built with a second account's data in it from the start. The
+gap-finding habit transfers; it just has to be applied while writing, not after.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
