@@ -15750,3 +15750,70 @@ reachable through state the rows did not construct.**
 |---|---|---|---|---|
 | **D996** | `tests/test_community_membership.py` | Four survivors, four states nobody had built. `do_subscribe`'s inner `if not existing_membership:` is reachable only when the OUTER guard does not recognise the membership as current -- `User.subscribed()` returns `SUBSCRIPTION_BANNED` for a `CommunityMember` with `is_banned=True` (`app/models.py:1435`) and the outer guard only skips `MEMBER` and `PENDING`, so a membership flagged by a ban since lifted at the `CommunityBan` level reaches it; without the check that user gets **two** `CommunityMember` rows and `subscribed()` answers from whichever it finds first. The feed loop's `!= SUBSCRIPTION_OWNER` needed a row with an OWNED feed, not merely a subscribed one. The `if request.method == 'GET':` around the "You left" flash needed a POST row asserting **nothing** was flashed. And `join_then_add`'s outer guard turned out to gate the flash as well as the join, so an existing member was told "You joined" on every visit to the post form -- the only thing distinguishing it from the `existing_member` check inside it. | **all four closed** | The four mutants |
 | D997 | `app/community/routes.py:2740`, `:2748` | Two **equivalent** mutants in `community_leave_all`, proved from the source rather than contorted into kills. `if subscription is not False and subscription < SUBSCRIPTION_MODERATOR:` cannot be false, because the list it iterates comes from `joined_communities()`, which already filters `CommunityMember.is_moderator == False, CommunityMember.is_owner == False` (`app/utils.py:2847`) -- so every community reaching the check is a plain membership. And `if joined_feed_ids:` guards a `for` loop over the same list, which is a no-op when it is empty. Both are defence in depth against a change upstream, and both are honest survivors. | **registered as equivalent mutants** | `app/utils.py:2847`'s filter |
+
+**Next free number: D998.**
+
+## Slice E: `add_post` -- the posting surface
+
+**The round in one line: one function closes at zero gaps and carried **SIX
+production defects** -- **a private community's posts were readable through the
+cross-post form**, an instance setting that refused local image hosting was
+**inert at three sites**, a refused submission **discarded what the user
+typed**, and the poll form **could not see two thirds of its own fields**.**
+
+### 1. A PRIVATE COMMUNITY'S POSTS, THROUGH THE CROSS-POST FORM
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D998** | `app/community/routes.py:1199` | **`add_post?source=<id>` COPIED ANY POST INTO THE FORM.** The cross-post prefill reads the source post by id from a query parameter and writes its title, body, url and tags into the new-post form. **Nothing checked who was asking.** A post in a private, local-only community was therefore readable by anyone who knew its id, by opening the cross-post form for any community they could post to -- the post page itself refuses exactly this at `app/post/routes.py:102`, and that refusal was simply absent here. Fixed with that same condition: `source_post.community.private and source_post.community_id not in community_membership_private(current_user.id)` -> `abort(403)`. | **fixed** | A non-member read the title, body and url of a post in a private community; the row fails with the guard removed |
+
+### 2. TWO MORE NIL DEREFERENCES, AND AN EXCEPTION ON THE PAGE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D999** | `app/community/routes.py:1070`, `:1195` | **D992'S SHAPE, FOURTH AND FIFTH INSTANCES IN THIS FILE.** `actor_to_community` returns `None` for an actor it cannot resolve and the next lines read `community.default_post_type` and `community.nsfw`; `db.session.get(Post, request.args.get('source'))` returns `None` for a stale cross-post link and the next line reads `source_post.deleted`. Both are 500s on an ordinary mistake -- a mistyped community name, a link to a post that has since been purged. | **fixed, both** | Each row fails with its guard removed |
+| **D1000** | `app/community/routes.py:1141` | **THE FAILURE PATH FLASHED `str(ex)`.** `make_post` reaches image processing, remote fetches and the plugin hooks, so the exception text can name a filesystem path, a relay host or a library internal, and it went onto the page verbatim. Same class as D895 and D950. The detail now goes to `current_app.logger.exception` and the user gets a fixed message. | **fixed** | A `RuntimeError('/srv/piefed/media/tmp/secret.png')` no longer reaches the flash |
+
+### 3. AN INSTANCE SETTING THAT DID NOTHING
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1001** | `app/community/forms.py:416`, `:437`, `:531` | **`allow_local_image_posts = False` RECORDED A COMPLAINT AND ACCEPTED THE IMAGE.** `CreateImageForm.validate` appended *'Images cannot be posted to local communities.'* to `communities.errors` and then **`return True`**, so `validate_on_submit()` was satisfied and `make_post` ran. The same four lines appear verbatim in `EditImageForm.validate` and `CreateEventForm.validate`; **all three were inert.** An instance that had turned local image hosting off -- a storage, moderation and legal decision -- was still hosting images. All three now return False. | **fixed, all three** | `PROBE i1 community is_local: True` / `PROBE i1 make_post called? True` |
+
+**D1001 was already registered, by a test.**
+`tests/test_form_validate_guards_super.py::test_the_image_forms_still_report_a_local_image_ban`
+asserted `valid is True` with the message *"update this test"* and a docstring
+naming the defect -- written by an earlier slice that saw it and did not fix
+it. The full-suite run is what surfaced it: the fix turned that row red. **A
+pin on today's wrong behaviour, with the reason attached, is how a registered
+finding survives until someone can fix it**, and it cost nothing to honour.
+
+### 4. A REFUSED POST LOST WHAT WAS TYPED
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1002** | `app/community/routes.py:1167` | **D907'S SHAPE, THE FIFTH INSTANCE**, and like every one before it found by covering the function rather than by reading it. `add_post`'s POST branch ended with `else:` instead of `elif request.method == 'GET':`, so a submission the form REFUSED fell into the pre-fill arm: community, language, timezone and `notify_author` were overwritten from the database, a poll's `finish_in` was reset to `3d`, an event was forced back online, and the cross-post and `?link=` prefills re-ran over the title and body that had just been typed. | **fixed** | `PROBE g1 submitted language 3 redisplayed as 2` / `timezone Europe/London redisplayed as Europe/Paris` / `notify_author off, redisplayed as True` |
+
+### 5. THE POLL FORM COULD NOT SEE ITS OWN FIELDS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1003** | `app/community/forms.py:576` | **TWO DEFECTS IN FOUR LINES.** `CreatePollForm.validate` counted `range(1, 10)` of the **fifteen** `choice_N` fields it declares, while `make_post` reads `range(1, 16)` (`app/shared/post.py:357`). A poll whose options were typed into choices 10-15 was refused with *"Polls need options for people to choose from"* **while displaying six of them**, and two choices split either side of the ninth were refused as one. The `elif choices_made > 15:` branch below could never fire -- fifteen fields cannot produce sixteen choices -- so it was removed (the D983 precedent). Second: `.data.strip()` on a field WTForms leaves at `None` when it is not submitted, which is a **500 for any poll submission that does not carry all fifteen fields**. The browser form does; nothing else has to. | **fixed, both** | `PROBE p1 six choices in 10..15, make_post called? False` before, `True` after; `PROBE p3 RAISED: AttributeError 'NoneType' object has no attribute 'strip'` |
+
+### 6. WHAT THE MUTATION PASS FOUND
+
+22 mutants; the measuring pass killed 21.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1004** | `tests/test_community_add_post.py` | The survivor dropped `community.is_local()` from D1001's own condition, making an instance that refuses local image posts refuse **remote** ones too -- and nothing noticed, because every image row in the file used a local community. The fix's condition names *local* communities, so the row that pins it has to be the remote one. **The ninth instance this sub-project of an assertion that cannot distinguish the thing it names** (facts 403, 404, 410, 411, 412, 418, 429, 430). | **closed** | `m21 image setting ignored for local communities: SURVIVED` -> `KILLED` |
+
+### 7. WHAT THE SLICE FOUND ABOUT ITS OWN METHOD
+
+D1001, D1002 and D1003 were all found the same way, and not by reading: a row
+that would not pass led to a probe, and the probe measured a defect. The
+upload-dispatch rows only ran once each post type's **own** required fields
+were supplied, and supplying them is what first put the poll and image
+validators under a client that was not the browser form. **Three of the six
+defects in this slice were reachable only by a client that is not the site's
+own page** -- which is the definition of the surface an attacker uses.

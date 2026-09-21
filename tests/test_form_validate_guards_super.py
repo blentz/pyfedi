@@ -428,14 +428,15 @@ class TestEachOverridesOwnCheckStillWorks:
             f'expected the no-choices error, got {choice_errors}'
 
     def test_the_image_forms_still_report_a_local_image_ban(self, app, post_env, db_session):
-        """Both image overrides append an error when the destination community
-        is local and the site forbids local image posts.
+        """Both image overrides refuse a local image post when the site
+        forbids one.
 
-        Asserted on the error list, not on the return value, because both
-        overrides append this error and then `return True` -- a separate,
-        pre-existing defect (an invalid submission that reports valid, with a
-        message the template will render). Reported, not fixed here; this test
-        pins today's behaviour so the change is visible when it is fixed.
+        This test used to assert `valid is True` and say so: the overrides
+        appended the error and then returned True, so the setting recorded a
+        complaint and accepted the image anyway. That is D1001, fixed at all
+        three sites (`CreateImageForm`, `EditImageForm`, `CreateEventForm`),
+        and this test was written to fail when it was -- the assertion below
+        carried "update this test" for exactly this moment.
         """
         site = db.session.get(Site, 1)
         site.allow_local_image_posts = False
@@ -446,8 +447,9 @@ class TestEachOverridesOwnCheckStillWorks:
                 community_errors = errors_on(form.communities)
             assert any('cannot be posted to local communities' in e for e in community_errors), \
                 f'{form_cls.__name__} lost the local-image check: {community_errors}'
-            assert valid is True, \
-                f'{form_cls.__name__} now REJECTS a local image post -- update this test'
+            assert valid is False, \
+                f'{form_cls.__name__} accepts a local image post while the site '\
+                f'forbids one -- D1001 is back'
 
 
 class TestTheEventFormsUrlFieldsAreCheckedAtAll:
