@@ -16272,3 +16272,42 @@ sub-project with no survivors, and the reason is worth recording: the rows for
 these thirteen functions were written after D1032, D1063 and D1069 had each
 been "only this person's?" misses, so every listing row in the file was built
 with a second account's data in it from the start.
+
+**Next free number: D1073.**
+
+## Slice H: the rest of the module
+
+**The round in one line: fifteen functions close at zero gaps, **TWO
+production defects** fixed -- including **a sort the settings page offers that
+matched no arm, so the list came back unordered** -- and **ONE registered and
+pinned**: an account created through OAuth can disconnect its only way of
+logging in.**
+
+### 1. REGISTERED, NOT FIXED
+
+| ID | Where | What | Why not this round |
+|---|---|---|---|
+| **D1073** | `app/user/routes.py:750`; `app/auth/oauth_util.py:52` | **AN OAUTH ACCOUNT CAN DISCONNECT ITS ONLY LOGIN METHOD.** `initialize_new_user` never calls `set_password`, so an account created through OAuth has `password_hash = None`; `connect_oauth` then disconnects its only provider with no check. Measured: `PROBE ab1 google id now: None | password_hash: None`. The account is not lost -- OAuth signups store a verified address, so an emailed password reset recovers it -- but the state is reachable in one click and the page says nothing. | Refusing the disconnect is a decision about the login flow, not a coverage fix. **Pinned as today's behaviour** in `test_an_oauth_only_account_can_disconnect_its_last_provider`, whose assertion carries "update this test (D1073)" -- the D1001 pattern, which is how D1001 itself was eventually found and fixed. |
+
+### 2. A GUARD IN THE WRONG PLACE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1074** | `app/user/routes.py:229` | `user_upvotes` called `_get_user_upvoted_posts(user)` -- which reads `user.id` -- **three lines above its own `if user is not None:` check**, so an actor this instance cannot resolve was `AttributeError: 'NoneType' object has no attribute 'id'` rather than the 404 the function goes on to produce. **D992's shape with a twist: the guard existed, in the wrong order.** | **fixed** | The row fails with the guard moved back |
+
+### 3. WHAT THE COVERAGE FOUND WITHOUT A DEFECT
+
+`GET /read-posts/delete` does **not** answer 405, although the delete route is
+POST-only: `/read-posts/<sort>` is registered on the same prefix, so the GET is
+read as a sort named "delete" and renders the history unsorted. The history
+survives, which is what the row asserts. Recorded as fact 495 rather than
+changed, because the fix is a route-ordering decision.
+
+### 4. WHAT THE MUTATION PASS FOUND
+
+26 mutants; the measuring pass killed 25.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1076** | `app/user/routes.py:2141` | **A SORT THE SETTINGS PAGE OFFERS MATCHED NO ARM.** `user_read_posts`'s ascending arm was `elif sort == 'oldest':`, and the page's own nav links exactly that -- but `sort` DEFAULTS to `current_user.default_sort`, and that setting's choices call the same order **`'old'`** (`SettingsForm.sorts`, and every other listing in the application). So an account whose default sort is "Old" opened `/read-posts` and matched no arm at all: the list came back with **no `ORDER BY`**, in whatever order the database chose. **Found only because a mutation on that arm SURVIVED** -- the row was asking for `/read-posts/old`, which reached no `order_by` to mutate. Both spellings are accepted now. | **fixed** | The arm's own mutant, once the row was rewritten to insert the newer post first |
+| **D1075** | `tests/test_user_misc.py` | The survivor deleted `lookup`'s `if exists:` shortcut -- and the redirect came out **identical**, because the search branch it falls into finds the same local row and redirects to the same place. The shortcut's whole purpose is to avoid the search, so the row has to assert that **no search happened**; a Location cannot tell the two paths apart. | **closed** | `m17` |
