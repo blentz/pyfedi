@@ -2051,6 +2051,17 @@ def user_hidden_posts():
 def fediverse_redirect(actor):
     actor = actor.strip()
     user = User.query.filter_by(user_name=actor, deleted=False, ap_id=None).first()
+
+    # D1065. Neither `user is None` nor a remote account returned anything, so
+    # both answered `TypeError: The view function for
+    # 'user.fediverse_redirect' did not return a valid response` -- a 500
+    # where a 404 was meant. D1012's shape, fourth instance in this campaign
+    # and the second in this module after D1019. The page exists to send a
+    # visitor to the instance that hosts the account, so a remote one has
+    # nowhere to send them.
+    if user is None or not user.is_local():
+        abort(404)
+
     if user and user.is_local():
         form = RemoteFollowForm()
         if form.validate_on_submit():
@@ -2139,9 +2150,13 @@ def user_read_posts_delete():
 @login_required
 def edit_user_note(actor):
     actor = actor.strip()
+    # D1066. `safe_redirect_target` REPLACES an unsafe candidate with the
+    # default rather than returning it, so the `if return_to.startswith('http'):
+    # abort(401)` that used to sit here could never fire -- the only values it
+    # can see are '' or a relative path this instance produced. Removed rather
+    # than left: a dead check reads as the protection, and the replacement IS
+    # the protection. The D983 precedent.
     return_to = safe_redirect_target(request.args.get('return_to', '').strip(), '')
-    if return_to.startswith('http'):
-        abort(401)
     if '@' in actor:
         user: User = User.query.filter_by(ap_id=actor, deleted=False).first()
     else:

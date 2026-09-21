@@ -2,7 +2,7 @@ from flask_login import current_user
 from flask_wtf import FlaskForm
 from wtforms import StringField, SubmitField, PasswordField, BooleanField, EmailField, TextAreaField, FileField, \
     RadioField, DateField, SelectField, IntegerField, SelectMultipleField, HiddenField
-from wtforms.validators import ValidationError, DataRequired, Email, EqualTo, Length, Optional
+from wtforms.validators import ValidationError, DataRequired, Email, EqualTo, Length, Optional, Regexp
 from flask_babel import _, lazy_gettext as _l
 
 from app.utils import MultiCheckboxField, get_timezones
@@ -243,7 +243,17 @@ class KeywordFilterEditForm(FlaskForm):
 
 
 class RemoteFollowForm(FlaskForm):
-    instance_url = StringField(_l('Your remote instance:'), validators=[DataRequired(), Length(min=3, max=50)],
+    # D1064. `instance_url` is interpolated straight into the redirect target
+    # (`https://{instance_url}/@user@host`), and it used to be validated only
+    # for length -- so 'evil.example/x?a=' produced
+    # `https://evil.example/x?a=/@author@test.piefed.local` and the route
+    # redirected there. Measured. The value is also stored in a cookie that
+    # expires in 2099 and pre-fills the form afterwards, so one bad value
+    # persists. A bare hostname is the only thing this field means.
+    instance_url = StringField(_l('Your remote instance:'),
+                               validators=[DataRequired(), Length(min=3, max=50),
+                                           Regexp(r'^[A-Za-z0-9.-]+(:[0-9]+)?$',
+                                                  message=_l('Enter a domain name, e.g. mastodon.social'))],
                                render_kw={'placeholder': 'e.g. mastodon.social'})
     type_choices = [
         ('mastodon', _l('Mastodon, Misskey, Akkoma, Iceshrimp and friends')),
