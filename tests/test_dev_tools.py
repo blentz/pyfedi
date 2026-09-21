@@ -466,18 +466,24 @@ def test_the_buttons_own_validate_call_is_belt_and_braces(app, db_session, dev_m
     observed.
 
     Asserted as the behaviour that makes it so: a POST carrying a forged token
-    raises out of the decorator, and nothing is created.
+    is refused by the decorator before the view runs, and nothing is created.
+
+    The refusal is a **400** since D958. It used to be the bare
+    `wtforms.validators.ValidationError` propagating to the 500 handler,
+    because `validate_csrf` raises that and no `CSRFProtect` is registered on
+    this app to convert it. The reasoning above is unchanged -- the token is
+    still checked before the view -- only what refusal looks like from outside.
     """
-    from wtforms.validators import ValidationError
     instance, alice = _seed()
     client = app.test_client()
     login(client, alice)
 
     with patch('app.dev.routes.render_template', return_value='rendered'):
-        with pytest.raises(ValidationError):
-            client.post('/dev/tools',
-                        data={'communities_submit': 'Go', 'csrf_token': 'forged'})
+        response = client.post('/dev/tools',
+                               data={'communities_submit': 'Go',
+                                     'csrf_token': 'forged'})
 
+    assert response.status_code == 400
     assert Community.query.count() == 0
     assert Topic.query.count() == 0
 
