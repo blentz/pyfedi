@@ -1165,6 +1165,15 @@ def add_post(actor, type=None):
 @bp.route('/community/<int:community_id>/report', methods=['GET', 'POST'])
 @login_required
 def community_report(community_id: int):
+    # A banned account may not generate moderator workload. Every report
+    # raises a Notification for the instance admin, so without this a banned
+    # user could flood the admin queue from an account that is already
+    # barred from posting. Found by the strengthened ratchet (D973), not by
+    # reading -- the route has no authorization construct in it at all, so
+    # the survey that listed the other nine never saw it.
+    if current_user.banned:
+        return show_ban_message()
+
     community = db.session.get(Community, community_id) or abort(404)
     form = ReportCommunityForm()
     if form.validate_on_submit():
@@ -2072,6 +2081,9 @@ def community_wiki_list(actor):
 @bp.route('/<actor>/moderate/wiki/add', methods=['GET', 'POST'])
 @login_required
 def community_wiki_add(actor):
+    if current_user.banned:
+        return show_ban_message()
+
     community = actor_to_community(actor)
 
     if community is not None:
@@ -2161,7 +2173,11 @@ def community_wiki_view_revision(actor, slug, revision_id):
     if community is not None:
         page: CommunityWikiPage = CommunityWikiPage.query.filter_by(slug=slug, community_id=community.id).first()
         revision: CommunityWikiPageRevision = db.session.get(CommunityWikiPageRevision, revision_id) or abort(404)
-        if page is None or revision is None:
+        # `revision.wiki_page_id != page.id` as well as the nil checks: the page
+        # is scoped by community above and the revision was not scoped at all,
+        # so any revision on the instance could be read through -- or, in
+        # community_wiki_revert_revision, written INTO -- this page.
+        if page is None or revision is None or revision.wiki_page_id != page.id:
             abort(404)
         else:
             # Breadcrumbs
@@ -2208,12 +2224,19 @@ def community_wiki_view_revision(actor, slug, revision_id):
 @bp.route('/<actor>/wiki/<slug>/<revision_id>/revert', methods=['GET'])
 @login_required
 def community_wiki_revert_revision(actor, slug, revision_id):
+    if current_user.banned:
+        return show_ban_message()
+
     community = actor_to_community(actor)
 
     if community is not None:
         page: CommunityWikiPage = CommunityWikiPage.query.filter_by(slug=slug, community_id=community.id).first()
         revision: CommunityWikiPageRevision = db.session.get(CommunityWikiPageRevision, revision_id) or abort(404)
-        if page is None or revision is None:
+        # `revision.wiki_page_id != page.id` as well as the nil checks: the page
+        # is scoped by community above and the revision was not scoped at all,
+        # so any revision on the instance could be read through -- or, in
+        # community_wiki_revert_revision, written INTO -- this page.
+        if page is None or revision is None or revision.wiki_page_id != page.id:
             abort(404)
         else:
             if page.can_edit(current_user, community):
@@ -2236,6 +2259,9 @@ def community_wiki_revert_revision(actor, slug, revision_id):
 @bp.route('/<actor>/moderate/wiki/<int:page_id>/edit', methods=['GET', 'POST'])
 @login_required
 def community_wiki_edit(actor, page_id):
+    if current_user.banned:
+        return show_ban_message()
+
     community = actor_to_community(actor)
 
     if community is not None:
@@ -2355,6 +2381,9 @@ def community_modlog(actor):
 @bp.route('/community/<int:community_id>/moderate_report/<int:report_id>/escalate', methods=['GET', 'POST'])
 @login_required
 def community_moderate_report_escalate(community_id, report_id):
+    if current_user.banned:
+        return show_ban_message()
+
     community = db.session.get(Community, community_id) or abort(404)
     if community.is_moderator() or current_user.is_admin():
         report = Report.query.filter_by(in_community_id=community.id, id=report_id, status=REPORT_STATE_NEW).first()
@@ -2377,6 +2406,14 @@ def community_moderate_report_escalate(community_id, report_id):
             else:
                 form.reason.data = report.description
                 return render_template('community/community_moderate_report_escalate.html', form=form)
+        else:
+            # A report that is missing, already handled (the query requires
+            # REPORT_STATE_NEW) or owned by another community used to fall off
+            # the end of the function, and Flask answers that with
+            # `TypeError: The view function ... did not return a valid
+            # response` -- a 500 on the ordinary act of opening a report
+            # somebody else has already dealt with.
+            abort(404)
     else:
         abort(401)
 
@@ -2384,6 +2421,9 @@ def community_moderate_report_escalate(community_id, report_id):
 @bp.route('/community/<int:community_id>/moderate_report/<int:report_id>/resolve', methods=['GET', 'POST'])
 @login_required
 def community_moderate_report_resolve(community_id, report_id):
+    if current_user.banned:
+        return show_ban_message()
+
     community = db.session.get(Community, community_id) or abort(404)
     if community.is_moderator() or current_user.is_admin():
         report = Report.query.filter_by(in_community_id=community.id, id=report_id).first()
@@ -2424,15 +2464,39 @@ def community_moderate_report_resolve(community_id, report_id):
                 return redirect(url_for('community.community_moderate', actor=community.link()))
             else:
                 return render_template('community/community_moderate_report_resolve.html', form=form)
+        else:
+            abort(404)
+    else:
+        # Without this a non-moderator fell off the end of the function and got
+        # a 500 rather than a refusal -- an authorization failure answered as a
+        # server fault, which is the wrong signal to the caller and to whatever
+        # watches the logs.
+        abort(401)
 
 
-@bp.route('/community/<int:community_id>/moderate_report/<int:report_id>/ignore', methods=['GET', 'POST'])
+# POST only, and for the same reason as community_unban_user (D955): this
+# function has no form and acts on whichever method arrives, and login_required
+# validates CSRF only for POST. The template rendered it as a plain <a href>, so
+# a moderator who loaded the link from anywhere discarded that report. Escalate
+# and Resolve are safe as GET links because both render a confirmation form
+# first; this one never did.
+@bp.route('/community/<int:community_id>/moderate_report/<int:report_id>/ignore', methods=['POST'])
 @login_required
 def community_moderate_report_ignore(community_id, report_id):
+    if current_user.banned:
+        return show_ban_message()
+
     community = db.session.get(Community, community_id) or abort(404)
     if community.is_moderator() or current_user.is_admin():
         report = Report.query.filter_by(in_community_id=community.id, id=report_id).first()
         if report:
+            # THIS report is marked first. The sweep below only updates reports
+            # that share a suspect_post_id or suspect_post_reply_id, so a report
+            # about a USER was never marked at all -- the moderator pressed
+            # Ignore, the counter went to -1, and the report sat in the queue
+            # as REPORT_STATE_NEW forever.
+            report.status = REPORT_STATE_DISCARDED
+
             # Set the 'reports' counter on the comment, post or user to -1 to ignore all future reports
             if report.suspect_post_reply_id:
                 post_reply = db.session.get(PostReply, report.suspect_post_reply_id)
@@ -2464,6 +2528,8 @@ def community_moderate_report_ignore(community_id, report_id):
             return redirect(url_for('community.community_moderate', actor=community.link()))
         else:
             abort(404)
+    else:
+        abort(401)
 
 
 @bp.route('/<actor>/my_flair', methods=['GET', 'POST'])
@@ -2519,10 +2585,20 @@ def community_flair(actor):
 @bp.route('/community/<int:community_id>/flair/<int:flair_id>', methods=['GET', 'POST'])
 @login_required
 def community_flair_edit(community_id, flair_id):
+    if current_user.banned:
+        return show_ban_message()
+
     community = db.session.get(Community, community_id) or abort(404)
 
     if community.is_moderator() or current_user.is_admin():
-        flair = db.session.get(CommunityFlair, flair_id) if flair_id else None
+        # Scoped to this community. `db.session.get(CommunityFlair, flair_id)`
+        # took whatever id was in the URL, so a moderator of one community
+        # rewrote another community's flair: measured, the other community's
+        # flair text became HIJACKED. A flair_id that belongs elsewhere now
+        # reads as absent, which is the existing "add a new one" path.
+        flair = (CommunityFlair.query
+                 .filter_by(id=flair_id, community_id=community.id).first()
+                 if flair_id else None)
         form = EditCommunityFlairForm()
         if form.validate_on_submit():
             if flair is None:
@@ -2565,9 +2641,22 @@ def community_flair_edit(community_id, flair_id):
 @bp.route('/community/<int:community_id>/flair/<int:flair_id>/delete', methods=['POST'])
 @login_required
 def community_flair_delete(community_id, flair_id):
+    if current_user.banned:
+        return show_ban_message()
+
     community = db.session.get(Community, community_id) or abort(404)
 
     if community.is_moderator() or current_user.is_admin():
+        # The flair must belong to THIS community. Without this the deletes
+        # below removed another community's flair outright, along with its
+        # post_flair rows and its CommunityFlairBlock rows, and cleared
+        # rss_feed.flair_id pointing at it. Measured: a moderator of 'mine'
+        # deleted a flair owned by 'theirs'.
+        flair = CommunityFlair.query.filter_by(id=flair_id,
+                                               community_id=community.id).first()
+        if flair is None:
+            abort(404)
+
         db.session.execute(text('DELETE FROM "post_flair" WHERE flair_id = :flair_id'), {'flair_id': flair_id})
         db.session.execute(text('UPDATE "rss_feed" SET flair_id=null WHERE flair_id = :flair_id'), {'flair_id': flair_id})
         db.session.query(CommunityFlairBlock).filter(CommunityFlairBlock.community_flair_id == flair_id).delete()

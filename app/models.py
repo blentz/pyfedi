@@ -3553,6 +3553,20 @@ class CommunityWikiPage(db.Model):
                                 lazy='dynamic')
 
     def can_edit(self, user: User, community: Community):
+        # The page's OWN community, first. `community` is an argument and
+        # self.community_id used to be ignored entirely, so this answered "may
+        # this user edit some page of that community" -- and every caller takes
+        # the community from the URL and the page from an id. A moderator of
+        # any community could therefore rewrite any other community's wiki
+        # pages by passing their page_id. Measured: a moderator of 'mine'
+        # POSTed to /community/mine/wiki/<page in 'theirs'>/edit and the body
+        # became HIJACKED.
+        #
+        # Fixed here rather than in the four routes, because the routes are not
+        # the only callers -- three templates ask the same question to decide
+        # whether to show an edit link.
+        if community is None or self.community_id != community.id:
+            return False
         if user.is_anonymous:
             return False
         if self.who_can_edit == 0:
