@@ -10298,3 +10298,49 @@ order, build the data in the order the query must *undo*.
 len(post_reply.path) > 1:` -- every row had `path` unset, so the length test
 was never reached and `> 1` could be mutated to `> 0` untouched. A falsy value
 in the left operand covers the line and proves nothing about the right one.
+
+**508. THE TEST SUITE DISABLES CSRF, AND THE TEMPLATES STILL ASK FOR IT.**
+`WTF_CSRF_ENABLED = False` (tests/conftest.py) means a form has no
+`csrf_token` field, so any template that calls `{{ form.csrf_token() }}` is
+`jinja2.exceptions.UndefinedError: '...Form object' has no attribute
+'csrf_token'`. On `show_post` the reply form is rendered **only for a
+logged-in reader**, so an anonymous row renders the real page and a logged-in
+one has to patch `render_template`. The error names the form, not the setting.
+
+**509. `Headers.set` REPLACES EVERY VALUE FOR THAT NAME.** Two `set('Link',
+...)` calls leave one Link header, not two -- and they also discard whatever
+the framework put there earlier (the preload hints). `add` is what a
+multi-valued header wants. D1086 was exactly this, and it cost the page its
+ActivityPub alternate.
+
+**510. `post_replies` RETURNS A TREE OF DICTS.** Its annotation says
+`List[PostReply]`; it returns `[{'comment': PostReply, 'replies': [...]}, ...]`
+built from `comments_dict`. A row that reads `.body` off a member gets
+`AttributeError: 'dict' object has no attribute 'body'`. The annotation is
+wrong, not the code.
+
+**511. A CONDITIONAL EXPRESSION BINDS LOOSER THAN `+`.** `[a] + b if c else []`
+is `([a] + b) if c else []`, not `[a] + (b if c else [])`. D1087 was that,
+and the visible effect was a feature that silently did nothing for the common
+case: `mark_post_read([], ...)` for every post with no cross-posts.
+
+**512. A FOREIGN KEY MAKES THE "NOT FOUND" BRANCH UNREACHABLE.**
+`show_post`'s `if lang:` after `db.session.get(Language, ...)` cannot be
+exercised: `post.language_id` is a foreign key, so the row it names always
+exists and PostgreSQL refuses `9999` outright
+(`psycopg2.errors.ForeignKeyViolation`). Delete the row rather than mock the
+database into an inconsistent state.
+
+**513. THE TEST CLIENT'S COOKIE NEEDS THE SERVER NAME.**
+`client.set_cookie('warned', '1')` defaults to `localhost` and is never sent
+to `SERVER_NAME`, so a row that needs a cookie measures the case without it.
+Pass `domain=app.config['SERVER_NAME']`.
+
+**514. ONE AUTHENTICATED IDENTITY PER TEST.** Flask-Login caches the loaded
+user on `g`, and the fixtures push ONE app context for the whole test, so the
+FIRST request in a test fixes `current_user` for every request after it --
+whatever client makes them. Measured: an authenticated client served
+`public, max-age=30` (the anonymous branch) after an anonymous request ran
+first, and an anonymous client rendering the logged-in reply form after a
+logged-in request ran first. A row that needs both views of a page has to be
+two rows.
