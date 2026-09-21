@@ -831,7 +831,13 @@ def do_subscribe(actor, user_id, admin_preload=False, joined_via_feed=False):
                     community = Community.query.filter_by(ap_id=actor).first()
                     if community is None:
                         community = search_for_community(f'!{actor}' if '!' not in actor else actor)
-                    if community.banned:
+                    # `community is not None and`: search_for_community returns
+                    # None for a handle it cannot resolve, and this line used to
+                    # dereference it -- `AttributeError: 'NoneType' object has
+                    # no attribute 'banned'`. The "community not found" path at
+                    # the bottom of this function is where that belongs, and it
+                    # was never reached.
+                    if community is not None and community.banned:
                         community = None
                     remote = True
                 else:
@@ -843,15 +849,38 @@ def do_subscribe(actor, user_id, admin_preload=False, joined_via_feed=False):
                         if not admin_preload:
                             abort(401)
                         else:
+                            # RETURN, as the direct-read check below now does.
+                            # This arm recorded the refusal and then fell
+                            # through into the join, so a bulk importer
+                            # subscribed the account to a community it is
+                            # banned from while reporting that it could not --
+                            # D991's shape at the first gate as well as the
+                            # second.
                             pre_load_message['user_banned'] = True
+                            return pre_load_message
                     if community_membership(user, community) != SUBSCRIPTION_MEMBER and community_membership(user, community) != SUBSCRIPTION_PENDING:
                         banned = CommunityBan.query.filter_by(user_id=user.id, community_id=community.id).first()
                         if banned:
+                            # RETURN, rather than flash and carry on. This
+                            # branch used to fall through into the join, so a
+                            # user with a CommunityBan row became a member
+                            # anyway while being told they could not.
+                            #
+                            # The check above it -- `community.id in
+                            # communities_banned_from(user.id)` -- is the one
+                            # that normally refuses, and it reads a list
+                            # memoized for 86400 seconds. community_ban_user
+                            # invalidates it, but a ban arriving any other way
+                            # (federated in, or written by a tool that does not
+                            # know to) leaves that gate stale for a day, and
+                            # this direct read is what should have caught it.
                             if not admin_preload:
-                                if current_user and current_user.id == user_id:
+                                if current_user and current_user.is_authenticated and current_user.id == user_id:
                                     flash(_('You cannot join this community'))
+                                abort(401)
                             else:
                                 pre_load_message['community_banned_by_local_instance'] = True
+                                return pre_load_message
                         # for local communities, joining is instant
                         existing_membership = CommunityMember.query.filter_by(user_id=user.id, community_id=community.id).first()
                         if not existing_membership:
@@ -974,6 +1003,12 @@ def unsubscribe(actor):
 @approval_required
 def join_then_add(actor):
     community = actor_to_community(actor)
+    # D992's shape, third instance in this file. The actor comes from the URL,
+    # so an unresolvable one was an AttributeError on the next line rather than
+    # a 404.
+    if community is None:
+        abort(404)
+
     if not current_user.subscribed(community.id):
         if not community.is_local():
             # send ActivityPub message to remote community, asking to follow. Accept message will be sent to our shared inbox
@@ -2784,6 +2819,12 @@ def community_invite_accept(actor, token):
     form = InviteAcceptForm()
 
     community = actor_to_community(actor)
+    # D992's shape, second instance in this file: actor_to_community returns
+    # None for an actor it cannot resolve, and the next line dereferenced it.
+    # The actor comes straight from the URL, so a stale or mistyped invite link
+    # was an AttributeError rather than a 404.
+    if community is None:
+        abort(404)
 
     if community.is_member(current_user):
         flash(_('You are already a member.'))

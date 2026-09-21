@@ -631,6 +631,15 @@ class RetrieveRemotePost(FlaskForm):
 
 
 class InviteCommunityForm(FlaskForm):
+    # community_invite calls invite_with_email() once per line, from this
+    # instance's own mail server. Community.invitations defaults to 0 and
+    # can_invite() returns True for anyone when it is 0, so without a cap any
+    # account past created_very_recently() could paste ten thousand addresses
+    # into a default community's invite box and have the instance send ten
+    # thousand emails under its own reputation. The feature is for inviting
+    # people you know.
+    MAX_INVITATIONS = 20
+
     to = TextAreaField(_l('To'), validators=[DataRequired()],
                        render_kw={'placeholder': _l('Email addresses or fediverse handles, one per line'),
                                   'autofocus': True})
@@ -639,6 +648,11 @@ class InviteCommunityForm(FlaskForm):
     def validate_to(self, field):
         if ',' in field.data:
             raise ValidationError(_l('Use new lines instead of commas.'))
+        recipients = [line.strip() for line in field.data.split('\n') if line.strip()]
+        if len(recipients) > self.MAX_INVITATIONS:
+            raise ValidationError(
+                _l('Please invite no more than %(num)d people at a time.',
+                   num=self.MAX_INVITATIONS))
         lines = field.data.split('\n')
         if len(lines) > 50:
             raise ValidationError(_l('Maximum of 50 at a time.'))
