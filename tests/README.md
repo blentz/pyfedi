@@ -9688,6 +9688,52 @@ satisfy a form, a slug or an actor -- say so in the docstring and pin those
 routes individually, rather than leaving the ratchet's name to imply a coverage
 it does not have. See D973.
 
+**414. NORMALISE IN THE VALIDATOR, NOT AFTER IT.** `AddCommunityForm` checked
+`url` for uniqueness and `add_local` then slugified it, and `slugify` is not the
+identity on the strings the validator accepts: `'__general__'` became
+`'general'`. A name the form approved therefore reached the INSERT as one that
+already existed, and the 500 that followed was an `IntegrityError` the form was
+written to prevent. Whenever a route transforms a field after validation, move
+the transform into `validate()` and let every check run on the value that will
+actually be stored.
+
+**415. ORDER THE VALIDATOR: STRIP, THEN CHECK CHARACTERS, THEN NORMALISE, THEN
+CHECK UNIQUENESS.** Putting the normalisation first turns `'has-a-hyphen'`
+into `'has_a_hyphen'` and accepts it, instead of reporting "- cannot be in
+Url". Putting the `/c/` strip in the route reproduces D980 exactly, one field
+along. Both mistakes were made while fixing D980 and both were caught by rows
+written for the character rules -- which is the argument for writing those rows
+before touching the validator.
+
+**416. AN `Optional()` FIELD'S DATA IS `None`, AND `None > 0` RAISES.**
+`community.topic_id = form.topic.data if form.topic.data > 0 else None` is a
+`TypeError` for any client that omits the field, even though the UI always
+sends it. Reverting the guard failed five rows, not one: an unguarded
+comparison on an optional field is not an edge case, it is the common path for
+every non-browser caller. See D982.
+
+**417. A `try/except` AROUND ONE READ OF `g.site` IS USELESS IF THE NEXT LINE
+READS IT AGAIN.** `add_local` fell back to `db.session.get(Site, 1)` and then
+dereferenced `g.site.enable_nsfw` three lines later, unguarded -- so the
+fallback could not rescue the request it existed for. Fix it by using the local
+rather than deleting it, and the branch becomes both meaningful and testable.
+See D984.
+
+**418. A SUBSTRING ASSERTION CANNOT TELL APART MESSAGES THAT SHARE A PREFIX.**
+The nsfw variant of "Community not found." begins with the plain one, so
+`assert 'Community not found.' in flashed` passed for both values of the
+setting and the mutant forcing one branch survived a row parameterised over
+both. Assert equality for user-facing strings. This is the eighth form of the
+same family in sub-project 80: **a parameterised row proves nothing if its
+assertion cannot distinguish the parameters.**
+
+**419. THE ANCHOR PRE-CHECK KEEPS FINDING DUPLICATED CODE.** D833's uniqueness
+requirement refused a mutant in `add_remote` because the identical
+five-line `search_for_community` / `is blocked.` block appears twice in
+`app/community/routes.py`, ~2600 lines apart. That is D935's finding again, in
+a second module: when an anchor matches twice, read the collision before
+working around it.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
