@@ -16015,3 +16015,49 @@ could repoint; an icon any logged-in account could delete; four routes that
 mutated on a bare GET; and an unauthenticated outbound-fetch primitive. The
 floor is what stops that work being undone by a later change that merely looks
 tidy.
+
+**Next free number: D1033.**
+
+# SUB-PROJECT 81: `app/user/routes.py`
+
+The largest uncovered module that is not `app/cli.py` or `app/nntp/*`: 1,319
+uncovered statements of 1,579, at 12.7%. It holds the account surface --
+profile, settings, blocking, reporting, deletion -- which is where the standing
+priority points.
+
+## Slice A: banning, blocking, reporting and deletion
+
+**The round in one line: eleven functions close at zero gaps and carried **SIX
+production defects** -- **a banned account could still file reports**, **a
+self-report counted**, **blocking a local profile blocked the whole instance**,
+and **the site's first administrator could delete their own account.**
+
+### 1. THE REPORT ROUTE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1033** | `app/user/routes.py:940` | **A BANNED ACCOUNT COULD STILL FILE REPORTS.** Every report writes a `Report` row and a `Notification` for **every admin**, so a banned account -- one already barred from posting -- could spend moderator attention at will. This is the same abuse `community_report` was fixed against (found there by the strengthened D973 ratchet); the other report route never got the check. | **fixed** | `PROBE u1 reports created: 1 / admin notifications: 1` |
+| **D1034** | `app/user/routes.py:946` | **REPORTING YOURSELF COUNTED.** A self-report created a real report, notified every admin, and incremented `user.reports` -- the counter that both the *"moderators have already assessed reports regarding this person"* message and the admin queue read. Every sibling action on a profile (block, unblock, ban, unban, delete) refuses self-targeting; this one did not. | **fixed** | `PROBE u2 reports created: 1` |
+| **D1037** | `app/user/routes.py:963` | `source_instance.domain` read unguarded on a nullable FK -- `AttributeError: 'NoneType' object has no attribute 'domain'`, a 500 on an ordinary report. **The fix is one edit, not two**: the guard on the `.domain` read carries it, while the companion `if user.instance_id` before `db.session.get` only avoids a SQLAlchemy warning. Reverting that half alone leaves every row green, which the pin measured and the test says. | **fixed** | The pin: `D1037 reporter instance nil guard: 73 passed` / `D1037b the domain read itself: 1 failed` |
+
+### 2. BLOCKING, AND WHAT GETS BLOCKED
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1035** | `app/user/routes.py:873` | **BLOCKING A LOCAL PROFILE'S INSTANCE BLOCKED THIS INSTANCE.** `user_block_instance` never checked that the profile was remote, and a local profile's `instance_id` is this instance -- so one click on a local user's *"block instance"* hid the entire site from the caller, announcing it as *'Content from None will be hidden.'* because a local user has no `ap_domain`. | **fixed** | `PROBE u3 block_remote_instance called with: (1, 1)` / `flashed: ['Content from None will be hidden.']` |
+
+### 3. DELETION
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1036** | `app/user/routes.py:1127` | **THE SITE'S FIRST ADMINISTRATOR COULD DELETE THEIR OWN ACCOUNT.** `delete_account`'s "this user cannot be deleted" guard sat on the **GET branch only**, so the refusal it states was advice rather than a rule -- POSTing the form directly went straight through. User 1 is the account `delete_profile` refuses to delete and the one an instance cannot recover without. | **fixed** | `PROBE u4 founder banned? True email: deleted_1@deleted.com` |
+| **D1038** | `app/user/routes.py:1026` | **A WARNING THAT COULD NEVER FIRE.** `delete_profile` flashes *'Deleted user with role permissions.'* behind `user.is_admin() or user.is_staff()`, both of which walk `self.roles` -- and both were read **after** `delete_dependencies()`, which executes `DELETE FROM "user_role" WHERE user_id = ...`. So for every account the warning was written for it was dead code; the only account `is_admin()` would still answer True for is user 1, whom the route refuses to delete two lines above. The flags are now read first. | **fixed** | The row fails with the reads moved back below `delete_dependencies()` |
+
+### 4. WHAT THE MUTATION PASS FOUND
+
+36 mutants; the measuring pass killed 32.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1039** | `tests/test_user_moderation.py` | Three real gaps. `if user and not user.banned:` is reachable **only for a remote account** -- `find_local_user` filters `banned=False` (`app/activitypub/actor.py:29`) so a banned local profile is a 404 before it, while `find_remote_actor` does not filter at all for a user URL (`:91`). The unblock query's `blocker_id` half could be deleted without any row noticing, because no row had somebody ELSE's block of the same person. And `instance.id != 1` in the deletion task was masked by the local instance row having no `inbox`, so the row had to give it one. | **all three closed** | `m5`, `m15`, `m32` |
+| **D1040** | `app/user/routes.py:880`, `:807` | Two **equivalent** mutants, proved from the source. `user.is_local() or user.instance_id is None or user.instance_id == 1` -- the first disjunct cannot decide anything, because a local account always carries `instance_id` 1 and nothing in the codebase creates one that does not; it is defence against that invariant breaking. And `allow_banned=True` on `unban_profile`'s **handle** arm changes no answer, because `find_remote_actor` never filters banned users -- it is load-bearing only on the local-URL arm two lines below, where it is already pinned. | **registered as equivalent mutants** | `m10` and `m21` SURVIVED with rows that construct both states |
