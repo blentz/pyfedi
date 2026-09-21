@@ -15848,3 +15848,52 @@ that could crash or hang, and a nil instance dereference.**
 |---|---|---|---|---|
 | **D1008** | `tests/test_community_show.py` | Two survivors, one cause: **`Post.deleted` and `PostReply.deleted` are each filtered TWICE**, once in the anonymous arm and once in the logged-in arm, and every row for them was anonymous. Deleting the logged-in copy of either changed nothing any assertion could see. The tenth instance in this sub-project of an assertion that cannot distinguish the thing it names -- and the first where the duplication, not the assertion, is what made it invisible. | **closed** | `m16 deleted posts shown: SURVIVED` and `m24 deleted comments shown: SURVIVED`, both KILLED after |
 | **D1009** | `app/community/routes.py:352` | An **equivalent mutant**, proved from the source rather than contorted into a kill. `if current_user.is_authenticated and community.instance_id in banned_instances(current_user.id): banned_from_community = True` cannot change the answer, because `communities_banned_from` (`app/utils.py:1687`) already unions the community bans with `Community JOIN InstanceBan ON Community.instance_id = InstanceBan.instance_id` -- so any community reaching the second check with a banned instance was flagged by the first. It is the **third** independent answer to "is this user banned here" in one request path, which is D995's finding from slice D, now with a measured consequence: one of the three is dead code. | **registered as an equivalent mutant; D995 gains a measured consequence** | `m8 instance ban ignored: SURVIVED (115 passed)` |
+
+**Next free number: D1010.**
+
+## Slice G: syndication -- RSS out, iCal out, RSS in
+
+**The round in one line: five functions close at zero gaps and carried **FIVE
+production defects** -- **a moderator of any community could repoint or delete
+another community's RSS importer**, two 500s where refusals were meant, a
+private community's feed answered `304` to a conditional request, and one bad
+event failed the whole calendar.**
+
+### 1. CROSS-COMMUNITY TAKEOVER OF THE RSS IMPORTER
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1010** | `app/community/routes.py:1994`, `:2038` | **`feed_id` AND `community_id` BOTH COME FROM THE URL, AND NOTHING TIED THEM TOGETHER.** `community_rss_feed_edit` checks that the caller moderates `community_id` -- *their own* community -- and then loads `RssFeed` by `feed_id` with no ownership check at all. So a moderator of any community could rewrite **another community's** feed. That is not a cosmetic edit: `RssFeed.url` is the input to the background fetcher that creates posts in the feed's community, so a moderator of one community could make another community's importer poll a URL they control and have the posts land there. `community_rss_feed_delete` has the identical hole and a worse effect -- `delete_dependencies()` deletes **every post the feed created**. Both routes now answer 404 for a feed that belongs elsewhere. | **fixed, both sites** | `PROBE r1 their feed is now: Taken over https://attacker.example/feed.xml` / `PROBE r2 their feed still exists? False` |
+| **D1011** | `app/community/routes.py:1994` | `rss_feed.title = form.name.data` on a `None` row for a `feed_id` that does not exist -- `AttributeError: 'NoneType' object has no attribute 'title'`, measured. Answered by D1010's guard, since a missing row cannot belong to the community. | **fixed** | `PROBE r4 RAISED: AttributeError ...` |
+
+### 2. TWO 500s WHERE REFUSALS WERE MEANT
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1012** | `app/community/routes.py:1968` | `community_rss_feeds` ended both of its arms without returning anything, so a **non-moderator** and an **unresolvable community name** each produced `TypeError: The view function for 'community.community_rss_feeds' did not return a valid response`. A 500 is not a refusal: it is an unhandled error page, it is logged as a fault rather than as an access denial, and it tells the caller nothing. Hoisted to `abort(404)` and `abort(403)`, which also unnests the body. | **fixed** | `PROBE r3 RAISED: TypeError The view function ... did not return a valid response` |
+
+### 3. AN ACCESS CHECK A CONDITIONAL REQUEST WALKED PAST
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1013** | `app/community/routes.py:746` | **THE 304 WAS ANSWERED BEFORE THE PRIVATE CHECK.** A client holding an ETag from before a community was made private kept getting `304 Not Modified` where a fresh request got 403. The ETag is `{id}_{hash(last_active)}`, so a 304 on a guessed value also confirms the community's current `last_active` to anyone who can guess it. **Order is the whole defect**: the same two checks, swapped, refuse first and then answer conditionally. | **fixed** | `PROBE r5 private feed with matching etag: 304` / `PROBE r5 private feed without etag: 403` |
+
+### 4. ONE BAD EVENT FAILED THE WHOLE CALENDAR
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1014** | `app/community/routes.py:826` | `evt.begin = post.event.start`, where `Post.event` is a relationship that can be absent for a `POST_TYPE_EVENT` post -- a federated event whose object carried no usable times, or a post whose type was changed after creation. One such post was an `AttributeError` that lost the **entire** iCal feed rather than that one entry. The entry is now skipped. | **fixed** | `PROBE r6 RAISED: AttributeError 'NoneType' object has no attribute 'start'` |
+
+### 5. WHAT THE MUTATION PASS FOUND
+
+26 mutants; the measuring pass killed 25.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1015** | `tests/test_community_syndication.py` | The survivor dropped `Post.type == POST_TYPE_EVENT` from the iCal query and nothing noticed -- **because D1014's own fix masked it**. An ordinary post has no `Event` row, so the new `if post.event is None: continue` hides it whether or not the type filter is there. The discriminating case is a post that HAS an Event row and is no longer an event, which is what a post whose type was changed after creation looks like. **A guard added this round made an existing filter untestable by the rows that were already there**, and only the mutation pass could say so. | **closed** | `m12 ical type filter dropped: SURVIVED` -> `KILLED` |
+
+### 6. REGISTERED, NOT FIXED
+
+| ID | Where | What | Why not this round |
+|---|---|---|---|
+| D1016 | `pytest.ini` | `ics` 0.7.3 serializes an alarm by calling `str(alarm)` on it (`ics/serializers/event_serializer.py:104`), and `Component.__str__` raises a `FutureWarning` about its own 0.9 behaviour -- **inside the library**, once per event carrying an alarm. The only way to avoid it from our side is to stop attaching the 30-minute reminder in `show_community_ical`, which is a product feature, so the trade is wrong. Filtered by module, category AND message text, with the reasoning in `pytest.ini`; every other `FutureWarning` from every other module still shows. This is the first warning filter in that file. | An `ics` upgrade. 0.8 is the first release that fixes it and is still alpha. |

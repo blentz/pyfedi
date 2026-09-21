@@ -9917,6 +9917,40 @@ per-test limit when the guard is reverted, because the unguarded loop does not
 end. A hang is a defect with a worse operational profile than a crash -- it
 holds a worker instead of returning a 500.
 
+**446. THE COMMUNITY BLUEPRINT'S PREFIX IS `/community`, AND SOME ROUTES
+REPEAT IT.** `@bp.route('/community/<int:community_id>/feed/<int:feed_id>')`
+is served at `/community/community/<id>/feed/<id>`. The doubling is real; a row
+that "fixes" it gets a 404 that looks exactly like the refusal under test.
+
+**447. TWO IDs IN ONE URL NEED A CHECK THAT THEY BELONG TOGETHER.** D1010 is
+the shape: the route authorized `community_id` and then loaded `feed_id`
+without relating them. Whenever a path carries a parent id and a child id, ask
+what makes the child the parent's -- the authorization on the parent says
+nothing about the child.
+
+**448. A ROUTE THAT FALLS OFF THE END RETURNS None, AND FLASK CALLS THAT A
+500.** `TypeError: The view function ... did not return a valid response`. An
+`if` with no `else` in a view is a 500 waiting for the first caller who fails
+the condition, and it reads in the logs as a fault rather than as the refusal
+it was meant to be.
+
+**449. ORDER IS AN ACCESS CONTROL.** D1013's two checks were both present and
+both correct; the conditional-request check simply ran first, so a 304 was
+returned to a caller the next check would have refused. Put every access check
+above every short-circuit -- 304, cache hit, early return.
+
+**450. A GUARD ADDED THIS ROUND CAN MAKE AN OLD FILTER UNTESTABLE.** D1014's
+`if post.event is None: continue` hid the absence of `Post.type ==
+POST_TYPE_EVENT` from every row in the file, because the two exclude the same
+posts for different reasons. After adding a skip, re-run the mutation pass over
+the filters NEAR it, not only over the new line.
+
+**451. A THIRD-PARTY WARNING RAISED INSIDE THE LIBRARY IS NOT ALWAYS OURS TO
+FIX.** `ics` calls `str()` on its own component while serializing an alarm. The
+filter for it names the module, the category and the message text, so it cannot
+hide anything of ours, and the reason sits next to it with the version that
+will make it removable.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
@@ -9925,6 +9959,10 @@ need re-investigating:
 - Two `DeprecationWarning`s from `ldap3`/`pyasn1` (`tagMap`/`typeMap` are
   deprecated) appear in every pytest run. They come from a transitive
   dependency pulled in by LDAP support, unrelated to this test setup.
+- A `FutureWarning` from `ics` 0.7.3, raised inside the library while
+  serializing an event alarm, is filtered in `pytest.ini` rather than shown.
+  Fact 451 and D1016 say why, and the filter names the module, the category and
+  the message text so it cannot hide anything of ours.
 - `./run_tests.sh --down` logs `StopSignal SIGTERM failed to stop container
   ...test-runner... resorting to SIGKILL`. `test-runner` idles on
   `sleep infinity`, which does not trap `SIGTERM`, so compose falls back to
