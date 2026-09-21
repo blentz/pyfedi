@@ -9471,6 +9471,79 @@ returns `str(self.id)`, and `app/models.py:1163` does not, so
 test sets it by hand, an int after a real `login_user`. `load_user` does
 `int(id)`, so both work; comparisons in tests need `str()` on both sides.
 
+**384. A FORM FIELD NOBODY READS IS INVISIBLE UNTIL SOMEBODY TRUSTS IT.**
+`AddUserForm` declared `banned` and `verified` and `admin_users_add` set
+neither, so an admin who ticked "Banned" when creating an account got an active
+one -- silently, because nothing errors on an unread field. When covering a
+form handler, diff the form's fields against the attributes the handler
+assigns; the gap is the bug list. See D944.
+
+**385. `else:` AFTER A `validate_on_submit()` BRANCH ALSO RUNS FOR A REFUSED
+POST.** The pre-fill arm belongs behind `elif request.method == 'GET':`. As an
+`else` it overwrites the submission from the database, so an admin whose form
+was rejected sees the stored values and loses what they typed -- and the page
+gives no sign of it. This is the third time in `app/admin/routes.py` alone
+(D907, slice C's `admin_federation`, D945). Grep a blueprint for
+`validate_on_submit` followed by a bare `else` before assuming it is one bug.
+
+**386. AN APOLOGY IN THE UI IS A BUG REPORT.** `admin_user_edit` flashed
+"Permissions are cached for 50 seconds so new admin roles won't take effect
+immediately" -- a message written instead of the two-line invalidation that
+removes the problem, and the direction that matters is DEMOTION: an
+administrator stripped of their role kept every permission for the length of
+the timeout. Where the code explains a limitation to the user, ask whether the
+limitation is real. See D946.
+
+**387. AN AUDIT CALL INSIDE ONE BRANCH OF THREE IS AN AUDIT GAP.**
+`add_to_modlog('delete_user', ...)` lived in the remote-user branch, so
+deleting one of this instance's OWN accounts recorded nothing anywhere.
+Parameterise the pin over every branch -- local-finalized, local-not-finalized,
+remote -- because the defect is precisely that one of them had the call. Write
+the entry before the row is destroyed, or `display_name()` and `link()` have
+nothing to read. See D947.
+
+**388. CHECK THE INDENTATION OF WHAT FOLLOWS A `if <row>:` GUARD.**
+`unsubscribe_from_everything_then_delete_task` guarded its unsubscribe and
+federation work with `if user:` and then ran `user.delete_dependencies()`
+outside it. A task queued after its route has committed can always find the row
+gone -- two clicks, or a retry -- and the answer was `AttributeError: 'NoneType'
+object has no attribute 'delete_dependencies'`. See D948.
+
+**389. PAGINATION LINKS ARE BUILT TWICE.** `next_url` and `prev_url` are
+separate expressions, so a filter dropped from one may be present in the other
+and a row that checks only `next_url` passes with half the defect in place.
+Request page 2 as well. See D949, D953.
+
+**390. A SEARCH OVER `or_(a, b)` NEEDS A TERM THAT MATCHES ONLY `a`.** Every
+row searching `admin_users` used a term present in both the email and the user
+name, so deleting either half of the `or_()` survived. Give one user an address
+that shares nothing with its name, and search for each separately. See D953.
+
+**391. AN EXCLUSION IS VACUOUS IF NOTHING WOULD HAVE BEEN INCLUDED.**
+`instance.id != 1` -- do not send this instance its own Delete -- survived
+because every instance in the row was offline, so nothing was sent to anything.
+The row has to have live peers that DO receive it. Same shape as fact 350, for
+a filter rather than a field. See D953.
+
+**392. `Pagination.has_prev` IS `self.page > 1`.** So `users.has_prev and page
+!= 1` cannot be distinguished from `users.has_prev`: `self.page` is the value
+`paginate()` was given, and `paginate(page=0, error_out=False)` cannot produce
+`has_prev`. Read the property before spending a row on the second test. See
+D954.
+
+**393. DO NOT `patch('...current_app')` TO WATCH THE LOGGER.** Mock
+auto-creates `logger.exception` as an AsyncMock, and pytest then reports
+`RuntimeWarning: coroutine 'AsyncMockMixin._execute_mock_call' was never
+awaited` -- a warning this campaign counts. Patching the proxy also replaces
+every config lookup the route makes. Use pytest's `caplog` fixture, which also
+lets the row assert the detail reached the log instead of the browser.
+
+**394. `tests.factories.make_instance` ALWAYS INSERTS.** `instance.domain` is
+unique and the `site` fixture has already created the local instance, so a
+second `make_instance('test.piefed.local')` is a `UniqueViolation`, not a
+second row. Use a get-or-create helper in any file that builds users across
+several instances.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not

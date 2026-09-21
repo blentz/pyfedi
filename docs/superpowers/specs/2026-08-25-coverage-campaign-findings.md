@@ -15424,3 +15424,55 @@ the instance permanently.**
 |---|---|---|---|
 | D942 | `app/admin/routes.py:2575-2581` | **`masquerade` writes no audit record.** An account holding `change instance settings` can become any local user, act as them, and leave nothing behind saying it happened — not in the modlog, not in `ActivityPubLog`, nowhere. The guard is correct and the feature is legitimate; the absence of a trail is the gap. | An audit-log decision that should cover the whole admin blueprint rather than one route. |
 | D943 | throughout `app/admin/routes.py` | **The decorator order is inconsistent across the blueprint.** `masquerade` is `@login_required` outside `@permission_required(...)`; `admin_misc`, `admin_site`, `admin_federation` and the rest are the other way round. An anonymous visitor therefore gets the login page on some admin routes and `/auth/permission_denied` on others — the latter being both less useful and a slightly louder answer than it needs to be. | A blueprint-wide consistency change, best made once with a row that asserts it for every rule — the shape D901 already uses. |
+
+**BASIS (slice E): the full suite, `6769 passed, 3 skipped, 258 warnings, 6
+subtests passed in 492.39s`**, chained with `&&` to `All 63 module floors met.`
+6750 + 19 collected in `tests/test_role_permissions.py` = 6769, exactly.
+
+**Next free number: D944.** (**D944-D954 were taken by sub-project 79
+slice F, below; the free number is now D955.**)
+
+## Sub-project 79 (slice F): user administration, and the floor at last
+
+**The round in one line: the seven functions that create, ban, promote, demote
+and destroy accounts close at zero gaps and carried **SEVEN production
+defects** -- **a "Banned" checkbox that did not ban**, **a refused edit that
+silently threw away the admin's moderation note**, **a demoted administrator
+who kept every permission for fifty seconds**, and **deleting a local user
+leaving no trace in the modlog at all**. `app/admin/routes.py` takes its floor,
+six slices after slice A deliberately declined to.**
+
+### 1. THE PRODUCTION DEFECTS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D944** | `app/admin/routes.py:2035-2043` | **THE "BANNED" AND "EMAIL ADDRESS IS VERIFIED" CHECKBOXES ON THE ADD-USER FORM DID NOTHING.** `AddUserForm` has declared both since it was written; `admin_users_add` copied sixteen attributes out of the form and **neither of these two**. An admin creating a pre-banned account got an active one, and one marking an address verified got an unverified user -- with no error either time. A moderation control that silently does nothing is worse than one that is absent, because the admin believes it worked. | **fixed** | `PROBE u1 ticked Banned and Verified -> banned: False verified: False` |
+| **D945** | `app/admin/routes.py:1955` (before) | **A REFUSED EDIT SILENTLY THREW AWAY WHAT THE ADMIN TYPED.** The POST branch ended with `else:` rather than `elif request.method == 'GET':`, so a submission the form **refused** fell into the pre-fill arm and was overwritten from the database. The admin's typed `admin_note` and their Banned tick were both replaced by the stored values, on a page that looked as though they had entered nothing. **D907's shape for the third time in this module** -- registered in slice A, found again in slice C -- and here it destroys moderation input rather than a settings field, which is why it is a P and not another registration. | **fixed** | `PROBE u2 errors: {'role': ['Not a valid choice.']}` with `admin_note redisplayed as: 'the stored note'` and `banned redisplayed as: False` |
+| **D946** | `app/admin/routes.py:1940-1948` | **A DEMOTED ADMINISTRATOR KEPT EVERY PERMISSION FOR FIFTY SECONDS.** `admin_user_edit` rewrites `user_role` and invalidated nothing, and `user_access` is `@cache.memoize(timeout=50)` -- so an account stripped of its admin role went on passing every permission check for up to fifty seconds after the change was saved. **The page knew**: it flashed *"Permissions are cached for 50 seconds so new admin roles won't take effect immediately."* Slice E had just built this invalidation for `admin_permissions`; demotion is the direction that matters, and an apology in a flash message is not a mitigation. | **fixed** | The mutant removing the invalidation fails only the new row, i.e. nothing else had ever exercised it |
+| **D947** | `app/admin/routes.py:2081-2101` | **DELETING A LOCAL USER WAS NEVER RECORDED IN THE MODLOG.** `add_to_modlog('delete_user', ...)` sat in the **remote** branch alone. Neither local path -- finalized or not -- wrote anything, and `unsubscribe_from_everything_then_delete_task`, where a finalized local deletion actually happens, contains no `add_to_modlog` either (`grep -c` gives **0**). So the most destructive action available against one of this instance's own accounts left no trace, while the same action against somebody else's did. Moved above the branch, and written before the row is destroyed so `display_name()` and `link()` still have something to read. | **fixed** | The pin is parameterised over all three shapes, because the defect was precisely that one of three branches had the call |
+| **D948** | `app/admin/util.py:61-63` | **`user.delete_dependencies()` SAT OUTSIDE ITS OWN `if user:`.** Everything above it was guarded; the delete and the UPDATE were not. A user already gone when the task ran -- two admins pressing Delete, or a retried task -- raised `AttributeError: 'NoneType' object has no attribute 'delete_dependencies'`. The task is queued after the route has already committed, and `admin_user_delete` is a plain POST with no idempotency, so two clicks are enough. | **fixed** | The pin calls the task with an id that does not exist |
+| **D949** | `app/admin/routes.py:1745-1750` | **THE VERIFIED FILTER WAS DROPPED FROM THE PAGINATION LINKS.** `next_url` and `prev_url` carried `search`, `local_remote`, `sort_by` and `last_seen` but not `verified`, so paging past the first page silently showed the unfiltered list. | **fixed** | Mutants m29 and m30, one per link -- they are built separately, so a row checking only `next_url` leaves half of it in place |
+| **D950** | `app/admin/routes.py:2015-2022` | **THE RESEND-EMAIL ENDPOINT RETURNED THE MAIL EXCEPTION'S TEXT TO THE BROWSER.** `message = _("Problem sending email: ") + str(e)`, returned as the HTMX response body -- and a mail failure names the relay, the credentials in use, or the recipient's provider. It was also D815's shape: the catalogue was asked for a translated prefix concatenated with a stack of server detail. Same class as D895. The detail is now logged and the browser is told to look there. | **fixed** | The pin asserts a planted `SMTP AUTH failed for smtp-relay.internal as postmaster@example.com` is absent from the body and present in `caplog.text` |
+
+### 2. DEAD CODE REMOVED
+
+| ID | Where | What | Status |
+|---|---|---|---|
+| D951 | `app/admin/routes.py:2019-2038` (before) | **TEN UNREACHABLE LINES IN `admin_users_add`:** two "remove the existing avatar/cover first" blocks, copied from `admin_user_edit` where they have a purpose. `user` here is the `User()` built at the top of the function, so `avatar_id` and `cover_id` are always `None` and neither block could ever run. | **removed** |
+| D952 | `app/admin/routes.py:1947` (before) | `if form.role.data == 4:` -- the magic number for the Admin role, two lines above a query already using the imported `ROLE_ADMIN`. It guarded only the flash message that D946 made untrue, so it left with it. | **removed with D946** |
+
+### 3. WHAT THE MUTATION PASS FOUND
+
+47 mutants over both files; the measuring pass killed 42, and **three of the
+five survivors were real**:
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D953 | `tests/test_admin_user_administration.py` | Three gaps of the same kind -- **a filter or an exclusion tested from only one side.** `prev_url` was never checked (it is built separately from `next_url`, so D949's own pin covered half the defect); the user search is an `or_()` over email **and** user name, and every row's search term matched both, so dropping either half survived; and `instance.id != 1` -- "do not send this instance its own Delete" -- survived because every instance in the row was offline, so nothing was sent to anything. Each closed by giving the row a case that can only pass with the code present. | **closed; m30, m35 and m45 die** | The three mutants |
+| D954 | `app/admin/routes.py:2030`; `app/admin/routes.py:1750` | Two **equivalent** mutants, proved rather than contorted into kills. `if file: user.avatar = file` versus an unconditional `user.avatar = file`: `save_icon_file` returns `None` on refusal and the attribute is already `None`, so neither path is observable. And `users.has_prev and page != 1`: `flask_sqlalchemy.pagination.Pagination.has_prev` is `self.page > 1`, and `self.page` is the value `paginate()` was given, so `has_prev` cannot be true while `page == 1` -- the second test can never change the answer. | **registered as equivalent mutants, with both mechanisms read off the source** | m07 and m31, the two survivors of 47 |
+
+### 4. THE FLOOR
+
+`app/admin/routes.py` has been deliberately unfloored since slice A: the figure
+would have risen every round and an interim floor is a number with no meaning.
+Slice F is the last of the six, so the floor is taken here.
