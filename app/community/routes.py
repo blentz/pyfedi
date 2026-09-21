@@ -1054,6 +1054,12 @@ def add_post(actor, type=None):
         else:
             community = actor_to_community(actor)
 
+    # D992's shape, fourth instance in this file: actor_to_community returns
+    # None for an actor it cannot resolve, and the next lines read
+    # community.default_post_type and community.nsfw.
+    if community is None:
+        abort(404)
+
     if type is None:
         type = community.default_post_type or 'link'
 
@@ -1120,7 +1126,13 @@ def add_post(actor, type=None):
                 uploaded_file = None
             post = make_post(form, community, post_type, SRC_WEB, uploaded_file=uploaded_file)
         except Exception as ex:
-            flash(_('Your post was not accepted because %(reason)s', reason=str(ex)), 'error')
+            # The exception text is LOGGED, not flashed. make_post reaches
+            # image processing, remote fetches and the plugin hooks, so str(ex)
+            # can name a path, a relay or a library internal -- and this goes
+            # straight onto the page. Same class as D895 and D950.
+            current_app.logger.exception('post creation failed for user %s in community %s',
+                                         current_user.id, community.id)
+            flash(_('Your post was not accepted. Please check the server log for details.'), 'error')
             if current_app.debug:
                 raise ex
             return redirect(url_for('activitypub.community_profile',
@@ -1144,7 +1156,16 @@ def add_post(actor, type=None):
         resp.delete_cookie('post_description')
         resp.delete_cookie('post_tags')
         return resp
-    else:  # GET
+    elif request.method == 'GET':
+        # D1002 -- D907's shape again, the fifth instance the campaign has
+        # found. This was `else:`, so a submission the form REFUSED fell in
+        # here and had its community, language, timezone and notify_author
+        # overwritten from the database before being redisplayed. Measured: a
+        # post submitted in French, in Europe/London, with notifications off
+        # came back in the author's stored language, stored timezone and with
+        # notifications on. The cross-post and `?link=` prefills below ran on
+        # the refused submission too, overwriting the title and body that had
+        # just been typed.
         form.communities.data = community.id
         form.notify_author.data = True
         if post_type == POST_TYPE_POLL:
@@ -1163,8 +1184,23 @@ def add_post(actor, type=None):
         # The source query parameter is used when cross-posting - load the source post's content into the form
         if (post_type == POST_TYPE_LINK or post_type == POST_TYPE_VIDEO) and request.args.get('source'):
             source_post = db.session.get(Post, request.args.get('source'))
-            if source_post.deleted:
+            # `source_post is None` as well as `.deleted`: the id comes from a
+            # query parameter, so a stale cross-post link was an
+            # `AttributeError: 'NoneType' object has no attribute 'deleted'`.
+            if source_post is None or source_post.deleted:
                 abort(404)
+
+            # And the caller has to be able to SEE it. This block copies the
+            # source post's title, body, url and tags into the form, and
+            # nothing checked who was asking -- so a post in a private
+            # community could be read by anyone who knew its id, simply by
+            # opening the cross-post form for a community they can post to.
+            # Measured: a non-member read the title, body and url of a post in
+            # a private, local-only community. The condition is the one
+            # app/post/routes.py:102 uses to guard the post page itself.
+            if (source_post.community.private and
+                    source_post.community_id not in community_membership_private(current_user.id)):
+                abort(403)
             form.title.data = source_post.title
             form.body.data = source_post.body
             form.nsfw.data = source_post.nsfw

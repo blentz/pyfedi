@@ -414,7 +414,12 @@ class CreateImageForm(CreatePostForm):
         if self.communities:
             community = db.session.get(Community, self.communities.data)
             if community.is_local() and g.site.allow_local_image_posts is False:
+                # D1001. This appended the error and then returned True, so
+                # `allow_local_image_posts = False` recorded a complaint and
+                # accepted the image anyway. Measured: with the setting off,
+                # an image post to a local community still reached make_post.
                 self.communities.errors.append(_l('Images cannot be posted to local communities.'))
+                return False
 
         return True
 
@@ -430,7 +435,12 @@ class EditImageForm(CreateImageForm):
         if self.communities:
             community = db.session.get(Community, self.communities.data)
             if community.is_local() and g.site.allow_local_image_posts is False:
+                # D1001. This appended the error and then returned True, so
+                # `allow_local_image_posts = False` recorded a complaint and
+                # accepted the image anyway. Measured: with the setting off,
+                # an image post to a local community still reached make_post.
                 self.communities.errors.append(_l('Images cannot be posted to local communities.'))
+                return False
 
         return True
 
@@ -525,7 +535,9 @@ class CreateEventForm(SubmittedUrlMixin, CreatePostForm):
             if self.communities:
                 community = db.session.get(Community, self.communities.data)
                 if community.is_local() and g.site.allow_local_image_posts is False:
+                    # D1001, third site.
                     self.communities.errors.append(_l('Images cannot be posted to local communities.'))
+                    return False
 
         return True
 
@@ -571,9 +583,24 @@ class CreatePollForm(CreatePostForm):
             self.repeat.errors.append(_l("Polls can't be scheduled more than once"))
             return False
 
+        # D1003. Two defects in four lines.
+        #
+        # `range(1, 10)` counted choices 1-9 of the FIFTEEN fields this form
+        # declares, while `make_post` reads `range(1, 16)`. So a poll whose
+        # choices were typed into 10-15 was refused with "Polls need options
+        # for people to choose from" while showing six of them, and the
+        # unreachable `> 15` branch below could never fire -- fifteen fields
+        # cannot produce sixteen choices. The count now covers every field
+        # the form has and the dead branch is gone.
+        #
+        # `.data.strip()` was an AttributeError for any submission that
+        # omitted a choice field: WTForms leaves an unsubmitted StringField at
+        # None, not ''. The browser form always posts all fifteen, so this was
+        # a 500 for anything else. Measured:
+        # `AttributeError: 'NoneType' object has no attribute 'strip'`.
         choices_made = 0
-        for i in range(1, 10):
-            choice_data = getattr(self, f"choice_{i}").data.strip()
+        for i in range(1, 16):
+            choice_data = (getattr(self, f"choice_{i}").data or '').strip()
             if choice_data != '':
                 choices_made += 1
         if choices_made == 0:
@@ -582,8 +609,6 @@ class CreatePollForm(CreatePostForm):
         elif choices_made <= 1:
             self.choice_2.errors.append(_l('Provide at least two choices'))
             return False
-        elif choices_made > 15:
-            self.choice_1.errors.append(_l('Maximum 15 choices'))
         return True
 
 
