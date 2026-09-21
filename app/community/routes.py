@@ -499,7 +499,16 @@ def show_community(community: Community):
         sticky_posts = sticky_posts.all()
     else:   # comments
         content_filters = {}
-        comments = community.replies
+        # D1005. `Community.replies` is every PostReply in the community, with
+        # no join to Post, so the comments view listed the discussion under
+        # posts the posts view refuses to show: a post a moderator has removed
+        # (`Post.deleted`) and a post still awaiting review
+        # (`status <= POST_STATUS_REVIEWING`, which has never been public).
+        # Measured: `PROBE s1 replies shown: ['reply to a removed post']` and
+        # `PROBE s2 replies shown for a post under review: [...]`. The two
+        # filters are the ones the posts branch applies to Post itself.
+        comments = community.replies.join(Post, PostReply.post_id == Post.id).filter(
+            Post.deleted == False, Post.status > POST_STATUS_REVIEWING)
 
         # filter out nsfw and nsfl if desired
         if current_user.is_anonymous:
@@ -581,9 +590,19 @@ def show_community(community: Community):
         topics = []
         previous_topic = db.session.get(Topic, community.topic_id)
         topics.append(previous_topic)
-        while previous_topic.parent_id:
+        # D1006. `db.session.get` returns None for a parent_id pointing at a
+        # topic that has been deleted, and the next iteration read
+        # `previous_topic.parent_id` off it -- measured as
+        # `AttributeError: 'NoneType' object has no attribute 'parent_id'`,
+        # a 500 on the community page. `seen` is the other way this loop does
+        # not end: a topic tree with a cycle in it walks forever.
+        seen = {previous_topic.id}
+        while previous_topic.parent_id and previous_topic.parent_id not in seen:
             topic = db.session.get(Topic, previous_topic.parent_id)
+            if topic is None:
+                break
             topics.append(topic)
+            seen.add(topic.id)
             previous_topic = topic
         topics = list(reversed(topics))
 
@@ -615,9 +634,14 @@ def show_community(community: Community):
             feeds = []
             previous_feed = community_feeds[0]
             feeds.append(previous_feed)
-            while previous_feed.parent_feed_id:
+            # D1006's second site, the same walk over feeds.
+            seen_feeds = {previous_feed.id}
+            while previous_feed.parent_feed_id and previous_feed.parent_feed_id not in seen_feeds:
                 feed = db.session.get(Feed, previous_feed.parent_feed_id)
+                if feed is None:
+                    break
                 feeds.append(feed)
+                seen_feeds.add(feed.id)
                 previous_feed = feed
             feeds = list(reversed(feeds))
 
@@ -658,7 +682,11 @@ def show_community(community: Community):
         recently_downvoted = []
     
     if not community.is_local():
-        is_dead = community.instance.gone_forever
+        # D1007. `Community.instance_id` is nullable (app/models.py:575), so a
+        # remote community with no instance row made this an
+        # `AttributeError: 'NoneType' object has no attribute 'gone_forever'`
+        # -- a 500 on the page, measured. Unknown is not dead.
+        is_dead = community.instance.gone_forever if community.instance else False
         if is_dead:
             flash(_("This instance no longer online, so posts and comments will only be visible locally"), "warning")
     else:
