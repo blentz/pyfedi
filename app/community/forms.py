@@ -6,6 +6,7 @@ import pytesseract
 from PIL import Image, UnidentifiedImageError
 from flask import request, g
 from flask_babel import _, lazy_gettext as _l
+from slugify import slugify
 from flask_login import current_user
 from flask_wtf import FlaskForm
 from sqlalchemy import func
@@ -50,6 +51,13 @@ class AddCommunityForm(FlaskForm):
     def validate(self, extra_validators=None):
         if not super().validate():
             return False
+        # The '/c/' prefix is stripped HERE, not in add_local. People paste the
+        # path rather than the name, and the strip used to run in the route
+        # after validation -- so every check below saw '/c/whatever' while the
+        # stored value was 'whatever'.
+        if self.url.data.strip().lower().startswith('/c/'):
+            self.url.data = self.url.data.strip()[3:]
+
         if self.url.data.strip() == '':
             self.url.errors.append(_l('Url is required.'))
             return False
@@ -61,6 +69,23 @@ class AddCommunityForm(FlaskForm):
             # Allow alphanumeric characters and underscores (a-z, A-Z, 0-9, _)
             if not re.match(r'^[a-zA-Z0-9_]+$', self.url.data):
                 self.url.errors.append(_l('Community urls can only contain letters, numbers, and underscores.'))
+                return False
+
+            # Normalise to the exact value add_local will store, AFTER the
+            # character rules (which must see what was typed, or a hyphen would
+            # be silently turned into an underscore rather than reported) and
+            # BEFORE the uniqueness checks below.
+            #
+            # add_local used to slugify after validation, and slugify is not
+            # the identity on strings this validator accepts: '__general__'
+            # became 'general' and '___' became ''. So a submission that passed
+            # the uniqueness check could collide on INSERT --
+            # `UniqueViolation ... ix_community_ap_profile_id`, an unhandled
+            # 500 -- and the friendly "already exists" error never fired,
+            # because it had been asked about a different string.
+            self.url.data = slugify(self.url.data.strip(), separator='_').lower()
+            if self.url.data == '':
+                self.url.errors.append(_l('Url is required.'))
                 return False
 
             community = Community.query.filter(Community.name == self.url.data.strip().lower(),

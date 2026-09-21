@@ -88,16 +88,21 @@ def add_local():
         return redirect(url_for('main.list_communities'))
 
     form = AddCommunityForm()
-    if g.site.enable_nsfw is False:
+    # `site`, not `g.site`. The try/except above falls back to a database read
+    # when the before_request hook has not populated g.site -- and this line
+    # then dereferenced g.site anyway, three lines later, so the fallback could
+    # never actually rescue a request. Using the local makes it mean something.
+    if site.enable_nsfw is False:
         form.nsfw.render_kw = {'disabled': True}
 
     form.languages.choices = languages_for_form(all_languages=True)
     form.theme.choices = community_theme_list()
 
     if form.validate_on_submit():
-        if form.url.data.strip().lower().startswith('/c/'):
-            form.url.data = form.url.data[3:]
-        form.url.data = slugify(form.url.data.strip(), separator='_').lower()
+        # No slugify here any more: AddCommunityForm.validate normalises before
+        # its uniqueness checks, so form.url.data is already the value to
+        # store. Re-applying it here is what let the two disagree -- D980.
+        pass
         show_popular = True
         show_all = True
         if form.private.data:
@@ -195,17 +200,15 @@ def add_remote():
             except Exception as e:
                 if 'is blocked.' in str(e):
                     flash(_('Sorry, that instance is blocked, check https://gui.fediseer.com/ for reasons.'), 'warning')
-        elif address.startswith('@') and '@' in address[1:]:
-            # todo: the user is searching for a person instead
-            ...
-        elif '@' in address:
-            new_community = search_for_community('!' + address)
-        elif address.startswith('https://') or address.startswith('http://'):
+        else:
+            # The only other shape SearchRemoteCommunity.validate lets through.
+            # It refuses anything that does not start with '!' or 'http(s)://',
+            # so the three branches that used to stand here -- one for '@user',
+            # one for a bare 'name@server', and an `else` flashing the accepted
+            # formats -- could never run. The form reports those cases itself,
+            # with a message per rule.
             server, community = extract_domain_and_actor(address)
             new_community = search_for_community('!' + community + '@' + server)
-        else:
-            message = Markup(_('Accepted address formats: !community@server.name or https://server.name/c/community.') + ' ' + _('Search on <a href="https://lemmyverse.net/communities">Lemmyverse.net</a> to find some.'))
-            flash(message, 'error')
         if new_community is None:
             if g.site.enable_nsfw:
                 flash(_('Community not found.'), 'warning')
@@ -1247,7 +1250,14 @@ def community_edit(community_id: int):
             community.invitations = form.invitations.data
             community.restricted_to_mods = form.restricted_to_mods.data
             community.new_mods_wanted = form.new_mods_wanted.data
-            community.topic_id = form.topic.data if form.topic.data > 0 else None
+            # `form.topic.data and ...`, not a bare comparison. `topic` is a
+            # SelectField(coerce=int, validators=[Optional()]) fed from
+            # topics_for_form(0), so on an instance that has defined no topics
+            # the field has no choices, nothing is submitted, and data is None
+            # -- and `None > 0` is `TypeError: '>' not supported between
+            # instances of 'NoneType' and 'int'`. Every community edit on such
+            # an instance was a 500.
+            community.topic_id = form.topic.data if form.topic.data and form.topic.data > 0 else None
             community.default_layout = form.default_layout.data
             community.default_post_type = form.default_post_type.data
             community.downvote_accept_mode = form.downvote_accept_mode.data
@@ -1307,7 +1317,12 @@ def community_edit(community_id: int):
             task_selector('edit_community', user_id=current_user.id, community_id=community.id)
             return redirect(url_for('activitypub.community_profile',
                                     actor=community.ap_id if community.ap_id is not None else community.name))
-        else:
+        elif request.method == 'GET':
+            # `elif request.method == 'GET'`, not `else`. As an `else` this arm
+            # also ran for a POST the form REFUSED, overwriting the submission
+            # from the database -- so an owner whose theme or topic selection
+            # was rejected got their typed title and description silently
+            # replaced by the stored values. D907's shape for the fourth time.
             form.title.data = community.title
             form.description.data = community.description
             form.theme.data = community.theme
