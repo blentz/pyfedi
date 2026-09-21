@@ -10022,6 +10022,42 @@ Partial branches are the remaining work, not a rounding error.
 whose foreign key forbids the nil. The marker carries the reason and names the
 constraint, so a later reader can tell it from a line nobody got round to.
 
+**464. A LOCAL USER IS NOT FINDABLE BY URL UNLESS `ap_profile_id` IS SET.**
+`find_local_user` matches `ap_profile_id == actor_url` or `alt_user_name`
+(`app/activitypub/actor.py:29`), and `make_user` leaves both None for a local
+account -- so every `/u/<name>` route answers 404 before its own logic runs.
+Registration sets `ap_profile_id`; a fixture that exercises these routes has to
+do the same.
+
+**465. THE LOOKUP CAN BE THE ACCESS CHECK.** A banned LOCAL profile is a 404 at
+`find_local_user`, which filters `banned=False` unless `allow_banned=True`; a
+banned REMOTE profile is found, because `find_remote_actor` does not filter for
+a user URL. So `if not user.banned` further down is dead for one and
+load-bearing for the other, and a row that does not know which is testing
+nothing. Same reason `allow_banned=True` matters on one lookup arm and not the
+other (D1040).
+
+**466. `make_user` DOES NOT SET `ap_domain`.** `make_community` and
+`make_feed` do. A route that reads `user.ap_domain` -- `user_block_instance`
+does, into an `in` test -- is a TypeError on a factory-built remote user, and
+that is the factory's gap rather than the route's.
+
+**467. `current_user` IS A PROXY, AND A MOCK KEEPS THE PROXY.** Reading `.id`
+off the `current_user` a `render_template` mock captured, after the request has
+ended, answers None rather than raising. Assert on the template name, or on
+something the route computed, rather than on the proxy.
+
+**468. A GUARD READ AFTER A DELETE IS A GUARD ABOUT NOTHING.** D1038's warning
+asked `user.is_admin()` after `delete_dependencies()` had removed the account's
+`user_role` rows. When a function both destroys state and reports on it, read
+the report's inputs first.
+
+**469. CHECK WHAT ELSE ALREADY EXCLUDES THE CASE.** Three of this slice's four
+mutation survivors survived because something upstream made the mutated line
+irrelevant -- an inbox that was None, a lookup that already filtered, an
+invariant that made a disjunct redundant. Before writing a row for a guard, ask
+what would have to be true for that guard to be the thing that decides.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
