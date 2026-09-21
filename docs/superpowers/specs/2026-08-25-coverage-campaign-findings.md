@@ -16173,3 +16173,42 @@ not refuse an upload**.**
 | ID | Where | What | Status | Evidence |
 |---|---|---|---|---|
 | **D1063** | `tests/test_user_profile_feed.py` | Two real gaps, and the second is a trap worth the entry. The enclosure rows only ever used a media url, so `not type.startswith('text/')` could be deleted unseen. And the blank-line row put its blank lines at the END of the box -- but `form.urls.data.strip()` removes trailing whitespace BEFORE the split, so a trailing blank line never reaches the loop and a row built from one tests nothing. The blank lines have to sit BETWEEN two urls. | **both closed** | `m9`, `m17` |
+
+**Next free number: D1064.**
+
+## Slice E: keyword filters, user notes, remote follow
+
+**The round in one line: six functions close at zero gaps and carried **THREE
+production defects** -- **an open redirect in the remote-follow form**, two
+more 500s where refusals were meant, and **a dead check that read as the
+protection**.**
+
+### 1. AN OPEN REDIRECT
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1064** | `app/user/forms.py:246` | **`instance_url` WAS VALIDATED ONLY FOR LENGTH** and is interpolated straight into the redirect target, so anything carrying a path, a query or an authority sent the visitor somewhere else entirely. The value is also written to a cookie that **expires in 2099** and pre-fills the form on every later visit, so one bad value persists. Now a bare hostname with an optional port -- self-hosted instances run on ports, and refusing those would refuse the ordinary case for those users. | **fixed** | `PROBE y1 location: https://evil.example/x?a=/@author@test.piefed.local` |
+
+### 2. TWO MORE 500s, AND A CHECK THAT COULD NOT FIRE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1065** | `app/user/routes.py:2051` | `fediverse_redirect` returned None for an unknown account and for a **remote** one -- `TypeError: The view function ... did not return a valid response`. **D1012's shape, fourth instance**, and the second in this module after D1019. The page exists to send a visitor to the instance that hosts the account, so a remote one has nowhere to send them. | **fixed** | The row fails with the guard removed |
+| **D1066** | `app/user/routes.py:2142` | `edit_user_note` carried `return_to = safe_redirect_target(...)` and then `if return_to.startswith('http'): abort(401)`. **`safe_redirect_target` REPLACES an unsafe candidate with the default** rather than returning it, so the abort could never fire. Removed rather than left: **a dead check reads as the protection, and the replacement is the protection.** The D983 precedent, and the reason this is a finding rather than a tidy-up is that a reader auditing this route would have concluded it was defended by the `abort`. | **fixed** | The row that used to assert 401 now asserts where the save lands |
+
+### 3. WHAT WAS CHECKED AND FOUND SOUND
+
+Two things this slice looked at and did **not** report. The three filter
+routes that take an id already check ownership
+(`current_user.id != content_filter.user_id: abort(401)`), and
+`_get_user_same_ip` -- which returns the other accounts sharing a viewer's IP
+-- is gated in `show_profile.html` on `is_admin_or_staff()`, so it is a wasted
+query rather than an alt-account disclosure. Both are pinned by rows.
+
+### 4. WHAT THE MUTATION PASS FOUND
+
+25 mutants; the measuring pass killed 23.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1067** | `tests/test_user_filters.py` | One real gap and **one repeat of fact 476**, written the same day: the `content_filter.keywords` deletion anchor omitted its leading indentation, left an IndentationError, and reported `NO SUMMARY` -- which the runner's `'failed' in summary` test reads as SURVIVED. The real gap was the restricted-country flash: every row submitted a CHANGE to the adult-content settings, so `(hide_nsfw != 1 or hide_nsfl != 1) and ...` could be reduced to its second conjunct unseen. The message explains why a change did not take, so somebody who changed nothing must not be told anything. | **both closed** | `m5`, `m9` |
