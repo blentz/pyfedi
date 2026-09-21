@@ -43,7 +43,7 @@ from app.utils import back, render_template, markdown_to_html, user_access, mark
     recently_downvoted_post_replies, reported_posts, user_notes, login_required, get_setting, filtered_out_communities, \
     moderating_communities_ids, blocked_or_banned_instances, blocked_domains, get_task_session, \
     patch_db_session, user_in_restricted_country, referrer, safe_redirect_target, user_pronouns, \
-    permission_required, check_anoobis
+    permission_required, check_anoobis, show_ban_message
 from app.rss_extras import RSSFeed
 
 @bp.route('/people', methods=['GET', 'POST'])
@@ -877,6 +877,16 @@ def user_block_instance(actor):
         user = find_actor_or_create(f'{current_app.config["SERVER_URL"]}/u/{actor}', create_if_not_found=False)
     if user is None:
         abort(404)
+
+    # D1035. Nothing checked that the user was REMOTE. A local profile has
+    # `instance_id` 1 -- this instance -- so this blocked the whole site for the
+    # caller, and said so as 'Content from None will be hidden.' because a local
+    # user has no `ap_domain`. Measured: `PROBE u3 block_remote_instance called
+    # with: (1, 1)`.
+    if user.is_local() or user.instance_id is None or user.instance_id == 1:
+        flash(_('You cannot block this instance.'), 'error')
+        return redirect(safe_redirect_target(request.args.get('redirect'), f'/u/{actor}'))
+
     block_remote_instance(user.instance_id, SRC_WEB)
     flash(_('Content from %(name)s will be hidden.', name=user.ap_domain))
 
@@ -937,12 +947,31 @@ def unblock_profile(actor):
 @bp.route('/u/<actor>/report', methods=['GET', 'POST'])
 @login_required
 def report_profile(actor):
+    # D1033. A banned account may not generate moderator workload. Every report
+    # writes a Report row AND a Notification for every admin, so without this a
+    # banned user could flood the admin queue from an account that is already
+    # barred from posting. Measured: `PROBE u1 reports created: 1 / admin
+    # notifications: 1`. The same check, for the same reason, as
+    # `community_report` (app/community/routes.py).
+    if current_user.banned:
+        return show_ban_message()
+
     if '@' in actor:
         user = find_actor_or_create(actor, create_if_not_found=False)
     else:
         user = find_actor_or_create(f'{current_app.config["SERVER_URL"]}/u/{actor}', create_if_not_found=False)
     if user is None:
         abort(404)
+
+    # D1034. Reporting yourself created a real report, notified every admin and
+    # incremented `user.reports` -- which is the counter the "already assessed"
+    # message and the admin queue's ordering both read. Measured:
+    # `PROBE u2 reports created: 1`. The sibling actions on this profile
+    # (block, unblock, ban, delete) all refuse self-targeting; this one did not.
+    if user.id == current_user.id:
+        flash(_('You cannot report yourself.'), 'error')
+        return redirect(safe_redirect_target(request.args.get('redirect'), f'/u/{actor}'))
+
     form = ReportUserForm()
 
     if user and user.reports == -1:  # When a mod decides to ignore future reports, user.reports is set to -1
@@ -957,12 +986,18 @@ def report_profile(actor):
                 goto = safe_redirect_target(request.args.get('redirect'), f'/u/{actor}')
                 return redirect(goto)
 
-            source_instance = db.session.get(Instance, user.instance_id)
+            # D1037. `User.instance_id` is nullable, and `source_instance.domain`
+            # below was read unguarded -- `AttributeError: 'NoneType' object has
+            # no attribute 'domain'`, measured, a 500 on an ordinary report. The
+            # guard that fixes that is on the `.domain` read; this `if
+            # user.instance_id` only avoids `db.session.get(Instance, None)`,
+            # which answers None but emits a SQLAlchemy warning on the way.
+            source_instance = db.session.get(Instance, user.instance_id) if user.instance_id else None
             targets_data = {'gen': '0',
                             'suspect_user_id': user.id,
                             'suspect_user_user_name': user.ap_id if user.ap_id else user.user_name,
                             'source_instance_id': user.instance_id,
-                            'source_instance_domain': source_instance.domain,
+                            'source_instance_domain': source_instance.domain if source_instance else None,
                             'reporter_id': current_user.id,
                             'reporter_user_name': current_user.user_name
                             }
@@ -1019,6 +1054,16 @@ def delete_profile(actor):
             if user.id == 1:
                 flash('This user cannot be deleted.')
                 return redirect(safe_redirect_target(request.args.get('redirect'), f'/u/{actor}'))
+            # D1038. These two flags are read BEFORE `delete_dependencies()`,
+            # which executes `DELETE FROM "user_role" WHERE user_id = ...`.
+            # Read afterwards, as they were, `is_admin()` and `is_staff()` --
+            # which both walk `self.roles` -- could only ever answer False, so
+            # the warning below was dead code for every account it was written
+            # for. (`is_admin()` also returns True for user id 1, and user 1
+            # cannot be deleted, so that arm was unreachable too.)
+            was_privileged = user.is_admin() or user.is_staff()
+            was_instance_admin = user.is_instance_admin()
+
             user.banned = True
             user.deleted = True
             user.deleted_by = current_user.id
@@ -1027,9 +1072,9 @@ def delete_profile(actor):
 
             add_to_modlog('delete_user', actor=current_user, target_user=user, link_text=user.display_name(), link=user.link())
 
-            if user.is_instance_admin():
+            if was_instance_admin:
                 flash(_('Deleted user was a remote instance admin.'), 'warning')
-            if user.is_admin() or user.is_staff():
+            if was_privileged:
                 flash(_('Deleted user with role permissions.'), 'warning')
             flash(_('%(actor)s has been deleted.', actor=actor))
     else:
@@ -1094,6 +1139,18 @@ def user_flair_unblock(flair_id):
 @login_required
 def delete_account():
     form = DeleteAccountForm()
+
+    # D1036. This guard was on the GET branch ONLY, so the refusal it states
+    # was advice rather than a rule: user 1 could delete their own account by
+    # POSTing the form directly. Measured: `PROBE u4 founder banned? True
+    # email: deleted_1@deleted.com`. User 1 is the instance's first
+    # administrator and is the account every other route special-cases
+    # (`delete_profile` refuses it too), so an instance that lost it would have
+    # no way back.
+    if current_user.id == 1:
+        flash(_('This user cannot be deleted.'))
+        return redirect(url_for('main.index'))
+
     if form.validate_on_submit():
         current_user.delete_dependencies()
         current_user.banned = True
@@ -1109,11 +1166,6 @@ def delete_account():
         logout_user()
         flash(_('Account deletion in progress. Give it a few minutes.'), 'success')
         return redirect(url_for('main.index'))
-    elif request.method == 'GET':
-        if current_user.id == 1:
-            flash('This user cannot be deleted.')
-            return redirect(url_for('main.index'))
-
     return render_template('user/delete_account.html', title=_('Delete my account'), form=form, user=current_user)
 
 
