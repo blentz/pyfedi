@@ -227,6 +227,14 @@ def user_upvotes(actor):
     else:
         user = find_actor_or_create(f'{current_app.config["SERVER_URL"]}/u/{actor}', create_if_not_found=False)
 
+    # D1074. `_get_user_upvoted_posts` reads `user.id`, and it was called
+    # BEFORE the `if user is not None` check three lines below -- so an actor
+    # this instance cannot resolve was `AttributeError: 'NoneType' object has
+    # no attribute 'id'` rather than the 404 the function goes on to produce.
+    # D992's shape; the guard exists, it was just in the wrong place.
+    if user is None:
+        abort(404)
+
     upvoted = _get_user_upvoted_posts(user)
 
     if user is not None:
@@ -2130,7 +2138,16 @@ def user_read_posts(sort=None):
             desc(Post.up_votes - Post.down_votes))
     elif sort == 'new':
         posts = posts.order_by(desc(Post.posted_at))
-    elif sort == 'oldest':
+    elif sort == 'oldest' or sort == 'old':
+        # D1076. This arm was `'oldest'` only, and the page's own nav links
+        # `/read-posts/oldest` -- but `sort` DEFAULTS to
+        # `current_user.default_sort`, and that setting's choices call the same
+        # order `'old'` (`SettingsForm.sorts`, and every other listing in the
+        # application). So an account whose default sort is "Old" opened
+        # /read-posts and matched no arm at all: the list came back in whatever
+        # order the database chose, with no `order_by`. Both spellings are
+        # accepted rather than one renamed, because the nav's links are the
+        # ones already in people's history.
         posts = posts.order_by(asc(Post.posted_at))
     elif sort == 'active':
         posts = posts.order_by(desc(Post.sticky)).order_by(desc(Post.last_active))
