@@ -743,13 +743,20 @@ def show_community_rss(actor):
     else:
         community: Community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first()
     if community is not None:
+        # D1013. The private check used to sit BELOW the 304, so a client
+        # holding an ETag from before the community was made private got
+        # `304 Not Modified` where a fresh request got 403 -- measured. That
+        # is an access check a conditional request walks past, and because the
+        # ETag is `{id}_{hash(last_active)}` a 304 on a guessed value also
+        # confirms the community's current last_active. Refuse first, then
+        # answer conditionally.
+        if community.private:
+            abort(403)
+
         # If nothing has changed since their last visit, return HTTP 304
         current_etag = f"{community.id}_{hash(community.last_active)}"
         if request_etag_matches(current_etag):
             return return_304(current_etag, 'application/rss+xml')
-
-        if community.private:
-            abort(403)
 
         score = request.args.get('score', 0, int)
         tag = request.args.get('tag', '')
@@ -809,6 +816,13 @@ def show_community_ical(actor):
             order_by(desc(Post.created_at)).limit(50).all()
         ical = Calendar(creator='PieFed')
         for post in posts:
+            # D1014. `Post.event` is a relationship, and a POST_TYPE_EVENT post
+            # whose Event row is missing -- a federated event whose object did
+            # not carry usable times, or a post whose type was changed -- made
+            # `post.event.start` an AttributeError, measured, which failed the
+            # WHOLE calendar rather than that one entry.
+            if post.event is None:
+                continue
             evt = Event(uid=post.ap_id)
             evt.name = post.title
             evt.description = f'For more information see {post.ap_id}'
@@ -1962,15 +1976,23 @@ def community_rss_feeds(actor):
         return show_ban_message()
     community = actor_to_community(actor)
 
-    if community is not None:
-        if community.is_moderator() or current_user.is_admin():
-            rss_feeds = RssFeed.query.filter(RssFeed.community_id == community.id).order_by(RssFeed.title).all()
-            return render_template('community/community_rss_feeds.html',
-                                   title=_('RSS feeds for %(community)s', community=community.display_name()),
-                                   community=community, rss_feeds=rss_feeds, current='rss_feeds',
-                                   can_add_rss=current_app.config['RSS_FEEDS'],
-                                   inoculation=inoculation[
-                                       randint(0, len(inoculation) - 1)] if g.site.show_inoculation_block else None)
+    # D1012. Both arms of this used to fall off the end of the function and
+    # return None, which Flask reports as `TypeError: The view function for
+    # 'community.community_rss_feeds' did not return a valid response` -- a 500
+    # for a name that does not resolve, and a 500 instead of a refusal for
+    # anyone who is not a moderator. Measured.
+    if community is None:
+        abort(404)
+    if not (community.is_moderator() or current_user.is_admin()):
+        abort(403)
+
+    rss_feeds = RssFeed.query.filter(RssFeed.community_id == community.id).order_by(RssFeed.title).all()
+    return render_template('community/community_rss_feeds.html',
+                           title=_('RSS feeds for %(community)s', community=community.display_name()),
+                           community=community, rss_feeds=rss_feeds, current='rss_feeds',
+                           can_add_rss=current_app.config['RSS_FEEDS'],
+                           inoculation=inoculation[
+                               randint(0, len(inoculation) - 1)] if g.site.show_inoculation_block else None)
 
 
 @bp.route('/community/<int:community_id>/feed/<int:feed_id>', methods=['GET', 'POST'])
@@ -1984,6 +2006,19 @@ def community_rss_feed_edit(community_id, feed_id=None):
     if community is not None:
         if (community.is_moderator() or current_user.is_admin()) and current_app.config['RSS_FEEDS']:
             rss_feed = db.session.get(RssFeed, feed_id) if feed_id else None
+            # D1010. `feed_id` came straight from the URL and nothing tied it
+            # to `community_id`, which comes from the same URL -- so a
+            # moderator of ANY community could rewrite another community's
+            # feed by pairing their own community id with its feed id.
+            # Measured: `PROBE r1 their feed is now: Taken over
+            # https://attacker.example/feed.xml`. The url is the input to the
+            # background fetcher that creates posts in the OTHER community, so
+            # this was a cross-community content-ingest takeover. The same
+            # check also answers 404 for a feed id that does not exist at all,
+            # which used to be `AttributeError: 'NoneType' object has no
+            # attribute 'title'` (D1011).
+            if feed_id and (rss_feed is None or rss_feed.community_id != community.id):
+                abort(404)
             form = CommunityRssFeedEdit()
             form.flair.choices = [(-1, _('None'))] + flair_for_form(community_id)
             if form.validate_on_submit():
@@ -2024,6 +2059,12 @@ def community_rss_feed_delete(community_id, feed_id):
 
     if community.is_moderator() or current_user.is_admin():
         rss_feed = db.session.get(RssFeed, feed_id) or abort(404)
+        # D1010's second site, and the more destructive one:
+        # `delete_dependencies()` deletes every post this feed created. A
+        # moderator of one community could delete another community's feed and
+        # its posts. Measured: `PROBE r2 their feed still exists? False`.
+        if rss_feed.community_id != community.id:
+            abort(404)
         form = DeleteCommunityRssFeedForm()
         if form.validate_on_submit():
             rss_feed.delete_dependencies()
