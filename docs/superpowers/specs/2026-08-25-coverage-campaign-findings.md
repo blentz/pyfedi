@@ -15662,3 +15662,40 @@ check saw `/c/whatever` while the stored value was `whatever` -- D980's own
 shape, in the same function, which only surfaced because a row existed for the
 pasted-path case. The order that works is: strip `/c/`, check the characters,
 normalise, check uniqueness.
+
+**BASIS (slice C): the full suite, `7056 passed, 3 skipped, 258 warnings, 6
+subtests passed in 524.35s`**, chained with `&&` to `All 64 module floors met.`
+6987 + 69 collected in `tests/test_community_lifecycle.py` = 7056, exactly.
+The mutation pass killed **35 of 37**, two proved equivalent.
+
+**Next free number: D987.** (**D987-D990 were taken by the sweep below; the
+free number is now D991.**)
+
+## Interlude: two recurring shapes, swept for across the whole application
+
+**The round in one line: two defect shapes this campaign had found by hand --
+D907's discarded form input and D955's mutating GET -- were swept for
+repo-wide, which found **21 and 45 candidate sites**, one more real CSRF on an
+ADMIN action, and produced the ratchet that stops the second shape spreading.**
+
+### Why sweep now
+
+D907's shape had been found four times (sub-project 79 slices A, C and F, then
+sub-project 80 slice C) and D955's three times (D955, D976, and now D987), each
+in a different blueprint, and **every one was found by covering the function,
+never by reading it.** Three hand-finds in three blueprints means the fourth is
+found the same way or not at all. Both shapes are mechanically detectable.
+
+### 1. THE NEW DEFECT THE SWEEP FOUND
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D987** | `app/post/routes.py:1524`; `app/templates/post/post_options.html:74`, `:81` | **AN ADMIN ACTION ON A BARE GET.** `post_instance_sticky` is `methods=['GET']`, has no form, and does `if current_user.is_admin(): post.instance_sticky = True ... db.session.commit()`. The template renders it as a plain `<a href>`. So **an administrator who loaded `<img src="/post/5/instance_sticky/yes">` anywhere on the web pinned that post across the entire instance** -- and the un-sticky link the same way. D955's shape for the third time, and the first with instance-wide authority behind it. Fixed to POST-only with the `confirm_first send_post` pattern. | **fixed** | The route's own `methods=['GET']` against `login_required`'s `if request.method == 'POST' and csrf:` |
+
+### 2. THE SWEEPS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D988** | application-wide | **D955'S SHAPE HAS 45 CANDIDATE SITES**, of which the triage leaves **eleven still matching it**: `community.unsubscribe`, `community.join_then_add`, `community.community_wiki_revert_revision`, `feed.feed_notification`, `feed.feed_unsubscribe`, `topic.topic_notification`, `user.remove_avatar`, `user.remove_cover`, `user.notification_goto`, `user.notification_delete` and `user.notifications_all_read`. The rest are read paths that also write (a counter, a last-seen stamp), or GETs by protocol -- an OAuth callback the provider redirects to, an unsubscribe link from an email carrying its own token. **Each of the eleven is left to the slice that covers its blueprint**, because changing a route's methods means changing every template that links to it, and doing eleven of those blind is how a fix becomes an outage. | **inventoried; one fixed, eleven scheduled** | The AST sweep |
+| **D989** | `tests/test_mutating_get_routes.py` | **THE RATCHET, and what it does NOT claim.** It enumerates every route that accepts GET and reaches a `db.session` write with no `validate_on_submit()` gating it, and freezes the set: a NEW one fails the test and must be justified, a FIXED one fails it too and must be removed from the list. **`KNOWN_GET_MUTATORS` is an inventory, not a safety claim** -- most entries are correct -- and the docstring says so, because D973 is the finding about a ratchet that claimed more than it checked. A second row names the three routes this campaign has fixed, so a later change cannot quietly reintroduce one and have it accepted as a new entry; a third asserts every listed endpoint still exists, because a frozen set of names goes stale silently when a route is renamed. | **added; 46 rows** | Reverting D987 fails two of the three rows, naming `post.post_instance_sticky` |
+| **D990** | application-wide | **D907'S SHAPE HAS 21 SITES**, across `app/admin/routes.py` (4), `app/community/routes.py` (6), `app/post/routes.py` (9), `app/user/routes.py` (1) and `app/auth/onboarding.py` (1) -- every one a `if form.validate_on_submit(): ... else: <pre-fill the form from the database>`, where the `else` also runs for a submission the form REFUSED and silently discards what the user typed. Four have been fixed as they were covered. **No ratchet yet**: unlike the GET sweep, the detector cannot tell a genuine pre-fill arm from an `else` that legitimately renders something, and a ratchet that has to be taught 21 exceptions before it can fail is a claim rather than a check. The inventory is recorded here so the remaining seventeen are fixed as their slices land rather than rediscovered. | **inventoried; four fixed, seventeen scheduled** | The AST sweep |

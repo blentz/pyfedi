@@ -9734,6 +9734,38 @@ five-line `search_for_community` / `is blocked.` block appears twice in
 a second module: when an anchor matches twice, read the collision before
 working around it.
 
+**420. SWEEP FOR A SHAPE ONCE YOU HAVE FOUND IT THREE TIMES.** D955's mutating
+GET was found by hand in three blueprints and D907's discarded form input in
+four places, always by covering the function rather than by reading it. Both
+are detectable with `ast`: for the first, a route whose `methods` include GET
+that reaches a `db.session` write with no `validate_on_submit()`; for the
+second, an `if form.validate_on_submit():` whose `else` assigns `form.<x>.data`.
+The sweeps took minutes and found 45 and 21 candidate sites, including one new
+CSRF on an admin action. See D987, D988, D990.
+
+**421. A FROZEN INVENTORY IS A RATCHET; IT IS NOT A SAFETY CLAIM.**
+`KNOWN_GET_MUTATORS` lists every route matching D955's shape, and most of them
+are fine -- a listing page that bumps a counter, an OAuth callback the provider
+redirects to. The test fails when the set GROWS (justify the new one) and when
+it SHRINKS (remove the fixed one), which is `coverage_floors.ini`'s discipline.
+Say in the docstring that membership is not approval, or the list reads as one.
+See D989, and D973 for what happens when a ratchet claims more than it checks.
+
+**422. NAME THE DEFECTS A RATCHET WAS BUILT FOR, SEPARATELY.** A frozen-set
+ratchet accepts a reintroduced defect as a "new entry" to be justified. A second
+row that names `community_unban_user`, `community_moderate_report_ignore` and
+`post_instance_sticky` explicitly is what makes reintroduction fail rather than
+prompt. A third row asserts every listed endpoint still exists, because a frozen
+set of endpoint names goes stale silently when a route is renamed.
+
+**423. DO NOT FIX ELEVEN ROUTES' METHODS BLIND.** Changing a route from GET to
+POST means changing every template that links to it, and this codebase has a
+specific pattern for that -- `class="confirm_first send_post" href="#"
+data-url="..."`, with `app/static/js/scripts.js:658` attaching the token from
+the meta tag. Eleven such changes with no per-route rows is how a security fix
+becomes an outage. Inventory them, fix each in the slice that covers its
+blueprint, and let the ratchet hold the line meanwhile.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
