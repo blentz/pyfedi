@@ -119,6 +119,39 @@ def _ban(community, user, by, flag_membership=True):
     return row
 
 
+# The tables this blueprint writes. A fingerprint over their CONTENTS, not
+# their row counts: these routes update as much as they insert, and a ratchet
+# that counted rows would miss `report.status`, `community_member.is_owner` and
+# every wiki edit.
+#
+# `user` is excluded and named here because app/request_hooks.py:110 sets
+# `current_user.last_seen` on every request, so it changes whatever the route
+# does. Nothing this blueprint does to a `user` row is invisible elsewhere:
+# the community-level effects all land in community_member or community_ban.
+_WATCHED_TABLES = (
+    'community', 'community_member', 'community_ban', 'community_block',
+    'community_wiki_page', 'community_wiki_page_revision', 'community_flair',
+    'community_flair_block', 'community_join_request', 'report', 'modlog',
+    'post', 'post_reply', 'post_flair', 'notification', 'rss_feed',
+)
+
+
+def _state_fingerprint():
+    """Every row of every table this blueprint can write, as comparable text."""
+    from sqlalchemy import inspect as sa_inspect, text
+
+    fingerprint = {}
+    existing = set(sa_inspect(db.engine).get_table_names())
+    for table in _WATCHED_TABLES:
+        if table not in existing:
+            continue
+        rows = db.session.execute(
+            text(f'SELECT * FROM "{table}" ORDER BY 1')).mappings().all()
+        fingerprint[table] = [tuple(sorted((k, str(v)) for k, v in row.items()))
+                              for row in rows]
+    return fingerprint
+
+
 def _is_banned(community, user):
     return CommunityBan.query.filter_by(community_id=community.id,
                                         user_id=user.id).first() is not None
@@ -386,13 +419,29 @@ def test_no_state_changing_route_answers_a_banned_user(app, community_world):
     """The durable artefact, in the shape D901 established for `app/admin`.
 
     Every rule on the community blueprint that changes state is requested as an
-    instance-banned moderator, and none may do the work. D956's five routes are
-    the ones it would have caught; the point is the ones added later.
+    instance-banned moderator, and the state this blueprint can write is
+    fingerprinted before and after: nothing may change.
 
-    Read-only rules are excluded BY NAME rather than by guessing from the
-    method, so adding a route means deciding which side of the line it is on.
-    A rule that is neither listed nor guarded fails here with its endpoint
-    named.
+    **WHAT THIS ROW DOES AND DOES NOT CATCH.** It drives each rule with a bare
+    POST and a plausible id, so it catches a route whose work that is enough to
+    trigger -- `community.community_report` was found exactly this way, and its
+    check removed again still fails this row. It does NOT catch a route that
+    needs a valid form body, a real slug or a resolvable actor to do anything,
+    because the request stops before the work either way. Measured: removing
+    the banned check from `community_wiki_add`, `community_flair_delete` and
+    `community_moderate_report_resolve` leaves this row passing.
+
+    So this is a FLOOR, not a proof. The per-route rows in
+    `tests/test_community_wiki_flair_reports.py` are what actually pin those
+    eight; this one is what notices a route nobody thought to write a row for.
+    Saying so matters: D973 is the finding that its earlier version -- which
+    only flagged a 200 -- passed while eight routes were unguarded, and a
+    ratchet that cannot fail for its own defect is worse than none, because it
+    is also a claim.
+
+    Read-only and self-service rules are excluded BY NAME rather than guessed
+    from the method, so adding a route means deciding which side of the line it
+    is on.
     """
     community, moderator, second, member = community_world
     moderator.banned = True
@@ -433,6 +482,7 @@ def test_no_state_changing_route_answers_a_banned_user(app, community_world):
     }
 
     answered = []
+    before = _state_fingerprint()
     for rule in app.url_map.iter_rules():
         if not rule.endpoint.startswith('community.'):
             continue
@@ -461,14 +511,21 @@ def test_no_state_changing_route_answers_a_banned_user(app, community_world):
             # this row is about; it is a different finding if it happens.
             continue
 
-        # show_ban_message() redirects; a 4xx is also a refusal. Anything that
-        # renders or redirects to the route's own success path is not.
-        if response.status_code == 200:
-            answered.append(f'{method.upper()} {path} ({rule.endpoint}) -> 200')
+        # The STATUS IS NOT THE TEST. D973: this row used to flag a rule only
+        # when it answered 200, and every route on this blueprint redirects on
+        # success -- so it passed while eight state-changing routes had no
+        # banned check at all. What matters is whether the work happened.
+        after = _state_fingerprint()
+        if after != before:
+            changed = sorted(k for k in set(before) | set(after)
+                             if before.get(k) != after.get(k))
+            answered.append(f'{method.upper()} {path} ({rule.endpoint}) '
+                            f'changed {changed}')
+        before = after
 
     assert answered == [], (
-        'these state-changing community routes answered an instance-banned '
-        'moderator:\n  ' + '\n  '.join(answered))
+        'these state-changing community routes did work for an '
+        'instance-banned moderator:\n  ' + '\n  '.join(answered))
 
 
 # --------------------------------------------------------------------------

@@ -15552,3 +15552,59 @@ the clause under test was never the reason for the refusal:
 | ID | Where | What | Status |
 |---|---|---|---|
 | D968 | `tests/test_dev_tools.py` | `test_the_buttons_own_validate_call_is_belt_and_braces` asserted `pytest.raises(ValidationError)` on a forged token -- it was pinning the 500 that D958 fixed. Its **reasoning is unchanged**: `login_required` still validates the token before the view runs, so each button's `and form.validate()` is still unreachable and the two equivalent mutants it registered are still equivalent. Only the observable moved, from a propagating exception to a 400. Updated in place, with the reason recorded in the docstring. **A fix to shared infrastructure invalidates the pins that measured the old behaviour; the question each time is whether the pin's ARGUMENT survives or only its assertion.** | **updated** |
+
+**BASIS (slice A): the full suite, `6902 passed, 3 skipped, 258 warnings, 6
+subtests passed in 784.10s`**, chained with `&&` to `All 64 module floors met.`
+6842 + 60 collected in `tests/test_community_moderation_authority.py` = 6902,
+exactly. The mutation pass killed **41 of 41** after two repairs.
+
+**Next free number: D969.** (**D969-D979 were taken by sub-project 80
+slice B, below; the free number is now D980.**)
+
+## Slice B: the moderation tools that are not banning, and a class of cross-community confusion
+
+**The round in one line: the wiki, flair and report handlers close at zero gaps
+and carried **EIGHT production defects** -- **a moderator of any community
+could rewrite or delete any other community's wiki pages and flair**, all three
+report handlers answered **500 instead of 401**, "Ignore" never marked a report
+about a user, and "Ignore" was a GET with no CSRF token, which is D955's shape
+one slice later.**
+
+### 1. THE CLASS: A CHILD RESOURCE FETCHED BY BARE ID
+
+Five routes take two ids -- a community (or actor) and a resource -- check the
+caller's authority over the **community**, and act on the **resource** without
+asking whether the two are related.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D969** | `app/models.py:3546` | **`CommunityWikiPage.can_edit(user, community)` NEVER CONSULTED `self.community_id`.** `community` is an argument, so the method answered "may this user edit **some** page of **that** community" -- a different question from the one all seven callers ask, since every one of them takes the community from the URL and the page from an id. A moderator of any community could therefore rewrite any other community's wiki pages. Fixed **in the method, not the four routes**: three templates call it too, to decide whether to show an edit link, and a template that offers a link the route refuses is its own bug. Fact 368's rule, and what D924 cost when it was ignored. | **fixed** | `PROBE w1 status 200 \| other community's wiki body now: HIJACKED` |
+| **D970** | `app/community/routes.py:2620`, `:2658` | **THE FLAIR ROUTES FETCHED BY BARE ID.** `community_flair_edit` did `db.session.get(CommunityFlair, flair_id)` and `community_flair_delete` deleted `CommunityFlair.id == flair_id` outright, neither constraining `community_id` -- and the delete cascades to that flair's `post_flair` rows, its `CommunityFlairBlock` rows and any `rss_feed.flair_id` pointing at it. So a moderator of one community could destroy another community's flair taxonomy and every post's association with it. | **fixed** | `PROBE f1 other community's flair still exists? False`; `PROBE f2 other community's flair text now: HIJACKED` |
+| **D971** | `app/community/routes.py:2188`, `:2246` | **THE WIKI REVISION ROUTES SCOPED THE PAGE AND NOT THE REVISION.** Both `community_wiki_view_revision` and `community_wiki_revert_revision` fetch the page with `filter_by(slug=slug, community_id=community.id)` -- correctly -- and then the revision with a bare `db.session.get`. Viewing discloses another page's content; **reverting writes it INTO this page**, which makes an unscoped revision id a way to pull any text on the instance into a page you control. | **fixed** | Two rows, one per route, each refused with 404 |
+
+### 2. FOUND WHILE COVERING, NOT BY READING
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D974** | `app/community/routes.py`, all three report handlers | **EACH FELL OFF THE END WITHOUT RETURNING ON AT LEAST ONE PATH.** Flask answers that with `TypeError: The view function ... did not return a valid response`, so a non-moderator got a **500 in place of a 401** on resolve and ignore -- an authorization failure dressed as a server fault, which is the wrong signal to the caller and to whatever watches the logs -- and opening a report another moderator had already handled was a 500 on all three. | **fixed** | Three rows, one per handler, plus the already-handled case |
+| **D975** | `app/community/routes.py:2494` | **"IGNORE" NEVER MARKED THE REPORT IT WAS GIVEN.** The function set the subject's counter to -1 and then swept sibling reports by `suspect_post_id` or `suspect_post_reply_id` -- so a report whose subject is a **USER** was marked by neither path and sat in the queue as `REPORT_STATE_NEW` forever. The moderator pressed Ignore and nothing happened to the queue. Found by a parameterised row that asked the same question of all three subject kinds; **the post and reply cases passed, because the sweep happened to cover them.** | **fixed** | The parameterised row, which fails only for `user` |
+| **D976** | `app/community/routes.py:2485`; `app/templates/community/community_moderate.html:64` | **"IGNORE" WAS A GET WITH NO CSRF TOKEN -- D955'S SHAPE, ONE SLICE LATER.** The function has no form at all and acted on whichever method arrived, and `login_required` validates CSRF only for POST. The template rendered it as a plain `<a href>`. Escalate and Resolve are safe as GET links **because both render a confirmation form first**; this one never did, which is exactly the distinction that makes the defect easy to miss by reading the three together. Fixed to POST-only with the `confirm_first send_post` pattern. | **fixed** | The 405 row, and the inversion |
+
+### 3. THE RATCHET THAT COULD NOT FAIL FOR ITS OWN DEFECT
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D972** | `app/community/routes.py`, eight routes | Eight more state-changing routes had no `current_user.banned` check: the three wiki writers, the three report handlers and both flair routes. | **fixed** | Eight per-route rows |
+| **D973** | `tests/test_community_moderation_authority.py` | **SLICE A's RATCHET PASSED WHILE ALL EIGHT WERE UNGUARDED.** It flagged a rule only when it answered **200**, and every route on this blueprint redirects on success -- so it was measuring the response, not whether the work happened. Rewritten to fingerprint the contents of the sixteen tables this blueprint writes (`user` excluded and named, because `app/request_hooks.py:110` updates `last_seen` on every request). It then found a **ninth** route the reading could not have: `community_report` has no authorization construct in it at all, so the survey that found the other eight was blind to it -- a banned account could file reports and raise a Notification for the admin on each one. **AND IT IS STILL NOT A PROOF:** removing the banned check from three of the eight leaves it passing, because a bare POST cannot drive a route that needs a valid form body, a real slug or a resolvable actor. That limit is now written into the test's own docstring. **A ratchet that cannot fail for the defect it was written for is worse than no ratchet, because it is also a claim.** | **strengthened, and its limits stated; the eight pinned by per-route rows instead** | `POST /community/community/1/report (community.community_report) changed ['notification', 'report']` on the first run of the new version |
+
+### 4. WHAT THE MUTATION PASS FOUND
+
+40 mutants; the measuring pass killed 36, and **all four survivors were the
+same family as D961, D966 and D967** -- input that does not distinguish the
+clause under test:
+
+| ID | Where | What | Status |
+|---|---|---|---|
+| **D977** | `tests/test_community_wiki_flair_reports.py` | The `who_can_edit` level row asked about **one person who was neither trustworthy, a member, nor a moderator**, so levels 0, 1 and 2 were indistinguishable: widening level 0 to admit `trustworthy()` and narrowing level 2 away from `is_member()` both survived. Now each level names the answer for three different people -- a newcomer, an established non-member and a member -- so every level is separated from its neighbours by at least one of them. Writing it needed two new helpers, because `make_user` produces an account that is **not** trustworthy (`created_recently() and reputation < 100`), so `assert outsider.trustworthy() is True` fails. | **closed; m05 and m06 die** |
+| D978 | `tests/test_community_wiki_flair_reports.py` | `resolve` and `ignore` had no cross-community row, though `escalate` did -- so dropping `in_community_id=community.id` from `resolve` survived, and a moderator of any community could clear any other community's queue. **A row written for one of three sibling handlers is a row for one of three.** | **closed; m30 dies** |
+| D979 | `tests/test_community_wiki_flair_reports.py` | The community-report row filed against `mine`, which is **community id 1**, so a mutant hard-coding `suspect_community_id=1` was invisible. Now files against `theirs`, with `assert theirs.id != 1` beside it. **The same trap as fact 347's user 1, for a different table.** | **closed; m38 dies** |
