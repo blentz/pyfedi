@@ -10139,6 +10139,28 @@ ran after the POST had stored the files and returned a redirect, so it could
 only ever announce that the limit had been passed. Ask of every limit: which
 request does it refuse?
 
+**484. A HELPER THAT REPLACES MAKES THE CHECK AFTER IT DEAD.**
+`safe_redirect_target` returns the default for an unsafe candidate, so
+`if return_to.startswith('http'): abort(401)` below it could never fire
+(D1066). When a guard follows a sanitiser, ask what the sanitiser can still
+hand it -- and delete the guard if the answer is "nothing it would refuse",
+because a dead check reads as the protection.
+
+**485. A VALUE INTERPOLATED INTO A URL NEEDS A SHAPE, NOT A LENGTH.**
+`instance_url` was `Length(min=3, max=50)` and went straight into
+`https://{...}/...`. Length says nothing about paths, queries or authorities.
+Validate what the field MEANS -- here, a hostname with an optional port.
+
+**486. A COOKIE PRE-FILLS THE FORM THAT WROTE IT.** D1064's bad value is stored
+for the next visit, so a single successful submission of a hostile value keeps
+working. When a form remembers its input, the validation protects every later
+visit as well as this one.
+
+**487. FACT 476 REPEATS ITSELF.** The same indentation-less deletion anchor
+produced another `NO SUMMARY` one slice after it was written down. When a
+mutant deletes a whole line, the anchor must include the leading whitespace --
+and `NO SUMMARY` is never a verdict.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
