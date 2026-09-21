@@ -9544,6 +9544,89 @@ second `make_instance('test.piefed.local')` is a `UniqueViolation`, not a
 second row. Use a get-or-create helper in any file that builds users across
 several instances.
 
+**395. `login_required` VALIDATES CSRF ONLY FOR POST.** `app/utils.py`'s
+decorator reads `if request.method == 'POST' and csrf:`, so a route that
+carries `methods=['GET', 'POST']` and mutates unconditionally has **no CSRF
+protection at all** on its GET path. `community_unban_user` had no form and
+unbanned on whichever method arrived, so an `<img src>` tag was enough. When
+covering a route, check its methods against whether it mutates before reading
+anything else. See D955.
+
+**396. A MISSING CSRF TOKEN USED TO BE A 500.** `validate_csrf` raises
+wtforms' `ValidationError`, which is not an `HTTPException`, and this app
+registers no `CSRFProtect` to convert it -- so every route using
+`app.utils.login_required` answered a tokenless or stale POST with a server
+error. It is a 400 now. A row that asserts "refused" has to say what refused
+looks like; `>= 400` would have hidden this.
+
+**397. THE `current_user.banned` CHECK IS PER-ROUTE, NOT A DECORATOR.** There
+is no `@banned_users_refused`; each route writes `if current_user.banned:
+return show_ban_message()` by hand, so the question for any new route is
+whether somebody remembered. Ten state-changing routes on the community
+blueprint had not. The ratchet in
+`tests/test_community_moderation_authority.py` enumerates `app.url_map` and
+requires every state-changing rule to refuse, with read-only and self-service
+rules excluded BY NAME so a new route has to be classified rather than land on
+the permissive side by default. See D956, D960.
+
+**398. A BANNED ACCOUNT MAY STILL ACT ON ITS OWN RELATIONSHIPS.** Leaving a
+community, blocking one, managing one's own flair and notification settings all
+change state, and refusing them would trap somebody in a place they are already
+barred from taking part in. That is why the ratchet needs two exclusion sets
+and not one, and why both are written out rather than guessed from the HTTP
+method.
+
+**399. FILTERING ON AN UNJOINED TABLE IS A CROSS JOIN, NOT A NO-OP.**
+`PostReply.query.filter(PostReply.user_id == u, Post.community_id == c)` puts
+`Post` in the FROM clause on its own, so the condition holds whenever ANY post
+exists in that community and every one of the user's replies matches. It reads
+as a narrowing filter and is the opposite. Measured: a ban in one community
+selected replies from another. Grep a query for model names that do not appear
+in its `select_from`/`join`. See D959.
+
+**400. `Community.moderators()` EXCLUDES BANNED MEMBERS.**
+`app/models.py:722` filters `CommunityMember.is_banned == False`, so setting
+that flag also removes the person from `is_moderator()` and `is_owner()`. A row
+that wants somebody to be a banned MODERATOR has to create the `CommunityBan`
+row without flipping the membership flag, or the guard it is testing stops
+seeing a moderator at all.
+
+**401. `is_admin_or_staff()` READS THE ROLE NAME.** `is_admin()` looks for a
+role called `Admin` and `is_staff()` for one called `Staff`
+(`app/models.py:1259-1275`), so `grant_permission(user, 'administer all
+communities')` -- which makes a bespoke role -- does not satisfy it. A fixture
+for staff has to attach the actual named role. See D965.
+
+**402. HOISTING A GUARD CAN ORPHAN THE ONE BELOW IT.** Moving
+`community_moderate_subscribers`'s authorization check above its form made the
+function's own `elif community is not None:` and inner `is_moderator()` test
+unable to be false, leaving an unreachable `abort(401)`. Re-read what a moved
+check now dominates, and delete what it has made dead in the same commit --
+otherwise the next round finds it as a defect. See D962.
+
+**403. TEST EACH CLAUSE OF AN `and` WITH INPUT THAT ONLY IT REFUSES.** The row
+for "an ordinary member cannot ban" aimed at a moderator, so
+`not community.is_moderator(user)` did the refusing and deleting the entire
+`(is_moderator() or is_admin_or_staff())` half survived -- meaning any logged-in
+account could have banned any non-moderator with the suite green. Give each
+clause a case the others would allow, and keep them as separate rows. See D966.
+
+**404. WHERE A MUTANT'S EFFECT IS A NO-OP WRITE, THE RESPONSE IS THE ONLY
+OBSERVABLE.** Dropping `and community.is_owner(user)` lets staff proceed to set
+`is_owner = False` on somebody for whom it is already false -- nothing changes
+in the database, so every row watching rows survives. Assert the status code,
+and set the world up so the refusal cannot be confused with a different guard's
+(a third owner, so `num_owners() == 1` is not what answered). See D967.
+
+**405. A FIX TO SHARED INFRASTRUCTURE INVALIDATES THE PINS THAT MEASURED THE
+OLD BEHAVIOUR.** D958 turned a propagating `ValidationError` into a 400, which
+broke `tests/test_dev_tools.py::test_the_buttons_own_validate_call_is_belt_and_braces`
+-- a row from an earlier round that asserted the exception. Ask whether the
+pin's ARGUMENT survives or only its assertion: there, the reasoning (the token
+is checked before the view, so the button's own `validate()` is unreachable)
+was untouched and only the observable moved. Update it in place and record why.
+See D968.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not

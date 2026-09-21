@@ -15476,3 +15476,79 @@ five survivors were real**:
 `app/admin/routes.py` has been deliberately unfloored since slice A: the figure
 would have risen every round and an interim floor is a number with no meaning.
 Slice F is the last of the six, so the floor is taken here.
+
+**BASIS (sub-project 79, slice F): the full suite, `6842 passed, 3 skipped,
+258 warnings, 6 subtests passed in 503.38s`**, chained with `&&` to `All 64
+module floors met.` 6769 + 73 collected in
+`tests/test_admin_user_administration.py` = 6842, exactly.
+`app/admin/routes.py` measured 67.08 and is floored at 67, six slices after
+slice A deliberately declined to take one.
+
+**Next free number: D955.** (**D955-D965 were taken by sub-project 80
+slice A, below; the free number is now D966.**)
+
+# Sub-project 80: `app/community/routes.py`
+
+D891 ranked it second by authorization density -- 143 constructs over 1441
+missed statements, 1865 statements at **18.7%**. It is split by its own seams,
+as `app/admin/routes.py` was across sub-project 79's six slices.
+
+## Slice A: community moderation authority
+
+**The round in one line: the six functions that decide who may ban, unban,
+promote and demote inside a community carried **FIVE production defects**, all
+found by reading before a test was written -- **an unban driven by a bare GET
+with no CSRF token**, **a banned account that kept every moderation power**,
+**a non-moderator who could drive the instance's outbound fetcher**, **a
+missing CSRF token answering 500 on every route in the application that uses
+this decorator**, and **a community ban that deleted the person's comments
+across the whole instance**.**
+
+### 1. THE PRODUCTION DEFECTS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D955** | `app/community/routes.py:1666`; `app/templates/community/community_moderate_subscribers.html:149` | **AN UNBAN WAS A GET, WITH NO CSRF TOKEN.** The route carried `methods=['GET', 'POST']`, has **no form**, and unbans on whichever method arrives -- and `app/utils.py`'s `login_required` validates CSRF **only for POST**. So a GET with no token at all removed the ban, and the template rendered it as a plain `<a href>`. A moderator who loaded `<img src="https://instance/community/community/1/3/unban_user_community">` on any page anywhere unbanned user 3. Fixed to POST-only, with the template switched to the `confirm_first send_post` pattern `community_mod_list.html` already uses for Make owner and Remove owner -- `app/static/js/scripts.js:658` attaches the token. | **fixed** | `PROBE c1 GET with NO csrf token, status: 302` / `PROBE c1 ban row still there? False` |
+| **D956** | `app/community/routes.py`, five routes | **A BANNED ACCOUNT KEPT ITS COMMUNITY MODERATION POWERS.** `current_user.banned` is checked by `add_post`, `community_edit`, `community_delete`, `community_add_moderator`, `community_find_moderator`, `community_moderate`, the three RSS routes and `community_moderate_comments`. It was checked by **none** of `community_make_owner`, `community_remove_owner`, `community_ban_user`, `community_unban_user` or `community_moderate_subscribers`. An instance-banned account that held community authority therefore could not post or edit the community -- but could still ban and unban people and promote and demote owners. **A sanction that leaves the person's power over other accounts intact is not a sanction.** | **fixed** | `PROBE c2 banned moderator ban POST status: 302` / `victim now banned from community? True`; `PROBE c3 banned owner make_owner status: 302` / `other is now an owner? True` |
+| **D957** | `app/community/routes.py:1896-1912` | **ANY LOGGED-IN ACCOUNT COULD MAKE THE INSTANCE FETCH AN ARBITRARY REMOTE ACTOR.** `community_moderate_subscribers` handled its find-and-ban form **before** it checked anything, and `find_actor_or_create` reaches `create_actor_from_remote` -- an outbound HTTP fetch of a handle the submitter chose. The ban itself was safe, because the redirect lands on `community_ban_user` which checks; the fetch was not. Fixed by hoisting both the 404 and the authorization check above the form. | **fixed** | `PROBE s1 is nobody a moderator? False` / `PROBE s1 find_actor_or_create called by a NON-moderator? [call('victim@attacker.example')]` |
+| **D958** | `app/utils.py:1979-1981` | **A MISSING OR STALE CSRF TOKEN ANSWERED 500, ON EVERY ROUTE USING `login_required`.** `validate_csrf` raises wtforms' `ValidationError`, which is not an `HTTPException`, and **no `CSRFProtect` is registered on this app** to turn it into a response -- so the error propagated to the 500 handler. A stale token is what an ordinary user gets from a page left open too long, which makes this a request error dressed as a server fault: wrong status for monitoring, wrong page for the user. Fixed with `abort(400)`. Found because a row asserting "a POST with no token is refused" could not say what refusal looked like. | **fixed** | `wtforms.validators.ValidationError: The CSRF token is missing.` reaching the handler |
+| **D959** | `app/community/routes.py:1627` (before) | **A COMMUNITY BAN DELETED THE PERSON'S COMMENTS ACROSS THE WHOLE INSTANCE.** `PostReply.query.filter(PostReply.user_id == user.id, Post.community_id == community.id)` -- **`Post` is not joined.** SQLAlchemy puts it in the FROM clause on its own, so the condition is satisfied whenever the community has **any** post at all, and every reply the user had ever written anywhere matched. A moderator of one community, ticking "delete replies" while banning somebody, destroyed that person's contributions in every other community on the instance. `PostReply` has its own `community_id`; the fix is one word. | **fixed** | `PROBE x1 replies the ban would delete for community "here": ['reply in elsewhere', 'reply in here']` against `PROBE x1 replies actually in "here": ['reply in here']` |
+
+### 2. THE DURABLE ARTEFACT, AND WHAT IT COST TO MAKE IT HONEST
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D960** | `tests/test_community_moderation_authority.py` | A blueprint-wide ratchet in D901's shape: every rule on the community blueprint that changes state is requested as an instance-banned moderator, and none may answer. Two exclusion sets, both **listed by name rather than inferred**, so adding a route means deciding which side of the line it is on: `read_only`, and `self_service` for routes that change only the caller's own relationship to a community -- a banned account may still leave a community or hide it from its own feed, because refusing that would trap somebody in a place they are already barred from taking part in. | **added** | It named `community.get_sidebar` and `community.unsubscribe` on its first run, neither of which D956 had listed |
+| **D961** | `tests/test_community_moderation_authority.py` | **FACT 350 FOR THE FOURTH TIME THIS CAMPAIGN, AND THIS TIME INSIDE A TEST WRITTEN TO CATCH AN AUTHORIZATION GAP.** The parameterised row for D956 covered four routes, and inverting the fix killed **one of the four**. Unbanning somebody who is not banned, promoting somebody who is not a moderator and demoting somebody who is not an owner all do nothing whether or not the guard is present, so three cases asserted an unchanged world against a no-op. Each case now establishes a state the action WOULD change, and asserts that before acting -- `assert not before(), 'the row is set up so the action would be a no-op'`. The `remove_owner` case needed a second repair for the same reason: an owner cannot depose another owner at all, so the only clause a banned owner can reach is standing down, and `num_owners() == 1` refuses even that unless a second owner exists. | **closed; all four now fail on inversion** | The inversion, before and after |
+
+### 3. WHAT THE FIX ITSELF CREATED
+
+| ID | Where | What | Status |
+|---|---|---|---|
+| D962 | `app/community/routes.py:1896-2005` | Hoisting D957's check made the function's own `elif community is not None:` and its inner `if community.is_moderator() or current_user.is_admin():` **unable to be false**, leaving an unreachable `abort(401)` -- the dead-guard shape this campaign keeps finding, introduced by a fix rather than found in the code. Both wrappers removed and the ~90-line body de-indented, so the function now reads guard, guard, work. | **removed in the same commit** |
+
+### 4. REGISTERED, NOT FIXED
+
+| ID | Where | What | Why not this round |
+|---|---|---|---|
+| D963 | `app/community/routes.py:1912` | `community_moderate_subscribers` gates on `current_user.is_admin()` while every neighbouring moderation route uses `is_admin_or_staff()`, so a staff member can ban from a community but cannot see who is banned. | A decision about what staff are for, spanning the blueprint. |
+| D964 | `app/community/routes.py:1907` | `flash(_(f'User: {ban_user_form.user_name.data} unable to be found'))` -- D815's shape, interpolated before gettext sees it. The blueprint's other instances are in slices this round does not touch. | Better repaired in one pass across the blueprint, as D936 did for `app/admin`. |
+| D965 | `app/models.py:1259-1275` | `is_admin_or_staff()` reads the **role NAME** -- `is_admin()` looks for a role called `Admin`, `is_staff()` for one called `Staff`. A permission granted through any other role does not satisfy it, so the role names are load-bearing strings with no constant behind them and no ratchet, exactly as `ROLE_PERMISSIONS` was before D940. | The same treatment as D940, which belongs with a round that owns `app/models.py`. |
+
+### 5. WHAT THE MUTATION PASS FOUND
+
+41 mutants over `app/community/routes.py` and `app/utils.py`; the measuring
+pass killed 39, and **both survivors were the same shape as D961** -- a guard
+exercised with input that fails a DIFFERENT clause of the same condition, so
+the clause under test was never the reason for the refusal:
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D966** | `tests/test_community_moderation_authority.py` | `(community.is_moderator() or current_user.is_admin_or_staff()) and not community.is_moderator(user)` -- the row for "an ordinary member cannot ban" aimed at a **moderator**, so the right-hand clause refused it and deleting the whole left-hand side survived. **Any logged-in account could have banned any non-moderator and the suite would have been green.** Closed with a target the other clause would allow: a second ordinary member. The moderator-target case is kept as its own row, so each clause has one only it can satisfy. | **closed; m23 dies** | The mutant |
+| D967 | `tests/test_community_moderation_authority.py` | `current_user.is_admin_or_staff() and community.is_owner(user)` -- dropping the second half survived, because a staff member aiming at a plain moderator then proceeds to clear a flag that is **already false**, which no row watching the database could see. Closed by asserting the STATUS (401, not 302) with a third owner present so the refusal cannot be confused with the last-owner guard. **Where a mutant's effect is a no-op write, the response is the only observable.** | **closed; m30 dies** | The mutant |
+
+### 6. A PIN FROM AN EARLIER ROUND THAT D958 INVALIDATED
+
+| ID | Where | What | Status |
+|---|---|---|---|
+| D968 | `tests/test_dev_tools.py` | `test_the_buttons_own_validate_call_is_belt_and_braces` asserted `pytest.raises(ValidationError)` on a forged token -- it was pinning the 500 that D958 fixed. Its **reasoning is unchanged**: `login_required` still validates the token before the view runs, so each button's `and form.validate()` is still unreachable and the two equivalent mutants it registered are still equivalent. Only the observable moved, from a propagating exception to a 400. Updated in place, with the reason recorded in the docstring. **A fix to shared infrastructure invalidates the pins that measured the old behaviour; the question each time is whether the pin's ARGUMENT survives or only its assertion.** | **updated** |
