@@ -10205,6 +10205,39 @@ three separate "only this person's?" misses (D1032, D1063, D1069), so every
 listing row was built with a second account's data in it from the start. The
 gap-finding habit transfers; it just has to be applied while writing, not after.
 
+**499. AN UNORDERED LIST LOOKS SORTED IF YOU INSERT IT SORTED.** D1076's arm
+reached no `order_by`, and the row still passed -- because it created the oldest
+post first and the database returned insertion order. A row that pins an
+ordering has to insert the rows in the WRONG order, or it is testing the
+insert.
+
+**500. A SURVIVING MUTANT CAN MEAN THE ROW NEVER REACHED THE LINE.** The
+`asc()` mutant survived not because the assertion was weak but because
+`/read-posts/old` matched no arm at all -- the code under test was never
+executed. Before strengthening an assertion, check that the request reaches the
+line.
+
+**495. TWO ROUTES ON ONE PREFIX SHADOW EACH OTHER.** `/read-posts/delete` is
+POST-only, but a GET to it does not 405: `/read-posts/<sort>` matches first and
+renders the history with `sort='delete'`. A POST-only route is only POST-only
+if nothing else claims its path.
+
+**496. AN OPTIMISATION AND THE PATH IT AVOIDS CAN GIVE THE SAME ANSWER.**
+`lookup`'s `if exists:` shortcut returns the same redirect the search branch
+would, so deleting it changes nothing observable in the response. Assert that
+the expensive path was NOT taken -- `search.call_args is None` -- rather than
+what came back (D1075).
+
+**497. A GUARD CAN BE PRESENT AND STILL BE MISSING.** `user_upvotes` had
+`if user is not None:` three lines BELOW the call that dereferenced `user`
+(D1074). When a function checks for None, check where the first dereference
+is, not whether the check exists.
+
+**498. PIN A FINDING YOU ARE NOT FIXING.** D1073 is a login-flow decision, so
+this round recorded today's behaviour in a row whose assertion says "update
+this test (D1073)". That is the same pattern an earlier slice inherited for
+D1001 -- and D1001 was found and fixed precisely because the pin turned red.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
