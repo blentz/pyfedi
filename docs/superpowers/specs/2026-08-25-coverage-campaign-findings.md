@@ -16311,3 +16311,50 @@ changed, because the fix is a route-ordering decision.
 |---|---|---|---|---|
 | **D1076** | `app/user/routes.py:2141` | **A SORT THE SETTINGS PAGE OFFERS MATCHED NO ARM.** `user_read_posts`'s ascending arm was `elif sort == 'oldest':`, and the page's own nav links exactly that -- but `sort` DEFAULTS to `current_user.default_sort`, and that setting's choices call the same order **`'old'`** (`SettingsForm.sorts`, and every other listing in the application). So an account whose default sort is "Old" opened `/read-posts` and matched no arm at all: the list came back with **no `ORDER BY`**, in whatever order the database chose. **Found only because a mutation on that arm SURVIVED** -- the row was asking for `/read-posts/old`, which reached no `order_by` to mutate. Both spellings are accepted now. | **fixed** | The arm's own mutant, once the row was rewritten to insert the newer post first |
 | **D1075** | `tests/test_user_misc.py` | The survivor deleted `lookup`'s `if exists:` shortcut -- and the redirect came out **identical**, because the search branch it falls into finds the same local row and redirects to the same place. The shortcut's whole purpose is to avoid the search, so the row has to assert that **no search happened**; a Location cannot tell the two paths apart. | **closed** | `m17` |
+
+## Sub-project 82, slice A: the comment routes of `app/post/routes.py`
+
+**The round in one line: eight routes carried two ids in one URL and never
+asked whether they belong together, so **a moderator of any community could
+undo another community's moderation**; and the pages that show a conversation
+one comment at a time **never made the private-community check `show_post`
+makes**, so an anonymous reader could read a private community's thread.**
+
+### 1. TWO IDS IN ONE URL, AND THE AUTHORIZATION MADE AGAINST THE WRONG ONE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1077** | `app/post/routes.py:689, 793, 862, 1019, 1823, 1973, 2019, 2092` | **A MODERATOR OF ANY COMMUNITY COULD RESTORE A DELETED REPLY IN ANOTHER ONE.** Every route on `/post/<post_id>/comment/<comment_id>` fetched the two objects independently, tested authorization against **`post.community`** -- the object the caller picks freely -- and then acted on **`post_reply`**. So pairing your own post's id with another community's comment id undid that community's moderators' removal. The delete twin had the same mismatch, where it surfaced as `Exception: Does not have permission` raised by `delete_reply` -- **a 500 rather than a cross-community deletion, and only because the helper happened to notice what the route did not**. Fact 447's shape for the third time, after D1010 and D1029. All eight sites now check `post_reply.post_id != post.id` first. | **fixed** | `PROBE ac2 status: 302 | their reply deleted: False` -- True before the request, False after |
+
+### 2. THE PRIVATE-COMMUNITY CHECK THE COMMENT PAGES NEVER MADE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1078** | `app/post/routes.py:70` (`refuse_private_community`), called at `:692, :796, :1022, :1827` | **AN ANONYMOUS READER COULD READ A PRIVATE COMMUNITY'S CONVERSATION.** `show_post` refuses a private community's post to anyone who is not a member; `continue_discussion`, its ajax twin, the reply options menu and the report form show the same content one comment at a time and made **no such check at all**. The report form also names the post, so a non-member learned a private community's post title from it. Fact 478 -- the same feature has two ends -- and the **sixth** surface in this campaign through which private-community content escaped, after D998, D1005, D1017, D1026 and D1057. Fixed as one helper holding the test `show_post` already makes, because four copies is how this happened. | **fixed** | `PROBE ae1 status: 200 | private body visible: True`; `PROBE ae4 anon status: 200 | private body visible: True`; `PROBE ae5 status: 200 | title visible: True` |
+
+**How D1078 was found:** D1077's probe paired a public post's id with a
+*private* community's comment id and watched the private body render. Reading
+the route afterwards, to write the D1077 row, showed the mismatch was not what
+let it through -- there was no private-community test on that route at all, so
+the **matched**-ids case leaked too. The second probe measured it directly.
+The lesson is narrow and worth keeping: **a probe that succeeds for the reason
+you expected is still worth re-reading, because it may also have succeeded for
+a worse one.**
+
+### 3. WHAT THE MUTATION PASS FOUND
+
+Two passes, 24 mutants; the measuring passes killed 20. Four survivors: three
+became rows, one is equivalent.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1079** | `tests/test_post_replies.py` | `was_mod_deletion` (`post_reply.deleted_by == post_reply.user_id`) is only observable in the **federated** payload: it puts `summary: "Deleted by mod"` on the Undo and gates sending it to a remote community's inbox. A restore row against a local community cannot see it. Two rows now restore in a remote community and read the payload. | **closed** | `m3` |
+| **D1080** | `tests/test_post_replies.py` | `post_reply_report` tests `reports == -1` **twice** -- once to warn on the page, once to drop the submission -- and a row that only submits kills neither, because the second test catches what the first would have warned about. The warning needs its own GET row. | **closed** | `m7` |
+| **D1081** | `app/post/routes.py:2005` | `Label(field_id=...)`'s field id reaches nothing: `render_form` builds the `<label>` itself and takes `for` from `field.id`. **Equivalent mutant**, recorded as fact 505 rather than chased. | **closed** | `m12` |
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1082** | `tests/test_post_replies.py` | `post_reply_restore` skips its ancestor `child_count` UPDATE when `len(path) > 1` is false, and **no row had a length-1 path**: `make_post_reply` leaves `path` unset, so every row short-circuited on `post_reply.path` being falsy and the length test was never reached. A top-level reply whose `path` is `[0]` is the case that separates them. | **closed** | `n8` |
+| **D1083** | `tests/test_post_replies.py` | The poll row created its choices **in sort order**, so dropping `order_by(PollChoice.sort_order)` gave the same list. **Fact 499 for the second time in two sub-projects** -- and it is now a step when writing any ordering row: insert the rows in the wrong order first. | **closed** | `n10` |
+
+**Next free number: D1084.**
