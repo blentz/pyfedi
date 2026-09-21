@@ -82,9 +82,7 @@ KNOWN_GET_MUTATORS = {
     'community.community_wiki_revert_revision',
     'feed.feed_notification', 'feed.feed_unsubscribe',
     'topic.topic_notification',
-    'user.remove_avatar', 'user.remove_cover',
     'user.notification_goto', 'user.notification_delete',
-    'user.notifications_all_read',
 }
 
 MUTATIONS = ('db.session.add(', 'db.session.delete(', 'db.session.commit()',
@@ -162,8 +160,8 @@ def test_no_new_route_mutates_on_a_bare_get():
 
 
 def test_the_routes_this_campaign_fixed_are_not_in_the_set():
-    """D955, D976, D987, D1018 and D1021 were each this shape and each is now
-    POST-only.
+    """D955, D976, D987, D1018, D1021, D1041 and D1044 were each this shape and
+    each is now POST-only.
     Naming them here is what stops a later change quietly reintroducing one --
     the ratchet above would accept it again as a new entry, but this row will
     not."""
@@ -176,7 +174,12 @@ def test_the_routes_this_campaign_fixed_are_not_in_the_set():
                      # added: promoting a moderator, stickying a post in a
                      # community, and casting a vote all mutated on a bare GET.
                      'community.community_add_moderator',
-                     'post.post_sticky', 'post.post_vote'):
+                     'post.post_sticky', 'post.post_vote',
+                     # D1041 and D1044, the last of D988's eleven in this
+                     # blueprint: removing your own avatar or banner, and
+                     # marking every notification read.
+                     'user.remove_avatar', 'user.remove_cover',
+                     'user.notifications_all_read'):
         assert endpoint not in found, (
             f'{endpoint} mutates on a GET again; it was fixed once already')
 

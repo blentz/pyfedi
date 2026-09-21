@@ -10058,6 +10058,38 @@ irrelevant -- an inbox that was None, a lookup that already filtered, an
 invariant that made a disjunct redundant. Before writing a row for a guard, ask
 what would have to be true for that guard to be the thing that decides.
 
+**470. A FIX CAN MAKE AN EXISTING BRANCH EQUIVALENT.** D1043 added `except
+ValueError` around the notification-type parse, and that made the
+`notif_type == 'Unread'` arm redundant: `int('Unread')` now falls into the same
+answer. Nothing failed, and nothing would have shown it except the mutation
+pass. Re-run the mutants over the code AROUND a fix, not only over the fix.
+
+**471. AN EMAIL LINK CANNOT CARRY A CSRF TOKEN.** Making
+`notifications_all_read` POST-only broke the "Mark all as read" button in the
+notification email, which is a GET by construction. The options are a
+single-use token in the link (what the unsubscribe links do) or removing the
+action from the email; this round did the second and said so. A route reached
+from an email is in D988's "GET by protocol" category or it is not reachable at
+all.
+
+**472. `request.files[...]` IS A 400, NOT A KeyError.** Werkzeug raises
+`BadRequestKeyError`, which Flask turns into a 400 response -- so a route that
+indexes `request.files` refuses every client that does not send that exact
+field, and the browser form is the only one that always does. `.get()` answers
+None, which the `if` below it usually already handles.
+
+**473. A TASK'S SESSION IS NOT THE TEST'S SESSION.** `import_settings_task`
+runs under `get_task_session()`, so an object handed to it through a patched
+`find_actor_or_create` belongs to the test's session and writes to it are never
+flushed by the task. Assert on rows the task itself created, not on counters it
+incremented on a borrowed object.
+
+**474. TWO IDENTICAL BOOKMARK TABLES, TWO ROWS.** `PostBookmark` and
+`PostReplyBookmark` both lack a unique constraint, so the `if not
+existing_bookmark:` in each is the only thing preventing a duplicate. Importing
+the same file twice is the ordinary way a user reaches that, and no row did it
+until the mutation pass asked.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
