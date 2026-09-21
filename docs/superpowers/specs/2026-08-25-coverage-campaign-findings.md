@@ -16061,3 +16061,44 @@ and **the site's first administrator could delete their own account.**
 |---|---|---|---|---|
 | **D1039** | `tests/test_user_moderation.py` | Three real gaps. `if user and not user.banned:` is reachable **only for a remote account** -- `find_local_user` filters `banned=False` (`app/activitypub/actor.py:29`) so a banned local profile is a 404 before it, while `find_remote_actor` does not filter at all for a user URL (`:91`). The unblock query's `blocker_id` half could be deleted without any row noticing, because no row had somebody ELSE's block of the same person. And `instance.id != 1` in the deletion task was masked by the local instance row having no `inbox`, so the row had to give it one. | **all three closed** | `m5`, `m15`, `m32` |
 | **D1040** | `app/user/routes.py:880`, `:807` | Two **equivalent** mutants, proved from the source. `user.is_local() or user.instance_id is None or user.instance_id == 1` -- the first disjunct cannot decide anything, because a local account always carries `instance_id` 1 and nothing in the codebase creates one that does not; it is defence against that invariant breaking. And `allow_banned=True` on `unban_profile`'s **handle** arm changes no answer, because `find_remote_actor` never filters banned users -- it is load-bearing only on the local-URL arm two lines below, where it is already pinned. | **registered as equivalent mutants** | `m10` and `m21` SURVIVED with rows that construct both states |
+
+**Next free number: D1041.**
+
+## Slice B: the profile form, and settings import/export
+
+**The round in one line: nine functions close at zero gaps, **EIGHT more
+production defects** -- including **an unbounded upload into Redis** and **an
+import file that drove one outbound fetch per line** -- and **the last three of
+D988's eleven mutating GETs are fixed**, so that inventory is now empty.**
+
+### 1. THE LAST THREE MUTATING GETs
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1041** | `app/user/routes.py:329`, `:343`; `app/templates/user/edit_profile.html:86`, `:97` | `remove_avatar` and `remove_cover` accepted GET and deleted the viewer's own image. Small harm next to D1021's forged vote, and the same shape -- two of D988's eleven, closed now that this blueprint has a slice. The nested `if current_user.avatar_id:` inside each could not be false and went with them (D983). | **fixed, both** | Each answers 405 to a GET, with the image still in place |
+| **D1044** | `app/user/routes.py:1310`; `app/templates/user/notifications.html:19`; `app/templates/email/unread_notifications.html:9` | `notifications_all_read` accepted GET, so an `<img src="/notifications/all_read">` marked **every one of the viewer's notifications read**. The page button moves to the `send_post` pattern. **The link in the notification EMAIL could not be fixed the same way** -- an email cannot carry a CSRF token -- so it now points at the notifications page, where the action lives behind a POST. That is a deliberate loss of a convenience, recorded here rather than left for a reader to discover. **D988's inventory of eleven is now empty.** | **fixed** | `PROBE v3 status: 302 unread rows: 0` for a bare GET |
+
+### 2. AN UNBOUNDED UPLOAD, AND AN UNBOUNDED FETCH
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1042** | `app/user/routes.py:730` | **`import_file.stream.read()` WITH NO ARGUMENT**, into memory and then into Redis with a one-hour TTL -- and this application sets **no `MAX_CONTENT_LENGTH` at all**, so the size was whatever the client sent. A settings export is a few kilobytes. Capped at 5 MB, read one byte past the limit so a file exactly at it is still accepted. | **fixed** | `PROBE v1 MAX_CONTENT_LENGTH: None` |
+| **D1046** | `app/user/routes.py:63` | **ONE IMPORT FILE DROVE ONE OUTBOUND FETCH PER LINE.** `find_actor_or_create` defaults to `create_if_not_found=True`, which reaches `create_actor_from_remote` -- an outbound request to a URL the uploader chose -- and nothing capped the list. D993's family (an unbounded outbound primitive) for the third time, after D1025. Capped at 500 entries per key. | **fixed** | `PROBE v5 outbound lookups attempted: 50` for a 50-line file, with no upper bound |
+| **D1045** | `app/user/routes.py:63` | **THE FILE'S SHAPE WAS AN ASSUMPTION.** The task iterated whatever it found under each key, so a single URL given as a bare STRING was iterated character by character, each character becoming an actor lookup. Both this and D1046 are answered by one helper, `import_entries`, which refuses a non-list and caps the rest. | **fixed** | `PROBE v4 find_actor_or_create calls: 25 first arg: h` |
+
+### 3. THREE SMALLER ONES
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1043** | `app/user/routes.py:1316` | `?type=abc` on `notifications_all_read`: `ValueError: invalid literal for int() with base 10: 'abc'` -- a 500 from a URL anyone could type. An unusable filter now means "all of them", which is what an empty filter already meant. | **fixed** | The probe |
+| **D1047** | `app/user/routes.py:262`, `:276`, `:729` | `request.files['profile_file']` raises `BadRequestKeyError` -- a **400** -- for a submission that does not carry the field. The rendered form always does; nothing else has to. **D1003's shape, on files rather than form fields**, at three sites. | **fixed, all three** | Every profile row in the file answered 400 until this changed |
+| **D1048** | `app/user/routes.py:1355` | The import task is queued and runs later, so the account can be gone by the time it does -- and every arm dereferences `user`. Measured with an **empty** file, which is what makes it a nil guard on the user rather than a per-entry one. D992's shape, in a background task. | **fixed** | `AttributeError: 'NoneType' object has no attribute 'id'` |
+
+### 4. WHAT THE MUTATION PASS FOUND
+
+36 mutants; the measuring pass killed 32.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1050** | `tests/test_user_profile_import.py` | One real gap: an import file can name a post the account has **already** bookmarked, and neither `PostBookmark` nor `PostReplyBookmark` has a unique constraint to catch the second row -- so `if not existing_bookmark:` could be deleted without any row noticing, because no row imported the same bookmark twice. | **closed** | `m36` |
+| **D1049** | `app/user/routes.py:251`, `:1316`, `:1425` | **Three equivalent mutants, each proved from the source, and one of them created by this round's own fix.** (a) `edit_profile`'s `and not current_user.banned` cannot decide anything: the lookup above filters `banned=False` and the route then requires the caller to BE that user, so a banned caller is a 404 first. (b) `notif_type == 'Unread'` no longer needs its own arm, because D1043's `except ValueError` now sends `int('Unread')` down the same path -- **a fix that made an existing branch equivalent, which only the mutation pass would show.** (c) the import's membership guard is backed by the `existing_member` check inside it, exactly as D996 recorded for `do_subscribe`. | **registered as equivalent mutants** | `m2`, `m24`, `m30` |
