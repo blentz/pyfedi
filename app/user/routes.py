@@ -46,6 +46,33 @@ from app.utils import back, render_template, markdown_to_html, user_access, mark
     permission_required, check_anoobis, show_ban_message
 from app.rss_extras import RSSFeed
 
+# D1042. A settings export is a few kilobytes; this is two orders of magnitude
+# above the largest real one, and the application sets no MAX_CONTENT_LENGTH of
+# its own, so without a limit here the upload size is whatever the client sends.
+SETTINGS_IMPORT_MAX_BYTES = 5 * 1024 * 1024
+
+# D1045/D1046. One import file drives one outbound actor fetch per entry --
+# `find_actor_or_create` defaults to `create_if_not_found=True`, which reaches
+# `create_actor_from_remote` -- so an unbounded list is an unbounded outbound
+# fetch primitive, the same family as D993 and D1025. Measured: 50 entries, 50
+# lookups. A real Lemmy export lists tens of communities, not thousands.
+SETTINGS_IMPORT_MAX_ENTRIES = 500
+
+
+def import_entries(contents_json, key):
+    """The entries under `key`, refused unless they are a list and capped.
+
+    A string passed where a list belongs iterates its CHARACTERS: measured as
+    `PROBE v4 find_actor_or_create calls: 25 first arg: h` for a single URL
+    given as a bare string. The file is user-supplied, so its shape is an
+    input to validate rather than an assumption.
+    """
+    entries = contents_json.get(key)
+    if not isinstance(entries, list):
+        return []
+    return entries[:SETTINGS_IMPORT_MAX_ENTRIES]
+
+
 @bp.route('/people', methods=['GET', 'POST'])
 @login_required
 def show_people():
@@ -258,7 +285,12 @@ def edit_profile(actor):
         current_user.bot = form.bot.data
         db.session.commit()
 
-        profile_file = request.files['profile_file']
+        # D1047. `request.files['...']` raises `BadRequestKeyError` -- a 400 --
+        # for a submission that does not carry the field. The browser form
+        # always does, so this was a 400 for every other client, and the same
+        # shape as D1003's `.data.strip()` on an unsubmitted field. `.get()`
+        # answers None, which the `if` below already handles.
+        profile_file = request.files.get('profile_file')
         if profile_file and profile_file.filename != '':
             # remove old avatar after adding the new one succeeds
             old_avatar = current_user.avatar_id
@@ -274,7 +306,7 @@ def edit_profile(actor):
                 if old_avatar:
                     old_file.delete_from_disk()
 
-        banner_file = request.files['banner_file']
+        banner_file = request.files.get('banner_file')
         if banner_file and banner_file.filename != '':
             # remove old cover
             old_banner = current_user.cover_id
@@ -326,32 +358,35 @@ def edit_profile(actor):
                            markdown_editor=current_user.markdown_editor, delete_form=delete_form, unsub_form=unsub_form)
 
 
-@bp.route('/user/remove_avatar', methods=['GET', 'POST'])
+# D1041. POST-only, two of D988's eleven. A forged GET deleted the viewer's
+# own avatar -- small harm, but the same shape as D955 and free to close now
+# that this blueprint has a slice. The nested `if current_user.avatar_id:`
+# could not be false and is gone with it, as in `remove_icon` (D983).
+@bp.route('/user/remove_avatar', methods=['POST'])
 @login_required
 def remove_avatar():
     if current_user.avatar_id:
         current_user.avatar.delete_from_disk()
-        if current_user.avatar_id:
-            file = db.session.get(File, current_user.avatar_id)
-            file.delete_from_disk()
-            current_user.avatar_id = None
-            db.session.delete(file)
-            db.session.commit()
+        file = db.session.get(File, current_user.avatar_id)
+        file.delete_from_disk()
+        current_user.avatar_id = None
+        db.session.delete(file)
+        db.session.commit()
     return _('Avatar removed!')
 
 
-@bp.route('/user/remove_cover', methods=['GET', 'POST'])
+# D1041's second site.
+@bp.route('/user/remove_cover', methods=['POST'])
 @login_required
 def remove_cover():
     if current_user.cover_id:
         current_user.cover.delete_from_disk()
-        if current_user.cover_id:
-            file = db.session.get(File, current_user.cover_id)
-            file.delete_from_disk()
-            current_user.cover_id = None
-            db.session.delete(file)
-            db.session.commit()
-            cache.delete_memoized(User.cover_image, current_user)
+        file = db.session.get(File, current_user.cover_id)
+        file.delete_from_disk()
+        current_user.cover_id = None
+        db.session.delete(file)
+        db.session.commit()
+        cache.delete_memoized(User.cover_image, current_user)
     return '<div> ' + _('Banner removed!') + '</div>'
 
 
@@ -463,7 +498,13 @@ def export_user_settings(user):
     notes = []
     for user_note in UserNote.query.filter(UserNote.user_id == user.id):
         target = db.session.get(User, user_note.target_id)
-        if target:
+        if target:  # pragma: no cover
+            # Unreachable while `user_note_target_id_fkey` holds: the row
+            # cannot name a user that does not exist, and a deleted account
+            # keeps its row. Kept as defence against that key being relaxed,
+            # and marked rather than covered -- the only way to reach the false
+            # arm from a test is to patch `db.session.get`, which also breaks
+            # the login the request needs.
             notes.append({'target': target.profile_id(), 'note': user_note.body})
     user_dict['user_notes'] = notes
 
@@ -726,15 +767,25 @@ def user_settings_import_export():
         return send_file(buffer, download_name=f'{user.user_name}_piefed_settings.json', as_attachment=True,
                          mimetype='application/octet-stream')
     elif form.validate_on_submit():
-        import_file = request.files['import_file']
+        import_file = request.files.get('import_file')
         if import_file and import_file.filename != '':
             file_ext = os.path.splitext(import_file.filename)[1]
             if file_ext.lower() != '.json':
                 abort(400)
-            
+
+            # D1042. `stream.read()` with no argument read the WHOLE upload
+            # into memory and then stored it in Redis for an hour, and this
+            # application sets no `MAX_CONTENT_LENGTH` at all (measured:
+            # `PROBE v1 MAX_CONTENT_LENGTH: None`), so the size was whatever
+            # the client chose to send. A settings export is a few kilobytes;
+            # a megabyte is already a very large one. Read one byte past the
+            # limit so that a file AT the limit is still accepted.
             redis_key = f"import:{user.id}:{gibberish(15)}"
-            imported_data = import_file.stream.read()
-            
+            imported_data = import_file.stream.read(SETTINGS_IMPORT_MAX_BYTES + 1)
+            if len(imported_data) > SETTINGS_IMPORT_MAX_BYTES:
+                flash(_('That file is too large to import.'), 'error')
+                return redirect(url_for('user.user_settings_import_export'))
+
             redis_client.set(redis_key, imported_data, ex=3600)
 
             # import settings in background task
@@ -1306,7 +1357,12 @@ def notification_unread(notification_id):
         abort(403)
 
 
-@bp.route('/notifications/all_read', methods=['GET', 'POST'])
+# D1044. POST-only, the D955 shape again and the last of D988's eleven to be
+# fixed: `login_required` validates CSRF only for POST, so while this accepted
+# GET an <img src="/notifications/all_read"> marked every one of the viewer's
+# notifications read. Measured: `PROBE v3 status: 302 unread rows: 0` for a
+# bare GET.
+@bp.route('/notifications/all_read', methods=['POST'])
 @login_required
 def notifications_all_read():
     notif_type = request.args.get('type', '')
@@ -1315,8 +1371,20 @@ def notifications_all_read():
         db.session.execute(text('UPDATE notification SET read=true WHERE user_id = :user_id'),
                            {'user_id': current_user.id})
     else:
-        notif_type = tuple(int(x.strip()) for x in
-                           notif_type.strip('{}').split(','))  # convert '{41, 10}' to a tuple containing 41 and 10
+        # D1043. `int(x)` on a query parameter: `?type=abc` was
+        # `ValueError: invalid literal for int() with base 10: 'abc'`,
+        # measured -- a 500 from a URL anyone could construct. An unusable
+        # filter means "all of them", which is what the empty filter above
+        # already means.
+        try:
+            notif_type = tuple(int(x.strip()) for x in
+                               notif_type.strip('{}').split(','))  # convert '{41, 10}' to a tuple containing 41 and 10
+        except ValueError:
+            db.session.execute(text('UPDATE notification SET read=true WHERE user_id = :user_id'),
+                               {'user_id': current_user.id})
+            db.session.commit()
+            flash(_('All notifications marked as read.'))
+            return redirect(url_for('user.notifications', type=original_notif_type))
         db.session.execute(
             text('UPDATE notification SET read=true WHERE notif_type IN :notif_type AND user_id = :user_id'),
             {'notif_type': notif_type, 'user_id': current_user.id})
@@ -1342,11 +1410,18 @@ def import_settings_task(user_id, redis_key):
             with patch_db_session(session):
                 from app import redis_client
                 user = session.get(User, user_id)
+                # D1048. The task is queued and runs later, so the account can
+                # be gone by the time it does -- and every arm below
+                # dereferences `user`. Measured, with an empty import file:
+                # `AttributeError: 'NoneType' object has no attribute 'id'`.
+                # D992's shape, in a background task rather than a route.
+                if user is None:
+                    return
                 contents = redis_client.get(redis_key)
                 contents_json = json.loads(contents)
 
                 # Follow communities
-                for community_ap_id in contents_json['followed_communities'] if 'followed_communities' in contents_json else []:
+                for community_ap_id in import_entries(contents_json, 'followed_communities'):
                     community = find_actor_or_create(community_ap_id, community_only=True)
                     if community:
                         if community.posts.count() == 0:
@@ -1396,7 +1471,7 @@ def import_settings_task(user_id, redis_key):
                                         session.commit()
                             cache.delete_memoized(community_membership, user, community)
 
-                for community_ap_id in contents_json['blocked_communities'] if 'blocked_communities' in contents_json else []:
+                for community_ap_id in import_entries(contents_json, 'blocked_communities'):
                     community = find_actor_or_create(community_ap_id, community_only=True)
                     if community:
                         existing_block = session.query(CommunityBlock).filter_by(user_id=user.id, community_id=community.id).first()
@@ -1405,7 +1480,7 @@ def import_settings_task(user_id, redis_key):
                             session.add(block)
 
 
-                for user_ap_id in contents_json['blocked_users'] if 'blocked_users' in contents_json else []:
+                for user_ap_id in import_entries(contents_json, 'blocked_users'):
                     blocked_user = find_actor_or_create(user_ap_id)
                     if blocked_user:
                         existing_block = session.query(UserBlock).filter_by(blocker_id=user.id, blocked_id=blocked_user.id).first()
@@ -1415,19 +1490,19 @@ def import_settings_task(user_id, redis_key):
                             if not blocked_user.is_local():
                                 ...  # todo: federate block
 
-                for user_note in contents_json['user_notes'] if 'user_notes' in contents_json else []:
+                for user_note in import_entries(contents_json, 'user_notes'):
                     note_target = find_actor_or_create(user_note['target'])
                     if note_target:
                         session.add(UserNote(user_id=user.id, target_id=note_target.id, body=user_note['body']))
 
                 cache.delete_memoized(user_notes, user.id)
 
-                for instance_domain in contents_json['blocked_instances'] if 'blocked_instances' in contents_json else []:
+                for instance_domain in import_entries(contents_json, 'blocked_instances'):
                     instance = Instance.query.filter(Instance.domain == instance_domain).first()
                     if instance:
                         session.add(InstanceBlock(user_id=user.id, instance_id=instance.id))
 
-                for ap_id in contents_json['saved_posts'] if 'saved_posts' in contents_json else []:
+                for ap_id in import_entries(contents_json, 'saved_posts'):
                     try:
                         post = get_resolve_object(None, {"q": ap_id}, user_id=user.id, recursive=True)
                         if post:
@@ -1437,7 +1512,7 @@ def import_settings_task(user_id, redis_key):
                     except Exception:
                         continue
 
-                for ap_id in contents_json['saved_comments'] if 'saved_comments' in contents_json else []:
+                for ap_id in import_entries(contents_json, 'saved_comments'):
                     try:
                         reply = get_resolve_object(None, {"q": ap_id}, user_id=user.id, recursive=True)
                         if reply:

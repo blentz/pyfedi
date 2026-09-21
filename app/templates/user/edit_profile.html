@@ -83,7 +83,9 @@
             <small class="field_hint">{{ _('Provide a square image that looks good when small.') }}</small>
             {% if user.avatar_id %}
                 <p><a href="{{ user.avatar_image() }}" class="btn btn-sm btn-primary showElement" data-id="avatar_image">{{ _('View image') }}</a>
-                   <a href="{{ url_for('user.remove_avatar') }}" class="btn btn-sm btn-primary"
+                   {# D1041: no href -- the route is POST-only now, because as a GET
+                      a forged <img> deleted the viewer's avatar. #}
+                   <a href="#" class="btn btn-sm btn-primary"
                       hx-post="{{ url_for('user.remove_avatar') }}"
                       hx-target="#avatar_image"
                       hx-swap="outerHTML">{{ _('Remove image') }}</a>
@@ -94,7 +96,7 @@
             <small class="field_hint">{{ _('Provide a wide image - letterbox orientation.') }}</small>
             {% if user.cover_id %}
                 <p><a href="{{ user.cover_image() }}" class="btn btn-sm btn-primary showElement" data-id="cover_div">{{ _('View image') }}</a> |
-                   <a href="{{ url_for('user.remove_cover') }}" class="btn btn-sm btn-primary"
+                   <a href="#" class="btn btn-sm btn-primary"
                       hx-post="{{ url_for('user.remove_cover') }}"
                       hx-target="#cover_div"
                       hx-swap="outerHTML">{{ _('Remove image') }}</a></p>
