@@ -536,8 +536,14 @@ def post_oembed(post_id):
         return jsonify(oembed)
 
 
-@bp.route('/post/<int:post_id>/<vote_direction>/<federate>', methods=['GET', 'POST'])
-@bp.route('/post/<int:post_id>/<vote_direction>/<federate>/<emoji>', methods=['GET', 'POST'])
+# D1021's second site, and the one with the largest reach: as a GET, an
+# <img src="/post/5/upvote/default"> cast the viewer's vote on that post, on
+# any page an attacker could get them to load. The site's own vote buttons are
+# hx-post with no anchor fallback (app/templates/post/_post_voting_buttons.html
+# and its masonry twin), and `comment_vote` next door is already POST-only, so
+# the GET arm was unused by anything but the forgery.
+@bp.route('/post/<int:post_id>/<vote_direction>/<federate>', methods=['POST'])
+@bp.route('/post/<int:post_id>/<vote_direction>/<federate>/<emoji>', methods=['POST'])
 @login_required
 @validation_required
 @approval_required
@@ -1510,7 +1516,14 @@ def post_mea_culpa(post_id: int):
     return render_template('post/post_mea_culpa.html', title=_('I changed my mind'), form=form, post=post)
 
 
-@bp.route('/post/<int:post_id>/sticky/<mode>', methods=['GET', 'POST'])
+# D1021. POST-only, for the reason recorded as D955, D976 and D987: this
+# function has no form and acts on whichever method arrives, and
+# login_required validates CSRF only for POST. As a GET link, a moderator who
+# loaded <img src="/post/5/sticky/yes"> stickied that post in their community
+# -- the community-level twin of the instance-wide action D987 fixed, left
+# behind because the D989 ratchet's detector looks for db.session writes in
+# the function body and this one's write is inside sticky_post().
+@bp.route('/post/<int:post_id>/sticky/<mode>', methods=['POST'])
 @login_required
 def post_sticky(post_id: int, mode):
     post = db.session.get(Post, post_id) or abort(404)

@@ -1641,13 +1641,33 @@ def community_remove_owner(community_id: int, user_id: int):
     return redirect(url_for("community.community_mod_list", community_id=community_id))
 
 
-@bp.route('/community/<int:community_id>/moderators/add/<int:user_id>', methods=['GET', 'POST'])
+@bp.route('/community/<int:community_id>/moderators/add/<int:user_id>', methods=['POST'])
 @login_required
 def community_add_moderator(community_id: int, user_id: int):
     if current_user.banned:
         return show_ban_message()
 
-    add_mod_to_community(community_id, user_id, SRC_WEB)
+    # D1018. Two defects in three lines.
+    #
+    # This route accepted GET and promoted a user to moderator, which is
+    # D955's shape a fourth time -- `login_required` validates CSRF only for
+    # POST, so an owner who loaded `<img src=".../moderators/add/123">`
+    # promoted account 123. The D989 ratchet did NOT catch it, because its
+    # detector looks for `db.session` writes in the function body and this
+    # one's write is inside `add_mod_to_community`. POST-only now, and the
+    # ratchet has been taught about the helpers.
+    #
+    # `add_mod_to_community` raises `Exception('no_permission')` for a caller
+    # who is neither the owner nor an admin, and nothing caught it -- measured
+    # as an unhandled `Exception: no_permission`, a 500 where the sibling
+    # `community_remove_moderator` answers 401. Its `.one()` calls raise the
+    # same way for an unknown community or user.
+    try:
+        add_mod_to_community(community_id, user_id, SRC_WEB)
+    except NoResultFound:
+        abort(404)
+    except Exception:
+        abort(401)
 
     return redirect(url_for('community.community_mod_list', community_id=community_id))
 
@@ -2200,16 +2220,15 @@ def community_kick_user(community_id: int, user_id: int):
     community = db.session.get(Community, community_id) or abort(404)
     user = db.session.get(User, user_id) or abort(404)
 
-    if community is not None:
-        if current_user.is_admin():
-
-            db.session.query(CommunityMember).filter_by(user_id=user.id, community_id=community.id).delete()
-            db.session.commit()
-
-        else:
-            abort(401)
+    # `if community is not None:` and its `else: abort(404)` were dead: the
+    # line above already aborts for a community that does not exist, so the
+    # false arm could never run. Removed rather than covered -- the D983
+    # precedent.
+    if current_user.is_admin():
+        db.session.query(CommunityMember).filter_by(user_id=user.id, community_id=community.id).delete()
+        db.session.commit()
     else:
-        abort(404)
+        abort(401)
 
     return redirect(url_for('community.community_moderate_subscribers', actor=community.name))
 
@@ -2692,6 +2711,14 @@ def community_moderate_report_ignore(community_id, report_id):
 def community_my_flair(actor):
     community = actor_to_community(actor)
 
+    # D1019. `actor_to_community` returns None for a name that does not
+    # resolve, and this function's body was entirely inside `if community is
+    # not None:` with no else -- so the view returned None and Flask answered
+    # `TypeError: The view function ... did not return a valid response`.
+    # Measured. D1012's shape, second instance in this file.
+    if community is None:
+        abort(404)
+
     if community is not None:
         form = SetMyFlairForm()
         existing_flair = UserFlair.query.filter(UserFlair.community_id == community.id,
@@ -3038,7 +3065,15 @@ def community_membership_manage(community_id: int):
         flash(_('Saved'))
         return redirect(url_for('activitypub.community_profile', actor=community.link()))
 
-    blocked_flair = CommunityFlairBlock.query.filter(CommunityFlairBlock.user_id == current_user.id).all()
+    # D1020. This read the viewer's flair blocks across EVERY community, so
+    # the form for one community opened pre-checked with another community's
+    # flair ids. Those ids are not among this form's choices, so WTForms
+    # refuses the submission and the page silently will not save while a
+    # foreign block exists. Measured: `PROBE h1 second community form
+    # pre-checked with: [1] (its own flair is 2 ...)`.
+    blocked_flair = CommunityFlairBlock.query.filter(
+        CommunityFlairBlock.user_id == current_user.id,
+        CommunityFlairBlock.community_id == community_id).all()
     form.block_flair.data = [bf.community_flair_id for bf in blocked_flair]
 
     return render_template('community/community_membership.html', title=_('Community membership'), form=form,
@@ -3048,6 +3083,16 @@ def community_membership_manage(community_id: int):
 @bp.route('/get_sidebar/<int:community_id>')
 def get_sidebar(community_id):
     community = db.session.get(Community, community_id)
+    # D1017. This served ANY community's title and description to ANY caller,
+    # with no login and no membership check, while `show_community` -- the page
+    # this fragment belongs to -- answers 404 for a banned community and 403
+    # for a private one the caller does not belong to. Measured, anonymously,
+    # against a private community: `PROBE h2 description leaked: True title
+    # leaked: True`. The refusals here are the same three, in the same order.
+    if community is None or community.banned:
+        abort(404)
+    if community.private and community.id not in community_membership_private(current_user.get_id()):
+        abort(403)
     return flask.render_template('community/description.html', community=community, hide_community_actions=True)
 
 
