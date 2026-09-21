@@ -9827,6 +9827,56 @@ registering rather than chasing: the guard is defence in depth against the
 upstream filter changing. Read the producer before assuming the consumer's
 check is testable.
 
+**432. `del form.field` DOES NOT REMOVE THE ATTRIBUTE.** WTForms'
+`Form.__delattr__` pops the field out of `_fields` and then sets the attribute
+to `None`, so after `del form.flair` the field is gone from rendering and
+validation while `hasattr(form, 'flair')` is still True. Assert on the value
+(`form.flair is None`) or on `'flair' not in form._fields`, never on `hasattr`.
+
+**433. AN UNSUBMITTED StringField IS `None`, NOT `''`.** WTForms initialises
+a field's data with `process_data(None)` and only overwrites it from the
+formdata when the key is present. So `form.choice_9.data.strip()` is an
+`AttributeError` for any client that does not post all fifteen choice fields.
+The browser form always posts them all, which is why D1003 survived: **the
+site's own page is the one client that cannot reach the defect.**
+
+**434. A VALIDATOR THAT APPENDS AN ERROR AND RETURNS True REFUSES NOTHING.**
+`validate_on_submit()` reads the return value, not `form.errors`. D1001 was
+three copies of `self.communities.errors.append(...)` with no `return False`
+under them, so an instance setting recorded a complaint and accepted the
+submission anyway. When covering a custom `validate()`, assert what the route
+DID -- that `make_post` was not called -- and not merely that an error was
+recorded.
+
+**435. GIVE EACH POST TYPE ITS OWN REQUIRED FIELDS BEFORE BLAMING THE ROUTE.**
+`add_post`'s six types build six different form classes, and a payload that is
+valid for a discussion is refused for an event (start/end/timezone/online link),
+a video (`video_url`'s Regexp fires on an empty string, with no DataRequired),
+a link (`link_url`) or a poll (`mode`, `finish_in`, two choices). A refusal
+looks exactly like the code under test not running. A `_type_extras(type_name)`
+helper keeps that knowledge in one place.
+
+**436. A MagicMock RETURN VALUE REACHES THE DATABASE.** Patching
+`make_post` and letting it return a `MagicMock` gave
+`InvalidRequestError: Incorrect number of values in identifier to formulate
+primary key for session.get()` -- the route reads `post.sticky` and passes
+`post.id` to `sticky_post`. A three-attribute stub class (`sticky`, `slug`,
+`id`) is what the double actually has to be. A failure in the double reads
+exactly like a failure in the route.
+
+**437. WHEN A FIX'S CONDITION NAMES A CASE, PIN THE OTHER CASE TOO.** D1001's
+condition is `community.is_local() and ...`. Every image row in the file used a
+local community, so dropping `is_local()` -- which would make an instance that
+refuses local image posts refuse remote ones as well -- changed nothing any
+assertion could see. This is the ninth instance in this sub-project of an
+assertion that cannot distinguish the thing it names.
+
+**438. A ROW THAT WILL NOT PASS IS A PROBE WAITING TO BE WRITTEN.** Three of
+slice E's six defects (D1001, D1002, D1003) were found because a row written
+from the source would not go green, not because anything was read. The rule
+that made it work: when a row fails, measure what actually happened before
+changing the row.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
