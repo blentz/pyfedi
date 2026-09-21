@@ -31,6 +31,11 @@ def unsubscribe_from_everything_then_delete_task(user_id):
         try:
             with patch_db_session(session):
                 user = db.session.get(User, user_id)
+                # Everything below is inside this guard. The delete and the
+                # UPDATE used to sit outside it, so a user already gone when
+                # the task ran -- two admins pressing Delete, or a retry --
+                # raised AttributeError: 'NoneType' object has no attribute
+                # 'delete_dependencies'.
                 if user:
                     # unsubscribe
                     communities = CommunityMember.query.filter_by(user_id=user_id).all()
@@ -55,9 +60,9 @@ def unsubscribe_from_everything_then_delete_task(user_id):
                             if instance.inbox and instance.online() and instance.id != 1:  # instance id 1 is always the current instance
                                 send_post_request(instance.inbox, payload, user.private_key, f"{user.public_url()}#main-key")
 
-                user.delete_dependencies()
-                db.session.execute(text('UPDATE "user" SET deleted = true, banned = true WHERE id = :user_id'), {'user_id': user.id})
-                session.commit()
+                    user.delete_dependencies()
+                    db.session.execute(text('UPDATE "user" SET deleted = true, banned = true WHERE id = :user_id'), {'user_id': user.id})
+                    session.commit()
         except Exception:
             session.rollback()
             raise
