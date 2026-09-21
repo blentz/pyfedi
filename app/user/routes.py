@@ -2469,6 +2469,20 @@ def user_files():
 @login_required
 def user_file_delete(file_id):
     file = db.session.get(File, file_id) or abort(404)
+
+    # D1071. The confirmation page renders `<img src="{{ file.source_url }}">`
+    # for whatever id is in the URL, and nothing tied the file to the caller --
+    # so walking the ids disclosed the URL of EVERY uploaded file on the
+    # instance, including ones an account uploaded and never posted. Measured
+    # from an unrelated account: `PROBE aa1 status: 200 url leaked: True`.
+    # `process_file_delete` scopes its DELETE by user (app/shared/upload.py:128),
+    # so the deletion was never the hole; the page was.
+    owns_it = db.session.execute(
+        text('SELECT 1 FROM "user_file" WHERE file_id = :file_id AND user_id = :user_id'),
+        {'file_id': file.id, 'user_id': current_user.id}).first()
+    if not owns_it:
+        abort(403)
+
     form = DeleteFileForm()
     if form.validate_on_submit():
         process_file_delete(file.source_url, current_user.id)
@@ -2597,7 +2611,17 @@ def user_follow_request_reject(user_id):
                                                UserFollower.remote_user_id == user_id,
                                                UserFollower.is_inward == True).first()
     if follow_request:
-        follow_request.is_accepted = True
+        # D1072. This said `is_accepted = True` -- a copy of the accept route
+        # that was never changed. So rejecting a follow request sent the remote
+        # side a `Reject` activity AND recorded locally that the follow had
+        # been ACCEPTED: the person appears in the followers list
+        # (`show_profile` selects `is_accepted == True`) of somebody who
+        # believes they turned them away, and the two instances disagree about
+        # what happened. `UserFollower.is_accepted`'s own column comment gives
+        # the value: "None = request sent. True = accepted. False = Rejected",
+        # which is what `app/activitypub/routes.py:1185` writes for an inbound
+        # rejection.
+        follow_request.is_accepted = False
         db.session.commit()
         if not remote_user.is_local():
             accept = {"@context": default_context(),
