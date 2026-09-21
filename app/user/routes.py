@@ -631,9 +631,28 @@ def user_settings():
         if str(new_max_hours) != str(current_max_hours):
             restriction_cookie = request.cookies.get('max_hours_restriction_date')
             current_date = datetime.now()
-            
-            if restriction_cookie and current_max_hours and int(current_max_hours) > 0:
-                restriction_date = datetime.fromisoformat(restriction_cookie)
+
+            # D1051/D1052. Both of these read a COOKIE and parsed it without a
+            # guard: `int('abc')` and
+            # `datetime.fromisoformat('not-a-date')` are each a ValueError, so a
+            # corrupt or crafted cookie was a 500 on the settings page --
+            # measured both ways. The cookies are set to expire in 2099, so a
+            # single bad value locked the account out of its own settings for
+            # good. An unreadable restriction is treated as no restriction,
+            # which is the state the cookie describes before it is first set.
+            restriction_date = None
+            current_hours_limit = 0
+            try:
+                current_hours_limit = int(current_max_hours) if current_max_hours else 0
+            except ValueError:
+                current_hours_limit = 0
+            if restriction_cookie:
+                try:
+                    restriction_date = datetime.fromisoformat(restriction_cookie)
+                except ValueError:
+                    restriction_date = None
+
+            if restriction_date is not None and current_hours_limit > 0:
 
                 # Check if restriction period has passed
                 if current_date < restriction_date:
@@ -1808,6 +1827,15 @@ def user_settings_block_instance():
         instance = Instance.query.filter_by(domain=instance_domain).first()
         if not instance:
             flash(_('Instance not found: %(domain)s', domain=instance_domain), 'error')
+            return render_template('user/block_instance.html', form=form, user=current_user)
+
+        # D1053. Typing this instance's own domain into the box blocked it --
+        # instance 1 is this server, so every local post, comment and community
+        # would be hidden from the caller, with no obvious way back. D1035's
+        # shape, at the other end of the same feature: `user_block_instance`
+        # reached it from a local profile, this one from the settings page.
+        if instance.id == 1 or instance.domain == current_app.config['SERVER_NAME']:
+            flash(_('You cannot block this instance.'), 'error')
             return render_template('user/block_instance.html', form=form, user=current_user)
 
         # Use the existing block_remote_instance function
