@@ -10161,6 +10161,26 @@ produced another `NO SUMMARY` one slice after it was written down. When a
 mutant deletes a whole line, the anchor must include the leading whitespace --
 and `NO SUMMARY` is never a verdict.
 
+**488. A ROUTE'S OWN FILTER CAN MAKE ITS BODY UNREACHABLE.**
+`show_profile`'s `if user.deleted: flash(...)` cannot fire through
+`/u/<name>`, because `activitypub.user_profile` filters `deleted=False,
+banned=False` before calling it. The reachable path is `/user/<id>`, which
+uses `db.session.get`. When a function has two callers, ask which one can
+actually reach the branch before writing the row.
+
+**489. SIX NEAR-IDENTICAL QUERIES NEED SIX ROWS.** `user_alerts` builds its
+list in six arms (posts, comments, communities × mine/others/all, plus topics,
+feeds and users). A "somebody else's alerts are not listed" row existed -- over
+the COMMUNITIES arm -- and the posts arm's identical scoping could still be
+deleted unseen. A row against one arm of a dispatch says nothing about the
+others, however similar they look.
+
+**490. A RULE WRITTEN DOWN IS NOT A RULE APPLIED.** Fact 478 ("the same feature
+has two ends") was written in slice C and D1068 is the same miss two slices
+later, in the same module. After fixing a parse or a guard, grep the module for
+the same expression before closing the finding -- the habit has to be a step,
+not a memory.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
