@@ -9951,6 +9951,36 @@ filter for it names the module, the category and the message text, so it cannot
 hide anything of ours, and the reason sits next to it with the version that
 will make it removable.
 
+**452. `Community.is_moderator()` DOES NOT READ THE `is_moderator` COLUMN.**
+It asks whether the user is in `moderators()` (`app/models.py:736`), which
+selects on `is_owner OR is_moderator`. So it means "is on the moderation team",
+and every owner satisfies it. A condition that says `is_owner or ...
+is_moderator(user)` therefore has an unreachable first arm -- D1023.
+
+**453. A BAN-CHECK ROW MUST START FROM A STATE THE REQUEST WOULD CHANGE.** A
+row that makes the member an owner and then asserts they still are cannot see
+the ban check at all: the assertion was true before the request. Set up the
+state the successful request would move away from, then assert it did not
+move.
+
+**454. AIM A REFUSAL ROW AT THE ARM THAT COULD HAVE SUCCEEDED.** The
+`remove_owner` ban row aimed at another account, which the authorization check
+refuses whether or not the ban check runs. The only arm an owner can reach on
+their own account is `user.id == current_user.id`, and that is the one the ban
+check has to stop.
+
+**455. A DETECTOR THAT READS THE FUNCTION BODY MISSES WHAT THE HELPERS DO.**
+The D989 ratchet looked for `db.session` writes in the view and therefore
+passed three live mutating GETs whose writes are in `app/shared/`
+(D1022). When a ratchet is written against a code shape, list the indirections
+that shape travels through, and re-run it after adding them -- doing so
+surfaced three more routes immediately.
+
+**456. A FRAGMENT ENDPOINT NEEDS THE PAGE'S REFUSALS.** `get_sidebar` renders
+part of the community page and had none of `show_community`'s access control
+(D1017). Any route that renders a piece of a protected page is a second front
+door to the same data.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not

@@ -66,6 +66,15 @@ KNOWN_GET_MUTATORS = {
     'admin.admin_permissions', 'dev.tools', 'post.add_reply_inline',
     'search.run_search', 'user.notifications', 'user.user_files',
 
+    # Found only once MUTATING_HELPERS was added, and all three carry the
+    # same deliberate comment as `community.unsubscribe` below: POST from
+    # htmx, GET when JavaScript is off. The CSRF exposure is real -- a forged
+    # GET can make somebody follow or unfollow something -- but removing the
+    # GET removes the no-JS path, which is the product decision recorded as
+    # D994 rather than a mechanical fix.
+    'community.subscribe', 'post.post_notification',
+    'post.post_reply_notification',
+
     # NOT YET FIXED. These are the ones that match D955's shape and change
     # something at the caller's direction. Each belongs to a blueprint this
     # campaign has not finished; the entry is removed when its slice lands.
@@ -80,6 +89,23 @@ KNOWN_GET_MUTATORS = {
 
 MUTATIONS = ('db.session.add(', 'db.session.delete(', 'db.session.commit()',
              'db.session.execute')
+
+# Writes that reach the database through a shared helper instead of through
+# `db.session` in the view itself. Without these the detector is blind to an
+# entire class of this defect, and that blindness was not theoretical: D1018
+# (`community_add_moderator`) and D1021 (`post_sticky`, `post_vote`) all
+# accepted GET and all mutated, and all four passed this test, because the
+# write happens one call deeper. Each name here is a function in
+# `app/shared/` that commits.
+MUTATING_HELPERS = (
+    'add_mod_to_community(', 'remove_mod_from_community(', 'do_subscribe(',
+    'community_ban_user(', 'unsubscribe_from_everything_then_delete(',
+    'make_post(', 'make_reply(', 'edit_post(', 'delete_post(', 'restore_post(',
+    'vote_for_post(', 'vote_for_reply(', 'bookmark_post(', 'subscribe_post(',
+    'subscribe_reply(', 'sticky_post(', 'lock_post(', 'mark_post_read(',
+    'block_another_user(', 'toggle_post_notification(', 'report_post(',
+    'purge_user_then_delete(',
+)
 
 
 def _blueprint_name(path):
@@ -107,7 +133,7 @@ def _get_mutating_routes():
             if methods is None or 'GET' not in methods:
                 continue
             body = ast.unparse(node)
-            if not any(marker in body for marker in MUTATIONS):
+            if not any(marker in body for marker in MUTATIONS + MUTATING_HELPERS):
                 continue
             if 'validate_on_submit' in body:
                 continue
@@ -135,8 +161,9 @@ def test_no_new_route_mutates_on_a_bare_get():
         'shape, so the list is stale -- remove them:\n  ' + '\n  '.join(fixed))
 
 
-def test_the_three_routes_this_campaign_fixed_are_not_in_the_set():
-    """D955, D976 and D987 were each this shape and each is now POST-only.
+def test_the_routes_this_campaign_fixed_are_not_in_the_set():
+    """D955, D976, D987, D1018 and D1021 were each this shape and each is now
+    POST-only.
     Naming them here is what stops a later change quietly reintroducing one --
     the ratchet above would accept it again as a new entry, but this row will
     not."""
@@ -144,7 +171,12 @@ def test_the_three_routes_this_campaign_fixed_are_not_in_the_set():
 
     for endpoint in ('community.community_unban_user',
                      'community.community_moderate_report_ignore',
-                     'post.post_instance_sticky'):
+                     'post.post_instance_sticky',
+                     # D1018 and D1021, found only after MUTATING_HELPERS was
+                     # added: promoting a moderator, stickying a post in a
+                     # community, and casting a vote all mutated on a bare GET.
+                     'community.community_add_moderator',
+                     'post.post_sticky', 'post.post_vote'):
         assert endpoint not in found, (
             f'{endpoint} mutates on a GET again; it was fixed once already')
 

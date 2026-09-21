@@ -15897,3 +15897,43 @@ event failed the whole calendar.**
 | ID | Where | What | Why not this round |
 |---|---|---|---|
 | D1016 | `pytest.ini` | `ics` 0.7.3 serializes an alarm by calling `str(alarm)` on it (`ics/serializers/event_serializer.py:104`), and `Component.__str__` raises a `FutureWarning` about its own 0.9 behaviour -- **inside the library**, once per event carrying an alarm. The only way to avoid it from our side is to stop attaching the 30-minute reminder in `show_community_ical`, which is a product feature, so the trade is wrong. Filtered by module, category AND message text, with the reasoning in `pytest.ini`; every other `FutureWarning` from every other module still shows. This is the first warning filter in that file. | An `ics` upgrade. 0.8 is the first release that fixes it and is still alpha. |
+
+**Next free number: D1017.**
+
+## Slice H: moderators, owners and membership
+
+**The round in one line: ten functions close at zero gaps and carried **FIVE
+production defects** -- **a sidebar fragment with no access control at all**,
+**three more routes that mutated on a bare GET** (one of them a vote), and two
+queries that crossed community boundaries. The GET-mutating three were invisible
+to the D989 ratchet, which has been taught to see them.**
+
+### 1. A FRAGMENT WITH NO ACCESS CONTROL
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1017** | `app/community/routes.py:3056` | **`/community/get_sidebar/<id>` SERVED ANY COMMUNITY'S TITLE AND DESCRIPTION TO ANY CALLER.** No login, no membership check, no banned check -- while `show_community`, the page this fragment belongs to, answers 404 for a banned community and 403 for a private one the caller does not belong to. A private community's sidebar was readable anonymously by id. **The fragment is the page's own content, and it had none of the page's refusals.** Fixed with the same three, in the same order. | **fixed** | `PROBE h2 status: 200` / `description leaked: True title leaked: True`, anonymously, against a private community |
+
+### 2. THREE MORE MUTATING GETs -- AND WHY THE RATCHET MISSED THEM
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1018** | `app/community/routes.py:1651` | **PROMOTING A MODERATOR ON A BARE GET.** `community_add_moderator` was `methods=['GET', 'POST']`, and `login_required` validates CSRF only for POST, so an owner who loaded `<img src=".../moderators/add/123">` promoted account 123. The same route also let `add_mod_to_community`'s own `Exception('no_permission')` escape -- a **500** where the sibling `community_remove_moderator` answers 401 -- and `NoResultFound` from its `.one()` calls likewise, which is now a 404. | **fixed, all three** | `PROBE h4 RAISED: Exception no_permission`; GET now 405 |
+| **D1021** | `app/post/routes.py:539`, `:1513`; `app/templates/post/post_options.html:56` | **A FORGED `<img>` CAST THE VIEWER'S VOTE.** `post_vote` accepted GET, so `<img src="/post/5/upvote/default">` on any page an attacker could get somebody to load recorded that person's vote. `post_sticky` accepted GET too -- the **community-level twin of the instance-wide action D987 fixed**, left behind because nothing could see it. Both are POST-only now. The site's own vote buttons are `hx-post` with no anchor fallback and `comment_vote` next door was already POST-only, so the GET arm served nothing but the forgery; the sticky links move to the `confirm_first send_post` pattern D987 introduced in that same template. | **fixed, both** | Each route answers 405 to a GET, and the ratchet row that names fixed routes now includes them |
+| **D1022** | `tests/test_mutating_get_routes.py` | **THE RATCHET WAS BLIND TO EVERY ONE OF THEM.** Its detector looked for `db.session` writes **in the view body**; `community_add_moderator`, `post_sticky` and `post_vote` all write one call deeper, in `app/shared/`. D989's entry says a ratchet is only as good as what it can see, and this is that sentence with a number on it: three live instances of D955's shape passed a test written to find D955's shape. `MUTATING_HELPERS` now lists the shared functions that commit, and adding it immediately surfaced three more routes -- `community.subscribe`, `post.post_notification`, `post.post_reply_notification` -- each carrying the deliberate "POST from htmx, GET when JS is off" comment, so they join `KNOWN_GET_MUTATORS` with that reason (D994) rather than being changed. 49 rows. | **fixed** | The three fixed routes were added to the "cannot come back" row; the three new ones to the inventory |
+
+### 3. TWO QUERIES THAT CROSSED A COMMUNITY BOUNDARY
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1019** | `app/community/routes.py:2698` | `community_my_flair`'s whole body sat inside `if community is not None:` with no else, so an unresolvable name returned None and Flask answered `TypeError: The view function ... did not return a valid response`. **D1012's shape, second instance**, found the same way. | **fixed** | `PROBE h5 RAISED: TypeError The view function ... did not return a valid response` |
+| **D1020** | `app/community/routes.py:3046` | The membership form's pre-fill read the viewer's `CommunityFlairBlock` rows across **every** community, so one community's form opened pre-checked with another's flair ids. Those ids are not among this form's choices, so WTForms refused the submission -- **the page silently would not save at all while a foreign block existed**, with no error the user could act on. | **fixed** | `PROBE h1 second community form pre-checked with: [1] (its own flair is 2 ...)` |
+
+### 4. WHAT THE MUTATION PASS FOUND
+
+28 mutants; the measuring pass killed 25.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1023** | `app/community/routes.py:1553`; `app/models.py:736` | An **equivalent mutant**, and a naming trap worth the entry. `community_mod_list` gates on `if is_owner or current_user.is_admin() or community.is_moderator(current_user):`, and the first arm cannot decide anything: **`Community.is_moderator()` does not read the `is_moderator` column.** It asks whether the user appears in `moderators()`, which selects on `is_owner OR is_moderator` -- so every owner satisfies the third arm whether or not they carry the moderator flag. Two rows survived their mutants for the same reason before the two real gaps below were found, which is why this is registered rather than chased. | **registered as an equivalent mutant** | `m4 mod list owner arm dropped: SURVIVED (61 passed)` after a row that builds owner-without-the-column |
+| **D1024** | `tests/test_community_moderators.py` | Two real gaps, one cause: **a ban-check row has to start from a state the request would change.** `test_a_banned_user_cannot_change_ownership` asserted that a member who was ALREADY an owner still was, so dropping the ban check changed nothing it could see; and its `remove_owner` half aimed at another account, which the authorization check refuses whether or not the ban check runs -- so that half could not reach the line it named at all. Split into a promote row that starts from moderator-not-owner and a stand-down row that uses the only arm an owner can reach on their own account. | **closed** | `m14` and `m18` SURVIVED, both KILLED after |
