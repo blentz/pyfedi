@@ -16212,3 +16212,34 @@ query rather than an alt-account disclosure. Both are pinned by rows.
 | ID | Where | What | Status | Evidence |
 |---|---|---|---|---|
 | **D1067** | `tests/test_user_filters.py` | One real gap and **one repeat of fact 476**, written the same day: the `content_filter.keywords` deletion anchor omitted its leading indentation, left an IndentationError, and reported `NO SUMMARY` -- which the runner's `'failed' in summary` test reads as SURVIVED. The real gap was the restricted-country flash: every row submitted a CHANGE to the adult-content settings, so `(hide_nsfw != 1 or hide_nsfl != 1) and ...` could be reduced to its second conjunct unseen. The message explains why a change did not take, so somebody who changed nothing must not be told anything. | **both closed** | `m5`, `m9` |
+
+**Next free number: D1068.**
+
+## Slice F: the profile page, the notification list and the alert lists
+
+**The round in one line: four functions close at zero gaps and carried **ONE
+production defect** -- **D1043's shape at its second site**, which the previous
+slice's fix did not touch.**
+
+### 1. THE SAME 500, ONE ROUTE ALONG
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1068** | `app/user/routes.py:1316` | `/notifications?type=abc` was `ValueError: invalid literal for int() with base 10: 'abc'` -- **the same expression, the same fault and the same fix as D1043**, at the route that LISTS notifications rather than the one that marks them read. Fixing one a slice earlier did not touch the other. This is **fact 478 repeating within two slices** ("the same feature has two ends"), which is why it is a numbered finding rather than a footnote: the rule was written down and still did not get applied. The filter is also cleared when it cannot be parsed, so the page does not claim to be filtered when it is not. | **fixed** | `PROBE z1 RAISED: ValueError invalid literal for int() with base 10: 'abc'` |
+
+### 2. WHAT THE COVERAGE FOUND WITHOUT A DEFECT
+
+`show_profile`'s deleted/banned handling is unreachable through `/u/<name>`:
+`activitypub.user_profile` filters `deleted=False, banned=False` before calling
+it. The path that reaches those lines is `show_profile_by_id` (`/user/<id>`),
+which is what a notification link uses -- so the rows go through the id route
+and say why. Recorded as fact 488.
+
+### 3. WHAT THE MUTATION PASS FOUND
+
+26 mutants; the measuring pass killed 22.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1069** | `tests/test_user_profile_page.py` | Three real gaps, all the same question as D1032's: **"only this person's?"** The public-feed list, the `following` query's own `User.banned == False`, and the post-alerts arm's `user_id` scoping could each be deleted without a row noticing, because every row had one user's data in it. The alerts case is the sharpest: the file HAD a "somebody else's alerts are not listed" row, but it used the **communities** arm, and the mutation was in the **posts** arm -- six near-identical queries, one row. | **all three closed** | `m6`, `m10`, `m20` |
+| **D1070** | `app/user/routes.py:119` | An **equivalent** mutant: `canonical = user.ap_public_url if user.ap_public_url else None` is `user.ap_public_url`, because the false arm evaluates to the same None the expression already has. Harmless, and left as written rather than "fixed" -- the conditional says out loud that None is expected. | **registered as an equivalent mutant** | `m11` SURVIVED with a row for each side |
