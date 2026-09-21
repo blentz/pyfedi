@@ -15817,3 +15817,34 @@ were supplied, and supplying them is what first put the poll and image
 validators under a client that was not the browser form. **Three of the six
 defects in this slice were reachable only by a client that is not the site's
 own page** -- which is the definition of the surface an attacker uses.
+
+**Next free number: D1005.**
+
+## Slice F: `show_community` -- the community page
+
+**The round in one line: the largest function in the blueprint closes at zero
+gaps and carried **THREE production defects** -- **the comments view listed the
+discussion under posts the posts view refuses to show**, two breadcrumb walks
+that could crash or hang, and a nil instance dereference.**
+
+### 1. THE COMMENTS VIEW SHOWED WHAT THE POSTS VIEW REFUSED
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1005** | `app/community/routes.py:504` | **`comments = community.replies` IS EVERY REPLY IN THE COMMUNITY, WITH NO JOIN TO POST.** Two lines above, the posts branch filters `Post.deleted == False, Post.status > POST_STATUS_REVIEWING`. So `/c/<name>?content_type=comments` listed the discussion under a post a moderator had REMOVED, and under a post still AWAITING REVIEW -- which has never been public and which the posts view will not show to anyone. A removal that leaves the conversation on display is not a removal, and a review queue whose contents are readable through a second URL is not a queue. Fixed with the same two filters, through a join to Post. | **fixed** | `PROBE s1 replies shown: ['reply to a removed post']` / `PROBE s2 replies shown for a post under review: ['reply to a pending post']` |
+
+### 2. TWO BREADCRUMB WALKS THAT DO NOT END
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1006** | `app/community/routes.py:585`, `:637` | **A NIL DEREFERENCE AND A HANG, IN THE SAME FOUR LINES, TWICE.** `while previous_topic.parent_id: topic = db.session.get(Topic, ...); previous_topic = topic` -- `Topic.parent_id` carries **no foreign key**, so a deleted parent leaves a dangling id, `db.session.get` returns None and the next iteration reads `.parent_id` off it. The identical walk runs over `Feed.parent_feed_id`. Both also walk **forever** on a cycle -- two rows each naming the other as parent -- which is a hung request rather than a failure, and a hung request holds a worker. Both faults fixed in both walks. On the feed side only the cycle is reachable, because `feed_parent_feed_id_fkey` refuses a dangling parent; the nil guard there is defence against that constraint being relaxed, and the test file says so rather than pretending to cover it. | **fixed, both walks** | `PROBE s3 RAISED: AttributeError 'NoneType' object has no attribute 'parent_id'`; the cycle rows fail by **timeout** when the guard is reverted |
+| **D1007** | `app/community/routes.py:659` | `is_dead = community.instance.gone_forever` on a remote community whose `instance_id` is NULL -- and `Community.instance_id` **is** nullable (`app/models.py:575`), the same nullable FK D325 registered a new carrier for. Unknown is not dead; the guard answers False. | **fixed** | `PROBE s4 RAISED: AttributeError 'NoneType' object has no attribute 'gone_forever'` |
+
+### 3. WHAT THE MUTATION PASS FOUND
+
+30 mutants; the measuring pass killed 27.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1008** | `tests/test_community_show.py` | Two survivors, one cause: **`Post.deleted` and `PostReply.deleted` are each filtered TWICE**, once in the anonymous arm and once in the logged-in arm, and every row for them was anonymous. Deleting the logged-in copy of either changed nothing any assertion could see. The tenth instance in this sub-project of an assertion that cannot distinguish the thing it names -- and the first where the duplication, not the assertion, is what made it invisible. | **closed** | `m16 deleted posts shown: SURVIVED` and `m24 deleted comments shown: SURVIVED`, both KILLED after |
+| **D1009** | `app/community/routes.py:352` | An **equivalent mutant**, proved from the source rather than contorted into a kill. `if current_user.is_authenticated and community.instance_id in banned_instances(current_user.id): banned_from_community = True` cannot change the answer, because `communities_banned_from` (`app/utils.py:1687`) already unions the community bans with `Community JOIN InstanceBan ON Community.instance_id = InstanceBan.instance_id` -- so any community reaching the second check with a banned instance was flagged by the first. It is the **third** independent answer to "is this user banned here" in one request path, which is D995's finding from slice D, now with a measured consequence: one of the three is dead code. | **registered as an equivalent mutant; D995 gains a measured consequence** | `m8 instance ban ignored: SURVIVED (115 passed)` |
