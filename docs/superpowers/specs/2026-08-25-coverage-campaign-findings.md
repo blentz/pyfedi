@@ -15608,3 +15608,57 @@ clause under test:
 | **D977** | `tests/test_community_wiki_flair_reports.py` | The `who_can_edit` level row asked about **one person who was neither trustworthy, a member, nor a moderator**, so levels 0, 1 and 2 were indistinguishable: widening level 0 to admit `trustworthy()` and narrowing level 2 away from `is_member()` both survived. Now each level names the answer for three different people -- a newcomer, an established non-member and a member -- so every level is separated from its neighbours by at least one of them. Writing it needed two new helpers, because `make_user` produces an account that is **not** trustworthy (`created_recently() and reputation < 100`), so `assert outsider.trustworthy() is True` fails. | **closed; m05 and m06 die** |
 | D978 | `tests/test_community_wiki_flair_reports.py` | `resolve` and `ignore` had no cross-community row, though `escalate` did -- so dropping `in_community_id=community.id` from `resolve` survived, and a moderator of any community could clear any other community's queue. **A row written for one of three sibling handlers is a row for one of three.** | **closed; m30 dies** |
 | D979 | `tests/test_community_wiki_flair_reports.py` | The community-report row filed against `mine`, which is **community id 1**, so a mutant hard-coding `suspect_community_id=1` was invisible. Now files against `theirs`, with `assert theirs.id != 1` beside it. **The same trap as fact 347's user 1, for a different table.** | **closed; m38 dies** |
+
+**BASIS (slice B): the full suite, `6987 passed, 3 skipped, 258 warnings, 6
+subtests passed in 893.44s`**, chained with `&&` to `All 64 module floors met.`
+6902 + 85 collected in `tests/test_community_wiki_flair_reports.py` = 6987,
+exactly. The mutation pass killed **40 of 40** after four repairs.
+
+**Next free number: D980.** (**D980-D986 were taken by sub-project 80
+slice C, below; the free number is now D987.**)
+
+## Slice C: the community lifecycle
+
+**The round in one line: create, edit, move and delete close at zero gaps and
+carried **FIVE production defects** -- **a name the form approved could collide
+on INSERT and answer 500**, a refused edit discarded what was typed (D907's
+shape for the FOURTH time), an omitted optional field was a `TypeError`, three
+address branches were unreachable behind a stricter form validator, and a
+try/except fallback could not rescue anything because the value it guarded was
+dereferenced unguarded three lines later.**
+
+### 1. THE VALIDATOR AND THE ROUTE DISAGREED ABOUT THE NAME
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D980** | `app/community/forms.py:AddCommunityForm.validate`; `app/community/routes.py:96` (before) | **THE FORM CHECKED ONE STRING FOR UNIQUENESS AND THE ROUTE STORED ANOTHER.** The validator tested `self.url.data.strip().lower()` against `Community.name`, `User.user_name` and `Feed.name`; `add_local` then did `slugify(form.url.data.strip(), separator='_').lower()`. `slugify` is not the identity on strings the validator accepts -- `'__general__'` becomes `'general'`, `'test__name'` becomes `'test_name'`, `'___'` becomes `''`. So a submission the form approved reached the INSERT as a name that already existed: `psycopg2.errors.UniqueViolation ... Key (ap_profile_id)=(https://test.piefed.local/c/general) already exists` -- **an unhandled 500 on community creation, reachable by typing four extra underscores** -- and the friendly "a community with this url already exists" error never fired, because it had been asked about a different string. Normalisation now happens inside `validate`, after the character rules and before the uniqueness checks. | **fixed** | The three-way probe, and the `UniqueViolation` traceback |
+| **D981** | `app/community/routes.py:1330` (before) | **A REFUSED COMMUNITY EDIT DISCARDED WHAT THE OWNER TYPED.** The POST branch ended with `else:` rather than `elif request.method == 'GET':`. **D907's shape for the fourth time** -- sub-project 79 slice A, slice C's `admin_federation`, slice F's `admin_user_edit`, and here -- and every one of the four was found by covering the function, never by reading it. | **fixed** | `PROBE g3 title redisplayed as: 'Stored title'` against a typed `'what the owner typed'` |
+| **D982** | `app/community/routes.py:1268` | `community.topic_id = form.topic.data if form.topic.data > 0 else None` -- `topic` is `SelectField(coerce=int, validators=[Optional()])`, so a client that omits it leaves `data` at `None` and `None > 0` raises `TypeError: '>' not supported between instances of 'NoneType' and 'int'`. Not reachable through the UI, where `topics_for_form` always offers `(-1, 'None')`, but reachable by anything that does not send the field. Inverting the fix failed **five** rows, not one: it is not an edge case in a branch, it is the common path for any caller that omits an optional field. | **fixed** | The inversion |
+
+### 2. TWO PIECES OF CODE NOTHING COULD REACH
+
+| ID | Where | What | Status |
+|---|---|---|---|
+| D983 | `app/community/routes.py:197-209` (before) | **THREE OF `add_remote`'s FIVE ADDRESS BRANCHES WERE UNREACHABLE.** `SearchRemoteCommunity.validate` refuses anything that does not start with `!` or `http(s)://`, so the `@user` branch, the bare `name@server` branch and the `else` that flashed the accepted formats could never run. The same shape as D918 (a route's extension check behind `FileAllowed`) and D951 (dead avatar-removal code). Removed; the form reports each refusal itself, with a message per rule, and those messages are now pinned. | **removed** |
+| D984 | `app/community/routes.py:81-88` | **A `try/except` FALLBACK THAT COULD NOT RESCUE ANYTHING.** `add_local` does `try: site = g.site / except: site = db.session.get(Site, 1)` -- and then dereferenced `g.site.enable_nsfw` three lines below, unguarded. So on the one dispatch path the fallback exists for, the request still failed. **Fixed rather than deleted**, by using the local `site`: the fallback now means what it says, and a row can exercise it. | **fixed** |
+
+### 3. WHAT THE MUTATION PASS FOUND
+
+37 mutants; the measuring pass killed 34.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D985** | `tests/test_community_lifecycle.py` | **THE TWO "COMMUNITY NOT FOUND" MESSAGES SHARE A PREFIX, AND THE ROW USED `in`.** The nsfw variant is `'Community not found. If you are searching for a nsfw community it is blocked by this instance.'` -- so `'Community not found.' in <either message>` is true, and the mutant forcing the else branch survived a row that was parameterised over both values of the setting. Closed by asserting equality. **A parameterised row proves nothing if its assertion cannot tell the parameters apart**, which is this sub-project's recurring family in its eighth form. | **closed; m28 dies** | The mutant |
+| D986 | `app/community/routes.py:143`, `:1413` | Two **equivalent** mutants, proved rather than contorted into kills. `if file: community.icon = file` cannot be distinguished from the unconditional assignment, because `save_icon_file` returns `None` on refusal and the attribute is already `None` -- the same argument as D954. And `if community.is_local(): community.banned = True` in `community_delete` is written to a row that `delete_dependencies()` and `db.session.delete(community)` remove in the same transaction; the route's own `todo` explains it, as a placeholder for a federation flow that does not exist yet. | **registered as equivalent mutants, with both mechanisms read off the source** | m25 and m30, the two survivors of 37 |
+
+### 4. A NOTE ON THE FIX THAT BROKE SOMETHING
+
+Moving the normalisation into `AddCommunityForm.validate` was done twice. The
+first attempt put it **before** the character rules, so `'has-a-hyphen'` was
+silently turned into `'has_a_hyphen'` and accepted, instead of being refused
+with "- cannot be in Url. Use _ instead?". The `/c/` strip had the same
+problem in reverse: it lived in the route, so it ran after validation and every
+check saw `/c/whatever` while the stored value was `whatever` -- D980's own
+shape, in the same function, which only surfaced because a row existed for the
+pasted-path case. The order that works is: strip `/c/`, check the characters,
+normalise, check uniqueness.
