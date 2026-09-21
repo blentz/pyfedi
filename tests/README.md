@@ -9627,6 +9627,67 @@ is checked before the view, so the button's own `validate()` is unreachable)
 was untouched and only the observable moved. Update it in place and record why.
 See D968.
 
+**406. A METHOD THAT TAKES ITS SCOPE AS AN ARGUMENT ANSWERS THE CALLER'S
+QUESTION, NOT ITS OWN.** `CommunityWikiPage.can_edit(user, community)` never
+consulted `self.community_id`, so it answered "may this user edit some page of
+that community" while every caller meant "may they edit THIS page". The fix
+belongs in the method: four routes and three templates ask it, and a template
+that offers an edit link the route refuses is its own bug. Whenever an
+instance method takes a parent as a parameter, check it against the instance's
+own parent first. See D969.
+
+**407. A CHILD RESOURCE FETCHED BY BARE ID IS NOT SCOPED BY ITS PARENT'S
+AUTHORIZATION.** Five routes in this blueprint took `(community_id,
+resource_id)`, checked authority over the community, and then acted on
+`db.session.get(Resource, resource_id)`. Grep a blueprint for two ids in one
+URL and confirm the second is filtered by the first. The flair delete also
+cascaded into the other community's `post_flair`, `CommunityFlairBlock` and
+`rss_feed` rows. See D970, D971.
+
+**408. A FUNCTION THAT FALLS OFF ITS END IS A 500.** Flask answers a view
+returning None with `TypeError: The view function ... did not return a valid
+response`. All three community report handlers had at least one such path, so a
+non-moderator got a 500 instead of a 401 and opening an already-handled report
+was a 500 too. Every `if/elif` chain in a view needs a terminal `else`, and a
+row per refusal path is what finds the missing ones. See D974.
+
+**409. A SWEEP IS NOT A SUBSTITUTE FOR ACTING ON THE ROW YOU WERE GIVEN.**
+`community_moderate_report_ignore` set the subject's counter and then updated
+sibling reports by `suspect_post_id` or `suspect_post_reply_id` -- which
+incidentally covered the report in hand whenever it had one of those, and never
+when its subject was a USER. Parameterise over every subject kind: the post and
+reply cases passed and only the user case failed. See D975.
+
+**410. SIBLING HANDLERS NEED THE SAME ROW EACH.** `escalate` had a
+cross-community row and `resolve` and `ignore` did not, so dropping
+`in_community_id=community.id` from `resolve` survived -- any moderator could
+clear any other community's queue. A row written for one of three near-identical
+handlers is a row for one of three; parameterise over the set. See D978, and
+D935 for the reason the three are near-identical in the first place.
+
+**411. COMMUNITY id 1 IS AS DANGEROUS AS USER id 1.** A row that reported
+`mine` -- the first community the fixture creates -- could not see a mutant
+hard-coding `suspect_community_id=1`. Use the second object and assert its id
+is not 1, exactly as fact 347 requires for users. Any fixture whose first row
+is the one under test has this problem.
+
+**412. `make_user` PRODUCES AN ACCOUNT THAT IS NOT `trustworthy()`.**
+`User.trustworthy()` is False when `created_recently() and reputation < 100`,
+and a fresh factory user is both. A row that needs a trusted non-moderator must
+say so -- set `reputation` above 100 or push `created` back -- and a row that
+needs an untrusted one should assert it rather than assume. Without both, the
+`who_can_edit` levels 0, 1 and 2 are indistinguishable and two mutants survive.
+See D977.
+
+**413. A RATCHET THAT CANNOT FAIL FOR ITS OWN DEFECT IS WORSE THAN NONE.**
+Slice A's blueprint scan flagged a rule only when it answered 200; every route
+on that blueprint redirects on success, so it passed while eight state-changing
+routes had no banned check. Fingerprint the STATE, not the response. And when
+the strengthened version still cannot drive some routes -- a bare POST will not
+satisfy a form, a slug or an actor -- say so in the docstring and pin those
+routes individually, rather than leaving the ratchet's name to imply a coverage
+it does not have. See D973.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
