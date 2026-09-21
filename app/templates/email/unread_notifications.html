@@ -6,7 +6,11 @@
         <li><p><a href="{{ url_for('user.notification_goto', notification_id=notification.id, _external=True) }}">{{ notification.title }}</a></p></li>
     {% endfor %}
 </ul>
-<p><a href="{{ url_for('user.notifications_all_read', _external=True) }}" class="btn btn-primary btn-sm">Mark all as read</a></p>
+{# D1044: this used to link straight at `notifications_all_read`, which is now
+   POST-only -- an email cannot carry a CSRF token, and a GET that marks every
+   notification read is the defect. The button goes to the notifications page,
+   where the same action sits behind a POST. #}
+<p><a href="{{ url_for('user.notifications', _external=True) }}" class="btn btn-primary btn-sm">See all notifications</a></p>
 {% if posts %}
 <p>Also here's a few recent posts:</p>
 <ul>

@@ -16,7 +16,10 @@
             <li class="breadcrumb-item active" aria-current="page">{{ user.user_name|shorten }}</li>
           </ol>
         </nav>
-        <a href="{{ url_for('user.notifications_all_read', type=current_filter) }}" class="btn btn-primary btn-sm" style="float: right;">{{ _('Mark all as read') }}</a>
+        {# D1044: posted, not linked. As a GET this route marked every
+           notification read for anyone who could get the viewer to load an
+           <img>, because login_required validates CSRF only for POST. #}
+        <a href="#" data-url="{{ url_for('user.notifications_all_read', type=current_filter) }}" class="btn btn-primary btn-sm send_post" style="float: right;">{{ _('Mark all as read') }}</a>
         <h1 class="mt-2">{{ _('Notifications') }}</h1>
 
         {% if has_notifications %}
