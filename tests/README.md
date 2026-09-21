@@ -10255,3 +10255,46 @@ need re-investigating:
   `sleep infinity`, which does not trap `SIGTERM`, so compose falls back to
   `SIGKILL` after its timeout. Cosmetic — the container still stops and no
   state persists (tmpfs).
+
+**501. A FACTORY LEAVES THE RENDERED COLUMN EMPTY.** `make_post_reply` sets
+`body`, not `body_html`, and the reply teaser template runs the stored HTML
+through `community_link_to_href` -- which answers `TypeError: expected string
+or bytes-like object, got 'NoneType'`. Any row that renders a thread has to set
+`body_html` itself. The same trap sits one level up: `make_post` sets
+`body_html` only for `microblog=True`.
+
+**502. A PATCHED `render_template` HAS TO RETURN A RESPONSE.**
+`continue_discussion` sets cache headers on what it renders, so
+`return_value='rendered'` is `AttributeError: 'str' object has no attribute
+'headers'` -- and the failure names the string, not the patch. Answer
+`app.response_class('rendered')` for any view that touches the response after
+rendering.
+
+**503. `languages_for_form` SKIPS CODE `'und'`.** It is filtered out of the
+"other languages" list by name, so a database whose only `Language` row is
+`und` gives a `SelectField` with no choices and every `language_id`
+`DataRequired` fails. A form row that has to submit a comment needs a real
+language row as well.
+
+**504. `@block_bots` IS NOT `@login_required`.** `post_reply_options` carries
+only the first, so it answers anonymous callers -- and refuses them a deleted
+reply's menu while serving it to any logged-in reader, because that menu is
+where the restore link lives. Read the decorator list before assuming a route
+has a user.
+
+**505. `Label(field_id=...)` REACHES NOTHING IN A BOOTSTRAP-FLASK FORM.**
+`post_reply_delete` rebuilds a field's label to say "my comments" rather than
+"replies"; only the TEXT is observable, because `render_form` builds the
+`<label>` itself and takes `for` from `field.id`. A mutant on the `field_id`
+argument survives and is equivalent -- recorded rather than chased.
+
+**506. INSERT ORDERING ROWS IN THE WRONG ORDER FIRST.** Fact 499 again, one
+sub-project later: a poll row created its choices in `sort_order`, so removing
+`order_by(PollChoice.sort_order)` returned the same list and the mutant
+survived. Treat it as a step rather than a memory -- when a row asserts an
+order, build the data in the order the query must *undo*.
+
+**507. A SHORT-CIRCUIT HIDES THE TEST BEHIND IT.** `if post_reply.path and
+len(post_reply.path) > 1:` -- every row had `path` unset, so the length test
+was never reached and `> 1` could be mutated to `> 0` untouched. A falsy value
+in the left operand covers the line and proves nothing about the right one.
