@@ -1523,7 +1523,13 @@ def post_sticky(post_id: int, mode):
     return redirect(referrer(post.slug if post.slug else url_for('activitypub.post_ap', post_id=post.id)))
 
 
-@bp.route('/post/<int:post_id>/instance_sticky/<mode>', methods=['GET'])
+# POST only, for the reason recorded as D955 and D976: this function has no form
+# and acts on whichever method arrives, and login_required validates CSRF only
+# for POST. As a GET link, an administrator who loaded
+# <img src="/post/5/instance_sticky/yes"> from anywhere stickied that post
+# across the whole instance. The template posts it through the
+# `confirm_first send_post` pattern, which attaches the token.
+@bp.route('/post/<int:post_id>/instance_sticky/<mode>', methods=['POST'])
 @login_required
 def post_instance_sticky(post_id: int, mode):
     post = db.session.get(Post, post_id) or abort(404)
