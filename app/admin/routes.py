@@ -1815,10 +1815,13 @@ def admin_users():
     users = users.order_by(safe_order_by(sort_by, User, {'user_name', 'banned', 'reports', 'attitude', 'reputation', 'created', 'last_seen'}))
     users = users.paginate(page=page, per_page=page_length, error_out=False)
 
+    # `verified` is carried through like every other filter. Leaving it out
+    # meant paging past the first page silently dropped it and showed the
+    # unfiltered list under a heading that still said otherwise.
     next_url = url_for('admin.admin_users', page=users.next_num, search=search, local_remote=local_remote,
-                       sort_by=sort_by, last_seen=last_seen) if users.has_next else None
+                       sort_by=sort_by, last_seen=last_seen, verified=verified) if users.has_next else None
     prev_url = url_for('admin.admin_users', page=users.prev_num, search=search, local_remote=local_remote,
-                       sort_by=sort_by, last_seen=last_seen) if users.has_prev and page != 1 else None
+                       sort_by=sort_by, last_seen=last_seen, verified=verified) if users.has_prev and page != 1 else None
 
     return render_template('admin/users.html', title=_('Users'), next_url=next_url, prev_url=prev_url, users=users,
                            local_remote=local_remote, search=search, sort_by=sort_by, last_seen=last_seen,
@@ -2014,8 +2017,14 @@ def admin_user_edit(user_id):
         if user_access('change user roles', current_user.id):
             db.session.execute(text('DELETE FROM user_role WHERE user_id = :user_id'), {'user_id': user.id})
             user.roles.append(db.session.get(Role, form.role.data))
-            if form.role.data == 4:
-                flash(_("Permissions are cached for 50 seconds so new admin roles won't take effect immediately."))
+            # user_access is @cache.memoize(timeout=50), so without this an
+            # administrator stripped of their role went on passing every
+            # permission check for up to fifty seconds after the change was
+            # saved -- which is the direction that matters. The page used to
+            # apologise for exactly this in a flash message; the invalidation
+            # is the same one admin_permissions does.
+            for permission in ROLE_PERMISSIONS:
+                cache.delete_memoized(user_access, permission, user.id)
 
         db.session.commit()
         cache.delete_memoized(low_value_reposters)
@@ -2031,7 +2040,14 @@ def admin_user_edit(user_id):
 
         flash(_('Saved'))
         return redirect(url_for('admin.admin_users', local_remote='local' if user.is_local() else 'remote'))
-    else:
+    elif request.method == 'GET':
+        # `elif request.method == 'GET'`, not `else`. As an `else` this arm also
+        # ran for a POST the form REFUSED, overwriting the submission from the
+        # database -- so an admin whose role selection was rejected got their
+        # typed admin_note and their Banned tick silently replaced by the
+        # stored values, on a page that looked as though they had entered
+        # nothing. Measured: errors {'role': ['Not a valid choice.']} with
+        # admin_note redisplayed as 'the stored note'.
         if not user.is_local():
             flash(_('This is a remote user - most settings here will be regularly overwritten with data from the original server.'), 'warning')
         form.bot.data = user.bot
@@ -2070,8 +2086,15 @@ def admin_user_resend_email(user_id):
     try:
         send_email_verification(user)
         message = _("Verification email sent!")
-    except Exception as e:
-        message = _("Problem sending email: ") + str(e)
+    except Exception:
+        # The exception text is LOGGED, not returned. str(e) on a mail failure
+        # names the relay, the credentials in use or the recipient's provider,
+        # and this response goes straight into the page. Concatenating onto a
+        # translated string was also D815's shape -- the catalogue was asked
+        # for a string ending in a stack of server detail.
+        current_app.logger.exception('resend of verification email to user %s failed',
+                                     user.id)
+        message = _("Problem sending email - see the server log for details.")
     
     return message
 
@@ -2092,29 +2115,17 @@ def admin_users_add():
         user.about_html = markdown_to_html(form.about.data)
         user.matrix_user_id = form.matrix_user_id.data
         user.bot = form.bot.data
+        # No "remove the old avatar/cover" blocks here, unlike admin_user_edit:
+        # `user` is the User() built at the top of this function, so avatar_id
+        # and cover_id are always None and the ten lines that used to stand
+        # here could never run.
         profile_file = request.files['profile_file']
         if profile_file and profile_file.filename != '':
-            # remove old avatar
-            if user.avatar_id:
-                file = db.session.get(File, user.avatar_id)
-                file.delete_from_disk()
-                user.avatar_id = None
-                db.session.delete(file)
-
-            # add new avatar
             file = save_icon_file(profile_file, 'users')
             if file:
                 user.avatar = file
         banner_file = request.files['banner_file']
         if banner_file and banner_file.filename != '':
-            # remove old cover
-            if user.cover_id:
-                file = db.session.get(File, user.cover_id)
-                file.delete_from_disk()
-                user.cover_id = None
-                db.session.delete(file)
-
-            # add new cover
             file = save_banner_file(banner_file, 'users')
             if file:
                 user.cover = file
@@ -2122,6 +2133,13 @@ def admin_users_add():
         user.ignore_bots = form.ignore_bots.data
         user.hide_nsfw = form.hide_nsfw.data
         user.hide_nsfl = form.hide_nsfl.data
+        # AddUserForm has declared both of these since it was written and this
+        # function set neither, so an admin who ticked "Banned" got an active
+        # account and an admin who ticked "Email address is verified" got an
+        # unverified one -- with no error either time. A moderation control
+        # that silently does nothing is worse than one that is absent.
+        user.banned = form.banned.data
+        user.verified = form.verified.data
 
         user.instance_id = 1
         user.roles.append(db.session.get(Role, form.role.data))
@@ -2168,6 +2186,15 @@ def admin_user_delete_task(user_id, current_user_id):
                 user: User = session.get(User, user_id)
                 current_usr = session.get(User, current_user_id)
                 if user:
+                    # The modlog entry is written for EVERY branch, and it is
+                    # written before the row is destroyed so display_name() and
+                    # link() still have something to read. It used to be in the
+                    # remote branch alone, so deleting one of this instance's
+                    # own accounts -- the case an audit trail exists for --
+                    # left no trace anywhere.
+                    add_to_modlog('delete_user', actor=current_usr, target_user=user,
+                                  link_text=user.display_name(), link=user.link())
+
                     if user.is_local():
                         if user.private_key is not None:  # They have a private key once the registration is fully completed
                             unsubscribe_from_everything_then_delete(user.id)
@@ -2180,9 +2207,6 @@ def admin_user_delete_task(user_id, current_user_id):
                         user.delete_dependencies()
                         db.session.execute(text('UPDATE "user" SET deleted = true, banned = true WHERE id = :user_id'), {'user_id': user.id})
                         db.session.commit()
-
-                        add_to_modlog('delete_user', actor=current_usr, target_user=user, link_text=user.display_name(),
-                                      link=user.link())
 
         except Exception:
             session.rollback()
