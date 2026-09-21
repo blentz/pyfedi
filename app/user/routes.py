@@ -58,6 +58,10 @@ SETTINGS_IMPORT_MAX_BYTES = 5 * 1024 * 1024
 # lookups. A real Lemmy export lists tens of communities, not thousands.
 SETTINGS_IMPORT_MAX_ENTRIES = 500
 
+# D1062. The URL box holds 10,000 characters, which is roughly a thousand
+# lines, and each line became a File row exempt from the storage quota.
+FILE_URLS_PER_UPLOAD = 25
+
 
 def import_entries(contents_json, key):
     """The entries under `key`, refused unless they are a list and capped.
@@ -2366,6 +2370,12 @@ def show_profile_rss(actor):
         user = find_actor_or_create(f'{current_app.config["SERVER_URL"]}/u/{actor}', create_if_not_found=False)
 
     if user is not None:
+        # D1056. The lookup filters `banned` but NOT `deleted`, so a deleted
+        # account's posts were still syndicated here while `show_profile`
+        # refuses the profile page itself. Measured: the post was listed.
+        if user.deleted:
+            abort(404)
+
         # If nothing has changed since their last visit, return HTTP 304
         current_etag = f"{user.id}_{hash(user.last_seen)}"
         if request_etag_matches(current_etag):
@@ -2373,8 +2383,17 @@ def show_profile_rss(actor):
 
         limit = request.args.get('limit', 20, int)
         limit = max(min(limit, 100), 0)
-        posts = user.posts.filter(Post.from_bot == False, Post.deleted == False,
-                                  Post.status > POST_STATUS_REVIEWING).order_by(desc(Post.created_at)).limit(limit).all()
+        # D1057. `user.posts` is every post the account has made, whatever
+        # community it is in -- so a post in a PRIVATE community appeared in
+        # the author's public RSS feed. `show_community_rss` refuses a private
+        # community outright (D1013); this route never looked at the community
+        # at all. Measured: `PROBE x2 private post listed: True`. Posts in a
+        # banned community go with them, for the same reason that route
+        # answers 404 for one.
+        posts = user.posts.join(Community, Post.community_id == Community.id). \
+            filter(Community.private == False, Community.banned == False). \
+            filter(Post.from_bot == False, Post.deleted == False,
+                   Post.status > POST_STATUS_REVIEWING).order_by(desc(Post.created_at)).limit(limit).all()
 
         server_url = current_app.config['SERVER_URL']
         description = shorten_string(user.about, 150) if user.about else ' '
@@ -2441,9 +2460,29 @@ def user_file_delete(file_id):
 @login_required
 def user_file_upload():
     form = UploadFileForm()
+
+    # D1060. The quota was checked ONLY on the render path, below, after the
+    # POST had already stored everything and returned a redirect -- so the
+    # message it flashes was a notification that the limit had been passed,
+    # not a refusal. Measured: an account already over quota uploaded two more
+    # files and got a 302. `process_upload` has no quota check of its own
+    # (app/shared/upload.py), so this is the only place one can live.
+    used = db.session.execute(text('SELECT COALESCE(SUM(size), 0) FROM "user_file" WHERE user_id = :user_id'),
+                              {'user_id': current_user.id}).scalar()
+    over_quota = used > current_app.config['FILE_UPLOAD_QUOTA']
+
     if form.validate_on_submit():
+        if over_quota:
+            flash(_('You have exceeded your storage quota.'), 'error')
+            return redirect(safe_redirect_target(form.referrer.data, url_for('user.user_files')))
+
         if form.urls.data.strip() != '':
             urls = form.urls.data.strip().split('\n')
+            # D1062. One submission could add a File row per line, and the box
+            # holds 10,000 characters -- roughly a thousand rows, none of which
+            # count towards the quota (D1061). D993's family again: a list from
+            # a form with no cap on its length.
+            urls = urls[:FILE_URLS_PER_UPLOAD]
             for url in urls:
                 if url and url.strip() != '':
                     file = File(source_url=url)
@@ -2477,14 +2516,12 @@ def user_file_upload():
 
         return redirect(safe_redirect_target(form.referrer.data, url_for('user.user_files')))
 
-    total_size = 0
-    file_sizes = db.session.execute(text('SELECT file_id, size FROM "user_file" WHERE user_id = :user_id'),
-                                    {'user_id': current_user.id}).all()
-    for fs in file_sizes:
-        total_size += fs[1]
-
-    if total_size > current_app.config['FILE_UPLOAD_QUOTA']:
-        flash(_('You have exceeded your storage quota.', 'error'))
+    if over_quota:
+        # The same condition the POST arm now refuses on. The `_()` call here
+        # used to read `_('...', 'error')`, which passes the category as a
+        # gettext ARGUMENT rather than to flash, so the message was never
+        # styled as an error.
+        flash(_('You have exceeded your storage quota.'), 'error')
         return redirect(referrer())
 
     form.referrer.data = referrer(url_for('user.user_files'))
