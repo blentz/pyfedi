@@ -67,6 +67,25 @@ from app.utils import render_template, markdown_to_html, validation_required, \
     community_membership_private, user_ip_banned, check_anoobis, safe_redirect_target, roles_with
 
 
+def refuse_private_community(post):
+    """D1078. `show_post` refuses a private community's post to anyone who is
+    not a member (the `community_membership_private` check below). The routes
+    that show the SAME content one comment at a time did not:
+    `continue_discussion` rendered a private community's conversation to an
+    anonymous reader. Measured:
+
+        PROBE ae1 status: 200 | private body visible: True
+        PROBE ae4 anon status: 200 | private body visible: True
+
+    Fact 478's shape -- the same feature has two ends, and only one of them
+    was guarded.
+    """
+    if not post.community.private:
+        return
+    if current_user.is_anonymous or post.community_id not in community_membership_private(current_user.id):
+        abort(403)
+
+
 @login_required_if_private_instance
 @check_anoobis
 def show_post(post_id: int, sort, low_bandwidth, autoplay):
@@ -661,6 +680,16 @@ def continue_discussion(post_id, comment_id):
     post = db.session.get(Post, post_id) or abort(404)
     comment = db.session.get(PostReply, comment_id) or abort(404)
 
+    # D1077's family. Every access test below is made against the POST from
+    # the URL, and the comment was fetched independently -- so pairing one
+    # community's post id with another's comment id made this page answer for
+    # a reply that is not part of this conversation. Measured: `PROBE ad1
+    # status: 200 | private body visible: True`.
+    if comment.post_id != post.id:
+        abort(404)
+
+    refuse_private_community(post)
+
     if post.community.banned or post.deleted or comment.deleted:
         if current_user.is_anonymous or not (current_user.is_authenticated and (current_user.is_admin() or current_user.is_staff())):
             abort(404)
@@ -760,6 +789,12 @@ def continue_discussion_ajax(post_id, comment_id, nonce):
     post = db.session.get(Post, post_id) or abort(404)
     comment = db.session.get(PostReply, comment_id) or abort(404)
 
+    # D1077's family: the same page, fetched by the front end.
+    if comment.post_id != post.id:
+        abort(404)
+
+    refuse_private_community(post)
+
     mods = post.community.moderators()
     if post.community.private_mods:
         mod_list = []
@@ -822,6 +857,13 @@ def add_reply(post_id: int, comment_id: int):
         return redirect(post.slug if post.slug else url_for('activitypub.post_ap', post_id=post_id))
 
     in_reply_to = db.session.get(PostReply, comment_id) or abort(404)
+
+    # D1077's family, on the write side: without this a reply could be
+    # attached to a parent in a different post -- and a different community --
+    # from the one whose permissions were just checked.
+    if in_reply_to.post_id != post.id:
+        abort(404)
+
     mods = post.community.moderators()
     is_moderator = current_user.is_authenticated and any(mod.user_id == current_user.id for mod in mods)
     if post.community.private_mods:
@@ -972,6 +1014,13 @@ def post_options(post_id: int, offer_markdown_source: str):
 def post_reply_options(post_id: int, comment_id: int):
     post = db.session.get(Post, post_id) or abort(404)
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
+
+    # D1077's family: this page is reached with both ids and shows the reply.
+    if post_reply.post_id != post.id:
+        abort(404)
+
+    refuse_private_community(post)
+
     if post.deleted or post_reply.deleted:
         if current_user.is_anonymous:
             abort(404)
@@ -1769,6 +1818,18 @@ def post_search_community_suggestions():
 def post_reply_report(post_id: int, comment_id: int):
     post = db.session.get(Post, post_id) or abort(404)
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
+
+    # D1077's family. The report is filed against `post_reply` and routed to
+    # `post.community`'s moderators, so a mismatch sends a community a report
+    # about content that is not theirs.
+    if post_reply.post_id != post.id:
+        abort(404)
+
+    # The report page names the post it is about, so a non-member learned a
+    # private community's post title from it. Measured: `PROBE ae5 status: 200
+    # | title visible: True`.
+    refuse_private_community(post)
+
     form = ReportPostForm()
 
     if post_reply.reports == -1:  # When a mod decides to ignore future reports, post_reply.reports is set to -1
@@ -1907,6 +1968,12 @@ def post_reply_source(post_id: int, comment_id: int, state: str):
 def post_reply_edit(post_id: int, comment_id: int):
     post = db.session.get(Post, post_id) or abort(404)
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
+
+    # D1077's family. Authorization here IS on the reply (`post_reply.user_id
+    # == current_user.id`), but `edit_reply` is handed both objects and the
+    # redirect afterwards uses the post from the URL.
+    if post_reply.post_id != post.id:
+        abort(404)
     if post_reply.parent_id:
         comment = db.session.get(PostReply, post_reply.parent_id) or abort(404)
     else:
@@ -1940,6 +2007,15 @@ def post_reply_edit(post_id: int, comment_id: int):
 def post_reply_delete(post_id: int, comment_id: int):
     post = db.session.get(Post, post_id) or abort(404)
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
+
+    # D1077's second site. Here the mismatch was caught one level down --
+    # `delete_reply` raises `Exception: Does not have permission`, measured --
+    # so this was a 500 rather than a cross-community deletion. The route
+    # should not be relying on the helper to notice that its own two ids
+    # disagree.
+    if post_reply.post_id != post.id:
+        abort(404)
+
     community = post.community
 
     form = ConfirmationMultiDeleteForm()
@@ -2000,6 +2076,16 @@ def post_reply_delete(post_id: int, comment_id: int):
 def post_reply_restore(post_id: int, comment_id: int):
     post = db.session.get(Post, post_id) or abort(404)
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
+
+    # D1077. Both ids come from the URL and nothing tied them together, while
+    # every authorization test below is made against `post.community` -- so a
+    # moderator of ANY community could restore a reply in another one by
+    # pairing their own post id with its comment id, undoing that community's
+    # moderator's removal. Measured: a moderator of 'mine' restored a deleted
+    # reply in 'theirs'. Fact 447's shape, third time in this campaign after
+    # D1010 and D1029.
+    if post_reply.post_id != post.id:
+        abort(404)
 
     if post_reply.user_id == current_user.id or post.community.is_moderator() or current_user.is_admin() or user_access('administer all communities', current_user.get_id()):
         if post_reply.deleted_by == post_reply.user_id:
