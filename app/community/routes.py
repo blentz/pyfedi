@@ -638,7 +638,15 @@ def show_community(community: Community):
             seen_feeds = {previous_feed.id}
             while previous_feed.parent_feed_id and previous_feed.parent_feed_id not in seen_feeds:
                 feed = db.session.get(Feed, previous_feed.parent_feed_id)
-                if feed is None:
+                if feed is None:  # pragma: no cover
+                    # Unreachable today, and kept: `feed.parent_feed_id`
+                    # carries `feed_parent_feed_id_fkey`, so a dangling parent
+                    # cannot be stored -- unlike `Topic.parent_id` eight lines
+                    # up, which has no such constraint and DID produce the
+                    # AttributeError D1006 records. This is the same guard
+                    # against the same fault, held against the constraint being
+                    # relaxed. Marked rather than covered, because the only way
+                    # to reach it is to drop a foreign key.
                     break
                 feeds.append(feed)
                 seen_feeds.add(feed.id)
@@ -1465,14 +1473,25 @@ def community_edit(community_id: int):
 @login_required
 def remove_icon(community_id):
     community = db.session.get(Community, community_id) or abort(404)
+    # D1028. There was no authorization here AT ALL: `@login_required` and
+    # nothing else, so any account could POST this and delete any community's
+    # icon, from disk as well as from the database. Measured, as a user with no
+    # relationship to the community: `PROBE i4 status: 200 / icon_id now:
+    # None`. The check is the one `community_edit` -- the page these buttons
+    # live on -- applies before showing them.
+    if not (community.is_owner() or community.is_moderator() or current_user.is_admin()):
+        abort(403)
     if community.icon_id:
+        # The nested `if community.icon_id:` this used to carry could not be
+        # false -- nothing between it and the line above changes the column --
+        # so its false arm was a partial branch nobody could ever cover.
+        # Removed, the D983 precedent.
         community.icon.delete_from_disk()
-        if community.icon_id:
-            file = db.session.get(File, community.icon_id)
-            file.delete_from_disk()
-            community.icon_id = None
-            db.session.delete(file)
-            db.session.commit()
+        file = db.session.get(File, community.icon_id)
+        file.delete_from_disk()
+        community.icon_id = None
+        db.session.delete(file)
+        db.session.commit()
     return _('Icon removed!')
 
 
@@ -1480,20 +1499,30 @@ def remove_icon(community_id):
 @login_required
 def remove_header(community_id):
     community = db.session.get(Community, community_id) or abort(404)
+    # D1028's second site, identical in every respect but the column.
+    if not (community.is_owner() or community.is_moderator() or current_user.is_admin()):
+        abort(403)
     if community.image_id:
+        # The same unreachable nested check as `remove_icon` above.
         community.image.delete_from_disk()
-        if community.image_id:
-            file = db.session.get(File, community.image_id)
-            file.delete_from_disk()
-            community.image_id = None
-            db.session.delete(file)
-            db.session.commit()
-            cache.delete_memoized(Community.header_image, community)
+        file = db.session.get(File, community.image_id)
+        file.delete_from_disk()
+        community.image_id = None
+        db.session.delete(file)
+        db.session.commit()
+        cache.delete_memoized(Community.header_image, community)
     return '<div> ' + _('Banner removed!') + '</div>'
 
 @bp.route('/community/<int:community_id>/<int:user_id>/flip_community_theme_allowed', methods=['POST'])
 @login_required
 def flip_community_theme_allowed(community_id:int,user_id:int):
+    # D1029. `user_id` came from the URL and was passed straight to
+    # `set_community_theme_allowed`, so any account could turn another
+    # account's per-community theme on or off. Measured: `PROBE i5 victim theme
+    # setting before/after: True False`. The setting is a personal preference
+    # and nobody else has business writing it.
+    if user_id != current_user.id:
+        abort(403)
     community_theme_allowed = not get_community_theme_allowed(community_id,user_id)
     set_community_theme_allowed(community_id,user_id,community_theme_allowed)
     if community_theme_allowed:
@@ -1974,8 +2003,17 @@ def community_moderate(actor):
                                                                                                     per_page=1000,
                                                                                                     error_out=False)
 
-            next_url = url_for('community.community_moderate', page=reports.next_num) if reports.has_next else None
-            prev_url = url_for('community.community_moderate',
+            # D1030. Both of these omitted `actor`, which this endpoint's rule
+            # requires, so building them raised `BuildError: Could not build
+            # url for endpoint 'community.community_moderate' with values
+            # ['page']` -- measured. The links are only built when the queue
+            # has more than one page, so the moderation queue answered 500
+            # exactly when a community was being flooded with reports and its
+            # moderators most needed it. Every sibling on this page passes the
+            # actor; these two did not.
+            next_url = url_for('community.community_moderate', actor=actor,
+                               page=reports.next_num) if reports.has_next else None
+            prev_url = url_for('community.community_moderate', actor=actor,
                                page=reports.prev_num) if reports.has_prev and page != 1 else None
 
             return render_template('community/community_moderate.html',
@@ -2197,6 +2235,17 @@ def community_moderate_comments(actor):
     if current_user.banned:
         return show_ban_message()
     community = actor_to_community(actor)
+
+    # D1012's shape, THIRD instance in this file: neither arm returned
+    # anything, so a name that does not resolve and a caller who is not a
+    # moderator both got `TypeError: The view function ... did not return a
+    # valid response` instead of a 404 and a 401. The sibling
+    # `community_moderate` two functions up answers both properly; this one was
+    # written from the same template and lost its else arms.
+    if community is None:
+        abort(404)
+    if not (community.is_moderator() or current_user.is_admin()):
+        abort(401)
 
     if community is not None:
         if community.is_moderator() or current_user.is_admin():
@@ -3019,7 +3068,17 @@ def lookup(community, domain):
             return back('/')
 
 
+# D1025. `@login_required` because this route FETCHES A CALLER-SUPPLIED URL
+# from the server (`retrieve_metadata_of_url` -> `httpx_client.get`). Without
+# it, anyone on the internet could make this instance issue outbound GETs, from
+# its own address, as fast as they liked. `is_invalid_get_request_uri` keeps
+# those requests off private ranges, so this was never SSRF to the inside; it
+# was an unauthenticated outbound-fetch primitive, the same family as D993's
+# unbounded email. The only caller is the new-post form, which is behind a
+# login already. Measured: `PROBE i1 outbound fetch attempted: True
+# ('https://example.com/x',)` with no session at all.
 @bp.route('/check_url_already_posted')
+@login_required
 def check_url_already_posted():
     url = request.args.get('link_url')
     if url:
@@ -3035,9 +3094,24 @@ def check_url_already_posted():
 
 @bp.route('/community_changed')
 def community_changed():
-    community_id = request.args.get('communities')
+    community_id = request.args.get('communities', type=int)
     if community_id:
+        # D1027. `request.args.get('communities')` is a string, and
+        # `db.session.get(Community, 'abc')` reached the database as one --
+        # `DataError: invalid input syntax for type integer: "abc"`, an
+        # unauthenticated 500 from a query parameter. `type=int` answers None
+        # for anything that is not a number, which this function already
+        # handles.
         community = db.session.get(Community, community_id)
+        # D1026. This fragment renders the community's flair list and the whole
+        # side pane, and had none of `show_community`'s refusals -- D1017's
+        # shape, at the second fragment endpoint in this file. Measured
+        # anonymously against a private community:
+        # `PROBE i2 title leaked: True`.
+        if community is None or community.banned:
+            abort(404)
+        if community.private and community.id not in community_membership_private(current_user.get_id()):
+            abort(403)
         return flask.render_template('community/community_changed.html', community=community)
     else:
         return ''
