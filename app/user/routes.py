@@ -1310,8 +1310,16 @@ def notifications():
         if type_ == 'Unread':
             notification_list = notification_list.filter(Notification.read == False)
         else:
-            type_ = tuple(int(x.strip()) for x in type_.strip('{}').split(','))  # convert '{41, 10}' to a tuple containing 41 and 10
-            notification_list = notification_list.filter(Notification.notif_type.in_(type_))
+            # D1068. D1043's shape at its SECOND site: `?type=abc` was
+            # `ValueError: invalid literal for int() with base 10: 'abc'` here
+            # too, and fixing `notifications_all_read` did not touch this one --
+            # fact 478's lesson, one slice later. An unusable filter shows
+            # everything, which is what an absent filter already does.
+            try:
+                type_ = tuple(int(x.strip()) for x in type_.strip('{}').split(','))  # convert '{41, 10}' to a tuple containing 41 and 10
+                notification_list = notification_list.filter(Notification.notif_type.in_(type_))
+            except ValueError:
+                current_filter = ''
 
     notification_list = notification_list.order_by(desc(Notification.created_at)).limit(50)
 
