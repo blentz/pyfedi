@@ -9981,6 +9981,47 @@ part of the community page and had none of `show_community`'s access control
 (D1017). Any route that renders a piece of a protected page is a second front
 door to the same data.
 
+**457. ASK "ONLY THIS ONE'S?" OF EVERY LISTING.** Four of slice I's five
+mutation survivors were the same gap: a queue or list whose scoping filter
+could be deleted without any row noticing, because every row had only one
+community in it. A listing row needs a second owner whose rows must NOT appear
+-- otherwise it tests that the query returns something, not that it returns the
+right something.
+
+**458. A ROUTE THAT FETCHES A CALLER-SUPPLIED URL NEEDS A LOGIN.** Even with
+`is_invalid_get_request_uri` keeping it off private ranges, an anonymous
+endpoint that issues outbound GETs is a primitive anyone can drive from the
+instance's own address (D1025). The question to ask of any new route is not
+only "what can it read" but "what can it make this server do".
+
+**459. TWO IDs IN ONE URL, AGAIN -- BUT THE OTHER WAY.** D1029 is fact 447's
+mirror: the pair was `community_id` and `user_id`, and the id that needed
+checking was the USER's, against the session. A path parameter naming a person
+is an authorization question every time.
+
+**460. A QUERY PARAMETER REACHES THE DATABASE WITH ITS TYPE.**
+`request.args.get('communities')` is a string, and `db.session.get(Model,
+'abc')` raises `DataError` from psycopg2 -- a 500, not a 404. `type=int` is the
+whole fix, and it answers None for anything that is not a number.
+
+**461. PAGINATION LINKS ARE ONLY BUILT ON PAGE TWO.** D1030's `BuildError`
+could not happen until the report queue exceeded 1,000 entries, so the page was
+correct in every test and in every quiet community, and broken in exactly the
+one that was under attack. When a view builds a URL conditionally, cover the
+condition, not just the view.
+
+**462. THE FLOOR IS ON STATEMENTS *AND* BRANCHES.** `.coveragerc` sets
+`branch = True`, so `percent_covered` -- the number
+`tests/check_coverage_floors.py` compares -- combines the two. A module with
+every statement covered can still read 98.75%, and the floor has to be set
+against the measured combined figure, with the split recorded next to it.
+Partial branches are the remaining work, not a rounding error.
+
+**463. `# pragma: no cover` IS FOR A LINE A CONSTRAINT MAKES UNREACHABLE.**
+`app/community/routes.py` closes at one uncovered line: a nil guard on a walk
+whose foreign key forbids the nil. The marker carries the reason and names the
+constraint, so a later reader can tell it from a line nobody got round to.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
