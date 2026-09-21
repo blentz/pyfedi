@@ -1976,7 +1976,18 @@ def login_required(csrf=True):
 
             # Validate CSRF token for POST requests
             if request.method == 'POST' and csrf:
-                validate_csrf(request.form.get('csrf_token', request.headers.get('x-csrftoken')))
+                try:
+                    validate_csrf(request.form.get('csrf_token',
+                                                   request.headers.get('x-csrftoken')))
+                except ValidationError:
+                    # abort(400), not the bare ValidationError. There is no
+                    # CSRFProtect registered on this app, so nothing turned
+                    # that into a response and a POST with a missing or stale
+                    # token answered 500 with a traceback -- on every route
+                    # using this decorator. A stale token is what an ordinary
+                    # user gets from a page left open too long, so it is a
+                    # request error, not a server error.
+                    abort(400, description='The CSRF token is missing or invalid.')
 
             # flask 1.x compatibility
             # current_app.ensure_sync is only available in Flask >= 2.0

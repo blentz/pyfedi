@@ -146,7 +146,8 @@
                                 <li><a class="dropdown-item" href="{{ user.ap_profile_id }}">{{ _('View remote') }}</a></li>
                             {% endif %}
                                 <div class="dropdown-divider"></div>
-                                <li><a class="dropdown-item" href="{{ url_for('community.community_unban_user', community_id=community.id, user_id=user.id) }}" class="confirm_first">{{ _('Unban') }}</a></li>
+                                <li><a class="dropdown-item confirm_first send_post" href="#" rel="nofollow"
+                                       data-url="{{ url_for('community.community_unban_user', community_id=community.id, user_id=user.id) }}">{{ _('Unban') }}</a></li>
                               </ul>
                             </div>
                         </td>

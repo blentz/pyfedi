@@ -1423,6 +1423,9 @@ def community_mod_list(community_id: int):
 @bp.route('/community/<int:community_id>/make_owner/<int:user_id>', methods=['POST'])
 @login_required
 def community_make_owner(community_id: int, user_id: int):
+    if current_user.banned:
+        return show_ban_message()
+
     community = db.session.get(Community, community_id) or abort(404)
     user = db.session.get(User, user_id) or abort(404)
     
@@ -1459,6 +1462,9 @@ def community_make_owner(community_id: int, user_id: int):
 @bp.route('/community/<int:community_id>/remove_owner/<int:user_id>', methods=['POST'])
 @login_required
 def community_remove_owner(community_id: int, user_id: int):
+    if current_user.banned:
+        return show_ban_message()
+
     community = db.session.get(Community, community_id) or abort(404)
     user = db.session.get(User, user_id) or abort(404)
 
@@ -1575,6 +1581,9 @@ def community_block(community_id: int):
 @bp.route('/community/<int:community_id>/<int:user_id>/ban_user_community', methods=['GET', 'POST'])
 @login_required
 def community_ban_user(community_id: int, user_id: int):
+    if current_user.banned:
+        return show_ban_message()
+
     community = db.session.get(Community, community_id) or abort(404)
     user = db.session.get(User, user_id) or abort(404)
     existing = CommunityBan.query.filter_by(community_id=community.id, user_id=user.id).first()
@@ -1607,7 +1616,17 @@ def community_ban_user(community_id: int, user_id: int):
                 if posts:
                     flash(_('Posts by %(name)s have been deleted.', name=user.display_name()))
             if form.delete_post_replies.data:
-                post_replies = PostReply.query.filter(PostReply.user_id == user.id, Post.community_id == community.id).all()
+                # PostReply.community_id, not Post.community_id. Filtering on a
+                # column of a table that is not joined puts Post in the FROM
+                # clause on its own, so the condition is satisfied whenever the
+                # community has ANY post at all -- and every reply this user has
+                # ever written, anywhere on the instance, matched. A moderator
+                # of one community ticking "delete replies" destroyed the
+                # person's comments in every other community too. Measured:
+                # ['reply in elsewhere', 'reply in here'] selected for a ban in
+                # 'here', against ['reply in here'] actually there.
+                post_replies = PostReply.query.filter(PostReply.user_id == user.id,
+                                                      PostReply.community_id == community.id).all()
                 for post_reply in post_replies:
                     delete_post_reply_from_community(post_reply.id, current_user.id)
                 if post_replies:
@@ -1655,9 +1674,19 @@ def community_ban_user(community_id: int, user_id: int):
         abort(403)
 
 
-@bp.route('/community/<int:community_id>/<int:user_id>/unban_user_community', methods=['GET', 'POST'])
+# POST only. This function has no form and unbans on whichever method arrives,
+# and login_required validates CSRF only for POST (app/utils.py) -- so while
+# GET was accepted, a moderator who loaded
+# <img src=".../unban_user_community"> anywhere on the web unbanned that user,
+# with no token involved. The template now posts it through the same
+# `confirm_first send_post` pattern community_mod_list.html already uses for
+# Make owner and Remove owner, which attaches the CSRF token from the meta tag.
+@bp.route('/community/<int:community_id>/<int:user_id>/unban_user_community', methods=['POST'])
 @login_required
 def community_unban_user(community_id: int, user_id: int):
+    if current_user.banned:
+        return show_ban_message()
+
     community = db.session.get(Community, community_id) or abort(404)
     user = db.session.get(User, user_id) or abort(404)
 
@@ -1886,7 +1915,26 @@ def community_rss_feed_delete(community_id, feed_id):
 @bp.route('/<actor>/moderate/subscribers', methods=['GET', 'POST'])
 @login_required
 def community_moderate_subscribers(actor):
+    if current_user.banned:
+        return show_ban_message()
+
     community = actor_to_community(actor)
+    if community is None:
+        abort(404)
+
+    # Both checks run BEFORE the form, not after it. The find-and-ban arm calls
+    # find_actor_or_create, which reaches create_actor_from_remote -- an
+    # outbound fetch of a handle the submitter chose -- and it used to run for
+    # anyone logged in, with no relationship to this community at all.
+    # Measured: a user who was not a moderator reached
+    # `find_actor_or_create('victim@attacker.example')`. The ban itself was
+    # safe, because the redirect lands on community_ban_user which checks; the
+    # fetch was not. Hoisting them leaves the body unnested: the `elif community
+    # is not None:` and the inner `is_moderator()` test that used to wrap it
+    # could no longer be false.
+    if not (community.is_moderator() or current_user.is_admin()):
+        abort(401)
+
     ban_user_form = FindAndBanUserCommunityForm()
 
     if ban_user_form.submit.data and ban_user_form.validate():
@@ -1898,72 +1946,65 @@ def community_moderate_subscribers(actor):
         else:
             flash(_(f'User: {ban_user_form.user_name.data} unable to be found'))
             return redirect(url_for('community.community_moderate_subscribers', actor=actor))
-    elif community is not None:
-        if community.is_moderator() or current_user.is_admin():
 
-            page = request.args.get('page', 1, type=int)
-            low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
-            sort_by = request.args.get('sort_by', 'last_seen DESC')
-            search = request.args.get('search', '')
+    page = request.args.get('page', 1, type=int)
+    low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
+    sort_by = request.args.get('sort_by', 'last_seen DESC')
+    search = request.args.get('search', '')
 
-            # Handle sort_by_btn redirects
-            sort_by_btn = request.args.get('sort_by_btn', '')
-            if sort_by_btn:
-                return redirect(
-                    url_for('community.community_moderate_subscribers', actor=actor, page=page, sort_by=sort_by_btn,
-                            search=search))
+    # Handle sort_by_btn redirects
+    sort_by_btn = request.args.get('sort_by_btn', '')
+    if sort_by_btn:
+        return redirect(
+            url_for('community.community_moderate_subscribers', actor=actor, page=page, sort_by=sort_by_btn,
+                    search=search))
 
-            subscribers = db.session.query(User, CommunityMember.created_at).join(CommunityMember,
-                                                                                  CommunityMember.user_id == User.id).filter(
-                CommunityMember.community_id == community.id)
-            subscribers = subscribers.filter(CommunityMember.is_banned == False)
-            subscribers = subscribers.filter(User.deleted == False, User.banned == False)
+    subscribers = db.session.query(User, CommunityMember.created_at).join(CommunityMember,
+                                                                          CommunityMember.user_id == User.id).filter(
+        CommunityMember.community_id == community.id)
+    subscribers = subscribers.filter(CommunityMember.is_banned == False)
+    subscribers = subscribers.filter(User.deleted == False, User.banned == False)
 
-            # Apply search filter
-            if search:
-                subscribers = subscribers.filter(User.user_name.ilike(f'%{search}%'))
+    # Apply search filter
+    if search:
+        subscribers = subscribers.filter(User.user_name.ilike(f'%{search}%'))
 
-            # Apply sorting
-            if sort_by.startswith('joined'):
-                if 'DESC' in sort_by:
-                    subscribers = subscribers.order_by(desc(CommunityMember.created_at))
-                else:
-                    subscribers = subscribers.order_by(CommunityMember.created_at)
-            elif sort_by.startswith('last_seen'):
-                if 'DESC' in sort_by:
-                    subscribers = subscribers.order_by(desc(User.last_seen))
-                else:
-                    subscribers = subscribers.order_by(User.last_seen)
-            elif sort_by.startswith('local_remote'):
-                if 'DESC' in sort_by:
-                    subscribers = subscribers.order_by(desc(User.ap_id.is_(None)))
-                else:
-                    subscribers = subscribers.order_by(User.ap_id.is_(None))
-            else:
-                subscribers = subscribers.order_by(desc(User.last_seen))
-
-            # Pagination
-            subscribers = subscribers.paginate(page=page, per_page=100 if not low_bandwidth else 50, error_out=False)
-            next_url = url_for('community.community_moderate_subscribers', actor=actor, page=subscribers.next_num,
-                               sort_by=sort_by, search=search) if subscribers.has_next else None
-            prev_url = url_for('community.community_moderate_subscribers', actor=actor, page=subscribers.prev_num,
-                               sort_by=sort_by, search=search) if subscribers.has_prev and page != 1 else None
-
-            banned_people = User.query.join(CommunityBan, CommunityBan.user_id == User.id).filter(
-                CommunityBan.community_id == community.id).all()
-
-            return render_template('community/community_moderate_subscribers.html',
-                                   title=_('Moderation of %(community)s', community=community.display_name()),
-                                   community=community, current='subscribers', subscribers=subscribers,
-                                   banned_people=banned_people,
-                                   ban_user_form=ban_user_form, sort_by=sort_by, search=search,
-                                   next_url=next_url, prev_url=prev_url, low_bandwidth=low_bandwidth,
-                                   inoculation=inoculation[randint(0, len(inoculation) - 1)] if g.site.show_inoculation_block else None)
+    # Apply sorting
+    if sort_by.startswith('joined'):
+        if 'DESC' in sort_by:
+            subscribers = subscribers.order_by(desc(CommunityMember.created_at))
         else:
-            abort(401)
-
+            subscribers = subscribers.order_by(CommunityMember.created_at)
+    elif sort_by.startswith('last_seen'):
+        if 'DESC' in sort_by:
+            subscribers = subscribers.order_by(desc(User.last_seen))
+        else:
+            subscribers = subscribers.order_by(User.last_seen)
+    elif sort_by.startswith('local_remote'):
+        if 'DESC' in sort_by:
+            subscribers = subscribers.order_by(desc(User.ap_id.is_(None)))
+        else:
+            subscribers = subscribers.order_by(User.ap_id.is_(None))
     else:
-        abort(404)
+        subscribers = subscribers.order_by(desc(User.last_seen))
+
+    # Pagination
+    subscribers = subscribers.paginate(page=page, per_page=100 if not low_bandwidth else 50, error_out=False)
+    next_url = url_for('community.community_moderate_subscribers', actor=actor, page=subscribers.next_num,
+                       sort_by=sort_by, search=search) if subscribers.has_next else None
+    prev_url = url_for('community.community_moderate_subscribers', actor=actor, page=subscribers.prev_num,
+                       sort_by=sort_by, search=search) if subscribers.has_prev and page != 1 else None
+
+    banned_people = User.query.join(CommunityBan, CommunityBan.user_id == User.id).filter(
+        CommunityBan.community_id == community.id).all()
+
+    return render_template('community/community_moderate_subscribers.html',
+                           title=_('Moderation of %(community)s', community=community.display_name()),
+                           community=community, current='subscribers', subscribers=subscribers,
+                           banned_people=banned_people,
+                           ban_user_form=ban_user_form, sort_by=sort_by, search=search,
+                           next_url=next_url, prev_url=prev_url, low_bandwidth=low_bandwidth,
+                           inoculation=inoculation[randint(0, len(inoculation) - 1)] if g.site.show_inoculation_block else None)
 
 
 @bp.route('/<actor>/moderate/comments', methods=['GET'])
