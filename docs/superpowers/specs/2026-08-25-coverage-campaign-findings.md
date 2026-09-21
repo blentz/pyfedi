@@ -16358,3 +16358,44 @@ became rows, one is equivalent.
 | **D1083** | `tests/test_post_replies.py` | The poll row created its choices **in sort order**, so dropping `order_by(PollChoice.sort_order)` gave the same list. **Fact 499 for the second time in two sub-projects** -- and it is now a step when writing any ordering row: insert the rows in the wrong order first. | **closed** | `n10` |
 
 **Next free number: D1084.**
+
+## Sub-project 82, slice B: `show_post`
+
+**The round in one line: THREE production defects -- an **unpublished post was
+readable by anyone who guessed its id**, the page's **ActivityPub discovery
+header was deleted by the line after it**, and **"hide read posts" marked
+nothing** -- plus one registered and pinned.**
+
+### 1. AN EMBARGOED POST, READABLE AHEAD OF TIME
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1084** | `app/post/routes.py:124` | **A SCHEDULED POST RENDERED TO ANYONE.** `post.status` is `POST_STATUS_SCHEDULED` (`-2`) until its publication time arrives, and the rest of the application treats that as private: the scheduled-posts page is scoped to `Post.user_id == current_user.id` (`app/user/routes.py:2040`) and the ActivityPub representation of the same post answers **403** for `post.status < POST_STATUS_PUBLISHED` (`app/activitypub/routes.py:2179`). The HTML page -- which `post_ap`, `post_nice` and the community post routes all lead to -- rendered it in full, title and body, to a visitor with no account. Post ids are sequential. | **fixed** | `PROBE af2 scheduled status: 200 \| body visible: True`; `PROBE af2b title visible: True` |
+
+### 2. TWO HEADERS, ONE SURVIVOR
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1086** | `app/post/routes.py:365` | **`Headers.set` REPLACES EVERY VALUE FOR THE NAME.** The page set its `Link: rel="alternate"; type="application/activity+json"` and then set the oembed `Link` on the next line, deleting the first -- so the HTML page did **not** advertise its ActivityPub representation, and a client discovering the object from HTML had nothing to follow. The same two calls also discarded the framework's `preload` hints, which the fix restores. The site's own licence `Link` survived only because `after_request` uses `add`. | **fixed** | `PROBE ah1 Link headers:` one oembed link and the rsl licence, no activity+json |
+
+### 3. A SETTING THAT DID NOTHING
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1087** | `app/post/routes.py:296` | **"HIDE READ POSTS" MARKED NOTHING FOR THE ORDINARY POST.** `main_post_id = [post.id] + post.cross_posts if post.cross_posts is not None else []` parses as `([post.id] + post.cross_posts) if ... else []` -- the conditional binds looser than `+` -- so a post with **no** cross-posts, which is nearly all of them, called `mark_post_read([], True, user_id)`. The feature silently did nothing and the page looked correct. | **fixed** | The row asserting the call: `assert [] == [1]` |
+
+### 4. REGISTERED, NOT FIXED
+
+| ID | Where | What | Why not this round |
+|---|---|---|---|
+| **D1085** | `app/post/routes.py:96` | **A POST ITS AUTHOR DELETED STILL RENDERS** -- 200, title visible, and the whole comment thread with it; only the body is withheld, and that is the template's doing. A post a MODERATOR deleted is 404 for the same visitor, and `continue_discussion` answers 404 for both. The two ends of the same feature disagree (fact 478). | The flash on that path -- "This post has been deleted by the author." -- is written for a general reader, so the tombstone looks deliberate; what deletion should leave behind is a product decision, not a coverage fix. **Pinned as today's behaviour** in a row carrying "update this test (D1085)", the D1001 pattern. |
+
+### 5. WHAT THE MUTATION PASS FOUND
+
+20 mutants; the measuring pass killed 19.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1088** | `tests/test_post_show.py` | The `current_user.is_anonymous` guard on the conditional-request check could be deleted with every row still green: the only logged-in row sent an ETag that could not match, so it measured "no 304" for the wrong reason. The guard is what stops a per-account page being answered 304 from an anonymous reader's cache validator (fact 449's other half). Writing the row needed **fact 514**: one authenticated identity per test, so the two views had to become two rows. | **closed** | `p4` |
+
+**Next free number: D1089.**
