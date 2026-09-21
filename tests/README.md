@@ -9877,6 +9877,46 @@ from the source would not go green, not because anything was read. The rule
 that made it work: when a row fails, measure what actually happened before
 changing the row.
 
+**439. `Site.private_instance` DEFAULTS TO True.** (`app/models.py:4014`.) An
+anonymous request to any page is redirected to the login form before the route
+runs, so every row about an anonymous visitor has to turn it off first. A row
+that does not looks exactly like the refusal it was written to test.
+
+**440. `CONTENT_WARNING` REDIRECTS EVERYONE, NOT ONLY THE ANONYMOUS.**
+`login_required_if_private_instance` (`app/utils.py:1930`) sends every visitor
+without the `warned` cookie to `/content_warning`. A row about a community's
+own nsfw/nsfl handling under that config has to set the cookie or it never
+reaches the route.
+
+**441. THE COMMUNITY FOUNDER IS ALWAYS A MODERATOR.**
+`community_moderators` (`app/utils.py:2917`) synthesises the community's own
+`user_id` into the list when no row holds it. A row asserting on the moderator
+list has to assert about the moderator it added, not about the whole list.
+
+**442. THE VIEWER CANNOT BE THE SUBJECT OF A `last_seen` TEST.** Flask-Login's
+request handling stamps `last_seen` on the CURRENT user, so an admin who is
+also a moderator makes themselves active again just by loading the page. The
+`un_moderated` rows use an admin who moderates nothing.
+
+**443. THE USER CONTENT PREFERENCES DO NOT DEFAULT TO OFF.** `hide_nsfw` and
+`hide_nsfl` default to 1 and `hide_gen_ai` to 2 (`app/models.py:993-995`), and
+every filter tests `== 1` -- so `hide_gen_ai = 2` means "label it", not "hide
+it". A row that only sets the preference to 1 passes against a filter that
+ignores the preference entirely. Assert both directions, and clear the other
+three so one filter does not cover for another.
+
+**444. A FILTER APPLIED IN TWO ARMS NEEDS A ROW IN EACH.** `Post.deleted` and
+`PostReply.deleted` are each filtered once for anonymous visitors and once for
+logged-in ones. Every row was anonymous, so deleting either logged-in copy
+survived. **Duplication hides a gap the same way a weak assertion does**, and
+neither is visible without the mutant.
+
+**445. A ROW CAN FAIL BY TIMEOUT, AND THAT IS A REAL RESULT.** The topic and
+feed cycle guards are pinned by rows that fail with pytest-timeout's 60-second
+per-test limit when the guard is reverted, because the unguarded loop does not
+end. A hang is a defect with a worse operational profile than a crash -- it
+holds a worker instead of returning a 500.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
