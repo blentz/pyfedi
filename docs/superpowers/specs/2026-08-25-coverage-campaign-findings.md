@@ -16102,3 +16102,34 @@ D988's eleven mutating GETs are fixed**, so that inventory is now empty.**
 |---|---|---|---|---|
 | **D1050** | `tests/test_user_profile_import.py` | One real gap: an import file can name a post the account has **already** bookmarked, and neither `PostBookmark` nor `PostReplyBookmark` has a unique constraint to catch the second row -- so `if not existing_bookmark:` could be deleted without any row noticing, because no row imported the same bookmark twice. | **closed** | `m36` |
 | **D1049** | `app/user/routes.py:251`, `:1316`, `:1425` | **Three equivalent mutants, each proved from the source, and one of them created by this round's own fix.** (a) `edit_profile`'s `and not current_user.banned` cannot decide anything: the lookup above filters `banned=False` and the route then requires the caller to BE that user, so a banned caller is a 404 first. (b) `notif_type == 'Unread'` no longer needs its own arm, because D1043's `except ValueError` now sends `int('Unread')` down the same path -- **a fix that made an existing branch equivalent, which only the mutation pass would show.** (c) the import's membership guard is backed by the `existing_member` check inside it, exactly as D996 recorded for `do_subscribe`. | **registered as equivalent mutants** | `m2`, `m24`, `m30` |
+
+**Next free number: D1051.**
+
+## Slice C: the settings page, and the four block forms
+
+**The round in one line: six functions close at zero gaps and carried **THREE
+production defects** -- **two cookie parses that answered 500 and locked the
+account out of its own settings**, and **a "block instance" box that would
+block this instance**.**
+
+### 1. A COOKIE THAT LOCKED THE SETTINGS PAGE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1051** | `app/user/routes.py:651` | `datetime.fromisoformat(restriction_cookie)` on a cookie, with no guard: `ValueError: Invalid isoformat string: 'not-a-date'`. | **fixed** | The probe |
+| **D1052** | `app/user/routes.py:646` | `int(current_max_hours)` on another cookie: `ValueError: invalid literal for int() with base 10: 'abc'`. **Both cookies are set to expire in 2099**, so one bad value answered 500 on the settings page for good -- and the settings page is where the account would go to clear it. The daily-usage limit is a self-restraint feature, which makes the accounts most likely to hit this the ones least able to work around it. An unreadable restriction is now treated as no restriction, which is the state the cookie describes before it is first set. | **fixed** | The probe. **The first attempt measured nothing**: with only one of the two cookies set the `and` short-circuits before `int()`, so the probe answered 302 and looked clean. Fact 475. |
+
+### 2. BLOCKING YOUR OWN INSTANCE, FROM THE OTHER END
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1053** | `app/user/routes.py:1826` | Typing this instance's own domain into the settings page's *block instance* box blocked it -- instance 1 is this server, so every local post, comment and community would be hidden from the caller, with no obvious way back. **D1035's shape at the other end of the same feature**: that one was reached from a local profile's button, this one from the settings form, and fixing one did not fix the other. Found by looking for it, which is what a registered finding is for. | **fixed** | The row fails with the guard removed |
+
+### 3. WHAT THE MUTATION PASS FOUND
+
+27 mutants; the measuring pass killed 24.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1054** | `tests/test_user_settings.py` | Two real gaps and one invalid mutant. The corrupt-hours row asserted only that the response was a 302, so treating an unparseable cookie as a limit of **1** rather than 0 -- which silently holds the account to a restriction it cannot see -- passed it; the row now asserts the new value reaches the cookie. The `session['ui_language']` mutant produced `NO SUMMARY` rather than a verdict, because its anchor omitted the leading indentation and the deletion left an IndentationError: **a mutant that cannot run is not a survivor, and the runner's `'failed' in summary` test reads one as the other.** | **both closed; the runner's blind spot recorded** | `m8`, `m5` |
+| **D1055** | `app/user/routes.py:1826` | An **equivalent** mutant: `instance.id == 1 or instance.domain == current_app.config['SERVER_NAME']` -- the id arm cannot decide anything, because this instance's own row is id 1 AND carries `SERVER_NAME` as its domain. Kept as defence against an installation where those two facts come apart. | **registered as an equivalent mutant** | `m13` SURVIVED with a row that builds the state |
