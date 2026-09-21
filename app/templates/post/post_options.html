@@ -53,16 +53,20 @@
                 {{ _('Set flair') }}
             </a>
         </li>
+        {# D1021: posted, not linked -- the same change D987 made to the
+           instance-wide sticky two blocks below. As a GET link, a moderator who
+           loaded <img src="/post/5/sticky/yes"> stickied that post in their
+           community, because login_required validates CSRF only for POST. #}
         {% if post.sticky -%}
             <li>
-                <a href="{{ url_for('post.post_sticky', post_id=post.id, mode='no') }}" style="white-space: normal" class="dropdown-item no-underline" rel="nofollow noindex">
+                <a href="#" data-url="{{ url_for('post.post_sticky', post_id=post.id, mode='no') }}" style="white-space: normal" class="dropdown-item no-underline send_post" rel="nofollow noindex">
                     <span class="fe fe-unsticky"></span>
                     {{ _('Un-sticky') }}
                 </a>
             </li>
         {% else -%}
             <li>
-                <a href="{{ url_for('post.post_sticky', post_id=post.id, mode='yes') }}" style="white-space: normal" class="dropdown-item no-underline" rel="nofollow noindex">
+                <a href="#" data-url="{{ url_for('post.post_sticky', post_id=post.id, mode='yes') }}" style="white-space: normal" class="dropdown-item no-underline send_post" rel="nofollow noindex">
                     <span class="fe fe-sticky"></span>
                     {{ _('Sticky') }}
                 </a>
