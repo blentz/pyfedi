@@ -15937,3 +15937,81 @@ to the D989 ratchet, which has been taught to see them.**
 |---|---|---|---|---|
 | **D1023** | `app/community/routes.py:1553`; `app/models.py:736` | An **equivalent mutant**, and a naming trap worth the entry. `community_mod_list` gates on `if is_owner or current_user.is_admin() or community.is_moderator(current_user):`, and the first arm cannot decide anything: **`Community.is_moderator()` does not read the `is_moderator` column.** It asks whether the user appears in `moderators()`, which selects on `is_owner OR is_moderator` -- so every owner satisfies the third arm whether or not they carry the moderator flag. Two rows survived their mutants for the same reason before the two real gaps below were found, which is why this is registered rather than chased. | **registered as an equivalent mutant** | `m4 mod list owner arm dropped: SURVIVED (61 passed)` after a row that builds owner-without-the-column |
 | **D1024** | `tests/test_community_moderators.py` | Two real gaps, one cause: **a ban-check row has to start from a state the request would change.** `test_a_banned_user_cannot_change_ownership` asserted that a member who was ALREADY an owner still was, so dropping the ban check changed nothing it could see; and its `remove_owner` half aimed at another account, which the authorization check refuses whether or not the ban check runs -- so that half could not reach the line it named at all. Split into a promote row that starts from moderator-not-owner and a stand-down row that uses the only arm an owner can reach on their own account. | **closed** | `m14` and `m18` SURVIVED, both KILLED after |
+
+**Next free number: D1025.**
+
+## Slice I: the rest of the blueprint -- and the floor
+
+**The round in one line: eighteen functions close at zero gaps, **SEVEN more
+production defects** -- including **two routes with no authorization at all**
+and **an unauthenticated server-side URL fetcher** -- and
+`app/community/routes.py` is floored at 100.**
+
+### 1. NO AUTHORIZATION AT ALL
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1028** | `app/community/routes.py:1473`, `:1489` | **`remove_icon` AND `remove_header` HAD `@login_required` AND NOTHING ELSE.** Any account on the instance could POST either one and delete any community's icon or banner -- `delete_from_disk()` as well as the database row. Not a moderator, not a member, no relationship to the community whatsoever. The CSRF token is validated, which is exactly why this is not a forgery finding: **the caller simply has to be logged in.** Both now require the owner, a moderator or an admin -- the check `community_edit`, the page these buttons live on, already applies before rendering them. | **fixed, both** | `PROBE i4 status: 200` / `icon_id now: None`, from an account with no relationship to the community |
+| **D1029** | `app/community/routes.py:1504` | `flip_community_theme_allowed(community_id, user_id)` passed the URL's `user_id` straight to `set_community_theme_allowed`, so any account could turn any other account's per-community theme on or off. A small preference, and a plain IDOR: the row is keyed by a user id the caller chose. | **fixed** | `PROBE i5 victim theme setting before/after: True False` |
+
+### 2. AN UNAUTHENTICATED OUTBOUND FETCH
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1025** | `app/community/routes.py:3030` | **`check_url_already_posted` WAS REACHABLE WITH NO SESSION** and calls `retrieve_metadata_of_url`, which issues `httpx_client.get` against whatever URL the caller passed. `is_invalid_get_request_uri` keeps those requests off private ranges and off `.local`, so this was never SSRF to the inside -- it was anyone on the internet making this instance issue outbound GETs **from its own address, at whatever rate they liked**, which is D993's family (an unbounded outbound primitive) rather than D955's. Its only caller is the new-post form, which is behind a login already. | **fixed** | `PROBE i1 status: 200` / `outbound fetch attempted: True ('https://example.com/x',)` with no session |
+
+### 3. THE SECOND FRAGMENT ENDPOINT
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1026** | `app/community/routes.py:3040` | `community_changed` renders the community's flair list and the whole side pane, and had none of `show_community`'s refusals. **D1017's shape, one endpoint along, found by looking for it** -- which is what a registered finding is for. | **fixed** | `PROBE i2 status: 200 / title leaked: True`, anonymously, against a private community |
+| **D1027** | `app/community/routes.py:3039` | The same route read `request.args.get('communities')` as a string and handed it to `db.session.get(Community, ...)`: `DataError: invalid input syntax for type integer: "abc"` -- **an unauthenticated 500 from a query parameter.** `type=int` answers None, which the function already handles. | **fixed** | `PROBE i3 RAISED: DataError ... invalid input syntax for type integer: "abc"` |
+
+### 4. THE MODERATION QUEUE FAILED WHEN IT OVERFLOWED
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1030** | `app/community/routes.py:2003` | Both of `community_moderate`'s pagination links omitted `actor`, which the endpoint's rule requires, so **building them raised `BuildError`**. They are only built when the queue has more than one page -- so the report queue answered 500 **exactly when a community was being flooded with reports and its moderators most needed to work through them**. Every sibling on the page passes the actor; these two did not. | **fixed** | `PROBE i6 RAISED: BuildError Could not build url for endpoint 'community.community_moderate' with values ['page']. Did you forget to specify values ['actor']?` |
+| **D1031** | `app/community/routes.py:2229` | `community_moderate_comments` returned None for a non-moderator and for a name that does not resolve -- **D1012's shape for the THIRD time in this file**, and its sibling `community_moderate`, written from the same template, answers both properly. | **fixed** | The rows fail with `TypeError: The view function ... did not return a valid response` when the guards are reverted |
+
+### 5. WHAT THE MUTATION PASS FOUND
+
+42 mutants; the measuring pass killed 37.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1032** | `tests/test_community_misc.py` | Five survivors, and **four of them were the same missing question: "only this community's?"** The report queue, the comment queue and the "already posted" list each carry a filter that scopes them -- `in_community_id`, `community_id`, `Post.deleted`/`status` -- and every row in the file had only one community, or only visible posts, so dropping any of those filters changed nothing an assertion could see. A moderator handed another community's reports sees who reported what; a "this was already posted" warning that names a removed post tells the submitter something the site will not show them. The fifth was `if isinstance(c, str)`: `search_term in c` on a dict asks about its KEYS, so the row needed an entry whose key matches. | **all five closed** | `m7`, `m9`, `m21`, `m25`, `m37` |
+
+### 6. THE FLOOR, AND WHAT IS STILL OPEN
+
+`app/community/routes.py` is floored at **98**, and the number needs its
+reasoning attached. **Statements are at 100.0%** -- 1,944 of 1,944. The floor
+is on `percent_covered`, which with `branch = True` combines statements with
+branches, and branches are at 95.9% (811 of 846). 98 is therefore the honest
+floor for a module whose statements are fully covered.
+
+**The 33 remaining partial branches are the next target in this module**, and
+they are recorded rather than left: each is a condition whose false arm no row
+constructs, and this campaign's own evidence -- D907 five times, D992 five
+times, D1012 three times -- says that is exactly where the next defect is. Two
+of the 35 measured were removed rather than covered in this round: `remove_icon`
+and `remove_header` each carried a nested `if community.icon_id:` /
+`if community.image_id:` that nothing between it and the check above could
+falsify, so its false arm was a partial branch nobody could ever reach (the
+D983 precedent).
+
+`app/community/routes.py` is floored at 98. One statement is
+excluded and marked `# pragma: no cover` with its reason: `show_community`'s
+feed-parent walk carries a nil guard that `feed_parent_feed_id_fkey` makes
+unreachable, kept against the constraint being relaxed -- unlike the topic walk
+eight lines above it, whose `Topic.parent_id` has no such constraint and which
+produced D1006's measured `AttributeError`.
+
+**Nine slices, thirty-one production defects in this one module**, most of them
+access control: a private community readable through the cross-post form,
+through the sidebar fragment and through the flair fragment; a community ban
+that did not prevent joining; an RSS importer another community's moderator
+could repoint; an icon any logged-in account could delete; four routes that
+mutated on a bare GET; and an unauthenticated outbound-fetch primitive. The
+floor is what stops that work being undone by a later change that merely looks
+tidy.
