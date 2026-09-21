@@ -10112,6 +10112,33 @@ profile; D1053 is the same mistake on the settings form, which nothing about
 the first fix touched. After fixing a defect in one entry point, grep for the
 other entry points to the same action before closing the finding.
 
+**479. A `strip()` BEFORE A `split()` EATS THE CASE YOU ARE TESTING.**
+`form.urls.data.strip().split('\n')` never yields a leading or trailing empty
+element, so a row that puts its blank line at the end of the box exercises
+nothing. Put the blank line BETWEEN two values (D1063).
+
+**480. NOT EVERY FIELD A GENERATOR ACCEPTS APPEARS IN ITS OUTPUT.** feedgen's
+RSS writer emits no atom id, and the channel `<link>` carries whichever link
+was set LAST -- so of three wrong urls in `show_profile_rss` only one could be
+pinned. Check what the serialiser actually produces before claiming a row
+covers a field.
+
+**481. A FEED IS A SECOND COPY OF AN ACCESS DECISION.** D1057 is the third
+surface where private-community content escaped: the cross-post form, the
+sidebar fragment, and the author's own RSS. When a listing is built from `user.
+posts` or `community.replies` rather than from the query the page uses, it has
+no access control unless someone adds it.
+
+**482. AN ABSENCE IS NOT REPORTED AS A BUG.** D1059 dropped every bodyless
+post -- most link and image posts -- from every user feed on the instance. A
+feed that is too short looks like an author who posts rarely, so nothing but a
+row that asserts the bodyless post IS listed would have found it.
+
+**483. A LIMIT CHECKED ON THE RENDER PATH IS NOT A LIMIT.** The upload quota
+ran after the POST had stored the files and returned a redirect, so it could
+only ever announce that the limit had been passed. Ask of every limit: which
+request does it refuse?
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
