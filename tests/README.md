@@ -10090,6 +10090,28 @@ existing_bookmark:` in each is the only thing preventing a duplicate. Importing
 the same file twice is the ordinary way a user reaches that, and no row did it
 until the mutation pass asked.
 
+**475. AN `and` CHAIN HIDES THE PROBE AS WELL AS THE DEFECT.** The first probe
+for D1052 set one cookie and answered 302, which looked like "no defect here" --
+`if restriction_cookie and current_max_hours and int(current_max_hours) > 0`
+short-circuits before the parse. Set EVERY conjunct before concluding that a
+line is unreachable.
+
+**476. A MUTANT THAT CANNOT RUN IS NOT A SURVIVOR.** A deletion anchor that
+omits the leading indentation leaves an IndentationError, and pytest then
+prints no `passed`/`failed` line at all. The runner classifies anything without
+`failed` as SURVIVED, so an invalid mutant reads as a gap. Treat `NO SUMMARY`
+as "re-write the mutant", never as a result.
+
+**477. A COOKIE THAT EXPIRES IN 2099 IS A PERMANENT INPUT.** D1051 and D1052
+are ordinary `ValueError`s, and would be minor if the value were transient. The
+cookies here are set to expire in 2099, so one corrupt value answers 500
+forever, on the page the account would use to clear it.
+
+**478. THE SAME FEATURE HAS TWO ENDS.** D1035 fixed "block this instance" on a
+profile; D1053 is the same mistake on the settings form, which nothing about
+the first fix touched. After fixing a defect in one entry point, grep for the
+other entry points to the same action before closing the finding.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
