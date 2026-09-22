@@ -10344,3 +10344,24 @@ whatever client makes them. Measured: an authenticated client served
 first, and an anonymous client rendering the logged-in reply form after a
 logged-in request ran first. A row that needs both views of a page has to be
 two rows.
+
+**515. `login_required` VALIDATES CSRF ON EVERY POST, EVEN WITH
+`WTF_CSRF_ENABLED = False`.** The decorator in `app/utils.py` calls
+`validate_csrf` itself and `abort(400, ...)` on failure, and `validate_csrf`
+does not consult that setting. A POST row without a token gets
+`{"code":400,"status":"Bad Request"}` -- which reads like the view refusing
+the request, not like a missing token. Use the `csrf()` helper for any POST to
+a `login_required` route.
+
+**516. PATCH `app.config['DEBUG']`, NOT `app.debug`.** `Flask.debug` is a
+property over `config['DEBUG']`, so `patch.object(app, 'debug', True)` sets the
+attribute on the CLASS and leaks into every test that follows -- the next row
+saw exceptions propagate instead of being flashed. `patch.dict(app.config,
+{'DEBUG': True})` is scoped to the block.
+
+**517. `get_timezones()` OFFERS ONLY `Region/City`.** It skips any zone
+without a `/`, so `'UTC'` is not among the choices and a form row submitting
+it fails with `{'timezone': ['Not a valid choice.']}` -- and the failure
+surfaces as the page being re-rendered, i.e. as a template error about
+`csrf_token` (fact 508), not as a validation message. Use e.g.
+`'Europe/London'`.
