@@ -10564,3 +10564,20 @@ three rows in test_fixup_url.py take those arms: 9.01s, 8.01s and 5.00s, 22s
 of waiting whose length also varies run to run. `patch('app.utils.sleep')`
 plus `assert waited.call_count == 1` keeps the backoff pinned and removes the
 wait. Look for this shape whenever a row's duration is measured in seconds.
+
+**545. THE TEST APP'S CACHE IS A NULL ONE.** `cache.get` always answers None
+and `cache.set` keeps nothing, so a row that wants to prove something was
+CACHED cannot do it by calling the function twice -- the second call misses
+too and the row passes for the wrong reason, or fails for it. Patch the
+module's `cache` and give `get` a dict's `.get`; assert on `cache.set`'s
+arguments for the other half.
+
+**546. `app.debug` HAS NO SETTER.** `patch.object(app, 'debug', True)` is
+`AttributeError: property 'debug' of 'Flask' object has no deleter`, because
+Flask reads it from the config. `patch.dict(app.config, {'DEBUG': True})`
+does what was meant.
+
+**547. A MagicMock SWALLOWS `del`.** `render_registration_form` does `del
+form.terms`, and against a MagicMock that neither fails nor leaves a trace
+worth asserting on -- `form.__delattr__.call_args_list` is not a mock. A row
+that pins a deletion needs a real object with the attribute on it.
