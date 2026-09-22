@@ -10466,3 +10466,31 @@ and the row leaves `RuntimeWarning: coroutine
 'AsyncMockMixin._execute_mock_call' was never awaited` behind -- three of
 them, against a suite that is counted for warnings. `patch.object(app.logger,
 'warning')` asserts the same thing and leaves nothing.
+
+**532. A UNIQUENESS VALIDATOR ON `RegisterByMastodonForm` BREAKS LOGIN.**
+That form is submitted by two different people: somebody registering, and
+somebody whose account already exists coming back through the same route --
+the existing-account branch sits *inside* `form.validate_on_submit()`. A
+`validate_email` that refuses any address already in the database therefore
+refuses the returning account its own address, and three slice B pins turned
+red at once. The check belongs in the route's new-account arm, where the
+question "is this somebody else's address?" is the one actually being asked.
+
+**533. `main.index` IS `/home`, NOT `/`.** A row asserting
+`response.headers['Location'] == '/'` after a successful login fails with
+`assert '/home' == '/'`. `url_for('main.index')` is the only safe way to
+write it, or the literal `/home`.
+
+**534. `get_token_and_user_info` IS THE SEAM FOR ALL THREE PROVIDERS.**
+Every network call Google, Discord and Mastodon make goes through it, and it
+swallows every exception into `(None, None)`. Patching it with a
+`(token, user_info)` pair drives the whole authorize callback without
+touching `authlib`; patching `app.auth.oauth_util.oauth` is only needed for
+rows about the function itself.
+
+**535. A TEMPLATE CANNOT BE RENDERED FROM `app.test_request_context()`.**
+`can_user_register`'s declined-country arm answers `render_template(...)`,
+and calling it inside a bare test request context raises from inside the
+template -- the page wants context the fixtures' request does not carry.
+Drive the route instead and assert on `response.data`; the unit call is only
+usable for the arms that answer True or a redirect.
