@@ -16500,3 +16500,54 @@ directly. **The existing suite caught an over-broad fix**, which is what the
 full-suite run before the commit is for.
 
 **Next free number: D1105.**
+
+## Sub-project 82, slice E: the fragments and side doors
+
+**The round in one line: ELEVEN production defects, and one theme -- **the
+checks live on the page, and the fragments it delegates to did not repeat
+them**: four more ways to read a private community, an unauthenticated
+outbound request, and five 500s.**
+
+### 1. FOUR MORE WAYS TO READ A PRIVATE COMMUNITY
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1105** | `app/post/routes.py:2650` | **`/post/<id>/ical` HAD NO ACCESS DECORATOR AT ALL.** A private community's event handed out its title, its description and its start time to anyone who asked, as a calendar file. | **fixed** | `PROBE an1 ical of a private event: 200 \| title: True` |
+| **D1106** | `app/post/routes.py:427` | **`/post/<id>/lazy_replies/<nonce>` RENDERED A PRIVATE COMMUNITY'S WHOLE THREAD.** This is where `show_post` defers the conversation past a hundred comments -- so the busier the private community, the more certainly its thread was public. | **fixed** | `PROBE an2 lazy_replies of a private post: 200 \| reply: True` |
+| **D1109** | `app/post/routes.py:2578` | The cross-post page handed a non-member **the post itself**. D998 fixed the community LIST on this same form and not this end of it. | **fixed** | `PROBE ao1 cross-post of a private post: 200 \| post handed to the template: SECRETTITLE` |
+| **D1111** | `app/post/routes.py:1900` | **`/post/search_community_suggestions` NAMED PRIVATE COMMUNITIES, UNAUTHENTICATED.** The fallback search matched name and `ap_id` with only `banned == False`, and the route carried no decorator. A private community's EXISTENCE is what its membership is meant to withhold. | **fixed** | `PROBE ap1 anonymous suggestions: 200 \| private named: True \| public named: True` |
+| **D1112** | `app/post/routes.py:1113, 2077` | The markdown-source fragments showed a private community's text to any logged-in reader -- the source of a post IS the post -- and fell over on a post with no body (every link post): `TypeError: argument of type 'NoneType' is not iterable`. | **fixed** | the rows fail with the guard removed |
+
+**Fact 478 for the fifth through ninth time in this sub-project.** The helpers
+slices A–C introduced are what four of these now call; `can_view_private` was
+factored out of `refuse_private_community` for the two that answer with their
+own "could not be found" fragment rather than a status code.
+
+### 2. AN UNAUTHENTICATED OUTBOUND REQUEST
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1107** | `app/post/routes.py:2701, 2760` | `post_check_ai` and `post_reply_check_ai` carried **no decorator**, so an anonymous caller drove one outbound request to the configured detector per HTTP request, with no rate limit of its own. D1025's shape -- the unauthenticated URL fetcher found in `app/community/routes.py`. | **fixed** | `PROBE an3 anonymous check_ai: 200 \| outbound fetch: True` |
+
+### 3. FIVE 500s
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1108** | both AI routes | `db.session.get` answers None and the next line reads `.ap_id` / `.body`. D992's shape. | **fixed** | `AttributeError: 'NoneType' object has no attribute 'ap_id'` |
+| **D1110** | `app/post/routes.py:2600` | `int(request.cookies.get('cross_post_community_id'))` -- a cookie is whatever the caller sends. `ValueError: invalid literal for int() with base 10: 'banana'`, and an id that no longer resolves is an `AttributeError` on `.lemmy_link()`. | **fixed** | measured |
+| **D1113** | `app/post/routes.py:2735, 2790` | Both AI routes are a chain of `if`s with a return for the happy path only: a detector answering 502 fell off the end. `TypeError: The view function for 'post.post_check_ai' did not return a valid response`. | **fixed** | measured |
+| **D1114** | `app/post/routes.py:2585` | `search_for_community(f'!{value}')` does `address[1:].split('@')` and unpacks two values, so a community name typed **without a server** -- what this form's own suggestions look like for a local community -- was `ValueError: not enough values to unpack (expected 2, got 1)`. `post_move` normalises the same input one screen away; **this end did not** (fact 478 again, on a crash rather than a leak). | **fixed** | measured |
+| **D1115** | `app/post/routes.py:425` | `if request.method == 'OPTIONS': return ''` at the top of `post_lazy_replies` **could never run**: `before_request` answers every OPTIONS before any view. Removed rather than left reading like the route's own contract. | **fixed** | the line stayed uncovered whatever the row sent (fact 521) |
+
+### 4. WHAT THE MUTATION PASS FOUND
+
+20 mutants; the measuring pass killed 16. All four survivors were rows that
+asserted the right thing for the wrong reason:
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1116** | `tests/test_post_fragments.py` | The "too short to check" row used a nine-character body, so the hundred-character boundary could be moved to ten and stay green. A boundary row belongs **just under the boundary**. | **closed** | `s9` |
+| **D1117** | `tests/test_post_fragments.py` | The two source-fence arms both render the text; the only difference is that a body containing four backticks is **escaped into `<pre><code>`** rather than fenced. Asserting the text passed either way. | **closed** | `s17`, `s18` |
+| **D1118** | `tests/test_post_fragments.py` | `cross_posts` is **emptied** rather than nulled when the last one goes, so the route's truthiness test needed a row with `[]` and not only one with None. | **closed** | `s20` |
+
+**Next free number: D1119.**
