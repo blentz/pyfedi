@@ -16737,3 +16737,53 @@ refused email, and that a form failing its own validators is shown again
 rather than falling through to a handshake already spent.
 
 **Next free number: D1145.**
+
+---
+
+## Round 85 — sub-project 83 slice D: `app/ldap_utils.py`
+
+**The round in one line: SEVEN production defects -- the login name went into
+an LDAP filter and a bind DN unescaped, an empty password was an anonymous
+bind that succeeded, a banned account logged in through the directory, and
+the directory could mint any local user name it liked.**
+
+An instance that configures a directory makes it the FIRST authenticator:
+`process_login` tries LDAP before the local password. All of this runs before
+an attacker holds an account. The module was at 10.8%.
+
+### 1. INJECTION, IN BOTH DIRECTIONS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1145** | `app/ldap_utils.py:205, 102` | **THE LOGIN NAME WENT INTO THE SEARCH FILTER UNESCAPED.** `LoginForm.user_name` carries `DataRequired` and nothing else, and `user_filter.format(username=user_name)` put it straight into the filter: `*` became `(uid=*)`, which matches **every entry in the directory**, and the code takes `entries[0]` -- whose address is what the local account is then built around. The write side had the same hole, where an injected name also chose the DN of the entry it created. `escape_filter_chars` at both. | **fixed** | `PROBE ax1 result: 'someone@example.com' \| search: '(uid=*)'` and `PROBE ax8 search: '(uid=bob)(uid=*)' \| added: 'uid=bob)(uid=*,dc=example,dc=com'` |
+| **D1146** | `app/ldap_utils.py:197, 149` | **AND INTO THE BIND DN UNESCAPED.** `f"{attr}={user_name},{base_dn}"`, so the caller chose which subtree the bind was attempted against. `escape_rdn` at both sites. | **fixed** | `PROBE ax2 bind dn: 'uid=bob,ou=admins,dc=example,dc=com'` |
+
+### 2. THE BIND THAT NEEDED NO PASSWORD
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1147** | `app/ldap_utils.py:36` | **AN EMPTY PASSWORD IS AN ANONYMOUS BIND, AND AN ANONYMOUS BIND SUCCEEDS.** A simple bind carrying an empty password is an *unauthenticated bind*, which RFC 4513 says a server should treat as anonymous, so `login_with_ldap(name, '')` came back with an address for a password nobody checked. `LoginForm`'s `Length(min=8)` keeps the web arm off that path; the refusal belongs in `_bind_user`, where every caller passes through -- the debug login route and the write bind included. | **fixed** | `PROBE ax3 result: 'someone@example.com' \| bind password: ''` |
+
+### 3. THE CHECKS THE DIRECTORY ARM DID NOT MAKE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1148** | `app/auth/util.py:504` | **A BANNED ACCOUNT LOGGED IN THROUGH THE DIRECTORY.** `validate_user_ldap_login` was a bind and a lookup; `validate_user_login`'s ban test had no counterpart. Those checks are now `refuse_if_banned`, called from both ends, and the LDAP arm answers **False** rather than None when it refuses, so `process_login` stops instead of falling through to a local password that must not overrule the refusal. | **fixed** | `PROBE ax4 user: <User person_2> \| banned: True` |
+| **D1149** | `app/auth/util.py:512` | **A DELETED ACCOUNT'S NAME GOT A SECOND ROW.** `find_user` filters deleted rows out, so the name looked free and `create_new_user_from_ldap` wrote another account holding it. | **fixed** | `PROBE ax5 users before: 2 \| after: 3 \| names: ['founder', 'person', 'person']` |
+| **D1150** | `app/auth/util.py:512` | **THE DIRECTORY COULD MINT ANY LOCAL NAME.** `admin` -- the name this instance reserves -- and `we ird/../x`, outside `USER_NAME_CHARSET_RE`, which exists because a local user name is interpolated into an actor URL, a webfinger answer and a feed regex. D1139's shape at a third door. `can_be_a_local_user_name` refuses rather than alters, because the local name has to be a stable function of the directory name or the next login would not find the account this one created. | **fixed** | `PROBE ax6 admin exists: True` and `PROBE ax7 names: ['founder', 'person', 'we ird/../x']` |
+
+### 4. THE SECOND DELETED TEST
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1151** | `app/auth/util.py:493` | `validate_user_login` closed with a deleted check **after the one it opens with** -- unreachable, and worded "This account has been deleted." where the first answers the same message every other failure gets. Saying which accounts were deleted is the enumeration D1131 closed. Removed with the extraction. | **fixed** | the only line the LDAP rows could not reach |
+
+### 5. WHAT THE MUTATION PASS FOUND
+
+22 mutants, 20 killed on the measuring pass. Both survivors were **rows of
+mine** that asserted the answer without asserting that nothing was contacted:
+with `LDAP_READ_ENABLE` ignored, the unpatched `ldap3` failed to connect and
+returned the same False the row expected. Both now assert the connection was
+never constructed. 22/22.
+
+**Next free number: D1152.**

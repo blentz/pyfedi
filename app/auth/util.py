@@ -21,10 +21,10 @@ from app.constants import NOTIF_REGISTRATION
 from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap, login_with_ldap
 from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role
-from app.utils import RESERVED_USER_NAMES, banned_ip_addresses, blocked_referrers, finalize_user_setup, get_request, \
-    get_setting, gibberish, \
+from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addresses, blocked_referrers, \
+    finalize_user_setup, get_request, get_setting, gibberish, \
     ip_address, is_safe_redirect_target, markdown_to_html, render_template, safe_redirect_target, user_cookie_banned, \
-    user_ip_banned, role_access, actor_contains_blocked_words, get_site_as_dict
+    user_ip_banned, role_access, actor_contains_blocked_words, get_site_as_dict, user_name_is_taken
 
 
 ALPHABET = string.ascii_letters + string.digits
@@ -443,6 +443,11 @@ def process_login(form: LoginForm):
 
     if current_app.config['LDAP_READ_ENABLE']:
         user = validate_user_ldap_login(username, password, ip)
+        if user is False:
+            # The directory authenticated them and this instance will not have
+            # them: banned, deleted, or a name that cannot be a local account
+            # (D1148, D1149, D1150). A local password does not overrule that.
+            return redirect(url_for("auth.login"))
         if user is not None:  # LDAP authentication succeeded
             ldap_sync = False  # setting it to false avoids writing to LDAP later on
 
@@ -489,27 +494,86 @@ def validate_user_login(user, password, ip):
         flash(invalid_login_message(), "error")
         return False
 
+    # The ban is tested AFTER the password, or the ban message itself tells a
+    # caller which accounts exist and which of them are banned.
+    return refuse_if_banned(user, ip)
+
+
+def refuse_if_banned(user, ip):
+    """Everything `validate_user_login` checks that is not the password.
+
+    D1148. The LDAP arm of `process_login` made none of these checks: a
+    directory bind was the whole of it, so an account this instance had
+    BANNED logged in anyway. Measured:
+
+        PROBE ax4 user: <User person_2> | banned: True
+
+    Fact 478 again -- one question asked at two ends, guarded at one.
+
+    D1151. `validate_user_login` used to close with a SECOND deleted test,
+    after the one it opens with -- unreachable, and worded
+    "This account has been deleted." where the first answers the same
+    message every other failure gets, because saying which accounts were
+    deleted is the enumeration D1131 closed. The LDAP arm cannot reach it
+    either: `find_user` filters deleted rows out, and a deleted name is
+    refused by `can_be_a_local_user_name`.
+    """
     if user.id != 1 and (user.banned or user_ip_banned() or user_cookie_banned()):
         handle_banned_user(user, ip)
-        return False
-
-    if user.deleted:
-        flash(_("This account has been deleted."), "error")
         return False
 
     return True
 
 
-def validate_user_ldap_login(user_name: str, password: str, ip: str) -> User | None:
+def validate_user_ldap_login(user_name: str, password: str, ip: str):
+    """The account a successful directory bind resolves to.
+
+    Answers None when LDAP did not authenticate -- the caller then tries a
+    local password -- and **False** when it did but the account may not be
+    let in, which is not something a local password should be able to
+    override.
+    """
     result = login_with_ldap(user_name, password)
     if result is False:
         flash(_('Login failed'))
         return None
-    else:
-        user = find_user(user_name)
-        if user is None:
-            user = create_new_user_from_ldap(user_name, result, password, ip)
-        return user
+
+    user = find_user(user_name)
+    if user is None:
+        if not can_be_a_local_user_name(user_name):  # D1149, D1150
+            flash(_('Login failed'))
+            return False
+        user = create_new_user_from_ldap(user_name, result, password, ip)
+
+    if not refuse_if_banned(user, ip):  # D1148
+        return False
+
+    return user
+
+
+def can_be_a_local_user_name(user_name):
+    """D1149, D1150. Whether a directory name may be written into a local
+    account.
+
+    `create_new_user_from_ldap` wrote whatever it was handed. Measured:
+
+        PROBE ax6 admin exists: True
+        PROBE ax7 names: ['founder', 'person', 'we ird/../x']
+        PROBE ax5 users before: 2 | after: 3 | names: ['founder', 'person', 'person']
+
+    So a directory could mint the name this instance reserves, a name outside
+    USER_NAME_CHARSET_RE -- which exists because a local name is interpolated
+    into an actor URL, a webfinger answer and a feed regex -- and a SECOND row
+    holding a name a deleted account already holds, because `find_user`
+    filters deleted rows out and nothing downstream looked again.
+
+    A name that fails here is refused rather than altered: the local name has
+    to be a stable function of the directory name, or the next login would not
+    find the account this one created.
+    """
+    return bool(USER_NAME_CHARSET_RE.match(user_name)) and \
+        user_name not in RESERVED_USER_NAMES and \
+        not user_name_is_taken(user_name)
 
 
 def handle_banned_user(user, ip):
