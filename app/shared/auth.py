@@ -7,7 +7,7 @@ from flask_login import login_user
 from sqlalchemy import func
 
 from app import db, cache
-from app.auth.util import get_country
+from app.auth.util import get_country, invalid_login_message
 from app.constants import *
 from app.ldap_utils import sync_user_to_ldap
 from app.models import IpBan, User, utcnow
@@ -40,16 +40,15 @@ def log_user_in(input, src):
 
     if src == SRC_WEB:
         if user is None or user.deleted:
-            flash(_('No account exists with that user name.'), 'error')
+            # D1131. One answer for every way a login can fail -- the API arm
+            # below already raises a single `incorrect_login` for both, and
+            # the web arm used to name which half had failed.
+            flash(invalid_login_message(), 'error')
             return redirect(url_for('auth.login'))
 
     if not user.check_password(password):
         if src == SRC_WEB:
-            if user.password_hash is None:
-                message = Markup(_('Invalid password. Please <a href="/auth/reset_password_request">reset your password</a>.'))
-                flash(message, 'error')
-                return redirect(url_for('auth.login'))
-            flash(_('Invalid password'))
+            flash(invalid_login_message(), 'error')  # D1131
             return redirect(url_for('auth.login'))
         elif src == SRC_API:
             raise Exception('incorrect_login')

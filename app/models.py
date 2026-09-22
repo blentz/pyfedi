@@ -7,6 +7,7 @@ import uuid
 import re
 import unicodedata
 from datetime import datetime, timedelta, date
+from hashlib import sha256
 from time import time
 from typing import List, Union
 from urllib.parse import urlparse, parse_qs, urlencode
@@ -1323,9 +1324,28 @@ class User(UserMixin, db.Model):
         email_parts = self.email.split('@')
         return email_parts[1]
 
+    def reset_password_fingerprint(self):
+        """A short digest of the credential a reset token is issued against.
+
+        D1130. The token is a JWT and therefore stateless, so nothing about
+        using one changed anything: the same link reset the password again,
+        and again, until it expired. Measured: `PROBE ar3 first reset worked:
+        True | same token reused: True`. Anyone who came by the link
+        afterwards -- browser history, a forwarded message, a shared device --
+        could take the account from the person who had just secured it.
+
+        Carrying a digest of the current `password_hash` makes the token
+        single-use without any storage: the reset changes the hash, so the
+        digest in an already-used token no longer matches. A digest rather
+        than the hash itself, because a JWT is signed and NOT encrypted --
+        whoever holds the token can read its payload.
+        """
+        return sha256((self.password_hash or '').encode()).hexdigest()[:16]
+
     def get_reset_password_token(self, expires_in=600):
         return jwt.encode(
-            {'reset_password': self.id, 'exp': time() + expires_in},
+            {'reset_password': self.id, 'pw': self.reset_password_fingerprint(),
+             'exp': time() + expires_in},
             current_app.config['SECRET_KEY'],
             algorithm='HS256')
 
@@ -1484,11 +1504,22 @@ class User(UserMixin, db.Model):
     @staticmethod
     def verify_reset_password_token(token):
         try:
-            id = jwt.decode(token, current_app.config['SECRET_KEY'],
-                            algorithms=['HS256'])['reset_password']
+            payload = jwt.decode(token, current_app.config['SECRET_KEY'],
+                                 algorithms=['HS256'])
+            id = payload['reset_password']
         except:
             return
-        return db.session.get(User, id)
+        user = db.session.get(User, id)
+        if user is None:
+            return
+        # D1130. A token issued against one password is spent once that
+        # password changes -- by this reset or by any other route to it.
+        # Tokens minted before this field existed carry no 'pw' and are
+        # refused rather than honoured, which costs their holders one more
+        # click on "forgot password" and closes the window for everyone else.
+        if payload.get('pw') != user.reset_password_fingerprint():
+            return
+        return user
 
     def delete_dependencies(self):
         # Get cover and avatar file IDs before clearing references

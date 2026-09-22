@@ -145,6 +145,27 @@ def create_registration_application(user, answer):
 
     return application
 
+def invalid_login_message():
+    """One answer for every way a login can fail (D1131).
+
+    The web arm used to say "No account exists with that user name." for a
+    name it does not know and "Invalid password" for one it does, so the pair
+    told a caller which accounts exist here, one guess at a time -- on the
+    most-probed form on the site. The API arm of the same flow
+    (`app/shared/auth.py`) already raises a single `incorrect_login` for both,
+    so this is fact 478 once more: one question asked at two ends, guarded at
+    one.
+
+    The reset link stays in the message. It is useful to everyone who has
+    genuinely forgotten a password -- including the OAuth-created accounts
+    that have no password at all (D1073) -- and, because it is shown for every
+    failure, it distinguishes nothing.
+    """
+    return Markup(_('Invalid user name or password. If you have forgotten your '
+                    'password you can <a href="/auth/reset_password_request">'
+                    'reset it</a>.'))
+
+
 def handle_abandoned_open_instance():
     if g.site.registration_mode == "Open" and no_admins_logged_in_recently():
         g.site.registration_mode = "Closed"
@@ -393,7 +414,7 @@ def process_login(form: LoginForm):
         # Either LDAP is disabled or LDAP auth failed - try local authentication
         user = find_user(username)
         if not user:
-            flash(_("No account exists with that user name."), "error")
+            flash(invalid_login_message(), "error")  # D1131
             return redirect(url_for("auth.login"))
 
         if not validate_user_login(user, password, ip):
@@ -423,15 +444,13 @@ def find_user(user_name):
 
 def validate_user_login(user, password, ip):
     if user.deleted:
-        flash(_("No account exists with that user name."), "error")
+        flash(invalid_login_message(), "error")  # D1131
         return False
-    
+
     if not user.check_password(password):
-        if user.password_hash is None:
-            message = Markup(_('Invalid password. Please <a href="/auth/reset_password_request">reset your password</a>.'))
-            flash(message, "error")
-        else:
-            flash(_("Invalid password"), "error")
+        # D1131. One message whether or not the account has a password, and
+        # whether or not it exists at all.
+        flash(invalid_login_message(), "error")
         return False
 
     if user.id != 1 and (user.banned or user_ip_banned() or user_cookie_banned()):
