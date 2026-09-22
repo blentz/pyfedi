@@ -106,8 +106,14 @@ def resend_email():
         user = User.query.filter(func.lower(User.email) == func.lower(form.email.data)).filter_by(ap_id=None, deleted=False).first()
 
         if user is None:
-            flash(_("No user found with that email address."), 'error')
-            return redirect(url_for('auth.resend_email'))
+            # D1129. This said "No user found with that email address." while
+            # the success path says "If an account exists, a link has been
+            # sent" -- so the pair of answers told a caller which addresses
+            # are registered here, one guess at a time. `reset_password_request`
+            # next door already answers the same way either way; this end did
+            # not (fact 478). Measured: `PROBE ar2 unknown address says: True`.
+            flash(_("If an account exists, a link has been sent"))
+            return redirect(url_for('auth.check_email'))
 
         # Create verification token if it doesn't exist already or else verification is impossible
         if not user.verification_token:
