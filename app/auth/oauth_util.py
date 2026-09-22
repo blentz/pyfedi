@@ -1,3 +1,4 @@
+import re
 from random import randint
 
 from flask import flash, g, redirect, render_template, request, url_for, session, current_app
@@ -9,7 +10,8 @@ from app import db, oauth
 from app.auth.util import create_registration_application, get_country, handle_banned_user
 from app.models import User, utcnow
 from app.shared.tasks import task_selector
-from app.utils import finalize_user_setup, get_setting, gibberish, ip_address, user_cookie_banned, user_ip_banned
+from app.utils import RESERVED_USER_NAMES, actor_contains_blocked_words, finalize_user_setup, get_setting, gibberish, \
+    ip_address, user_cookie_banned, user_ip_banned, user_name_is_taken
 
 
 def is_country_blocked(country: str) -> bool:
@@ -31,10 +33,23 @@ def handle_user_verification(user, oauth_id_key, token, ip, country, user_info):
         email = user_info.get('email')
         username = user_info.get('username', '')
 
+        # D1143. Not every provider hands back an email -- Mastodon's
+        # `accounts/verify_credentials` does not -- and `email.lower()` below
+        # answered `AttributeError: 'NoneType' object has no attribute
+        # 'lower'` when one did not. Measured: `PROBE av7 outcome:
+        # AttributeError: 'NoneType' object has no attribute 'lower'`.
+        if not email:
+            flash(_('That account did not give us an email address, so it '
+                    'cannot be used to sign up here.'), 'error')
+            return redirect(url_for('auth.login'))
+
+        refusal = refuse_banned_visitor()  # D1142
+        if refusal is not None:
+            return refusal
+
         # Check if an account with this email already exists
         # Otherwise
-        existing_user = User.query.filter(func.lower(User.email) == email.lower()).first()
-        if existing_user:
+        if email_already_registered(email):
             flash(_('An account with this email already exists, please login and connect this account over "Connect OAuth" setting.'), 'error')
             return redirect(url_for('auth.login'))
 
@@ -43,10 +58,54 @@ def handle_user_verification(user, oauth_id_key, token, ip, country, user_info):
         if g.site.registration_mode == 'RequireApplication' and g.site.application_question:
             task_selector('check_application', application_id=user.registration_application.id)
             return redirect(url_for('auth.please_wait'))
-        return None
+        # D1138. This used to `return None`, and a Flask view that returns
+        # None is `TypeError: The view function ... did not return a valid
+        # response`. So EVERY first-time Google or Discord sign-up ended on an
+        # error page -- after the account had been created and logged in.
+        # Measured: `PROBE av4 outcome: TypeError: ... | user created: True`.
+        # The local registration path sends a new account to the same place.
+        return redirect(url_for('auth.filter_selection'))
     else:
         # Handle existing user
         return finalize_user_login(user, token, ip, country)
+
+
+def email_already_registered(email):
+    """D1141. One address, one account.
+
+    The providers that supply an email have always been asked this question.
+    Mastodon supplies none, so its arm asks the visitor to type one -- and
+    nothing checked it, so two accounts ended up holding one address.
+    Measured:
+
+        PROBE av6 status: 302 | accounts holding that email: 2 |
+        names: ['Person', 'person']
+
+    Login-by-email, the reset-password request and the resend-verification
+    form all look an account up by address and take `.first()`, so a
+    duplicate decides which of the two those answer for.
+    """
+    return User.query.filter(func.lower(User.email) == func.lower(email.strip())).first() is not None
+
+
+def refuse_banned_visitor():
+    """D1142. A response when this visitor may not register, otherwise None.
+
+    `handle_oauth_authorize` sends an EXISTING banned account to
+    `handle_banned_user`, and the Mastodon form arm does the same. A visitor
+    who has no account yet was never asked: `initialize_new_user` wrote
+    `banned=user_ip_banned() or user_cookie_banned()` into the row and then
+    called `finalize_user_setup` and `login_user` on it regardless, so a
+    banned IP got a working session on a fresh account. Measured:
+
+        PROBE av5 outcome: ... | created: True | banned: True
+
+    Both new-account sites call this, rather than each carrying its own copy.
+    """
+    if user_ip_banned() or user_cookie_banned():
+        flash(_('You have been banned.'), 'error')
+        return redirect(url_for('auth.login'))
+    return None
 
 
 def initialize_new_user(email, username, oauth_id_key, user_info, ip, country):
@@ -146,10 +205,12 @@ def handle_oauth_authorize(provider, user_info_endpoint, oauth_id_key, form_clas
         flash(_('Login failed due to a problem with the OAuth server.'), 'error')
         return redirect(url_for('auth.login'))
 
+    # D1144. `can_user_register` answers True, a redirect or a rendered page --
+    # never False -- so the `is False` arm this replaces could not be taken,
+    # and it existed to turn a False into the redirect that the function
+    # already returns for itself.
     can_user_authenticate = can_user_register()
     if can_user_authenticate is not True:
-        if can_user_authenticate is False:
-            return redirect(url_for('auth.login'))
         return can_user_authenticate
 
     ip = ip_address()
@@ -187,16 +248,41 @@ def finalize_user_login(user, token, ip, country):
 
 
 def find_new_username(email: str) -> str:
-    email_parts = email.lower().split('@')
-    original_email_part = email_parts[0]
-    attempts = 0
+    """The user name an OAuth signup gets, from the email's local part.
 
+    D1139/D1140. This used to answer that local part VERBATIM, checking only
+    that no user held the same string with the same capitalisation. Every
+    other rule `RegistrationForm.validate_user_name` enforces was missing, so
+    an OAuth sign-in minted names the registration form refuses outright.
+    Measured:
+
+        PROBE av1 admin exists: True
+        PROBE av2 names: ['founder', 'Person', 'we.ird+chars!']
+        PROBE av3 person-ish names: ['Person', 'person']
+
+    `admin` is the name the registration path reserves; `we.ird+chars!` is
+    outside USER_NAME_CHARSET_RE, which exists because a local user name is
+    interpolated into an actor URL, a webfinger response and a feed regex;
+    and `person` beside `Person` is a second account answering to one name,
+    which `find_user` resolves with `.first()`.
+
+    Fact 478 once more -- registration has two ends, and only one of them
+    asked any of these questions.
+    """
+    base = re.sub(r'[^a-z0-9_]', '', email.lower().split('@')[0])
+    # Length(min=3) is the form's rule. A base that cannot satisfy the
+    # charset, the reserved list or the blocked words is replaced outright
+    # rather than decorated, so the loop below only ever answers one question.
+    if len(base) < 3 or base in RESERVED_USER_NAMES or \
+            actor_contains_blocked_words(base):
+        base = gibberish(10)
+
+    candidate = base
+    attempts = 0
     while attempts < 1000:
-        existing_user = User.query.filter(User.user_name == email_parts[0], User.ap_id == None).first()
-        if existing_user is None:
-            return email_parts[0]
-        else:
-            email_parts[0] = original_email_part + str(randint(1, 1000))
-            attempts += 1
+        if not user_name_is_taken(candidate):
+            return candidate
+        candidate = base + str(randint(1, 1000))
+        attempts += 1
 
     return gibberish(10)

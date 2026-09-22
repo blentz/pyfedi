@@ -16682,3 +16682,58 @@ application question**, where there is nothing for a moderator to read and
 the registration completes instead of waiting on a review that cannot happen.
 
 **Next free number: D1138.**
+
+---
+
+## Round 84 — sub-project 83 slice C: `app/auth/oauth_util.py`
+
+**The round in one line: SIX production defects -- every first-time Google or
+Discord signup was a 500, the OAuth path bypassed every user-name rule the
+registration form enforces, two accounts could hold one email address, and a
+banned visitor was given an account and a session.**
+
+### 1. THE SIGNUP THAT ALWAYS ERRORED
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1138** | `app/auth/oauth_util.py:46` | **EVERY FIRST-TIME GOOGLE OR DISCORD SIGNUP ENDED IN A 500.** `handle_user_verification` closed its new-account path with `return None`, and a Flask view that returns None is a `TypeError`. The account had already been created, `finalize_user_setup` had run and `login_user` had handed out the session -- so the visitor was signed in and shown an error page, with no way to tell which had happened. A new account now goes where the local registration path sends one. | **fixed** | `PROBE av4 outcome: TypeError: The view function for 'auth.google_authorize' did not return a valid response. \| user created: True` |
+
+### 2. THE USER NAME NOBODY CHECKED
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1139** | `app/auth/oauth_util.py:189` | **THE OAUTH SIGNUP TOOK NAMES THE REGISTRATION FORM REFUSES.** `find_new_username` answered the email's local part **verbatim**: no charset check, no reserved-name list, no blocked words. `admin` -- the one name `process_registration_form` reserves -- was one Google sign-in away, and `we.ird+chars!` became a local user name although `USER_NAME_CHARSET_RE` exists precisely because a local name is interpolated into an actor URL, a webfinger answer and a feed regex. | **fixed** | `PROBE av1 admin exists: True` and `PROBE av2 names: ['founder', 'Person', 'we.ird+chars!']` |
+| **D1140** | `app/auth/oauth_util.py:195` | **THE UNIQUENESS TEST WAS CASE SENSITIVE.** `User.user_name == email_parts[0]`, against `find_user`, `RegistrationForm.validate_user_name` and every other comparison in the codebase, which lower both sides. So `person` was created beside `Person` and `.first()` decides which of the two a login resolves to. Community and feed names were not consulted at all. The form's three queries are now one function, `user_name_is_taken`, called from both ends. | **fixed** | `PROBE av3 person-ish names: ['Person', 'person']` |
+
+### 3. TWO ACCOUNTS, ONE EMAIL ADDRESS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1141** | `app/auth/routes.py:319` | **THE ONE ARM THAT ASKS THE VISITOR FOR AN EMAIL NEVER CHECKED IT.** Mastodon supplies no email, so that arm renders a form for one. `RegistrationForm.validate_real_email` refuses a taken address and `handle_user_verification` refuses one for the providers that do supply it; this third door had no check, and login-by-email, the reset-password request and the resend-verification form all take `.first()` on the address -- so the duplicate decides which account they answer for. The check lives in the route, not the form, because the same form is submitted by somebody whose account already exists. Its other half: a POST that did not validate fell through to a provider handshake already spent, so a refused email was reported as *"Login failed due to a problem with the OAuth server."* | **fixed** | `PROBE av6 status: 302 \| accounts holding that email: 2 \| names: ['Person', 'person']` |
+
+### 4. THE BAN NOBODY APPLIED TO A STRANGER
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1142** | `app/auth/oauth_util.py:52` | **A BANNED VISITOR WAS GIVEN AN ACCOUNT AND A SESSION.** `handle_oauth_authorize` sends an EXISTING banned account to `handle_banned_user`, and the Mastodon arm does the same; a visitor who had no account yet was never asked. `initialize_new_user` wrote `banned=user_ip_banned() or user_cookie_banned()` into the row and then called `finalize_user_setup` and `login_user` on it regardless. One helper, `refuse_banned_visitor`, at both new-account sites. | **fixed** | `PROBE av5 outcome: ... \| created: True \| banned: True` |
+
+### 5. THE PROVIDER THAT GIVES NO EMAIL
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1143** | `app/auth/oauth_util.py:31` | `email = user_info.get('email')` and then `email.lower()`. A provider that answers without an email -- Mastodon's normal behaviour, and any provider configured without the email claim -- crashed the callback. | **fixed** | `PROBE av7 outcome: AttributeError: 'NoneType' object has no attribute 'lower'` |
+
+### 6. AN ARM THAT COULD NOT BE TAKEN
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1144** | `app/auth/oauth_util.py:208` | `if can_user_authenticate is False: return redirect(url_for('auth.login'))`. `can_user_register` answers True, a redirect or a rendered page -- never False -- and the arm existed to convert a False into the redirect the function already returns for itself. Removed. | **fixed** | the only line the slice's rows could not reach |
+
+### 7. WHAT THE MUTATION PASS FOUND
+
+24 mutants, **24 killed** -- after two rows were added for arms the first
+draft left unmeasured: that the profile survives in the session across a
+refused email, and that a form failing its own validators is shown again
+rather than falling through to a handshake already spent.
+
+**Next free number: D1145.**

@@ -21,7 +21,8 @@ from app.constants import NOTIF_REGISTRATION
 from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap, login_with_ldap
 from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role
-from app.utils import banned_ip_addresses, blocked_referrers, finalize_user_setup, get_request, get_setting, gibberish, \
+from app.utils import RESERVED_USER_NAMES, banned_ip_addresses, blocked_referrers, finalize_user_setup, get_request, \
+    get_setting, gibberish, \
     ip_address, is_safe_redirect_target, markdown_to_html, render_template, safe_redirect_target, user_cookie_banned, \
     user_ip_banned, role_access, actor_contains_blocked_words, get_site_as_dict
 
@@ -188,7 +189,9 @@ def handle_abandoned_open_instance():
 
 
 def process_registration_form(form):
-    disallowed_usernames = ["admin"]
+    # One reserved-name list, shared with the OAuth signup path -- see
+    # app/utils.py's RESERVED_USER_NAMES and D1139.
+    disallowed_usernames = RESERVED_USER_NAMES
     ip = ip_address()
     country = get_country(ip)
 
