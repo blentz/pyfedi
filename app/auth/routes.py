@@ -271,7 +271,15 @@ def google_connect_callback():
         flash(_('Your Google account has been connected successfully.'), 'success')
         return redirect(url_for('user.connect_oauth'))
     except Exception as e:
-        flash(_('Failed to connect Google account: %(error)s', error=str(e)), 'error')
+        # D1136. This used to put `str(e)` in front of the person. The
+        # exception comes from the OAuth client, and its text carries
+        # whatever the library chose to put there -- a token, a URL with a
+        # code in it, an internal address. Measured: a flash reading
+        # `Failed to connect Google account: token secret=abc123 leaked`.
+        # The detail belongs in the log, where the operator can see it and
+        # the visitor cannot.
+        current_app.logger.warning('Google OAuth connect failed: %s', e)
+        flash(_('Failed to connect Google account. Please try again.'), 'error')
         return redirect(url_for('user.connect_oauth'))
 
 
@@ -331,11 +339,20 @@ def mastodon_authorize():
 
 
 @bp.route("/mastodon_connect")
+@login_required
 def mastodon_connect():
+    # D1135. `google_connect`, `discord_connect` and both of their callbacks
+    # carry `@login_required`; these two did not. Connecting an account to
+    # `current_user` is meaningless without one, and the anonymous caller got
+    # as far as being redirected to the remote instance -- a real
+    # authorization burned on a flow that can only fail. Measured:
+    # `PROBE au1 anonymous /auth/mastodon_connect: 200`, against 302 to the
+    # login page for all four siblings. Fact 478 again.
     return oauth.mastodon.authorize_redirect(redirect_uri=url_for('auth.mastodon_connect_callback', _external=True))
 
 
 @bp.route("/mastodon_connect_callback")
+@login_required
 def mastodon_connect_callback():
     """
     Callback route for Mastodon OAuth connection.
@@ -359,7 +376,15 @@ def mastodon_connect_callback():
         flash(_('Your Mastodon account has been connected successfully.'), 'success')
         return redirect(url_for('user.connect_oauth'))
     except Exception as e:
-        flash(_('Failed to connect Mastodon account: %(error)s', error=str(e)), 'error')
+        # D1136. This used to put `str(e)` in front of the person. The
+        # exception comes from the OAuth client, and its text carries
+        # whatever the library chose to put there -- a token, a URL with a
+        # code in it, an internal address. Measured: a flash reading
+        # `Failed to connect Mastodon account: token secret=abc123 leaked`.
+        # The detail belongs in the log, where the operator can see it and
+        # the visitor cannot.
+        current_app.logger.warning('Mastodon OAuth connect failed: %s', e)
+        flash(_('Failed to connect Mastodon account. Please try again.'), 'error')
         return redirect(url_for('user.connect_oauth'))
 
 
@@ -407,5 +432,13 @@ def discord_connect_callback():
         flash(_('Your Discord account has been connected successfully.'), 'success')
         return redirect(url_for('user.connect_oauth'))
     except Exception as e:
-        flash(_('Failed to connect Discord account: %(error)s', error=str(e)), 'error')
+        # D1136. This used to put `str(e)` in front of the person. The
+        # exception comes from the OAuth client, and its text carries
+        # whatever the library chose to put there -- a token, a URL with a
+        # code in it, an internal address. Measured: a flash reading
+        # `Failed to connect Discord account: token secret=abc123 leaked`.
+        # The detail belongs in the log, where the operator can see it and
+        # the visitor cannot.
+        current_app.logger.warning('Discord OAuth connect failed: %s', e)
+        flash(_('Failed to connect Discord account. Please try again.'), 'error')
         return redirect(url_for('user.connect_oauth'))
