@@ -16640,3 +16640,45 @@ mutants never ran. The truncation looked exactly like a completed pass. Facts
 476 and 487 are the same class of quiet truncation seen from the other side.
 
 **Next free number: D1133.**
+
+## Sub-project 83, slice B: registration and the three OAuth providers
+
+**The round in one line: FIVE production defects -- **the registration
+honeypot was a bypass**, **an abandoned open instance never actually closed
+itself**, and the Mastodon connect routes were missing the login check their
+four siblings carry.**
+
+### 1. THE HONEYPOT WAS A BYPASS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1133** | `app/auth/util.py:196` | **FILLING THE HONEYPOT SKIPPED THE CHECKS BELOW IT.** `is_invalid_email_or_username` opened with `if form.email.data.strip(): return False` -- and `email` is the hidden honeypot beside the real `real_email`. Returning False means "not invalid", so a caller who filled the field a human never fills **walked past both gates underneath**: the reserved-user-name list and the role-address refusal. The field meant to catch bots was the way around the checks. | **fixed** | `PROBE at3 honeypot + reserved name "admin": users created=1 \| admin exists=True` and `PROBE at4 honeypot + role address: users created=1`, against `PROBE at5 reserved name, NO honeypot: users created=0` and `PROBE at6 role address, NO honeypot: users created=0` |
+
+### 2. THE DOOR THAT NEVER SHUT
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1137** | `app/auth/util.py:168` | **AN ABANDONED OPEN INSTANCE NEVER CLOSED ITSELF.** `handle_abandoned_open_instance` sets `g.site.registration_mode = "Closed"` when no admin has logged in recently -- and `g.site` is built by `before_request` as `Site(**get_site_as_dict())`, a **transient object from a plain dict, never added to the session**. The write reached the current request and nothing else; the next request rebuilt `g.site` from the database and the instance was Open again. The safety exists to shut the door on an unattended instance before a spam run finds it, and it never shut it. The row is written now, and `get_site_as_dict`'s 60-second memoization cleared so the next request does not read the old value back. | **fixed** | the row fails with the database write removed (fact 530) |
+
+### 3. THE MASTODON ROUTES MISSING THEIR SIBLINGS' DECORATOR
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1135** | `app/auth/routes.py:343, 356` | `google_connect`, `discord_connect` and both their callbacks carry `@login_required`; **`mastodon_connect` and `mastodon_connect_callback` did not**. Connecting a provider to `current_user` is meaningless without one, and the anonymous caller got as far as being redirected to the remote instance -- a real authorization burned on a flow that can only fail. Fact 478 again, this time as a decorator missing from two of six. | **fixed** | `PROBE au1 anonymous /auth/mastodon_connect: 200`, against 302 to the login page for all four siblings |
+| **D1136** | `app/auth/routes.py:280, 362, 424` | All three connect callbacks ended `except Exception as e: flash(... error=str(e))`. The exception comes from the OAuth client and its text carries whatever the library put there -- a token, a URL with a code in it, an internal address -- **straight to the visitor**. The detail goes to the log now. | **fixed** | a flash reading `Failed to connect Mastodon account: token secret=abc123 leaked` |
+
+### 4. REGISTERED, NOT FIXED
+
+| ID | Where | What | Why not this round |
+|---|---|---|---|
+| **D1134** | `app/auth/forms.py:26` | **NOTHING ACTS ON THE HONEYPOT.** With D1133 fixed the field no longer *bypasses* anything, but filling it still registers an account exactly like an honest submission -- the hidden input is decorative. | Making it refuse is a product decision: a password manager that fills hidden fields would then lock out real people, and the field is named `email`, which is exactly what an autofiller looks for. **Pinned as it stands** in a row carrying "update this test (D1134)". |
+
+### 5. WHAT THE MUTATION PASS FOUND
+
+17 mutants; the measuring pass killed 15. Both survivors were arms with no
+row rather than defects: a `tos_url` of **only whitespace** (the second half
+of `is None or not .strip()`), and `RequireApplication` set with **no
+application question**, where there is nothing for a moderator to read and
+the registration completes instead of waiting on a review that cannot happen.
+
+**Next free number: D1138.**
