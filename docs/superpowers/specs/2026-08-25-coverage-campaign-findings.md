@@ -16836,3 +16836,68 @@ request sent to a remote community this account already belongs to**. All
 three now assert what the guard decides. 22/22.
 
 **Next free number: D1159.**
+
+---
+
+## Round 87 — sub-project 83 slice F: the rest of `app/auth/util.py`
+
+**The round in one line: FIVE production defects -- an ipinfo.io outage took
+the whole authentication surface down with it, a private address crashed the
+same function, an admin who had never logged in crashed the registration
+page, one application notified the founder twice, and every registration
+wrote the LDAP directory twice.**
+
+### 1. THE LOOKUP THAT TOOK AUTHENTICATION WITH IT
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1159** | `app/auth/util.py:53` | **AN IPINFO.IO OUTAGE WAS A FAILED LOGIN, A FAILED REGISTRATION AND A FAILED OAUTH CALLBACK.** `ip2location` called `get_request(url)` with nothing around it, and `get_request` normalises every transport failure to `httpx.HTTPError`. Its only caller is `get_country`, which runs on every registration, every login and every OAuth callback. The retry makes it worse: `get_request` sleeps 3-10 seconds before its second attempt, so a slow service held the request open as well. A country nobody could look up is a country we do not know, which is what the empty answer already means. | **fixed** | `PROBE az1 outcome: HTTPError: boom` |
+| **D1160** | `app/auth/util.py:79` | **A PRIVATE ADDRESS HAD NO CITY, AND THE CODE READ ONE.** ipinfo answers `{"ip": ..., "bogon": true}` for a private or reserved address -- no city, region, country or timezone -- and only `127.0.0.1` is rewritten to a public address on the way in, so every LAN address reached this. Same blast radius as D1159. | **fixed** | `PROBE az2 outcome: KeyError: 'city'` |
+
+### 2. THE SAFETY THAT CRASHED THE PAGE IT PROTECTS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1161** | `app/auth/util.py:105` | `user.last_seen > a_week_ago` on a nullable column. The caller is `handle_abandoned_open_instance`, on the registration page, so an admin who had never logged in closed registration by crashing it -- the opposite of what the safety is for. | **fixed** | `PROBE az3 outcome: TypeError: '>' not supported between instances of 'NoneType' and 'datetime.datetime'` |
+
+### 3. TOLD TWICE, WRITTEN TWICE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1162** | `app/auth/util.py:137` | Two loops -- `Site.admins()`, then `Site.staff()` -- each sending its own notification, so somebody holding both roles was told twice about one application and had `unread_notifications` moved by two. The founder of a small instance is usually both. | **fixed** | `PROBE az4 notifications: 2 \| unread counter: 2` |
+| **D1163** | `app/auth/util.py:429` | **EVERY REGISTRATION WROTE THE LDAP DIRECTORY TWICE.** `register_new_user` calls `sync_user_with_ldap(user, form.password.data)`, and `finalize_user_registration` -- a few lines later on the same path -- called `sync_user_to_ldap(user.user_name, user.email, form.password.data.strip())` with its own copy of the try/except the helper already carries. One bind, search and modify, then the whole thing again. | **fixed** | `PROBE az5 sync_user_to_ldap calls: 2` |
+
+### 4. TWO ARMS THAT COULD NOT BE TAKEN
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1164** | `app/auth/routes.py:125` | `resend_email` tested `if user:` eight lines below `if user is None: return`. | **fixed** | the arm no row could construct |
+| **D1165** | `app/auth/routes.py:178` | `verify_email` wrapped its ENTIRE body in `if token != '':` with no else arm, so had it ever been false the view would have returned None -- a 500. It never was: Flask's default converter does not match an empty path segment, so `/verify_email/` is a 404. | **fixed** | same |
+
+### 5. AN EQUIVALENT MUTANT
+
+| ID | Where | What |
+|---|---|---|
+| **D1166** | `app/auth/util.py:656` | Dropping `not current_user.finished_onboarding` from `check_user_finished_onboarding` leaves it writing True over a column that is already True. No caller can see the difference; the only effect is a redundant commit. |
+
+### 6. WHAT THE MUTATION PASS FOUND
+
+31 mutants, 30 killed on the measuring pass. The survivor is D1166.
+
+---
+
+## Sub-project 83 complete: the authentication surface
+
+| module | before | after |
+|---|---|---|
+| `app/auth/routes.py` | 25.7% | **100%** |
+| `app/auth/util.py` | 20.4% | **100%** |
+| `app/auth/oauth_util.py` | 11.9% | **100%** |
+| `app/auth/onboarding.py` | 15.1% | **100%** |
+| `app/ldap_utils.py` | 10.8% | **100%** |
+
+**35 production defects, D1129-D1165**, across six slices. Everything an
+attacker reaches before holding an account: login, registration, the
+verification link, the reset link, three OAuth providers and the directory.
+
+**Next free number: D1167.**
