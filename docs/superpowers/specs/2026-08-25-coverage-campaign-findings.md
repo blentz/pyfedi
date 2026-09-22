@@ -16443,3 +16443,60 @@ habits automatic: build ordering data in the wrong order (facts 499, 506), and
 give every "only this person's?" check a second account.
 
 **Next free number: D1097.**
+
+## Sub-project 82, slice D: deleting, purging, moving, reporting, blocking
+
+**The round in one line: SEVEN production defects -- **anyone could silence
+anyone's post**, **a post could be moved into a private community**, and five
+refusals that were 500s.**
+
+### 1. ANYONE COULD SILENCE ANYONE'S POST
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1097** | `app/post/routes.py:1631` | **`post_mea_culpa` HAD NO AUTHORIZATION AT ALL.** "I changed my mind" marks a post as a mistake **and turns its comments off**, and any logged-in account could do it to anybody's post: the conversation under someone else's post closes, and the post then carries a notice in that author's name saying they made a mistake. Neither the author nor a moderator was checked -- there was no check. | **fixed** | `PROBE al1 stranger mea_culpa: 302 \| mea_culpa now=True comments_enabled=False` |
+
+### 2. A POST COULD BE MOVED INTO A PRIVATE COMMUNITY
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1102** | `app/shared/post.py:990` | **`move_post` CONSULTED ONLY THE SOURCE COMMUNITY.** It checks that the actor moderates the community the post is IN; the destination was never tested. So a moderator of any community could move a post into any other one, **including a private community they do not belong to** -- content injected past its membership, by someone with no standing there. Fixed by testing the destination's MEMBERSHIP -- private-without-membership, banned community, actor banned from it -- in the shared helper, so the web route and the API are covered by one check (fact 478). NOT `can_create_post`: that also brings in the poster-side conditions (verification, keys, `ban_posts`), which are about authoring a post rather than about where an existing one may be filed, and using it turned six existing rows in `tests/test_shared_post_moderation.py` red. | **fixed** | `PROBE am1 mod moves into a private community: 302 \| post now in theirs (private=True)` |
+
+### 3. FIVE REFUSALS THAT WERE 500s
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1098** | `app/post/routes.py:1316` | `post_delete` had **no `else`**: a caller who is not permitted fell off the end and the view returned None -- `TypeError: The view function for 'post.post_delete' did not return a valid response`. D1012's shape, fact 500. | **fixed** | measured |
+| **D1099** | `app/post/routes.py:1566` | `post_block_domain` on a post with no domain -- anything that is not a link -- was `psycopg2.errors.NotNullViolation: null value in column "domain_id" of relation "domain_block"`. The `post.domain.name` in the flash one line later is the same miss. | **fixed** | measured |
+| **D1100** | six sites in `app/post/routes.py` | `request.headers.get('HX-Current-Url')` read straight into `in` tests. D1091's shape; the whole family is guarded now. | **fixed** | `TypeError: argument of type 'NoneType' is not iterable` |
+| **D1101** | `app/post/routes.py:1620, 2024` | `post_block_instance` flashed "Content from … will be hidden." **immediately after** `block_remote_instance` had flashed "You cannot block the local instance." -- two messages contradicting each other, one of them false -- and a post with no instance was an `AttributeError`. Its twin `post_reply_block_instance` had both. | **fixed** | measured |
+| **D1103** | `app/post/routes.py:2291, 1981` | `post_reply_purge` and `post_reply_block_user` carry a post id and a comment id and relate them nowhere. **Tenth and eleventh sites** of D1010's shape -- and purging is the one deletion that cannot be undone. | **fixed** | the rows fail with the guards removed |
+
+### 4. WHAT THE MUTATION PASS FOUND
+
+19 mutants; the measuring pass killed 18. Two of them ran against
+`app/shared/post.py` rather than the routes, which is where D1102's guard
+lives: **a mutation pass has to cover the file the fix went into, not the file
+the defect was found from.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1104** | `tests/test_post_moderation.py` | D1102's guard has three arms -- private-without-membership, banned community, **actor banned from the destination** -- and only the first two had rows. The third is the same refusal for the same reason, and deleting it changed nothing. | **closed** | `r19` |
+
+**The floor caught the other half.** The suite passed with the guard in place
+-- 8306 rows green -- and the floor check then refused the round:
+`app/shared/post.py: 99.84% is below its floor of 100.00%`. The new refusal
+has two arms, a flash for the web and a `raise` for the API, and every row for
+this slice lives in the route's file, which never reaches the second. The
+ratchet is what noticed (fact 520).
+
+**A correction worth recording.** The first version of D1102's guard called
+`can_create_post`, which turned **six existing rows red** in
+`tests/test_shared_post_moderation.py` -- they move posts with actors who have
+no keys. `can_create_post` mixes the destination's membership rules with the
+poster-side conditions (verification, keys, `ban_posts`), and only the first
+group belongs to a moderation action. The guard now tests membership
+directly. **The existing suite caught an over-broad fix**, which is what the
+full-suite run before the commit is for.
+
+**Next free number: D1105.**

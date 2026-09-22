@@ -10365,3 +10365,26 @@ it fails with `{'timezone': ['Not a valid choice.']}` -- and the failure
 surfaces as the page being re-rendered, i.e. as a template error about
 `csrf_token` (fact 508), not as a validation message. Use e.g.
 `'Europe/London'`.
+
+**518. `url_for('main.index')` IS `/home`, NOT `/`.** The index is registered
+on both, and `url_for` builds the LAST-registered rule -- so a row asserting
+where an htmx redirect lands has to expect `/home`. Asserting `'/'` fails with
+`assert '/home' == '/'`, which reads like the route being wrong rather than
+the expectation.
+
+**519. A NOT-NULL COLUMN SHOWS UP AS A WARNING BEFORE IT SHOWS UP AS AN
+ERROR.** Inserting `DomainBlock(domain_id=None)` logs
+`SAWarning: Column 'domain_block.domain_id' is marked as a member of the
+primary key ... no explicit value is passed` and only then raises
+`psycopg2.errors.NotNullViolation` at flush. The warning names the column; the
+traceback names the INSERT. D1099 was found by the latter, but the former was
+in the log the whole time.
+
+**520. A FIX LANDING IN A CLOSED MODULE NEEDS A ROW IN THAT MODULE'S FILE.**
+D1102's guard went into `app/shared/post.py`, which is floored at 100%. The
+suite passed -- 8306 rows green -- and the floor check then refused the round:
+`app/shared/post.py: 99.84% is below its floor of 100.00%`, one uncovered
+line, the `raise` on the API arm of the new refusal. The rows for the slice
+were in the route's file; the arm the route never reaches had none. **When a
+fix crosses into another module, look at that module's floor before running
+the suite, not after.**
