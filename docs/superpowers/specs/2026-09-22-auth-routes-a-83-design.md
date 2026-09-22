@@ -74,7 +74,7 @@ Tokens minted before this field existed carry no `pw` claim and are refused.
 That costs their holders one more click on "forgot password", and closes the
 window for everybody else.
 
-### A lead for slice B, not yet measured
+### The lead slice B followed (now measured: D1133)
 
 `is_invalid_email_or_username` (`app/auth/util.py`) opens with
 
@@ -91,8 +91,12 @@ honeypot is consumed somewhere this reading has not found.
 
 A first probe could not reach the code: every registration POST it sent came
 back as a re-rendered form, so the form itself refused them and nothing was
-measured. That is slice B's first job, and it is recorded here rather than
-guessed at.
+measured. **Slice B found why** -- `RegistrationForm` adds a `CaptchaField`
+with `DataRequired` unless `captcha_enabled` is off, so the form refused the
+submission before any route code ran (fact 529) -- and then measured the
+reading above as correct: filling the honeypot skipped both checks, and
+`admin` and `postmaster@` were both accepted. Recorded as **D1133**, fixed in
+slice B.
 
 ## Success criteria
 

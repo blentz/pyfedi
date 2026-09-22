@@ -10442,3 +10442,27 @@ SIGPIPE, and the runner dies with **exit code 0** -- so it looks finished
 rather than truncated. Facts 476 and 487 recorded the same class of quiet
 truncation from the other direction. Never pipe a long-running pass into
 `head`; read the output file instead.
+
+**529. `RegistrationForm` CARRIES A CAPTCHA UNLESS `captcha_enabled` IS
+OFF.** `CaptchaField` with `DataRequired` is added in `__init__` and removed
+only when `get_setting('captcha_enabled', True)` is false, so a registration
+row that does not patch that setting has its POST refused by the form before
+any route code runs -- and the route answers 200 (the form, re-rendered),
+which reads like the route rejecting the registration rather than the form
+never letting it through. Patch `app.auth.forms.get_setting`.
+
+**530. `g.site` IS A TRANSIENT COPY, NOT THE ROW.** `before_request` builds
+it as `Site(**get_site_as_dict())` -- a new object from a plain dict, never
+added to the session -- so assigning to `g.site.<column>` changes the current
+request and nothing else. D1137 was exactly that: the safety that closes an
+abandoned open instance wrote only to `g.site`, so the door reopened on the
+next request. Anything meant to persist has to load `Site` from the session
+and commit, and clear `get_site_as_dict`'s 60-second memoization.
+
+**531. PATCH THE LOGGER, NOT `current_app`.** `patch('...current_app')`
+replaces a LocalProxy with a MagicMock, and `.logger.warning` off that mock
+comes back as an **AsyncMock**: the call returns a coroutine nobody awaits,
+and the row leaves `RuntimeWarning: coroutine
+'AsyncMockMixin._execute_mock_call' was never awaited` behind -- three of
+them, against a suite that is counted for warnings. `patch.object(app.logger,
+'warning')` asserts the same thing and leaves nothing.
