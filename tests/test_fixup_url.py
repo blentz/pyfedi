@@ -16,12 +16,23 @@ from the formats the production code already handles -- observed behaviour, not
 an authoritative source. WHATWG URL Standard and RFC 3986 govern the parsing
 underneath; YouTube's path conventions do not.
 """
+from unittest.mock import patch
+
 import httpx
 import pytest
 import respx
 
 from app.utils import fixup_url, get_request
 from tests.factories import make_instance
+
+
+def no_backoff():
+    """`get_request`'s two retry arms `sleep(random.randint(3, 10))` before
+    the second attempt, and three rows here take those arms: they measured
+    9.01s, 8.01s and 5.00s, 22s of the suite spent waiting on a delay whose
+    length is also random. Each row asserts the wait was ASKED for, so the
+    backoff is still pinned -- what is removed is only the waiting."""
+    return patch('app.utils.sleep')
 
 
 class TestNonYoutubePassesThrough:
@@ -260,8 +271,10 @@ class TestPeertubeErrorSwallowing:
         url = 'https://peertube.example/w/aaaaaaaaaaaaaaaaaaaaaa'
         http_mock.get(url).mock(side_effect=httpx.ConnectError('boom'))
         with app.test_request_context('/'):
-            thumbnail, embed = fixup_url(url)
+            with no_backoff() as waited:
+                thumbnail, embed = fixup_url(url)
         assert (thumbnail, embed) == (url, url)
+        assert waited.call_count == 1
 
     def test_a_read_failure_on_both_attempts_is_swallowed(self, app, db_session, http_mock):
         """The one get_request path that did NOT normalise to httpx.HTTPError.
@@ -279,8 +292,10 @@ class TestPeertubeErrorSwallowing:
         url = 'https://peertube.example/w/aaaaaaaaaaaaaaaaaaaaaa'
         http_mock.get(url).mock(side_effect=httpx.ReadError('boom'))
         with app.test_request_context('/'):
-            thumbnail, embed = fixup_url(url)
+            with no_backoff() as waited:
+                thumbnail, embed = fixup_url(url)
         assert (thumbnail, embed) == (url, url)
+        assert waited.call_count == 1
 
 
 class TestGetRequestNormalisesTransportFailure:
@@ -296,5 +311,7 @@ class TestGetRequestNormalisesTransportFailure:
         url = 'https://peertube.example/w/aaaaaaaaaaaaaaaaaaaaaa'
         http_mock.get(url).mock(side_effect=httpx.ReadError('boom'))
         with app.test_request_context('/'):
-            with pytest.raises(httpx.HTTPError):
-                get_request(url)
+            with no_backoff() as waited:
+                with pytest.raises(httpx.HTTPError):
+                    get_request(url)
+        assert waited.call_count == 1
