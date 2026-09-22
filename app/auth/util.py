@@ -89,20 +89,13 @@ def no_admins_logged_in_recently():
     return True
 
 
-def create_user_application(user: User, registration_answer: str):
-    application = UserRegistration(user_id=user.id, answer='Signed in with Google')
-    db.session.add(application)
-    targets_data = {'application_id': application.id, 'user_id': user.id}
-    for admin in Site.admins():
-        notify = Notification(title='New registration', url=f'/admin/approve_registrations?account={user.id}',
-                              user_id=admin.id,
-                              author_id=user.id, notif_type=NOTIF_REGISTRATION,
-                              subtype='new_registration_for_approval',
-                              targets=targets_data)
-        admin.unread_notifications += 1
-        db.session.add(notify)
-        # todo: notify everyone with the "approve registrations" permission, instead of just all admins
-    db.session.commit()
+# D1157. `create_user_application(user, registration_answer)` stood here and
+# was called from nowhere. It ignored its own `registration_answer` and wrote
+# `answer='Signed in with Google'` for every caller, and it set no `status`,
+# where `create_registration_application` -- the live function, four lines
+# down -- sets -1 when the address is still unverified so an application
+# cannot be approved before the email is. A second, wronger copy of a live
+# function is how a fix reaches one of them and not the other.
 
 
 def notify_admins_of_registration(application):
