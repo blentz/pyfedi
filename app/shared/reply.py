@@ -4,6 +4,7 @@ from flask import current_app, flash, abort
 from flask_babel import _, force_locale, gettext
 from flask_login import current_user
 from sqlalchemy import text
+from sqlalchemy.orm.exc import NoResultFound
 
 from app import db, limiter
 from app.constants import *
@@ -71,6 +72,13 @@ def vote_for_reply(reply_id: int, vote_direction, federate: bool, emoji: str | N
 def bookmark_reply(reply_id: int, src, auth=None):
     user_id = authorise_api_user(auth) if src == SRC_API else current_user.id
 
+    # D1125. Its post-level twin wrote to `read_posts` before checking, and
+    # answered a foreign-key violation for an id that does not resolve; this
+    # one simply inserted a bookmark pointing at nothing. Both ends now raise
+    # what the web routes already catch.
+    if db.session.get(PostReply, reply_id) is None:
+        raise NoResultFound
+
     existing_bookmark = PostReplyBookmark.query.filter_by(post_reply_id=reply_id, user_id=user_id).first()
     if not existing_bookmark:
         db.session.add(PostReplyBookmark(post_reply_id=reply_id, user_id=user_id))
@@ -88,6 +96,9 @@ def bookmark_reply(reply_id: int, src, auth=None):
 
 def remove_bookmark_reply(reply_id: int, src, auth=None):
     user_id = authorise_api_user(auth) if src == SRC_API else current_user.id
+
+    if db.session.get(PostReply, reply_id) is None:  # D1125
+        raise NoResultFound
 
     existing_bookmark = PostReplyBookmark.query.filter_by(post_reply_id=reply_id, user_id=user_id).first()
     if existing_bookmark:
