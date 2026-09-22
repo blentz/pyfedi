@@ -23,7 +23,7 @@ from app.ldap_utils import sync_user_to_ldap, login_with_ldap
 from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role
 from app.utils import banned_ip_addresses, blocked_referrers, finalize_user_setup, get_request, get_setting, gibberish, \
     ip_address, is_safe_redirect_target, markdown_to_html, render_template, safe_redirect_target, user_cookie_banned, \
-    user_ip_banned, role_access, actor_contains_blocked_words
+    user_ip_banned, role_access, actor_contains_blocked_words, get_site_as_dict
 
 
 ALPHABET = string.ascii_letters + string.digits
@@ -168,7 +168,23 @@ def invalid_login_message():
 
 def handle_abandoned_open_instance():
     if g.site.registration_mode == "Open" and no_admins_logged_in_recently():
+        # D1137. This used to set the mode on `g.site` alone. `before_request`
+        # builds that as `Site(**get_site_as_dict())` -- a TRANSIENT object
+        # constructed from a plain dict, never added to the session -- so the
+        # write reached the current request and nothing else: the next request
+        # rebuilt `g.site` from the database and the instance was Open again.
+        # The safety exists to shut the door on an unattended instance before
+        # it is found by a spam run, and it never shut it.
+        #
+        # The row itself is written now, and `get_site_as_dict`'s 60-second
+        # memoization is cleared so the next request does not read the old
+        # value back out of the cache.
         g.site.registration_mode = "Closed"
+        site = db.session.get(Site, 1)
+        if site is not None and site.registration_mode == "Open":
+            site.registration_mode = "Closed"
+            db.session.commit()
+            cache.delete_memoized(get_site_as_dict)
 
 
 def process_registration_form(form):
@@ -194,9 +210,26 @@ def process_registration_form(form):
 
 
 def is_invalid_email_or_username(form, disallowed_usernames):
-    if form.email.data.strip():
-        return False
-
+    # D1133. This function used to open with
+    #
+    #     if form.email.data.strip():
+    #         return False
+    #
+    # `email` is the HONEYPOT -- a HiddenField beside the real `real_email`,
+    # which a human never fills. Returning False means "not invalid", so
+    # filling the honeypot SKIPPED both checks below it: the field meant to
+    # catch bots was a bypass around the two gates that stop a registration
+    # taking a reserved name or a role address. Measured:
+    #
+    #     PROBE at3 honeypot + reserved name "admin": users created=1 | admin exists=True
+    #     PROBE at4 honeypot + role address: users created=1
+    #     PROBE at5 reserved name, NO honeypot: users created=0
+    #     PROBE at6 role address, NO honeypot: users created=0
+    #
+    # The checks now run for every registration. What a filled honeypot
+    # should ITSELF do is a separate question, recorded as D1134: today it
+    # does nothing, and making it refuse would lock out anyone whose password
+    # manager fills hidden fields.
     if form.real_email.data.lower().startswith(("postmaster@", "abuse@", "noc@")):
         flash(_("Sorry, you cannot use that email address"), "error")
         return True
