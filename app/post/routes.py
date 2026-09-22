@@ -67,6 +67,17 @@ from app.utils import render_template, markdown_to_html, validation_required, \
     community_membership_private, user_ip_banned, check_anoobis, safe_redirect_target, roles_with
 
 
+def can_view_private(community):
+    """The membership test `refuse_private_community` aborts on, as a
+    predicate. Some fragments answer with their own "could not be found" body
+    rather than a status code, and those need the question without the abort.
+    """
+    if not community.private:
+        return True
+    return current_user.is_authenticated and \
+        community.id in community_membership_private(current_user.id)
+
+
 def refuse_private_community(post):
     """D1078. `show_post` refuses a private community's post to anyone who is
     not a member (the `community_membership_private` check below). The routes
@@ -80,9 +91,7 @@ def refuse_private_community(post):
     Fact 478's shape -- the same feature has two ends, and only one of them
     was guarded.
     """
-    if not post.community.private:
-        return
-    if current_user.is_anonymous or post.community_id not in community_membership_private(current_user.id):
+    if not can_view_private(post.community):
         abort(403)
 
 
@@ -413,9 +422,21 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
 
 @bp.route('/post/<int:post_id>/lazy_replies/<nonce>', methods=['GET', 'OPTIONS'])
 def post_lazy_replies(post_id, nonce):
-    if request.method == 'OPTIONS':
-        return ''
+    # D1115. This function used to begin `if request.method == 'OPTIONS':
+    # return ''`, which could never run: the app-wide `before_request`
+    # (app/request_hooks.py) answers every OPTIONS with the CORS response
+    # before any view is reached. The arm is removed rather than left as
+    # unreachable code that reads like the route's own contract; 'OPTIONS'
+    # stays in `methods` so the rule still advertises it.
     post = db.session.get(Post, post_id) or abort(404)
+
+    # D1106. `show_post` defers the thread to this route past a hundred
+    # comments, and this route made none of the checks `show_post` makes: a
+    # private community's whole conversation was readable by anyone.
+    # Measured: `PROBE an2 lazy_replies of a private post: 200 | reply: True`.
+    refuse_private_community(post)
+    refuse_unpublished_post(post)
+
     sort = request.args.get('sort', 'hot') if post.archived is None else 'hot'  # archived posts can only show comments sorted by 'hot'
     community = post.community
     user = current_user if current_user.is_authenticated else None
@@ -1108,6 +1129,16 @@ def post_source(post_id: int, state: str):
         abort(400)
     
     post = db.session.get(Post, post_id)
+
+    # D1112. The markdown source of a post is the post. This route made no
+    # private-community check, and a post with no body at all -- every link
+    # post -- was `TypeError: argument of type 'NoneType' is not iterable` on
+    # the `'````' in post.body` below. Both answer with the same fragment the
+    # route already uses for a post it will not show, which withholds the
+    # post's existence as well as its text.
+    if post is not None and (post.body is None or
+                             not can_view_private(post.community)):
+        post = None
 
     if not post or state not in ['show', 'hide'] or (post.deleted and not current_user.is_admin()):
         post_body = markdown_to_html(_("Something went wrong and a post could not be found."))
@@ -1891,7 +1922,14 @@ def post_move(post_id: int):
 
 
 @bp.route("/post/search_community_suggestions", methods=['POST'])
+@login_required
 def post_search_community_suggestions():
+    # D1111. D998's shape at the other end of the same form: the fallback
+    # search below matched on name and `ap_id` with only `banned == False`, so
+    # it named PRIVATE communities -- to anyone, since the route carried no
+    # decorator either. Measured: `PROBE ap1 anonymous suggestions: 200 |
+    # private named: True | public named: True`. A private community's
+    # EXISTENCE is what its membership is meant to withhold.
     q = request.form.get("which_community") or request.form.get("community") or ""
     q = q.lower()
 
@@ -1918,8 +1956,10 @@ def post_search_community_suggestions():
     if len(comms) < 10:
         from sqlalchemy import or_
         search_pattern = f"%{q}%"
+        visible_private = community_membership_private(current_user.id)
         db_comms = db.session.query(Community).filter(
             Community.banned == False,
+            or_(Community.private == False, Community.id.in_(visible_private)),
             Community.id.not_in(already_added),
             or_(
                 Community.ap_id.ilike(search_pattern),
@@ -2072,6 +2112,11 @@ def post_reply_source(post_id: int, comment_id: int, state: str):
         abort(400)
     
     post_reply = db.session.get(PostReply, comment_id)
+
+    # D1112's twin: the same two misses on the comment side.
+    if post_reply is not None and (post_reply.body is None or
+                                   not can_view_private(post_reply.community)):
+        post_reply = None
 
     if not post_reply or state not in ['show', 'hide'] or (post_reply.deleted and not current_user.is_admin()):
         reply_body = markdown_to_html(_("Something went wrong and a comment could not be found."))
@@ -2511,10 +2556,28 @@ def post_fixup_from_remote(post_id: int):
 @login_required
 def post_cross_post(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+
+    # D1109. The page names the post it is about, and D998 fixed the community
+    # list on the same form without this end of it: a non-member reached the
+    # page for a PRIVATE community's post and was handed the post itself.
+    # Measured: `PROBE ao1 cross-post of a private post: 200 | post handed to
+    # the template: SECRETTITLE`.
+    refuse_private_community(post)
+    refuse_unpublished_post(post)
+
     form = CrossPostForm()
 
     if form.validate_on_submit():
-        community = search_for_community(f'!{form.which_community.data}', allow_fetch=False)
+        # D1114. `search_for_community` does `address[1:].split('@')` and
+        # unpacks two values, so a name typed without a server -- which is
+        # what this form's own suggestions look like for a local community --
+        # was `ValueError: not enough values to unpack (expected 2, got 1)`,
+        # a 500 on an ordinary submission. `post_move` normalises the same
+        # input one screen away; this end did not (fact 478).
+        search = form.which_community.data.lower().strip()
+        if '@' not in search:
+            search += f'@{current_app.config["SERVER_NAME"]}'
+        community = search_for_community(f'!{search}', allow_fetch=False)
         if community:
             post_type = post_type_to_form_url_type(post.type, post.url)
             response = make_response(
@@ -2538,8 +2601,19 @@ def post_cross_post(post_id: int):
         breadcrumb.url = '/communities'
         breadcrumbs.append(breadcrumb)
 
-        if request.cookies.get('cross_post_community_id'):
-            form.which_community.data = db.session.get(Community, int(request.cookies.get('cross_post_community_id'))).lemmy_link().replace('!', '')
+        # D1110. A cookie is whatever the caller sends: `int('banana')` is
+        # `ValueError: invalid literal for int() with base 10: 'banana'`, and
+        # an id that no longer resolves is `AttributeError` on
+        # `.lemmy_link()`. Both were 500s on a page that has a perfectly good
+        # answer without the convenience -- an empty field.
+        remembered = request.cookies.get('cross_post_community_id')
+        if remembered:
+            try:
+                last_community = db.session.get(Community, int(remembered))
+            except (TypeError, ValueError):
+                last_community = None
+            if last_community is not None:
+                form.which_community.data = last_community.lemmy_link().replace('!', '')
 
         return render_template('post/post_cross_post.html', title=_('Cross post'), form=form, post=post,
                                breadcrumbs=breadcrumbs)
@@ -2591,6 +2665,19 @@ def show_post_ical(post_id: int):
         post = db.session.get(Post, post_id) or abort(404)
         if post.type != POST_TYPE_EVENT:
             abort(404)
+
+        # D1105. This route carries no access decorator of its own and made no
+        # check: a PRIVATE community's event handed its title, its description
+        # and its start time to anyone who asked. Measured: `PROBE an1 ical of
+        # a private event: 200 | title: True`. The `post.event` guard is the
+        # other half -- `post.type` and the Event row are separate, and a post
+        # that claims to be an event without one was `AttributeError` on
+        # `post.event.start`.
+        refuse_private_community(post)
+        refuse_unpublished_post(post)
+        if post.event is None:
+            abort(404)
+
         ical = Calendar(creator='PieFed')
         evt = ics.Event(uid=post.ap_id)
         evt.name = post.title
@@ -2612,8 +2699,17 @@ def show_post_ical(post_id: int):
 
 
 @bp.route('/post/<int:post_id>/check_ai', methods=['POST'])
+@login_required
 def post_check_ai(post_id):
-    post = db.session.get(Post, post_id)
+    # D1107. No decorator and no check: an anonymous caller made this
+    # instance issue an outbound request to the configured detector, once per
+    # call, with no rate limit of its own -- D1025's shape. Measured: `PROBE
+    # an3 anonymous check_ai: 200 | outbound fetch: True`.
+    # D1108. `db.session.get` answers None for an id that does not resolve,
+    # and the fetch below reads `post.ap_id`: `AttributeError: 'NoneType'
+    # object has no attribute 'ap_id'`.
+    post = db.session.get(Post, post_id) or abort(404)
+    refuse_private_community(post)
     if current_app.config['DETECT_AI_ENDPOINT']:
         is_ai = get_request(f"{current_app.config['DETECT_AI_ENDPOINT']}?url={post.ap_id}")
         if is_ai and is_ai.status_code == 200:
@@ -2642,6 +2738,13 @@ def post_check_ai(post_id):
                 output += f"{int(is_ai_result['attachment']['confidence'] * 100)}% confident"
                 output += '</div>'
             return output
+
+        # D1113. A detector that answers anything but 200 is not a verdict,
+        # and this arm had no return: the view returned None and Flask
+        # answered `TypeError: The view function for 'post.post_check_ai' did
+        # not return a valid response`. D1012's shape -- a 500 in the logs
+        # where the button should simply have gone quiet.
+        return ''
     else:
         return _('Not configured.')
 
@@ -2663,8 +2766,11 @@ def post_set_read(post_id):
 
 
 @bp.route('/post_reply/<int:post_reply_id>/check_ai', methods=['POST'])
+@login_required
 def post_reply_check_ai(post_reply_id):
-    post_reply = db.session.get(PostReply, post_reply_id)
+    # D1107's twin, with D1108's miss as well: `post_reply.body` on None.
+    post_reply = db.session.get(PostReply, post_reply_id) or abort(404)
+    refuse_private_community(post_reply.post)
     if current_app.config['DETECT_AI_ENDPOINT']:
         if len(post_reply.body) > 100:
             is_ai = get_request(f"{current_app.config['DETECT_AI_ENDPOINT']}?url={post_reply.ap_id}")
@@ -2680,6 +2786,9 @@ def post_reply_check_ai(post_reply_id):
                 output += f"{int(is_ai_result['confidence'] * 100)}% confident"
                 output += '</div>'
                 return output
+
+            # D1113's twin.
+            return ''
         else:
             return _('Body text is too short to be sure.')
     else:
