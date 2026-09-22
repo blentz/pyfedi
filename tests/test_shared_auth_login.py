@@ -442,7 +442,10 @@ def test_log_user_in_web_refuses_an_unknown_user_name(app, db_session, monkeypat
             expected_location = url_for('auth.login')
 
     assert response.status_code == 302
-    assert 'No account exists with that user name.' in flashed
+    # D1131. One message for every way a login can fail -- naming which half
+    # failed told a caller which accounts exist here.
+    assert any('Invalid user name or password' in m for m in flashed)
+    assert not any('No account exists' in m for m in flashed)
     assert response.headers['Location'] == expected_location
 
 
@@ -472,7 +475,10 @@ def test_log_user_in_web_refuses_a_deleted_user(app, db_session, monkeypatch):
             expected_location = url_for('auth.login')
 
     assert response.status_code == 302
-    assert 'No account exists with that user name.' in flashed
+    # D1131. One message for every way a login can fail -- naming which half
+    # failed told a caller which accounts exist here.
+    assert any('Invalid user name or password' in m for m in flashed)
+    assert not any('No account exists' in m for m in flashed)
     assert response.headers['Location'] == expected_location
 
 
@@ -486,12 +492,11 @@ def test_log_user_in_web_refuses_a_wrong_password_with_a_reset_link(app, db_sess
     SRC_API. The SRC_WEB arm is live code, so it is covered -- but no login
     page reaches it, and a reader should not mistake this for a test of one.
 
-    The two wrong-password messages differ: :49-51 offers a reset link when
-    there is no hash to check against, :52-53 says only 'Invalid password'.
-    The exact text is asserted rather than merely that a flash happened,
-    because asserting the latter would let the two branches swap undetected --
-    false-witness mechanism (d), an input taking the same path under both
-    arms.
+    The two wrong-password messages USED to differ -- a reset link when there
+    was no hash to check against, 'Invalid password' otherwise -- and that
+    difference was the disclosure D1131 removed. They are now one message, and
+    this row and its sibling below pin that the answer is the same whether or
+    not the account has a password at all.
 
     THE FLASH LIST IS ASSERTED EXACTLY, not with `any(...)`. Deleting :51's
     `return redirect(...)` lets flow fall into :52-53 too, which appends a
@@ -518,19 +523,22 @@ def test_log_user_in_web_refuses_a_wrong_password_with_a_reset_link(app, db_sess
                        flask_session.get('_flashes', [])]
 
     assert response.status_code == 302
+    # D1131. The two wrong-password branches were merged: an account with no
+    # password hash and one with the wrong password now answer identically,
+    # because the difference was itself the disclosure. The exact list is
+    # still asserted -- a second flash appended by a deleted `return` would
+    # show up here.
     assert flashed == [
-        'Invalid password. Please <a href="/auth/reset_password_request">reset your password</a>.'
+        'Invalid user name or password. If you have forgotten your password '
+        'you can <a href="/auth/reset_password_request">reset it</a>.'
     ]
 
 
 def test_log_user_in_web_refuses_a_wrong_password_without_a_reset_link(app, db_session, monkeypatch):
     """:52-53. A wrong password on the web arm when `user.password_hash` IS
-    set -- the counterpart to the test above, which sets it to None. The two
-    wrong-password messages differ: :49-51 offers a reset link, :52-53 says
-    only 'Invalid password'. The exact text is asserted rather than merely
-    that a flash happened, because asserting the latter would let the two
-    branches swap undetected -- false-witness mechanism (d), an input taking
-    the same path under both arms.
+    set -- the counterpart to the test above, which sets it to None. Both now
+    answer with the same message (D1131); what this row carries that its
+    sibling does not is the logged-in check below.
 
     THE LOGGED-IN CHECK BELOW IS THE LOAD-BEARING ASSERTION. Deleting :53's
     `return redirect(...)` makes a wrong-password web login fall through --
@@ -559,7 +567,10 @@ def test_log_user_in_web_refuses_a_wrong_password_without_a_reset_link(app, db_s
             logged_in = '_user_id' in flask_session
 
     assert response.status_code == 302
-    assert flashed == ['Invalid password']
+    assert flashed == [
+        'Invalid user name or password. If you have forgotten your password '
+        'you can <a href="/auth/reset_password_request">reset it</a>.'
+    ]  # D1131
     assert logged_in is False
 
 

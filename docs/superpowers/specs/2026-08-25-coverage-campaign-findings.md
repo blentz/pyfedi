@@ -16604,3 +16604,39 @@ production defects fixed (D1077–D1127) and two registered and pinned (D1073's
 successor D1085, and D1081's equivalent mutant). The floor is taken at 98.
 
 **Next free number: D1129.**
+
+## Sub-project 83, slice A: the credential flows of `app/auth/routes.py`
+
+**The round in one line: THREE production defects, all of them ways in for
+somebody who does not have an account yet -- **two forms that told a caller
+which accounts exist** and **a password-reset link that worked more than
+once**.**
+
+### 1. TWO FORMS THAT NAMED THEIR USERS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1129** | `app/auth/routes.py:110` | **THE RESEND-VERIFICATION FORM DISCLOSED WHETHER AN ADDRESS IS REGISTERED.** It answered "No user found with that email address." for one it does not know and "If an account exists, a link has been sent" for one it does. The success message is carefully non-committal; the failure message gave the answer away, one guess at a time. `reset_password_request`, one screen away, already answered the same way in both cases -- fact 478. | **fixed** | `PROBE ar1 known address says: True`; `PROBE ar2 unknown address says: True` |
+| **D1131** | `app/auth/util.py:396, 426`; `app/shared/auth.py:43` | **THE LOGIN FORM DISCLOSED WHETHER AN ACCOUNT EXISTS** -- "No account exists with that user name." for a name it does not know, "Invalid password" for one it does, and a third message for an account with no password at all (which says both that it exists AND that it has none). Username enumeration on the most-probed form on the site, at **three** sites, while the API arm of the same flow already raised a single `incorrect_login` for both. One message now, carrying the reset link every time: it helps whoever has genuinely forgotten a password -- including the OAuth-created accounts of D1073 -- and, shown for every failure, it distinguishes nothing. | **fixed** | the rows fail with the old messages restored |
+
+### 2. A PASSWORD-RESET LINK THAT WORKED MORE THAN ONCE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1130** | `app/models.py:1323, 1481` | **THE RESET TOKEN WAS REPLAYABLE.** It is a JWT carrying a user id and a ten-minute expiry, and nothing about USING one changed anything -- so the same link reset the password again, and again, until it expired. The window is ten minutes, but the link outlives the reset in browser history, in a forwarded message, on a shared device, and whoever finds it there takes the account from the person who has just secured it. The token now carries a **digest of the password hash it was issued against** and verification refuses a token whose digest no longer matches: single-use, with no storage at all. A digest rather than the hash, because **a JWT is signed and not encrypted** -- whoever holds it can read its payload. Tokens minted before the field existed carry no `pw` claim and are refused. | **fixed** | `PROBE ar3 first reset worked: True \| same token reused: True` |
+
+### 3. WHAT THE MUTATION PASS FOUND
+
+15 mutants; the measuring pass killed 14.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1132** | `tests/test_auth_credentials.py` | `verify_email`'s application lookup is filtered to `status=-1` -- an application still waiting on its email address -- and only that state had a row. An application already at 0 is in the moderators' queue, and verifying again must not announce it twice. | **closed** | `u15` |
+
+**And a process note, recorded as fact 528.** The first attempt at this pass
+was invoked as `python3 mutants_83a.py | head -4`. It reported four results
+and **exit code 0**: `head` exited, the runner took SIGPIPE, and eleven
+mutants never ran. The truncation looked exactly like a completed pass. Facts
+476 and 487 are the same class of quiet truncation seen from the other side.
+
+**Next free number: D1133.**

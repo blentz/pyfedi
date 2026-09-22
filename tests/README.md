@@ -10421,3 +10421,24 @@ reported one survivor -- a guard from slice D, whose row lives in
 `tests/test_post_moderation.py`. Re-run against that file it died at once.
 When a slice touches a line another slice pinned, point the runner at the
 other slice's file rather than adding a duplicate row.
+
+**526. `login_user` STORES THE ID AS THE COLUMN HOLDS IT.** A hand-built test
+session sets `session['_user_id'] = str(user.id)`, but a real login stores
+`user.get_id()`, which on this model is the integer. So a row that logs in
+through the form and then asserts `session['_user_id'] == str(user.id)` fails
+with `assert 2 == '2'`. Compare `str(session['_user_id'])` when the login went
+through the real path.
+
+**527. A PIN TURNING RED IS THE POINT OF A PIN.** D1131 changed the login
+failure message deliberately, and four rows in
+`tests/test_shared_auth_login.py` that pinned the old wording went red. They
+were updated -- with the reason written into their docstrings -- rather than
+worked around. A pin exists so that a change to the behaviour it records
+cannot happen silently.
+
+**528. `| head -N` KILLS A BACKGROUND RUN.** A mutation pass piped into
+`head -4` stopped after its fourth line: `head` exits, the writer gets
+SIGPIPE, and the runner dies with **exit code 0** -- so it looks finished
+rather than truncated. Facts 476 and 487 recorded the same class of quiet
+truncation from the other direction. Never pipe a long-running pass into
+`head`; read the output file instead.
