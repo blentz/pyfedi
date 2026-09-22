@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import namedtuple, defaultdict
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -607,6 +608,14 @@ def post_embed_code(post_id):
 def post_oembed(post_id):
     with limiter.limit('10/minute'):
         post = db.session.get(Post, post_id) or abort(404)
+
+        # D1119. oEmbed is what a chat client or a link preview fetches, so
+        # this JSON is the widest possible audience: it carried a PRIVATE
+        # community's post title and its author's name to anyone. Measured:
+        # `PROBE aq1 oembed of a private post: 200 | title: True`.
+        refuse_private_community(post)
+        refuse_unpublished_post(post)
+
         iframe_url = url_for('post.post_embed', post_id=post.id, _external=True)
         oembed = {
             "version": "1.0",
@@ -731,7 +740,19 @@ def comment_emoji_set(comment_id):
 def poll_vote(post_id):
     post = db.session.get(Post, post_id) or abort(404)
     poll_data = db.session.get(Poll, post_id) or abort(404)
-    votes = int(request.form.get('poll_choice')) if poll_data.mode == 'single' else request.form.getlist('poll_choice[]')
+    # D1122. A form field is whatever the caller sends, and this one was read
+    # with a bare `int()`: `TypeError: int() argument must be a string, a
+    # bytes-like object or a real number, not 'NoneType'`
+    # (app/post/routes.py:734), measured, for a submission with no choice
+    # ticked -- which is what a poll form sends when nobody ticks anything.
+    if poll_data.mode == 'single':
+        try:
+            votes = int(request.form.get('poll_choice'))
+        except (TypeError, ValueError):
+            flash(_('Choose an option first.'), 'error')
+            return redirect(post.slug if post.slug else url_for('activitypub.post_ap', post_id=post_id))
+    else:
+        votes = request.form.getlist('poll_choice[]')
     vote_for_poll(post_id, votes, SRC_WEB)
     flash(_('Vote has been cast.'))
 
@@ -1082,6 +1103,11 @@ def cancel_inline(comment_id:int):
 @block_bots
 def post_options(post_id: int, offer_markdown_source: str):
     post = db.session.get(Post, post_id) or abort(404)
+
+    # D1123. `post_reply_options` next door got this check in slice A and its
+    # post-level twin did not: the menu names the post and offers its actions.
+    refuse_private_community(post)
+
     if post.deleted:
         if current_user.is_anonymous:
             abort(404)
@@ -1391,6 +1417,7 @@ def post_purge(post_id: int):
 @login_required
 def post_teaser_translate(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_private_community(post)  # D1124
     if current_app.config['TRANSLATE_ENDPOINT']:
         recipient_language = get_recipient_language(current_user.id)
         source = post.language.code if post.language_id and post.language.code != 'und' else 'auto'
@@ -1401,12 +1428,21 @@ def post_teaser_translate(post_id: int):
                                              target=recipient_language)
         post_url = post.slug if post.slug else f"/post/{post.id}"
         return f'<h3><a href="{post_url}" class="post_teaser_title_a">{result_title}</a></h3>'
+    return _('Translation is not configured on this instance.')  # D1126
 
 
 @bp.route('/post/<int:post_id>/translate', methods=['POST'])
 @login_required
 def post_translate(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+
+    # D1124. Translation hands back the text it was given, so these three
+    # routes are read surfaces for the body and the title -- and none of them
+    # asked whose community it is. They also send that text to the configured
+    # LibreTranslate endpoint, so a private community's post left the instance
+    # as well as reaching the caller.
+    refuse_private_community(post)
+
     if current_app.config['TRANSLATE_ENDPOINT']:
         recipient_language = get_recipient_language(current_user.id)
         source = post.language.code if post.language_id and post.language.code != 'und' else 'auto'
@@ -1419,12 +1455,18 @@ def post_translate(post_id: int):
                                              source=source,
                                              target=recipient_language)
         return f'<div class="post_body">{result}</div><h1 class="mt-2 post_title" hx-swap-oob="outerHTML:h1.post_title">{result_title}</h1>'
+    # D1126. D1113's shape on three more routes: the whole body is inside
+    # `if current_app.config['TRANSLATE_ENDPOINT']:` with no else, so an
+    # instance that has not configured a translator answered `TypeError: The
+    # view function ... did not return a valid response` rather than saying so.
+    return _('Translation is not configured on this instance.')
 
 
 @bp.route('/post_reply/<int:post_reply_id>/translate', methods=['POST'])
 @login_required
 def post_reply_translate(post_reply_id: int):
     post_reply = db.session.get(PostReply, post_reply_id) or abort(404)
+    refuse_private_community(post_reply.post)  # D1124
     if current_app.config['TRANSLATE_ENDPOINT']:
         recipient_language = get_recipient_language(current_user.id)
         source = post_reply.language.code if post_reply.language_id and post_reply.language.code != 'und' else 'auto'
@@ -1434,6 +1476,7 @@ def post_reply_translate(post_reply_id: int):
                                        source=source,
                                        target=recipient_language)
         return f'<div class="col-12 pr-0" lang="{recipient_language}">' + result + "</div>"
+    return _('Translation is not configured on this instance.')  # D1126
 
 
 @bp.route('/post/<int:post_id>/reminder', methods=['GET', 'POST'])
@@ -2093,6 +2136,15 @@ def post_reply_distinguish(post_id: int, comment_id: int):
     post = db.session.get(Post, post_id) or abort(404)
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
 
+    # D1120. D1077's twelfth site. The moderator test is made against
+    # `post.community` and the flag is set on `post_reply`, so a moderator of
+    # one community could mark their own comment in ANOTHER -- a private one,
+    # in the measurement -- as speaking for that community's moderators.
+    # Measured: `PROBE aq2 distinguish across communities: 302 |
+    # distinguished now=True`.
+    if post_reply.post_id != post.id:
+        abort(404)
+
     if (post.community.is_moderator() or post.community.is_owner()) and current_user.id == post_reply.user_id:
         if post_reply.distinguished:
             post_reply.distinguished = False
@@ -2751,11 +2803,17 @@ def post_check_ai(post_id):
 
 @bp.route('/post/<int:post_id>/set_ai', methods=['POST'])
 def post_set_ai(post_id):
-    post = db.session.get(Post, post_id)
+    # D1127. `db.session.get` answers None and the test below reads
+    # `post.user_id`; and a caller who is not permitted was told **'Done'**
+    # with nothing written -- a refusal reported as a success, which is worse
+    # than either a refusal or a success.
+    post = db.session.get(Post, post_id) or abort(404)
     if current_user.is_authenticated and (current_user.is_admin_or_staff() or post.user_id == current_user.id or post.community.is_moderator()):
         post.ai_generated = True
         db.session.commit()
-    return 'Done'
+        return 'Done'
+    else:
+        abort(401)
 
 
 @bp.route('/post/<int:post_id>/set_read', methods=['POST'])
@@ -2820,8 +2878,25 @@ def post_share_mastodon(post_id):
     post = db.session.get(Post, post_id) or abort(404)
     form = ShareMastodonForm()
     if form.validate_on_submit():
-        resp = make_response(redirect(f"https://{form.domain.data}/share?text={post.title}&url=https://{current_app.config['SERVER_NAME']}{post.slug}"))
-        resp.set_cookie('mastodon_share', form.domain.data, expires=datetime(year=2099, month=12, day=30))
+        # D1121. The field is a Length check and nothing else, and its value
+        # went straight into the host part of a redirect, so anything typed
+        # -- or carried in on a crafted link -- became the destination.
+        # Measured: `PROBE aq3 share to an arbitrary host: 302 ->
+        # https://evil.example/phish?x=/share?text=MINE&url=...`. A domain is
+        # a hostname: no scheme, no path, no credentials, no port.
+        domain = form.domain.data.strip().lower()
+        if not re.fullmatch(r'[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+',
+                            domain):
+            flash(_('That is not a domain name.'), 'error')
+            return redirect(url_for('post.post_share_mastodon', post_id=post.id))
+
+        # The same measurement showed the OTHER end of the URL: `post.slug` is
+        # None until the post has one, and an f-string writes that out as the
+        # four characters "None".
+        post_url = post.slug if post.slug else url_for('activitypub.post_ap',
+                                                       post_id=post.id)
+        resp = make_response(redirect(f"https://{domain}/share?text={post.title}&url=https://{current_app.config['SERVER_NAME']}{post_url}"))
+        resp.set_cookie('mastodon_share', domain, expires=datetime(year=2099, month=12, day=30))
         return resp
 
     form.domain.data = request.cookies.get('mastodon_share', 'mastodon.social')

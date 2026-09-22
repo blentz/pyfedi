@@ -12,6 +12,7 @@ from flask_babel import _, force_locale, gettext
 from flask_login import current_user
 from pillow_heif import register_heif_opener
 from sqlalchemy import text, Integer
+from sqlalchemy.orm.exc import NoResultFound
 
 from app import db, cache, plugins, limiter
 from app.activitypub.util import make_image_sizes, notify_about_post
@@ -90,6 +91,15 @@ def vote_for_post(post_id: int, vote_direction, federate: bool, emoji: str, src,
 def bookmark_post(post_id: int, src, auth=None):
     user_id = authorise_api_user(auth) if src == SRC_API else current_user.id
 
+    # D1125. `mark_post_read` INSERTs into `read_posts`, whose `read_post_id`
+    # is a foreign key, so an id that does not resolve was
+    # `psycopg2.errors.ForeignKeyViolation: insert or update on table
+    # "read_posts" violates foreign key constraint` -- a 500, although the web
+    # route already catches `NoResultFound` to answer 404 and the API arm
+    # expects the same. The write ran BEFORE anything checked the row exists.
+    if db.session.get(Post, post_id) is None:
+        raise NoResultFound
+
     mark_post_read([post_id], True, user_id)
 
     existing_bookmark = PostBookmark.query.filter_by(post_id=post_id, user_id=user_id).first()
@@ -109,6 +119,13 @@ def bookmark_post(post_id: int, src, auth=None):
 
 def remove_bookmark_post(post_id: int, src, auth=None):
     user_id = authorise_api_user(auth) if src == SRC_API else current_user.id
+
+    # D1125's other half: the web route catches `NoResultFound` to answer 404,
+    # and nothing here ever raised it, so an id that does not resolve got 200
+    # and the message "This post was not bookmarked." -- which is true of every
+    # post that does not exist, and says nothing about the one asked for.
+    if db.session.get(Post, post_id) is None:
+        raise NoResultFound
 
     existing_bookmark = PostBookmark.query.filter_by(post_id=post_id, user_id=user_id).first()
     if existing_bookmark:
