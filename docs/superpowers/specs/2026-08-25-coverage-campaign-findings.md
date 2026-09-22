@@ -16551,3 +16551,56 @@ asserted the right thing for the wrong reason:
 | **D1118** | `tests/test_post_fragments.py` | `cross_posts` is **emptied** rather than nulled when the last one goes, so the route's truthiness test needed a row with `[]` and not only one with None. | **closed** | `s20` |
 
 **Next free number: D1119.**
+
+## Sub-project 82, slice F: the rest of the module, and the floor
+
+**The round in one line: NINE production defects -- including **an open
+redirect in the share button** and **a "Done" returned for an action that was
+refused** -- and `app/post/routes.py` closes at ZERO functions with gaps,
+having gone from 14.5% to 98.6% across six slices and 51 defects.**
+
+### 1. THE WIDEST AUDIENCE ANY OF THESE ROUTES HAS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1119** | `app/post/routes.py:614` | **`/post/<id>/oembed` CARRIED A PRIVATE COMMUNITY'S POST TITLE AND AUTHOR TO ANYONE.** oEmbed is what a chat client or a link preview fetches, so this JSON reaches further than any page. | **fixed** | `PROBE aq1 oembed of a private post: 200 \| title: True` |
+| **D1123** | `app/post/routes.py:1108` | `post_options` never made the private-community check `post_reply_options` got in slice A. The menu names the post and offers its actions. | **fixed** | the row fails with the guard removed |
+| **D1124** | `app/post/routes.py:1416, 1348, 2110` | **TRANSLATION IS A READ SURFACE.** The three translate routes hand back the text they were given -- and send it to the configured LibreTranslate endpoint on the way -- and none asked whose community it is, so a private community's post both reached the caller and **left the instance**. | **fixed** | the rows fail with the guards removed |
+
+### 2. SPEAKING FOR A COMMUNITY YOU DO NOT MODERATE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1120** | `app/post/routes.py:2100` | `post_reply_distinguish` tests `post.community.is_moderator()` and sets the flag on `post_reply`. **D1077's twelfth site**: a moderator of one community marked their own comment in another -- a private one, in the measurement -- as speaking for that community's moderators. | **fixed** | `PROBE aq2 distinguish across communities: 302 \| distinguished now=True` |
+
+### 3. AN OPEN REDIRECT IN THE SHARE BUTTON
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1121** | `app/post/routes.py:2838` | **`ShareMastodonForm.domain` CARRIES A `Length(max=512)` AND NOTHING ELSE**, and its value went straight into the host part of a redirect -- so anything typed, or carried in on a crafted link, became the destination, and was then stored in a cookie set to expire in 2099. The same measurement showed the other end of that URL: `post.slug` is None until the post has one, and the f-string wrote it out as the four characters `None`. | **fixed** | `PROBE aq3 share to an arbitrary host: 302 -> https://evil.example/phish?x=/share?text=MINE&url=https://test.piefed.localNone` |
+
+### 4. FIVE MORE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1122** | `app/post/routes.py:739` | `int(request.form.get('poll_choice'))` -- which is what a poll form sends when nobody ticks anything. | **fixed** | `TypeError: int() argument must be ... not 'NoneType'` at `app/post/routes.py:734` |
+| **D1125** | `app/shared/post.py:90, 110`; `app/shared/reply.py:71, 96` | **`bookmark_post` CALLED `mark_post_read` BEFORE ANYTHING CHECKED THE POST EXISTS**, and `read_posts.read_post_id` is a foreign key: an id that does not resolve was a `ForeignKeyViolation` although the route around it already catches `NoResultFound` to answer 404. Its three siblings never raised at all, so those routes' 404 arms were **unreachable**. | **fixed** | measured |
+| **D1126** | three translate routes | D1113's shape again: the whole body inside `if current_app.config['TRANSLATE_ENDPOINT']:` with no else. | **fixed** | measured |
+| **D1127** | `app/post/routes.py:2790` | **`post_set_ai` RETURNED 'Done' TO A CALLER WHO IS NOT PERMITTED**, with nothing written -- a refusal reported as a success, which is worse than either. It also read `post.user_id` off a `db.session.get` that can answer None. | **fixed** | the row fails with the guard removed |
+
+### 5. WHAT THE MUTATION PASS FOUND
+
+21 mutants; **all 21 killed**, but one needed the right file to die in:
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1128** | `tests/` | `t19` "survived" against `tests/test_post_actions.py` and was killed at once against `tests/test_post_moderation.py` -- the guard it mutates is slice D's, and its row lives in slice D's file. **A mutant is killed by the file whose row covers it, not by the slice that wrote it** (fact 525). Adding a duplicate row would have been the wrong repair. | **closed** | `t19` |
+
+### 6. THE MODULE CLOSES
+
+`app/post/routes.py` measures **0 functions with gaps, 98.6% combined** across
+the six slices' files, from 14.5% when the sub-project opened. Fifty-one
+production defects fixed (D1077–D1127) and two registered and pinned (D1073's
+successor D1085, and D1081's equivalent mutant). The floor is taken at 98.
+
+**Next free number: D1129.**
