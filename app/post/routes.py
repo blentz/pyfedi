@@ -86,6 +86,24 @@ def refuse_private_community(post):
         abort(403)
 
 
+def refuse_unpublished_post(post):
+    """D1084/D1089. An unpublished post is the author's alone until its time
+    comes: the scheduled-posts page is scoped to `Post.user_id ==
+    current_user.id` (app/user/routes.py), and the ActivityPub representation
+    answers 403 for `post.status < POST_STATUS_PUBLISHED`
+    (app/activitypub/routes.py). Every HTML page that shows a post has to make
+    the same test, which is why this is a helper and not a fourth copy.
+    Measured: `PROBE af2 scheduled status: 200 | body visible: True` on the
+    post page, `PROBE ai3 embed scheduled: 200 | body: True` on the embed.
+    """
+    if post.status >= POST_STATUS_PUBLISHED:
+        return
+    if current_user.is_anonymous or not (current_user.id == post.user_id or
+                                         post.community.is_moderator() or
+                                         current_user.is_admin_or_staff()):
+        abort(404)
+
+
 @login_required_if_private_instance
 @check_anoobis
 def show_post(post_id: int, sort, low_bandwidth, autoplay):
@@ -121,18 +139,7 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
             if post.community.private and post.community_id not in community_membership_private(current_user.id):
                 abort(403)
 
-        # D1084. An unpublished post is the author's alone until its time
-        # comes: the scheduled-posts page is scoped to `Post.user_id ==
-        # current_user.id` (app/user/routes.py), and the ActivityPub
-        # representation of the same post answers 403 for `post.status <
-        # POST_STATUS_PUBLISHED` (app/activitypub/routes.py). The HTML page
-        # rendered it to anyone who guessed the id. Measured: `PROBE af2
-        # scheduled status: 200 | body visible: True`.
-        if post.status < POST_STATUS_PUBLISHED:
-            if current_user.is_anonymous or not (current_user.id == post.user_id or
-                                                 community.is_moderator() or
-                                                 current_user.is_admin_or_staff()):
-                abort(404)
+        refuse_unpublished_post(post)
 
         # If nothing has changed since their last visit, return HTTP 304
         current_etag = f"{post.id}{sort}_{hash(post.last_active)}"
@@ -486,6 +493,14 @@ def post_embed(post_id):
                 else:
                     flash(_('This post has been deleted and is only visible to staff and admins.'), 'warning')
 
+        # D1089. The embed is the post, in a frame: it rendered a PRIVATE
+        # community's title and body to an anonymous visitor, and an
+        # unpublished post to anyone. `show_post` refuses both. Measured:
+        # `PROBE ai1 embed anon: 200 | body: True | title: True` and
+        # `PROBE ai3 embed scheduled: 200 | body: True`.
+        refuse_private_community(post)
+        refuse_unpublished_post(post)
+
         # If nothing has changed since their last visit, return HTTP 304
         current_etag = f"{post.id}_{hash(post.last_active)}"
         if current_user.is_anonymous and request_etag_matches(current_etag):
@@ -505,6 +520,12 @@ def post_embed(post_id):
 def post_embed_code(post_id):
     post = db.session.get(Post, post_id) or abort(404)
     community = post.community
+
+    # D1089's other half: this page names the post in its title, its
+    # breadcrumbs and the snippet it hands out. Measured: `PROBE ai2
+    # embed_code anon: 200 | title: True` against a private community.
+    refuse_private_community(post)
+    refuse_unpublished_post(post)
 
     # Breadcrumbs
     breadcrumbs = []
@@ -951,6 +972,15 @@ def add_reply_inline(post_id: int, comment_id: int, nonce):
 
     in_reply_to = db.session.get(PostReply, comment_id) or abort(404)
 
+    # D1092. D1077's family, ninth site and the worst of them: every
+    # permission above is tested against `post.community`, and the reply is
+    # then attached to `in_reply_to`. Pairing a public post's id with a
+    # comment id from a PRIVATE community grafted a new reply onto that
+    # community's conversation. Measured: `PROBE ak1 status=200 | replies
+    # made=1 | child post_id=1 parent post_id=2`.
+    if in_reply_to.post_id != post.id:
+        abort(404)
+
     if in_reply_to.author.has_blocked_user(current_user.id):
         return _('You cannot reply to %(name)s', name=in_reply_to.author.display_name())
     if not in_reply_to.replies_enabled:
@@ -981,7 +1011,15 @@ def add_reply_inline(post_id: int, comment_id: int, nonce):
                                low_bandwidth=request.cookies.get('low_bandwidth', '0') == '1')
     else:
         content = request.form.get('body', '').strip()
-        language_id = int(request.form.get('language_id'))
+        # D1093. A form field is whatever the caller sends: absent, empty, or
+        # not a number. `int(None)` is `TypeError: int() argument must be a
+        # string, a bytes-like object or a real number, not 'NoneType'`
+        # (app/post/routes.py:1005), measured -- a 500 for a request the
+        # instance's own language setting can answer.
+        try:
+            language_id = int(request.form.get('language_id'))
+        except (TypeError, ValueError):
+            language_id = current_user.language_id or g.site.language_id
 
         if content == '':
             return f'<div id="reply_to_{comment_id}" class="hidable"></div>'  # do nothing, just hide the form
@@ -991,7 +1029,10 @@ def add_reply_inline(post_id: int, comment_id: int, nonce):
                                   body_html=markdown_to_html(content), notify_author=True,
                                   language_id=language_id, distinguished=False, answer=False)
         except PostReplyValidationError as e:
-            return '<div id="reply_to_{comment_id}" class="hidable"><span class="red">' + str(e) + '</span></div>'
+            # D1094. This was not an f-string, so the id was the literal
+            # `reply_to_{comment_id}` and htmx had no element to swap: the
+            # refusal was rendered into nothing and the form simply sat there.
+            return f'<div id="reply_to_{comment_id}" class="hidable"><span class="red">' + str(e) + '</span></div>'
 
         current_user.language_id = language_id
         reply.ap_id = reply.profile_id()
@@ -1145,7 +1186,9 @@ def post_edit(post_id: int):
             form.nsfw.render_kw = {'disabled': True}
         if post.community.nsfl:
             form.nsfl.data = True
-            form.nsfw.render_kw = {'disabled': True}
+            # D1095. This disabled the NSFW box, not the NSFL one: an NSFL
+            # community left its own box editable and locked the wrong one.
+            form.nsfl.render_kw = {'disabled': True}
 
         form.language_id.choices = languages_for_form()
 
@@ -1166,8 +1209,13 @@ def post_edit(post_id: int):
             form.title.data = post.title
             form.body.data = post.body
             form.notify_author.data = post.notify_author
-            form.nsfw.data = post.nsfw
-            form.nsfl.data = post.nsfl
+            # D1096. These run BELOW the community's own test above, so the
+            # forced value was overwritten by the post's and the disabled box
+            # rendered UNCHECKED -- the page said "not NSFW" for a post in a
+            # community where NSFW is not optional. `or` keeps whichever is
+            # set.
+            form.nsfw.data = post.nsfw or post.community.nsfw
+            form.nsfl.data = post.nsfl or post.community.nsfl
             form.ai_generated.data = post.ai_generated
             form.sticky.data = post.sticky
             form.language_id.data = post.language_id
@@ -1657,8 +1705,17 @@ def post_set_flair(post_id):
     post = db.session.get(Post, post_id) or abort(404)
     if post.user_id == current_user.id or post.community.is_moderator(current_user) or current_user.is_staff() or current_user.is_admin() or user_access('administer all communities', current_user.get_id()):
 
-        if request.headers.get("HX-Request"):
-            curr_url = request.headers.get("HX-Current-Url")
+        # D1090. This branch WRITES -- it resets the post's flair and its
+        # nsfw / nsfl / ai_generated marks from `request.form`, which a GET
+        # does not carry -- and the route accepts GET, so a GET with this one
+        # header cleared all four. Measured: `PROBE aj1 GET set_flair
+        # status=200 | nsfw now=False | flair now=[]`, against a post that
+        # went in marked nsfw and flaired. GET still renders the form below.
+        # D1091: `HX-Current-Url` is read straight into `in` tests, so a
+        # request without it was `TypeError: argument of type 'NoneType' is
+        # not iterable` rather than a page.
+        if request.headers.get("HX-Request") and request.method == 'POST':
+            curr_url = request.headers.get("HX-Current-Url") or ''
             flair_sent = []
 
             form_fields = [key for key in request.form]
@@ -1732,7 +1789,10 @@ def post_set_flair(post_id):
 def post_flair_list(post_id):
     post = db.session.get(Post, post_id) or abort(404)
     if post.user_id == current_user.id or post.community.is_moderator(current_user) or current_user.is_staff() or current_user.is_admin():
-        curr_url = request.headers.get("HX-Current-Url")
+        # D1091. Measured: `TypeError: argument of type 'NoneType' is not
+        # iterable` (app/post/routes.py:1736) for a request without the
+        # header -- a 500 in place of the fragment.
+        curr_url = request.headers.get("HX-Current-Url") or ''
         if "/post/" in curr_url or ("/c/" in curr_url and "/p/" in curr_url):
             post_preview = False
         else:
