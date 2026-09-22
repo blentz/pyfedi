@@ -155,3 +155,6 @@ class ChooseTopicsForm(FlaskForm):
 class RegisterByMastodonForm(FlaskForm):
     email = EmailField(_l('Email'), validators=[DataRequired(), Email()], render_kw={'autofocus': True})
     submit = SubmitField(_l("Set email"))
+    # The address is checked in the route rather than here (D1141): this same
+    # form is submitted by somebody whose account ALREADY exists, and their
+    # own address is not a duplicate.

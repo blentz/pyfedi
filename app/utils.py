@@ -4764,6 +4764,32 @@ def validate_user_name_charset(user_name):
         raise ValidationError(_l('User names can only contain letters, numbers, and underscores.'))
 
 
+# Names nobody may register. `process_registration_form` held this as a local
+# list and the OAuth signup path held nothing at all, which is how D1139
+# happened: an account called `admin` was one Google sign-in away.
+RESERVED_USER_NAMES = ('admin',)
+
+
+def user_name_is_taken(user_name: str) -> bool:
+    """True when a LOCAL user, community or feed already answers to this name.
+
+    `RegistrationForm.validate_user_name` asks this question one query at a
+    time. The OAuth signup path asked a narrower, CASE-SENSITIVE version of
+    it (`User.user_name == local_part`), so `Person` and `person` ended up
+    side by side while `find_user` lowers both sides and takes `.first()`
+    (D1140). One function, so the two ends cannot drift apart again.
+    """
+    name = user_name.strip()
+    if User.query.filter(func.lower(User.user_name) == func.lower(name),
+                         User.ap_id == None).first() is not None:
+        return True
+    if Community.query.filter(func.lower(Community.name) == func.lower(name),
+                              Community.ap_id == None).first() is not None:
+        return True
+    return Feed.query.filter(func.lower(Feed.name) == func.lower(name),
+                             Feed.ap_id == None).first() is not None
+
+
 def apply_feed_url_rules(self):
     if '-' in self.url.data.strip():
         self.url.errors.append(_l('- cannot be in Url. Use _ instead?'))

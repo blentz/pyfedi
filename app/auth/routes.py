@@ -11,8 +11,10 @@ from app.auth.forms import LoginForm, RegisterByMastodonForm, RegistrationForm, 
     ResetPasswordRequestForm, ResendEmailForm
 from app.auth.oauth_util import (
     handle_oauth_authorize,
+    email_already_registered,
     finalize_user_login,
     initialize_new_user,
+    refuse_banned_visitor,
 )
 from app.auth.util import (
     handle_abandoned_open_instance,
@@ -313,7 +315,16 @@ def mastodon_authorize():
                     # User already exists, finalize login
                     return finalize_user_login(user, None, ip, country)
             else:
+                refusal = refuse_banned_visitor()  # D1142
+                if refusal is not None:
+                    return refusal
                 email = form.email.data.strip()
+                if email_already_registered(email):  # D1141
+                    session["user_info"] = user_info  # they get another try
+                    form.email.errors.append(
+                        _('An account with this email address already exists.'))
+                    return render_template('auth/mastodon_authorize.html',
+                                           form=form, user_info=user_info)
                 username = user_info['username']
                 # New user registration
                 user = initialize_new_user(
@@ -329,6 +340,14 @@ def mastodon_authorize():
                     )
                     return redirect(url_for("auth.please_wait"))
                 return redirect_next_page() if len(user.communities()) >= 0 else redirect(url_for('auth.filter_selection'))
+        elif request.method == "POST":
+            # D1141's other half. A POST that does not validate used to fall
+            # through to `handle_oauth_authorize`, which asks the provider for
+            # a token it has already spent -- so a visitor whose email was
+            # refused was told "Login failed due to a problem with the OAuth
+            # server" instead of being shown what was wrong with the form.
+            return render_template('auth/mastodon_authorize.html', form=form,
+                                   user_info=session["user_info"])
 
     return handle_oauth_authorize(
         provider='mastodon',
