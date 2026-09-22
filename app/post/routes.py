@@ -1316,6 +1316,13 @@ def post_delete(post_id: int):
                                    title=_('Are you sure you want to delete the post "%(post_title)s"?',
                                            post_title=post.title),
                                    form=form)
+    else:
+        # D1098. There was no `else`, so a caller who is not permitted fell
+        # off the end and the view returned None: `TypeError: The view
+        # function for 'post.post_delete' did not return a valid response`
+        # -- measured, a 500 in the logs in place of the refusal that was
+        # meant. D1012's shape (fact 500).
+        abort(401)
 
 
 @bp.route('/post/<int:post_id>/restore', methods=['POST'])
@@ -1533,7 +1540,7 @@ def post_block_user(post_id: int):
 
     if request.headers.get('HX-Request'):
         resp = make_response()
-        curr_url = request.headers.get('HX-Current-Url')
+        curr_url = request.headers.get('HX-Current-Url') or ''
 
         if "/post/" in curr_url or ("/c/" in curr_url and "/p/" in curr_url):
             resp.headers['HX-Redirect'] = post.community.local_url()
@@ -1554,6 +1561,15 @@ def post_block_user(post_id: int):
 @login_required
 def post_block_domain(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+
+    # D1099. Only a link post has a domain. For any other kind `post.domain_id`
+    # is None, and the INSERT below was `psycopg2.errors.NotNullViolation: null
+    # value in column "domain_id" of relation "domain_block" violates not-null
+    # constraint` -- measured, a 500 rather than a refusal. `post.domain.name`
+    # in the flash below is the same miss one line further on.
+    if post.domain_id is None:
+        abort(404)
+
     existing = DomainBlock.query.filter_by(user_id=current_user.id, domain_id=post.domain_id).first()
     if not existing:
         db.session.add(DomainBlock(user_id=current_user.id, domain_id=post.domain_id))
@@ -1563,7 +1579,7 @@ def post_block_domain(post_id: int):
 
     if request.headers.get('HX-Request'):
         resp = make_response()
-        curr_url = request.headers.get('HX-Current-Url')
+        curr_url = request.headers.get('HX-Current-Url') or ''
 
         if "/post/" in curr_url or ("/c/" in curr_url and "/p/" in curr_url):
             resp.headers['HX-Redirect'] = url_for("main.index")
@@ -1588,7 +1604,7 @@ def post_block_community(post_id: int):
 
     if request.headers.get('HX-Request'):
         resp = make_response()
-        curr_url = request.headers.get('HX-Current-Url')
+        curr_url = request.headers.get('HX-Current-Url') or ''
         redir_home = ["/c/", "/post/"]
 
         if any(found_str in curr_url for found_str in redir_home):
@@ -1605,12 +1621,22 @@ def post_block_community(post_id: int):
 @login_required
 def post_block_instance(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+
+    # D1101. `block_remote_instance` refuses instance 1 with its own flash
+    # ("You cannot block the local instance."), and this line then said
+    # "Content from test.piefed.local will be hidden." straight after it --
+    # two flashes, contradicting each other, one of them false. A post with no
+    # instance at all was worse: `post.instance.domain` on None, and the
+    # INSERT one level down has the same not-null column D1099 hit.
+    if post.instance_id is None or post.instance_id == 1:
+        abort(404)
+
     block_remote_instance(post.instance_id, SRC_WEB)
     flash(_('Content from %(name)s will be hidden.', name=post.instance.domain))
 
     if request.headers.get('HX-Request'):
         resp = make_response()
-        curr_url = request.headers.get('HX-Current-Url')
+        curr_url = request.headers.get('HX-Current-Url') or ''
 
         if post.instance.domain in curr_url or "/post/" in curr_url or ("/c/" in curr_url and "/p/" in curr_url):
             resp.headers["HX-Redirect"] = url_for("main.index")
@@ -1626,6 +1652,16 @@ def post_block_instance(post_id: int):
 @login_required
 def post_mea_culpa(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+
+    # D1097. There was NO authorization here at all. "I changed my mind" is
+    # the author admitting a mistake in their own post -- it marks the post
+    # and turns its comments off -- and any logged-in account could do it to
+    # anybody's post, silencing the conversation under it. Measured:
+    # `PROBE al1 stranger mea_culpa: 302 | mea_culpa now=True
+    # comments_enabled=False`.
+    if post.user_id != current_user.id:
+        abort(401)
+
     form = MeaCulpaForm()
     if form.validate_on_submit():
         post.comments_enabled = False
@@ -1942,6 +1978,13 @@ def post_reply_report(post_id: int, comment_id: int):
 def post_reply_block_user(post_id: int, comment_id: int):
     post = db.session.get(Post, post_id) or abort(404)
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
+
+    # D1077's family. The block is the caller's own, but the redirect below
+    # compares `post_reply.author` with `post.author`, so a mismatched pair
+    # sent them somewhere unrelated to either.
+    if post_reply.post_id != post.id:
+        abort(404)
+
     existing = UserBlock.query.filter_by(blocker_id=current_user.id, blocked_id=post_reply.author.id).first()
     if not existing:
         db.session.add(UserBlock(blocker_id=current_user.id, blocked_id=post_reply.author.id))
@@ -1951,7 +1994,7 @@ def post_reply_block_user(post_id: int, comment_id: int):
 
     if request.headers.get('HX-Request'):
         resp = make_response()
-        curr_url = request.headers.get('HX-Current-Url')
+        curr_url = request.headers.get('HX-Current-Url') or ''
 
         if "/post/" in curr_url or ("/c/" in curr_url and "/p/" in curr_url):
             if post_reply.author.id != post.author.id:
@@ -1974,12 +2017,19 @@ def post_reply_block_user(post_id: int, comment_id: int):
 @login_required
 def post_reply_block_instance(post_id: int, comment_id: int):
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
+
+    # D1101's twin. `block_remote_instance` refuses instance 1 with its own
+    # flash and this line said the opposite straight after it; a reply with no
+    # instance was `AttributeError` on `post_reply.instance.domain`.
+    if post_reply.instance_id is None or post_reply.instance_id == 1:
+        abort(404)
+
     block_remote_instance(post_reply.instance_id, SRC_WEB)
     flash(_('Content from %(name)s will be hidden.', name=post_reply.instance.domain))
 
     if request.headers.get('HX-Request'):
         resp = make_response()
-        curr_url = request.headers.get('HX-Current-Url')
+        curr_url = request.headers.get('HX-Current-Url') or ''
 
         if post_reply.instance.domain in curr_url:
             resp.headers["HX-Redirect"] = url_for("main.index")
@@ -2254,6 +2304,13 @@ def post_reply_restore(post_id: int, comment_id: int):
 def post_reply_purge(post_id: int, comment_id: int):
     post = db.session.get(Post, post_id) or abort(404)
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
+
+    # D1077's family, tenth site: the permission below is tested against
+    # `post.community` and the row deleted is `post_reply`. Purging is the one
+    # deletion that cannot be undone.
+    if post_reply.post_id != post.id:
+        abort(404)
+
     if not post_reply.deleted:
         abort(404)
     if post_reply.deleted_by == current_user.id or post.community.is_moderator() or current_user.is_admin() or user_access('administer all communities', current_user.get_id()):

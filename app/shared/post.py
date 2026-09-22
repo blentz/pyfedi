@@ -25,7 +25,8 @@ from app.utils import render_template, authorise_api_user, shorten_string, gibbe
     opengraph_parse, url_to_thumbnail_file, can_create_post, is_video_hosting_site, recently_upvoted_posts, \
     is_image_url, add_to_modlog, store_files_in_s3, guess_mime_type, retrieve_image_hash, \
     hash_matches_blocked_image, can_upvote, can_downvote, get_recipient_language, to_srgb, can_upload_video, \
-    is_video_url, sanitize_svg, user_ip_banned, ip_address, inspect_image_c2pa
+    is_video_url, sanitize_svg, user_ip_banned, ip_address, inspect_image_c2pa, \
+    community_membership_private, communities_banned_from
 
 
 def vote_for_post(post_id: int, vote_direction, federate: bool, emoji: str, src, auth=None):
@@ -990,6 +991,28 @@ def move_post(post_id: int, target_id: int, src, auth=None):
     if post.community.is_moderator(user) or post.community.is_instance_admin(user) or user.is_admin_or_staff():
         old_community_id = post.community_id
         target_community = db.session.get(Community, target_id)
+
+        # D1102. Only the SOURCE community was ever consulted. A moderator of
+        # any community could therefore move a post into any other one --
+        # including a PRIVATE community they do not belong to, which is
+        # content injected past its membership. Measured: `PROBE am1 mod moves
+        # into a private community: 302 | post now in theirs (private=True)`.
+        #
+        # The test is the destination's MEMBERSHIP, not `can_create_post`:
+        # moving is a moderation action, and `can_create_post` would also
+        # bring in the poster-side conditions -- verification, keys,
+        # `ban_posts` -- which are about authoring a new post and not about
+        # where an existing one may be filed. Placed in this helper so the web
+        # route and the API are covered by one check (fact 478).
+        if target_community is None or target_community.banned or \
+                (target_community.private and
+                 target_community.id not in community_membership_private(user.id)) or \
+                target_community.id in communities_banned_from(user.id):
+            msg = 'You cannot post in that community.'
+            if src == SRC_API:
+                raise Exception(msg)
+            flash(_(msg), 'error')
+            return
 
         post.move_to(target_community)
         db.session.commit()
