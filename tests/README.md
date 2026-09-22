@@ -10533,3 +10533,18 @@ PREVIOUS run. That produced `app/ldap_utils.py: 10.79% is below its floor of
 reported from a file written hours earlier. Read the reported test count and
 the `modified` timestamp the checker prints, not just the last line. Fact 528
 is the same trap wearing a different hat.
+
+**541. A ROW THAT READS THE RENDERED PAGE CANNOT TEST WHAT THE TEMPLATE ALSO
+LIMITS.** `topics_for_form` caps the topic tree at three levels and
+`auth/choose_topics.html` renders three levels, so a row asserting a
+fourth-level name is absent passed with the cap mutated away. The same held
+for the country pre-selection: the name appears on the page whether or not it
+is selected. Call the function and assert on the structure it returns.
+
+**542. RENDERING A FORM PAGE NEEDS A CSRF TOKEN THAT THE TEST APP DOES NOT
+MINT.** `auth/filter_selection.html` reads `form.csrf_token`, and with CSRF
+off the field does not exist: `jinja2.exceptions.UndefinedError:
+'FilterSetupForm object' has no attribute 'csrf_token'`. Either post a token
+(fact 355) or patch the module's `render_template` and assert on the `form`
+it was handed -- which is also the only way to see a default the template
+does not render distinctly.
