@@ -16399,3 +16399,47 @@ nothing** -- plus one registered and pinned.**
 | **D1088** | `tests/test_post_show.py` | The `current_user.is_anonymous` guard on the conditional-request check could be deleted with every row still green: the only logged-in row sent an ETag that could not match, so it measured "no 304" for the wrong reason. The guard is what stops a per-account page being answered 304 from an anonymous reader's cache validator (fact 449's other half). Writing the row needed **fact 514**: one authenticated identity per test, so the two views had to become two rows. | **closed** | `p4` |
 
 **Next free number: D1089.**
+
+## Sub-project 82, slice C: editing, flair, embeds and the inline reply
+
+**The round in one line: EIGHT production defects -- the embed pages had
+**none** of the post page's access checks, a **GET cleared a post's flair and
+its NSFW mark**, and the inline reply **grafted a new comment onto another
+community's thread**.**
+
+### 1. THE EMBED PAGES HAD NONE OF THE POST PAGE'S ACCESS CHECKS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1089** | `app/post/routes.py:487, 528` | **A PRIVATE COMMUNITY'S POST, AND AN UNPUBLISHED ONE, WERE READABLE THROUGH THE EMBED.** `/post/<id>/embed` **is** the post in a frame, and `/post/<id>/embed_code` names it in its title, its breadcrumbs and the snippet it hands out. Neither made the private-community test, and neither made the unpublished test slice B had just added to `show_post`. **Fact 478 for the fourth time in three slices.** The unpublished test is now the helper `refuse_unpublished_post`, and `show_post` was changed to call it rather than keep its own copy -- the same reason `refuse_private_community` became one in slice A. | **fixed** | `PROBE ai1 embed anon: 200 \| body: True \| title: True`; `PROBE ai2 embed_code anon: 200 \| title: True`; `PROBE ai3 embed scheduled: 200 \| body: True` |
+
+### 2. A GET THAT CLEARED A POST'S FLAIR AND ITS NSFW MARK
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1090** | `app/post/routes.py:1665` | **`GET /post/<id>/set_flair` WITH ONE HEADER RESET FOUR FIELDS.** The htmx branch is entered on `HX-Request` alone and writes: it rebuilds `post.flair` and sets `nsfw`, `nsfl` and `ai_generated` from `request.form`, which a GET does not carry -- so the flair list emptied and all three marks became False. D955's shape, and **the detector in `tests/test_mutating_get_routes.py` does not see it**: the view contains `form.validate_on_submit()` further down, which is the heuristic for "a form gates the write", and this branch returns before reaching it. The branch now requires `request.method == 'POST'`; GET still renders the form. | **fixed** | `PROBE aj1 GET set_flair status=200 \| nsfw now=False \| flair now=[]`, against a post that went in marked nsfw and flaired |
+
+### 3. A REPLY GRAFTED ONTO ANOTHER COMMUNITY'S THREAD
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1092** | `app/post/routes.py:973` | **`add_reply_inline` CHECKED ITS PERMISSIONS AGAINST ONE POST AND ATTACHED THE REPLY TO ANOTHER.** D1077's family, **ninth site**, and the only one that WRITES across the boundary rather than reading across it: a reply was created under a public post whose parent is a comment in a private community's post. | **fixed** | `PROBE ak1 status=200 \| replies made=1 \| child post_id=1 parent post_id=2` |
+
+### 4. FIVE SMALLER ONES
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1091** | `app/post/routes.py:1666, 1741` | `curr_url = request.headers.get("HX-Current-Url")` read straight into `if "/post/" in curr_url`. A request without the header was `TypeError: argument of type 'NoneType' is not iterable` -- D992's shape, on two routes. | **fixed** | measured at `app/post/routes.py:1736` |
+| **D1093** | `app/post/routes.py:1005` | `language_id = int(request.form.get('language_id'))`. A form field is whatever the caller sends; absent is `TypeError: int() argument must be a string, a bytes-like object or a real number, not 'NoneType'`. Falls back to the account's language, then the site's. | **fixed** | measured |
+| **D1094** | `app/post/routes.py:1020` | The `PostReplyValidationError` arm returned `'<div id="reply_to_{comment_id}" ...'` **without the `f`**, so the id was the literal string, htmx had no element to swap, and the refusal rendered into nothing. | **fixed** | the row asserting `b'{comment_id}' not in response.data` |
+| **D1095** | `app/post/routes.py:1189` | The NSFL arm set **`form.nsfw.render_kw`** -- the wrong field -- so an NSFL community left its own box editable and locked the NSFW one instead. A copy-paste one line below the NSFW arm it was copied from. | **fixed** | the row asserting `form.nsfl.render_kw == {'disabled': True}` |
+| **D1096** | `app/post/routes.py:1246` | The community's forced NSFW/NSFL values were set ABOVE the repopulation that then overwrote them with the post's, so the disabled box rendered **unchecked**: the page said "not NSFW" for a post in a community where NSFW is not optional. | **fixed** | the row asserting `form.nsfw.data is True` |
+
+### 5. WHAT THE MUTATION PASS FOUND
+
+23 mutants; the measuring pass killed **all 23** -- the second clean pass of
+the campaign. The rows were written after slice A and B had made the two
+habits automatic: build ordering data in the wrong order (facts 499, 506), and
+give every "only this person's?" check a second account.
+
+**Next free number: D1097.**
