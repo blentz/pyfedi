@@ -16787,3 +16787,52 @@ returned the same False the row expected. Both now assert the connection was
 never constructed. 22/22.
 
 **Next free number: D1152.**
+
+---
+
+## Round 86 — sub-project 83 slice E: `app/auth/onboarding.py`
+
+**The round in one line: SIX production defects -- the filter screen created
+its filter only for people who already had it, onboarding joined PRIVATE
+communities with nobody's approval, and merely looking at the topics page
+finished onboarding.**
+
+### 1. THE SCREEN THAT DID NOT DO ITS ONE JOB
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1152** | `app/auth/onboarding.py:43` | **THE FILTER WAS CREATED ONLY FOR SOMEBODY WHO ALREADY HAD IT.** `if existing_filters is not None:` around the `Filter(...)` that the screen exists to create -- inverted. A new account got nothing, and an account that came back to the screen collected a duplicate each time. The other four answers on the same form were written correctly, which is why the screen looked like it worked. | **fixed** | `PROBE ay1 status: 302 \| filters now: []` and `PROBE ay2 filters now: 2 \| titles: ['Trump & Musk', 'Trump & Musk']` |
+
+### 2. ONBOARDING JOINED PRIVATE COMMUNITIES
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1154** | `app/auth/onboarding.py:118` | **A CHOSEN TOPIC PUT THE ACCOUNT INTO EVERY PRIVATE COMMUNITY UNDER IT.** `Community.private` is invite-only real access control (app/models.py:594): every other surface requires a join request and somebody's approval, and six defects in this campaign have been private-community content escaping. This route wrote the `CommunityMember` row directly. Fact 478 at a seventh surface. | **fixed** | `PROBE ay4 status: 302 \| member of the private community: True` |
+
+### 3. THE OTHER THREE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1153** | `app/auth/onboarding.py:80` | `int(topic_id_str)` over `request.form.getlist('chosen_topics')`, which is whatever was posted. Anything that is not an id is dropped now. | **fixed** | `PROBE ay3 outcome: ValueError: invalid literal for int() with base 10: 'nonsense'` |
+| **D1155** | `app/auth/onboarding.py:75` | **LOOKING AT THE PAGE FINISHED ONBOARDING.** `mark_onboarding_as_finished()` was the route's first line, so somebody who opened the topics page and went elsewhere was never brought back to it. It is finished when they answer -- and on the arm where the instance has no topics to ask about, or every login would return to a question this instance cannot ask. | **fixed** | `PROBE ay5 finished_onboarding after a GET: True` |
+| **D1156** | `app/auth/onboarding.py:86` | "You have joined some communities relating to those interests." was said for a topic with no communities in it -- and, once D1154 was fixed, for one whose communities this account may not join. `join_topic` answers how many memberships it wrote, and the message follows the count. | **fixed** | `PROBE ay6 said: You have joined some communities relating to those interests.` |
+
+### 4. DEAD CODE, REMOVED
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1157** | `app/auth/util.py:92` | **A SECOND, WRONGER COPY OF A LIVE FUNCTION.** `create_user_application(user, registration_answer)` was called from nowhere. It **ignored its own `registration_answer`** and wrote `answer='Signed in with Google'` for every caller, and set no `status`, where `create_registration_application` -- four lines below it -- sets -1 when the address is unverified so an application cannot be approved before the email is. That is how a fix reaches one copy and not the other. | **fixed** | `grep -rn create_user_application` finds only the definition |
+| **D1158** | `app/auth/onboarding.py:175` | `topics_for_form`'s root loop tested `if node is not None`, which cannot happen: `build_topic_tree` answers None only past depth 2, and these are the roots, at depth 0. | **fixed** | the only partial branch the slice's rows could not close |
+
+### 5. WHAT THE MUTATION PASS FOUND
+
+22 mutants, 19 killed on the measuring pass. All three survivors were **rows
+of mine**: the depth cap (the row read the rendered page, and the template
+renders three levels regardless, so it could not tell the cap from the
+template), the country pre-selection (asserted the topic appeared, not that it
+was selected), and the membership test -- whose observable effect is not a
+duplicate row, which the second check catches, but a **second Follow and join
+request sent to a remote community this account already belongs to**. All
+three now assert what the guard decides. 22/22.
+
+**Next free number: D1159.**
