@@ -10401,3 +10401,23 @@ tested `DETECT_AI_ENDPOINT`, then `is_ai.status_code == 200`, and had a return
 for neither miss -- `TypeError: The view function ... did not return a valid
 response` for a detector that answers 502. When a view is a chain of `if`s,
 count the returns against the arms before writing the row (facts 448, 500).
+
+**523. `BlockedImage.hash` IS `BIT(256)`.** Not a hex digest: PostgreSQL
+refuses anything that is not 256 binary digits with
+`psycopg2.errors.InvalidTextRepresentation: "a" is not a valid binary digit`,
+and the error names the character rather than the column type. A row that
+stands in for `retrieve_image_hash` has to answer `'1010' * 64` or similar.
+
+**524. A HELPER THAT WRITES BEFORE IT CHECKS TURNS A 404 INTO A 500.**
+`bookmark_post` called `mark_post_read` first, and `read_posts.read_post_id`
+is a foreign key -- so an id that does not resolve was a
+`ForeignKeyViolation` at flush, although the route around it already catches
+`NoResultFound` to answer 404. The route's error handling was correct and
+unreachable. D1125.
+
+**525. A MUTANT IS KILLED BY THE FILE WHOSE ROW COVERS IT, NOT BY THE SLICE
+THAT WROTE IT.** Slice F's pass ran against `tests/test_post_actions.py` and
+reported one survivor -- a guard from slice D, whose row lives in
+`tests/test_post_moderation.py`. Re-run against that file it died at once.
+When a slice touches a line another slice pinned, point the runner at the
+other slice's file rather than adding a duplicate row.
