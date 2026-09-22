@@ -15,6 +15,7 @@ two are exactly that shape, and a runtime count would score them zero.
 """
 import ast
 import re
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -27,14 +28,26 @@ ROOT = Path(__file__).resolve().parent.parent
 SELF = 'tests/test_no_deprecated_apis.py'
 
 
+@lru_cache(maxsize=None)
 def _sources(*roots):
+    """Every source file under `roots`, with its text, read ONCE for the whole
+    session.
+
+    Three rows in this module walk the same two trees, and `_legacy_calls`
+    used to read each file a second time on top of that -- four full reads of
+    app/ and tests/ per run, which measured 4.18s in the slowest row alone.
+    The tree does not change while the suite runs, so the result is cached;
+    the tuple return type is what makes it cacheable.
+    """
+    found = []
     for root in roots:
         for path in sorted((ROOT / root).rglob('*.py')):
             if '__pycache__' in path.parts:
                 continue
             if path.relative_to(ROOT).as_posix() == SELF:
                 continue
-            yield path, path.read_text()
+            found.append((path, path.read_text()))
+    return tuple(found)
 
 
 def _count(pattern, *roots, skip=()):
@@ -81,12 +94,20 @@ LEGACY_GET_CEILING = 0
 LEGACY_EXEMPT = {'tests/test_no_deprecated_apis.py'}
 
 
-def _legacy_calls(path):
+def _legacy_calls(path, text):
     """Every live `X.query.get(...)`, `X.query.get_or_404(...)` and
     `<session>.query(X).get(...)` in one file, as `path:lineno`.
     """
+    # Both shapes this looks for -- `X.query.get(...)` and
+    # `<session>.query(X).get(...)` -- contain the substring `.query`, so a
+    # file without it cannot match and need not be parsed. Worth 2.81s ->
+    # 2.49s, no more: most files in app/ and tests/ do carry it. The rest of
+    # the cost is the AST walk itself, which is what this row is.
+    if '.query' not in text:
+        return []
+
     found = []
-    for node in ast.walk(ast.parse(path.read_text())):
+    for node in ast.walk(ast.parse(text)):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
             continue
         func = node.func
@@ -141,11 +162,11 @@ def test_no_legacy_query_get_calls_remain():
     own get_or_404 does, minus the legacy call it makes internally.
     """
     hits = []
-    for path, _text in _sources('app', 'tests'):
+    for path, text in _sources('app', 'tests'):
         relative = path.relative_to(ROOT).as_posix()
         if relative in LEGACY_EXEMPT:
             continue
-        hits += [f'{relative}:{line}' for line in _legacy_calls(path)]
+        hits += [f'{relative}:{line}' for line in _legacy_calls(path, text)]
 
     assert len(hits) <= LEGACY_GET_CEILING, (
         f'legacy Query.get() is back at {len(hits)} site(s): {hits[:10]}. '

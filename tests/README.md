@@ -10548,3 +10548,19 @@ off the field does not exist: `jinja2.exceptions.UndefinedError:
 (fact 355) or patch the module's `render_template` and assert on the `form`
 it was handed -- which is also the only way to see a default the template
 does not render distinctly.
+
+**543. RSA KEYPAIRS COME FROM A POOL, NOT FROM GENERATION.** A 2048-bit
+keypair costs ~96ms in the test container (10 keys in 0.96s) and
+`with_keys=True` appears at 407 call sites, so generating one per actor was
+tens of seconds of every run spent on key material no assertion reads.
+`tests/factories.a_keypair()` hands out one of sixteen generated on first
+use, in rotation: a test building up to sixteen keyed actors still gets
+sixteen different keys. A collision past that fails a row rather than passing
+one falsely -- the rows that care assert a signature is REJECTED.
+
+**544. A REAL `sleep` IN A RETRY PATH IS PAID BY THE SUITE.** `get_request`'s
+two retry arms `sleep(random.randint(3, 10))` before the second attempt, and
+three rows in test_fixup_url.py take those arms: 9.01s, 8.01s and 5.00s, 22s
+of waiting whose length also varies run to run. `patch('app.utils.sleep')`
+plus `assert waited.call_count == 1` keeps the backoff pinned and removes the
+wait. Look for this shape whenever a row's duration is measured in seconds.

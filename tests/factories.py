@@ -11,6 +11,7 @@ activity envelope and the object it names. Their docstrings say why they live
 here.
 """
 
+import itertools
 import uuid
 from collections.abc import Iterable
 from datetime import datetime
@@ -38,17 +39,40 @@ def make_instance(domain: str, software: str = 'mastodon') -> Instance:
     return instance
 
 
+# A 2048-bit RSA keypair costs ~96ms to generate (measured in the test
+# container: 10 keys in 0.96s), and `with_keys=True` appears at 407 call sites
+# in this suite. Generating one per actor was tens of seconds of every run
+# spent on key material no assertion looks at.
+#
+# The pool is generated on first use and handed out in rotation, so a test
+# building up to sixteen keyed actors still gets sixteen DIFFERENT keys --
+# which is what the signature tests need, and a collision beyond that fails
+# the row loudly rather than passing it falsely: a row that asserts a
+# signature is REJECTED is the one that would notice, and it would fail.
+_KEYPAIR_POOL_SIZE = 16
+_KEYPAIR_POOL = []
+_KEYPAIR_TURN = itertools.count()
+
+
+def a_keypair() -> tuple[str, str]:
+    """One of the session's pre-generated RSA keypairs."""
+    if not _KEYPAIR_POOL:
+        _KEYPAIR_POOL.extend(RsaKeys.generate_keypair()
+                             for _ in range(_KEYPAIR_POOL_SIZE))
+    return _KEYPAIR_POOL[next(_KEYPAIR_TURN) % _KEYPAIR_POOL_SIZE]
+
+
 def make_user(instance, name: str, local: bool = False, with_keys: bool = False) -> User:
     """A local user has ap_id None; a remote user has a full actor URI.
 
-    with_keys generates a real RSA keypair. Off by default because generation
-    costs roughly a second and almost no test needs it -- but a user that SENDS
+    with_keys gives the user a real RSA keypair, from the session pool above.
+    Off by default because almost no test needs one -- but a user that SENDS
     a signed activity does: HttpSignature.signed_request calls .encode() on the
     private key, so a keyless sender dies at signing with "'NoneType' object has
     no attribute 'encode'" before any HTTP request is attempted. A test
     asserting on delivery must build its sending actor with with_keys=True.
     """
-    private_key, public_key = RsaKeys.generate_keypair() if with_keys else (None, None)
+    private_key, public_key = a_keypair() if with_keys else (None, None)
     user = User(
         user_name=name,
         email=f'{name}@example.com',
@@ -182,7 +206,7 @@ def make_feed(instance, name: str = 'peerfeed', public: bool = False,
                 ap_public_url=f'https://{host}/f/{name}',
                 ap_fetched_at=utcnow())
     if with_keys:
-        private_key, public_key = RsaKeys.generate_keypair()
+        private_key, public_key = a_keypair()
         feed.private_key = private_key
         feed.public_key = public_key
     db.session.add(feed)
@@ -986,7 +1010,7 @@ def seed_signing_site() -> Site:
     401 branch's signed_get_request call can run at all.
     """
     site = make_site()
-    private_key, _public_key = RsaKeys.generate_keypair()
+    private_key, _public_key = a_keypair()
     site.private_key = private_key
     db.session.commit()
     return site
