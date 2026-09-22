@@ -476,6 +476,24 @@ def test_a_moderator_moves_a_post_to_another_community(db_session):
     assert s.post.community_id == target.id
 
 
+def test_the_api_refuses_a_move_into_a_community_with_no_standing(db_session):
+    """D1102's API arm. The web route flashes and returns; the API raises, so
+    a client that asked for a move it may not make is told so rather than
+    getting a success it did not get. The destination here is PRIVATE and the
+    mover is not a member of it -- they moderate only the source."""
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    target = make_community('target')
+    target.private = True
+    db.session.commit()
+
+    with pytest.raises(Exception, match='cannot post in that community'):
+        move_post(s.post.id, target.id, SRC_API, auth=bearer(s.voter))
+
+    db.session.refresh(s.post)
+    assert s.post.community_id == s.community.id
+
+
 def test_moving_records_the_target_community_in_the_modlog(db_session):
     """`:978-980`'s add_to_modlog, which passes `community=target_community`
     rather than the post's original community.
