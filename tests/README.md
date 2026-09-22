@@ -10494,3 +10494,42 @@ and calling it inside a bare test request context raises from inside the
 template -- the page wants context the fixtures' request does not carry.
 Drive the route instead and assert on `response.data`; the unit call is only
 usable for the arms that answer True or a redirect.
+
+**536. `ldap3` IS BEHIND ONE CLASS.** `app/ldap_utils.py` builds a `Server`
+and a `Connection` and does everything else through the connection object, so
+`patch('app.ldap_utils.Connection', return_value=MagicMock())` is the whole
+seam: `conn.entries`, `conn.search.call_args`, `conn.modify`, `conn.add` and
+`conn.unbind` are the entire protocol surface. Patch `Server` as well or the
+constructor tries to resolve the host name.
+
+**537. AN `ldap3` ATTRIBUTE IS NOT A STRING, AND IS NOT ONLY A MOCK.**
+`sync_user_to_ldap` compares `getattr(entry, attr, None) != email` and
+`login_with_ldap` reads `.value` off the same object. A `MagicMock` is never
+equal to a string, so the "nothing to change" arm is unreachable with one; a
+plain string has no `.value`. A `str` subclass carrying a `.value` property
+satisfies both.
+
+**538. A ROW THAT ASSERTS ONLY THE ANSWER DOES NOT PIN A SKIP.** Two rows
+here checked that a disabled directory answers False -- and passed with the
+`LDAP_READ_ENABLE`/`LDAP_WRITE_ENABLE` guard mutated away, because the
+unpatched `ldap3` then failed to reach the host and returned the same False.
+A row about something NOT happening has to assert that it did not happen:
+`assert connection.call_args is None`.
+
+**539. A PRODUCTION FUNCTION NAMED `test_*` GETS COLLECTED.**
+`from app.ldap_utils import test_ldap_connection` binds that name at module
+level in a test file, so pytest collects it, RUNS it as a test, counts it as
+a pass and warns `PytestReturnNotNoneWarning: Test functions should return
+None ... returned <class 'bool'>`. It was the 251st warning against a
+baseline of 250. Import it under another name.
+
+**540. A RUN THAT HITS `session_timeout` STILL EXITS 0, AND THE FLOOR CHECK
+THEN READS A STALE `coverage.json`.** `pytest-timeout`'s session budget stops
+the run and prints `!!! session-timeout: 1200.0 sec exceeded !!!`, but the
+process exit status is 0, so `&&` carries on into
+`check_coverage_floors.py` -- which reads the coverage.json left by the
+PREVIOUS run. That produced `app/ldap_utils.py: 10.79% is below its floor of
+100.00%` for a module the round had just taken to 100%: a floor breach
+reported from a file written hours earlier. Read the reported test count and
+the `modified` timestamp the checker prints, not just the last line. Fact 528
+is the same trap wearing a different hat.
