@@ -10388,3 +10388,16 @@ line, the `raise` on the API arm of the new refusal. The rows for the slice
 were in the route's file; the arm the route never reaches had none. **When a
 fix crosses into another module, look at that module's floor before running
 the suite, not after.**
+
+**521. AN `OPTIONS` ARM INSIDE A VIEW IS DEAD CODE.** `app/request_hooks.py`
+answers every OPTIONS request in `before_request`, before any view runs, so a
+`if request.method == 'OPTIONS': return ''` at the top of a route can never
+execute. A row that sends OPTIONS passes -- the hook answers it -- and the
+line stays uncovered no matter what the row does. D1115 was exactly this; the
+arm was removed rather than left reading like the route's own contract.
+
+**522. THE DETECTOR ARMS ARE `if` WITHOUT `else` TWICE OVER.** `post_check_ai`
+tested `DETECT_AI_ENDPOINT`, then `is_ai.status_code == 200`, and had a return
+for neither miss -- `TypeError: The view function ... did not return a valid
+response` for a detector that answers 502. When a view is a chain of `if`s,
+count the returns against the arms before writing the row (facts 448, 500).
