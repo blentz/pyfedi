@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from unicodedata import normalize
 
+import httpx
 from flask import current_app, flash, g, make_response, redirect, request, session, url_for
 from flask_babel import _
 from flask_login import current_user, login_user
@@ -50,19 +51,34 @@ def ip2location(ip: str):
         if not current_app.config['IPINFO_TOKEN']:
             return {}
         url = 'http://ipinfo.io/' + ip + '?token=' + current_app.config['IPINFO_TOKEN']
-        response = get_request(url)
-        if response.status_code == 200:
-            data = response.json()
-            cache.set('ip_' + ip, data, timeout=86400)
-        else:
+        # D1159. Nothing caught this. `get_request` raises httpx.HTTPError for
+        # every transport failure, and it is the retrying kind: two attempts
+        # and a 3-10 second sleep between them. `get_country` -- the only
+        # caller -- runs on every registration, every login and every OAuth
+        # callback, so an ipinfo.io outage took the whole authentication
+        # surface down with it. Measured: `PROBE az1 outcome: HTTPError:
+        # boom`. A country nobody could look up is a country we do not know,
+        # which is what the empty answer already means.
+        try:
+            response = get_request(url)
+            data = response.json() if response.status_code == 200 else None
+        except (httpx.HTTPError, ValueError):
             return {}
+        if data is None:
+            return {}
+        cache.set('ip_' + ip, data, timeout=86400)
 
-    if 'postal' in data:
-        postal = data['postal']
-    else:
-        postal = ''
-    return {'city': data['city'], 'region': data['region'], 'country': data['country'], 'postal': postal,
-            'timezone': data['timezone']}
+    # D1160. `data['city']` on an answer that carries no city. ipinfo replies
+    # `{"ip": ..., "bogon": true}` for a private or reserved address -- no
+    # city, region, country or timezone -- and every LAN address reaches this
+    # (127.0.0.1 is rewritten above; 192.168.x.x is not). Measured: `PROBE az2
+    # outcome: KeyError: 'city'`. An answer with no country is no answer, and
+    # `get_country`'s own fallback is what should apply.
+    if 'country' not in data:
+        return {}
+    return {'city': data.get('city', ''), 'region': data.get('region', ''),
+            'country': data['country'], 'postal': data.get('postal', ''),
+            'timezone': data.get('timezone', '')}
 
 
 def get_country(ip: str, fallback: Any = '') -> str:
@@ -77,13 +93,20 @@ def get_country(ip: str, fallback: Any = '') -> str:
 
 
 def no_admins_logged_in_recently():
+    """D1161. `user.last_seen > a_week_ago` on a column that can be null:
+    `TypeError: '>' not supported between instances of 'NoneType' and
+    'datetime.datetime'`. Measured as `PROBE az3`. An admin who has never
+    signed in has not signed in recently, which is the answer this function
+    wants anyway -- and the caller is `handle_abandoned_open_instance`, on the
+    registration page, so the exception closed registration by crashing it.
+    """
     a_week_ago = utcnow() - timedelta(days=7)
     for user in Site.admins():
-        if user.last_seen > a_week_ago:
+        if user.last_seen is not None and user.last_seen > a_week_ago:
             return False
 
     for user in Site.staff():
-        if user.last_seen > a_week_ago:
+        if user.last_seen is not None and user.last_seen > a_week_ago:
             return False
 
     return True
@@ -105,7 +128,18 @@ def notify_admins_of_registration(application):
     db.session.commit()
 
     targets_data = {'gen': '0', 'application_id': application.id, 'user_id': application.user_id}
-    for admin in Site.admins():
+
+    # D1162. The two loops this replaces sent one notification each, so
+    # somebody holding BOTH roles -- which is the ordinary shape on a small
+    # instance, where the founder is admin and staff -- was told twice about
+    # one application and had `unread_notifications` moved by two. Measured:
+    # `PROBE az4 notifications: 2 | unread counter: 2`.
+    recipients = list(Site.admins())
+    if role_access('approve registrations', 3):
+        known = {admin.id for admin in recipients}
+        recipients += [member for member in Site.staff() if member.id not in known]
+
+    for admin in recipients:
         notify = Notification(title='New registration',
                               url=f'/admin/approve_registrations?account={application.user_id}', user_id=admin.id,
                               author_id=application.user_id, notif_type=NOTIF_REGISTRATION,
@@ -113,16 +147,7 @@ def notify_admins_of_registration(application):
                               targets=targets_data)
         admin.unread_notifications += 1
         db.session.add(notify)
-    if role_access('approve registrations', 3):
-        for admin in Site.staff():
-            notify = Notification(title='New registration',
-                                  url=f'/admin/approve_registrations?account={application.user_id}', user_id=admin.id,
-                                  author_id=application.user_id, notif_type=NOTIF_REGISTRATION,
-                                  subtype='new_registration_for_approval',
-                                  targets=targets_data)
-            admin.unread_notifications += 1
-            db.session.add(notify)
-    
+
     plugins.fire_hook("new_registration_for_approval", application)
 
 
@@ -393,12 +418,16 @@ def handle_user_application(user, form):
 
 
 def finalize_user_registration(user, form):
+    # D1163. A second `sync_user_to_ldap(user.user_name, user.email,
+    # form.password.data.strip())` stood here, with its own copy of the
+    # try/except that `sync_user_with_ldap` already carries -- and
+    # `register_new_user` calls that helper a few lines earlier, with the same
+    # three arguments. Every registration on an instance with LDAP writing
+    # enabled therefore wrote the directory TWICE: one bind, search and
+    # modify, then the whole thing again. Measured: `PROBE az5
+    # sync_user_to_ldap calls: 2`.
     if user.verified and not user.waiting_for_approval():
         finalize_user_setup(user)
-        try:
-            sync_user_to_ldap(user.user_name, user.email, form.password.data.strip())
-        except Exception as e:
-            current_app.logger.error(f"LDAP sync failed for user {user.user_name}: {e}")
         login_user(user, remember=True)
 
 

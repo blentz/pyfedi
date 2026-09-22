@@ -122,14 +122,15 @@ def resend_email():
             user.verification_token = random_token(16)
             db.session.commit()
 
-        if user:
-            try:
-                send_email_verification(user)
-                flash(_("If an account exists, a link has been sent"))
-                return redirect(url_for('auth.check_email'))
-            except Exception:
-                flash(_("Problem sending email, please contact the administrator for support"), 'warning')
-                return redirect(url_for('auth.resend_email'))
+        # D1164. An `if user:` stood here, below the `if user is None: return`
+        # eight lines above it: an arm that could not be false.
+        try:
+            send_email_verification(user)
+            flash(_("If an account exists, a link has been sent"))
+            return redirect(url_for('auth.check_email'))
+        except Exception:
+            flash(_("Problem sending email, please contact the administrator for support"), 'warning')
+            return redirect(url_for('auth.resend_email'))
     
     return render_template('auth/resend_email_request.html', title=_('Resend verification email'), form=form)
 
@@ -174,49 +175,54 @@ def reset_password(token):
 
 @bp.route('/verify_email/<token>')
 def verify_email(token):
-    if token != '':
-        user = User.query.filter_by(verification_token=token).first()
-        if user is not None:
-            if user.banned:
-                flash(_('You have been banned.'), 'error')
-                return redirect(url_for('main.index'))
-            if user.verified:  # guard against users double-clicking the link in the email
-                flash(_('Thank you for verifying your email address.'))
-                return redirect(url_for('auth.login'))
-            user.verified = True
-            user.verification_token = random_token(16)
-
-            # Update any pending application status from -1 to 0 when email is verified
-            application = UserRegistration.query.filter_by(user_id=user.id, status=-1).first()
-            if application:
-                application.status = 0
-
-                # Now notify admins since application is ready for review
-                notify_admins_of_registration(application)
-
-            db.session.commit()
-            if not user.waiting_for_approval() and user.private_key is None:  # only finalize user set up if this is a brand new user. People can also end up doing this process when they change their email address in which case we DO NOT want to reset their keys, etc!
-                finalize_user_setup(user)
-            flash(_('Thank you for verifying your email address.'))
-        else:
-            flash(_('Email address validation failed.'), 'error')
+    # D1165. `if token != '':` wrapped this whole body, and nothing else --
+    # no else arm, so had it ever been false the view would have returned
+    # None: `TypeError: The view function ... did not return a valid
+    # response`. It never was: Flask's default converter does not match an
+    # empty path segment, so `/verify_email/` is a 404 and `token` is never
+    # the empty string here.
+    user = User.query.filter_by(verification_token=token).first()
+    if user is not None:
+        if user.banned:
+            flash(_('You have been banned.'), 'error')
             return redirect(url_for('main.index'))
+        if user.verified:  # guard against users double-clicking the link in the email
+            flash(_('Thank you for verifying your email address.'))
+            return redirect(url_for('auth.login'))
+        user.verified = True
+        user.verification_token = random_token(16)
 
-        if user.waiting_for_approval():
-            return redirect(url_for('auth.please_wait'))
+        # Update any pending application status from -1 to 0 when email is verified
+        application = UserRegistration.query.filter_by(user_id=user.id, status=-1).first()
+        if application:
+            application.status = 0
+
+            # Now notify admins since application is ready for review
+            notify_admins_of_registration(application)
+
+        db.session.commit()
+        if not user.waiting_for_approval() and user.private_key is None:  # only finalize user set up if this is a brand new user. People can also end up doing this process when they change their email address in which case we DO NOT want to reset their keys, etc!
+            finalize_user_setup(user)
+        flash(_('Thank you for verifying your email address.'))
+    else:
+        flash(_('Email address validation failed.'), 'error')
+        return redirect(url_for('main.index'))
+
+    if user.waiting_for_approval():
+        return redirect(url_for('auth.please_wait'))
+    else:
+        # Two things need to happen - email verification and (usually) admin approval.
+        if g.site.registration_mode == 'RequireApplication':
+            send_registration_approved_email(user)
         else:
-            # Two things need to happen - email verification and (usually) admin approval.
-            if g.site.registration_mode == 'RequireApplication':
-                send_registration_approved_email(user)
-            else:
-                ...
-                # send_welcome_email(user) #not written yet
+            ...
+            # send_welcome_email(user) #not written yet
 
-            login_user(user, remember=True)
-            if user.communities():
-                return redirect(url_for('main.index'))
-            else:
-                return redirect(url_for('auth.filter_selection'))
+        login_user(user, remember=True)
+        if user.communities():
+            return redirect(url_for('main.index'))
+        else:
+            return redirect(url_for('auth.filter_selection'))
 
 
 @bp.route('/validation_required')
