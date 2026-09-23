@@ -10662,3 +10662,32 @@ with_keys=True)`.
 key identity cannot load any object.` A nullable foreign key has to be tested
 before the lookup, not after -- the suite is counted for warnings, so this
 turns up as a count regression rather than a failure.
+
+**561. A FACTORY-BUILT `PostReply` HAS NO `path`, AND THAT IS DELIBERATE.**
+`PostReply.new` sets `path` and `root_id` for every comment it creates --
+`[0, reply.id]` for a top-level one -- and nothing else does, so a
+factory-built comment carries NULL: a state the product cannot reach, which
+`get_reply_list`'s depth-first branch walks into as `TypeError: 'NoneType'
+object is not iterable`.
+
+Setting them in `make_post_reply` looks like the fix and is not:
+tests/test_shared_reply_make.py's
+`test_replying_to_a_parent_sets_the_path_and_the_parent_id` uses a path-less
+parent ON PURPOSE, to witness `PostReply.new`'s own else-branch, and that
+witness disappears the moment the factory pre-builds one -- the pin turned
+red and `app/shared/reply.py` fell below its floor in the same run. The
+factory is left alone; `api_baseline` sets the pair (its comment is fixed
+scenery for other files), and a test that needs a realistic path builds it
+itself.
+
+**562. "IS IN THE ANSWER" DOES NOT PIN A FILTER.** Nine rows in one slice
+asserted that the wanted comment was present, and every mutant that WIDENED
+the filter still satisfied them. A filter is pinned by what it excludes: put
+a second row in the database that the filter must drop, and assert its
+absence alongside the first one's presence.
+
+**563. coverage.py's TERMINAL COLUMN ROUNDS; THE FLOOR FILE DOES NOT.** A
+module showing `99%` in `--cov-report=term-missing` can measure 98.67 in
+`percent_covered`, and a floor taken from the displayed figure fails the very
+run that set it. Read the number the checker reads -- the JSON report's
+`percent_covered` -- before writing a floor.

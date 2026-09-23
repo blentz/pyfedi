@@ -495,6 +495,13 @@ def make_post_reply(post: Post, user: User, body: str = 'a reply') -> PostReply:
     )
     db.session.add(reply)
     db.session.commit()
+    # `path` and `root_id` are deliberately NOT set here, although
+    # `PostReply.new` always sets them: tests/test_shared_reply_make.py's
+    # `test_replying_to_a_parent_sets_the_path_and_the_parent_id` uses a
+    # path-less parent to witness `PostReply.new`'s own else-branch
+    # (app/models.py:3095), and that witness disappears if this factory
+    # pre-builds one. A test that needs a realistic path sets it itself --
+    # see tests/test_api_reply_list.py's `a_child` (fact 561).
     return reply
 
 

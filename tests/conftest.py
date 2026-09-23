@@ -683,6 +683,14 @@ def api_baseline(app, db_session):
                        body='reply one', posted_at=utcnow(), deleted=False)
     db.session.add(reply1)
     db.session.commit()
+    # `path` and `root_id` the way `PostReply.new` sets them for a top-level
+    # comment (app/models.py:3095). Nothing else writes them, and
+    # get_reply_list's depth-first branch iterates every row's path, so a
+    # comment carrying NULL is a state the product cannot produce but a
+    # fixture can (fact 561).
+    reply1.path = [0, reply1.id]
+    reply1.root_id = reply1.id
+    db.session.commit()
 
     db.session.add(NotificationSubscription(name='community2', user_id=user1.id, entity_id=community2.id,
                                             type=NOTIF_COMMUNITY))
