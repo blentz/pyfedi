@@ -10649,3 +10649,16 @@ reaches seven with candidates still to come. A row that simply supplies nine
 names never reaches it: the query's own `limit(7)` runs out first. Give the
 loop a candidate that sorts FIRST and is new (`reputation` decides the
 order), with the rest already in the list.
+
+**559. `api_baseline`'s ACCOUNTS CANNOT WRITE COMMENTS AS THEY STAND.**
+`can_create_post_reply` refuses a local account whose `private_key` is None
+(app/utils.py:2574), and the baseline's users have no keys -- so a row that
+posts a comment fails with "You are not permitted to comment in this
+community", which reads like a membership problem and is not one. Set
+`private_key` on the actors, or build them with `make_user(..,
+with_keys=True)`.
+
+**560. `db.session.get(Model, None)` WARNS.** `SAWarning: fully NULL primary
+key identity cannot load any object.` A nullable foreign key has to be tested
+before the lookup, not after -- the suite is counted for warnings, so this
+turns up as a count regression rather than a failure.
