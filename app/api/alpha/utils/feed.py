@@ -104,7 +104,12 @@ def get_feed(auth, data, user_id=None):
     if id:
         feed = db.session.get(Feed, id)
     elif name:
+        # D1174. `parts[1]` on a name carrying no `@` was `IndexError: list
+        # index out of range` -- and `name` is whatever the caller sent, so
+        # every bare feed name reached it. Measured as PROBE bb4.
         parts = name.split('@')
+        if len(parts) != 2:
+            raise Exception('invalid_request')
         feed = Feed.query.filter(Feed.name == parts[0], Feed.ap_domain == parts[1]).first()
     else:
         raise Exception('invalid_request')
@@ -130,6 +135,26 @@ def post_feed_follow(auth, data):
 
     if not feed:
         raise Exception('could not find feed')
+
+    # D1173. Nothing here asked whether this account may see the feed at all.
+    # `get_feed` refuses a private one to anybody but its owner --
+    # `PROBE bb1 outcome: Exception: access_denied` -- and this endpoint, one
+    # function below it, took the id and joined:
+    #
+    #     PROBE bb2 outcome: accepted | member now: True
+    #
+    # which is not merely an unwanted membership row. `show_feed`
+    # (app/feed/routes.py:447) serves a private feed to anyone for whom
+    # `feed.subscribed(current_user.id)` is true, so following by id was a way
+    # around the restriction entirely:
+    #
+    #     PROBE bb7 subscribed before: 0 | after: 1
+    #
+    # Fact 478 again: the same question asked at two ends, guarded at one.
+    # Leaving is not gated -- somebody who is already a member may always get
+    # out, including of a feed that has since been made private.
+    if follow and not (feed.public or feed.user_id == user.id):
+        raise Exception('access_denied')
 
     if follow:
         join_feed(feed.link(), user.id, SRC_API)

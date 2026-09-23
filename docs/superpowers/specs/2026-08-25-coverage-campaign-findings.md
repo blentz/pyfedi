@@ -16955,3 +16955,42 @@ because `send_message` writes the row before it knows who the other member is.
 The other survivor is D1172.
 
 **Next free number: D1173.**
+
+---
+
+## Round 89 — sub-project 84 slice B: `app/api/alpha/utils/feed.py`
+
+**The round in one line: TWO production defects -- following a private feed
+by id was a way around the restriction entirely, because the feed page serves
+a private feed to anyone who is subscribed.**
+
+### 1. THE FOLLOW THAT UNLOCKED A PRIVATE FEED
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1173** | `app/api/alpha/utils/feed.py:134` | **`post_feed_follow` ASKED NOTHING ABOUT WHO MAY SEE THE FEED.** `get_feed`, one function above it, refuses a private feed to anybody but its owner; this endpoint took the id and joined. That is not merely an unwanted membership row: `show_feed` (app/feed/routes.py:447) serves a private feed to anyone for whom `feed.subscribed(current_user.id)` is true, so a stranger could follow by id and then read the feed, its communities and its posts. `edit_feed` unsubscribes every non-owner member when a feed is made private (app/shared/feed.py:382), which is the product's own statement that membership of a private feed is access. Fact 478 again. Leaving stays ungated, so somebody already in a feed that has since been made private can still get out. | **fixed** | `PROBE bb1 outcome: Exception: access_denied` (reading) against `PROBE bb2 outcome: accepted \| member now: True` (following), and `PROBE bb7 subscribed before: 0 \| after: 1` |
+
+### 2. A BARE FEED NAME
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1174** | `app/api/alpha/utils/feed.py:108` | `parts = name.split('@')` and then `parts[1]`, with no check that there was one. `name` is whatever the caller sent, so every bare feed name crashed the endpoint. | **fixed** | `PROBE bb4 outcome: IndexError: list index out of range` |
+
+### 3. WHAT THE MUTATION PASS FOUND
+
+22 mutants, 20 killed on the measuring pass. Both survivors were rows of mine
+that could not fail:
+
+* the nsfw row asserted on a flag `edit_feed` writes only when
+  `g.site.enable_nsfw` is set, which the fixture's Site did not set -- so the
+  assertion held whatever the code did (fact 551);
+* the "leaving is always allowed" row made the feed private with an attribute
+  write **after** calling `post_feed_follow`, and `join_feed` ends with
+  `finally: db.session.remove()` -- it discards the whole scoped session, so
+  every object the test was holding is detached and the write never reached
+  the row (fact 552). The endpoint then re-read a feed that was still public,
+  and the row proved nothing.
+
+Both rewritten; 22/22.
+
+**Next free number: D1175.**
