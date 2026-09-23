@@ -414,8 +414,32 @@ def get_reply_list(auth, data, user_details=None):
     return list_json
 
 
+# D1194. Ten endpoints in this module read attributes straight off a
+# `db.session.get(...)`, which answers None for an id nobody holds -- so a
+# caller naming a comment, post or report that does not exist got an
+# AttributeError rather than an answer. Measured, one per endpoint:
+#
+#     PROBE bm get_reply: AttributeError: 'NoneType' object has no attribute 'community_id'
+#     PROBE bm put_reply: ... 'language_id'
+#     PROBE bm post_reply_report: ... 'user_id'
+#     PROBE bm post_reply_mark_as_read: ... 'id'
+#     PROBE bm post_reply_mark_as_answer: ... 'user_id'
+#     PROBE bm post_reply_distinguish: ... 'author'
+#     PROBE bm get_reply_like_list: ... 'community'
+#     PROBE bm put_reply_report_resolve: ... 'suspect_post_reply_id'
+#     PROBE bm get_reply_report_list: ... 'community'
+#
+# One helper, so the ten cannot drift apart again.
+def a_reply(reply_id):
+    reply = db.session.get(PostReply, reply_id)
+    if reply is None:
+        raise Exception('comment not found')
+    return reply
+
+
 def get_reply(auth, data):
     id = int(data['id'])
+    a_reply(id)
 
     user_id = authorise_api_user(auth) if auth else None
 
@@ -425,9 +449,10 @@ def get_reply(auth, data):
 
 def post_reply_like(auth, data):
     user = authorise_api_user(auth, return_type="model")
-
-    if not user:
-        raise Exception("incorrect login")
+    # D1197. An `if not user: raise Exception("incorrect login")` stood here,
+    # and `authorise_api_user` raises for every way authorisation can fail --
+    # it never answers a falsy user. Three of these, plus a fourth spelled
+    # `if not user_id`.
 
     score = data['score']
     reply_id = data['comment_id']
@@ -468,12 +493,21 @@ def post_reply(auth, data):
     body = data['body']
     post_id = data['post_id']
     parent_id = data['parent_id'] if 'parent_id' in data else None
+    # D1195. `if language_id < 2` on a value that can be None: the default is
+    # `site_language_id()`, which answers None when the Site carries no
+    # language and the Language table has no 'en' row -- a fresh instance
+    # before its languages are seeded. `None < 2` is `TypeError: '<' not
+    # supported between instances of 'NoneType' and 'int'`, measured as PROBE
+    # bm post_reply. `put_reply`, the sibling below, already writes
+    # `if language_id is None or language_id < 2` (fact 478).
     language_id = data['language_id'] if 'language_id' in data else site_language_id()
-    if language_id < 2:
+    if language_id is None or language_id < 2:
         language_id = site_language_id()
 
     input = {'body': body, 'notify_author': True, 'language_id': language_id}
     post = db.session.get(Post, post_id)
+    if post is None:
+        raise Exception('post not found')
 
     user_id, reply = make_reply(input, post, parent_id, SRC_API, auth)
 
@@ -483,7 +517,7 @@ def post_reply(auth, data):
 
 def put_reply(auth, data):
     reply_id = data['comment_id']
-    reply = db.session.get(PostReply, reply_id)
+    reply = a_reply(reply_id)
 
     body = data['body'] if 'body' in data else reply.body
     language_id = data['language_id'] if 'language_id' in data else reply.language_id
@@ -522,7 +556,7 @@ def post_reply_report(auth, data):
     report_remote = data['report_remote'] if 'report_remote' in data else True
     input = {'reason': reason, 'description': description, 'report_remote': report_remote}
 
-    reply = db.session.get(PostReply, reply_id)
+    reply = a_reply(reply_id)
     user_id, report = report_reply(reply, input, SRC_API, auth)
 
     reply_json = reply_report_view(report=report, reply_id=reply_id, user_id=user_id)
@@ -531,9 +565,10 @@ def post_reply_report(auth, data):
 
 def get_reply_report_list(auth, data):
     user = authorise_api_user(auth, return_type="model")
-
-    if not user:
-        raise Exception("incorrect login")
+    # D1197. An `if not user: raise Exception("incorrect login")` stood here,
+    # and `authorise_api_user` raises for every way authorisation can fail --
+    # it never answers a falsy user. Three of these, plus a fourth spelled
+    # `if not user_id`.
 
     comment_id = data['comment_id'] if 'comment_id' in data else None
     community_id = data['community_id'] if 'community_id' in data else None
@@ -543,7 +578,7 @@ def get_reply_report_list(auth, data):
 
     if comment_id:
         # Just get reports for a single comment
-        reply = db.session.get(PostReply, comment_id)
+        reply = a_reply(comment_id)
         mods = reply.community.moderators()
         mod_ids = [mod.user_id for mod in mods]
 
@@ -554,6 +589,8 @@ def get_reply_report_list(auth, data):
     elif community_id:
         # Just get reports for a single community
         community = db.session.get(Community, community_id)
+        if community is None:
+            raise Exception('community not found')
         mods = community.moderators()
         mod_ids = [mod.user_id for mod in mods]
 
@@ -595,15 +632,22 @@ def put_reply_report_resolve(auth, data):
     resolved = data['resolved']
 
     user = authorise_api_user(auth, return_type="model")
-
-    if not user:
-        raise Exception("incorrect login")
+    # D1197. An `if not user: raise Exception("incorrect login")` stood here,
+    # and `authorise_api_user` raises for every way authorisation can fail --
+    # it never answers a falsy user. Three of these, plus a fourth spelled
+    # `if not user_id`.
     
     report = db.session.get(Report, report_id)
-    
-    if not report.suspect_post_reply_id:
+
+    # The community is tested BEFORE the lookup: `db.session.get(Community,
+    # None)` warns `SAWarning: fully NULL primary key identity cannot load
+    # any object`, and a report that names no community is exactly what a
+    # report about a conversation looks like. `report_in_community_id_fkey`
+    # means the id cannot dangle, so a set id always resolves.
+    if report is None or not report.suspect_post_reply_id \
+            or not report.in_community_id:
         raise Exception("invalid target of resolution")
-    
+
     community = db.session.get(Community, report.in_community_id)
     mods = community.moderators()
     mod_ids = [mod.user_id for mod in mods]
@@ -646,7 +690,7 @@ def post_reply_mark_as_read(auth, data):
 
     # no real support for this. Just marking the Notification for the reply really
     # notification has its own id, which would be handy, but reply_view is currently just returning the reply.id for that
-    reply = db.session.get(PostReply, reply_id)
+    reply = a_reply(reply_id)
 
     reply_url = '#comment_' + str(reply.id)
     mention_url = '/comment/' + str(reply.id)
@@ -691,7 +735,7 @@ def post_reply_mark_as_answer(auth, data):
     user_details = authorise_api_user(auth, return_type='dict')
     user_id = user_details['id']
 
-    reply = db.session.get(PostReply, reply_id)
+    reply = a_reply(reply_id)
     user = db.session.get(User, user_id)
     if not (user.is_admin_or_staff() or reply.user_id == user.id
             or reply.community.is_moderator(user)):
@@ -728,7 +772,7 @@ def post_reply_distinguish(auth, data):
 
     user_id = authorise_api_user(auth)
 
-    reply = db.session.get(PostReply, reply_id)
+    reply = a_reply(reply_id)
     author = reply.author
 
     if not author.id == user_id:
@@ -767,7 +811,7 @@ def get_reply_like_list(auth, data):
         limit = current_app.config["PAGE_LENGTH"]
 
     user = authorise_api_user(auth, return_type='model')
-    post_reply = db.session.get(PostReply, comment_id)
+    post_reply = a_reply(comment_id)
 
     if post_reply.community.is_moderator(user) or user.is_admin() or user.is_staff():
         banned_from_site_user_ids = list(db.session.execute(text('SELECT id FROM "user" WHERE banned = true')).scalars())

@@ -17231,3 +17231,50 @@ Two slices, 151 rows, **five production defects** (D1189–D1193). Every
 statement covered; floored at 98.
 
 **Next free number: D1194.**
+
+---
+
+## Round 95 — sub-project 84 slice H: the comment API's actions
+
+**The round in one line: FOUR production defects -- ten endpoints crashed on
+an id nobody holds, and taking back a vote you never cast was a 500 for a
+comment and a no-op for a post.**
+
+### 1. TEN ENDPOINTS, ONE SHAPE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1194** | `app/api/alpha/utils/reply.py` (ten sites) | **EVERY COMMENT ENDPOINT READ ATTRIBUTES OFF A `db.session.get(...)` THAT ANSWERS None.** A caller naming a comment, post or report that does not exist got an AttributeError -- a 500 -- rather than an answer. One helper, `a_reply`, now holds the lookup for the nine comment sites, so they cannot drift apart again; the post and community sites carry their own. | **fixed** | ten measurements, one per endpoint: `PROBE bm get_reply: AttributeError: 'NoneType' object has no attribute 'community_id'`, `put_reply: ... 'language_id'`, `post_reply_report: ... 'user_id'`, `post_reply_mark_as_read: ... 'id'`, `post_reply_mark_as_answer: ... 'user_id'`, `post_reply_distinguish: ... 'author'`, `get_reply_like_list: ... 'community'`, `put_reply_report_resolve: ... 'suspect_post_reply_id'`, `get_reply_report_list: ... 'community'` |
+
+### 2. THE VOTE YOU NEVER CAST
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1196** | `app/models.py:3352` | **`PostReply.vote` REMAPPED 'reversal' ONLY WHEN AN EXISTING VOTE WAS FOUND**, so a reversal with nothing to reverse fell through to `raise ValueError('unresolvable vote direction')`. The API sends score 0 for "take my vote back", so the same request was a **500 for a comment and a no-op for a post** -- `Post.vote` answers None for it. The explicit early return is what `Post.vote` has; the ValueError below stays load-bearing for a direction that is none of the three, which is what :3357's comment is about.<br><br>**This repairs a divergence two earlier rounds registered rather than fixed.** `tests/test_shared_reply_interactions.py`'s `test_a_reversal_with_no_existing_vote_is_not_refused_by_the_gate` pinned the 500 and said so in its own docstring -- "That divergence is registered, not repaired here" -- and D408 recorded the `Post.vote` side of it. That pin turned red on this round's full suite and has been updated to the repaired behaviour, keeping its real witness: no `PostReplyVote` is written, which is what distinguishes the early return from the mutant that arm exists to stop. | **fixed** | `PROBE bn1 comment: ValueError: unresolvable vote direction: 'reversal'` against `PROBE bn2 post: accepted` |
+
+### 3. A LANGUAGE THAT IS NOT SET
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1195** | `app/api/alpha/utils/reply.py:474` | `if language_id < 2` on a value that can be None: the default is `site_language_id()`, which answers None when the Site carries no language and the Language table has no 'en' row -- a fresh instance before its languages are seeded. `put_reply`, the sibling one function below, already writes `is None or ... < 2`. Fact 478. | **fixed** | `PROBE bm post_reply: TypeError: '<' not supported between instances of 'NoneType' and 'int'` |
+
+### 4. DEAD CODE, REMOVED
+
+| ID | Where | What | Status |
+|---|---|---|---|
+| **D1197** | `app/api/alpha/utils/reply.py:452, 566, 632` | Three `if not user: raise Exception("incorrect login")` guards under `authorise_api_user(auth, return_type="model")`, which raises for every way authorisation can fail and never answers a falsy user. | **fixed** |
+
+### 5. WHAT THE MUTATION PASS FOUND
+
+30 mutants, 29 killed on the measuring pass. The survivor was a row of mine:
+the null-`distinguished` coercion is invisible both in the view (which
+renders a null flag as False anyway) and in the column (which is only written
+for a moderator), so the row had to assert on what `edit_reply` was handed.
+
+One production change came out of the test-writing rather than a probe: the
+resolve endpoint's community lookup now tests `report.in_community_id` before
+calling `db.session.get`, because `get(Community, None)` warns `SAWarning:
+fully NULL primary key identity cannot load any object` -- and a report that
+names no community is exactly what a conversation report looks like.
+
+**Next free number: D1198.**

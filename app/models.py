@@ -3358,11 +3358,28 @@ class PostReply(db.Model):
         from app.utils import wilson_confidence_lower_bound
         with redis_client.lock(f"lock:post_reply:{self.id}", timeout=10, blocking_timeout=6):
             existing_vote = db.session.query(PostReplyVote).filter_by(user_id=user.id, post_reply_id=self.id).first()
-            if existing_vote and vote_direction == 'reversal':  # api sends '1' for upvote, '-1' for downvote, and '0' for reversal
-                if existing_vote.effect == 1:
-                    vote_direction = 'upvote'
-                elif existing_vote.effect == -1:
-                    vote_direction = 'downvote'
+            # D1196. This used to read `if existing_vote and vote_direction ==
+            # 'reversal':`, so a reversal with NOTHING TO REVERSE fell through
+            # to the ValueError below -- while `Post.vote` answers None for
+            # exactly the same request. The API sends '0' for a reversal, so
+            # the same call was a 500 for a comment and a no-op for a post:
+            #
+            #     PROBE bn1 comment: ValueError: unresolvable vote direction: 'reversal'
+            #     PROBE bn2 post: accepted
+            #
+            # The early return is what `Post.vote` has, and it keeps the
+            # ValueError below load-bearing for a direction that is none of
+            # the three -- which is what :3357's comment is about.
+            if vote_direction == 'reversal':  # api sends '1' for upvote, '-1' for downvote, and '0' for reversal
+                if existing_vote:
+                    if existing_vote.effect == 1:
+                        vote_direction = 'upvote'
+                    elif existing_vote.effect == -1:
+                        vote_direction = 'downvote'
+                    else:
+                        return None  # no point reversing a vote with no effect
+                else:
+                    return None      # cannot reverse non-existent vote
             if vote_direction != 'upvote' and vote_direction != 'downvote':
                 # Was an assert, and asserts vanish under `python -O`. This one is
                 # load-bearing: unlike Post.vote above, `:3321` remaps 'reversal' only
