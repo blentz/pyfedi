@@ -52,7 +52,6 @@ def get_private_message_list(auth, data):
 def get_private_message_conversation(auth, data):
     page = int(data['page']) if 'page' in data else 1
     limit = int(data['limit']) if 'limit' in data else 10
-    person_id = int(data['person_id'])
 
     if limit > current_app.config["PAGE_LENGTH"]:
         limit = current_app.config["PAGE_LENGTH"]
@@ -62,17 +61,29 @@ def get_private_message_conversation(auth, data):
     conversation = None
     conversation_ids = []
 
+    # D1168. `person_id = int(data['person_id'])` stood at the top, ten lines
+    # above the `if 'person_id' in data` that was meant to guard it, so EVERY
+    # call that did not pass one -- including the `conversation_id` form this
+    # endpoint documents -- was `KeyError: 'person_id'`. Measured:
+    #
+    #     PROBE ba3 outcome: KeyError: 'person_id'   (conversation_id given)
+    #     PROBE ba6 outcome: KeyError: 'person_id'   (neither given)
     if 'person_id' in data:
         conversation_ids = db.session.execute(text(
             "SELECT conversation_id FROM conversation_member WHERE user_id = :person_id"),
-            {"person_id": person_id}).scalars()
-    
+            {"person_id": int(data['person_id'])}).scalars()
+
+    # `.scalars()` answers a ScalarResult, which is a ONE-SHOT iterator: the
+    # membership test below consumes it, and the query after that filters on
+    # it again. A list is read as many times as it is asked for.
     joined_conversations = db.session.execute(text(
         "SELECT conversation_id FROM conversation_member WHERE user_id = :user_id AND joined = :state"),
-        {"user_id": user_id, "state": True}).scalars()
-    
+        {"user_id": user_id, "state": True}).scalars().all()
+
     if 'conversation_id' in data:
         conversation = db.session.get(Conversation, data['conversation_id'])
+        if conversation is None:
+            raise Exception("User is not a member of this conversation")
         conversation_ids = [conversation.id]
         if conversation.id not in joined_conversations:
             raise Exception("User is not a member of this conversation")
@@ -119,16 +130,18 @@ def post_leave_conversation(auth, data):
     conversation_id = data["conversation_id"]
     conversation = db.session.get(Conversation, conversation_id)
 
+    # D1170. A second `if conversation.is_member(user):` wrapped the body,
+    # immediately below the guard that has already refused everyone it would
+    # have excluded: an arm that could not be false.
     if not conversation or not conversation.is_member(user):
         raise Exception("You are not a part of this conversation")
 
-    if conversation.is_member(user):
-        db.session.execute(text("UPDATE conversation_member SET joined = :state WHERE user_id = :person_id AND conversation_id = :conversation_id"),
-                           {"state": False, "person_id": user.id, "conversation_id": conversation_id})
-        db.session.commit()
+    db.session.execute(text("UPDATE conversation_member SET joined = :state WHERE user_id = :person_id AND conversation_id = :conversation_id"),
+                       {"state": False, "person_id": user.id, "conversation_id": conversation_id})
+    db.session.commit()
 
-        conversation.delete_if_abandoned()
-    
+    conversation.delete_if_abandoned()
+
     return
 
 
@@ -237,16 +250,19 @@ def post_private_message_report(auth, data):
                     targets=targets_data)
     db.session.add(report)
 
-    already_notified = set()
+    # D1171. An `already_notified = set()` stood here with `if admin.id not in
+    # already_notified:` around the body -- and nothing ever added to the set,
+    # so the test was always true. A de-duplication that de-duplicates nothing
+    # reads like the question has been dealt with; `Site.admins()` answers
+    # distinct rows, so there is nothing here to de-duplicate.
     for admin in Site.admins():
-        if admin.id not in already_notified:
-            notify = Notification(title='Reported conversation with user', url='/admin/reports',
-                                  user_id=admin.id,
-                                  author_id=user_id, notif_type=NOTIF_REPORT,
-                                  subtype='chat_conversation_reported',
-                                  targets=targets_data)
-            db.session.add(notify)
-            admin.unread_notifications += 1
+        notify = Notification(title='Reported conversation with user', url='/admin/reports',
+                              user_id=admin.id,
+                              author_id=user_id, notif_type=NOTIF_REPORT,
+                              subtype='chat_conversation_reported',
+                              targets=targets_data)
+        db.session.add(notify)
+        admin.unread_notifications += 1
     db.session.commit()
 
     return {"private_message_report_view": private_message_view(private_message, variant=3, report=report)}
@@ -258,7 +274,28 @@ def post_private_message_conversation_report(auth, data):
     reason = data["reason"]
     conversation = db.session.get(Conversation, conversation_id)
 
-    if not (conversation or conversation.is_member(user) or user_access("administer all users", user.id)):
+    # D1167. This was
+    #
+    #     if not (conversation or conversation.is_member(user) or
+    #             user_access("administer all users", user.id)):
+    #
+    # -- `or` where each arm was meant to be required. A conversation that
+    # exists makes the whole disjunction true, so `not` is false and NOTHING
+    # was refused: any account could report any conversation by id, and the
+    # admin report list hands back that conversation's message history.
+    # Measured:
+    #
+    #     PROBE ba1 outcome: accepted | reports filed: 1
+    #     PROBE ba2 1 reports, bodies: ['SECRETBODY']
+    #
+    # So a stranger could put any two people's private messages in front of
+    # the administrators, one conversation id at a time. The other half of the
+    # same expression: with no such conversation, `conversation.is_member`
+    # was an AttributeError on None.
+    if not conversation:
+        raise Exception("You are not a part of this conversation")
+
+    if not (conversation.is_member(user) or user_access("administer all users", user.id)):
         raise Exception("You are not a part of this conversation")
 
     # Create the report
@@ -373,9 +410,12 @@ def put_private_message_report_resolve(auth, data):
     if not user_access("administer all users", user.id):
         raise Exception("incorrect login")
     
+    # D1169. `db.session.get` answers None for an id that does not resolve,
+    # and the line below it read `.targets` off that None: `AttributeError:
+    # 'NoneType' object has no attribute 'targets'`, measured as PROBE ba7.
     report = db.session.get(Report, report_id)
 
-    if "suspect_message_id" not in report.targets:
+    if report is None or "suspect_message_id" not in report.targets:
         raise Exception("invalid target of resolution")
     
     if resolved:
@@ -399,9 +439,9 @@ def put_private_message_conversation_report_resolve(auth, data):
     if not user_access("administer all users", user.id):
         raise Exception("incorrect login")
     
-    report = db.session.get(Report, report_id)
+    report = db.session.get(Report, report_id)  # D1169's twin
 
-    if not report.suspect_conversation_id:
+    if report is None or not report.suspect_conversation_id:
         raise Exception("invalid target of resolution")
     
     if resolved:
