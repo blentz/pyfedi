@@ -725,7 +725,8 @@ def test_a_document_the_other_server_will_not_hand_over(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-@pytest.mark.parametrize('document', [{}, {'id': 'https://remote.example/x'}])
+@pytest.mark.parametrize('document', [{}, {'type': 'Note'},
+                                      {'id': 'https://remote.example/x'}])
 def test_a_document_missing_what_it_needs(app, env, document):
     """No `id`, or an `id` that matches and no `type`."""
     from app.api.alpha.utils.misc import get_resolve_object
@@ -1003,8 +1004,9 @@ def test_a_community_url_with_no_name_in_it(app, env):
 
     user, author, community, post, reply, baseline = env
 
-    with pytest.raises(Exception) as refused:
-        get_resolve_object(token(user), {'q': local_url('/m/')})
+    with patch('app.api.alpha.utils.misc.search_for_community', return_value=None):
+        with pytest.raises(Exception) as refused:
+            get_resolve_object(token(user), {'q': local_url('/m/')})
 
     assert str(refused.value) == 'No object found.'
 
@@ -1041,8 +1043,9 @@ def test_a_person_url_with_no_name_in_it(app, env):
 
     user, author, community, post, reply, baseline = env
 
-    with pytest.raises(Exception) as refused:
-        get_resolve_object(token(user), {'q': local_url('/u/')})
+    with patch('app.api.alpha.utils.misc.search_for_user', return_value=None):
+        with pytest.raises(Exception) as refused:
+            get_resolve_object(token(user), {'q': local_url('/u/')})
 
     assert str(refused.value) == 'No object found.'
 
@@ -1052,8 +1055,9 @@ def test_a_feed_url_with_no_name_in_it(app, env):
 
     user, author, community, post, reply, baseline = env
 
-    with pytest.raises(Exception) as refused:
-        get_resolve_object(token(user), {'q': local_url('/f/')})
+    with patch('app.api.alpha.utils.misc.search_for_feed', return_value=None):
+        with pytest.raises(Exception) as refused:
+            get_resolve_object(token(user), {'q': local_url('/f/')})
 
     assert str(refused.value) == 'No object found.'
 
@@ -1379,14 +1383,71 @@ def test_seven_suggestions_even_when_the_thread_fills_them(app, env):
     from app.api.alpha.utils.misc import get_suggestion
 
     user, author, community, post, reply, baseline = env
-    for number in range(5):
+    # Seven from the thread fills the list, so the loop below it breaks on
+    # its first iteration rather than running out of candidates.
+    for number in range(7):
         somebody = make_user(baseline.instance_local, f'samename{number}',
                              local=True)
         make_post_reply(post, somebody, body=f'reply {number}')
-    for number in range(5, 10):
+    for number in range(7, 12):
         make_user(baseline.instance_local, f'samename{number}', local=True)
     db.session.commit()
 
     answer = get_suggestion({'q': '@samename', 'post_id': post.id})
 
     assert len(answer['result']) == 7
+
+
+def test_a_lookalike_domain_is_not_this_instance(app, env):
+    """`@name@sub.<server>` ends with our domain but is not it, so the
+    at-notation branch trims the name before asking whether it is here."""
+    from app.api.alpha.utils.misc import get_resolve_object
+
+    user, author, community, post, reply, baseline = env
+    name = f"@{author.user_name}@sub.{current_app.config['SERVER_NAME']}"
+
+    with patch('app.api.alpha.utils.misc.search_for_user',
+               return_value=author) as searched:
+        answer = get_resolve_object(token(user), {'q': name})
+
+    assert answer['person']['person']['id'] == author.id
+    assert searched.call_args_list[0].args[0] == author.user_name.lower()
+
+
+def test_seven_suggestions_from_the_looser_search_too(app, env):
+    """The cap is checked in the second loop as well, which only runs when
+    the first one left room."""
+    from app.api.alpha.utils.misc import get_suggestion
+
+    user, author, community, post, reply, baseline = env
+    # Six whose name STARTS with the query, so the prefix loop leaves room
+    # for exactly one more -- and two that only the `%name%` search finds,
+    # given the reputation to sort FIRST in it. The second loop then reaches
+    # seven on its first candidate and breaks on its second.
+    for number in range(6):
+        make_user(baseline.instance_local, f'findme{number}', local=True)
+    for number in range(2):
+        somebody = make_user(baseline.instance_local, f'xx_findme{number}',
+                             local=True)
+        somebody.reputation = 100
+    db.session.commit()
+
+    answer = get_suggestion({'q': '@findme'})
+
+    assert len(answer['result']) == 7
+
+
+def test_an_at_query_that_names_nobody_here(app, env):
+    """The at-notation branch of a local request: the name is ours to
+    resolve, and nobody answers to it."""
+    from app.api.alpha.utils.misc import get_resolve_object
+
+    user, author, community, post, reply, baseline = env
+    name = f"@nosuch@{current_app.config['SERVER_NAME']}"
+
+    with patch('app.api.alpha.utils.misc.search_for_user',
+               return_value=None):
+        with pytest.raises(Exception) as refused:
+            get_resolve_object(token(user), {'q': name})
+
+    assert str(refused.value) == 'No object found.'

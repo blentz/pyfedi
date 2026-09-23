@@ -10641,3 +10641,11 @@ replies, posts, communities, users and feeds -- so a fixture whose actor
 carries the very url the row is about is answered there, and the dispatch the
 row means to exercise never runs. Give the fixture a different
 `ap_profile_id` when testing how a url is DISPATCHED.
+
+**558. A LOOP'S `break` NEEDS A CANDIDATE AFTER THE ONE THAT FILLS THE
+LIST.** `get_suggestion`'s second loop breaks at seven, and it is entered
+only when fewer than seven are held -- so the break fires only if the list
+reaches seven with candidates still to come. A row that simply supplies nine
+names never reaches it: the query's own `limit(7)` runs out first. Give the
+loop a candidate that sorts FIRST and is new (`reputation` decides the
+order), with the rest already in the list.
