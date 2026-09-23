@@ -10615,3 +10615,14 @@ over-length value is refused, matched on the substring `'too long'`, passes
 with the application's own guard removed: Postgres answers `value too long
 for type character varying(50)` for the same input. Assert the exact message
 the guard raises, and that nothing was written.
+
+**554. A SORT ROW THAT ASSERTS A COUNT TESTS NOTHING.** Four rows here
+parametrised over Hot/Top/Old/New and asserted `len(...) == 2`, which every
+sort satisfies -- all four passed with the sort clause deleted. Build rows
+whose ORDER differs per sort (a high `ranking`, a high vote count, an old
+`posted_at`, a new one) and assert which one comes first.
+
+**555. A FALLBACK NEEDS TWO ROWS THAT DISAGREE.** `file.file_name or
+str(furl(file.source_url).path).split('/')[-1]` cannot be tested with a file
+whose stored name equals the last segment of its url: both halves answer the
+same string. Make them differ.
