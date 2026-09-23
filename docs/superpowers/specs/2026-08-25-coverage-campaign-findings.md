@@ -16901,3 +16901,57 @@ attacker reaches before holding an account: login, registration, the
 verification link, the reset link, three OAuth providers and the directory.
 
 **Next free number: D1167.**
+
+---
+
+## Round 88 — sub-project 84 slice A: `app/api/alpha/utils/private_message.py`
+
+**The round in one line: THREE production defects -- any account could put any
+two people's private conversation in front of the instance's administrators,
+and the documented way to read your own conversation was a KeyError for
+everybody.**
+
+Private messages are the one surface on an instance whose whole purpose is
+that nobody else reads them. The module was at 7.3%.
+
+### 1. THE REPORT THAT SHOWED ADMINS SOMEBODY ELSE'S CONVERSATION
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1167** | `app/api/alpha/utils/private_message.py:261` | **ANY ACCOUNT COULD REPORT ANY CONVERSATION.** `if not (conversation or conversation.is_member(user) or user_access("administer all users", user.id)):` -- **`or`** where each arm was meant to be required. A conversation that EXISTS makes the disjunction true, so `not` is false and nothing was refused. And `get_private_message_conversation_report_list` hands an administrator the **message history** of every reported conversation, so a stranger could walk conversation ids and have other people's private messages read by the instance's staff, one report at a time. The same expression's other half: with no such conversation, `conversation.is_member` was an AttributeError on None. | **fixed** | `PROBE ba1 outcome: accepted \| reports filed: 1` and `PROBE ba2 1 reports, bodies: ['SECRETBODY']` |
+
+### 2. THE ENDPOINT THAT COULD NOT BE CALLED
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1168** | `app/api/alpha/utils/private_message.py:55` | **`person_id = int(data['person_id'])` STOOD TEN LINES ABOVE THE `if 'person_id' in data` MEANT TO GUARD IT.** Every call that did not pass one -- including the `conversation_id` form the endpoint documents -- was `KeyError: 'person_id'`. Behind it sat a second bug the first one hid: `joined_conversations` came from `.scalars()`, a ONE-SHOT iterator, which the membership test consumed and the query below filtered on again, so a legitimate member got an empty conversation once the KeyError was fixed. `.all()` materialises it. | **fixed** | `PROBE ba3 outcome: KeyError: 'person_id'` (conversation_id given) and `PROBE ba6` (neither given) |
+
+### 3. None, READ AS AN OBJECT
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1169** | `app/api/alpha/utils/private_message.py:376, 402` | Both resolve endpoints read `.targets` / `.suspect_conversation_id` straight off a `db.session.get` that answers None for an id that does not resolve. | **fixed** | `PROBE ba7 outcome: AttributeError: 'NoneType' object has no attribute 'targets'` |
+
+### 4. TWO DEAD ARMS
+
+| ID | Where | What | Status |
+|---|---|---|---|
+| **D1170** | `:125` | `post_leave_conversation` tested `if conversation.is_member(user):` immediately below the guard that has already refused everyone it would have excluded. | **fixed** |
+| **D1171** | `:240` | `post_private_message_report` built `already_notified = set()` and tested `if admin.id not in already_notified:` -- and **nothing ever added to the set**. A de-duplication that de-duplicates nothing reads like the question has been dealt with. `Site.admins()` answers distinct rows, so there is nothing here to de-duplicate; D1162 was the same question answered wrongly one module away. | **fixed** |
+
+### 5. AN EQUIVALENT MUTANT
+
+| ID | Where | What |
+|---|---|---|
+| **D1172** | `:93` | `if conversation_ids and joined_conversations:` -- dropping the second conjunct changes nothing, because the query it guards filters `conversation_id.in_(joined_conversations)` and an empty list yields the same empty answer. |
+
+### 6. WHAT THE MUTATION PASS FOUND
+
+30 mutants, 28 killed on the measuring pass. One survivor was **my own
+mutant**: `filter(..., True)` adds nothing to a SQLAlchemy filter, so it could
+not fail. Rewritten to drop the `recipient_id != None` clause outright, it
+needed a row for a message that has not been addressed yet -- a real state,
+because `send_message` writes the row before it knows who the other member is.
+The other survivor is D1172.
+
+**Next free number: D1173.**
