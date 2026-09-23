@@ -210,10 +210,16 @@ def get_user_replies(auth, data, mentions=False):
         for result in results:
             # result[0] = Notification.targets
             # result[1] = Notification.read
+            # D1184. The second append had no membership test, while the one
+            # above it does -- so a notification of the right subtype whose
+            # `targets` carry no `comment_id` broke the whole endpoint:
+            # `KeyError: 'comment_id'`, measured as PROBE bg3 and bg4. The
+            # column is a free-form JSON dict and several subtypes write
+            # different keys into it.
             if 'comment_id' in result[0]:
                 all_comment_ids.append(result[0]['comment_id'])
-            if result[1] == True:
-                read_comment_ids.append(result[0]['comment_id'])
+                if result[1] == True:
+                    read_comment_ids.append(result[0]['comment_id'])
 
     replies = PostReply.query.filter(PostReply.id.in_(all_comment_ids))
     if sort == "Hot":
