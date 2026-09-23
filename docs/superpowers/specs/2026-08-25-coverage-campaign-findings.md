@@ -17143,3 +17143,46 @@ D1186–D1188) and four findings pinned as product decisions (D1178, D1182,
 D1183, D1185). Every statement covered; floored at 99.
 
 **Next free number: D1189.**
+
+---
+
+## Round 93 — sub-project 84 slice F: search and resolve, in `app/api/alpha/utils/misc.py`
+
+**The round in one line: FOUR production defects, three of them the same
+mistake -- `and` binds tighter than `or`, and this file writes long mixed
+chains without parentheses.**
+
+### 1. OPERATOR PRECEDENCE, THREE TIMES
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1190** | `app/api/alpha/utils/misc.py:152, 335` | **A COMMENT URL THAT NAMES ITS COMMUNITY RESOLVED TO THE COMMUNITY.** The local dispatch reads `startswith('!') or ('/c/' in q and '/p/' not in q) or ('/m/' in q and '/t/' not in q) and ('/comment/' not in q)` -- and `and` binds tighter, so the comment exclusion applied to the THIRD disjunct alone. `https://<server>/c/<name>/comment/<id>` is the shape PieFed's own comment permalinks take, so resolving one answered with the community it is in. The same chain appears again on the fetch path, where it decided whether a remote permalink was fetched as an actor. | **fixed** | `PROBE bj2 outcome: ['community']`, against `PROBE bj3 outcome: ['comment']` for the same comment addressed without its community |
+| **D1191** | `app/api/alpha/utils/misc.py:363` | `ap_json['type'] == 'Person' or ... == 'Service' or ... == 'Group' or ... == 'Feed' and 'preferredUsername' in ap_json` -- the membership test guarded the **Feed** arm alone, while the line below reads that key for all four types. An actor document of any other type carrying no `preferredUsername` was a KeyError. | **fixed** | `PROBE bk1 outcome: KeyError: 'preferredUsername'` |
+
+### 2. THE GUARD THAT ASKED FOR THE WRONG THING
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1189** | `app/api/alpha/utils/misc.py:25` | `if not data or ('q' not in data and 'type_' not in data)` -- **either** key satisfied the guard, and `data['type_']` is read on the next line. A search carrying only `q` was `KeyError: 'type_'`. The route's schema marks both required, so this is what a direct caller hits; the guard now asks for what the function uses. | **fixed** | `PROBE bj1 outcome: KeyError: 'type_'` |
+
+### 3. THE ARGUMENTS BUILT FOR THE WRONG REASON
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1192** | `app/api/alpha/utils/misc.py:56` | **`feed_dict` WAS BUILT FROM THE SHAPE OF THE QUERY AND USED WHEREVER A FEED CAME BACK.** It is populated only when the query carries `/f/` or begins with `~` -- and three `feed_view(feed=object, **feed_dict)` calls can be reached by a query of any shape, because what a lookup ANSWERS with is not decided by how it was addressed. A `/m/` url resolving to a feed was `TypeError: feed_view() argument after ** must be a mapping, not NoneType`. The arguments depend on the caller, not the query, so they are now a function (`feed_view_arguments`) called where they are needed. | **fixed** | `PROBE bl1 outcome: TypeError: app.api.alpha.views.feed_view() argument after ** must be a mapping, not NoneType` |
+
+### 4. WHAT THE MUTATION PASS FOUND
+
+26 mutants, 22 killed on the measuring pass. Three survivors were rows of
+mine: D1190's twin on the fetch path had no row of its own; the bare feed
+url's row asserted the answer rather than the address the lookup was made
+with; and the seven-suggestion cap is checked INSIDE the loop, which a row
+relying on the query's own `limit(7)` cannot reach. All three added or
+rewritten; 26/26.
+
+Two of those rows also ran into the same trap twice: `get_resolve_object`
+opens with `filter_by(ap_profile_id=query)`, so a fixture whose actor carries
+the url under test is answered there and the dispatch under test never runs
+(fact 557).
+
+**Next free number: D1193.**
