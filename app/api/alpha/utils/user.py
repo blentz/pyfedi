@@ -334,8 +334,16 @@ def put_user_save_user_settings(auth, data):
     genai_visibility = data['genai_visibility'] if 'genai_visibility' in data else None
     show_read_posts = data['show_read_posts'] if 'show_read_posts' in data else None
     about = data['bio'] if 'bio' in data else None
-    default_sort = data['default_sort_type'] if 'default_sort' in data else None
-    default_comment_sort = data['default_comment_sort_type'] if 'default_comment_sort' in data else None
+    # D1186. These read `default_sort_type` and tested for `default_sort` --
+    # two different keys. The schema declares `default_sort_type` and
+    # marshmallow passes only declared fields, so the test could never be
+    # true: BOTH settings were unchangeable through the API, silently.
+    # Measured:
+    #
+    #     PROBE bh1 outcome: accepted | default_sort now: 'hot'   (asked for 'New')
+    #     PROBE bh2 outcome: KeyError: 'default_sort_type'        (sending the tested key)
+    default_sort = data['default_sort_type'] if 'default_sort_type' in data else None
+    default_comment_sort = data['default_comment_sort_type'] if 'default_comment_sort_type' in data else None
     extra_fields = data['extra_fields'] if 'extra_fields' in data else None
     reply_collapse_threshold = data['reply_collapse_threshold'] if 'reply_collapse_threshold' in data else None
     reply_hide_threshold = data['reply_hide_threshold'] if 'reply_hide_threshold' in data else None
@@ -854,6 +862,14 @@ def put_user_notification_state(auth, data):
     # commit that change to the db
     db.session.commit()
 
+    # D1187. `_process_notification_item` builds `status` from `item.read`,
+    # and it runs ABOVE the write -- so marking a notification read answered
+    # `'Unread'`, contradicting the change it had just made. Measured: `PROBE
+    # bh4 answered status: 'Unread' | stored read: True`. The view is built
+    # first on purpose: it is what validates the notification is one this
+    # endpoint can represent, and nothing should be written if it is not.
+    res['status'] = 'Read' if read_state else 'Unread'
+
     return res
 
 
@@ -874,6 +890,13 @@ def put_user_mark_all_notifications_read(auth):
     user = authorise_api_user(auth, return_type='model')
     # set all the user's notifs as read
     db.session.execute(text('UPDATE notification SET read=true WHERE user_id = :user_id'), {'user_id': user.id})
+    # D1188. The rows were updated and `user.unread_notifications` was not --
+    # and that column is what `get_user_unread_count` answers with, so the
+    # badge kept its number after "mark all as read". Measured: `PROBE bh5
+    # counter column: 1 | counted unread: {'count': 0}`.
+    # `post_user_mark_all_as_read`, the same intent one endpoint away, zeroes
+    # it: fact 478 again.
+    user.unread_notifications = 0
     # save the changes to the db
     db.session.commit()
     # return a message, though it may not be used by the client

@@ -17087,3 +17087,59 @@ sub-project, and **every one of the nine survivors was a row of mine**:
 All rewritten or added; 30/31, the survivor being D1185.
 
 **Next free number: D1186.**
+
+---
+
+## Round 92 — sub-project 84 slice E: settings and notifications, closing `app/api/alpha/utils/user.py`
+
+**The round in one line: THREE production defects -- two account settings
+could never be changed through the API, marking a notification read answered
+that it was unread, and "mark all as read" left the badge showing its old
+number.**
+
+### 1. TWO SETTINGS NOBODY COULD CHANGE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1186** | `app/api/alpha/utils/user.py:337` | **`data['default_sort_type'] if 'default_sort' in data else None`** -- the value is read from one key and the test is made against another. The schema declares `default_sort_type`, and marshmallow passes only declared fields, so the test could never be true: the default sort and the default comment sort were BOTH unchangeable through the API, silently, and sending the key the code tested for was a `KeyError`. | **fixed** | `PROBE bh1 outcome: accepted \| default_sort now: 'hot'` after asking for `'New'`; `PROBE bh2 outcome: KeyError: 'default_sort_type'`; `PROBE bh3` for the comment-sort twin |
+
+### 2. THE ANSWER THAT CONTRADICTED THE WRITE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1187** | `app/api/alpha/utils/user.py:849` | `put_user_notification_state` builds its response with `_process_notification_item`, which sets `status` from `item.read` -- and that runs **above** the write. So marking a notification read answered `'Unread'`. The view is still built first, because it is what validates the notification is one this endpoint can represent and nothing should be written if it is not; the status is corrected after the commit. | **fixed** | `PROBE bh4 answered status: 'Unread' \| stored read: True` |
+
+### 3. THE BADGE THAT KEPT ITS NUMBER
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1188** | `app/api/alpha/utils/user.py:883` | `put_user_mark_all_notifications_read` updated the notification rows and left `user.unread_notifications` alone -- and that column is what `get_user_unread_count` answers with, so the unread badge kept its number after the account had marked everything read. `post_user_mark_all_as_read`, the same intent one endpoint away, zeroes it. Fact 478 again. | **fixed** | `PROBE bh5 counter column: 1 \| counted unread: {'count': 0}` |
+
+### 4. WHAT THE COVERAGE FOUND WITHOUT A DEFECT
+
+Four `if remove_file:` guards in the avatar and cover paths cannot be false:
+`user_avatar_id_fkey` and `user_cover_id_fkey` stop a File row being deleted
+while an account points at it, so the id cannot dangle. A row that tries
+answers `psycopg2.errors.ForeignKeyViolation: update or delete on table
+"file" violates foreign key constraint "user_avatar_id_fkey"`. Left as
+partial branches, recorded in coverage_floors.ini rather than exercised
+through a state the schema forbids.
+
+### 5. WHAT THE MUTATION PASS FOUND
+
+38 mutants, 37 killed on the measuring pass. The survivor was a **real gap
+guarding a subtle default**: `display_name = data['display_name'] if
+'display_name' in data else False`. `False` is load-bearing, because `None`
+is the value that REMOVES the title -- so with the default changed to None,
+any settings call about anything else would have wiped the display name, and
+no row noticed. 38/38 with that row added.
+
+---
+
+## `app/api/alpha/utils/user.py` closed
+
+Three slices, 188 rows, **nine production defects** (D1175–D1181, D1184,
+D1186–D1188) and four findings pinned as product decisions (D1178, D1182,
+D1183, D1185). Every statement covered; floored at 99.
+
+**Next free number: D1189.**
