@@ -10626,3 +10626,11 @@ whose ORDER differs per sort (a high `ranking`, a high vote count, an old
 str(furl(file.source_url).path).split('/')[-1]` cannot be tested with a file
 whose stored name equals the last segment of its url: both halves answer the
 same string. Make them differ.
+
+**556. A FOREIGN KEY CAN MAKE A NIL GUARD UNREACHABLE.** `if remove_file:`
+after `db.session.get(File, user.avatar_id)` cannot be false, because
+`user_avatar_id_fkey` stops the File row being deleted while the account
+points at it -- a row that sets up the dangling id gets
+`psycopg2.errors.ForeignKeyViolation` instead. Check the constraint before
+deciding a defensive branch is a coverage gap; the honest answer is a
+partial branch with its reason recorded, not a test of an impossible state.
