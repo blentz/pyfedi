@@ -195,17 +195,17 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
                     raise Exception('No object found.')
             
             # This is a community specified by url
+            # D1193. A `try: ... except: comm_name = None` and an
+            # `if not comm_name: raise` stood here, and neither could be
+            # taken: this branch is reached only when `/c/` or `/m/` is in
+            # the query, and `r"/[cm]/(.*?)(/|$)"` always matches such a
+            # query -- the group can be empty, so `"!" + group(1)` is at
+            # worst `"!"`, which is truthy. The same pair stood in the user
+            # and feed branches below, on the same reasoning.
             comm_pattern = re.compile(r"/[cm]/(.*?)(/|$)")
             matches = re.search(comm_pattern, query)
-            
-            try:
-                comm_name = "!" + matches.group(1)
-            except:
-                comm_name = None
-            
-            if not comm_name:
-                raise Exception('No object found.')
-            
+            comm_name = "!" + matches.group(1)
+
             if "@" not in comm_name:
                 comm_name = comm_name + "@" + current_app.config['SERVER_NAME']
 
@@ -233,17 +233,10 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
                     raise Exception('No object found.')
             
             # This is a user specified by url
-            user_pattern = re.compile(r"/u/(.*?)(/|$)")
+            user_pattern = re.compile(r"/u/(.*?)(/|$)")  # D1193, as above
             matches = re.search(user_pattern, query)
+            user_name = matches.group(1)
 
-            try:
-                user_name = matches.group(1)
-            except:
-                user_name = None
-            
-            if not user_name:
-                raise Exception('No object found.')
-            
             if user_name.endswith(current_app.config['SERVER_NAME']) and '@' in user_name:
                 user_name = user_name.split('@')[0]
 
@@ -266,12 +259,13 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             elif "/t/" in query:
                 # Post url from mbin
                 post_pattern = re.compile(r"/t/(\d*)(/|$)")
-            else:
-                post_pattern = None
 
-            if not post_pattern:
-                raise Exception('No object found.')
-            
+            # D1193's fourth site: an `else: post_pattern = None` with an
+            # `if not post_pattern: raise` under it, where this branch is
+            # reached only when one of the three patterns is in the query.
+            # The `except` below it IS reachable -- `/post/notanumber` does
+            # not match -- and stays.
+
             # Do the regex
             matches = re.search(post_pattern, query)
             try:
@@ -323,17 +317,10 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
                     raise Exception('No object found.')
             
             # This is a feed specified by url
-            feed_pattern = re.compile(r"/[f]/(.*?)($)")
+            feed_pattern = re.compile(r"/[f]/(.*?)($)")  # D1193, as above
             matches = re.search(feed_pattern, query)
+            feed_name = "~" + matches.group(1)
 
-            try:
-                feed_name = "~" + matches.group(1)
-            except:
-                feed_name = None
-            
-            if not feed_name:
-                raise Exception('No object found.')
-            
             if "@" not in feed_name:
                 feed_name = feed_name + "@" + current_app.config['SERVER_NAME']
             

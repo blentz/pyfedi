@@ -17186,3 +17186,48 @@ the url under test is answered there and the dispatch under test never runs
 (fact 557).
 
 **Next free number: D1193.**
+
+---
+
+## Round 94 — sub-project 84 slice G: the modlog, closing `app/api/alpha/utils/misc.py`
+
+**The round in one line: no new defect in the modlog itself -- its one
+load-bearing rule holds -- and four defensive arms removed that the regexes
+above them make unreachable.**
+
+### 1. THE RULE THE MODLOG RESTS ON
+
+`get_modlog` opens every query with
+
+```python
+if not is_admin:
+    base_q = base_q.filter(ModLog.public == True)
+```
+
+`ModLog.public` defaults to False, so an entry is private until somebody says
+otherwise, and this endpoint is the public face of the log. Every filter,
+category and view below is built on that one query. It holds: a private entry
+is invisible to an ordinary account and to an anonymous reader, and visible to
+admins and to staff. Four rows pin it, and the mutation pass confirms each
+arm.
+
+### 2. DEAD CODE, REMOVED
+
+| ID | Where | What | Status |
+|---|---|---|---|
+| **D1193** | `app/api/alpha/utils/misc.py:196, 233, 263, 320` | Four `try: X = matches.group(1) / except: X = None` pairs with `if not X: raise` under them -- and none can be taken. Each branch is reached only when its own substring is in the query (`/c/`, `/u/`, `/f/`, or one of the three post shapes), and each regex matches such a query with a possibly-empty group, so `matches` is never None and `"!" + group(1)` is at worst `"!"`, which is truthy. The post branch's `except` IS reachable (`/post/notanumber` does not match) and stays. | **fixed** |
+
+### 3. WHAT THE MUTATION PASS FOUND
+
+18 mutants, 18 killed on the measuring pass -- the first clean sweep of this
+sub-project. The modlog is a long function but a shallow one: a base query, a
+category table, and nine view builders that differ only in their keys.
+
+---
+
+## `app/api/alpha/utils/misc.py` closed
+
+Two slices, 151 rows, **five production defects** (D1189–D1193). Every
+statement covered; floored at 98.
+
+**Next free number: D1194.**
