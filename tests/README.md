@@ -10609,3 +10609,9 @@ caller was holding is DETACHED once it returns: an attribute written on one
 afterwards is never flushed, and the endpoint's own `db.session.get` reads
 the unchanged row. A test that has to change a row after calling it needs an
 explicit `query(...).update({...})`, and should assert the new value landed.
+
+**553. THE DATABASE SAYS "too long" TOO.** A row asserting that an
+over-length value is refused, matched on the substring `'too long'`, passes
+with the application's own guard removed: Postgres answers `value too long
+for type character varying(50)` for the same input. Assert the exact message
+the guard raises, and that nothing was written.
