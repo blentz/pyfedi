@@ -884,7 +884,16 @@ def post_user_verify_credentials(data):
     else:
         user = User.query.filter(func.lower(User.user_name) == username, User.ap_id == None, User.deleted == False).first()
 
-    if user is None or not user.check_password(password):
+    # D1179. The API's own login (`app/shared/auth.py`, SRC_API) refuses a
+    # banned account with `incorrect_login`; this endpoint answered 200 for
+    # one. A client that asks here whether a password is good was told yes for
+    # an account that cannot log in -- and the pair of answers distinguished a
+    # banned account from a wrong password, which is the account-state oracle
+    # D1131 closed on the web arm. Measured: `PROBE bf6 outcome: accepted`.
+    # `user.id != 1` matches the login's own carve-out for whoever set the
+    # instance up.
+    if user is None or not user.check_password(password) or \
+            (user.id != 1 and user.banned):
         raise BlockingIOError
 
     return {}
@@ -898,6 +907,13 @@ def post_user_set_flair(auth, data):
 
     user = authorise_api_user(auth, return_type='model')
     community_id = data['community_id']
+
+    # D1175. `community_id` is whatever the caller sent, and the INSERT below
+    # carries it into `user_flair.community_id`, which is a foreign key:
+    # `psycopg2.errors.ForeignKeyViolation ... user_flair_community_id_fkey`,
+    # measured as PROBE bf1.
+    if db.session.get(Community, community_id) is None:
+        raise Exception('community not found')
 
     try:
         if flair_text is not None:
@@ -938,7 +954,11 @@ def post_user_set_note(auth, data):
     target_user_id = data["person_id"]
     note_text = data["note"] if "note" in data else None
 
-    # target_user = User.query.get(target_user_id)
+    # D1176. `user_note.target_id` is a foreign key and `person_id` is
+    # whatever the caller sent: `psycopg2.errors.ForeignKeyViolation ...
+    # user_note_target_id_fkey`, measured as PROBE bf3.
+    if db.session.get(User, target_user_id) is None:
+        raise Exception('person not found')
 
     if note_text:
         note_text = note_text.strip()
@@ -972,6 +992,13 @@ def post_user_ban(auth, data):
         if user.id == target_user_id:
             raise Exception('cannot_ban_self')
 
+        # D1177. `ban_user` does `db.session.get(User, person_id)` and then
+        # `to_ban.banned = True`, so an id that does not resolve was
+        # `AttributeError: 'NoneType' object has no attribute 'banned'`.
+        # Measured as PROBE bf5.
+        if db.session.get(User, target_user_id) is None:
+            raise Exception('person not found')
+
         ban_user({'person_id': target_user_id,
                   'ban_ip_address': ban_ip_address,
                   'purge_content': purge_content,
@@ -989,6 +1016,9 @@ def post_user_unban(auth, data):
     if user_access('ban users', user.id) or user_access('manage users', user.id):
         if user.id == target_user_id:
             raise Exception('cannot_unban_self')
+
+        if db.session.get(User, target_user_id) is None:  # D1177's twin
+            raise Exception('person not found')
 
         unban_user({'person_id': target_user_id}, SRC_API, auth)
     else:
@@ -1024,8 +1054,11 @@ def post_user_logout(auth):
 
 
 def post_user_register(data):
-    ...
+    # D1181. This was `...`, and its route loads a response schema from what
+    # it returns -- `Schema().load(None)`. An endpoint that is not written yet
+    # says so, rather than answering 500.
+    raise Exception('not implemented')
 
 
 def get_user_captcha():
-    ...
+    raise Exception('not implemented')  # D1181, as above

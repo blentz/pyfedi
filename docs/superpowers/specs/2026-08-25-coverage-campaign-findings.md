@@ -16994,3 +16994,53 @@ that could not fail:
 Both rewritten; 22/22.
 
 **Next free number: D1175.**
+
+---
+
+## Round 90 — sub-project 84 slice C: the actions of `app/api/alpha/utils/user.py`
+
+**The round in one line: FIVE production defects -- two endpoints carried the
+caller's id straight into a foreign key, banning somebody who does not exist
+was an AttributeError, a BANNED account's credentials verified, and the
+registration and captcha endpoints were registered at a doubled path so
+nobody could reach them.**
+
+### 1. IDS THAT WENT STRAIGHT INTO A FOREIGN KEY
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1175** | `app/api/alpha/utils/user.py:903` | `post_user_set_flair` wrote `UserFlair(community_id=data['community_id'])` with no check that the community exists. | **fixed** | `PROBE bf1 outcome: IntegrityError: (psycopg2.errors.ForeignKeyViolation) ... user_flair_community_id_fkey` |
+| **D1176** | `app/api/alpha/utils/user.py:941` | `post_user_set_note` did the same with `person_id`, which is `user_note.target_id`. | **fixed** | `PROBE bf3 outcome: IntegrityError: ... user_note_target_id_fkey` |
+| **D1177** | `app/api/alpha/utils/user.py:971, 992` | `ban_user` does `db.session.get(User, person_id)` and then `to_ban.banned = True`, so a ban or unban naming an id that does not resolve was an AttributeError on None. Both endpoints check first now. | **fixed** | `PROBE bf5 outcome: AttributeError: 'NoneType' object has no attribute 'banned'` |
+
+### 2. A BANNED ACCOUNT'S CREDENTIALS VERIFIED
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1179** | `app/api/alpha/utils/user.py:887` | **`post_user_verify_credentials` ANSWERED 200 FOR A BANNED ACCOUNT.** The API's own login (`app/shared/auth.py`, SRC_API) refuses one with `incorrect_login`. So a client asking here whether a password is good was told yes for an account that cannot log in -- and the pair of answers distinguished a banned account from a wrong password, which is the account-state oracle D1131 closed on the web arm. The founder's carve-out (`user.id != 1`) matches the login's. | **fixed** | `PROBE bf6 outcome: accepted` |
+
+### 3. TWO ENDPOINTS NOBODY COULD REACH
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1180** | `app/api/alpha/routes.py:1535, 1547` | `/user/register` and `/user/get_captcha` were registered as `@user_bp.route('/api/alpha/user/register')` -- and the blueprint already carries `url_prefix="/api/alpha"`. Every other route in the file is written relative to it, so these two lived at `/api/alpha/api/alpha/...` and the documented paths were 404. | **fixed** | `PROBE bf8 /api/alpha/user/register: 404` against `/api/alpha/api/alpha/user/register: 400` |
+| **D1181** | `app/api/alpha/utils/user.py:1026` | Both utils were `...`, and their routes load a response schema from what they return -- `Schema().load(None)`. An endpoint that is not written yet says so. | **fixed** | the stubs, read |
+
+### 4. REGISTERED AND PINNED
+
+| ID | Where | What | Why not this round |
+|---|---|---|---|
+| **D1178** | `app/api/alpha/utils/user.py:964` | **AN ACCOUNT WITH `ban users` MAY BAN AN ADMINISTRATOR**, including user 1 -- whose `user_access` answers True for everything, but whose `banned` column still stops them logging in. Measured: `PROBE bf4 outcome: accepted \| admin banned: True`. | Whether staff may ban an admin is a product decision: an instance may genuinely need one admin removed by another, and a rule would also have to say what happens to the founder. **Pinned as it stands.** |
+| **D1182** | `app/api/alpha/utils/user.py:1017` | A token carrying no `jti` cannot be revoked, and `post_user_logout` answers `{'success': True}` anyway. `encode_jwt_token` always mints one, so this is only reachable for a token made elsewhere. | A claim the endpoint cannot keep, but refusing might break a client holding an older token. **Pinned as it stands.** |
+| **D1183** | `app/api/alpha/utils/user.py:1006` | An equivalent mutant: dropping `if not auth.startswith('Bearer ')` changes nothing, because `auth[7:]` then cuts into the token and `jwt.decode` raises the same `incorrect_login`. | — |
+
+### 5. WHAT THE MUTATION PASS FOUND
+
+31 mutants, 28 killed on the measuring pass. Two survivors were rows of mine:
+the flair-length row matched on `'too long'`, which **Postgres also says**
+(`value too long for type character varying(50)`), so it passed with the
+guard removed (fact 553); and nothing held `UserNote.user_id == user.id` in
+the replace path, so one person editing a note could have overwritten
+another's about the same target. The third survivor is D1183.
+
+**Next free number: D1184.**
