@@ -10597,3 +10597,15 @@ REFUSES an ordinary account has to use user2 or user3.
 is the same filter: SQLAlchemy drops the literal. A surviving mutant is only
 evidence of a gap once the mutant is known to change behaviour -- check the
 mutation, not just the survival.
+
+**551. `edit_feed` WRITES nsfw/nsfl ONLY WHEN THE INSTANCE ALLOWS THEM.**
+`if g.site.enable_nsfw: feed.nsfw = nsfw` (app/shared/feed.py:377). A row
+asserting that an edit keeps or changes either flag passes whatever the code
+does unless the fixture's Site enables them, because the write never happens.
+
+**552. `join_feed` ENDS WITH `db.session.remove()`.** Its `finally` discards
+the whole scoped session (app/shared/feed.py:110), so every ORM object the
+caller was holding is DETACHED once it returns: an attribute written on one
+afterwards is never flushed, and the endpoint's own `db.session.get` reads
+the unchanged row. A test that has to change a row after calling it needs an
+explicit `query(...).update({...})`, and should assert the new value landed.
