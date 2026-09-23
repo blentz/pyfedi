@@ -17278,3 +17278,55 @@ fully NULL primary key identity cannot load any object` -- and a report that
 names no community is exactly what a conversation report looks like.
 
 **Next free number: D1198.**
+
+---
+
+## Round 96 — sub-project 84 slice I: `get_reply_list`, closing `app/api/alpha/utils/reply.py`
+
+**The round in one line: THREE production defects -- an f-string missing its
+`f`, a listing filter that ran before the query it was meant to narrow, and a
+sort that divided by zero on any comment nobody had voted on.**
+
+### 1. THE F-STRING THAT WAS NOT ONE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1198** | `app/api/alpha/utils/reply.py:201` | `depth_query = ' AND depth <= {max_depth}'` -- **no f-prefix**, so the braces themselves went into the SQL. Every depth-first comment query carrying a `max_depth` was a syntax error, and the aborted transaction took the next query in the same request with it. | **fixed** | `PROBE bp1 max_depth=True: ProgrammingError: (psycopg2.errors.SyntaxError) syntax error at or near "{"` |
+
+### 2. THE FILTER THAT RAN TOO EARLY
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1199** | `app/api/alpha/utils/reply.py:74` | **THE LISTING TYPE WAS SILENTLY IGNORED FOR THREE OF THE FOUR WAYS OF NARROWING A QUERY.** The `type_` block is guarded by `if replies:` and sat ABOVE the `person_id`, `community_id` and no-filter blocks -- none of which had assigned `replies` yet. So `Local` did not exclude remote comments, `Subscribed` did not narrow to what you follow, and the `incorrect login` refusals that guard `Moderating` and `Subscribed` were skipped with them: an anonymous caller asking for the moderating listing was ANSWERED. The block now sits below all three, and still does not apply to the threaded branch, where a conversation is not a listing. | **fixed** | `PROBE bq1 person_id + Local: remote included: True`, `PROBE bq2 community_id + Local: remote included: True`, `PROBE bq3 anonymous + Moderating: accepted` |
+
+### 3. THE SORT THAT DIVIDED BY ZERO
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1200** | `app/api/alpha/utils/reply.py:355` | The Controversial sort's divisor was `coalesce(greatest(up_votes, down_votes), 1)` -- which guards NULL and **not zero**. A comment with no votes at all has `greatest(0, 0)`, so one such comment made the whole listing `psycopg2.errors.DivisionByZero: division by zero`. `greatest(coalesce(up, 0), coalesce(down, 0), 1)` cannot be either. | **fixed** | the DivisionByZero, raised by the `Controversial` row before the fix |
+
+### 4. AN EQUIVALENT MUTANT
+
+| ID | Where | What |
+|---|---|---|
+| **D1201** | `app/api/alpha/utils/reply.py:238` | `if element not in processed:` in the depth-first page walk. `processed.add(element)` runs unconditionally and the page is then fetched with `PostReply.id.in_(...)`, which collapses a doubled id -- so the de-duplication changes the page ARRAY and not the answer, for any shape a test can build. The paging either side of it is pinned; the dedupe itself is recorded here. |
+
+### 5. WHAT THE MUTATION PASS FOUND
+
+33 mutants, 20 killed on the measuring pass -- **thirteen survivors, and
+twelve were rows of mine**. The pattern in nine of them was the same:
+asserting that the wanted comment is IN the answer, which every mutant that
+widens a filter still satisfies. A filter is pinned by what it EXCLUDES.
+The others: a sort row whose two orderings agreed by accident (the
+Controversial comment was also the newest), a `liked_only` row with no
+comment of the reader's own in it, and a `saved_only` row with nothing saved
+but unliked. 32/33 after; the survivor is D1201.
+
+---
+
+## `app/api/alpha/utils/reply.py` closed
+
+Two slices, 150 rows, **six production defects** (D1194-D1200). Every
+statement covered but one the code itself marks unreachable; floored at 99.
+
+**Next free number: D1202.**

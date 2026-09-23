@@ -70,23 +70,6 @@ def get_reply_list(auth, data, user_details=None):
             replies = replies.search(query, sort=sort == 'Relevance')
         replies = replies.filter(PostReply.indexable == True)
         
-    if replies:
-        if type == 'Local':
-            replies = replies.filter(or_(PostReply.ap_id == None, PostReply.ap_id.startswith('https://' + current_app.config['SERVER_NAME'])))
-        elif type == 'Moderating' or type == 'ModeratorView':
-            if user_id:
-                replies = replies.filter(PostReply.community_id.in_(moderating_communities_ids(user_id=user_id)))
-            else:
-                raise Exception('incorrect login')
-        elif type == 'Subscribed':
-            if user_id:
-                comms = joined_communities(user_id=user_id)
-                comm_ids = [comm.id for comm in comms]
-                comm_ids.extend(moderating_communities_ids(user_id=user_id))
-                replies = replies.filter(PostReply.community_id.in_(comm_ids))
-            else:
-                raise Exception('incorrect login')
-
     # PERSON_ID
     add_creator_in_view = True
     is_creator_blocked = None
@@ -130,6 +113,36 @@ def get_reply_list(auth, data, user_details=None):
             replies = PostReply.query
             if user_id is None and page * limit > 10000:
                 raise Exception('unknown') # deliberately vague response
+
+    # LISTING TYPE
+    # D1199. This block used to sit ABOVE the person_id, community_id and
+    # no-filter blocks, and it is guarded by `if replies:` -- which none of
+    # them had assigned yet. So `type_` was silently ignored for every query
+    # narrowed by a person, a community or nothing at all, and the
+    # `incorrect login` refusals below were skipped with it. Measured:
+    #
+    #     PROBE bq1 person_id + Local: remote included: True
+    #     PROBE bq2 community_id + Local: remote included: True
+    #     PROBE bq3 anonymous + Moderating: accepted
+    #
+    # It still does not apply to the threaded branch, where `replies` is
+    # assigned further down: a conversation is not a listing.
+    if replies:
+        if type == 'Local':
+            replies = replies.filter(or_(PostReply.ap_id == None, PostReply.ap_id.startswith('https://' + current_app.config['SERVER_NAME'])))
+        elif type == 'Moderating' or type == 'ModeratorView':
+            if user_id:
+                replies = replies.filter(PostReply.community_id.in_(moderating_communities_ids(user_id=user_id)))
+            else:
+                raise Exception('incorrect login')
+        elif type == 'Subscribed':
+            if user_id:
+                comms = joined_communities(user_id=user_id)
+                comm_ids = [comm.id for comm in comms]
+                comm_ids.extend(moderating_communities_ids(user_id=user_id))
+                replies = replies.filter(PostReply.community_id.in_(comm_ids))
+            else:
+                raise Exception('incorrect login')
 
     add_post_in_view = True
     depth_first = False
@@ -198,7 +211,18 @@ def get_reply_list(auth, data, user_details=None):
                     where_query = f' WHERE post_id = {post_id}'
 
                 if max_depth is not None:
-                    depth_query = ' AND depth <= {max_depth}'
+                    # D1198. This was `' AND depth <= {max_depth}'` with no
+                    # f-prefix, so the braces themselves reached Postgres:
+                    # `psycopg2.errors.SyntaxError: syntax error at or near
+                    # "{"`, measured as PROBE bp1. Every depth-first comment
+                    # query carrying a max_depth failed, and the aborted
+                    # transaction took the next query in the request with it.
+                    #
+                    # The value is interpolated rather than bound because the
+                    # surrounding clauses are too, and all three come from
+                    # `int(...)` a few lines above -- see `parent_id`,
+                    # `post_id` and `max_depth`.
+                    depth_query = f' AND depth <= {max_depth}'
                 else:
                     depth_query = ''
 
@@ -328,7 +352,13 @@ def get_reply_list(auth, data, user_details=None):
                 func.coalesce(func.pow(
                     func.coalesce(PostReply.up_votes, 0) * func.coalesce(PostReply.down_votes, 0),
                     cast(func.least(func.coalesce(PostReply.up_votes, 0), func.coalesce(PostReply.down_votes, 0)), Float) /
-                    cast(func.coalesce(func.greatest(PostReply.up_votes, PostReply.down_votes), 1), Float)), 0)))
+                    # D1200. The divisor was `coalesce(greatest(up, down), 1)`,
+                    # which guards NULL and not ZERO -- and a comment with no
+                    # votes at all has `greatest(0, 0)`, so the whole listing
+                    # was `psycopg2.errors.DivisionByZero: division by zero`.
+                    # `greatest(..., 1)` cannot be either.
+                    cast(func.greatest(func.coalesce(PostReply.up_votes, 0),
+                                       func.coalesce(PostReply.down_votes, 0), 1), Float)), 0)))
         else:
             replies = replies.order_by(desc(PostReply.posted_at))
 
