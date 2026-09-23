@@ -17044,3 +17044,46 @@ the replace path, so one person editing a note could have overwritten
 another's about the same target. The third survivor is D1183.
 
 **Next free number: D1184.**
+
+---
+
+## Round 91 — sub-project 84 slice D: the reading half of `app/api/alpha/utils/user.py`
+
+**The round in one line: ONE production defect -- a single notification
+carrying no comment id broke the whole replies feed.**
+
+### 1. THE MEMBERSHIP TEST ONE BRANCH MADE AND THE OTHER DID NOT
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1184** | `app/api/alpha/utils/user.py:215` | `get_user_replies`'s "read and unread" branch appended `result[0]['comment_id']` with **none of the `if 'comment_id' in ...` test its sibling two lines above makes**. `Notification.targets` is a free-form JSON dict and several subtypes write different keys into it, so one notification of the right subtype carrying a `post_id` instead broke the endpoint for that account entirely -- the replies feed and the mentions feed both. | **fixed** | `PROBE bg3 outcome: KeyError: 'comment_id'` and `PROBE bg4` for the mentions query |
+
+### 2. AN EQUIVALENT MUTANT
+
+| ID | Where | What |
+|---|---|---|
+| **D1185** | `app/api/alpha/utils/user.py:141` | `if unread_notifications > 0:` around the counting queries is a performance short-circuit: with the counter at zero every query it guards answers zero anyway, and `other` is `0 - 0 - 0 - 0`. |
+
+### 3. WHAT THE COVERAGE FOUND WITHOUT A DEFECT
+
+* `get_user` looks a local account up by bare name with `func.lower(User.ap_domain) == None`, which reads like a comparison that can never match -- SQLAlchemy renders it `IS NULL`, and the lookup resolves. Measured before assuming: `PROBE bg1 outcome: found 3 | author ap_domain: None`.
+* `get_user_media` falls back to the **web session** when the bearer token does not authorise. Outside a request that is an AttributeError on `current_user`; inside one it is the anonymous user, so an unauthenticated caller gets `incorrect_login`. Left alone, with a row for each half.
+
+### 4. WHAT THE MUTATION PASS FOUND
+
+31 mutants, 22 killed on the measuring pass -- the worst ratio of this
+sub-project, and **every one of the nine survivors was a row of mine**:
+
+* four sort rows asserted only the **count**, so they could not tell one sort
+  from another (replies and people alike);
+* the media row gave the file a name identical to the last segment of its
+  url, so `file.file_name or <derive from url>` could not be told apart;
+* the media row also had only one account's file in the database, so dropping
+  the `user_id` filter changed nothing;
+* the `Local` list row asserted a local account was present rather than that
+  a remote one was absent;
+* `saved_only` and the deleted-by-name lookup had no row at all.
+
+All rewritten or added; 30/31, the survivor being D1185.
+
+**Next free number: D1186.**
