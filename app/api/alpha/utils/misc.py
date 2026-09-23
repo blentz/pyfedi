@@ -22,7 +22,12 @@ from app import db
 
 
 def get_search(auth, data):
-    if not data or ('q' not in data and 'type_' not in data):
+    # D1189. The guard was `'q' not in data and 'type_' not in data`, so
+    # EITHER key satisfied it -- and `data['type_']` is read on the next line.
+    # A search carrying only `q` was `KeyError: 'type_'`, measured as PROBE
+    # bj1. The route's schema marks both required, so this is what a direct
+    # caller hits; the guard now asks for what the function uses.
+    if not data or 'q' not in data or 'type_' not in data:
         raise Exception('missing parameters for search')
 
     type = data['type_']
@@ -44,6 +49,37 @@ def get_search(auth, data):
     return search_json
 
 
+def feed_view_arguments(user_id):
+    """Everything `feed_view` needs beyond the feed itself.
+
+    D1192. This was built inline, and only when the QUERY looked like a feed
+    (`/f/` in it, or a leading `~`) -- while three `feed_view(feed=object,
+    **feed_dict)` calls below can be reached by a query of any shape, because
+    what a lookup ANSWERS with is not decided by how it was addressed. A
+    `/m/` url that resolves to a feed was `TypeError: feed_view() argument
+    after ** must be a mapping, not NoneType`, measured as PROBE bl1. The
+    arguments depend on the caller, not the query, so they are built where
+    they are needed.
+    """
+    arguments = {"variant": 2, "user_id": user_id, "include_communities": False}
+    if user_id:
+        g.user = db.session.get(User, user_id)
+        arguments["blocked_community_ids"] = blocked_communities(user_id)
+        arguments["blocked_instance_ids"] = blocked_or_banned_instances(user_id)
+        arguments["subscribed"] = subscribed_feeds(user_id)
+        arguments["banned_from"] = communities_banned_from(user_id)
+        arguments["communities_moderating"] = moderating_communities_ids(user_id)
+        arguments["communities_joined"] = joined_or_modding_communities(user_id)
+    else:
+        arguments["subscribed"] = []
+        arguments["banned_from"] = []
+        arguments["communities_moderating"] = []
+        arguments["communities_joined"] = []
+        arguments["blocked_community_ids"] = []
+        arguments["blocked_instance_ids"] = []
+    return arguments
+
+
 def get_resolve_object(auth, data, user_id=None, recursive=False):
     if not data or 'q' not in data:
         raise Exception('missing q parameter for resolve_object')
@@ -54,27 +90,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
 
     # Check if this is a request for a feed, then define some boilerplate for all subsequent feed_view calls
     if "/f/" in query or query.startswith("~"):
-        feed_dict = {}
-        feed_dict["variant"] = 2
-        feed_dict["user_id"] = user_id
-        feed_dict["include_communities"] = False
-        if user_id:
-            user = db.session.get(User, user_id)
-            g.user = user
-
-            feed_dict["blocked_community_ids"] = blocked_communities(user_id)
-            feed_dict["blocked_instance_ids"] = blocked_or_banned_instances(user_id)
-            feed_dict["subscribed"] = subscribed_feeds(user_id)
-            feed_dict["banned_from"] = communities_banned_from(user_id)
-            feed_dict["communities_moderating"] = moderating_communities_ids(user_id)
-            feed_dict["communities_joined"] = joined_or_modding_communities(user_id)
-        else:
-            feed_dict["subscribed"] = []
-            feed_dict["banned_from"] = []
-            feed_dict["communities_moderating"] = []
-            feed_dict["communities_joined"] = []
-            feed_dict["blocked_community_ids"] = []
-            feed_dict["blocked_instance_ids"] = []
+        feed_dict = feed_view_arguments(user_id)
     else:
         feed_dict = None
 
@@ -100,10 +116,11 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             raise Exception('No object found.')
         return user_view(user=object, variant=7, user_id=user_id) if not recursive else object
     object = db.session.query(Feed).filter_by(ap_profile_id=query.lower()).first()
-    if object and feed_dict:
+    if object:
         if object.banned:
             raise Exception('No object found.')
-        return feed_view(feed=object, **feed_dict) if not recursive else object
+        return feed_view(feed=object, **(feed_dict or feed_view_arguments(user_id))) \
+            if not recursive else object
 
     # if not found and user is logged in, fetch the object if it's not hosted on a banned instance
     # note: accommodating !, @, and ~ queries for communities, people, and feeds is different from lemmy's v3 api
@@ -151,11 +168,24 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
     if local_request:
 
         # Communities
-        if (
-            (query.startswith('!')) or 
-            (('/c/' in query) and ('/p/' not in query)) or 
-            (('/m/' in query) and ('/t/' not in query)) and 
-            ('/comment/' not in query)):
+        # D1190. This read
+        #
+        #     (query.startswith('!')) or
+        #     (('/c/' in query) and ('/p/' not in query)) or
+        #     (('/m/' in query) and ('/t/' not in query)) and
+        #     ('/comment/' not in query)
+        #
+        # and `and` binds tighter than `or`, so the comment exclusion applied
+        # to the THIRD disjunct alone. A comment url that names its community
+        # -- `https://<server>/c/<name>/comment/<id>`, which is the shape
+        # PieFed's own comment permalinks take -- was resolved as the
+        # COMMUNITY. Measured: `PROBE bj2 outcome: ['community']`, against
+        # `PROBE bj3 outcome: ['comment']` for the same comment addressed
+        # without one.
+        if ('/comment/' not in query) and (
+            (query.startswith('!')) or
+            (('/c/' in query) and ('/p/' not in query)) or
+            (('/m/' in query) and ('/t/' not in query))):
             # This is a community specified using !communtiy@instance.tld notation
             if query.startswith('!'):
                 object = search_for_community(query.lower(), allow_fetch=bool(user_id))
@@ -331,11 +361,10 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
         if object and feed_dict:
             return feed_view(feed=object, **feed_dict)
     # if the instance is following the lemmy convention, a '/u/' means user and '/c/' means community
-    if '/u/' in query or (
+    if '/u/' in query or (('/comment/' not in query) and (  # D1190's twin
         (query.startswith('!')) or
         (('/c/' in query) and ('/p/' not in query)) or
-        (('/m/' in query) and ('/t/' not in query)) and
-        ('/comment/' not in query)):
+        (('/m/' in query) and ('/t/' not in query)))):
         object = find_actor_or_create(query.lower())
         if object:
             if isinstance(object, User):
@@ -343,7 +372,8 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             elif isinstance(object, Community):
                 return community_view(community=object, variant=6, user_id=user_id) if not recursive else object
             elif isinstance(object, Feed):
-                return feed_view(feed=object, **feed_dict)
+                return feed_view(feed=object,
+                                 **(feed_dict or feed_view_arguments(user_id)))
 
     # no more hints from query
     ap_json = remote_object_to_json(query)
@@ -360,8 +390,15 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
     if not 'type' in ap_json:
         raise Exception('No object found.')
 
-    if (ap_json['type'] == 'Person' or ap_json['type'] == 'Service' or ap_json['type'] == 'Group' 
-        or ap_json['type'] == 'Feed' and 'preferredUsername' in ap_json):
+    # D1191. This read `... == 'Person' or ... == 'Service' or ... == 'Group'
+    # or ... == 'Feed' and 'preferredUsername' in ap_json`, and `and` binds
+    # tighter than `or`, so the membership test guarded the **Feed** arm
+    # alone -- while the line below reads the key for all four. An actor
+    # document of any other type carrying no `preferredUsername` was
+    # `KeyError: 'preferredUsername'`, measured as PROBE bk1. D1190's shape,
+    # second instance in this file.
+    if (ap_json['type'] in ('Person', 'Service', 'Group', 'Feed')
+            and 'preferredUsername' in ap_json):
         name = ap_json['preferredUsername'].lower()
         object = actor_json_to_model(ap_json, name, server)
         if object:
@@ -370,7 +407,8 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             elif isinstance(object, Community):
                 return community_view(community=object, variant=6, user_id=user_id) if not recursive else object
             elif isinstance(object, Feed):
-                return feed_view(feed=object, **feed_dict)  
+                return feed_view(feed=object,
+                                 **(feed_dict or feed_view_arguments(user_id)))
 
     # a post or a reply
     community = find_community(ap_json)
