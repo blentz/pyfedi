@@ -1460,27 +1460,29 @@ class TestVoteForReplySourceAndPermission:
 
         The gate cannot ask "was this voter allowed to cast the vote they are
         undoing" when no such vote exists, so it falls through rather than
-        refusing. Control reaches `:44`, `:47` and then `reply.vote()`, where
-        app/models.py:3321 remaps 'reversal' ONLY `if existing_vote` -- so the
-        direction arrives still spelled 'reversal', `:3326` catches it and
-        `:3333` raises.
+        refusing. Control reaches `:44`, `:47` and then `reply.vote()`.
 
-        THIS PINS A PRE-EXISTING 500, NOT A NEW ONE, and it is here because
-        `:35`'s false arm needs a witness. `Post.vote` handles the same state
-        differently: app/models.py:2740-2741 returns None for a reversal with
-        no existing vote, where `PostReply.vote` has no such arm. That
-        divergence is registered, not repaired here.
+        UPDATED BY D1196. This test used to pin a 500: `PostReply.vote`
+        remapped 'reversal' only `if existing_vote`, so the direction arrived
+        still spelled 'reversal' and the ValueError below it raised. Its own
+        docstring recorded the divergence -- "`Post.vote` ... returns None for
+        a reversal with no existing vote, where `PostReply.vote` has no such
+        arm. That divergence is registered, not repaired here." -- and the API
+        made it reachable: score 0 is how a client takes a vote back, so the
+        same request was a 500 for a comment and a no-op for a post. The
+        explicit early return `Post.vote` has is now in `PostReply.vote` too,
+        and this pin says so.
 
-        THE WITNESS IS THE ABSENT ROW AS MUCH AS THE RAISE. A crash is a weak
-        kill on its own, so the assertion below is that no `PostReplyVote` was
-        written -- which is what distinguishes falling through the gate from a
-        mutant that let the else-branch cast a new downvote.
+        THE WITNESS IS THE ABSENT ROW. The ValueError below the remap is still
+        load-bearing for a direction that is none of the three (app/models.py
+        :3357), and what distinguishes the early return from the mutant that
+        arm exists to stop is that NO `PostReplyVote` is written -- a new
+        downvote cast past the caller's permission gates would be.
         """
         s = _seed_reply()
         try:
-            with pytest.raises(ValueError):
-                vote_for_reply(s.reply.id, 'reversal', True, None, SRC_API,
-                               auth=bearer(s.user))
+            assert vote_for_reply(s.reply.id, 'reversal', True, None, SRC_API,
+                                  auth=bearer(s.user)) == s.user.id
 
             assert PostReplyVote.query.filter_by(
                 post_reply_id=s.reply.id, user_id=s.user.id).count() == 0
