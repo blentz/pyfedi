@@ -10581,3 +10581,19 @@ does what was meant.
 form.terms`, and against a MagicMock that neither fails nor leaves a trace
 worth asserting on -- `form.__delattr__.call_args_list` is not a mock. A row
 that pins a deletion needs a real object with the attribute on it.
+
+**548. `Site.admins()` ANSWERS FROM `g.admin_ids` WHENEVER IT IS SET.** API
+util tests set `g.admin_ids = []` because the view functions read it, and
+that same assignment makes `Site.admins()` answer **nobody** -- so a row that
+creates an admin and asserts they were notified fails, with the role rows
+correctly in place. Add the new admin's id to `g.admin_ids` as well.
+
+**549. `user_access` ANSWERS TRUE FOR USER 1, WHATEVER THE PERMISSION.**
+`if user_id == 1: return True` (app/utils.py). `api_baseline.user1` is
+therefore an administrator for every check, so a row proving an endpoint
+REFUSES an ordinary account has to use user2 or user3.
+
+**550. A MUTANT THAT ADDS A NO-OP CANNOT FAIL.** `filter(X != None, True)`
+is the same filter: SQLAlchemy drops the literal. A surviving mutant is only
+evidence of a gap once the mutant is known to change behaviour -- check the
+mutation, not just the survival.
