@@ -10634,3 +10634,10 @@ points at it -- a row that sets up the dangling id gets
 `psycopg2.errors.ForeignKeyViolation` instead. Check the constraint before
 deciding a defensive branch is a coverage gap; the honest answer is a
 partial branch with its reason recorded, not a test of an impossible state.
+
+**557. `get_resolve_object` ANSWERS FROM ITS FIRST LOOKUP.** It opens with
+`filter_by(ap_id=query)` / `filter_by(ap_profile_id=query.lower())` for
+replies, posts, communities, users and feeds -- so a fixture whose actor
+carries the very url the row is about is answered there, and the dispatch the
+row means to exercise never runs. Give the fixture a different
+`ap_profile_id` when testing how a url is DISPATCHED.
