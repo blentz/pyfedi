@@ -2143,7 +2143,13 @@ def new_instance_profile_task(instance_id: int):
                     instance_json = {}
                 if 'type' in instance_json and instance_json['type'] == 'Application':
                     instance.inbox = instance_json['inbox'] if 'inbox' in instance_json else f"{protocol}://{instance.domain}/inbox"
-                    instance.outbox = instance_json['outbox']
+                    # `'outbox' in instance_json`, as the line above already
+                    # does for the inbox: this is another instance's actor
+                    # document, and one without an outbox was a KeyError that
+                    # killed the task -- so nothing about that instance was
+                    # ever learned, not even its software.
+                    if 'outbox' in instance_json:
+                        instance.outbox = instance_json['outbox']
                 else:  # it's pretty much always /inbox so just assume that it is for whatever this instance is running
                     instance.inbox = f"{protocol}://{instance.domain}/inbox"
                 instance.updated_at = utcnow()
@@ -2167,6 +2173,12 @@ def new_instance_profile_task(instance_id: int):
                         if 'admins' in instance_data:
                             admin_profile_ids = []
                             for admin in instance_data['admins']:
+                                # Whatever /api/v3/site answered. An entry
+                                # without a person, or a person without an
+                                # actor_id, was a KeyError.
+                                if not isinstance(admin, dict) or not isinstance(admin.get('person'), dict) \
+                                        or not admin['person'].get('actor_id'):
+                                    continue
                                 admin_profile_ids.append(admin['person']['actor_id'].lower())
                                 user = find_actor_or_create(admin['person']['actor_id'])
                                 if user and not instance.user_is_admin(user.id):
