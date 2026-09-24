@@ -925,7 +925,9 @@ def protocol_handler():
         try:
             resp = get_resolve_object(None, {'q': q.replace('web+ap://', 'https://')}, user_id=current_user.id)
         except Exception:
-            flash(_('Failed to look up %(url)s'))
+            # `url=q`: the placeholder had no value to substitute, so the
+            # visitor was shown the literal '%(url)s'.
+            flash(_('Failed to look up %(url)s', url=q))
             return redirect(url_for('main.index'))
 
         if 'post' in resp:
@@ -938,6 +940,11 @@ def protocol_handler():
         if 'person' in resp:
             return redirect(url_for('activitypub.user_profile', actor=resp['person']['person']['id']))
 
+        # Anything else the resolver answers -- a feed, say, or nothing at all
+        # -- used to fall off the end of the view, and a view that returns None
+        # is a 500 rather than "could not find that".
+        flash(_('Failed to look up %(url)s', url=q))
+        return redirect(url_for('main.index'))
     else:
         return render_template('protocol_handler.html', title=_('Protocol handler'))
 
