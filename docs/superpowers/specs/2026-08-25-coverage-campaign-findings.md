@@ -18476,4 +18476,51 @@ upload paths.
 
 ---
 
+---
+
+## Round 124 — sub-project 98: the admin screens that hold content
+
+**The round in one line: five clusters of admin routes, five different
+permissions, and every one of them names the permission its author meant --
+which is a finding in its own right, and only a test from both sides can say
+it.**
+
+No defect. The round exists because these are the buttons that change what
+the instance serves, and because `masquerade` hands its caller another
+account's session -- the one route on the instance that does. Each gate is
+now pinned from both sides: somebody holding the permission it names gets in,
+somebody holding a DIFFERENT one is refused, and a mutant that removes any of
+the seven gates dies.
+
+**Two things worth writing down, neither a defect:**
+
+* `permission_required` REDIRECTS rather than aborting, and on these routes it
+  is the outer decorator, so a logged-out visitor is told the permission is
+  missing rather than asked to log in. `masquerade` has the two decorators the
+  other way round, so there a logged-out visitor gets the login page. Both are
+  pinned as they stand.
+* deleting from the media list needs `administer all users` while the list
+  itself needs `administer all communities`. That looked like a slip and is
+  not: the list is a moderation view and the deletion touches somebody's
+  account. The test says so, and the mutant that levels them down to one
+  permission dies.
+
+**Not covered, deliberately:** `/admin/perf_test` runs a hundred million
+iterations of a Python loop in the request, by design. Covering it would cost
+seconds of CPU on every suite run to assert a benchmark's own output.
+
+### What the slice pins
+
+71 tests, `app/admin/routes.py` from 67% to 73%: who may open each of seven
+screens (four ways each), CMS pages added, edited, deleted, who edited them
+recorded, a page nobody wrote; emoji added, edited, deleted, and a submission
+that does not validate; blocked images added by hash and by url, edited,
+deleted, the purge screen and the deletion it queues; the media list, narrowed
+to one account, its second page, deleting one file and everything one account
+uploaded, and the background task that does it; and masquerade -- an admin
+becoming a local account, refused a remote one, refused one that is not there,
+and refused outright to everybody else.
+
+---
+
 **Next free number: D1289.**

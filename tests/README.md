@@ -11191,3 +11191,22 @@ survived here for that reason alone: the community had no topic, so
 inbox, so "a remote account is not announced" could not fail. The fix is in
 the test, not the assertion -- set the state the assertion is about, then
 assert.
+
+**630. A GATE IS ONLY TESTED WHEN SOMEBODY IS TURNED AWAY BY IT.** Every
+admin route in sub-project 98 is exercised by an account holding exactly ONE
+permission -- the one the route names for the positive case, a DIFFERENT one
+for the negative. A test that only signs in as user 1 (who passes every check,
+fact 347) proves nothing about which permission the route asked for, and the
+mutant that swaps one gate for another survives it.
+
+**631. `permission_required` REDIRECTS; IT DOES NOT ABORT.** A refusal is a
+302 to `auth.permission_denied`, not a 401, and on most admin routes it is the
+OUTER decorator, so it answers before `login_required` -- a logged-out visitor
+is told the permission is missing rather than asked to log in. Assert the
+redirect target, not a status code, or the test passes on any 302 including
+the login one.
+
+**632. `session['_user_id']` IS AN int AFTER `login_user` AND A str AFTER A
+HAND-WRITTEN COOKIE.** `User.get_id()` returns an int in this codebase, so a
+test that signs somebody in by writing the session and then checks what
+`login_user` wrote compares `'2'` against `2`. Normalise both sides.
