@@ -10735,3 +10735,34 @@ dropped below their floors, none of them anywhere near the test that did it.
 Write config through `monkeypatch.setitem(current_app.config, key, value)`,
 which restores the previous value at teardown. The symptom is a full-suite
 failure that does not reproduce when the offending file is run alone.
+
+**569. `hide_nsfw`, `hide_nsfl`, `hide_gen_ai` AND `ignore_bots` ARE NOT
+FLAGS.** All four are four-valued integers: 0 Show, 1 Hide completely, 2 Blur
+(or Label, for gen-AI), 3 Semi-transparent -- see `hide_type_choices` in
+app/auth/forms.py. Reading one for truthiness treats "show it, blurred" as
+"hide it", which is the opposite of what the reader asked for. Compare
+against the value you mean: `== 1` for "is it hidden", `== 2` for "is it
+blurred" (which is what `Post.blurred` does). The default is 1.
+
+**570. A LISTING FILTER FLAG THAT DEFAULTS TO TRUE FILTERS NOTHING.** The
+community listing's `show_genai` defaulted to True, so `if user.hide_gen_ai
+and not show_genai` could never fire -- and no request schema carried the
+field, so no caller could set it either. When a request flag exists only to
+OVERRIDE an account setting, its default is the one that leaves the setting
+in charge.
+
+**571. `DefaultSchema.Meta.unknown = EXCLUDE` MAKES A KEY THE CODE READS
+UNREACHABLE.** `get_community_list` reads `data['q']` and `data['show_genai']`,
+and `ListCommunitiesRequest` (app/api/alpha/schema.py) declares neither, so
+marshmallow drops both before the function sees them: over HTTP that whole
+search block is dead code. When a test calls one of these functions directly
+it can pass keys no client can, which is how the block gets covered -- worth
+saying out loud in the test, because coverage of it proves nothing about the
+endpoint.
+
+**572. THE API AND THE WEB DO NOT SHARE THEIR GUARDS.** `do_subscribe`
+(app/community/routes.py) refuses a banned account twice over; the API's
+`post_community_follow` went through `join_community`, which checks nothing,
+so the same request the web refused was granted. When a rule is enforced in a
+route rather than in the shared function both paths call, assume the other
+path does not enforce it and probe it.

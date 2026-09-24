@@ -17388,4 +17388,62 @@ turned out to be D1207. 41/41 accounted for after: 39 killed, 2 equivalent.
 
 ---
 
-**Next free number: D1208.**
+---
+
+## Round 98 — sub-project 84 slice K: the listing and lifecycle half, closing `app/api/alpha/utils/community.py`
+
+**The round in one line: EIGHT production defects -- an account banned from a
+community rejoined it by asking, three account settings read as flags when
+they are four-valued, one setting that answered for another, a listing that
+answered the wrong question when asked anonymously, four endpoints handing an
+unchecked id to a shared function, a community that could be created with no
+name at all, and an unfollow that could never federate.**
+
+### 1. A BANNED ACCOUNT REJOINED BY ASKING
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1209** | `app/api/alpha/utils/community.py:196` | `post_community_follow` checked nothing before joining. The web path refuses the same request TWICE -- `communities_banned_from`, then a direct `CommunityBan` read, both hardened in this campaign as D991 -- and the API refused it not at all: the membership row went in, and the community came back into the banned account's Subscribed listing and its feeds. | **fixed** | `PROBE j9 a banned account rejoins: returned {...}`, `PROBE j9 rows: 1` |
+
+### 2. THREE SETTINGS READ AS FLAGS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1211** | `app/api/alpha/utils/community.py:157,159,161` | `hide_nsfw`, `hide_nsfl` and `hide_gen_ai` are **not booleans**: 0 is Show, 1 is Hide completely, 2 is Blur, 3 is Semi-transparent (`app/auth/forms.py`, `hide_type_choices`). The listing tested all three for truthiness, so an account that had asked for a BLURRED thumbnail, or a semi-transparent one -- both ways of SHOWING something -- had every such community removed from its listing entirely. `app/api/alpha/views.py` and `app/api/alpha/utils/post.py` both test `== 1`. | **fixed** | `PROBE l2 a reader who blurs, asking for nothing` listed neither before the fix and both after |
+| **D1212** | `app/api/alpha/utils/community.py:90` | `show_nsfl = show_nsfw`. Two separate account settings, tied together at the request: a reader who had hidden NSFL was handed it for asking about NSFW, and an anonymous caller asking for NSFW got NSFL with it. `show_nsfl` is now read on its own and defaults to False. | **fixed** | `PROBE g5 anonymous, nsfw asked for` listed `gorehouse` before the fix |
+| **D1216** | `app/api/alpha/utils/community.py:92` | `show_genai` defaulted to **True**, so `not show_genai` was false for every caller and `hide_gen_ai` was honoured for nobody -- and no request schema carries `show_genai`, so no caller could turn it off. It now defaults the way `show_nsfw` and `show_nsfl` do. | **fixed** | the AI-generated community was listed to an account whose `hide_gen_ai` was 1 |
+
+### 3. THE LISTING THAT ANSWERED A DIFFERENT QUESTION
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1208** | `app/api/alpha/utils/community.py:115` | Asked for `Subscribed`, `Moderating` or `ModeratorView` **without an account**, the type check fell through to the `else` arm and answered with EVERY community on the instance. D1199's shape, one module along; `app/api/alpha/utils/reply.py` refuses the same two by name. | **fixed** | `PROBE g2 anonymous, Subscribed: ['community1', 'community2', 'community3', 'probeland']` |
+
+### 4. FOUR ENDPOINTS, ONE UNCHECKED ID
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1210** | `app/api/alpha/utils/community.py` -- `post_community_follow`, `post_community_block`, `put_community_subscribe`, `post_community_delete`, `get_community` | Each passed a community id straight to a shared function. A follow answered `NoResultFound`; a delete answered `AttributeError: 'NoneType' object has no attribute 'is_owner'`; and a **block reached the database as an insert against a community that does not exist**, so the caller got `psycopg2.errors.ForeignKeyViolation` with the SQL in the message and the request's session was poisoned for everything after it. `get_community` answered `invalid literal for int() with base 10: 'abc'` for a non-numeric id. All now refuse by name. | **fixed** | `PROBE j2 ... IntegrityError: (psycopg2.errors.ForeignKeyViolation) insert or update on table "community_block" violates foreign key constraint`, then `PROBE j3/j4: PendingRollbackError` from the poisoned session |
+| **D1213** | `app/api/alpha/utils/community.py:206` | Leaving a community never joined answered `No row was found when one was required`: `leave_community` reads the membership with `.one()`. | **fixed** | `PROBE j7 leave a community never joined: NoResultFound` |
+
+### 5. A COMMUNITY WITH NO NAME
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1214** | `app/shared/community.py:241` | `slugify()` answers `''` for a name made entirely of characters it strips, and the empty name was accepted: a community whose `ap_profile_id` is `https://host/c/` and whose every link is the bare prefix. Refused now, on the web path as well as the API's. | **fixed** | `PROBE k6 an empty name: returned {... 'name': '', ...}` |
+
+### 6. THE UNFOLLOW THAT COULD NEVER FEDERATE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1215** | `app/shared/tasks/follows.py:126` | The `leave_community` task read `join_request.uuid` off a `.first()`. The `join_community` task one function above writes that row **only when the remote instance was online at the time**, and a membership can arrive without ever going through it -- a feed auto-follow, an import, an Accept federated in. Every such leave was an `AttributeError` that took the whole Undo Follow with it, so the remote community was never told and kept sending posts. The Follow id only has to be a URI the Undo can name, so a missing row now gets a fresh one. | **fixed** | `AttributeError: 'NoneType' object has no attribute 'uuid'` at `app/shared/tasks/follows.py:126`, from four leave-all tests |
+
+### 7. WHAT IS RECORDED AND NOT REPAIRED
+
+* **The `q` parameter is unreachable over HTTP.** `ListCommunitiesRequest` (`app/api/alpha/schema.py`) carries `limit`, `page`, `show_nsfw`, `sort` and `type_`, and `DefaultSchema.Meta.unknown = EXCLUDE` drops everything else -- so the search block in `get_community_list`, including the `!name@host` resolver call, cannot be reached by any API client. Either the schema or the block is wrong; which one is the maintainer's call. The block is covered here by calling the function directly.
+* **`invitations` is not consulted when joining.** The column documents 0 = anyone can join, 1 = apply, 2/3/4 = must be invited, and NEITHER the API nor `do_subscribe` reads it: a community set to "must be invited by the owner" is joined by anyone who asks. The invite-token route is the only thing that honours it. Left alone deliberately -- closing it is a product-policy change that belongs in the shared path, not a coverage slice.
+* **One dead branch.** `post_community_leave_all`'s `if subscription is not False and subscription < SUBSCRIPTION_MODERATOR` cannot be false for anything `joined_communities()` returns: that query already excludes moderators, owners and banned members, and `User.subscribed` never answers False for a real id. It is kept because `joined_communities` is memoized for 86400 seconds and a stale entry is exactly what the guard would catch.
+
+---
+
+**Next free number: D1217.**
