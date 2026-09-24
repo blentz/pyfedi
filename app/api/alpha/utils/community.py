@@ -87,8 +87,15 @@ def get_community_list(auth, data):
     page = int(data['page']) if 'page' in data else 1
     limit = int(data['limit']) if 'limit' in data else 10
     show_nsfw = data['show_nsfw'] if 'show_nsfw' in data else False
-    show_nsfl = show_nsfw
-    show_genai = data['show_genai'] if 'show_genai' in data else True
+    # NOT `show_nsfl = show_nsfw`. `hide_nsfl` is a separate account setting
+    # from `hide_nsfw`, and tying the two here meant an account that had hidden
+    # NSFL content was shown it again the moment it asked for NSFW.
+    show_nsfl = data['show_nsfl'] if 'show_nsfl' in data else False
+    # Defaulting this to True made `not show_genai` false for every caller, so
+    # `hide_gen_ai` was honoured for nobody -- and no request schema carries
+    # show_genai, so no caller could turn it off. It defaults the way show_nsfw
+    # and show_nsfl do: the account's own setting decides.
+    show_genai = data['show_genai'] if 'show_genai' in data else False
 
     user = authorise_api_user(auth, return_type='model') if auth else None
     user_id = user.id if user else None
@@ -100,6 +107,13 @@ def get_community_list(auth, data):
     if user_id and '@' in query and '.' in query and query.startswith('!'):
         search_for_community(query)
         query = query[1:]
+
+    # Asked without an account, 'Subscribed' and the moderating listings used to
+    # fall through to the `else` below and answer with EVERY community on the
+    # instance -- an answer to a question nobody asked. app/api/alpha/utils/
+    # reply.py refuses the same two by name.
+    if user_id is None and type_ in ('Subscribed', 'Moderating', 'ModeratorView'):
+        raise Exception('incorrect login')
 
     if user_id and type_ == 'Subscribed':
         communities = Community.query.filter_by(banned=False).join(CommunityMember).filter(
@@ -138,11 +152,18 @@ def get_community_list(auth, data):
         blocked_community_ids = blocked_communities(user_id)
         if blocked_community_ids:
             communities = communities.filter(Community.id.not_in(blocked_community_ids))
-        if user.hide_nsfw and not show_nsfw:
+        # `== 1`, not truthiness. These columns are not flags: 0 is Show, 1 is
+        # Hide completely, 2 is Blur and 3 is Semi-transparent (app/auth/
+        # forms.py, hide_type_choices). Blur and Semi-transparent are ways of
+        # SHOWING something, so reading any non-zero value as "hide" took every
+        # NSFW community out of the listing of an account that had asked only
+        # for a blurred thumbnail. app/api/alpha/views.py and
+        # app/api/alpha/utils/post.py both test `== 1`.
+        if user.hide_nsfw == 1 and not show_nsfw:
             communities = communities.filter(Community.nsfw == False)
-        if user.hide_nsfl and not show_nsfl:
+        if user.hide_nsfl == 1 and not show_nsfl:
             communities = communities.filter(Community.nsfl == False)
-        if user.hide_gen_ai and not show_genai:
+        if user.hide_gen_ai == 1 and not show_genai:
             communities = communities.filter(Community.ai_generated == False)
     else:
         if not show_nsfw:
@@ -185,8 +206,16 @@ def get_community(auth, data):
     if 'id' not in data and 'name' not in data:
         raise Exception('id or name required')
     if 'id' in data:
-        community = int(data['id'])
-    elif 'name' in data:
+        try:
+            community = int(data['id'])
+        except (TypeError, ValueError):
+            # `int('abc')` reached the caller as
+            # "invalid literal for int() with base 10: 'abc'".
+            raise Exception('id must be a number')
+    else:
+        # `else`, not `elif 'name' in data`: the guard above already refused a
+        # request carrying neither, so the elif had a false arm nothing could
+        # reach.
         community = data['name']
         if '@' not in community:
             community = f"{community}@{current_app.config['SERVER_NAME']}"
@@ -209,6 +238,25 @@ def get_community(auth, data):
 def post_community_follow(auth, data):
     community_id = data['community_id']
     follow = data['follow']
+
+    community = a_community(community_id)
+    if not follow:
+        # `leave_community` reads the membership with `.one()`, so leaving a
+        # community never joined answered "No row was found when one was
+        # required".
+        user = authorise_api_user(auth, return_type='model')
+        if not CommunityMember.query.filter_by(user_id=user.id,
+                                               community_id=community.id).first():
+            raise Exception('You are not a member of this community')
+    if follow:
+        # The web path refuses this twice (app/community/routes.py,
+        # do_subscribe) and the API did not refuse it at all: an account banned
+        # from a community rejoined it by asking, and the membership row that
+        # came back put the community into its subscribed feed.
+        user = authorise_api_user(auth, return_type='model')
+        if CommunityBan.query.filter_by(user_id=user.id,
+                                        community_id=community.id).first():
+            raise Exception('You are banned from this community')
 
     user_id = join_community(community_id, SRC_API, auth) if follow else leave_community(community_id, SRC_API, auth)
     community_json = community_view(community=community_id, variant=4, stub=False, user_id=user_id)
@@ -258,6 +306,7 @@ def post_community_block(auth, data):
     community_id = data['community_id']
     block = data['block']
 
+    a_community(community_id)
     user_id = block_community(community_id, SRC_API, auth) if block else unblock_community(community_id, SRC_API, auth)
     community_json = community_view(community=community_id, variant=5, user_id=user_id)
     return community_json
@@ -330,6 +379,7 @@ def put_community_subscribe(auth, data):
     community_id = data['community_id']
     subscribe = data['subscribe']
 
+    a_community(community_id)
     user_id = subscribe_community(community_id, subscribe, SRC_API, auth)
     community_json = community_view(community=community_id, variant=4, user_id=user_id)
     return community_json
@@ -339,6 +389,7 @@ def post_community_delete(auth, data):
     community_id = data['community_id']
     deleted = data['deleted']
 
+    a_community(community_id)
     if deleted:
         user_id = delete_community(community_id, SRC_API, auth)
     else:

@@ -122,10 +122,20 @@ def leave_community(send_async, user_id, community_id):
             if community.is_local():
                 return
 
+            # join_community above writes this row only when the remote instance
+            # was ONLINE at the time, and a membership can arrive without ever
+            # going through it -- a feed auto-follow, an import, an Accept
+            # federated in. Reading .uuid off the None that leaves here was an
+            # AttributeError that took the whole Undo Follow with it, so the
+            # remote community was never told and kept sending posts. The
+            # Follow id only has to be a URI the Undo can name.
             join_request = session.query(CommunityJoinRequest).filter_by(user_id=user_id, community_id=community_id).first()
-            join_request_uuid = join_request.uuid
-            session.delete(join_request)
-            session.commit()
+            if join_request:
+                join_request_uuid = join_request.uuid
+                session.delete(join_request)
+                session.commit()
+            else:
+                join_request_uuid = gibberish(15)
 
             if (not community.instance.online() or
                user.has_blocked_instance(community.instance.id) or
