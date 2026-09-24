@@ -74,6 +74,10 @@ def stripe_redirect(plan):
             cancel_url=url_for('user.stripe_result', result='failure', _external=True),
         )
     elif plan == 'billing':
+        if stripe_customer is None:       # nothing for the portal to manage yet
+            flash(_('You do not have a donation to manage yet.'))
+            return redirect(url_for('user.choose_plan'))
+
         with httpx.Client(timeout=10) as client:
             response = client.post(
                 'https://api.stripe.com/v1/billing_portal/sessions',
@@ -81,11 +85,33 @@ def stripe_redirect(plan):
                 auth=(current_app.config['STRIPE_SECRET_KEY'], '')
             )
 
-        stripe_session = response.json()
+        try:
+            stripe_session = response.json()
+        except ValueError:
+            stripe_session = {}
+        if not isinstance(stripe_session, dict) or 'url' not in stripe_session:
+            current_app.logger.error(f'Stripe billing portal refused: {response.status_code} {response.text[:500]}')
+            flash(_('The billing portal is unavailable at the moment. Please try again later.'), 'error')
+            return redirect(url_for('user.choose_plan'))
         return redirect(stripe_session['url'])
 
     return render_template('user/stripe_redirect.html', title=_('Please wait...'),
                            key=current_app.config['STRIPE_PUBLISHABLE_KEY'], stripe_session=stripe_session)
+
+
+def user_from_reference(client_reference_id):
+    """The account a checkout session names, or None.
+
+    `client_reference_id` is whatever is attached to the session at checkout,
+    so it is not necessarily a user id, and it is not necessarily a number at
+    all. Handing it straight to the database raises, and a webhook that raises
+    is one Stripe retries for days.
+    """
+    try:
+        user_id = int(client_reference_id)
+    except (TypeError, ValueError):
+        return None
+    return db.session.get(User, user_id)
 
 
 @bp.route('/stripe_webhook', methods=['POST'])
@@ -108,28 +134,33 @@ def stripe_webhook():
         # Invalid signature
         return 'could not verify signature', 400
 
+    data = event.get('data')            # every value below comes off the wire
+    stripe_object = data.get('object') if isinstance(data, dict) else None
+    if not isinstance(stripe_object, dict):
+        stripe_object = {}
+
     # Handle the checkout.session.completed event
     # Fulfill the purchase...
-    if event['type'] == 'checkout.session.completed':
-        stripe_session = event['data']['object']
-        u = db.session.get(User, stripe_session['client_reference_id'])
+    if event.get('type') == 'checkout.session.completed':
+        u = user_from_reference(stripe_object.get('client_reference_id'))
         if u is None:   # could not find user, bail
             return 'Ok'
-        u.stripe_customer_id = stripe_session['customer']
-        if 'subscription' in stripe_session and stripe_session['subscription'] is not None:
-            if u.stripe_subscription_id is not None and u.stripe_subscription_id != stripe_session['subscription']:  # Remove previous subscription, if any
+        if stripe_object.get('customer'):   # a session with no customer of its own must not erase the one we have
+            u.stripe_customer_id = stripe_object['customer']
+        if stripe_object.get('subscription') is not None:
+            if u.stripe_subscription_id is not None and u.stripe_subscription_id != stripe_object['subscription']:  # Remove previous subscription, if any
                 try:
                     stripe.Subscription.delete(u.stripe_subscription_id)
-                except:
+                except Exception:
                     pass
 
-            u.stripe_subscription_id = stripe_session['subscription']
+            u.stripe_subscription_id = stripe_object['subscription']
 
         db.session.commit()
     # Handle the customer.subscription.deleted event
-    elif event['type'] == 'customer.subscription.deleted':
-        subscription = event['data']['object']
-        u = User.query.filter_by(stripe_subscription_id=subscription['id']).first()
+    elif event.get('type') == 'customer.subscription.deleted':
+        subscription_id = stripe_object.get('id')
+        u = User.query.filter_by(stripe_subscription_id=subscription_id).first() if subscription_id else None
         if u is not None:
             u.stripe_subscription_id = None
             db.session.commit()
@@ -160,4 +191,7 @@ def plan_unsubscribe(account_id, subscription):
         current_user.stripe_subscription_id = None
         db.session.commit()
         return render_template('generic_message.html', title=_('Regular donation cancelled'), message=_('Your donation has been cancelled.'))
+    else:
+        return render_template('generic_message.html', title=_('Donation not found'),
+                               message=_('That is not one of your regular donations.'))
 
