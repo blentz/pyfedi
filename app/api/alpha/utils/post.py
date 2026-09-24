@@ -89,6 +89,13 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
     # user_id: the logged in user
     # person_id: the author of the posts being requested
 
+    # Asked without an account, these three used to fall through to the `else`
+    # arm below and answer with the All listing instead -- a different question,
+    # answered without saying so. app/api/alpha/utils/reply.py and
+    # app/api/alpha/utils/community.py refuse the same three by name.
+    if user_id is None and type in ('Subscribed', 'Moderating', 'ModeratorView'):
+        raise Exception('incorrect login')
+
     community_id = int(data['community_id']) if 'community_id' in data else None
     feed_id = int(data['feed_id']) if 'feed_id' in data else None
     topic_id = int(data['topic_id']) if 'topic_id' in data else None
@@ -267,6 +274,8 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
             use_faster_query = False
             segregate_instance_stickies = False
             feed = db.session.get(Feed, feed_id)
+            if not feed:
+                raise Exception('feed not found')
             if feed.show_posts_in_children:  # include posts from child feeds
                 feed_ids = get_all_child_feed_ids(feed)
             else:
@@ -276,8 +285,13 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
             # used for the posts searching
             feed_community_ids = []
             for fid in feed_ids:
-                feed_items = FeedItem.query.join(Feed, FeedItem.feed_id == fid).all()
-                for item in feed_items:
+                # filter_by, not `join(Feed, FeedItem.feed_id == fid)`: that
+                # join names no predicate BETWEEN the two tables, so it paired
+                # every matching FeedItem with every row of `feed` and returned
+                # the same community id once per feed on the instance. The
+                # answer survived the trip through `IN`; the work did not need
+                # doing.
+                for item in FeedItem.query.filter_by(feed_id=fid).all():
                     feed_community_ids.append(item.community_id)
 
             posts = Post.query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
@@ -299,6 +313,8 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
             use_faster_query = False
             segregate_instance_stickies = False
             topic = db.session.get(Topic, topic_id)
+            if not topic:
+                raise Exception('topic not found')
             if topic.show_posts_in_children:  # include posts from child feeds
                 topic_ids = get_all_child_topic_ids(topic)
             else:
@@ -358,14 +374,29 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
     posts = posts.filter(or_(Community.private == False, Community.id.in_(private_community_ids)))
     
     # for materialized view - private community filtering
+    # ALWAYS append a private-community criterion, whether or not the reader is
+    # a member of one. The sqlalchemy filter on the line above says the same
+    # thing, but when use_faster_query is on that query is never RUN -- the raw
+    # SQL below is -- and this block used to be entered only when the reader had
+    # a private membership to name. An anonymous caller has none by definition,
+    # so `GET /post/list` handed anyone who asked a front page with every
+    # private community's posts on it.
     if private_community_ids:
         post_query_criteria.append('(c.private is false OR community_id IN :private_community_ids)')
         post_query_parameters['private_community_ids'] = tuple(private_community_ids)
+    else:
+        post_query_criteria.append('c.private is false')
 
     if query:
         segregate_instance_stickies = False
         if search_type == 'Url':
             posts = posts.filter(Post.url.ilike(f"%{query}%"))
+            # The raw SQL needs the same filter. Without it the fast path --
+            # which this branch leaves switched ON -- ran with no url condition
+            # at all, so a URL search answered with every post on the instance
+            # while the sqlalchemy filter above was thrown away.
+            post_query_criteria.append('p.url ILIKE :url_query')
+            post_query_parameters['url_query'] = f"%{query}%"
         else:
             use_faster_query = False
             posts = posts.search(query, sort=sort == 'Relevance').filter(Post.indexable == True)
@@ -450,7 +481,11 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
             pass
 
     if minimum_upvotes:
-        posts = posts.filter(Post.up_votes - Post.down_votes >= minimum_upvotes)
+        # `Post.score`, not `Post.up_votes - Post.down_votes`: the raw SQL below
+        # reads the stored score, so the two paths answered the same request
+        # differently for any post whose score had not caught up with its votes.
+        # score is the column every Top sort here orders by.
+        posts = posts.filter(Post.score >= minimum_upvotes)
         post_query_criteria.append('score >= :minimum_upvotes')
         post_query_parameters['minimum_upvotes'] = minimum_upvotes
     
@@ -562,10 +597,25 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
                     c.private, c.ap_id as community_ap_id, c.name as community_name, c.ap_domain
                 FROM post p
                 JOIN community c ON c.id = p.community_id WHERE p.deleted = FALSE AND p.status > 0 AND c.banned = FALSE AND """
-        sql += ' AND '.join(post_query_criteria) + ' ORDER BY ' + ', '.join(sql_order_by)
+        sql += ' AND '.join(post_query_criteria)
+        # Only when there is something to order by. Every sort above appends a
+        # clause except 'Relevance', which relies on the full-text search doing
+        # the ordering, and an unrecognised one, which appends nothing at all --
+        # so with `ignore_sticky` set (the stickies are the other contributors)
+        # the query read `ORDER BY  LIMIT 1000` and came back as
+        # `psycopg2.errors.SyntaxError: syntax error at or near "LIMIT"`. A URL
+        # search sorted by relevance reached it the same way, and that one is a
+        # plain `GET /search?type_=Url&sort=Relevance`.
+        if sql_order_by:
+            sql += ' ORDER BY ' + ', '.join(sql_order_by)
         sql += ' LIMIT 1000'
         post_ids = db.session.execute(text(sql), post_query_parameters).scalars().all()
-        has_next_page = len(post_ids) > page + 1 * limit
+        # `page * limit`, not `page + 1 * limit`. `*` binds tighter than `+`, so
+        # the test read `len > page + limit` and stayed true long after the rows
+        # ran out: page 6 of a nine-row listing at two per page came back empty
+        # AND said next_page was 7, which an infinite-scroll client follows
+        # forever.
+        has_next_page = len(post_ids) > page * limit
         post_ids = paginate_post_ids(post_ids, page - 1, page_length=limit)
         posts = post_ids_to_models(post_ids, sort.lower()).all()
     else:
@@ -578,15 +628,9 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
         bookmarked_posts = list(db.session.execute(text(
             'SELECT post_id FROM "post_bookmark" WHERE user_id = :user_id'),
             {'user_id': user_id}).scalars())
-        if bookmarked_posts is None:
-            bookmarked_posts = []
-
         post_subscriptions = list(db.session.execute(text(
             'SELECT entity_id FROM "notification_subscription" WHERE type = :type and user_id = :user_id'),
             {'type': NOTIF_POST, 'user_id': user_id}).scalars())
-        if post_subscriptions is None:
-            post_subscriptions = []
-
         read_post_set = set(u_rp_ids)  # lookups ("in") on a set is O(1), tuples/lists are O(n). read_posts can be very large so this makes a difference.
 
         communities_moderating = moderating_communities_ids_all_users()
@@ -737,6 +781,13 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
     # user_id: the logged in user
     # person_id: the author of the posts being requested
 
+    # Asked without an account, these three used to fall through to the `else`
+    # arm below and answer with the All listing instead -- a different question,
+    # answered without saying so. app/api/alpha/utils/reply.py and
+    # app/api/alpha/utils/community.py refuse the same three by name.
+    if user_id is None and type in ('Subscribed', 'Moderating', 'ModeratorView'):
+        raise Exception('incorrect login')
+
     community_id = int(data['community_id']) if 'community_id' in data else None
     feed_id = int(data['feed_id']) if 'feed_id' in data else None
     topic_id = int(data['topic_id']) if 'topic_id' in data else None
@@ -854,6 +905,8 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
             content_filters = user_filters_posts(user_id) if user_id else {}
         elif feed_id:
             feed = db.session.get(Feed, feed_id)
+            if not feed:
+                raise Exception('feed not found')
             if feed.show_posts_in_children:  # include posts from child feeds
                 feed_ids = get_all_child_feed_ids(feed)
             else:
@@ -863,8 +916,13 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
             # used for the posts searching
             feed_community_ids = []
             for fid in feed_ids:
-                feed_items = FeedItem.query.join(Feed, FeedItem.feed_id == fid).all()
-                for item in feed_items:
+                # filter_by, not `join(Feed, FeedItem.feed_id == fid)`: that
+                # join names no predicate BETWEEN the two tables, so it paired
+                # every matching FeedItem with every row of `feed` and returned
+                # the same community id once per feed on the instance. The
+                # answer survived the trip through `IN`; the work did not need
+                # doing.
+                for item in FeedItem.query.filter_by(feed_id=fid).all():
                     feed_community_ids.append(item.community_id)
 
             posts = Post.query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
@@ -879,6 +937,8 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
         elif feed_id:
             segregate_instance_stickies = False
             feed = db.session.get(Feed, feed_id)
+            if not feed:
+                raise Exception('feed not found')
             if feed.show_posts_in_children:  # include posts from child feeds
                 feed_ids = get_all_child_feed_ids(feed)
             else:
@@ -888,8 +948,13 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
             # used for the posts searching
             feed_community_ids = []
             for fid in feed_ids:
-                feed_items = FeedItem.query.join(Feed, FeedItem.feed_id == fid).all()
-                for item in feed_items:
+                # filter_by, not `join(Feed, FeedItem.feed_id == fid)`: that
+                # join names no predicate BETWEEN the two tables, so it paired
+                # every matching FeedItem with every row of `feed` and returned
+                # the same community id once per feed on the instance. The
+                # answer survived the trip through `IN`; the work did not need
+                # doing.
+                for item in FeedItem.query.filter_by(feed_id=fid).all():
                     feed_community_ids.append(item.community_id)
 
             posts = Post.query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
@@ -904,6 +969,8 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
         elif topic_id:
             segregate_instance_stickies = False
             topic = db.session.get(Topic, topic_id)
+            if not topic:
+                raise Exception('topic not found')
             if topic.show_posts_in_children:  # include posts from child feeds
                 topic_ids = get_all_child_topic_ids(topic)
             else:
@@ -1157,15 +1224,9 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
         bookmarked_posts = list(db.session.execute(text(
             'SELECT post_id FROM "post_bookmark" WHERE user_id = :user_id'),
             {'user_id': user_id}).scalars())
-        if bookmarked_posts is None:
-            bookmarked_posts = []
-
         post_subscriptions = list(db.session.execute(text(
             'SELECT entity_id FROM "notification_subscription" WHERE type = :type and user_id = :user_id'),
             {'type': NOTIF_POST, 'user_id': user_id}).scalars())
-        if post_subscriptions is None:
-            post_subscriptions = []
-
         read_post_set = set(u_rp_ids)  # lookups ("in") on a set is O(1), tuples/lists are O(n). read_posts can be very large so this makes a difference.
 
         communities_moderating = moderating_communities_ids_all_users()
