@@ -10876,3 +10876,21 @@ from the listing changes no answer, only the query count. Three mutants across
 two slices survived on this. Either assert the query count (nothing here does)
 or record them; do not chase them with more assertions on the response, which
 cannot tell the difference.
+
+**587. A COLUMN OF FREE-FORM JSON IS A ROW OF LANDMINES.**
+`InstanceChooser.data` is filled in by whoever adds the row, and
+`get_site_instance_chooser_search` read three keys out of it directly -- so
+ONE malformed row was a KeyError that took the whole listing down for every
+caller until somebody edited that row. Read such a column with `.get`, expect
+a value of the wrong TYPE as well as a missing one (a `language` that is
+already a string rather than an object), and give the endpoint a test with a
+half-filled row in it. `Notification.targets` (D1184) is the same trap in
+another table.
+
+**588. `db.session.get(Model, None)` IS A WARNING, NOT AN ERROR.** It answers
+None after `SAWarning: fully NULL primary key identity cannot load any
+object`, so a guard that skips the lookup and a guard that handles the None
+produce the SAME response and differ only in the warning. A mutation pass
+cannot tell them apart from the answer alone -- assert the warning's absence
+with `warnings.catch_warnings(record=True)` if the guard is meant to prevent
+the lookup rather than survive it.
