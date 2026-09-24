@@ -4875,8 +4875,8 @@ def safe_order_by(sort_param: str, model, allowed_fields: set):
             safe_order_by(sort_param, Community, allowed_fields)
         )
     """
-    parts = sort_param.strip().split()
-    field_name = parts[0]
+    parts = (sort_param or '').strip().split()
+    field_name = parts[0] if parts else ''
     direction = parts[1].lower() if len(parts) > 1 else 'asc'
 
     if field_name in allowed_fields and hasattr(model, field_name):
@@ -4886,9 +4886,15 @@ def safe_order_by(sort_param: str, model, allowed_fields: set):
         else:
             return asc(column)
     else:
-        # Return a default safe order if invalid input
-        default_field = next(iter(allowed_fields))
-        return desc(getattr(model, default_field))
+        # Return a default safe order if invalid input. This must not be
+        # `next(iter(allowed_fields))`: a set has no order, and Python
+        # randomizes string hashing per process, so that picked a different
+        # column in every worker -- and raised AttributeError in the workers
+        # where it picked a name the model does not have.
+        for default_field in sorted(allowed_fields):
+            if hasattr(model, default_field):
+                return desc(getattr(model, default_field))
+        return desc(model.id)
 
 
 
