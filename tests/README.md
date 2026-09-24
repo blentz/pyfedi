@@ -10981,3 +10981,12 @@ every file, with the symptom being an unexplained 403 from an unrelated page.
 `db_session` clears `honeypot:*` and `ban:*` along with `votes_cast_*`. This
 is the second kind of Redis state to catch this campaign out (fact 573); when
 a feature enforces something by IP, look for where it stores that and clear it.
+
+**600. THE GUARD IS USUALLY ON THE NEXT LINE ALREADY.** Three times now a key
+has been read out of federated JSON without a membership test while the
+adjacent clause tested one: `mods_data['type']` beside
+`'orderedItems' in mods_data` (D1259), `announce['object']` beside
+`'object' in announce` (D1260), `data['registration_mode']` beside code that
+knew better (D1245). When reviewing a line that indexes a remote payload, read
+the lines around it -- the codebase's own answer is generally right there, and
+its absence on one line is a slip rather than a decision.

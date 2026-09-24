@@ -18012,4 +18012,31 @@ that is not a Group, and an actor that is not JSON at all.
 
 ---
 
-**Next free number: D1259.**
+---
+
+## Round 112 — sub-project 87 slice B: filling in a community this instance has just heard of
+
+**The round in one line: two keys read out of another instance's JSON without
+asking whether they were there, each of which killed the backfill task and
+left a community with nothing in it.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1259** | `app/community/util.py:121` | `if mods_data and mods_data['type'] == 'OrderedCollection' and 'orderedItems' in mods_data` -- the SECOND clause membership-tests its key and the first does not. A moderators collection with no `type` was `KeyError: 'type'`, which killed `retrieve_mods_and_backfill`: the community existed, was never filled in, and the only sign was a traceback in a worker log. | **fixed** | `PROBE ha a moderators collection with no type: KeyError: 'type'` |
+| **D1260** | `app/community/util.py:181` | In the PeerTube and Guppe branch, `remote_object_to_json(announce['object'])`. The branch immediately below it reads `'object' in announce` before using it; this one did not. **One** malformed entry anywhere in a remote outbox stopped the whole backfill. It is skipped now, and the rest of the outbox is read. | **fixed** | `PROBE ja a peertube outbox whose items have no object: KeyError: 'object'` |
+
+Both are D1184's shape -- a key read out of free-form remote JSON without a
+membership test -- and in both the correct idiom was already on the adjacent
+line. That is the third module in this campaign where the guard exists one
+line away from the place it was needed (D1184, D1245, and now these).
+
+### What the slice pins
+
+Six shapes a remote's moderators collection can take, six an outbox can take
+(including the paginated one whose first page answers nothing), the PeerTube
+variant, and a community row that has been deleted between the task being
+queued and running.
+
+---
+
+**Next free number: D1261.**
