@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from dateutil.relativedelta import relativedelta
 from flask import current_app
@@ -21,6 +21,64 @@ from app.utils import authorise_api_user, communities_banned_from_all_users, mod
 from app.utils import communities_banned_from, blocked_instances, blocked_communities, shorten_string, \
     joined_communities, moderating_communities, expand_hex_color, community_membership, subscribed_feeds, \
     feed_membership
+
+
+def a_community(community_id):
+    """The community `community_id` names, or a clean refusal.
+
+    `Community.query.filter_by(id=...).one()` answers NoResultFound for an id
+    nobody holds, and `db.session.get(Community, ...)` answers None, whose
+    first attribute access is an AttributeError. Either way the API's shared
+    error handler (app/api/alpha/__init__.py) hands the caller a 400 carrying
+    "No row was found when one was required" or "'NoneType' object has no
+    attribute 'is_owner'" -- after logging a traceback and, where one is
+    configured, reporting it to Sentry. An id that is simply wrong is not an
+    application error and should not be filed as one.
+    """
+    community = db.session.get(Community, community_id)
+    if not community:
+        raise Exception('community not found')
+    return community
+
+
+def a_user(user_id):
+    """The account `user_id` names, or a clean refusal. See `a_community`."""
+    user = db.session.get(User, user_id)
+    if not user:
+        raise Exception('user not found')
+    return user
+
+
+def a_post(post_id):
+    """The post `post_id` names, or a clean refusal. See `a_community`."""
+    post = db.session.get(Post, post_id)
+    if not post:
+        raise Exception('post not found')
+    return post
+
+
+def a_ban_expiry(expires_at):
+    """`expires_at` read as a naive UTC datetime.
+
+    The one spelling this used to accept, `'%Y-%m-%dT%H:%M:%S.%fZ'`, is the one
+    this module emits -- but it is not the only way an ISO 8601 timestamp can be
+    written. Whole seconds (`2030-01-01T00:00:00Z`) and a numeric offset
+    (`2030-01-01T00:00:00+00:00`) are both ordinary, and both used to reach the
+    caller as `time data '...' does not match format '%Y-%m-%dT%H:%M:%S.%fZ'`.
+
+    A timestamp that carries an offset is converted to UTC and stripped of its
+    tzinfo, because `CommunityBan.ban_until` is a naive column holding UTC.
+    """
+    text_value = expires_at.strip()
+    if text_value.endswith(('Z', 'z')):
+        text_value = text_value[:-1] + '+00:00'
+    try:
+        parsed = datetime.fromisoformat(text_value)
+    except ValueError:
+        raise Exception(f'expires_at is not an ISO 8601 timestamp: {expires_at}')
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
 
 
 def get_community_list(auth, data):
@@ -138,7 +196,7 @@ def get_community(auth, data):
     try:
         community_json = community_view(community=community, variant=3, stub=False, user_id=user_id)
         return community_json
-    except:
+    except Exception:
         if 'name' in data:
             query = data['name']
             if user_id and '@' in query and '.' in query:
@@ -230,7 +288,7 @@ def post_community(auth, data):
 
 def put_community(auth, data):
     community_id = data['community_id']
-    community = Community.query.filter_by(id=community_id).one()
+    community = a_community(community_id)
 
     title = data['title'] if 'title' in data else community.title
     description = data['description'] if 'description' in data else community.description
@@ -292,7 +350,7 @@ def post_community_delete(auth, data):
 def get_community_moderate_bans(auth, data):
     # get the community_id from the data
     community_id = int(data['community_id'])
-    community = Community.query.filter_by(id=community_id).one()
+    community = a_community(community_id)
 
     # get the user_id from the auth
     user = authorise_api_user(auth, return_type='model')
@@ -326,7 +384,7 @@ def get_community_moderate_bans(auth, data):
             ban_json['expired'] = False
             ban_json['expires_at'] = None
             ban_json['expired_at'] = None
-        elif cb.ban_until < datetime.now():
+        elif cb.ban_until < utcnow():
             ban_json['expired'] = True
             ban_json['expired_at'] = cb.ban_until.isoformat(timespec="microseconds") + "Z"
         else:
@@ -346,10 +404,10 @@ def get_community_moderate_bans(auth, data):
 def put_community_moderate_unban(auth, data):
     # get the user to unban
     user_id = data['user_id']
-    blocked = db.session.get(User, user_id)
+    blocked = a_user(user_id)
 
     # get the community from the data
-    community = Community.query.filter_by(id=data['community_id']).one()
+    community = a_community(data['community_id'])
 
     # get the user from the auth and make sure they are allowed to conduct this action
     user = authorise_api_user(auth, return_type='model')
@@ -367,9 +425,10 @@ def put_community_moderate_unban(auth, data):
         raise Exception("Specified ban does not exist")
 
     # build the response before deleting the record in the db
+    expired_at = utcnow()
     res = {}
     res['reason'] = cb.reason
-    res['expired_at'] = utcnow().isoformat(timespec="microseconds") + "Z"
+    res['expired_at'] = expired_at.isoformat(timespec="microseconds") + "Z"
     res['community'] = community_view(community, variant=1)
     res['banned_user'] = user_view(user=cb.user_id, variant=1)
     res['banned_by'] = user_view(user=cb.banned_by, variant=1)
@@ -384,8 +443,12 @@ def put_community_moderate_unban(auth, data):
     db.session.commit()
 
     # federate the unban
+    # `expiry` is handed to ap_datetime() by the task, which calls .isoformat()
+    # on it: passing the already-formatted res['expired_at'] string made every
+    # unban raise AttributeError inside the task, so no Undo Block was ever
+    # federated and remote instances kept the ban forever.
     task_selector('unban_from_community', user_id=user_id, mod_id=user.id, community_id=community.id,
-                  expiry=res['expired_at'], reason=res['reason'])
+                  expiry=expired_at, reason=res['reason'])
 
     # notify the unbanned user if they are local to this instance
     if blocked.is_local():
@@ -414,10 +477,10 @@ def put_community_moderate_unban(auth, data):
 def post_community_moderate_ban(auth, data):
     # get the user to ban
     user_id = data['user_id']
-    blocked = db.session.get(User, user_id)
+    blocked = a_user(user_id)
 
     # get the community from the data
-    community = Community.query.filter_by(id=data['community_id']).one()
+    community = a_community(data['community_id'])
 
     # get the user from the auth and make sure they are allowed to conduct this action
     blocker = authorise_api_user(auth, return_type='model')
@@ -432,13 +495,13 @@ def post_community_moderate_ban(auth, data):
     if data.get('permanent', False):
         ban_until = None
     elif isinstance(data.get('expires_at', None), str):
-        ban_until = datetime.strptime(data['expires_at'], '%Y-%m-%dT%H:%M:%S.%fZ')
-        if ban_until < datetime.now():
+        ban_until = a_ban_expiry(data['expires_at'])
+        if ban_until < utcnow():
             raise Exception("expires_at must be a time in the future. - "
                             f"Current time: {utcnow().isoformat(timespec='microseconds') +  'Z'} - "
                             f"Time provided: {ban_until.isoformat(timespec='microseconds') + 'Z'}")
     else:
-        ban_until = datetime.now() + relativedelta(years=1)
+        ban_until = utcnow() + relativedelta(years=1)
 
     # create the community ban
     cb = CommunityBan.query.filter(CommunityBan.user_id == blocked.id, CommunityBan.community_id == community.id).first()
@@ -501,7 +564,7 @@ def post_community_moderate_post_nsfw(auth, data):
 
     # get the post from the data
     post_id = int(data['post_id'])
-    post = db.session.get(Post, post_id)
+    post = a_post(post_id)
 
     # get the community from the post
     community = db.session.get(Community, post.community_id)
@@ -540,11 +603,13 @@ def post_community_mod(auth, data):
 
 def post_community_flair_create(auth, data):
     user = authorise_api_user(auth, return_type='model')
-    community = db.session.get(Community, data['community_id'])
+    community = a_community(data['community_id'])
 
     if not (community.is_owner(user) or community.is_moderator(user) or user.is_admin_or_staff()):
         raise Exception('insufficient permissions')
-    
+
+    data['flair_title'] = data['flair_title'].strip()
+
     if 'text_color' not in data:
         data['text_color'] = "#000000"
     elif len(data['text_color']) == 4:
@@ -561,9 +626,11 @@ def post_community_flair_create(auth, data):
         data['blur_images'] = False
     
     try:
-        CommunityFlair.query.filter_by(community_id=community.id, flair=data['flair_title'],
-                                       text_color=data['text_color'], background_color=data['background_color'],
-                                       blur_images=data['blur_images']).one()
+        # Matched on the community and the title alone. The colours used to be
+        # part of the match, so the same title in a different colour was not a
+        # duplicate -- and the title was matched unstripped while it is stored
+        # stripped below, so ' news ' was not a duplicate of 'news' either.
+        CommunityFlair.query.filter_by(community_id=community.id, flair=data['flair_title']).one()
         raise Exception("Flair already exists")
     except NoResultFound:
         # Flair is new, create it
