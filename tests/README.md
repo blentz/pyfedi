@@ -11066,3 +11066,21 @@ Two of them filtered the private flag and the one shown by default did not
 (D1271). Where the same data is assembled more than once, compare the
 filters side by side rather than reading each on its own -- the odd one out
 is the finding.
+
+**612. WHEN A FIX HAS A SHAPE, SWEEP FOR IT THE SAME DAY.** `name, domain =
+handle.split('@')` was fixed four times in four rounds (D1174, D1258, D1268,
+then seven more sites in D1275) because each round fixed only the copy it
+tripped over. One `grep -rn "\.split('@')"` found the rest in a minute. A
+defect with a greppable shape is a sweep, not a finding.
+
+**613. A GUARD THE TEST CANNOT KILL MAY BE UNREACHABLE, NOT UNTESTED.** Two
+of the seven guards survived every mutant because an earlier guard on the
+same path always fired first. The answer was to delete them and say why in a
+comment, not to contrive a test. Check what is upstream before assuming a
+surviving mutant means a missing case.
+
+**614. REMOVING STATEMENTS CAN DROP A PERCENTAGE WITH NOTHING UNCOVERED.**
+`app/api/alpha/utils/misc.py` fell from 98.03% to 97.994% and failed its
+floor with `missing_lines: []` -- two covered statements had been deleted, so
+the same partial branches were a larger share of a smaller denominator. The
+fix is to cover one more arc, never to lower the floor.

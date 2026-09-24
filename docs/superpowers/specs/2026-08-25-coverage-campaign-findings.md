@@ -18169,4 +18169,39 @@ the purge task including that its flag is the CDN one.
 
 ---
 
-**Next free number: D1274.**
+---
+
+## Round 116 — sub-project 90: `name@server`, everywhere a caller can send one
+
+**The round in one line: a sweep rather than a module -- one helper existed
+for splitting a handle, seven other places did it themselves, and the helper
+itself answered the wrong server for a handle naming two.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1274** | `app/activitypub/util.py:4674` | `normalise_actor_string` read `actor[0]` before checking the string had one, so `''` was `IndexError: string index out of range`. Worse, it read `parts[1]` after splitting on `@` without checking how many parts there were: `evil@attacker.test@victim.test` answered `('evil', 'attacker.test')`, silently discarding the rest, so a handle naming one server was looked up against another. Anything that is not exactly `name@server` is `('', '')` now, which is the value both existing callers already test for. | **fixed** | `normalise_actor_string('evil@attacker.test@victim.test')` was `('evil', 'attacker.test')` |
+| **D1275** | `app/api/alpha/utils/post.py:116,239,818,898`, `app/api/alpha/views.py:532`, `app/api/alpha/utils/user.py:33`, `app/shared/community.py:680`, `app/api/alpha/utils/misc.py:133` | Seven more copies of `name, domain = something.split('@')`, each handed its string by a query parameter. The alpha API's error handler turns an exception into a 400 carrying its message, so `?community_name=a@b@c` answered `{"message": "too many values to unpack (expected 2)"}` -- the right status with a Python internal in it. All seven go through the helper now and answer `invalid_request`. | **fixed** | `PROBE aa post/list community_name=a@b@c: 400 '{"code":400,"message":"too many values to unpack (expected 2)"...}'` |
+
+**Third time for this shape.** D1174 fixed it in `app/api/alpha/utils/feed.py`
+and left a comment saying what it was; D1258 fixed
+`search_for_community`; D1268 fixed `search_for_user`, its near-copy, a
+fortnight later. This round went looking for the rest instead of waiting for
+them, which is fact 609 applied rather than restated.
+
+**Two guards removed as dead.** The listing blocks in `get_post_list` and
+`get_post_list2` are only reached after the lookup block above them has
+already refused a malformed name, so their own guards could not be killed by
+any test. They are gone rather than left with a `# pragma`, and the comment
+in their place says why.
+
+### What the slice pins
+
+65 tests: fourteen shapes through the helper including the port case and the
+marker-only one, five malformed names on each of the two post listings,
+signed in and out, five usernames, six resolve queries, both view helpers
+taken directly, and -- on each endpoint -- that a well-formed handle for
+something nobody hosts is a DIFFERENT answer from a handle that is not one.
+
+---
+
+**Next free number: D1276.**
