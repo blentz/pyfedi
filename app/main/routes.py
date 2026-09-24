@@ -473,6 +473,12 @@ def list_communities():
 
 @bp.route('/modlog', methods=['GET'])
 @limiter.limit("20 per 1 minutes", methods=['GET', 'POST'])
+# A private instance shows nothing to a caller without an account, and this
+# page was the exception: it answered 200 with its public entries -- community
+# names, actions and reasons -- where /communities and / redirect to the login.
+# The `public == True` filter below still governs what a signed-in
+# non-moderator sees on a public instance.
+@login_required_if_private_instance
 @check_anoobis
 def modlog():
     page = request.args.get('page', 1, type=int)
@@ -506,7 +512,14 @@ def modlog():
     if user_name:
         if f"@{current_app.config['SERVER_NAME']}" in user_name:
             user_name = user_name.split('@')[0]
-        user = User.query.filter(func.lower(User.user_name) == suspect_user_name.lower(), User.ap_id == None).first()
+        # `user_name`, not `suspect_user_name`: this block filters by the
+        # MODERATOR who acted, and it was searching for the suspect's name
+        # instead -- a copy of the block above with one word left behind. With
+        # no suspect named, `''.lower()` matched nobody, `user` stayed None,
+        # and the fallback lookup by ap_id matches only remote accounts -- so
+        # filtering the modlog by a local moderator's name silently returned
+        # the whole unfiltered log.
+        user = User.query.filter(func.lower(User.user_name) == user_name.lower(), User.ap_id == None).first()
         if user is None:
             user = User.query.filter_by(ap_id=user_name.lower()).first()
         if user:
