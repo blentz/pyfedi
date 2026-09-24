@@ -9,7 +9,7 @@ from sqlalchemy import text, func, or_
 from sqlalchemy.orm.exc import NoResultFound, DetachedInstanceError
 
 from app import cache, db
-from app.activitypub.util import active_month
+from app.activitypub.util import active_month, normalise_actor_string
 from app.constants import *
 from app.models import ChatMessage, Community, Language, Instance, Post, PostReply, User, utcnow, \
     AllowedInstances, BannedInstances, utcnow, Site, Feed, FeedItem, Topic, CommunityFlair, \
@@ -529,7 +529,9 @@ def community_view(community: Community | int | str, variant, stub=False, user_i
     if isinstance(community, int):
         community = Community.query.filter_by(id=community).one()
     elif isinstance(community, str):
-        name, ap_domain = community.strip().split('@')
+        name, ap_domain = normalise_actor_string(community)
+        if not name or not ap_domain:
+            raise Exception('invalid_request')
         community = Community.query.filter_by(name=name, ap_domain=ap_domain).first()
         if community is None:
             community = Community.query.filter(func.lower(Community.name) == name.lower(),

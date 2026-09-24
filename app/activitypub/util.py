@@ -4672,16 +4672,21 @@ def find_microblogging_community():
 
 
 def normalise_actor_string(actor: str) -> Tuple[str, str]:
-    # Turns something like whatever@server.tld into tuple(whatever, server.tld)
+    # Turns something like whatever@server.tld into tuple(whatever, server.tld).
+    # Anything that is not exactly that shape is ('', ''), which every caller
+    # already tests for: `actor[0]` on an empty string was IndexError, and
+    # `parts[1]` on `a@b@c` answered ('a', 'b') -- a lookup against a server
+    # nobody named.
+    if not actor:
+        return '', ''
     actor = actor.strip()
-    if actor[0] == '@' or actor[0] == '!' or actor[0] == '~':
+    if actor and (actor[0] == '@' or actor[0] == '!' or actor[0] == '~'):
         actor = actor[1:]
 
-    if '@' in actor:
-        parts = actor.split('@')
-        return parts[0].lower(), parts[1].lower()
-    else:
+    parts = actor.split('@')
+    if len(parts) != 2 or not parts[0] or not parts[1]:
         return '', ''
+    return parts[0].lower(), parts[1].lower()
 
 
 def process_banned_message(banned_json, instance_domain: str, session):

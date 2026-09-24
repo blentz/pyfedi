@@ -7,7 +7,7 @@ import jwt
 from datetime import datetime
 
 from app import db, cache
-from app.activitypub.util import make_image_sizes
+from app.activitypub.util import make_image_sizes, normalise_actor_string
 from app.api.alpha.utils.post import get_post_list
 from app.api.alpha.utils.reply import get_reply_list
 from app.api.alpha.views import user_view, reply_view, post_view, community_view
@@ -30,12 +30,11 @@ def get_user(auth, data):
             name = person.lower()
             ap_domain = None
         else:
-            name, ap_domain = person.strip().split('@')
-            name = name.lower()
-            if ap_domain == current_app.config['SERVER_NAME']:
+            name, ap_domain = normalise_actor_string(person)   # both lowercased
+            if not name or not ap_domain:
+                raise Exception('invalid_request')
+            if ap_domain == current_app.config['SERVER_NAME'].lower():
                 ap_domain = None
-            else:
-                ap_domain = ap_domain.lower()
         person = User.query.filter(func.lower(User.user_name) == name, func.lower(User.ap_domain) == ap_domain,
                                    User.deleted == False).one()
         data['person_id'] = person.id

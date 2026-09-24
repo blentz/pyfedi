@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app import db, plugins, cache
 from app.api.alpha.views import post_view, post_report_view, reply_view, community_view, user_view, flair_view
+from app.activitypub.util import normalise_actor_string
 from app.constants import *
 from app.feed.routes import get_all_child_feed_ids
 from app.models import Post, Community, CommunityMember, utcnow, User, Feed, FeedItem, Topic, PostReply, PostVote, \
@@ -113,7 +114,9 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
                 community_name_lookup = f"{community_name}@{current_app.config['SERVER_NAME']}"
             else:
                 community_name_lookup = community_name
-            name, ap_domain = community_name_lookup.split('@')
+            name, ap_domain = normalise_actor_string(community_name_lookup)
+            if not name or not ap_domain:
+                raise Exception('invalid_request')
             community = Community.query.filter_by(name=name, ap_domain=ap_domain).first()
 
         if community and community.private:
@@ -234,7 +237,10 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
             segregate_instance_stickies = False
             if not '@' in community_name:
                 community_name = f"{community_name}@{current_app.config['SERVER_NAME']}"
-            name, ap_domain = community_name.split('@')
+            name, ap_domain = normalise_actor_string(community_name)
+            # No guard here: the block above refuses a malformed
+            # `community_name` before this one is reached, and ('', '') simply
+            # matches nothing.
             posts = Post.query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
                                       Post.user_id.not_in(blocked_person_ids),
                                       Post.community_id.not_in(blocked_community_ids),
@@ -811,7 +817,9 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
                 community_name_lookup = f"{community_name}@{current_app.config['SERVER_NAME']}"
             else:
                 community_name_lookup = community_name
-            name, ap_domain = community_name_lookup.split('@')
+            name, ap_domain = normalise_actor_string(community_name_lookup)
+            if not name or not ap_domain:
+                raise Exception('invalid_request')
             community = Community.query.filter_by(name=name, ap_domain=ap_domain).first()
 
         if community and community.private:
@@ -889,7 +897,10 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
             segregate_instance_stickies = False
             if not '@' in community_name:
                 community_name = f"{community_name}@{current_app.config['SERVER_NAME']}"
-            name, ap_domain = community_name.split('@')
+            name, ap_domain = normalise_actor_string(community_name)
+            # No guard here: the block above refuses a malformed
+            # `community_name` before this one is reached, and ('', '') simply
+            # matches nothing.
             posts = Post.query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
                                       Post.user_id.not_in(blocked_person_ids),
                                       Post.community_id.not_in(blocked_community_ids),
