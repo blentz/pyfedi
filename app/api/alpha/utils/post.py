@@ -26,6 +26,37 @@ from app.utils import authorise_api_user, blocked_users, blocked_communities, bl
 from app.shared.tasks import task_selector
 
 
+def a_post(post_id):
+    """The post `post_id` names, or a clean refusal.
+
+    `db.session.get(Post, ...)` answers None for an id nobody holds, and the
+    alpha API turns every exception into a 400 carrying `str(e)` -- so reading
+    an attribute off that None handed the caller `'NoneType' object has no
+    attribute 'community'` after logging a traceback and, where one is
+    configured, filing a Sentry event. The same shape as D1194 and D1202.
+    """
+    post = db.session.get(Post, post_id)
+    if not post:
+        raise Exception('post not found')
+    return post
+
+
+def a_community(community_id):
+    """The community `community_id` names, or a clean refusal. See `a_post`."""
+    community = db.session.get(Community, community_id)
+    if not community:
+        raise Exception('community not found')
+    return community
+
+
+def a_report(report_id):
+    """The report `report_id` names, or a clean refusal. See `a_post`."""
+    report = db.session.get(Report, report_id)
+    if not report:
+        raise Exception('report not found')
+    return report
+
+
 def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
     type = data['type_'] if 'type_' in data else "All"
     sort = data['sort'] if 'sort' in data else "Hot"
@@ -1379,12 +1410,12 @@ def get_post_replies(auth, data):
 
 
 def post_post_like(auth, data):
+    # No `if not user` guard: authorise_api_user either returns a User or
+    # raises -- there is no falsy return for return_type='model' -- so the
+    # guard that used to stand here could not run.
     user = authorise_api_user(auth, return_type="model")
 
-    if not user:
-        raise Exception("incorrect login")
-
-    post_id = data['post_id']
+    post_id = a_post(data['post_id']).id
     score = data['score']
     private = data['private'] if 'private' in data else bool(user.vote_privately)
     emoji = data['emoji'] if 'emoji' in data else None
@@ -1402,7 +1433,7 @@ def post_post_like(auth, data):
 
 
 def put_post_save(auth, data):
-    post_id = data['post_id']
+    post_id = a_post(data['post_id']).id
     save = data['save']
 
     user_id = bookmark_post(post_id, SRC_API, auth) if save else remove_bookmark_post(post_id, SRC_API, auth)
@@ -1411,7 +1442,7 @@ def put_post_save(auth, data):
 
 
 def put_post_subscribe(auth, data):
-    post_id = data['post_id']
+    post_id = a_post(data['post_id']).id
     subscribe = data['subscribe']
 
     user_id = subscribe_post(post_id, subscribe, SRC_API, auth)
@@ -1428,7 +1459,10 @@ def post_post(auth, data):
     ai_generated = data['ai_generated'] if 'ai_generated' in data else False
     alt_text = data['alt_text'] if 'alt_text' in data else title
     language_id = data['language_id'] if 'language_id' in data else site_language_id()
-    if language_id < 2:
+    # `is None or`: site_language_id() answers None on an instance whose
+    # languages are not seeded, and `None < 2` is a TypeError. Fact 478 --
+    # app/api/alpha/utils/reply.py asks the same question the same way.
+    if language_id is None or language_id < 2:
         language_id = site_language_id()
     
     user_id = authorise_api_user(auth)
@@ -1458,7 +1492,7 @@ def post_post(auth, data):
     if 'poll' in data and data['poll']:
         input['poll'] = data['poll']
 
-    community = Community.query.filter_by(id=community_id).one()
+    community = a_community(community_id)
 
     # Fire hook for plugins
     post_data = {
@@ -1479,17 +1513,24 @@ def post_post(auth, data):
 
 def put_post(auth, data):
     post_id = data['post_id']
-    post = db.session.get(Post, post_id)
+    post = a_post(post_id)
 
     title = data['title'] if 'title' in data else post.title
-    body = data['body'] if 'body' in data else post.body
+    # `or ''`: Post.body is nullable and a link or image post routinely has no
+    # body at all, while edit_post hands whatever it gets to
+    # piefed_markdown_to_lemmy_markdown, which is a regex substitution --
+    # `TypeError: expected string or bytes-like object, got 'NoneType'`. So no
+    # bodyless post could be edited through the API, not even to fix its title.
+    # post_post one function above already defaults its body to ''.
+    body = data['body'] if 'body' in data else (post.body or '')
     url = data['url'] if 'url' in data else post.url
     nsfw = data['nsfw'] if 'nsfw' in data else post.nsfw
     ai_generated = data['ai_generated'] if 'ai_generated' in data else post.ai_generated
     language_id = data['language_id'] if 'language_id' in data else post.language_id
     tags = data['tags'] if 'tags' in data else tags_to_string(post) or ''
     flair = data['flair'] if 'flair' in data else flair_to_string(post) or ''
-    if language_id < 2:
+    # `is None or`: the post's own language_id is nullable. See post_post above.
+    if language_id is None or language_id < 2:
         language_id = site_language_id()
     if 'alt_text' in data:
         alt_text = data['alt_text']
@@ -1525,7 +1566,7 @@ def put_post(auth, data):
 
 
 def post_post_delete(auth, data):
-    post_id = data['post_id']
+    post_id = a_post(data['post_id']).id
     deleted = data['deleted']
 
     if deleted:
@@ -1544,7 +1585,7 @@ def post_post_report(auth, data):
     report_remote = data['report_remote'] if 'report_remote' in data else True
     input = {'reason': reason, 'description': description, 'report_remote': report_remote}
 
-    post = db.session.get(Post, post_id)
+    post = a_post(post_id)
     user_id, report = report_post(post, input, SRC_API, auth)
 
     post_json = post_report_view(report=report, post_id=post_id, user_id=user_id)
@@ -1552,10 +1593,10 @@ def post_post_report(auth, data):
 
 
 def get_post_report_list(auth, data):
+    # No `if not user` guard: authorise_api_user either returns a User or
+    # raises -- there is no falsy return for return_type='model' -- so the
+    # guard that used to stand here could not run.
     user = authorise_api_user(auth, return_type="model")
-
-    if not user:
-        raise Exception("incorrect login")
 
     post_id = data['post_id'] if 'post_id' in data else None
     community_id = data['community_id'] if 'community_id' in data else None
@@ -1565,7 +1606,7 @@ def get_post_report_list(auth, data):
 
     if post_id:
         # Just get reports for a single post
-        post = db.session.get(Post, post_id)
+        post = a_post(post_id)
         mods = post.community.moderators()
         mod_ids = [mod.user_id for mod in mods]
 
@@ -1576,7 +1617,7 @@ def get_post_report_list(auth, data):
             raise Exception('incorrect login')
     elif community_id:
         # Just get reports for a single community
-        community = db.session.get(Community, community_id)
+        community = a_community(community_id)
         mods = community.moderators()
         mod_ids = [mod.user_id for mod in mods]
 
@@ -1621,14 +1662,20 @@ def put_post_report_resolve(auth, data):
     report_id = data['report_id']
     resolved = data['resolved']
 
+    # No `if not user` guard: authorise_api_user either returns a User or
+    # raises -- there is no falsy return for return_type='model' -- so the
+    # guard that used to stand here could not run.
     user = authorise_api_user(auth, return_type="model")
 
-    if not user:
-        raise Exception("incorrect login")
-    
-    report = db.session.get(Report, report_id)
-    
-    if not report.suspect_post_id and report.suspect_post_reply_id:
+    report = a_report(report_id)
+
+    # `if not report.suspect_post_id`, on its own. Tested with
+    # `and report.suspect_post_reply_id`, this refused a report against a
+    # COMMENT and let every other kind through -- a report against a person, a
+    # community or a conversation names no post and no reply, so it reached
+    # `db.session.get(Community, report.in_community_id)` with None and died
+    # on `community.moderators()`. This endpoint resolves post reports.
+    if not report.suspect_post_id:
         raise Exception("invalid target of resolution")
     
     community = db.session.get(Community, report.in_community_id)
@@ -1650,7 +1697,7 @@ def put_post_report_resolve(auth, data):
 
 
 def post_post_lock(auth, data):
-    post_id = data['post_id']
+    post_id = a_post(data['post_id']).id
     locked = data['locked']
 
     user_id, post = lock_post(post_id, locked, SRC_API, auth)
@@ -1660,7 +1707,7 @@ def post_post_lock(auth, data):
 
 
 def post_post_hide(auth, data):
-    post_id = data['post_id']
+    post_id = a_post(data['post_id']).id
     hidden = data['hidden']
 
     user_id, post = hide_post(post_id, hidden, SRC_API, auth)
@@ -1670,13 +1717,18 @@ def post_post_hide(auth, data):
 
 
 def post_post_feature(auth, data):
-    post_id = data['post_id']
+    post_id = a_post(data['post_id']).id
     featured = data['featured']
     feature_type = data['feature_type'] if 'feature_type' in data else 'Community'
 
+    # Neither arm bound `post` or `user_id` for a feature_type that is neither,
+    # so the response built below was an UnboundLocalError.
+    if feature_type not in ("Community", "Local"):
+        raise Exception('feature_type must be Community or Local')
+
     if feature_type == "Community":
         user_id, post = sticky_post(post_id, featured, SRC_API, auth)
-    elif feature_type == "Local":
+    else:
         user = authorise_api_user(auth, 'model')
         user_id = user.id
         post = db.session.get(Post, post_id)
@@ -1695,7 +1747,7 @@ def post_post_feature(auth, data):
 
 
 def post_post_remove(auth, data):
-    post_id = data['post_id']
+    post_id = a_post(data['post_id']).id
     removed = data['removed']
 
     if removed:
@@ -1717,7 +1769,9 @@ def post_post_mark_as_read(auth, data):
     try:
         if 'post_id' in data:
             mark_post_read([data['post_id']], data['read'], user_id)
-        elif 'post_ids' in data:
+        else:
+            # `else`, not `elif 'post_ids' in data`: the guard at the top of
+            # this function already refused a request carrying neither.
             mark_post_read(data['post_ids'], data['read'], user_id)
     except IntegrityError:
         return {"success": False}
@@ -1733,7 +1787,7 @@ def get_post_like_list(auth, data):
         limit = current_app.config["PAGE_LENGTH"]
 
     user = authorise_api_user(auth, return_type='model')
-    post = db.session.get(Post, post_id)
+    post = a_post(post_id)
 
     if post.community.is_moderator(user) or user.is_admin() or user.is_staff():
         banned_from_site_user_ids = list(db.session.execute(text('SELECT id FROM "user" WHERE banned = true')).scalars())
@@ -1762,7 +1816,7 @@ def put_post_set_flair(auth, data):
     post_id = data['post_id']
     flair_list = data['flair_id_list'] if 'flair_id_list' in data else []
 
-    post = db.session.get(Post, post_id)
+    post = a_post(post_id)
     user = authorise_api_user(auth, return_type='model')
     
     if post.community.is_moderator(user) or user.is_admin_or_staff() or post.user_id == user.id:
@@ -1789,7 +1843,7 @@ def put_post_set_flair(auth, data):
 
 
 def post_poll_vote(auth, data):
-    post_id = data['post_id']
+    post_id = a_post(data['post_id']).id
     choice_id = data['choice_id']
 
     user_id = authorise_api_user(auth)
