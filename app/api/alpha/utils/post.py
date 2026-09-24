@@ -1273,11 +1273,20 @@ def get_post(auth, data):
     if not data or 'id' not in data:
         raise Exception('missing parameters for post')
 
-    id = int(data['id'])
+    try:
+        id = int(data['id'])
+    except (TypeError, ValueError):
+        # `int('abc')` reached the caller as
+        # "invalid literal for int() with base 10: 'abc'".
+        raise Exception('id must be a number')
+
+    # a_post before post_view: the view looks the row up with `.one()`, so an
+    # id nobody holds answered the bare `NoResultFound: ()`.
+    post = a_post(id)
 
     user_id = authorise_api_user(auth) if auth else None
 
-    post_json = post_view(post=id, variant=3, user_id=user_id)
+    post_json = post_view(post=post, variant=3, user_id=user_id)
     return post_json
 
 
@@ -1304,12 +1313,21 @@ def get_post_replies(auth, data):
 
     if parent_id:
         parent = db.session.get(PostReply, parent_id)
+        if not parent:
+            raise Exception('comment not found')
         if post_id is None:
             post_id = parent.post_id
-        post = db.session.get(Post, post_id)
+        post = a_post(post_id)
         replies = get_comment_branch(post, parent.id, sort.lower(), user)
     else:
-        post = db.session.get(Post, post_id)
+        # Naming neither leaves post_id None, and `db.session.get(Post, None)`
+        # answers None after warning that a fully NULL primary key identity
+        # cannot load any object -- so a request with no post_id at all was
+        # `'NoneType' object has no attribute 'archived'` from inside
+        # post_replies, and so was one naming a post nobody holds.
+        if post_id is None:
+            raise Exception('post_id or parent_id required')
+        post = a_post(post_id)
         replies = post_replies(post, sort.lower(), user)
 
     is_user_banned_from_community = post.community_id in user_details['user_ban_community_ids'] if user_details else False
@@ -1318,10 +1336,13 @@ def get_post_replies(auth, data):
 
     # Apply max_depth filter to the nested reply tree
     def filter_max_depth(reply_tree, current_depth=0, parent_depth=0):
-        """Filter nested reply tree by max_depth"""
-        if max_depth is None:
-            return reply_tree
+        """Filter nested reply tree by max_depth.
 
+        The caller below guards `max_depth is not None`, so the guard that
+        used to stand here for the same thing cannot run. It was the right
+        test in the wrong place: the caller's own guard read `if max_depth:`,
+        which never called this function at all for a max_depth of 0.
+        """
         filtered_tree = []
         for item in reply_tree:
             comment = item['comment']
@@ -1338,7 +1359,11 @@ def get_post_replies(auth, data):
         return filtered_tree
 
     # Apply max_depth filter
-    if max_depth:
+    # `is not None`, not truthiness: max_depth=0 means "the top level and
+    # nothing under it", and 0 is falsy, so the one depth a caller is most
+    # likely to ask for was the one silently ignored. filter_max_depth's own
+    # guard already tests `is None`.
+    if max_depth is not None:
         replies = filter_max_depth(replies)
 
     # Apply cursor-based pagination

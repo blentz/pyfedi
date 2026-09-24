@@ -157,7 +157,15 @@ def post_replies(post: Post, sort_by: str, viewer: User, db_only=False) -> List[
         blocked_accounts = blocked_users(viewer.id)
         if blocked_accounts:
             comments = comments.filter(PostReply.user_id.not_in(blocked_accounts))
-        if viewer.reply_hide_threshold and not (viewer.is_admin_or_staff() or post.community.is_moderator()):
+        # `is_moderator(viewer)`, not `is_moderator()`. With no argument the
+        # method falls back to `current_user.get_id()` -- the WEB session --
+        # which is not who `viewer` is when the API calls this: every
+        # authenticated API reader was treated as a non-moderator and had the
+        # hide threshold applied regardless, and with no request context at
+        # all (a direct call, as the tests make) `current_user` is None and
+        # the line is an AttributeError. The web callers pass `current_user`
+        # as `viewer`, so naming it changes nothing for them.
+        if viewer.reply_hide_threshold and not (viewer.is_admin_or_staff() or post.community.is_moderator(viewer)):
             comments = comments.filter(or_(PostReply.score > viewer.reply_hide_threshold, PostReply.collapsible == False))
         if viewer.read_language_ids and len(viewer.read_language_ids) > 0:
             comments = comments.filter(
@@ -216,7 +224,15 @@ def get_comment_branch(post: Post, comment_id: int, sort_by: str, viewer: User) 
         blocked_accounts = blocked_users(viewer.id)
         if blocked_accounts:
             comments = comments.filter(PostReply.user_id.not_in(blocked_accounts))
-        if viewer.reply_hide_threshold and not (viewer.is_admin_or_staff() or post.community.is_moderator()):
+        # `is_moderator(viewer)`, not `is_moderator()`. With no argument the
+        # method falls back to `current_user.get_id()` -- the WEB session --
+        # which is not who `viewer` is when the API calls this: every
+        # authenticated API reader was treated as a non-moderator and had the
+        # hide threshold applied regardless, and with no request context at
+        # all (a direct call, as the tests make) `current_user` is None and
+        # the line is an AttributeError. The web callers pass `current_user`
+        # as `viewer`, so naming it changes nothing for them.
+        if viewer.reply_hide_threshold and not (viewer.is_admin_or_staff() or post.community.is_moderator(viewer)):
             comments = comments.filter(PostReply.score > viewer.reply_hide_threshold)
         if viewer.read_language_ids and len(viewer.read_language_ids) > 0:
             comments = comments.filter(
