@@ -363,6 +363,8 @@ def tags_from_string(tags: str) -> List[dict]:
     tag_list = tags.split(',')
     tag_list = [tag.strip() for tag in tag_list]
     for tag in tag_list:
+        if tag == '':       # `news,` and `news,,sport` both produce one of
+            continue        # these, and `tag[0]` on it was IndexError
         if tag[0] == '#':
             tag = tag[1:]
         tag_to_append = find_hashtag_or_create(tag)
@@ -382,9 +384,21 @@ def tags_from_string_old(tags: str) -> List[Tag]:
         tags = tags[:-1]
     tag_list = tags.split(',')
     tag_list = [tag.strip() for tag in tag_list]
+    seen = set()
     for tag in tag_list:
+        if tag == '':       # one trailing comma is stripped above; `,news`,
+            continue        # `news,,sport` and `,` are not, and `tag[0]` on
+                            # the empty tag they produce was IndexError
         if tag[0] == '#':
             tag = tag[1:]
+        # Deduplicate by NAME. `tag_to_append not in return_value` compared
+        # objects, and `find_hashtag_or_create` queries without flushing, so
+        # the second `news` in `news,news` was a second pending Tag row --
+        # `Tag.name` carries an index but no unique constraint, so both were
+        # written and the tag existed twice.
+        if tag.lower() in seen:
+            continue
+        seen.add(tag.lower())
         tag_to_append = find_hashtag_or_create(tag)
         if tag_to_append and tag_to_append not in return_value:
             return_value.append(tag_to_append)
@@ -467,7 +481,14 @@ def delete_post_from_community_task(post_id, user_id):
                         }
 
                         for instance in post.community.following_instances():
-                            if instance.inbox and not current_user.has_blocked_instance(instance.id) and not instance_banned(
+                            # `user`, not `current_user`. This runs in a Celery
+                            # worker, where there is no request and
+                            # `current_user` is None, so the announce loop was
+                            # an AttributeError -- the post was already marked
+                            # deleted and committed, and the delete never
+                            # federated. The sibling task below names the
+                            # author for the same reason.
+                            if instance.inbox and not user.has_blocked_instance(instance.id) and not instance_banned(
                                     instance.domain):
                                 send_to_remote_instance(instance.id, post.community.id, announce)
         except Exception:
@@ -544,7 +565,8 @@ def delete_post_reply_from_community_task(post_reply_id, user_id):
 
 def remove_old_file(file_id):
     remove_file = db.session.get(File, file_id)
-    remove_file.delete_from_disk()
+    if remove_file:     # the row can be gone by the time the caller gets here
+        remove_file.delete_from_disk()
 
 
 def save_icon_file(icon_file, directory='communities') -> File:
@@ -876,7 +898,7 @@ def send_to_remote_instance_task(instance_id: int, community_id: int, payload):
         community: Community = session.get(Community, community_id)
         if community:
             instance: Instance = session.get(Instance, instance_id)
-            if instance.inbox and instance.online() and not instance_banned(instance.domain):
+            if instance and instance.inbox and instance.online() and not instance_banned(instance.domain):
                 send_post_request(instance.inbox, payload, community.private_key, community.ap_profile_id + '#main-key',
                                   timeout=10, new_task=False)
     except Exception:
@@ -1020,16 +1042,20 @@ def publicize_community(community: Community):
 @celery.task
 def publicize_community_task(community_id: int):
     session = get_task_session()
-    community = session.get(Community, community_id)
-    get_request(f'https://lemmy.world/api/v3/resolve_object?q={community.lemmy_link()}')
-    get_request(f'https://sh.itjust.works/api/v3/resolve_object?q={community.lemmy_link()}')
-    get_request(f'https://lemmy.zip/api/v3/resolve_object?q={community.lemmy_link()}')
-    get_request(f'https://feddit.org/api/v3/resolve_object?q={community.lemmy_link()}')
-    get_request(f'https://lemmy.dbzer0.com/api/v3/resolve_object?q={community.lemmy_link()}')
-    get_request(f'https://lemmy.ca/api/v3/resolve_object?q={community.lemmy_link()}')
-    get_request(f'https://lemmy.blahaj.zone/api/v3/resolve_object?q={community.lemmy_link()}')
-    get_request(f'https://programming.dev/api/v3/resolve_object?q={community.lemmy_link()}')
-    session.close()
+    try:
+        community = session.get(Community, community_id)
+        if community is None:
+            return
+        get_request(f'https://lemmy.world/api/v3/resolve_object?q={community.lemmy_link()}')
+        get_request(f'https://sh.itjust.works/api/v3/resolve_object?q={community.lemmy_link()}')
+        get_request(f'https://lemmy.zip/api/v3/resolve_object?q={community.lemmy_link()}')
+        get_request(f'https://feddit.org/api/v3/resolve_object?q={community.lemmy_link()}')
+        get_request(f'https://lemmy.dbzer0.com/api/v3/resolve_object?q={community.lemmy_link()}')
+        get_request(f'https://lemmy.ca/api/v3/resolve_object?q={community.lemmy_link()}')
+        get_request(f'https://lemmy.blahaj.zone/api/v3/resolve_object?q={community.lemmy_link()}')
+        get_request(f'https://programming.dev/api/v3/resolve_object?q={community.lemmy_link()}')
+    finally:
+        session.close()
 
 
 def is_bad_name(community_name: str) -> bool:
