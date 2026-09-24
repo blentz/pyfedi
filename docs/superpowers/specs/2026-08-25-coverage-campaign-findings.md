@@ -18276,4 +18276,42 @@ and which form each post type needs.
 
 ---
 
-**Next free number: D1278.**
+---
+
+## Round 119 — sub-project 93: everything the instance sends by email
+
+**The round in one line: `app/email.py` closed at 100% down both of its
+paths, with one method deleted because every call to it raised.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1278** | `app/email.py:259` | `SMTPEmailService.set_cc_bcc` read `self.msg.CC` and `self.msg.BCC`. Those are not attributes of `email.message.Message` -- the headers are `self.msg['CC']` -- so any call was `AttributeError: 'MIMEText' object has no attribute 'CC'`. It also ignored both of its arguments and appended the lists it built to `self.recipients`, where `replace_header('To', ...)` would then have been handed a list rather than an address. Nothing called it, and it is removed rather than covered. | **removed** | `PROBE ca AttributeError: 'MIMEText' object has no attribute 'CC'` |
+
+**Header injection: measured, and Python refuses it.** A subject or a
+recipient carrying a newline is `HeaderParseError: header value appears to
+contain an embedded header` when the message is serialised, so an injected
+`Bcc:` never reaches the wire. Both are pinned. What it costs instead is an
+unhandled exception in the Celery task, which is the right trade and is
+recorded rather than changed.
+
+**Nobody learns who else was written to.** `send_all` replaces the `To`
+header for each recipient rather than adding to it. That is asserted directly
+-- one recipient's copy does not contain the other's address -- and the
+mutant that makes it `self.msg["To"] = recipient` (which appends a second
+header) dies.
+
+### What the slice pins
+
+51 tests: both dispatch paths, everything handed to an SMTP server and
+everything handed to SES including the return path and the reply-to arm,
+Amazon refusing, an instance that has configured neither, the local-development
+sender rewrite, a bare recipient string, the four messages the instance sends
+and what each one carries, the welcome mail with and without the instance's
+own words and with no from-address configured, TLS against SSL, logging in
+with and without credentials, every setter on the message, refusing to send
+before connecting, refusing a bare recipient string, and the two newline
+cases.
+
+---
+
+**Next free number: D1279.**
