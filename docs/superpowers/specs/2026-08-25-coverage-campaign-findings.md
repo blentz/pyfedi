@@ -17604,4 +17604,96 @@ a row of mine**, and they fell into three groups:
 
 ---
 
-**Next free number: D1231.**
+---
+
+## Round 101 — sub-project 84 slice N: `get_post_list2`
+
+**The round in one line: SIX production defects in the listing behind
+`/post/list2`, one of which made every score-ordered request a 500 and
+another of which showed NSFW to anyone who did not ask about it.**
+
+### 1. ELEVEN SORTS THAT COULD NOT RUN
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1231** | `app/api/alpha/utils/post.py:1174-1207` | Every `Top*` arm read `order_by(desc(Post.score, desc(Post.id)))` -- ONE call to `desc()` with two arguments, not two arguments to `order_by`. `desc()` takes one. So `Top`, `TopDay`, `TopHour`, `TopSixHour`, `TopTwelveHour`, `TopWeek`, `TopMonth`, `TopThreeMonths`, `TopSixMonths`, `TopNineMonths` and `TopAll` were each `TypeError: desc() takes 1 positional argument but 2 were given` -- the entire score-ordered half of this endpoint, in every window. | **fixed** | `desc(Post.score, desc(Post.id))` raises that TypeError when evaluated |
+
+### 2. NSFW TO ANYONE WHO DID NOT ASK
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1234** | `app/api/alpha/utils/post.py:1065` | The anonymous arm read `if nsfw == 'Exclude':` where `get_post_list`'s reads `if nsfw == 'Exclude' or nsfw == '':`. `''` is what a caller who said nothing sends, and it matches none of `Exclude`, `Only` or `Include` -- so the default listing of this endpoint included NSFW posts for every caller without an account. | **fixed** | an anonymous listing with no `nsfw` key returned the NSFW post |
+
+### 3. THE SEARCH THAT SEARCHED TITLES ONLY
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1232** | `app/api/alpha/utils/post.py` | The query was applied TWICE. The first pass is `posts.search(query, ...)`, which reads the full-text vector and so covers the body; the second ANDed `Post.title.ilike(f"%{query}%")` onto it. A word that appears in a post's body and not in its title therefore found nothing here, while the same search through `get_post_list` found the post. The second block is gone. | **fixed** | `PROBE am list text: 1 posts` / `PROBE am list2 text: 0 posts`, same data, same word |
+
+### 4. THE READER'S LANGUAGES, IGNORED
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1235** | `app/api/alpha/utils/post.py:1004` | `get_post_list` computes `read_language_ids` and filters on it; `get_post_list2` computed neither and filtered on nothing, so an account that had chosen one language was served every language. | **fixed** | a post in French was listed to a reader whose `read_language_ids` was `[english]` |
+
+### 5. TWO MORE OF THE SAME FAMILY
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1233** | `app/api/alpha/utils/post.py` | No `PAGE_LENGTH` clamp at all -- the only one of the three listings in this module without one -- so `limit=100000` was served, a hundred thousand rows built into Post objects and rendered. | **fixed** | measured: a `limit` of 500 was honoured where `get_post_list` clamps it |
+| **D1236** | `app/api/alpha/utils/post.py:1075` | `minimum_upvotes` compared `up_votes - down_votes` here and `score` in `get_post_list`, so the same request answered differently depending on which listing served it. D1230's twin. | **fixed** | a post with score 9 and no votes recorded was listed by one and not the other |
+
+### 6. THE DUPLICATED BLOCK, AND THE DEAD ONE
+
+`get_post_list2` applies its whole filter sequence **twice** -- liked_only,
+saved_only, hide_read_posts, the community keyword filter and the sort chain
+all appear in two copies, one with keyset tiebreakers and one without. The
+filters are idempotent, so the duplication is only waste; the sorts
+concatenate, so the ORDER BY carries every column twice. **D1232 is what
+happens when the two copies disagree.** Recorded, not repaired: merging them
+means choosing between the copy that has `Old` and `Relevance` and the copy
+that has the tiebreakers and the poll/event exclusion, and that is a refactor
+with its own test plan.
+
+One duplicate WAS repaired: a second `elif feed_id:` block sat below the
+first in the same chain and could never run -- thirty-one lines of dead code.
+Its only difference from the reachable one was the line
+`segregate_instance_stickies = False`, which every other narrowing branch
+has and the reachable feed branch lacked. The dead block is gone and the
+line it carried is now where it belongs.
+
+### 7. WHAT THE MUTATION PASS FOUND
+
+44 mutants, 33 killed on the measuring pass. Eleven survivors:
+
+* **eight were shadowed by the duplication** -- removing one copy of
+  liked_only, saved_only, the keyword filter, hide_read_posts, Active, Hot or
+  New leaves the other copy doing the job. A second pass mutating BOTH copies
+  killed every one of them, which is how the duplication got measured rather
+  than asserted;
+* two were weak rows of mine: a community-name listing whose fall-through
+  answer was the same three posts, and a feed listing that never checked
+  where its instance sticky landed. Both fixed;
+* one is equivalent: `user_votes = {}`, because `post_view` re-queries the
+  vote whenever `my_vote == 0` (D1229's shape).
+
+43 killed and 1 equivalent.
+
+### 8. A WARNING THIS SLICE SURFACES
+
+Covering this function raises the suite's warning count by ~200, all of one
+kind: `UserWarning: Ordering by nullable column post.score can cause rows to
+be incorrectly omitted from the results` (and the same for `sticky`,
+`instance_sticky`, `ranking`, `ranking_scaled`, `posted_at`, `last_active`).
+sqlakeyset means it: keyset pagination over a nullable column can silently
+drop rows. Nothing in the code ever writes NULL into those columns -- they
+all have Python-side defaults -- but the schema permits it, which is what the
+library inspects. The remedy is a migration adding `nullable=False` and
+server defaults to those seven columns; it is recorded here rather than done
+because it is a schema change and this is a coverage slice. The warnings were
+always being emitted in production; they were simply never provoked by a test
+before.
+
+---
+
+**Next free number: D1237.**

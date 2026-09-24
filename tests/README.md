@@ -10826,3 +10826,28 @@ query with no ORDER BY at all, and Postgres then returns the rows roughly as
 they were written -- which matched 'New' exactly, so that mutant survived a
 full-sequence assertion. Build the fixture's rows in an order that matches
 neither the ascending nor the descending expectation.
+
+**581. `get_post_list2` RUNS ITS FILTERS TWICE.** liked_only, saved_only,
+hide_read_posts, the community keyword filter and the whole sort chain each
+appear in two copies inside that one function. A mutant that removes one copy
+survives because the other still does the work, so a single-copy mutation
+pass measures nothing there -- mutate BOTH copies, or the pass will tell you
+the tests are weak when they are not. The copies are not identical, and where
+they disagreed the second one silently won (D1232, the title-only search).
+
+**582. `desc()` TAKES ONE ARGUMENT.** `order_by(desc(a, desc(b)))` is not
+`order_by(desc(a), desc(b))` -- it is one call to `desc()` with two arguments
+and `TypeError: desc() takes 1 positional argument but 2 were given`, raised
+when the query is built rather than when it runs. Eleven sorts in one
+function were written that way and none of them had ever been executed by a
+test. Any `desc(` with a comma inside it is worth a second look.
+
+**583. KEYSET PAGINATION WARNS ABOUT NULLABLE ORDER-BY COLUMNS, AND MEANS
+IT.** sqlakeyset emits `UserWarning: Ordering by nullable column post.score
+can cause rows to be incorrectly omitted from the results` for every nullable
+column in the ORDER BY. It inspects the SCHEMA, not the data, so columns that
+always have a Python-side default still trigger it -- and the hazard is real
+if a NULL ever lands there. Covering a keyset-paginated listing therefore
+raises the suite's warning count until the columns are made `nullable=False`
+by migration. Do not silence it; it is the library telling you the page can
+lose rows.
