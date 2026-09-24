@@ -18399,4 +18399,41 @@ and the public ACL.
 
 ---
 
-**Next free number: D1285.**
+---
+
+## Round 122 — sub-project 96: filling a new community from the remote's outbox
+
+**The round in one line: one entry the task could make nothing of threw away
+every entry after it, five more keys were read out of another instance's JSON
+without asking, and a reply in an unfamiliar language quietly lost it.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1286** | `app/community/util.py:203` | `if not activity: return`. One outbox entry the task could make nothing of -- an Announce with no nested object, say -- discarded every entry after it, and an outbox arrives in whatever order the remote sent, so which posts survived was luck. The peertube branch six lines above was given a `continue` in D1260; this one was left. | **fixed** | `PROBE da a malformed entry before a good one: ok, posts=2` -- the good post was never created |
+| **D1285** | `app/community/util.py:232,236,246,277,308,303` | Five keys read with no membership test, each one fatal to the task: `replies['type']` (one line before a membership test on the very next key), `reply_data['id']`, `reply_data['attributedTo']`, `reply_data['language']['identifier']`, and `item['id']` in the featured collection. Plus `community.post_count > 0` followed by `.first().posted_at`: `post_count` is a counter kept by hand, so it can be positive with no rows behind it. | **fixed** | `PROBE aa: KeyError: 'type'`; `ba: KeyError: 'id'`; `ca: KeyError: 'attributedTo'`; `ea: KeyError: 'id'`; `ga: KeyError: 'identifier'` |
+| **D1287** | `app/community/util.py:281` | `language = find_language_or_create(...); language_id = language.id`. That helper adds a new `Language` to the session and does not flush, so for a language this instance had never seen `.id` was None and the reply was stored with no language at all -- silent, and only for the languages the instance sees least often. | **fixed** | `AttributeError: 'NoneType' object has no attribute 'code'` from `reply.language` |
+
+**One equivalent mutant.** Removing the `filter_by(ap_id=...)` skip above each
+reply survives: `PostReply.ap_id` is unique, so the database refuses the
+second copy, the IntegrityError is caught by the `except` around
+`PostReply.new`, and the loop carries on. The guard's value is avoiding that
+round trip and the rollback it costs, which no assertion can see.
+
+### What the slice pins
+
+55 tests: a post created from an outbox entry with its author and its date,
+several of them, an entry naming no author or a list of them, a post
+attributed to a local account, an outbox that says it holds nothing, a
+paginated one, a collection of an unknown type, the cap on how many are
+taken, and an entry `create_post` refuses. Then the replies: created, nested
+under another reply, orphaned, in markdown, unwrapped content, a collection
+with no type, an entry with no id or no author, a non-public one, one already
+held, one whose text has changed since, a named language and a half-described
+one, distinguished, a replies url that answers nothing, an inline collection,
+and a post with no published date. Then the featured collection, the two
+moderator sources, the nsfw and nsfl refusals, the peertube, guppe and
+wordpress shapes, and the reply count recomputed at the end.
+
+---
+
+**Next free number: D1288.**

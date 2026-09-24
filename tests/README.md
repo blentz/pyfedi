@@ -11162,3 +11162,17 @@ covered. The filter added for it names the module, the category AND the
 message, so a DeprecationWarning with the same text from our own code still
 shows. That is the third such filter in `pytest.ini` and each one carries the
 count it was measured against.
+
+**626. `return` IN A LOOP OVER REMOTE DATA IS A BLAST RADIUS.** The backfill
+answered one unusable outbox entry with `return`, so everything after it was
+discarded -- and an outbox arrives in whatever order the remote sent (D1286).
+The branch six lines above it had been given a `continue` two rounds earlier.
+When a loop processes items from outside, every refusal in it should be
+`continue`; a `return` is a claim that the rest of the batch is worthless.
+
+**627. AN UNFLUSHED ROW HAS NO id, AND READING IT LOSES DATA SILENTLY.**
+`find_language_or_create` adds a new `Language` without flushing, so
+`language.id` was None and the reply kept no language (D1287). Nothing
+raised. The test that catches this asserts on the RELATIONSHIP
+(`reply.language.code`), not on the id it was given -- an assertion on
+`language_id is None` would have looked like the correct answer.
