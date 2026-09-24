@@ -720,8 +720,18 @@ def hide_post(user: User, post: Post) -> None:
     db.session.commit()
 
 
-def make_community_flair(community: Community, name: str = 'flair', ap_id: str = None) -> CommunityFlair:
+def make_community_flair(community: Community, name: str = 'flair', ap_id: str = None,
+                         text_color: str = '#000000',
+                         background_color: str = '#DEDDDA') -> CommunityFlair:
     """A CommunityFlair scoped to `community`, with no post attached.
+
+    The colours default to the ones `post_community_flair_create` gives a
+    flair created through the API, because a flair with NULL colours is a
+    shape nothing in the product makes -- the API path defaults them, the web
+    form supplies them, and the federated path (app/activitypub/util.py)
+    starts them at ''. A null-coloured flair fails the response schema
+    (`text_color` is required and not nullable), so a factory that built one
+    made every route returning a flair look broken.
 
     find_flair_or_create (app/activitypub/util.py) resolves and updates
     CommunityFlair rows at the community level only -- it never reads or
@@ -732,7 +742,9 @@ def make_community_flair(community: Community, name: str = 'flair', ap_id: str =
     of this factory rather than duplicating the CommunityFlair construction
     a second time.
     """
-    flair = CommunityFlair(community_id=community.id, flair=name, ap_id=ap_id)
+    flair = CommunityFlair(community_id=community.id, flair=name, ap_id=ap_id,
+                           text_color=text_color,
+                           background_color=background_color)
     db.session.add(flair)
     db.session.commit()
     return flair
