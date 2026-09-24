@@ -11224,3 +11224,18 @@ storage and bind to a directory server. `debug_mode_only` is the whole of
 their protection, so it gets a test on both sides for each of them -- 403 in
 production, and in debug the thing it claims to test actually being called
 with what it was given.
+
+**635. TO ASSERT A REQUEST WAS NEVER MADE, DO NOT USE `http_mock`.** It runs
+with `assert_all_called`, so registering the route you expect nobody to call
+fails the test for the opposite reason, and NOT registering it makes an
+unexpected call fail as unmocked -- which looks the same as the guard working.
+`tests/test_ap_new_instance_profile.py` drives that one case through
+`patch('...get_request', side_effect=record)` and asserts on the list of urls
+asked for. Fact 603 is the simple version of this; this is what to do when the
+code under test swallows the unmocked-request error.
+
+**636. A GUARD WHOSE EXCEPTION IS ALREADY SWALLOWED IS AN EQUIVALENT MUTANT.**
+`if 'software' in node_json` sits inside a bare `except: return`, so removing
+it changes nothing observable -- the KeyError lands in the same place the
+guard's absence does. Recorded as equivalent rather than chased, which is the
+same disposition as rounds 113, 118 and 121.
