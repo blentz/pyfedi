@@ -118,7 +118,12 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                 # get mods
                 if community.ap_moderators_url:
                     mods_data = remote_object_to_json(community.ap_moderators_url)
-                    if mods_data and mods_data['type'] == 'OrderedCollection' and 'orderedItems' in mods_data:
+                    # `'type' in mods_data and`, as the next clause already does
+                    # for orderedItems: this is whatever the remote instance
+                    # sent, and a moderators collection without a `type` was a
+                    # KeyError that killed the backfill task -- the community
+                    # was created and then never filled in.
+                    if mods_data and 'type' in mods_data and mods_data['type'] == 'OrderedCollection' and 'orderedItems' in mods_data:
                         for actor in mods_data['orderedItems']:
                             sleep(0.5)
                             mod = find_actor_or_create(actor)
@@ -178,6 +183,12 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                         for announce in outbox_data['orderedItems']:
                             activity = None
                             if is_peertube or is_guppe:
+                                # `.get`, as the branch below tests for: an
+                                # Announce without an `object` was a KeyError
+                                # here, and one malformed entry in a remote
+                                # outbox stopped the whole backfill.
+                                if 'object' not in announce:
+                                    continue
                                 activity = remote_object_to_json(announce['object'])
                             elif 'object' in announce and 'object' in announce['object']:
                                 activity = announce['object']['object']
