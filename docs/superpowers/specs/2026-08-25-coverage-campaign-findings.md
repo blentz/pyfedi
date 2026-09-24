@@ -17696,4 +17696,67 @@ before.
 
 ---
 
-**Next free number: D1237.**
+---
+
+## Round 102 — sub-project 84 slice O: `get_post` and `get_post_replies`, closing `app/api/alpha/utils/post.py`
+
+**The round in one line: FIVE production defects, and the last of them meant
+every authenticated API reader of a comment tree was asked about the wrong
+person.**
+
+### 1. THE MODERATOR CHECK THAT ASKED ABOUT THE WEB SESSION
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1241** | `app/post/util.py:168,235` | `if viewer.reply_hide_threshold and not (viewer.is_admin_or_staff() or post.community.is_moderator()):` -- `is_moderator()` with **no argument** falls back to `current_user.get_id()`, the WEB session, which is not who `viewer` is when the API calls this function. So an authenticated API reader who moderates the community was still treated as an outsider and had the reply-hide threshold applied to them; and with no request context at all -- a direct call, which is how the API's own tests reach it -- `current_user` is None and the line is `AttributeError: 'NoneType' object has no attribute 'get_id'`. Both sites now pass `viewer`, which is what the web callers already hand in as `current_user`. | **fixed** | `AttributeError: 'NoneType' object has no attribute 'get_id'` at `app/models.py:739`, from the first test that gave the community a moderator |
+
+### 2. THE DEPTH NOBODY COULD ASK FOR
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1237** | `app/api/alpha/utils/post.py:1441` | `if max_depth:` guarding the depth filter. `max_depth=0` means "the top level and nothing under it" -- the one depth a client is likeliest to ask for, since it is how you draw a collapsed thread -- and 0 is falsy, so the filter was skipped and the WHOLE tree came back. The nested function it calls had the right test, `if max_depth is None`, in the wrong place: it could never see a 0 because the caller never passed one. One guard now, in the caller, reading `is not None`. | **fixed** | `PROBE db max_depth 0: 3 comments` against `PROBE dc max_depth 1: 2 comments` -- the filter was not applied at all |
+
+### 3. THE REPLIES TO NO POST
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1238** | `app/api/alpha/utils/post.py` | `post_id` defaults to None, and a request naming neither a post nor a parent handed that None to `db.session.get(Post, None)` -- which warns that a fully NULL primary key identity cannot load any object, answers None, and left `post_replies` to die on `'NoneType' object has no attribute 'archived'`. A post id nobody holds took the same path; a `parent_id` nobody holds died a line earlier on `parent.post_id`. All three now refuse by name. | **fixed** | `PROBE ca no post_id at all` and `PROBE cb a post nobody holds`: `AttributeError: 'NoneType' object has no attribute 'archived'`; `PROBE cc`: `...has no attribute 'post_id'` |
+
+### 4. ONE POST, TWO WAYS OF ASKING BADLY
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1239** | `app/api/alpha/utils/post.py` | `get_post` handed its id straight to `post_view`, which looks the row up with `.one()`, so an id nobody holds answered the bare `NoResultFound: ()` -- a message with no words in it. | **fixed** | `PROBE bb an id nobody holds: NoResultFound: ()` |
+| **D1240** | `app/api/alpha/utils/post.py` | And `int(data['id'])` on a non-numeric id answered `invalid literal for int() with base 10: 'abc'`. D1210's shape. | **fixed** | `PROBE bc a non-numeric id: ValueError: invalid literal for int() with base 10: 'abc'` |
+
+### 5. TWO EQUIVALENT MUTANTS
+
+| ID | Where | What |
+|---|---|---|
+| **D1242** | `app/api/alpha/utils/post.py` | (a) `is_reply_bookmarked = ... if user_details else None` -- `reply_view` re-queries the bookmark whenever it is handed None, so the prefetch is a pure optimisation, exactly as the vote prefetch was in D1229. (b) `if not included_branches:` in the cursor paginator -- the `elif` below it ends `or total_items == 0`, which admits the first branch on the same terms, so deleting the arm changes nothing. |
+
+### 6. WHAT THE MUTATION PASS FOUND
+
+29 mutants, 25 killed on the measuring pass. Four survivors: one was my own
+occurrence-counting mistake (the clamp mutant pointed at `get_post_list2`'s
+copy rather than this function's), one was a branch-depth row that rooted its
+branch at a top-level comment, where counting from the parent and counting
+from the post agree -- it now roots at a child, where they do not -- and two
+are D1242. **27 killed, 2 equivalent.**
+
+---
+
+## `app/api/alpha/utils/post.py` closed
+
+Four slices (L, M, N, O), 1,943 lines, **381 test rows**, and **twenty-six
+production defects** (D1217–D1242). The module goes from 14.9% to every
+statement covered and one partial branch, floored at 99.
+
+The two worst were both in the listings, and both were the same mistake in
+different clothes: a filter written into one of the two queries a function
+builds, when only the other one runs. D1227 handed every private community's
+posts to anonymous callers on the front page; D1228 made a URL search answer
+with everything. The loudest was D1231 -- eleven sorts that could not run at
+all, because `desc()` had been given two arguments.
+
+**Next free number: D1243.**
