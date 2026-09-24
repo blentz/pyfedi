@@ -17969,4 +17969,28 @@ community directory.
 
 ---
 
-**Next free number: D1256.**
+---
+
+## Round 110 — sub-project 86 slice D: the menus, the share sheet and the honeypot
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1256** | `app/main/routes.py:879` | `/share` read `request.args.get('url')` and called `.strip()` on it. Anything that follows the route without its query string -- a crawler, a link with the parameters stripped, a bookmark saved wrong -- got `AttributeError: 'NoneType' object has no attribute 'strip'`: a 500, a logged traceback and a Sentry event, for a request that is merely incomplete. Now a 400. | **fixed** | `PROBE no url: AttributeError: 'NoneType' object has no attribute 'strip'` |
+| **D1257** | `app/main/routes.py:1426` | `/anoobis` checks that its `next` is on this instance -- an open-redirect guard -- and on failure it **raised**, with the caller's own host in the message, leaving the `abort(403)` on the line below unreachable. So the guard working correctly produced a 500 and a Sentry event rather than a refusal. | **fixed** | `PROBE anoobis, remote next: Exception: Anoobis error: evil.test != test.piefed.local` |
+
+### And one in the test harness
+
+Testing the honeypot broke eleven tests in another file. `/honey` records each
+visit in `honeypot:{ip}` and, on the third within 24 hours, writes `ban:{ip}`
+for **four weeks** -- and every test client shares one IP. Three honeypot rows
+in one file therefore banned the address for every test that ran after them,
+anywhere, the symptom being an unexplained 403 from an unrelated page.
+`db_session` now clears those keys as it clears the vote quota (fact 573):
+Redis outlives the database, and this is the second kind of state that has
+caught this campaign out because of it.
+
+`app/main/routes.py` goes from 55% to 63%.
+
+---
+
+**Next free number: D1258.**

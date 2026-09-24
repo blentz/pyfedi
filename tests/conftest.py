@@ -182,17 +182,28 @@ def db_session(app):
 
     g.__dict__.clear()
 
-    # The vote quota lives in Redis, not in the database, so truncating tables
-    # does not touch it. votes_cast_today (app/models.py) reads
+    # Three kinds of Redis state outlive the database, because truncating
+    # tables does not touch Redis at all.
+    #
+    # The vote quota. votes_cast_today (app/models.py) reads
     # `votes_cast_{today}_{user_id}` from the SHARED test Redis and
     # Post.vote/PostReply.vote increment it, so the counters for the low user
     # ids climb across every run of the suite -- and once one passes VOTE_QUOTA
     # (240) every later vote by that id is a 429, in whichever test happens to
     # run next. Clearing them here keeps the suite's behaviour independent of
     # how often it has been run before.
+    #
+    # The honeypot's counter and the IP ban it writes. `/honey` (app/main/
+    # routes.py) records each visit in `honeypot:{ip}` and, on the third within
+    # 24 hours, writes `ban:{ip}` for FOUR WEEKS -- and every test client
+    # shares one IP. Three honeypot tests in a file therefore banned the
+    # address for every test that ran after them, in every file, with the
+    # symptom being an unexplained 403 from an unrelated page.
     from app import redis_client
     if redis_client is not None:
-        stale = redis_client.keys('votes_cast_*')
+        stale = []
+        for pattern in ('votes_cast_*', 'honeypot:*', 'ban:*'):
+            stale.extend(redis_client.keys(pattern))
         if stale:
             redis_client.delete(*stale)
 
