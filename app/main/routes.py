@@ -1065,7 +1065,13 @@ def activitypub_application():
         'type': 'Application',
         'id': f"{current_app.config['SERVER_URL']}/",
         'name': 'PieFed',
-        'summary': g.site.name + ' - ' + g.site.description,
+        # Both halves are nullable, and `Site()` with no arguments -- which is
+        # what app/models.py and app/admin/routes.py fall back to when row 1 is
+        # missing -- leaves them so. `None + ' - '` is a TypeError, and this is
+        # the document every fediverse peer fetches when it first hears of this
+        # instance, so a site whose tagline was never filled in answered its
+        # introductions with a 500.
+        'summary': ' - '.join(part for part in (g.site.name, g.site.description) if part),
         'published': ap_datetime(g.site.created_at),
         'updated': ap_datetime(g.site.updated),
         'inbox': f"{current_app.config['SERVER_URL']}/inbox",
@@ -1221,13 +1227,19 @@ def explore():
 #@cache.cached(timeout=600, query_string=True)
 def index_rss(feed_type=None):
 
+    # Refuse first, then answer conditionally. The 304 used to be computed
+    # ABOVE this check, so a caller holding an ETag from before the instance
+    # was made private -- or one guessed, since it is `home_{hash(last_active)}`
+    # -- got `304 Not Modified` where a fresh request got 404. That is an
+    # access check a conditional request walks past, and it is the same defect
+    # this campaign fixed in app/community/routes.py's community feed.
+    if g.site.private_instance:
+        abort(404)
+
     # If nothing has changed since their last visit, return HTTP 304
     current_etag = f"home_{hash(g.site.last_active)}"
     if request_etag_matches(current_etag):
         return return_304(current_etag, 'application/rss+xml')
-
-    if g.site.private_instance:
-        abort(404)
 
     current_user_is_authenticated = False
     user = None
