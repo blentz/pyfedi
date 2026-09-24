@@ -17841,4 +17841,39 @@ slices reach with the API switched on.
 
 ---
 
-**Next free number: D1251.**
+---
+
+## Round 106 — sub-project 85 slice B: the site, search, feeds and the registration queue over HTTP
+
+**The round in one line: driving fifteen routes through the test client with
+the API switched on found a response the API's own schema refuses to send.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1251** | `app/api/alpha/views.py:1470` | `registration_view` wrote `ip_address` into the response **only when the applicant had one**: `if registration.user.ip_address: v1["ip_address"] = ...`. The schema declares `ip_address = fields.String(required=True, allow_none=True)` -- null is allowed, ABSENT is not -- so one applicant with no recorded address made the whole `/admin/registration_application/list` response fail validation. The admin did not get a queue with a blank in it; they got `400 {'registrations': {0: {'ip_address': ['Missing data for required field.']}}}` and no queue at all, until that applicant was dealt with some other way. The key is always present now, null when there is nothing to report. | **fixed** | `SHAPE reglist: {'code': 400, 'message': "{'registrations': {0: {'ip_address': ['Missing data for required field.']}}}"}` |
+
+### Why this slice exists
+
+The utils functions behind these routes already had their own coverage. What
+no test reached was the **schema round-trip**: whether what a function returns
+is what the schema its route declares says it returns. Two defects have come
+out of that in two slices -- D1250, where the schema refused a null the view
+had every right to send, and D1251, where the view omitted a key the schema
+required -- and neither is visible from either side alone.
+
+`required=True, allow_none=True` is the combination to watch: it means
+"always send this key, and null is a fine value for it", and a view that skips
+the key when it has nothing to say breaks it.
+
+### What else this slice pins
+
+The account behind each request: `auth = request.headers.get('Authorization')`
+is a line every route has and no test had ever checked, so a route that read
+no header would have gone on answering. Five of the fifteen are now pinned by
+a row that fails if the header is ignored.
+
+`app/api/alpha/routes.py` goes 61% -> 63%.
+
+---
+
+**Next free number: D1252.**

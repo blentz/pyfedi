@@ -10917,3 +10917,20 @@ enumerates routes from the url_map and filters by blueprint
 it is added rather than the day someone remembers to add a row. It also
 separates the two kinds of route in that file: the gated API and the
 `not_yet_implemented` placeholders on the plain blueprint.
+
+**592. `required=True, allow_none=True` MEANS "ALWAYS SEND THIS KEY, NULL IS
+FINE".** A view that writes the key only when it has a value breaks it, and
+marshmallow's complaint names the field rather than the row -- so ONE
+applicant with no recorded IP address turned the whole registration queue into
+`400 {'registrations': {0: {'ip_address': ['Missing data for required
+field.']}}}` (D1251). The mirror image is `required=True` with no
+`allow_none`, which refuses a null the view has every right to send (D1250).
+Driving a route over HTTP is the only thing that checks either: the utils
+function's own tests never see the schema.
+
+**593. DRIVE THE API ROUTES WITH `app.test_client()`, NOT THE UTILS
+FUNCTIONS.** `tests/test_api_*.py` call `app/api/alpha/utils/*.py` directly,
+which covers the logic and skips three things the route does: reading the
+Authorization header, validating the request against its schema, and
+validating the RESPONSE against its schema. Those three are where the
+schema-versus-view defects live.
