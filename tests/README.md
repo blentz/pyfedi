@@ -11113,3 +11113,16 @@ answer a permalink with nothing. That is a decision for whoever owns the
 product. The campaign's job there is to pin today's behaviour, say in the
 test's own docstring that it is pinning a no-op, and write the finding -- so
 the change is visible when somebody makes it.
+
+**619. A METHOD NOTHING CALLS CAN BE WRONG IN WAYS NOTHING NOTICES.**
+`set_cc_bcc` raised `AttributeError` on its second line, ignored both of its
+arguments, and would have put a list where an address belongs (D1278). It sat
+there for as long as the file has existed. When a module's coverage gap is a
+method with no callers, check whether it works before writing a test for it --
+the answer here was to delete it.
+
+**620. MOCK THE LIBRARY, NOT THE MODULE UNDER TEST.** `tests/test_email.py`
+patches `smtplib.SMTP` and `boto3.client` and then asserts on the message
+that WOULD have gone out -- headers, recipients, return path. Patching
+`send_email` instead would have covered the four callers and nothing of the
+sending, which is where all the behaviour is.
