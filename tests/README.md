@@ -10894,3 +10894,26 @@ produce the SAME response and differ only in the warning. A mutation pass
 cannot tell them apart from the answer alone -- assert the warning's absence
 with `warnings.catch_warnings(record=True)` if the guard is meant to prevent
 the lookup rather than survive it.
+
+**589. THE ALPHA API IS OFF IN THE TEST ENVIRONMENT.** `enable_api()` reads
+`current_app.debug or config['ENABLE_ALPHA_API'] == 'true'`, and the test
+config sets neither -- so every route under `/api/alpha` answers
+"alpha api is not enabled" and the body of each one is unreachable. A test
+that drives these routes over HTTP has to
+`monkeypatch.setitem(current_app.config, 'ENABLE_ALPHA_API', 'true')` first.
+Note the STRING: the boolean `True` does not turn it on.
+
+**590. SCHEMA VALIDATION RUNS BEFORE THE VIEW.** A flask-smorest route
+decorated with `@bp.arguments(...)` rejects a request that does not match the
+schema before the function body -- and therefore before `enable_api()`. So a
+sweep that sends empty bodies to every route sees "Validation failed" from
+most of them and cannot assert the gate's own message; assert the property
+that matters (nothing answers below 400 with the API off) and pin the exact
+message on the routes that need no arguments.
+
+**591. `app.url_map` IS A BETTER TEST TABLE THAN A LIST.** The gate sweep
+enumerates routes from the url_map and filters by blueprint
+(`rule.endpoint.split('.')[0]`), so a route added tomorrow is covered the day
+it is added rather than the day someone remembers to add a row. It also
+separates the two kinds of route in that file: the gated API and the
+`not_yet_implemented` placeholders on the plain blueprint.

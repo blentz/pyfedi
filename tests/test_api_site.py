@@ -125,7 +125,7 @@ class TestTheInstanceChooser:
         with warnings.catch_warnings(record=True) as raised:
             warnings.simplefilter('always')
             res = get_site_instance_chooser(None)
-        assert res['language'] == {'id': None, 'code': None, 'name': None}
+        assert res['language'] is None
         assert [str(w.message) for w in raised
                 if 'NULL primary key' in str(w.message)] == []
 
