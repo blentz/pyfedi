@@ -17993,4 +17993,23 @@ caught this campaign out because of it.
 
 ---
 
-**Next free number: D1258.**
+---
+
+## Round 111 — sub-project 87: resolving a community from a handle
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1258** | `app/community/util.py:36` | `name, server = address[1:].split('@')` unpacked whatever it was handed. Every address reaching this function comes from outside -- a URL segment (`/c/<actor>/subscribe` passes its own path segment), a search box, an API query parameter -- so `!name` was `ValueError: not enough values to unpack (expected 2, got 1)` and `!a@b@c` was `too many values to unpack (expected 2)`. A crafted URL produced a 500 where "no such community" was the answer. The handle is now checked for exactly one `@` with something on each side of it. | **fixed** | `PROBE ea no at sign: ValueError: not enough values to unpack (expected 2, got 1)`, `PROBE eb two at signs: ValueError: too many values to unpack (expected 2)` |
+
+### What the slice pins
+
+The six malformed handles, the local lookup (including that it refuses a
+REMOTE row whose profile sits under this server's name), the
+already-known remote, the allowlist and the ban list, and the six ways a
+remote WebFinger exchange can fail: a 404, a connection that never answers,
+one that answers on the second try, a response with no `self` link, an actor
+that is not a Group, and an actor that is not JSON at all.
+
+---
+
+**Next free number: D1259.**
