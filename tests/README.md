@@ -10965,3 +10965,10 @@ body, but it confirms the ETag, and the ETag is derived from data (a
 `last_active` timestamp) the caller is not supposed to have. Refuse first,
 then answer conditionally, and pin it with a test that fetches the ETag while
 the door is open and presents it after it shuts.
+
+**598. A FILTER THAT DOES NOTHING LOOKS EXACTLY LIKE A FILTER THAT MATCHES
+EVERYTHING.** The modlog's moderator filter searched for the wrong variable
+and returned the unfiltered log (D1254), and no assertion on "the page still
+lists things" would have caught it. Pin a filter with data it must EXCLUDE:
+two rows differing only in the field being filtered, and an assertion that one
+of them is gone.

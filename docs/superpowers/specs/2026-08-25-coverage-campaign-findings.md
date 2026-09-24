@@ -17949,4 +17949,24 @@ instance, and the RSS feed in all five of its sorts.
 
 ---
 
-**Next free number: D1254.**
+---
+
+## Round 109 — sub-project 86 slice C: the moderation log and the community directory
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1254** | `app/main/routes.py:509` | The modlog's "filter by moderator" block is a copy of the "filter by suspect" block above it with one word left behind: it searched `func.lower(User.user_name) == suspect_user_name.lower()`. With no suspect named -- which is the usual way to filter by a moderator -- `''.lower()` matched nobody, `user` stayed None, and the fallback (`filter_by(ap_id=user_name.lower())`) only finds REMOTE accounts. So filtering the log by a local moderator's name silently returned the whole unfiltered log, and the page gave no sign that the filter had not been applied. | **fixed** | two entries by two moderators; `PROBE ad by moderator: rows≈ 2` before, 1 after |
+| **D1255** | `app/main/routes.py:474` | `/modlog` was the one page in this module without `login_required_if_private_instance`. On a PRIVATE instance -- one whose whole point is that a caller with no account sees nothing -- it answered 200 with its public entries: community names, actions and reasons. `/communities` and `/` redirect to the login. The `public == True` filter still governs what a signed-in non-moderator sees on a public instance. | **fixed** | `PROBE ba modlog on a private instance: 200` beside `PROBE bb communities on a private instance: 302` |
+
+### What the slice pins
+
+Every filter of the modlog, each narrowing to a row the others do not reach;
+the three visibility levels (no account, an ordinary account, an
+administrator) against a private entry; and fourteen ways of narrowing the
+community directory.
+
+`app/main/routes.py` goes from 39% to 53%.
+
+---
+
+**Next free number: D1256.**
