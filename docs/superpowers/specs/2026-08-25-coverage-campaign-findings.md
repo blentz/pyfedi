@@ -17802,4 +17802,43 @@ differs. The row now asserts the absence of that warning, and it dies. 24/24.
 
 ---
 
-**Next free number: D1248.**
+---
+
+## Round 105 — sub-project 85 slice A: the alpha API's front door
+
+**The round in one line: one route of 118 could be reached with the API
+switched off, and the reason for every refusal was replaced by a message
+about browsers.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1248** | `app/api/alpha/routes.py:124` | 117 of the 118 routes in that file open with `if not enable_api(): abort(400, ...)`. `/site/instance_chooser_search` opened with the instance chooser's OWN setting instead, and nothing else -- so an instance that had turned the chooser on and the alpha API off answered that one endpoint. Its sibling `/site/instance_chooser` checks both gates, in that order, which is now what this one does. | **fixed** | `PROBE qd chooser search, chooser on but api OFF: 200 b'{"result":[]}'` beside `PROBE qe chooser itself, chooser on but api OFF: 400 ... "alpha api is not enabled"` |
+| **D1249** | `app/api/alpha/__init__.py:108` | `flask_smorest`'s `abort()` stashes the reason it is given in `e.data['message']`; `shared_error_handler` read `str(e)`, which on a Werkzeug `BadRequest` is "The browser (or proxy) sent a request that this server could not understand". So **every deliberate refusal in the API** -- all 117 in routes.py, "alpha api is not enabled" among them -- reached the caller as a message about browsers, for requests the server understood perfectly and refused on purpose. An operator switching the API off and testing it saw nothing that said so. | **fixed** | `PROBE qa disabled body: 400 b'{"code":400,"message":"400 Bad Request: The browser (or proxy) sent a request that this server could not understand."...'` |
+| **D1250** | `app/api/alpha/schema.py:248`, `app/api/alpha/views.py:1311` | Fixing D1244 (the chooser's null language) surfaced the other half of it: `GetSiteInstanceChooserResponse.language` is `required=True` with no `allow_none`, so the endpoint answered **400 "Field may not be null"** once the view stopped raising. The field now allows null and the view sends `None` rather than a dict of Nones, which is the honest answer for an instance that has not chosen a language -- and the only kind of instance the chooser exists to introduce. | **fixed** | `PROBE sb chooser both on: 400 {'language': {'code': ['Field may not be null.'], ...}}` |
+
+### What this slice pins
+
+The sweep is driven from `app.url_map`, not from a list: **no route under
+`/api/alpha` answers anything below 400 while the API is off**, and a route
+added tomorrow without the gate fails that test without anyone remembering to
+add a row for it. The routes that need no arguments -- the eleven a caller can
+reach with an empty request -- are additionally pinned by the exact words of
+the refusal, because that message is the operator's only clue.
+
+Also pinned: the 33 Lemmy-V3 paths this API does not implement, which are
+NOT gated and should not be; `enable_api()`'s comparison against the string
+`'true'`, which means the boolean `True` and the string `'True'` both leave
+the API off; and every arm of `shared_error_handler`, including the two that
+reach Sentry and the two messages that deliberately do not.
+
+`app/api/alpha/__init__.py` closes at **100%**. `app/api/alpha/routes.py`
+goes from 47% to 61% -- the rest is the body of each route, which the later
+slices reach with the API switched on.
+
+### What the mutation pass found
+
+21 mutants, all killed.
+
+---
+
+**Next free number: D1251.**
