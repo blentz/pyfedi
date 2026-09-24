@@ -17446,4 +17446,82 @@ name at all, and an unfollow that could never federate.**
 
 ---
 
-**Next free number: D1217.**
+---
+
+## Round 99 — sub-project 84 slice L: the actions half of `app/api/alpha/utils/post.py`
+
+**The round in one line: FIVE production defects -- a report-resolution guard
+that refused the one kind of report it is for and waved the three it is not
+straight past, fourteen endpoints reading off a row nobody holds, a nullable
+language compared with `<`, a bodyless post that could not be edited at all,
+and a feature_type that reached the response before anything had been bound.**
+
+### 1. THE GUARD THAT REFUSED THE WRONG REPORTS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1217** | `app/api/alpha/utils/post.py:1678` | `if not report.suspect_post_id and report.suspect_post_reply_id:` -- the post-report resolver's own admission test. Read as written it refuses a report against a **comment** and lets every other kind through: a report against a person, a community or a conversation names neither a post nor a reply, so it walked past the guard and reached `db.session.get(Community, report.in_community_id)` with None, dying on `community.moderators()`. Now `if not report.suspect_post_id:` -- this endpoint resolves post reports. Fact 478's shape again: the same question asked at two ends, guarded at one. | **fixed** | `PROBE o2 resolve a report against a person: AttributeError: 'NoneType' object has no attribute 'moderators'` |
+
+### 2. FOURTEEN ENDPOINTS, ONE UNCHECKED LOOKUP
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1218** | `app/api/alpha/utils/post.py` -- `put_post`, `post_post_report`, `post_post_like`, `put_post_save`, `put_post_subscribe`, `post_post_delete`, `post_post_lock`, `post_post_hide`, `post_post_remove`, `get_post_like_list`, `put_post_set_flair`, `post_poll_vote`, `get_post_report_list` (post and community), `post_post_feature`, `put_post_report_resolve` | D1194 and D1202's shape a third time, and the widest instance of it yet. Each passed an id to `db.session.get` or to a shared function and used the answer. Measured: `'NoneType' object has no attribute 'body'` / `'user_id'` / `'community'` / `'id'` / `'moderators'` / `'suspect_post_id'` / `'instance_sticky'`, plus two bare `NoResultFound`. `a_post`, `a_community` and `a_report` now answer by name. | **fixed** | `PROBE m1`–`m14`, `o1`, `p2` -- fourteen distinct AttributeErrors and NoResultFounds, one per endpoint |
+
+### 3. A NULLABLE LANGUAGE COMPARED WITH `<`
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1219** | `app/api/alpha/utils/post.py:1465,1533` | `if language_id < 2` in both `post_post` and `put_post`. The default is `site_language_id()`, which answers **None** on an instance whose languages are not seeded, and `Post.language_id` is itself nullable -- so on such an instance NO post could be written, and no post whose language was never set could be edited. This is D1195, already fixed in `app/api/alpha/utils/reply.py`, in the module next door; both now read `is None or ... < 2`. | **fixed** | `PROBE n1/n2/n3: TypeError: '<' not supported between instances of 'NoneType' and 'int'` |
+
+### 4. NO BODYLESS POST COULD BE EDITED
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1220** | `app/api/alpha/utils/post.py:1525` | `body = data['body'] if 'body' in data else post.body`. `Post.body` is NULL for every link and image post, and `edit_post` hands what it gets to `piefed_markdown_to_lemmy_markdown`, a regex substitution -- so editing a link post, even just to fix its title, was `TypeError: expected string or bytes-like object, got 'NoneType'`. `post_post` one function above already defaults its body to `''`. | **fixed** | `PROBE n2 trace: ... app/utils.py:1236, in piefed_markdown_to_lemmy_markdown / TypeError: expected string or bytes-like object, got 'NoneType'` |
+
+### 5. A FEATURE TYPE THAT BOUND NOTHING
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1221** | `app/api/alpha/utils/post.py:1726` | `if feature_type == "Community": ... elif feature_type == "Local": ...` and nothing else. Neither arm bound `post` or `user_id` for any other value, and the response built below them reads both. | **fixed** | `PROBE p1: UnboundLocalError: cannot access local variable 'post' where it is not associated with a value` |
+
+### 6. AN EQUIVALENT MUTANT
+
+| ID | Where | What |
+|---|---|---|
+| **D1222** | `app/api/alpha/utils/post.py:1479` | `elif url: type = POST_TYPE_LINK`. Deleting it changes nothing observable: `make_post` (`app/shared/post.py`) re-derives the type inside its own `if url:` block, whose final else is `post.type = POST_TYPE_LINK`. The module's inference is a duplicate of the shared one, and no test can tell it from its absence. |
+
+### 7. THREE DEAD GUARDS REMOVED
+
+`post_post_like`, `get_post_report_list` and `put_post_report_resolve` each
+opened with `user = authorise_api_user(auth, return_type="model")` followed by
+`if not user: raise Exception("incorrect login")`. `authorise_api_user`
+(`app/utils.py:3613`) raises on every rejecting path and returns a `User` for
+`return_type='model'` -- there is no falsy return -- so none of the three could
+run. Removed rather than recorded: three statements and three branches that
+nothing could reach, in a file whose remaining half still has to be closed.
+
+### 8. WHAT THE MUTATION PASS FOUND
+
+43 mutants, 37 killed on the measuring pass. Six survivors, every one a row of
+mine: a vote-privacy row and a report-remote row that read the response rather
+than the task argument the flag actually decides, an alt-text row whose post
+had no url (so the branch that writes the description back never ran), an
+edited-event row that asserted the title instead of the event, a removal-reason
+row that never read the modlog, and D1222. 42 killed and 1 equivalent after.
+
+### 9. A TEST-INFRASTRUCTURE FIX THAT WAS OVERDUE
+
+Strengthening the vote rows turned every voting test in the new file red with
+`429 Too Many Requests`. The vote quota is not in the database:
+`votes_cast_today` (`app/models.py:48`) reads `votes_cast_{today}_{user_id}`
+from the **shared test Redis**, which `db_session`'s truncation never touched,
+so the counters for the low user ids had been climbing across every run of the
+suite until one crossed `VOTE_QUOTA` (240). Every vote test in the repository
+was one busy day away from failing for reasons having nothing to do with its
+subject. `db_session` now clears those keys per test. Fact 573.
+
+---
+
+**Next free number: D1223.**
