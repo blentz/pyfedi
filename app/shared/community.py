@@ -239,6 +239,12 @@ def make_community(input, src, auth=None, uploaded_icon_file=None, uploaded_bann
     if user.verified is False or user.private_key is None:
         raise Exception("You can't create a community until your account is verified.")
 
+    # slugify() answers '' for a name made entirely of characters it strips, and
+    # the empty name was accepted: a community addressed as /c/, which nothing
+    # can link to and which takes that URL for itself.
+    if not name:
+        raise Exception('A community needs a name')
+
     # test user with this name doesn't already exist
     ap_profile_id = 'https://' + current_app.config['SERVER_NAME'] + '/u/' + name.lower()
     existing_user = User.query.filter_by(ap_profile_id=ap_profile_id).first()
