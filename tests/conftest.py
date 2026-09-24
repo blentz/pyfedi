@@ -182,6 +182,20 @@ def db_session(app):
 
     g.__dict__.clear()
 
+    # The vote quota lives in Redis, not in the database, so truncating tables
+    # does not touch it. votes_cast_today (app/models.py) reads
+    # `votes_cast_{today}_{user_id}` from the SHARED test Redis and
+    # Post.vote/PostReply.vote increment it, so the counters for the low user
+    # ids climb across every run of the suite -- and once one passes VOTE_QUOTA
+    # (240) every later vote by that id is a 429, in whichever test happens to
+    # run next. Clearing them here keeps the suite's behaviour independent of
+    # how often it has been run before.
+    from app import redis_client
+    if redis_client is not None:
+        stale = redis_client.keys('votes_cast_*')
+        if stale:
+            redis_client.delete(*stale)
+
     yield db.session
 
     db.session.rollback()

@@ -10766,3 +10766,32 @@ endpoint.
 so the same request the web refused was granted. When a rule is enforced in a
 route rather than in the shared function both paths call, assume the other
 path does not enforce it and probe it.
+
+**573. THE VOTE QUOTA LIVES IN REDIS AND OUTLIVES THE DATABASE.**
+`votes_cast_today` (app/models.py) reads `votes_cast_{today}_{user_id}` from
+the SHARED test Redis, and `Post.vote`/`PostReply.vote` increment it, so
+`db_session`'s truncation never resets it: the counters for the low user ids
+climb across every run of the suite, and once one passes `VOTE_QUOTA` (240)
+the next vote by that id is `429 Too Many Requests` -- in whichever test
+happens to run next, with nothing in that test to explain it. `db_session`
+now deletes `votes_cast_*` before each test. When a limit is enforced from
+Redis rather than from a table, assume it survives the fixture and clear it.
+
+**574. `ModLog.type` IS 'mod' OR 'admin'; THE ACTION IS IN `ModLog.action`.**
+`add_to_modlog(action, ...)` (app/utils.py) writes the action name into
+`action` and puts the actor's standing into `type`, so
+`ModLog.query.filter_by(type='delete_post')` silently matches nothing. Filter
+on `action` and the row is there.
+
+**575. A FLAG THE RESPONSE DOES NOT SHOW IS PINNED THROUGH THE TASK.**
+`private` on a vote and `report_remote` on a report both decide only what gets
+federated -- `vote_for_post` passes `federate=`, `report_post` passes
+`instance_ids=` -- and the JSON that comes back is identical either way. Two
+mutants survived on rows that asserted the response. Patch
+`app.shared.post.task_selector` and read `call_args.kwargs`.
+
+**576. `edit_post` ONLY WRITES THE ALT TEXT BACK WHEN THE POST HAS A URL.**
+The `if url and post.image:` block is what copies `image_alt_text` onto the
+File, so a test that gives a post a picture but no url cannot see the
+endpoint's alt-text default at all -- and the default matters, because the
+block OVERWRITES whatever description is there with what it was handed.
