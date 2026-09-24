@@ -11126,3 +11126,18 @@ patches `smtplib.SMTP` and `boto3.client` and then asserts on the message
 that WOULD have gone out -- headers, recipients, return path. Patching
 `send_email` instead would have covered the four callers and nothing of the
 sending, which is where all the behaviour is.
+
+**621. `current_user` IN A CELERY TASK IS None.** `delete_post_from_community_task`
+asked it for a block list (D1280); `post_replies` asked `is_moderator()` with
+no argument, which falls back to it (D1241). Both ran fine in the web request
+that queued them and failed in the worker that ran them. When covering a
+task, call it DIRECTLY -- no request context -- and any reference to the
+session user fails immediately instead of only in production.
+
+**622. A DEDUPE THAT COMPARES OBJECTS IS NOT A DEDUPE.**
+`tag_to_append not in return_value` looked right and did nothing, because the
+factory it calls queries without flushing and hands back a fresh pending row
+each time (D1282). The test that caught it committed and then counted the
+rows -- `len(result) == 1` alone would have passed on the object identity
+while the database grew a duplicate. When a function dedupes rows it also
+creates, assert on the DATABASE after a commit, not on the list it returned.
