@@ -17876,4 +17876,47 @@ a row that fails if the header is ignored.
 
 ---
 
+---
+
+## Round 107 — sub-project 85 slices D-G: the rest of the alpha API over HTTP
+
+**The round in one line: 96 rows over the post, comment, user,
+private-message and upload routes take `app/api/alpha/routes.py` from 47% to
+88%, and every response those routes send is now validated against the schema
+that declares it.**
+
+No new production defects. That is the finding: after D1250 and D1251, the
+remaining hundred routes' schema round-trips all hold. What the slices did
+turn up is a catalogue of places where the REQUEST schema and the obvious
+guess disagree, each of which would have met an API client as a 400 with no
+hint of which word to change:
+
+* `/comment/mark_as_read`, `/comment/mark_as_answer` and
+  `/comment/distinguish` name the comment `comment_reply_id`; the other
+  fourteen comment routes call it `comment_id`;
+* `/user/follow` and `/user/unfollow` name the account `user_id`; the other
+  user routes call it `person_id`;
+* `/domain/block` names the domain by its NAME, not its id;
+* `/private_message` names the text `content`; the model calls it `body`;
+* `/post/poll_vote` takes `choice_id` as a LIST, of length one for a
+  single-choice poll;
+* `/user/ban` requires `ban_ip_address` and `purge_content` as well as the
+  obvious three;
+* `/feed/delete` requires `deleted`, though there is nothing else it could
+  mean;
+* `/admin/registration_application/approve` names the APPLICANT (`user_id`),
+  not the application.
+
+These are recorded rather than changed: an API's field names are its
+contract, and renaming them breaks every client that already guessed right.
+
+### What the slices pin
+
+Each route's body: the Authorization header it reads, the utils function it
+calls, and the schema it loads the answer into. The tests are written per
+blueprint, so `tests/test_api_routes_*.py` maps one-to-one onto the sections
+of routes.py.
+
+---
+
 **Next free number: D1252.**

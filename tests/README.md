@@ -10934,3 +10934,18 @@ which covers the logic and skips three things the route does: reading the
 Authorization header, validating the request against its schema, and
 validating the RESPONSE against its schema. Those three are where the
 schema-versus-view defects live.
+
+**594. THE API'S REQUEST FIELD NAMES ARE NOT GUESSABLE.** Three comment
+routes name the comment `comment_reply_id` while fourteen call it
+`comment_id`; `/user/follow` wants `user_id` where its neighbours want
+`person_id`; `/domain/block` wants the domain's NAME; `/private_message`
+wants `content` where the model says `body`; `/post/poll_vote` wants
+`choice_id` as a LIST. Read the schema in app/api/alpha/schema.py before
+writing the request -- a wrong guess is a 400 that names the missing field
+but not the one you sent.
+
+**595. A ROUTE TEST IS A SCHEMA TEST.** Driving a route over HTTP validates
+the request against its schema, runs the body, and validates the RESPONSE
+against its schema. The last of those is what the utils-level tests cannot
+do, and it is where this campaign found a schema that refused its own view's
+answer (D1250) and a view that omitted a key its schema required (D1251).
