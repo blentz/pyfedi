@@ -33,7 +33,15 @@ allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.mpo',
 
 def search_for_community(address: str, allow_fetch: bool = True) -> Community | None:
     if address.startswith('!'):
-        name, server = address[1:].split('@')
+        # Exactly one '@', with something on each side of it. `split('@')`
+        # alone raised `ValueError: not enough values to unpack` for `!name`
+        # and `too many values to unpack` for `!a@b@c` -- and the addresses
+        # reaching here are built from URL segments and search boxes, so
+        # `/c/a@b@c/subscribe` was a 500 rather than a "no such community".
+        parts = address[1:].split('@')
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            return None
+        name, server = parts
 
         if get_setting('use_allowlist') and not instance_allowed(server):
             return None
