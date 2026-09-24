@@ -878,7 +878,13 @@ def feeds_menu():
 
 @bp.route('/share', methods=['GET', 'POST'])
 def share():
+    # `/share` is a public GET that anything can follow, and a request with no
+    # `url` at all used to be `AttributeError: 'NoneType' object has no
+    # attribute 'strip'` -- a 500, a logged traceback and a Sentry event, for a
+    # request that is merely incomplete.
     url = request.args.get('url')
+    if not url:
+        abort(400)
     url = remove_tracking_from_link(url.strip())
     form = ShareLinkForm()
     form.which_community.choices = possible_communities()
@@ -1424,7 +1430,10 @@ def anoobis():
         return render_template('anoobis.html', next=next, diff_desktop=current_app.config['ANOOBIS_DIFFICULTY_DESKTOP'],
                                diff_mobile=current_app.config['ANOOBIS_DIFFICULTY_MOBILE'])
     else:
-        raise Exception(f'Anoobis error: {f.host} != {current_app.config["SERVER_NAME"]}')
+        # abort(403), which is what the line below the raise always meant. The
+        # raise turned a refused open-redirect attempt -- the guard working --
+        # into a 500 and a Sentry event, with the attacker's own host echoed
+        # into the message, and left the abort unreachable behind it.
         abort(403)
 
 
