@@ -11098,3 +11098,18 @@ SHAPED.** `app/api/alpha/views.py` holds four "you are not a member" refusals
 that no route repeats. Covering a route does not cover them, because the
 route hands the view an id and the view decides. Cover the view function
 directly, from both sides, for every variant that has one.
+
+**617. `query.filter(...)` WITHOUT THE ASSIGNMENT IS A NO-OP, AND IT READS
+LIKE A FILTER.** `comments.filter(PostReply.score > -20)` appears twice in
+`app/post/util.py` and has never run (D1277). The lines around it all say
+`comments = comments.filter(...)`. When covering a query builder, check that
+every filter is assigned -- a dropped result is invisible in review, invisible
+in coverage (the line IS executed), and only a test that asserts the filtered
+row is absent will catch it.
+
+**618. A NO-OP WHOSE REPAIR CHANGES THE PRODUCT IS RECORDED, NOT FIXED.**
+Making that filter work would hide whole subtrees from logged-out readers and
+answer a permalink with nothing. That is a decision for whoever owns the
+product. The campaign's job there is to pin today's behaviour, say in the
+test's own docstring that it is pinning a no-op, and write the finding -- so
+the change is visible when somebody makes it.
