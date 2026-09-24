@@ -1214,7 +1214,13 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
         posts = posts.filter(Post.ranking_scaled != None).order_by(desc(Post.ranking_scaled),
             desc(Post.ranking), desc(Post.posted_at), desc(Post.id))
     elif sort == "Active":
-        posts = posts.filter(Post.reply_count > 0)
+        # `last_active != None` as well as the reply count, which is what
+        # get_post_list's Active arm filters on. Post.last_active is the one
+        # column in this ORDER BY with no default of any kind, so it really can
+        # be NULL -- and sqlakeyset warns, correctly, that ordering a keyset
+        # page by a nullable column can omit rows from it silently. A post with
+        # replies but no last_active was exactly that row.
+        posts = posts.filter(Post.reply_count > 0, Post.last_active != None)
         posts = posts.order_by(desc(Post.last_active), desc(Post.id))
 
     page_obj = get_page(posts, per_page=limit, page=bookmark)
