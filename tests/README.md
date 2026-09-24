@@ -10795,3 +10795,34 @@ The `if url and post.image:` block is what copies `image_alt_text` onto the
 File, so a test that gives a post a picture but no url cannot see the
 endpoint's alt-text default at all -- and the default matters, because the
 block OVERWRITES whatever description is there with what it was handed.
+
+**577. `get_post_list` BUILDS TWO QUERIES AND RUNS ONE.** It assembles a
+sqlalchemy query AND a raw SQL string in parallel, and `use_faster_query`
+picks between them -- so a filter added to only one of them is silently
+dropped for half the requests. Two of this module's defects were exactly
+that (D1227, the private communities; D1228, the url search). When testing
+this function, ask the same question BOTH ways: the front page runs the raw
+SQL, and narrowing by community, feed, topic, person, search text,
+`liked_only` or `saved_only` switches it off.
+
+**578. ON THE FAST PATH THE MODULE'S `order_by` IS THROWN AWAY.** The raw
+SQL's own ORDER BY decides which 1000 rows are fetched, and the page is then
+re-sorted by `post_ids_to_models(post_ids, sort)` (app/utils.py), which
+re-implements hot/new/old/top/active/scaled and knows nothing about stickies.
+So an ordering assertion on the front page proves nothing about this module,
+and an instance sticky does NOT lead the page it asked to lead. Assert
+ordering on the community-narrowed path.
+
+**579. A SORT CHAIN THAT ENDS IN A FALLBACK NEEDS A ROW PER ARM.**
+`elif sort.startswith("Top")` closes the Top* chain with a one-day window, so
+every test whose data only reaches back a day cannot tell TopHour, TopDay,
+TopWeek or TopMonth from the fallback -- eleven mutants survived on that.
+Give the fixture one post per window, and assert the COUNT each window
+reaches.
+
+**580. AN UNORDERED QUERY COMES BACK IN INSERTION ORDER, WHICH IS USUALLY
+SOMEBODY'S EXPECTED ORDER.** A sort whose arm is mutated away leaves the
+query with no ORDER BY at all, and Postgres then returns the rows roughly as
+they were written -- which matched 'New' exactly, so that mutant survived a
+full-sequence assertion. Build the fixture's rows in an order that matches
+neither the ascending nor the descending expectation.

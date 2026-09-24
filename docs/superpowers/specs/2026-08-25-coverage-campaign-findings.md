@@ -17524,4 +17524,84 @@ subject. `db_session` now clears those keys per test. Fact 573.
 
 ---
 
-**Next free number: D1223.**
+---
+
+## Round 100 — sub-project 84 slice M: `get_post_list`
+
+**The round in one line: SEVEN production defects, and the first one handed
+every private community's posts to anyone who asked.**
+
+### 1. THE PRIVATE COMMUNITIES ON THE FRONT PAGE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1227** | `app/api/alpha/utils/post.py:388` | This function builds TWO queries -- a sqlalchemy one and a raw SQL one -- and runs whichever `use_faster_query` selects. The private-community filter was applied to the sqlalchemy query unconditionally, but appended to the SQL **only when `private_community_ids` was non-empty**, i.e. only when the reader already belonged to a private community. An anonymous caller belongs to none by definition, so `GET /post/list` -- the front page, the default listing, no authentication -- answered with every private community's posts. The criterion is now appended either way. | **fixed** | a private community's three posts came back from `get_post_list(None, {})` |
+
+### 2. THE URL SEARCH THAT SEARCHED NOTHING
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1228** | `app/api/alpha/utils/post.py:398` | The same shape, one branch along: `search_type == 'Url'` filtered the sqlalchemy query with `Post.url.ilike(...)` and left `use_faster_query` switched ON, so the raw SQL ran with no url condition at all. A URL search answered with every post on the instance. | **fixed** | `get_post_list(None, {'q': 'example.test'}, search_type='Url')` returned all three posts, one of which had a url |
+
+### 3. THE NEXT PAGE THAT NEVER ENDED
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1224** | `app/api/alpha/utils/post.py:618` | `has_next_page = len(post_ids) > page + 1 * limit`. `*` binds tighter than `+`, so the test read `len > page + limit` -- nothing like `(page + 1) * limit`. Nine posts at two per page: page 6 came back EMPTY and still named page 7, and page 7 would have named page 8. An infinite-scroll client follows that forever. | **fixed** | `PROBE z2 page 6: 0 posts, next_page=7` |
+
+### 4. TWO ORDINARY REQUESTS THAT WERE SQL SYNTAX ERRORS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1225** | `app/api/alpha/utils/post.py:609` | `sql += ' ORDER BY ' + ', '.join(sql_order_by)` with nothing to join. Two ordinary requests leave that list empty: an unrecognised sort with `ignore_sticky` set, and a URL search sorted by relevance -- `GET /search?type_=Url&sort=Relevance`, which needs no account and no unusual parameter. Both came back `psycopg2.errors.SyntaxError: syntax error at or near "LIMIT"`. | **fixed** | `PROBE v Nonsense with ignore_sticky: ProgrammingError: (psycopg2.errors.SyntaxError) syntax error at or near "LIMIT"`, and the same for `PROBE x Relevance` |
+
+### 5. THE LISTING THAT ANSWERED A DIFFERENT QUESTION
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1223** | `app/api/alpha/utils/post.py:96,788` | 'Subscribed', 'Moderating' and 'ModeratorView' each carry `and user_id is not None`, so an anonymous caller fell through to the All arm and got the front page under another name. D1199 and D1208's shape, in the third module. Fixed in `get_post_list2` at the same time. | **fixed** | `PROBE r1 anonymous Subscribed: 9 posts` -- the same nine as `PROBE r4 anonymous All` |
+
+### 6. THE ROWS NOBODY HOLDS, AND THE SCORE THAT DISAGREED WITH ITSELF
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1226** | `app/api/alpha/utils/post.py:278,317` (and three more sites in `get_post_list2`) | `db.session.get(Feed, feed_id)` and `db.session.get(Topic, topic_id)`, then `.show_posts_in_children` off the answer. | **fixed** | `PROBE s1/s2: AttributeError: 'NoneType' object has no attribute 'show_posts_in_children'` |
+| **D1230** | `app/api/alpha/utils/post.py:488` | `minimum_upvotes` filtered the sqlalchemy query on `Post.up_votes - Post.down_votes` and the SQL on `score`. The same request therefore answered differently depending on which path ran, for any post whose stored score had not caught up with its votes. Both read `score` now -- the column every Top sort here orders by. | **fixed** | a post with up_votes 10, down_votes 1 and score 0 was listed by the community-narrowed path and not by the front page |
+
+### 7. WHAT IS RECORDED AND NOT REPAIRED
+
+| ID | Where | What |
+|---|---|---|
+| **D1229** | `app/api/alpha/utils/post.py` | Three equivalent mutants, all of them the fast path's redundancy. (a) `elif sort == "Top" or sort == "TopDay":` -- deleting it falls through to `elif sort.startswith("Top")`, whose window is the same one day. (b) `user_votes = get_post_votes_for_posts(...)` -- `post_view` re-queries the vote whenever `my_vote == 0`, so the prefetch is a pure optimisation. (c) `interacted_at = get_post_interacted_at(...)` -- `post_view` reads it only when `unread_counts is None`, and this caller always passes a dict. |
+
+Also measured and left alone: **instance stickies do not lead the front
+page**, though the query asks them to. `sql_order_by` starts with
+`instance_sticky DESC`, but the page that comes back is re-sorted by
+`post_ids_to_models(post_ids, sort)`, which knows nothing about stickies. The
+community-narrowed path, which keeps sqlalchemy's ordering, does put its
+sticky first. Fixing it means changing `post_ids_to_models` in `app/utils.py`,
+which has other callers.
+
+### 8. WHAT THE MUTATION PASS FOUND
+
+63 mutants, 45 killed on the measuring pass. **Eighteen survivors, every one
+a row of mine**, and they fell into three groups:
+
+* eleven sort rows that asserted an answer the FALLBACK arm gives too -- the
+  Top* chain ends in a one-day window, so a spread of 0, 40 and 80 days made
+  TopHour through TopMonth indistinguishable from it. The spread is now one
+  post per window;
+* four ordering rows read on the fast path, where the module's `order_by` is
+  discarded and `post_ids_to_models` re-sorts the page. Ordering is now
+  asserted on the community-narrowed path, as the whole sequence rather than
+  its first element -- and the posts are built in a third order again, because
+  an unordered query came back in exactly the order 'New' asks for;
+* three rows that read the response where the filter lives on the other query
+  path: the private filter, the url filter and the minimum score each needed
+  asking BOTH ways.
+
+60 killed and 3 equivalent (D1229) after.
+
+---
+
+**Next free number: D1231.**
