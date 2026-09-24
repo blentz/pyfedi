@@ -216,16 +216,16 @@ def move_community_images_to_here(community_id):
                                             if ';' in content_type:
                                                 content_type_parts = content_type.split(';')
                                                 content_type = content_type_parts[0]
+                                            # `str.split('/')` always returns a
+                                            # non-empty list, so the `else` that
+                                            # stood here -- deriving the
+                                            # extension from the url instead --
+                                            # could never run. Removed rather
+                                            # than left to look like a fallback.
                                             content_type_parts = content_type.split('/')
-                                            if content_type_parts:
-                                                file_extension = '.' + content_type_parts[-1]
-                                                if file_extension == '.jpeg':
-                                                    file_extension = '.jpg'
-                                            else:
-                                                file_extension = os.path.splitext(post.image.source_url)[1]
-                                                file_extension = file_extension.replace('%3f', '?')
-                                                if '?' in file_extension:
-                                                    file_extension = file_extension.split('?')[0]
+                                            file_extension = '.' + content_type_parts[-1]
+                                            if file_extension == '.jpeg':
+                                                file_extension = '.jpg'
 
                                             # A remote SVG must be sanitized before it is
                                             # re-hosted under our own name. content_type is
@@ -303,16 +303,16 @@ def move_community_images_to_here(community_id):
                                             if ';' in content_type:
                                                 content_type_parts = content_type.split(';')
                                                 content_type = content_type_parts[0]
+                                            # `str.split('/')` always returns a
+                                            # non-empty list, so the `else` that
+                                            # stood here -- deriving the
+                                            # extension from the url instead --
+                                            # could never run. Removed rather
+                                            # than left to look like a fallback.
                                             content_type_parts = content_type.split('/')
-                                            if content_type_parts:
-                                                file_extension = '.' + content_type_parts[-1]
-                                                if file_extension == '.jpeg':
-                                                    file_extension = '.jpg'
-                                            else:
-                                                file_extension = os.path.splitext(post.image.source_url)[1]
-                                                file_extension = file_extension.replace('%3f', '?')
-                                                if '?' in file_extension:
-                                                    file_extension = file_extension.split('?')[0]
+                                            file_extension = '.' + content_type_parts[-1]
+                                            if file_extension == '.jpeg':
+                                                file_extension = '.jpg'
 
                                             # As above: a remote SVG is sanitized before it is
                                             # re-hosted, and one we cannot sanitize is skipped
