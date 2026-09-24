@@ -18523,4 +18523,44 @@ and refused outright to everybody else.
 
 ---
 
-**Next free number: D1289.**
+---
+
+## Round 125 — sub-project 99: the rest of the public surface
+
+**The round in one line: `web+ap://` links to anything the handler had no
+branch for were a 500, and the nine debug-only diagnostics -- which send mail,
+write to S3 and bind to the directory -- had never been exercised from either
+side of the gate in front of them.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1289** | `app/main/routes.py:936` | `protocol_handler` tests the resolver's answer for `post`, `comment`, `community` and `person`, and then falls off the end. Anything else -- a feed, or an answer with nothing in it -- returned None from the view, which Flask answers with `TypeError: did not return a valid response` and a 500. The `else` below it covers only "no `to` parameter at all". Same family as D1257 and D1261. It flashes and redirects now. Alongside it, `flash(_('Failed to look up %(url)s'))` was never given a value for its placeholder, so the visitor was shown the literal `%(url)s`. | **fixed** | `TypeError: The view function for 'main.protocol_handler' did not return a valid response.` |
+
+**Why the diagnostics were worth covering.** `/test_email`, `/test_s3`,
+`/test_ldap` and `/test_ldap_login` send mail, write to an object store and
+bind to the directory with a password from the query string. The only thing in
+front of them is `debug_mode_only`. Each is now pinned from both sides: 403 in
+production, and in debug the thing it claims to test actually being called.
+`/test_ldap_login` takes its password from the URL, which is recorded here
+rather than changed -- it is a debug endpoint and the change is the
+maintainer's call.
+
+**One cache that was hiding an assertion.** `/sitemap.xml` is
+`@cache.cached(timeout=6000)`, so the second sitemap test in a class reads the
+first one's answer. The mutant that drops the `indexable` filter survived
+until the test cleared the cache first. Fact 633.
+
+### What the slice pins
+
+83 tests: `robots.txt` with and without the AI-crawler licence, `rsl.xml`
+present only when crawlers are refused, `security.txt`, the sitemap and the
+three reasons a post stays out of it, the service worker's cache header, the
+manifest for five user agents and one that cannot be parsed, its icons
+configured and not, the privacy page and a CMS page replacing it, the feeds
+listing as HTML and as ActivityPub with a remote feed excluded, explore, both
+refused on a private instance, the protocol handler's six outcomes, and every
+diagnostic in both modes.
+
+---
+
+**Next free number: D1290.**
