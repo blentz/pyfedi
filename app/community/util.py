@@ -196,7 +196,8 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                                 activity = announce['object']
                                 is_wordpress = True
                             if not activity:
-                                return
+                                continue    # `return` here threw away every
+                                            # entry after a malformed one
                             if is_peertube and mod:
                                 user = mod
                             elif 'attributedTo' in activity and isinstance(activity['attributedTo'], str):
@@ -229,8 +230,14 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                                     # create post_replies based on activity['replies'], if it exists
                                     if 'replies' in activity and isinstance(activity['replies'], str):
                                         replies = remote_object_to_json(activity['replies'])
-                                        if replies and replies['type'] == 'OrderedCollection' and 'orderedItems' in replies:
+                                        if replies and 'type' in replies and replies['type'] == 'OrderedCollection' and 'orderedItems' in replies:
                                             for reply_data in replies['orderedItems']:
+                                                # Everything below comes off the
+                                                # wire: an entry with no id, and
+                                                # one with no author, were each a
+                                                # KeyError that killed the task.
+                                                if not isinstance(reply_data, dict) or 'id' not in reply_data:
+                                                    continue
                                                 # Skip if reply already exists
                                                 if session.query(PostReply).filter_by(ap_id=reply_data['id']).first():
                                                     continue
@@ -243,6 +250,8 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                                                     continue
 
                                                 # Find the author of the reply
+                                                if 'attributedTo' not in reply_data:
+                                                    continue
                                                 reply_author = find_actor_or_create(reply_data['attributedTo'])
                                                 if not reply_author:
                                                     continue
@@ -275,10 +284,19 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                                                 
                                                 # Get language
                                                 language_id = None
-                                                if 'language' in reply_data and isinstance(reply_data['language'], dict):
+                                                if 'language' in reply_data and isinstance(reply_data['language'], dict) and \
+                                                        'identifier' in reply_data['language'] and 'name' in reply_data['language']:
                                                     from app.activitypub.util import find_language_or_create
                                                     language = find_language_or_create(reply_data['language']['identifier'],
-                                                                                     reply_data['language']['name'])
+                                                                                     reply_data['language']['name'],
+                                                                                     session=session)
+                                                    # A language this instance
+                                                    # has not seen before is
+                                                    # added and not flushed, so
+                                                    # `language.id` was None and
+                                                    # the reply kept no language
+                                                    # at all.
+                                                    session.flush()
                                                     language_id = language.id
                                                 
                                                 # Check if distinguished
@@ -302,12 +320,16 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                             if activities_processed >= max:
                                 break
                         if community.post_count > 0:
-                            community.last_active = session.query(Post).filter(Post.community_id == community.id).order_by(desc(Post.posted_at)).first().posted_at
-                            session.commit()
+                            newest = session.query(Post).filter(Post.community_id == community.id).order_by(desc(Post.posted_at)).first()
+                            if newest:      # post_count is a counter, not a count
+                                community.last_active = newest.posted_at
+                                session.commit()
                 if community.ap_featured_url:
                     featured_data = remote_object_to_json(community.ap_featured_url)
                     if featured_data and 'type' in featured_data and featured_data['type'] == 'OrderedCollection' and 'orderedItems' in featured_data:
                         for item in featured_data['orderedItems']:
+                            if not isinstance(item, dict) or 'id' not in item:
+                                continue
                             post = session.query(Post).filter_by(ap_id=item['id']).first()
                             if post:
                                 post.sticky = True
