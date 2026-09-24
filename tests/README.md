@@ -11037,3 +11037,32 @@ defect reachable from a URL. Rerun to CONFIRM, never to dismiss.
 same run also printed `1 failed, 9642 passed` against a suite of ~10,340 and
 exited 0, because `session_timeout` had been spent. Two distinct problems in
 one summary line, and the exit code reported neither.
+
+**608. A KEYWORD ARGUMENT PASSED POSITIONALLY IS A SILENT REORDERING.**
+`purge_content(self, soft=True, flush=True)` called as `purge_content(flush)`
+put the CDN flag into `soft` (D1273), so a moderation action did the opposite
+of what was asked on both axes and hard-deleted content irreversibly. The
+sibling call three files away passes it by keyword. When a function's
+parameters are two booleans in a row, pass them by name and assert
+`call_args.kwargs` rather than `call_args.args` in the test -- which is what
+caught this one.
+
+**609. WHEN TWO FUNCTIONS ARE NEAR-COPIES, FIX BOTH.** `search_for_community`
+and `search_for_user` share a shape line for line. D1258 fixed the handle
+unpack in one of them; D1268 is the same line, still unfixed, in the other,
+found a fortnight later. After fixing a defect, grep for its shape before
+closing the round.
+
+**610. TWO GUARDS CAN COVER FOR EACH OTHER AND HIDE A MUTANT.** Removing the
+`isinstance(links, list)` check survived, because the per-link
+`isinstance(links, dict)` check caught every input the tests had. The killing
+case was `{'links': 5}` -- not iterable at all, so the per-link check never
+runs. When a mutant on a guard survives, ask which OTHER guard is covering
+for it, and find the input that only the first one catches.
+
+**611. THE TAB THAT IS SHOWN FIRST IS THE ONE TO CHECK.** The user profile
+has three lists of the same content: posts, replies, and the two interleaved.
+Two of them filtered the private flag and the one shown by default did not
+(D1271). Where the same data is assembled more than once, compare the
+filters side by side rather than reading each on its own -- the odd one out
+is the finding.

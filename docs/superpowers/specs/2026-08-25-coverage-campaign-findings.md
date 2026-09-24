@@ -18126,4 +18126,47 @@ falls back to the id, and that every field the directory offers exists on
 
 ---
 
-**Next free number: D1268.**
+---
+
+## Round 115 — sub-project 89: looking a person up, and what their profile shows
+
+**The round in one line: six defects in the module behind `/u/<actor>`, one
+of which showed anonymous visitors what an account had written in a private
+community, and one of which hard-deleted content when the admin had asked for
+the opposite.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1268** | `app/user/utils.py:86` | `name, server = address.lower().split('@')` unpacked whatever it was given. `@a@b@c` was `ValueError: too many values to unpack` -- a 500 from a crafted URL where "no such person" was the answer. This is D1258's line on the user side; the two functions are near-copies of each other and only one of them was fixed. | **fixed** | `PROBE aa two servers: ValueError: too many values to unpack (expected 2)` |
+| **D1269** | `app/user/utils.py:117,120,151` | `webfinger_json['links']`, `links['href']` and `object['type']` read out of another instance's JSON with no membership test, each one a 500. `links` was also iterated without checking it was a list: an object there yields its KEYS, so `'rel' in links` was true of the string `'rel'` and `links['rel']` was `TypeError: string indices must be integers`. | **fixed** | `PROBE ba a webfinger with no links key: KeyError: 'links'`; `PROBE ca an actor with no type: KeyError: 'type'`; `PROBE da a self link with no href: KeyError: 'href'` |
+| **D1270** | `app/user/utils.py:126` | The retry loop around the actor fetch had no `break`, so a request that SUCCEEDED was made a second time -- and `get_request` retries internally as well. Every user lookup cost the remote instance two fetches, and every actor behind authorized-fetch two more. | **fixed** | `PROBE cb actor fetches: 2`, now 1 |
+| **D1271** | `app/user/utils.py:268` | The profile's overview tab -- posts and replies interleaved, the tab that is shown FIRST -- filtered neither `post.private` nor `post_reply.private`, though the posts tab and the replies tab beside it both do. It relies instead on `community_membership_private`, which lists only the private communities the account is STILL a non-banned member of. So anything the account posted in a private community it has since left, or been banned from, was listed to anonymous visitors. | **fixed** | `PROBE fa overview after a ban: ['a secret reply', 'a secret', ...]` beside `PROBE fb posts tab after a ban:` with neither |
+| **D1272** | `app/user/utils.py:95` | `name` and `server` were lowercased and then the lookup used the ORIGINAL `address`, so `@SomeOne@Remote.Test` matched nobody. With fetching allowed that means a WebFinger round trip and a re-parse of an actor this instance already had, on every mixed-case handle. | **fixed** | `assert None == <User someone>` from the lower-case test |
+| **D1273** | `app/user/utils.py:49` | `user.purge_content(flush)` -- passed POSITIONALLY into `purge_content(self, soft=True, flush=True)`, so the CDN flag landed in `soft`. An admin who bans and deletes a local account with the CDN purge turned OFF got the opposite of both: every post and reply HARD-deleted from the database rather than soft-deleted, and the CDN purged anyway. The sibling call for a remote account, `app/shared/user.py:176`, passes it by keyword and is correct. | **fixed** | `purge.call_args.args == ('',)` before, `kwargs == {'flush': False}` after |
+
+**Hardened, not a live defect.** `_get_user_same_ip` lists the other accounts
+sharing an IP address and checked only that the viewer was logged in. The
+profile template gates the block on `is_admin_or_staff`, so nothing leaked
+through the page as it stands, but the function is one caller away from doing
+so. The gate now lives in the function too.
+
+**Recorded, not repaired.** Nothing catches the WebFinger request itself, so
+a remote that is down raises out of `search_for_user`; the source already
+says "todo: try, except block around every get_request". Pinned as it stands.
+The retry loops are also nearly redundant now that `get_request` retries
+internally -- an actor that never answers is asked four times, not two.
+
+### What the slice pins
+
+100 tests, `app/user/utils.py` at 100%: six malformed handles, the local and
+remote lookups including the mixed-case one, banned instances, eleven shapes
+of WebFinger answer, six of the actor JSON, how many times the remote is
+asked in each case, the authorized-fetch path, both branches of
+`unsubscribe_from_community`, all three visibility branches of each of the
+three profile tabs, the alt-account block, upvotes, subscriptions, moderated
+communities with and without `private_mods`, notes, `SimplePagination`, and
+the purge task including that its flag is the CDN one.
+
+---
+
+**Next free number: D1274.**
