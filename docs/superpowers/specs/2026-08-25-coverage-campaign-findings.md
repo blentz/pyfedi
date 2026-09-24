@@ -18563,4 +18563,45 @@ diagnostic in both modes.
 
 ---
 
-**Next free number: D1290.**
+---
+
+## Round 126 — sub-project 100: what this instance learns about a new one
+
+**The round in one line: the first thing this instance does when it hears from
+a domain nobody here knows is read three documents that domain controls, and
+two keys in them were read without asking.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1290** | `app/activitypub/util.py:2146` and `:2169` | `instance.outbox = instance_json['outbox']` -- the line IMMEDIATELY above it membership-tests `inbox` and this one did not, so an Application actor with no outbox was `KeyError: 'outbox'`. Because the whole task then died, nothing about that instance was learned: no inbox to deliver to, no software recorded. And `admin['person']['actor_id']`, read straight off whatever `/api/v3/site` answered, was `KeyError: 'person'` for an entry shaped any other way. | **fixed** | `PROBE aa an Application actor with no outbox: KeyError: 'outbox'`; `PROBE ba an admin entry with no person: KeyError: 'person'` |
+
+**The admin list is not filtered by domain, and that is correct.** A remote
+instance's `/api/v3/site` names the accounts it claims as its admins, and this
+instance writes an `InstanceRole` for each. Those roles grant power over that
+instance's OWN communities (`Community.is_instance_admin` reads
+`InstanceRole.instance_id == self.instance_id`), so an instance naming an actor
+on a third domain gives away only its own authority. The check that grants an
+account power over its own instance, `User.is_instance_admin`, reads the
+account's OWN `instance_id`, so a role held for somebody else's instance
+grants nothing there. Both are now asserted rather than assumed.
+
+**One equivalent mutant.** Removing the `if 'software' in node_json` guard
+survives: the `KeyError` it would raise is swallowed by the bare
+`except: return` wrapped around it, and the software is left unset either way.
+
+### What the slice pins
+
+43 tests: the domain lookup in three forms, both dispatch paths and the
+no-instance case, an Application actor naming both boxes or neither, something
+that is not an Application, an answer that is not JSON, the two statuses that
+still mean the inbox is at /inbox, one that means nothing is learned, a domain
+that answers only over http and one that answers neither way; the admin list
+recorded, deduplicated, revoked when no longer named, six malformed entry
+shapes, an actor that cannot be resolved, and four ways `/api/v3/site` fails;
+and the software read from each of the three nodeinfo schemas this instance
+accepts, one it does not (asserted as a request never made), and six ways
+nodeinfo fails.
+
+---
+
+**Next free number: D1291.**
