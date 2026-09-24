@@ -1467,8 +1467,12 @@ def registration_view(registration) -> dict:
     v1["user_id"] = registration.user.id
     v1["user_name"] = registration.user.display_name()
     
-    if registration.user.ip_address:
-        v1["ip_address"] = registration.user.ip_address
+    # Always present, null when there is none. The schema declares
+    # `ip_address` required AND allow_none, so omitting the key -- which is
+    # what this used to do for any account with no recorded address -- failed
+    # validation for the WHOLE listing: one such applicant and the admin could
+    # not see the registration queue at all, only a 400 naming a field.
+    v1["ip_address"] = registration.user.ip_address if registration.user.ip_address else None
 
     if registration.user.ip_address_country:
         v1["country_code"] = registration.user.ip_address_country
