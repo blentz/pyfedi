@@ -1308,11 +1308,16 @@ def site_instance_chooser_view():
         maturity = 'Embryonic'
 
     result = {
+        # None, not a dict of Nones: an instance that has never chosen a site
+        # language has no language to report, and the schema says so with
+        # allow_none. The lookup above is skipped rather than handed the None
+        # id, because db.session.get(Model, None) warns that a fully NULL
+        # primary key identity cannot load any object.
         'language': {
-            "id": language.id if language else None,
-            "code": language.code if language else None,
-            "name": language.name if language else None
-        },
+            "id": language.id,
+            "code": language.code,
+            "name": language.name
+        } if language else None,
         'nsfw': g.site.enable_nsfw,
         'newbie_friendly': num_topics() >= 3,
         'name': g.site.name,

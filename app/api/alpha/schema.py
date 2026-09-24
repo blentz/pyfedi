@@ -245,7 +245,11 @@ class GetSiteVersionResponse(DefaultSchema):
 
 
 class GetSiteInstanceChooserResponse(DefaultSchema):
-    language = fields.Nested(LanguageView, required=True)
+    # allow_none: an instance that has never chosen a site language has none
+    # to report, and saying so is the honest answer. Without this the endpoint
+    # answered 400 -- "Field may not be null" -- for the very instances the
+    # chooser exists to introduce.
+    language = fields.Nested(LanguageView, required=True, allow_none=True)
     nsfw = fields.Boolean(required=True)
     newbie_friendly = fields.Boolean(required=True)
     name = fields.String(required=True)
