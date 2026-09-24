@@ -6,7 +6,7 @@ from flask import current_app, g
 from sqlalchemy import desc
 
 from app.activitypub.util import find_actor_or_create, remote_object_to_json, actor_json_to_model, \
-    find_community, create_resolved_object
+    find_community, create_resolved_object, normalise_actor_string
 from app.api.alpha.utils.community import get_community_list
 from app.api.alpha.utils.post import get_post_list
 from app.api.alpha.utils.user import get_user_list
@@ -130,9 +130,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
         parsed_url = urlparse(query)
         server = parsed_url.netloc.lower()
     elif query.startswith('!') or query.startswith('@') or query.startswith('~'):
-        address = query[1:]
-        if '@' in address:
-            name, server = address.lower().split('@')
+        name, server = normalise_actor_string(query)
 
     if not server:  # can't find server
         raise Exception('No object found.')

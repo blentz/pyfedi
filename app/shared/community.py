@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app import db, cache, plugins
 from app.activitypub.signature import RsaKeys
-from app.activitypub.util import make_image_sizes
+from app.activitypub.util import make_image_sizes, normalise_actor_string
 from app.chat.util import send_message
 from app.constants import *
 from app.email import send_email
@@ -677,7 +677,9 @@ def get_comm_flair_list(community: Community | int | str) -> list:
     elif isinstance(community, Community):
         community_id = community.id
     elif isinstance(community, str):
-        name, ap_domain = community.strip().split('@')
+        name, ap_domain = normalise_actor_string(community)
+        if not name or not ap_domain:
+            raise Exception('invalid_request')
         community = db.session.query(Community).filter_by(name=name, ap_domain=ap_domain).first()
         if community is None:
             community = db.session.query(Community).filter(func.lower(Community.name) == name.lower(),
