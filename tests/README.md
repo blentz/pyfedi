@@ -11176,3 +11176,18 @@ When a loop processes items from outside, every refusal in it should be
 raised. The test that catches this asserts on the RELATIONSHIP
 (`reply.language.code`), not on the id it was given -- an assertion on
 `language_id is None` would have looked like the correct answer.
+
+**628. A NAME USED BEFORE IT IS ASSIGNED IS INVISIBLE UNTIL THE LINE RUNS.**
+`extra_args = {'ContentType': content_type}` sat above every assignment to
+`content_type` (D1288), so the whole task raised `NameError` on the instances
+it exists for -- and nothing in the suite reached it, because nothing covered
+the S3 branch. Python will not tell you at import time. When a function has a
+branch that only a particular configuration takes, cover that configuration
+or the branch is not code, it is a guess.
+
+**629. A MUTANT THAT SURVIVES BECAUSE THE TEST'S FIXTURE IS TOO QUIET.** Four
+survived here for that reason alone: the community had no topic, so
+"silencing clears the topic" could not fail; the remote instance had no
+inbox, so "a remote account is not announced" could not fail. The fix is in
+the test, not the assertion -- set the state the assertion is about, then
+assert.

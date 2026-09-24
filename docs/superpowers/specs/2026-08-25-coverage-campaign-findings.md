@@ -18436,4 +18436,44 @@ wordpress shapes, and the reply count recomputed at the end.
 
 ---
 
-**Next free number: D1288.**
+---
+
+## Round 123 — sub-project 97: the work an admin's buttons queue
+
+**The round in one line: moving a community's images onto this instance was a
+`NameError` on every instance that stores its files in S3, which is the only
+kind of instance that branch exists for.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1288** | `app/admin/util.py:177` | `if store_files_in_s3(): extra_args = {'ContentType': content_type}`. `content_type` is not assigned until inside the loop below it, so `move_community_images_to_here` raised `NameError: name 'content_type' is not defined` before it uploaded anything. The task is what runs when a community migrates here and its images have to come with it. Each upload builds its own arguments now, from the type of the file it is actually sending. | **fixed** | read, then pinned: the mutant that puts the line back dies on `test_an_image_on_this_disk_is_pushed_to_the_bucket` |
+
+**Two unreachable arms removed**, in the shape D1193 established.
+`content_type_parts = content_type.split('/')` is followed by
+`if content_type_parts:` and an `else` that derives the extension from the
+url instead. `str.split` never returns an empty list, so neither `else` could
+run. Both are gone, with a comment where they stood.
+
+**What the S3 branch does with a remote file, pinned.** It downloads it,
+refuses anything whose content type is not an image, refuses a 404 that
+claims to be one, sanitises an SVG before re-hosting it under this
+instance's own name, skips one it cannot sanitise, and closes the response on
+every way out -- including a body that fails halfway through, which is the
+arm that leaked a pooled connection before it was fixed.
+
+### What the slice pins
+
+85 tests, `app/admin/util.py` at 100%: deleting an account and the Delete it
+federates (and the three reasons an instance is not told), leaving each
+community on the way out, an account already gone, the newsletter and who
+does and does not get it including a test send, the topic dropdown to three
+levels, silencing and unsilencing an instance, and then the image move -- on
+disk and into S3, a file already here, a remote one downloaded, a jpeg's
+extension, an SVG sanitised and one refused, a download that 404s or answers
+something that is not an image or dies halfway, two posts in one run, four
+ways a post is skipped mid-loop, and the storage class and ACL on both
+upload paths.
+
+---
+
+**Next free number: D1289.**
