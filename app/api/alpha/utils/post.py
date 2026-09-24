@@ -769,6 +769,12 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
 
     query = data['q'] if 'q' in data else ''
 
+    # The same clamp get_post_list applies. Without it a caller naming
+    # `limit=100000` had every one of those rows built into Post objects and
+    # rendered into the response.
+    if limit > current_app.config["PAGE_LENGTH"]:
+        limit = current_app.config["PAGE_LENGTH"]
+
     if auth:
         user_id = authorise_api_user(auth)
 
@@ -824,12 +830,14 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
         blocked_instance_ids = blocked_or_banned_instances(user_id)
         blocked_domain_ids = blocked_domains(user_id)
         private_community_ids = community_membership_private(user_id)
+        read_language_ids = user_filters_languages(user_id)
     else:
         blocked_person_ids = []
         blocked_community_ids = []
         blocked_instance_ids = []
         blocked_domain_ids = []
         private_community_ids = []
+        read_language_ids = []
 
     content_filters = {}
     u_rp_ids = []
@@ -904,37 +912,13 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
                                                                               blocked_instance_ids))
             content_filters = user_filters_posts(user_id) if user_id else {}
         elif feed_id:
-            feed = db.session.get(Feed, feed_id)
-            if not feed:
-                raise Exception('feed not found')
-            if feed.show_posts_in_children:  # include posts from child feeds
-                feed_ids = get_all_child_feed_ids(feed)
-            else:
-                feed_ids = [feed.id]
-
-            # for each feed get the community ids (FeedItem) in the feed
-            # used for the posts searching
-            feed_community_ids = []
-            for fid in feed_ids:
-                # filter_by, not `join(Feed, FeedItem.feed_id == fid)`: that
-                # join names no predicate BETWEEN the two tables, so it paired
-                # every matching FeedItem with every row of `feed` and returned
-                # the same community id once per feed on the instance. The
-                # answer survived the trip through `IN`; the work did not need
-                # doing.
-                for item in FeedItem.query.filter_by(feed_id=fid).all():
-                    feed_community_ids.append(item.community_id)
-
-            posts = Post.query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
-                                      Post.user_id.not_in(blocked_person_ids),
-                                      Post.community_id.not_in(blocked_community_ids),
-                                      or_(Post.domain_id == None, Post.domain_id.not_in(blocked_domain_ids)),
-                                      Post.instance_id.not_in(blocked_instance_ids)). \
-                join(Community, Community.id == Post.community_id).filter(Community.id.in_(feed_community_ids),
-                                                                          Community.instance_id.not_in(
-                                                                              blocked_instance_ids))
-            content_filters = user_filters_posts(user_id) if user_id else {}
-        elif feed_id:
+            # segregate_instance_stickies = False, as every other
+            # narrowing branch does: a feed listing is not the front
+            # page and its instance stickies do not belong at the top
+            # of it. The line was present only in a SECOND `elif
+            # feed_id:` block that sat below this one in the same
+            # chain and could therefore never run -- thirty-one lines
+            # of dead code, removed with this comment in their place.
             segregate_instance_stickies = False
             feed = db.session.get(Feed, feed_id)
             if not feed:
@@ -1014,6 +998,13 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
 
     posts = posts.filter(or_(Community.private == False, Community.id.in_(private_community_ids)))
 
+    # The reader's own languages. get_post_list has had this filter all along
+    # and this listing had none, so an account that reads one language was
+    # served every language here.
+    if read_language_ids:
+        posts = posts.filter(or_(Post.language_id.in_(read_language_ids),
+                                 Post.language_id == None))
+
     if query:
         segregate_instance_stickies = False
         if search_type == 'Url':
@@ -1067,7 +1058,11 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
         if len(filtered_out_community_ids):
             posts = posts.filter(Post.community_id.not_in(filtered_out_community_ids))
     else:
-        if nsfw == 'Exclude':
+        # `or nsfw == ''`: without it an anonymous caller who asked nothing
+        # about NSFW got it, because '' matches none of the three named values
+        # below. get_post_list excludes it by default, and this listing is the
+        # one a fresh client hits first.
+        if nsfw == 'Exclude' or nsfw == '':
             posts = posts.filter(Post.nsfw == False)
         elif nsfw == 'Only':
             posts = posts.filter(Post.nsfw == True)
@@ -1075,7 +1070,9 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
             pass
 
     if minimum_upvotes:
-        posts = posts.filter(Post.up_votes - Post.down_votes >= minimum_upvotes)
+        # `Post.score`, the column both listings sort by, so that the same
+        # request cannot answer differently depending on which one served it.
+        posts = posts.filter(Post.score >= minimum_upvotes)
     
     if search_by_community and not ignore_sticky:
         posts = posts.order_by(desc(Post.sticky))
@@ -1136,11 +1133,12 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
     # change when polls and events are supported
     posts = posts.filter(Post.type != POST_TYPE_POLL).filter(Post.type != POST_TYPE_EVENT)
 
-    if query:
-        if search_type == 'Url':
-            posts = posts.filter(Post.url.ilike(f"%{query}%"))
-        else:
-            posts = posts.filter(Post.title.ilike(f"%{query}%"))
+    # The query is already applied above, and applied BETTER: `posts.search()`
+    # reads the full-text vector, which covers the body as well as the title.
+    # The block that used to stand here re-filtered on `Post.title.ilike(...)`,
+    # which ANDed a title-only match onto the full-text one -- so a search for
+    # a word that appears in a post's body and not in its title answered
+    # nothing at all, while the same search through get_post_list found it.
 
     if user_id:
         if liked_only:
@@ -1173,38 +1171,43 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
 
     if sort == "Hot":
         posts = posts.order_by(desc(Post.ranking), desc(Post.posted_at), desc(Post.id))
+    # `desc(a), desc(b)` -- TWO arguments to order_by -- not
+    # `desc(a, desc(b))`, which is one call to desc() with two arguments and
+    # `TypeError: desc() takes 1 positional argument but 2 were given`. Every
+    # Top* sort in this function was written that way, so each of the eleven
+    # was a 500 for anyone who asked for it.
     elif sort == "Top" or sort == "TopDay":
         posts = posts.filter(Post.posted_at > utcnow() - timedelta(days=1)).order_by(
-            desc(Post.score, desc(Post.id)))
+            desc(Post.score), desc(Post.id))
     elif sort == "TopHour":
         posts = posts.filter(Post.posted_at > utcnow() - timedelta(hours=1)).order_by(
-            desc(Post.score, desc(Post.id)))
+            desc(Post.score), desc(Post.id))
     elif sort == "TopSixHour":
         posts = posts.filter(Post.posted_at > utcnow() - timedelta(hours=6)).order_by(
-            desc(Post.score, desc(Post.id)))
+            desc(Post.score), desc(Post.id))
     elif sort == "TopTwelveHour":
         posts = posts.filter(Post.posted_at > utcnow() - timedelta(hours=12)).order_by(
-            desc(Post.score, desc(Post.id)))
+            desc(Post.score), desc(Post.id))
     elif sort == "TopWeek":
         posts = posts.filter(Post.posted_at > utcnow() - timedelta(days=7)).order_by(
-            desc(Post.score, desc(Post.id)))
+            desc(Post.score), desc(Post.id))
     elif sort == "TopMonth":
         posts = posts.filter(Post.posted_at > utcnow() - timedelta(days=28)).order_by(
-            desc(Post.score, desc(Post.id)))
+            desc(Post.score), desc(Post.id))
     elif sort == "TopThreeMonths":
         posts = posts.filter(Post.posted_at > utcnow() - timedelta(days=90)).order_by(
-            desc(Post.score, desc(Post.id)))
+            desc(Post.score), desc(Post.id))
     elif sort == "TopSixMonths":
         posts = posts.filter(Post.posted_at > utcnow() - timedelta(days=180)).order_by(
-            desc(Post.score, desc(Post.id)))
+            desc(Post.score), desc(Post.id))
     elif sort == "TopNineMonths":
         posts = posts.filter(Post.posted_at > utcnow() - timedelta(days=270)).order_by(
-            desc(Post.score, desc(Post.id)))
+            desc(Post.score), desc(Post.id))
     elif sort == "TopYear":
         posts = posts.filter(Post.posted_at > utcnow() - timedelta(days=365)).order_by(
-            desc(Post.score, desc(Post.id)))
+            desc(Post.score), desc(Post.id))
     elif sort == "TopAll":
-        posts = posts.order_by(desc(Post.score, desc(Post.id)))
+        posts = posts.order_by(desc(Post.score), desc(Post.id))
     elif sort == "New":
         posts = posts.order_by(desc(Post.posted_at), desc(Post.id))
     elif sort == "Scaled":
