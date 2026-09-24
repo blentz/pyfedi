@@ -3,7 +3,7 @@ from flask_smorest import Blueprint as ApiBlueprint
 from flask_limiter import RateLimitExceeded
 from sqlalchemy.orm.exc import NoResultFound
 import sentry_sdk
-from werkzeug.exceptions import UnprocessableEntity
+from werkzeug.exceptions import HTTPException, UnprocessableEntity
 
 # Non-documented routes in swagger UI
 bp = Blueprint('api_alpha', __name__)
@@ -105,6 +105,17 @@ def shared_error_handler(e):
         
         response = {"code": 400, "message": "Validation failed", "status": str(e.data['messages'])}
         return jsonify(response), 400
+    elif isinstance(e, HTTPException) and isinstance(getattr(e, 'data', None), dict) \
+            and 'message' in e.data:
+        # flask_smorest's abort() stashes the reason it was given in `e.data`,
+        # and `str(e)` is Werkzeug's generic description instead. Without this
+        # branch, every deliberate refusal in app/api/alpha/routes.py -- all
+        # 117 of them, including "alpha api is not enabled" -- reached the
+        # caller as "400 Bad Request: The browser (or proxy) sent a request
+        # that this server could not understand", for a request the server
+        # understood perfectly and refused on purpose.
+        response = {"code": e.code, "message": e.data['message'], "status": e.name}
+        return jsonify(response), e.code
     else:
         if str(e) != 'incorrect_login' and str(e) != 'No object found.':
             current_app.logger.exception("API exception")

@@ -121,6 +121,12 @@ def get_alpha_site_instance_chooser():
 @site_bp.response(200, GetSiteInstanceChooserSearchResponse)
 @site_bp.alt_response(400, schema=DefaultError)
 def get_alpha_site_instance_chooser_search(data):
+    # The API gate as well as the chooser's own, which is what every other
+    # route here has and what the sibling /site/instance_chooser has. Without
+    # it, an instance that had turned the chooser on and the alpha API off
+    # answered this one endpoint anyway.
+    if not enable_api():
+        return abort(400, message="alpha api is not enabled")
     if get_setting('enable_instance_chooser', False):
         resp = get_site_instance_chooser_search(data)
         return GetSiteInstanceChooserSearchResponse().load(resp)
