@@ -11084,3 +11084,17 @@ surviving mutant means a missing case.
 floor with `missing_lines: []` -- two covered statements had been deleted, so
 the same partial branches were a larger share of a smaller denominator. The
 fix is to cover one more arc, never to lower the floor.
+
+**615. A BRANCH WITH NO COVERAGE MAY HAVE NO CALLERS THAT SURVIVE IT.**
+`feed_view`'s private branch raised `IndexError` on its second line for every
+feed the instance hosts (D1276), so it had never returned since it was
+written. Nothing in the suite reached it and nothing in production could get
+past it. When a branch shows 0% and the feature it serves is one people use,
+the question is not "which test is missing" but "does this branch work at
+all".
+
+**616. SERIALISERS ARE WHERE ACCESS IS DECIDED, NOT JUST WHERE DATA IS
+SHAPED.** `app/api/alpha/views.py` holds four "you are not a member" refusals
+that no route repeats. Covering a route does not cover them, because the
+route hands the view an id and the view decides. Cover the view function
+directly, from both sides, for every variant that has one.

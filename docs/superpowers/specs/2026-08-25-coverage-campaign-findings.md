@@ -18204,4 +18204,39 @@ something nobody hosts is a DIFFERENT answer from a handle that is not one.
 
 ---
 
-**Next free number: D1276.**
+---
+
+## Round 117 — sub-project 91: what the API serialises
+
+**The round in one line: the file that decides what leaves the instance went
+from 79.6% to 94%, and the branch that guards a private feed turned out never
+to have returned at all.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1276** | `app/api/alpha/views.py:1028` | `feed_view`'s private branch built `v1["actor_id"] = feed.public_url() + "/" + feed.name.rsplit("/", 1)[1]`. `feed.name` is the url slug a feed was created with (`app/shared/feed.py:214`, `name=url`), so it contains no `/` and `rsplit('/', 1)` returns a one-element list. Every private feed on the instance was `IndexError: list index out of range` -- a 500 for its owner, the one account entitled to see it, and for an admin. The branch has never once returned since it was written. `public_url()` is already the feed's address, so both branches now say so and only the access check is conditional. | **fixed** | `IndexError: list index out of range` from `test_its_owner_is_shown_it` |
+
+**Three access checks pinned rather than found.** The reason this file was
+worth a round of its own is that it holds the last word on who is shown what:
+a private community's post detail (`post_view` variant 3), a private
+community's own detail and its resolve-object shape (`community_view`
+variants 3 and 6), and a private feed (`feed_view` variant 1). None of the
+four was covered. All four are now, from both sides -- refused to a stranger
+and to an anonymous caller, allowed to a member, an owner or an admin -- and
+a mutant that removes any one of them dies.
+
+### What the slice pins
+
+103 tests: the media a post carries in each of its three types and what is
+left out when an image has no usable url, cross-posts including one whose row
+has since gone, the optional fields on an account and which of them a stub
+omits, the six community variants, flair, the reply path helpers, an
+instance's version fallback, the site's sidebar in all four states, the
+instance chooser's four maturity levels and its language-less case, private
+messages including the ones predating `ap_id`, conversations, registrations,
+a feed's whole visibility matrix and the four reasons a community is left out
+of one, and topics.
+
+---
+
+**Next free number: D1277.**
