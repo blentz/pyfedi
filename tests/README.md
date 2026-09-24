@@ -10691,3 +10691,47 @@ module showing `99%` in `--cov-report=term-missing` can measure 98.67 in
 `percent_covered`, and a floor taken from the displayed figure fails the very
 run that set it. Read the number the checker reads -- the JSON report's
 `percent_covered` -- before writing a floor.
+
+**564. THE HOST'S CLOCK IS NOT UTC, AND A TEST CAN PROVE IT.** Columns in
+this schema hold UTC because every writer goes through `utcnow()`, so a
+`datetime.now()` anywhere near one is a bug waiting for a server outside
+Greenwich. It is testable in-process: `os.environ['TZ'] = 'JST-9'` plus
+`time.tzset()` moves `datetime.now()` nine hours east and leaves `utcnow()`
+alone. `JST-9` is a POSIX TZ string -- a name and the offset to ADD to local
+time to reach UTC -- so no zoneinfo files have to be installed in the image.
+Assert the shift actually took before probing anything, or the test passes
+vacuously on a host that ignored the variable, and restore the previous value
+in `__exit__`.
+
+**565. A VIEW CAN COMMIT.** `CommunityFlair.get_ap_id` (app/models.py)
+computes the identity, **assigns it, and commits** -- and `flair_view` calls
+it on the way out. So a response carrying an `ap_id` proves nothing about
+whether the endpoint stored one, and neither does a `db.session.rollback()`
+in the test, because the getter already committed. Two mutants that deleted
+the endpoints' own assignments survived for this reason (D1207). When a
+response field is computed by the view, pin the column, not the field -- and
+check first whether the view's getter is really a getter.
+
+**566. `CommunityMember` AND `CommunityBan` HAVE NO `id`.** Both are keyed by
+`(user_id, community_id)`, so `db.session.get(Model, row.id)` is an
+`AttributeError` and a re-read after the code under test has committed has to
+name both columns: `CommunityMember.query.filter_by(user_id=..., community_id=...).one()`.
+
+**567. THE ALPHA API TURNS EVERY EXCEPTION INTO A 400 CARRYING `str(e)`.**
+`shared_error_handler` (app/api/alpha/__init__.py) is registered for
+`Exception` on all eleven blueprints. There is no 500: an `AttributeError`
+from an unchecked `db.session.get` reaches the caller as
+`'NoneType' object has no attribute 'is_owner'` with a 400, having first
+logged a traceback and, where `SENTRY_DSN` is set, filed a Sentry event. So
+an id nobody holds is indistinguishable from a real refusal at the wire, and
+the operator pays for it twice. Guard the lookup and raise a named message;
+the two are told apart by what the message says.
+
+**568. THE `app` FIXTURE IS SESSION-SCOPED, SO A CONFIG WRITE IS FOREVER.**
+`current_app.config['PAGE_LENGTH'] = 2` inside one test left PAGE_LENGTH at 2
+for every test that ran after it -- seven failures in two unrelated files
+(`test_community_show.py`, `test_feed_reading_routes.py`) and two modules
+dropped below their floors, none of them anywhere near the test that did it.
+Write config through `monkeypatch.setitem(current_app.config, key, value)`,
+which restores the previous value at teardown. The symptom is a full-suite
+failure that does not reproduce when the offending file is run alone.
