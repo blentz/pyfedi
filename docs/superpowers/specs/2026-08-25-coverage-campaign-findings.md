@@ -17776,4 +17776,30 @@ and stays recorded rather than done.
 
 ---
 
-**Next free number: D1244.**
+---
+
+## Round 104 — sub-project 84 slice P: `app/api/alpha/utils/site.py`
+
+**The round in one line: FOUR production defects in the smallest module of
+the API, and the first of them broke the page a brand-new instance is
+likeliest to be asked for.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1244** | `app/api/alpha/views.py:1282` | `site_instance_chooser_view` read `db.session.get(Language, g.site.language_id)` and then `language.id`. `Site.language_id` is nullable and an instance that has never chosen a language leaves it so -- so `/site/instance_chooser`, the endpoint a NEW instance exists to answer, was a 500 on exactly the instances least likely to have set it. The lookup is now skipped when there is no id, rather than handed the None: `db.session.get(Model, None)` warns `SAWarning: fully NULL primary key identity cannot load any object` (fact 560), and the test watches for that warning as well as for the answer. | **fixed** | `PROBE he the instance chooser: AttributeError: 'NoneType' object has no attribute 'id'` |
+| **D1245** | `app/api/alpha/utils/site.py` | `InstanceChooser.data` is free-form JSON, filled in by whoever added the row, and the chooser search read `data['registration_mode']` and `data['language']['name']` straight out of it. **One** row missing either key was a KeyError that took the whole listing with it -- for every caller, until somebody edited that row. D1184's shape. Read with `.get` now, and a `language` that is already a string is passed through rather than indexed. | **fixed** | `PROBE ka: KeyError: 'registration_mode'`, `PROBE kb: KeyError: 'language'` |
+| **D1246** | `app/api/alpha/utils/site.py` | `get_site_metadata` read `data['url']` unchecked: a request without one was `KeyError: 'url'`. | **fixed** | `PROBE la no url at all: KeyError: 'url'` |
+| **D1247** | `app/api/alpha/utils/site.py` | Blocking an instance nobody holds reached the database as an insert against a missing foreign key, so the caller got `psycopg2.errors.ForeignKeyViolation` with the SQL in it and the rest of the request's session was poisoned behind it. D1210's shape, third instance. | **fixed** | `PROBE ma: IntegrityError: (psycopg2.errors.ForeignKeyViolation) insert or update on table "instance_block" violates foreign key constraint` |
+
+### What the mutation pass found
+
+24 mutants, 23 killed on the measuring pass. The survivor was the guard on the
+null language lookup: without it `db.session.get(Language, None)` answers None
+rather than raising, so the response is identical -- only the SAWarning
+differs. The row now asserts the absence of that warning, and it dies. 24/24.
+
+`app/api/alpha/utils/site.py` closes at **100%**, statements and branches.
+
+---
+
+**Next free number: D1248.**
