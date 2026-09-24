@@ -18314,4 +18314,44 @@ cases.
 
 ---
 
-**Next free number: D1279.**
+---
+
+## Round 120 — sub-project 94: tags, deletions, and telling the fediverse
+
+**The round in one line: a trailing comma in a tags field was a 500, and a
+post deleted from a local community was marked deleted, committed, and then
+never federated -- because the task asked `current_user` in a Celery
+worker.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1279** | `app/community/util.py:365` and `:385` | `tags_from_string` and `tags_from_string_old` read `tag[0]` on every comma-separated piece. `news,` -- one trailing comma, the likeliest typo there is in a tags field -- and `,news` and `news,,sport` each leave an empty piece, and `tag[0]` on it was `IndexError: string index out of range`. The older of the two strips ONE trailing comma, which is why `news,` reached only the newer one; everything else reached both. The string comes from the tags field on the post form, via `app/shared/post.py`. | **fixed** | `PROBE aa tags_from_string('news,'): IndexError: string index out of range` |
+| **D1280** | `app/community/util.py:471` | `delete_post_from_community_task` asked `current_user.has_blocked_instance(instance.id)` while running in a Celery worker, where there is no request and `current_user` is None. Deleting a post from a LOCAL community with remote followers marked it deleted, committed, and THEN raised -- so the post was gone here and still up everywhere else, and the only sign was a traceback in a worker log. The sibling task for replies names `post_reply.author` instead, which is why only one of the two was broken. Same family as D1241. | **fixed** | `AssertionError: assert 0 == 1` for the announce, with `current_user` restored |
+| **D1281** | `app/community/util.py:877` | `send_to_remote_instance_task` guards `community` and then reads `instance.inbox` unguarded. A queued announce outlives the row it names. | **fixed** | the mutant that removes the guard dies on `test_an_instance_that_is_gone` |
+| **D1282** | `app/community/util.py:390` | `tags_from_string_old` deduplicated with `tag_to_append not in return_value`, which compares OBJECTS, while `find_hashtag_or_create` queries without flushing -- so the second `news` in `news,news` was a second pending `Tag` row. `Tag.name` carries an index but no unique constraint, so both were written and the tag existed twice. Deduplicated by name now. | **fixed** | `assert 2 == 1` from `len(tags_from_string_old('news,news'))` |
+
+**Two more unguarded reads, same shape as D1194.** `remove_old_file` called
+`delete_from_disk()` on whatever `db.session.get(File, ...)` returned, and
+`publicize_community_task` called `community.lemmy_link()` the same way --
+and left its task session open on any failure, since there was no
+`try/finally`. Both guarded.
+
+### What the slice pins
+
+109 tests: every shape a tags field can hold including seven with an empty
+piece in them, flair by id and by name, all seven poll durations and four
+choices nobody offers, deleting a post and a reply (marked, committed, and
+then federated the right way for a local community, a remote one and a
+local-only one, with the three reasons an instance is skipped), how a delete
+is dispatched, sending one announce to one instance with its five refusals,
+the no-database variant, finding local accounts and moderators by name and by
+handle, the tag cloud with filters and banned tags and deleted posts, its
+font sizing, the community theme setting, and the names a community may not
+have.
+
+**Still to do in this file:** `save_icon_file` and `save_banner_file` (about
+300 lines of image handling) and the body of `retrieve_mods_and_backfill`.
+
+---
+
+**Next free number: D1283.**
