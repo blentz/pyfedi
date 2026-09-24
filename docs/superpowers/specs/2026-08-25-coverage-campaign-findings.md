@@ -17759,4 +17759,21 @@ posts to anonymous callers on the front page; D1228 made a URL search answer
 with everything. The loudest was D1231 -- eleven sorts that could not run at
 all, because `desc()` had been given two arguments.
 
-**Next free number: D1243.**
+---
+
+## Round 103 — a nullable ordering column in a keyset page
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1243** | `app/api/alpha/utils/post.py:1216` | `get_post_list2`'s Active arm filtered `Post.reply_count > 0` and then ordered by `Post.last_active`, which is the one column in that ORDER BY with **no default of any kind** -- every other one has a Python-side default, and this one is assigned only when something actually happens to the post. sqlakeyset warns that a keyset page ordered by a nullable column can omit rows from it silently, and a post with replies but no `last_active` was precisely that row. `get_post_list`'s Active arm has always filtered `last_active != None`; this one now does too. | **fixed** | the warning names the column, and `get_post_list` already guards it |
+
+This is the one of the seven sqlakeyset warnings that could be answered
+without a migration. The other six -- `sticky`, `instance_sticky`, `score`,
+`ranking`, `ranking_scaled`, `posted_at` -- name columns that always have a
+default and are nullable only because the schema never said otherwise; the
+remedy there is `nullable=False` with a server default, which is a migration
+and stays recorded rather than done.
+
+---
+
+**Next free number: D1244.**
