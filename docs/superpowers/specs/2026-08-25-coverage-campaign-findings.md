@@ -17329,4 +17329,63 @@ but unliked. 32/33 after; the survivor is D1201.
 Two slices, 150 rows, **six production defects** (D1194-D1200). Every
 statement covered but one the code itself marks unreachable; floored at 99.
 
-**Next free number: D1202.**
+---
+
+## Round 97 — sub-project 84 slice J: the moderating half of `app/api/alpha/utils/community.py`
+
+**The round in one line: FIVE production defects -- a ban window measured
+against the wrong clock, an unban that could never federate, one timestamp
+format where several are ordinary, a duplicate check that could not see its
+own rows, and five endpoints that read attributes off a row nobody holds.**
+
+### 1. THE BAN WINDOW MEASURED AGAINST THE HOST'S CLOCK
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1203** | `app/api/alpha/utils/community.py:387,499,504` | `CommunityBan.ban_until` holds UTC -- every row that writes it goes through `utcnow()` -- but three places read it against `datetime.now()`, the host's LOCAL clock. On any instance whose clock is not set to UTC the whole ban window was displaced by the UTC offset, and east of Greenwich it is displaced in the unsafe direction: the ban listing reported a running ban as **already expired**, a genuinely future `expires_at` was **refused as being in the past** -- in a message printing `utcnow()` as "the current time", so the two halves of one sentence disagreed -- and the fallback ban ran for a year PLUS the offset. All three now read `utcnow()`. | **fixed** | measured at TZ=JST-9: a ban with four hours left is listed `expired: True`, and an expiry four hours out is refused as past |
+
+### 2. THE UNBAN THAT COULD NEVER FEDERATE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1206** | `app/api/alpha/utils/community.py:451` | `put_community_moderate_unban` handed `task_selector('unban_from_community', ...)` its `expiry` as the **already formatted string** `res['expired_at']`, while the task passes that value to `ap_datetime()`, which calls `.isoformat()` on it. Every unban raised `AttributeError: 'str' object has no attribute 'isoformat'` inside the task, so no `Undo Block` was ever sent: remote instances kept the ban forever while the local row said it was lifted. The ban path one function below already passes a datetime. | **fixed** | `AttributeError: 'str' object has no attribute 'isoformat'` at `app/utils.py:2305`, raised by the first unban test written |
+
+### 3. ONE TIMESTAMP FORMAT WHERE SEVERAL ARE ORDINARY
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1204** | `app/api/alpha/utils/community.py:498` | `datetime.strptime(data['expires_at'], '%Y-%m-%dT%H:%M:%S.%fZ')` accepted exactly the spelling this module EMITS. The ordinary whole-second form `2030-01-01T00:00:00Z` and the numeric-offset form `2030-01-01T00:00:00+09:00` -- the same instants, written the way most clients write them -- came back as `time data '...' does not match format`. Now parsed by `a_ban_expiry`, which accepts any ISO 8601 timestamp, converts an offset to UTC and drops the tzinfo for the naive column, and refuses anything else by name. | **fixed** | `PROBE b1: ValueError: time data '2030-01-01T00:00:00Z' does not match format '%Y-%m-%dT%H:%M:%S.%fZ'`, `PROBE b2: ...'2030-01-01T00:00:00+00:00'...` |
+
+### 4. THE DUPLICATE CHECK THAT COULD NOT SEE ITS OWN ROWS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1205** | `app/api/alpha/utils/community.py:633` | `post_community_flair_create` looked for an existing flair by title AND all three presentation columns, and it matched on the **unstripped** title while the row it writes stores `.strip()`. So `' news '` never matched the `'news'` it had just written, and `'news'` in a different colour was not a duplicate either: one community could carry any number of identically named flairs, which is exactly what the check exists to prevent. Matched on the community and the stripped title alone. | **fixed** | `PROBE d4 flair rows: [(1, "'news'", '#000000'), (2, "'news'", '#000000'), (3, "'news'", '#ffffff')]` from three calls that differed only in padding and colour |
+
+### 5. FIVE ENDPOINTS THAT READ OFF A ROW NOBODY HOLDS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1202** | `app/api/alpha/utils/community.py` -- `put_community`, `get_community_moderate_bans`, `put_community_moderate_unban`, `post_community_moderate_ban`, `post_community_moderate_post_nsfw`, `post_community_flair_create` | Each looked a row up by id -- `Community.query.filter_by(id=...).one()`, or `db.session.get(...)` -- and used the answer without testing it. The API's shared error handler turns everything into a 400, so a caller who simply typed a wrong id got `No row was found when one was required` or `'NoneType' object has no attribute 'is_owner'`, **after** a logged traceback and a Sentry report. This is D1194's shape, one module along. Three named helpers (`a_community`, `a_user`, `a_post`) now answer `community not found` / `user not found` / `post not found`. | **fixed** | `PROBE a3/a4/a9: NoResultFound: No row was found when one was required`; `PROBE a5/a6: AttributeError: 'NoneType' object has no attribute 'id'`; `PROBE a7: ...'community_id'`; `PROBE a8: ...'is_owner'` |
+
+`post_community_mod` still answers `NoResultFound` for a community nobody
+holds, because its lookup is in `add_mod_to_community` (`app/shared/
+community.py`), which the web UI shares. Left for that module's slice.
+
+### 6. TWO EQUIVALENT MUTANTS
+
+| ID | Where | What |
+|---|---|---|
+| **D1207** | `app/api/alpha/utils/community.py:647,685` | `new_flair.ap_id = new_flair.get_ap_id()` on create, and `if not flair.ap_id: flair.ap_id = flair.get_ap_id()` on edit. Deleting either changes nothing observable: `flair_view` calls `get_ap_id()` on its way out, and `CommunityFlair.get_ap_id` (`app/models.py:4367`) **assigns the identity it computes and commits it** -- a read path that writes. So the endpoints' own assignments are redundant, and no test can tell them from their absence. Recorded rather than removed: the redundancy is the safe half of the arrangement, and the committing getter belongs to `app/models.py`. |
+
+### 7. WHAT THE MUTATION PASS FOUND
+
+41 mutants, 38 killed on the measuring pass. Three survivors, all rows of
+mine: a "within a year" bound loose enough to swallow the nine-hour
+displacement it was written for (now an equality against
+`before + relativedelta(years=1)`), and the two flair-identity rows that
+turned out to be D1207. 41/41 accounted for after: 39 killed, 2 equivalent.
+
+---
+
+**Next free number: D1208.**
