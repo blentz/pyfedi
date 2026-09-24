@@ -18354,4 +18354,49 @@ have.
 
 ---
 
-**Next free number: D1283.**
+---
+
+## Round 121 — sub-project 95: the icon and the banner
+
+**The round in one line: the banner half of the image handling refused every
+HEIC and 500d on every SVG, and one of those left the uploaded bytes in the
+media root.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1283** | `app/community/util.py:762` | `.svg` is in `allowed_extensions`, which `save_banner_file` shares with `save_icon_file`, and only the icon function has an `.svg` branch that skips the Pillow work. So every SVG banner reached `Image.open` and raised `PIL.UnidentifiedImageError` -- a 500, with the uploaded bytes left sitting in the media root and nothing to clean them up. A comment in the function had already recorded the shape of this and left it. It is a 400 refusal now, with `sanitize_svg` still run on the way past so a hostile SVG is destroyed rather than merely refused, and the file unlinked either way. | **fixed** | `PIL.UnidentifiedImageError: cannot identify image file '...svg'` |
+| **D1284** | `app/community/util.py:786` | The banner path then checks what Pillow says the image ACTUALLY is -- `'.' + img.format.lower()` -- against the same list of extensions. Pillow names the format of a `.heic` file HEIF, so `.heif` was not in the list and every HEIC banner was refused with a 400, though `.heic` IS an allowed extension and `save_icon_file` accepts one. The two spellings are reconciled now. | **fixed** | `test_a_heic_banner` aborting 400 at `app/community/util.py:868` |
+
+**The content check is the interesting one, and it stays.** `save_banner_file`
+compares Pillow's idea of the format against the allowlist, so a bitmap
+wearing a `.png` extension is refused even though its extension passes. That
+is asserted directly. `save_icon_file` has no equivalent check -- it relies
+on re-encoding through Pillow instead, which is why a `payload.php.png` never
+survives as php.
+
+**One equivalent mutant.** Removing the extension check at the top of
+`save_icon_file` survives, because the `if file_ext.lower() in
+allowed_extensions:` wrapping its body carries an `else: abort(400)` with the
+identical condition. No input can tell the two apart, which is also why that
+`else` shows as uncovered. Left as it is rather than dedenting a hundred
+lines to delete it.
+
+**A third warning filter.** `botocore` signs every request with
+`datetime.utcnow()`, which Python 3.12 deprecates; 20 warnings arrived with
+the S3 tests, against a baseline of 465. Pinned by module, category and
+message, like the two before it, with the reasoning in `pytest.ini`.
+
+### What the slice pins
+
+48 tests: six extensions nobody allows, an extension in capitals, a double
+extension, a clean SVG icon and a hostile one, an SVG banner and a hostile
+one and that neither leaves anything behind, small and large icons and
+banners, a thumbnail beside each, three still formats, animated GIFs small
+and large, HEIC and AVIF both ways, every combination of configured output
+format and quality, a bitmap wearing a png extension, bytes that are not an
+image at all, and the whole S3 arm against moto including the storage class
+and the public ACL.
+
+---
+
+**Next free number: D1285.**

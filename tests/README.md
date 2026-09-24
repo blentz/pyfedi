@@ -11141,3 +11141,24 @@ each time (D1282). The test that caught it committed and then counted the
 rows -- `len(result) == 1` alone would have passed on the object identity
 while the database grew a duplicate. When a function dedupes rows it also
 creates, assert on the DATABASE after a commit, not on the list it returned.
+
+**623. AN ALLOWLIST SHARED BY TWO FUNCTIONS IS A CONTRACT NEITHER OF THEM
+STATES.** `allowed_extensions` is used by `save_icon_file`, which has an
+`.svg` branch, and by `save_banner_file`, which has none -- so the list
+promised something one of its two readers could not do, and an SVG banner was
+a 500 (D1283). When one module-level constant gates two code paths, check
+that BOTH paths handle every value in it.
+
+**624. PILLOW'S FORMAT NAME IS NOT THE FILE EXTENSION.** `img.format` is
+`HEIF` for a `.heic` file, `JPEG` for `.jpg`, `MPO` for some JPEGs. Code that
+compares `'.' + img.format.lower()` against a list of extensions silently
+refuses the ones whose two spellings differ (D1284). Test every format the
+allowlist names, with a real file of that format -- the mismatch is invisible
+in review.
+
+**625. A THIRD-PARTY WARNING GETS A PINNED FILTER, NOT A BLANKET ONE.**
+`botocore` added 20 `DeprecationWarning`s the moment the S3 branch was
+covered. The filter added for it names the module, the category AND the
+message, so a DeprecationWarning with the same text from our own code still
+shows. That is the third such filter in `pytest.ini` and each one carries the
+count it was measured against.
