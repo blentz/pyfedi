@@ -18239,4 +18239,41 @@ of one, and topics.
 
 ---
 
-**Next free number: D1277.**
+---
+
+## Round 118 — sub-project 92: reading a post's replies, live or archived
+
+**The round in one line: `app/post/util.py` closed at 100%, and the only
+thing wrong in it is a filter whose result is thrown away -- which is
+recorded rather than repaired, because repairing it changes what logged-out
+readers see.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1277** | `app/post/util.py:175` and `:244` | `comments.filter(PostReply.score > -20)` -- the result is discarded. Every other filter in both functions is `comments = comments.filter(...)`. So the line that hides heavily downvoted replies from anonymous visitors has never run, at either of the two sites it appears. | **recorded, not repaired** | `test_a_heavily_downvoted_reply_is_shown_anyway` passes with a reply at -500 |
+
+**Why it is not repaired here.** Making the line do what it says is a product
+decision, not a defect fix. In `post_replies` it would hide whole subtrees,
+because a child whose parent has been filtered out is attached to nothing and
+dropped; in `get_comment_branch` a permalink to a reply below -20 would
+answer with nothing at all. Both are defensible products and neither is
+obviously what the maintainer wants. The tests pin what the code does today
+and say in their docstrings that they are pinning a no-op, so whoever changes
+it does so deliberately and sees the tests move.
+
+### What the slice pins
+
+80 tests: eight ways an archive can be read or fail to be (gzipped, already
+decompressed by a CDN, 404, not JSON, on disk, missing, not gzipped), the
+whole of rebuilding replies and their authors out of archived JSON including
+the times and the language, finding one branch in it at three depths, a post
+whose archive cannot be read falling back to the database, the six filters a
+signed-in reader's settings apply to a tree and to a branch, the moderator
+and admin exemptions from the hide threshold, silenced instances for a
+stranger, every sort and one nobody offers, an orphaned reply, the reply
+count with and without deleted rows, tags, flair, the archive-link helpers,
+and which form each post type needs.
+
+---
+
+**Next free number: D1278.**
