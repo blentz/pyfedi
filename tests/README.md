@@ -10972,3 +10972,12 @@ and returned the unfiltered log (D1254), and no assertion on "the page still
 lists things" would have caught it. Pin a filter with data it must EXCLUDE:
 two rows differing only in the field being filtered, and an assertion that one
 of them is gone.
+
+**599. THE HONEYPOT BANS THE TEST CLIENT'S IP FOR FOUR WEEKS.** `/honey`
+(app/main/routes.py) counts visits in `honeypot:{ip}` and writes `ban:{ip}`
+on the third within 24 hours -- and every test client shares one address, so
+three honeypot rows in one file banned every test that ran after them, in
+every file, with the symptom being an unexplained 403 from an unrelated page.
+`db_session` clears `honeypot:*` and `ban:*` along with `votes_cast_*`. This
+is the second kind of Redis state to catch this campaign out (fact 573); when
+a feature enforces something by IP, look for where it stores that and clear it.
