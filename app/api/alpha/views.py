@@ -1015,17 +1015,20 @@ def feed_view(feed: Feed | int, variant: int, user_id, subscribed, include_commu
         v1["communities_count"] = v1.pop("num_communities")
         v1["show_posts_from_children"] = v1.pop("show_posts_in_children")
 
-        if v1["public"]:
-            v1["actor_id"] = feed.public_url()
-        else:
+        if not v1["public"]:        # a private feed is its owner's alone
             if not user_id:
                 raise Exception("insufficient permissions")
             if not user_id == feed.user_id:
                 user = db.session.get(User, user_id)
                 if not user.is_admin():
                     raise Exception("insufficient permissions")
-            
-            v1["actor_id"] = feed.public_url() + "/" + feed.name.rsplit("/", 1)[1]
+
+        # This used to be `public_url() + "/" + feed.name.rsplit("/", 1)[1]`
+        # for a private feed. `feed.name` is the url slug the feed was created
+        # with (app/shared/feed.py:214, `name=url`) and holds no '/', so that
+        # was IndexError for every feed this instance hosts: the branch had
+        # never once returned. `public_url()` is already the feed's address.
+        v1["actor_id"] = feed.public_url()
 
         if feed.icon_id:
             valid_url = feed.icon.medium_url()
