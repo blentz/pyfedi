@@ -46,7 +46,11 @@ def purge_user_then_delete_task(user_id, flush):
                         unsubscribe_from_community(community, user)
 
                     user.delete_dependencies()
-                    user.purge_content(flush)
+                    # `flush` is the CDN flag. Passed positionally it landed
+                    # in `soft`, so a deletion with the CDN purge turned OFF
+                    # hard-deleted every post and reply instead of soft-deleting
+                    # them, and purged the CDN anyway.
+                    user.purge_content(flush=flush)
                     from app import redis_client
                     with redis_client.lock(f"lock:user:{user.id}", timeout=10, blocking_timeout=6):
                         user = session.get(User, user_id)
@@ -86,7 +90,12 @@ def search_for_user(address: str, allow_fetch: bool = True):
     if address.startswith('@'):
         address = address[1:]
     if '@' in address:
-        name, server = address.lower().split('@')
+        # `name, server = address.split('@')` unpacked whatever it was given,
+        # and this address comes from a URL segment or a search box.
+        parts = address.lower().split('@')
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            return None
+        name, server = parts
     else:
         name = address
         server = ''
@@ -96,7 +105,10 @@ def search_for_user(address: str, allow_fetch: bool = True):
         if banned:
             reason = f" Reason: {banned.reason}" if banned.reason is not None else ''
             raise Exception(f"{server} is blocked.{reason}")
-        already_exists = db.session.query(User).filter_by(ap_id=address).first()
+        # `name` and `server` were lowercased above; `address` was not, so
+        # this lookup was case-sensitive and a handle typed with any capital
+        # letter in it found nobody.
+        already_exists = db.session.query(User).filter_by(ap_id=f'{name}@{server}').first()
     else:
         already_exists = db.session.query(User).filter_by(user_name=name, ap_id=None).first()
     
@@ -119,28 +131,37 @@ def search_for_user(address: str, allow_fetch: bool = True):
         except:
             webfinger_data.close()
             return None
-        for links in webfinger_json['links']:
-            if 'rel' in links and links['rel'] == 'self':  # this contains the URL of the activitypub profile
+        links = webfinger_json['links'] if 'links' in webfinger_json else []
+        if not isinstance(links, list):
+            return None
+        for links in links:
+            if not isinstance(links, dict):
+                continue
+            if 'rel' in links and links['rel'] == 'self' and 'href' in links:  # this contains the URL of the activitypub profile
                 type = links['type'] if 'type' in links else 'application/activity+json'
                 # retrieve the activitypub profile
+                object_request = None
                 for attempt in [1,2]:
                     try:
                         object_request = get_request(links['href'], headers={'Accept': type})
+                        break           # without this, a request that SUCCEEDED was made a second time
                     except httpx.HTTPError:
                         if attempt == 1:
                             time.sleep(3 + random.randrange(3))
-                        else:
-                            return None
+                if object_request is None:
+                    return None
                 if object_request.status_code == 401:
                     site = db.session.get(Site, 1)
+                    object_request = None
                     for attempt in [1,2]:
                         try:
                             object_request = signed_get_request(links['href'], site.private_key, f"{current_app.config['SERVER_URL']}/actor#main-key")
+                            break
                         except httpx.HTTPError:
                             if attempt == 1:
                                 time.sleep(3)
-                            else:
-                                return None
+                    if object_request is None:
+                        return None
                 if object_request.status_code == 200:
                     try:
                         object = object_request.json()
@@ -151,7 +172,7 @@ def search_for_user(address: str, allow_fetch: bool = True):
                 else:
                     return None
 
-                if object['type'] == 'Person' or object['type'] == 'Service':
+                if 'type' in object and (object['type'] == 'Person' or object['type'] == 'Service'):
                     user = actor_json_to_model(object, name, server)
                     return user
 
@@ -267,8 +288,11 @@ def _get_user_posts_and_replies(user, page):
             reply_select += f" AND community_id NOT IN ({private})"
     else:
         # Everyone else sees only non-deleted posts/replies
-        post_select = f"SELECT id, posted_at, 'post' AS type FROM post WHERE user_id = {user_id} AND deleted = 'False' and status > {POST_STATUS_REVIEWING}"
-        reply_select = f"SELECT id, posted_at, 'reply' AS type FROM post_reply WHERE user_id={user_id} AND deleted = 'False'"
+        # `private` below excludes the private communities this account is
+        # STILL a member of. The post's own flag is what covers the ones it
+        # has left or been banned from, and both other tabs apply it.
+        post_select = f"SELECT id, posted_at, 'post' AS type FROM post WHERE user_id = {user_id} AND deleted = 'False' and status > {POST_STATUS_REVIEWING} AND private = 'False'"
+        reply_select = f"SELECT id, posted_at, 'reply' AS type FROM post_reply WHERE user_id={user_id} AND deleted = 'False' AND private = 'False'"
         if private:
             post_select += f" AND community_id NOT IN ({private})"
             reply_select += f" AND community_id NOT IN ({private})"
@@ -277,9 +301,9 @@ def _get_user_posts_and_replies(user, page):
     query_result = db.session.execute(text(full_query))
 
     for row in query_result:
-        if row.type == "post":
+        if row.type == "post":      # the query selects these two literals and
             returned_list.append(db.session.get(Post, row.id))
-        elif row.type == "reply":
+        else:                       # nothing else, so there is no third case
             returned_list.append(db.session.get(PostReply, row.id))
 
     if len(returned_list) > per_page:
@@ -312,7 +336,9 @@ def _get_user_moderates(user):
 def _get_user_same_ip(user):
     """Get users that have the same IP address as this user"""
 
-    if current_user.is_anonymous or user.ip_address is None or user.ip_address == '':
+    if current_user.is_anonymous or not current_user.is_admin_or_staff():
+        return []       # the template gates this too; the gate belongs here as well
+    if user.ip_address is None or user.ip_address == '':
         return []
 
     return User.query.filter_by(ip_address=user.ip_address).filter(User.ap_id == None, User.id != user.id).all()
