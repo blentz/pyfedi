@@ -353,6 +353,13 @@ def test_no_csp_header_on_a_304_response(app, db_session):
     instance = make_instance('test.piefed.local', software='piefed')
     user = make_user(instance, 'etaguser', local=True)
     site = db.session.get(Site, 1)
+    # Site.private_instance defaults to True, and index_rss() refuses a private
+    # instance BEFORE it answers conditionally -- D1252, where a caller holding
+    # an ETag from before the instance was made private was getting a 304 past
+    # that check. This test is about the CSP hook rather than the gate, so it
+    # opens the door the 304 comes through.
+    site.private_instance = False
+    db.session.commit()
     current_etag = f"home_{hash(site.last_active)}"
 
     with app.test_client() as client:
