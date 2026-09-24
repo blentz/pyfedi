@@ -10949,3 +10949,19 @@ the request against its schema, runs the body, and validates the RESPONSE
 against its schema. The last of those is what the utils-level tests cannot
 do, and it is where this campaign found a schema that refused its own view's
 answer (D1250) and a view that omitted a key its schema required (D1251).
+
+**596. `api_baseline`'s SITE IS PRIVATE.** `g.site.private_instance` is True
+there, so every anonymous page under `login_required_if_private_instance`
+redirects to `/auth/login` -- which looks like a broken route rather than a
+working gate. A test of a public page sets `g.site.private_instance = False`
+first; a test of the gate puts it back. `CONTENT_WARNING` is the other
+redirect on that decorator, and it is 0 in the test config.
+
+**597. AN ETag IS AN ACCESS CHECK'S BLIND SPOT.** Three times now this
+campaign has found `if request_etag_matches(...): return return_304(...)`
+sitting ABOVE the check that decides whether the caller may see the thing at
+all -- the community feed, and now the front page's RSS. A 304 carries no
+body, but it confirms the ETag, and the ETag is derived from data (a
+`last_active` timestamp) the caller is not supposed to have. Refuse first,
+then answer conditionally, and pin it with a test that fetches the ETag while
+the door is open and presents it after it shuts.

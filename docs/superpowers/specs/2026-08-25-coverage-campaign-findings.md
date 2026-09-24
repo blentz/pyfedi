@@ -17919,4 +17919,34 @@ of routes.py.
 
 ---
 
-**Next free number: D1252.**
+---
+
+## Round 108 — sub-project 86 slices A and B: the public front of the instance
+
+**The round in one line: the front page's RSS feed let a conditional request
+walk past the private-instance check, and the instance's own ActivityPub actor
+was a 500 on any instance whose tagline was never filled in.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1252** | `app/main/routes.py:1222` | `index_rss` computed its ETag and answered `304 Not Modified` **before** testing `g.site.private_instance`. So a caller holding an ETag from before the instance was made private -- or one guessed, since it is `home_{hash(g.site.last_active)}` -- got a 304 where a fresh request got 404. An access check a conditional request walks past. This campaign fixed the identical shape in `app/community/routes.py`'s community feed; the comment left there says "Refuse first, then answer conditionally", which is now what this one does. | **fixed** | `PROBE wb private, plain: 404` beside `PROBE wc private, conditional: 304` |
+| **D1253** | `app/main/routes.py:1067` | `'summary': g.site.name + ' - ' + g.site.description`. Both columns are nullable, and `Site()` with no arguments -- the fallback `app/models.py` and `app/admin/routes.py` use when row 1 is missing -- leaves them so. This is the document **every fediverse peer fetches when it first hears of this instance**, and on one whose tagline was never filled in it answered `TypeError: can only concatenate str (not "NoneType") to str`. | **fixed** | the first test that asked for `/` with `Accept: application/activity+json` |
+
+### What the slices pin
+
+Slice A: robots.txt, security.txt, the sitemap, the licensing file and the
+switch that turns it on, the PWA manifest (including the per-platform one),
+the service worker and its cache header, the instance actor, the about and
+privacy pages and the CMS pages that replace them, and the nine `/test_*`
+diagnostics, which are `@debug_mode_only` and answer 403 in production.
+
+Slice B: the front page by all four of its paths, its ETag, the anonymous
+reader's inability to ask for "subscribed", the private-instance redirect,
+the ActivityPub content negotiation that answers a peer even on a private
+instance, and the RSS feed in all five of its sorts.
+
+`app/main/routes.py` goes from 22.8% to 37%.
+
+---
+
+**Next free number: D1254.**
