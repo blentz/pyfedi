@@ -11210,3 +11210,17 @@ the login one.
 HAND-WRITTEN COOKIE.** `User.get_id()` returns an int in this codebase, so a
 test that signs somebody in by writing the session and then checks what
 `login_user` wrote compares `'2'` against `2`. Normalise both sides.
+
+**633. `@cache.cached` ON A ROUTE MAKES THE SECOND TEST READ THE FIRST'S
+ANSWER.** `/sitemap.xml` is cached for 6000 seconds, so a test that asserted a
+post was absent was reading a body rendered before the post existed -- and the
+mutant that dropped the `indexable` filter survived because of it. Clear the
+cache at the top of each test that exercises a cached route, and assert on
+something the template actually emits (the sitemap prints urls, not titles).
+
+**634. A DEBUG-ONLY ENDPOINT IS STILL AN ENDPOINT.** `/test_email`,
+`/test_s3`, `/test_ldap` and `/test_ldap_login` send mail, write to object
+storage and bind to a directory server. `debug_mode_only` is the whole of
+their protection, so it gets a test on both sides for each of them -- 403 in
+production, and in debug the thing it claims to test actually being called
+with what it was given.
