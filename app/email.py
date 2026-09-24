@@ -259,23 +259,13 @@ class SMTPEmailService:
 
         self.recipients = in_recipients
 
-    def set_cc_bcc(self, cc, bcc):
-        cc = []
-        if self.msg.CC:
-            if isinstance(self.msg.CC, str):
-                cc = [self.msg.CC]
-            else:
-                cc = list(self.msg.CC)
-
-        bcc = []
-        if self.msg.BCC:
-            if isinstance(self.msg.BCC, str):
-                bcc = [self.msg.BCC]
-            else:
-                bcc = list(self.msg.BCC)
-
-        self.recipients.append(cc)
-        self.recipients.append(bcc)
+    # `set_cc_bcc` was removed here. It read `self.msg.CC` and `self.msg.BCC`,
+    # which are not attributes of `email.message.Message` -- the headers are
+    # `self.msg['CC']` -- so calling it was `AttributeError: 'MIMEText' object
+    # has no attribute 'CC'`. It also ignored both of its arguments and
+    # appended the lists it built to `self.recipients`, where a list rather
+    # than an address would have been handed to `replace_header('To', ...)`.
+    # Nothing called it.
 
     def add_recipient(self, in_recipient):
         """Adds a recipient to the back of the list
