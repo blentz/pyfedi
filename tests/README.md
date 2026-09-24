@@ -10851,3 +10851,28 @@ if a NULL ever lands there. Covering a keyset-paginated listing therefore
 raises the suite's warning count until the columns are made `nullable=False`
 by migration. Do not silence it; it is the library telling you the page can
 lose rows.
+
+**584. `Community.is_moderator()` WITH NO ARGUMENT ASKS ABOUT THE WEB
+SESSION.** It falls back to `current_user.get_id()`, so in an API path -- where
+the viewer is a User object the caller was handed, not a logged-in session --
+it answers about the wrong person, and with no request context at all
+(a function called directly, which is how these tests reach it) `current_user`
+is None and it is an `AttributeError`. The same is true of `is_owner()` and
+`is_member()`. Always pass the user. A test that calls a shared web/API helper
+directly is the only thing that finds this, which is why D1241 survived until
+`get_post_replies` got covered.
+
+**585. `if max_depth:` IS NOT `if max_depth is not None:`.** A depth of 0 is a
+real request -- the top level and nothing under it, which is how a collapsed
+thread is drawn -- and it is falsy. The same trap waits on any numeric
+parameter whose zero is meaningful: limits, offsets, thresholds, scores. When
+the same function ALSO has an `is None` test further in, one of the two is
+wrong; here the inner one was right and unreachable.
+
+**586. A PREFETCH THAT THE VIEW CAN DO WITHOUT IS AN EQUIVALENT MUTANT.**
+`post_view` re-queries the vote when `my_vote == 0`, and `reply_view`
+re-queries the bookmark when it is handed None -- so deleting either prefetch
+from the listing changes no answer, only the query count. Three mutants across
+two slices survived on this. Either assert the query count (nothing here does)
+or record them; do not chase them with more assertions on the response, which
+cannot tell the difference.
