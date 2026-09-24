@@ -10990,3 +10990,50 @@ adjacent clause tested one: `mods_data['type']` beside
 knew better (D1245). When reviewing a line that indexes a remote payload, read
 the lines around it -- the codebase's own answer is generally right there, and
 its absence on one line is a slip rather than a decision.
+
+**601. A WEBHOOK THAT ANSWERS 500 IS A WEBHOOK THAT KEEPS ARRIVING.** Stripe
+retries a failed delivery for days, so an unguarded key in
+`/stripe_webhook` is not one error but a repeating one, and the transaction
+it aborts takes the request with it. When covering a provider callback, the
+question is not only "does it refuse forgeries" but "what does it do with a
+payload shaped differently from the one example in the docs" -- the answer
+should be 200 and a no-op, never a traceback.
+
+**602. SIGN THE PAYLOAD; DO NOT MOCK THE CHECK.** `tests/test_user_subscription.py`
+builds the `Stripe-Signature` header itself with `hmac.new(secret, b'%d.%s' %
+(timestamp, payload), hashlib.sha256)`. That costs four lines and means every
+good-payload test also exercises `construct_event`, so the signature path is
+covered by all fifty-odd of them rather than by the three that attack it.
+Patching `stripe.Webhook.construct_event` would have covered neither.
+
+**603. `respx` CANNOT ASSERT A ROUTE WAS NOT CALLED.** `http_mock` runs with
+`assert_all_called=True`, so registering a route in order to assert
+`route.call_count == 0` fails the test for the opposite reason. The way to
+pin "this must not reach the network" is to register nothing and assert
+`len(http_mock.calls) == 0`: an unexpected request then fails as unmocked.
+
+**604. AN EQUIVALENT MUTANT IS A FINDING, NOT A FAILURE.** Dropping the
+`if subscription_id` guard in the Stripe webhook survives because writing
+null over null emits no UPDATE. The honest response was to say so in the
+module docstring and the findings table, and to correct the claim the test
+had been making -- not to invent an assertion that could not be true.
+
+**605. A SET IS NOT AN ORDER, AND `next(iter(a_set))` IS A DIFFERENT ANSWER IN
+EVERY PROCESS.** `safe_order_by` chose its fallback sort column that way
+(D1266). Python randomizes string hashing per process, so two workers sorted
+the same page differently and one in eight raised `AttributeError` on a name
+the model did not have. The suite caught it by failing on a run where nothing
+had changed -- which is the only way it CAN be caught, because a rerun in the
+same process is a rerun with the same seed. When a fallback has to pick one
+of several names, sort them.
+
+**606. A FAILURE IN A FILE YOU DID NOT TOUCH IS STILL YOURS TO EXPLAIN.** The
+run that was meant to ratchet sub-project 88's floors failed in
+`test_main_modlog.py`, committed days earlier. The cheap reading is "flaky,
+rerun it". Reproducing it standalone took one command and found a production
+defect reachable from a URL. Rerun to CONFIRM, never to dismiss.
+
+**607. READ THE TEST COUNT, NOT THE LAST LINE (again -- fact 540).** That
+same run also printed `1 failed, 9642 passed` against a suite of ~10,340 and
+exited 0, because `session_timeout` had been spent. Two distinct problems in
+one summary line, and the exit code reported neither.

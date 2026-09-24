@@ -18039,4 +18039,91 @@ queued and running.
 
 ---
 
-**Next free number: D1261.**
+---
+
+## Round 113 — sub-project 88: the donation routes
+
+**The round in one line: the only five routes on the instance that move
+money, one of which is an unauthenticated POST endpoint open to the whole
+internet, held five ways to turn a payload into a 500 -- and a webhook that
+answers 500 is one Stripe retries for days.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1261** | `app/user/subscription.py:151` | `plan_unsubscribe` tests `stripe_subscription_id is None`, then `== subscription`, and has no `else`. A subscription id that is not the caller's fell off the end of the view: Flask raised "did not return a valid response" and the caller got a 500 where a refusal was the answer. Same family as D1257. | **fixed** | `PROBE nc cancelling somebody else's: TypeError: The view function for 'user.plan_unsubscribe' did not return a valid response.` |
+| **D1262** | `app/user/subscription.py:84` | `/stripe_redirect/billing` posted to Stripe's billing portal and then read `response.json()['url']`. Any signed-in account that has never donated has no `stripe_customer_id`, so the request sent `customer=None`, Stripe answered 400 with an `error` body, and the page was `KeyError: 'url'`. Reachable by every logged-in user on a Stripe-configured instance. Now the portal is not asked for at all without a customer, a non-JSON answer is caught, and an answer with no `url` is logged and refused. | **fixed** | `PROBE pa the billing portal with no customer: KeyError: 'url'` |
+| **D1263** | `app/user/subscription.py:115` | The webhook handed `stripe_session['client_reference_id']` straight to `db.session.get(User, ...)`. `client_reference_id` is whatever was attached to the checkout session, so it need not be a number: anything else was `DataError: invalid input syntax for type integer`, which aborted the transaction and answered 500. A null one raised `SAWarning: fully NULL primary key identity cannot load any object` instead. Both go through `user_from_reference` now. | **fixed** | `PROBE rd a client_reference_id that is not a number: sqlalchemy.exc.DataError` |
+| **D1264** | `app/user/subscription.py:118` | `u.stripe_customer_id = stripe_session['customer']` -- assigned unconditionally, while the very next line membership-tests `subscription`. A session with no `customer` key was `KeyError: 'customer'`; one with a null customer erased the customer id already on file, which is exactly what makes D1262 reachable for somebody who HAS donated. The customer is only written now when the session names one. | **fixed** | `PROBE sa a session with no customer key: KeyError: 'customer'` |
+| **D1265** | `app/user/subscription.py:113,114,132` | `event['type']`, `event['data']['object']` and `subscription['id']` were all indexed without a membership test. Each is a 500, and Stripe retries a 500 for days -- so a single oddly-shaped event becomes a repeating error rather than a single ignored one. | **fixed** | `PROBE sb an event with no data at all: KeyError: 'data'`; `PROBE sc an event with no type: KeyError: 'type'`; `PROBE sf a subscription deleted with no id: KeyError: 'id'` |
+
+The signature check itself is sound: `stripe.Webhook.construct_event` is
+called with the configured secret before anything in the payload is read, a
+bad signature is a clean 400, and the tests sign every good payload for real
+rather than mocking the check away. `account_id` in the `plan_unsubscribe`
+URL is unused and is not what authorises the cancellation -- the caller's own
+`stripe_subscription_id` is -- so there is no IDOR here, only the missing
+refusal.
+
+**Recorded, not repaired:** `/stripe_result/<result>` answers an empty 200
+body for any result other than `success` or `failure`. It is pinned as it
+stands.
+
+**One equivalent mutant.** Dropping the `if subscription_id` guard in the
+`customer.subscription.deleted` branch survives: a null id matches the
+accounts that are not donating and then writes null over null, so SQLAlchemy
+emits no UPDATE and nothing is observable. The guard stays because it keeps
+the query from running at all, but no test can kill it, and the module
+docstring says so rather than claiming a defect that is not there.
+
+### What the slice pins
+
+Both shapes of the donation page (Stripe configured or not, signed in or
+not), both checkout plans and how a first-time donor is told apart from a
+returning one, the billing portal's four failure shapes, five ways a webhook
+request fails the signature check including a replayed timestamp, what a
+completed checkout stores and when it cancels the previous plan, six shapes
+of `client_reference_id`, three of `customer`, five malformed events, and the
+four outcomes of cancelling a plan -- including that presenting somebody
+else's subscription id neither cancels it nor 500s.
+
+---
+
+---
+
+## Round 114 — the sort guard, found by a test that had passed for days
+
+**The round in one line: the suite failed on a run where nothing had changed,
+because the function that guards ORDER BY against a query string picked its
+fallback column out of a SET -- a different one in every process.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1266** | `app/utils.py:4889` | `safe_order_by`'s fallback for an invalid sort was `desc(getattr(model, next(iter(allowed_fields))))`. A set has no order and Python randomizes string hashing per process, so this picked a different column in every Gunicorn worker: the same `/communities?sort_by=nonsense` sorted differently depending on which worker answered, and any worker whose arbitrary pick was a name the model does not have answered 500. The fallback is now the first allowed name, in name order, that the model actually has, and `model.id` if none of them do. The same function also read `parts[0]` straight after `.split()`, so `?sort_by=` -- an empty value anyone can type -- was `IndexError`. | **fixed** | `AttributeError: type object 'Community' has no attribute 'average_rating'` at `app/utils.py:4891`, from `tests/test_main_modlog.py::TestTheCommunityDirectory::test_every_way_of_narrowing_it[?sort_by=name asc]` |
+| **D1267** | `app/main/routes.py:426` | The community directory's allowed-sort set named `average_rating`, which `Community` has never had. That is the name D1266 kept landing on. Removed. Four other call sites (`main/routes.py:1561`, `admin/routes.py:1401`, `:1745`, `:2261`) were checked the same way and name only columns that exist. | **fixed** | the same traceback |
+
+**How it was found is the point.** This was not a probe. The full-suite run
+that was meant to ratchet the floors for sub-project 88 came back with one
+failure in a file committed days earlier and not touched since, and the
+per-process hash seed is the only thing that differed between the run where
+it passed and the run where it did not. A defect whose reachability depends
+on the hash seed will pass CI repeatedly and then fail in production on one
+worker out of eight.
+
+**One thing no test can distinguish.** With D1266 fixed, leaving
+`average_rating` in the allowed set is harmless -- the fallback skips names
+the model lacks. The removal stands because the set is documentation of what
+the page offers, but a mutant that puts it back survives, and that is correct
+rather than a gap.
+
+### What the slice pins
+
+`tests/test_safe_order_by.py`: six well-formed sorts, six malformed ones
+(including the empty string, whitespace, `None` and a semicolon), that the
+default does not depend on how the set was built, that an allowed name the
+model lacks is skipped rather than raised on, that a set of nothing usable
+falls back to the id, and that every field the directory offers exists on
+`Community`.
+
+---
+
+**Next free number: D1268.**
