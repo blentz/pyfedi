@@ -754,14 +754,17 @@ def save_banner_file(banner_file, directory='communities') -> File:
     final_place_thumbnail = os.path.join(local_directory, new_filename + '_thumbnail.webp')
     banner_file.save(final_place)
 
-    # An SVG that cannot be sanitized is rejected, before Image.open below gets
-    # it. '.svg' is in allowed_extensions but this function has no '.svg' branch,
-    # so Pillow raises UnidentifiedImageError on one and the request 500s --
-    # leaving the uploaded bytes sitting in the media root with nothing to clean
-    # them up. sanitize_svg has already destroyed the file by the time it
-    # returns False. (A CLEAN SVG banner still fails at Image.open; that is a
-    # separate, pre-existing bug in listing '.svg' as a banner extension.)
-    if file_ext.lower() == '.svg' and not sanitize_svg(final_place):
+    # No SVG banner, clean or otherwise. '.svg' is in allowed_extensions, which
+    # is shared with save_icon_file, and THAT function has an '.svg' branch that
+    # skips the Pillow work. This one does not, so every SVG banner reached
+    # `Image.open` and raised UnidentifiedImageError: a 500, with the uploaded
+    # bytes left sitting in the media root and nothing to clean them up. A
+    # refusal is the answer, and it is the same 400 the extension check above
+    # gives. The sanitize_svg call stays ahead of it so that a hostile SVG is
+    # destroyed on the way past rather than merely refused.
+    if file_ext.lower() == '.svg':
+        sanitize_svg(final_place)
+        os.unlink(final_place) if os.path.exists(final_place) else None
         abort(400)
 
     if file_ext.lower() == '.heic':
@@ -772,7 +775,11 @@ def save_banner_file(banner_file, directory='communities') -> File:
     # resize if necessary
     Image.MAX_IMAGE_PIXELS = 89478485
     img = Image.open(final_place)
-    if '.' + img.format.lower() in allowed_extensions:
+    # Pillow names the format of a .heic file HEIF, and the allowlist spells
+    # it .heic -- so a HEIC banner failed this check and was refused with a
+    # 400, though .heic is an allowed extension and save_icon_file takes one.
+    img_ext = '.heic' if img.format == 'HEIF' else '.' + img.format.lower()
+    if img_ext in allowed_extensions:
         img = ImageOps.exif_transpose(img)
 
         image_format = current_app.config['MEDIA_IMAGE_FORMAT']
