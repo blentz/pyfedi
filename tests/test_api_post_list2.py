@@ -141,6 +141,18 @@ class TestSorts:
         res = get_post_list2(None, {'sort': 'Active', 'limit': 50})
         assert len(res['posts']) == 1
 
+    def test_the_active_sort_wants_a_last_active(self, spread):
+        """D1243. `Post.last_active` has no default of any kind, so it is the
+        one column in this ORDER BY that really can be NULL -- and a keyset
+        page ordered by a nullable column can drop rows without saying so.
+        get_post_list's Active arm has always filtered it out."""
+        for post in spread.posts:
+            post.last_active = None
+        spread.posts[0].last_active = utcnow()
+        db.session.commit()
+        res = get_post_list2(None, {'sort': 'Active', 'limit': 50})
+        assert len(res['posts']) == 1
+
     def test_the_scaled_sort_wants_a_scaled_ranking(self, spread):
         for post in spread.posts:
             post.ranking_scaled = None
