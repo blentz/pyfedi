@@ -1279,7 +1279,11 @@ def site_view(user) -> dict:
 
 def site_instance_chooser_view():
     logo = g.site.logo if g.site.logo else '/static/images/piefed_logo_icon_t_75.png'
-    language = db.session.get(Language, g.site.language_id)
+    # Site.language_id is nullable and an instance that has never chosen one
+    # leaves it so, which made `language.id` below an AttributeError: the
+    # instance chooser -- the page a NEW instance is most likely to be asked
+    # for -- was a 500 on exactly the instances least likely to have set it.
+    language = db.session.get(Language, g.site.language_id) if g.site.language_id else None
     defed_list = BannedInstances.query.filter(or_(BannedInstances.domain == 'hexbear.net',
                                                   BannedInstances.domain == 'lemmygrad.ml',
                                                   BannedInstances.domain == 'hilariouschaos.com',
@@ -1305,9 +1309,9 @@ def site_instance_chooser_view():
 
     result = {
         'language': {
-            "id": language.id,
-            "code": language.code,
-            "name": language.name
+            "id": language.id if language else None,
+            "code": language.code if language else None,
+            "name": language.name if language else None
         },
         'nsfw': g.site.enable_nsfw,
         'newbie_friendly': num_topics() >= 3,

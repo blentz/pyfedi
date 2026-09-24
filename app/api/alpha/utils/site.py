@@ -2,7 +2,8 @@ from sqlalchemy import or_, cast, String
 
 from app.api.alpha.views import site_view, federated_instances_view, site_instance_chooser_view
 from app.constants import SRC_API, VERSION
-from app.models import InstanceBlock, InstanceChooser, Language
+from app import db
+from app.models import Instance, InstanceBlock, InstanceChooser, Language
 from app.shared.site import block_remote_instance, unblock_remote_instance
 from app.utils import authorise_api_user, instance_banned, opengraph_parse
 
@@ -54,12 +55,18 @@ def get_site_instance_chooser_search(query_params):
     for instance in instances.all():
         if instance.hide or instance_banned(instance.domain):
             continue
-        instance_data = instance.data
-        if instance_data['registration_mode'] == 'Closed':
+        # InstanceChooser.data is free-form JSON filled in by whoever added the
+        # row, so every key here is read with `.get`: one row missing
+        # `registration_mode` or `language` used to be a KeyError that took the
+        # whole listing with it, for every caller, until someone edited that
+        # row.
+        instance_data = dict(instance.data or {})
+        if instance_data.get('registration_mode') == 'Closed':
             continue
         instance_data['domain'] = instance.domain
         instance_data['id'] = instance.id
-        instance_data['language'] = instance_data['language']['name']
+        language = instance_data.get('language')
+        instance_data['language'] = language.get('name') if isinstance(language, dict) else language
         result['result'].append(instance_data)
     return result
 
@@ -73,6 +80,9 @@ def get_site_metadata(auth, data):
         user = authorise_api_user(auth)
     else:
         user = None
+
+    if not data or 'url' not in data:
+        raise Exception('url required')
 
     metadata = opengraph_parse(data['url'])
     if metadata:
@@ -89,6 +99,13 @@ def get_site_metadata(auth, data):
 def post_site_block(auth, data):
     instance_id = data['instance_id']
     block = data['block']
+
+    # An instance nobody holds used to reach the database as an insert against
+    # a missing foreign key: the caller got psycopg2's ForeignKeyViolation with
+    # the SQL in it, and the rest of the request's session was poisoned behind
+    # it.
+    if not db.session.get(Instance, instance_id):
+        raise Exception('instance not found')
 
     user_id = block_remote_instance(instance_id, SRC_API, auth) if block else unblock_remote_instance(instance_id, SRC_API, auth)
     blocked = InstanceBlock.query.filter_by(user_id=user_id, instance_id=instance_id).first()
