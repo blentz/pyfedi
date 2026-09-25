@@ -18997,4 +18997,55 @@ each asserted for the comment path beside the post path it disagreed with.
 
 ---
 
-**Next free number: D1307.**
+## Round 137 — sub-project 111: topics in the admin, and deleting a community
+
+**The round in one line: the topic edit form offered a topic its own child as a
+parent, and taking the offer wrote a cycle that hung every request for that
+topic's path and hid both topics from the only screen that could undo it.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1307** | `app/admin/util.py:123`, `topics_for_form` | Skipped `current_topic` itself and then walked into its children anyway, so the edit form listed a topic's own child (and grandchild) among the parents it could be given. `SelectField` validates against those choices, so the offer was also the permission. | **fixed** | probe: `pb choices offered when editing Parent: [(-1, 'None'), (3, 'Lonely'), (2, '-- Child')]`, then `pc reparent Parent under Child: status=302 parent.parent_id=2 child.parent_id=1` |
+| **D1308** | `app/models.py:557`, `Topic.path` | Walks `parent_id` until a topic has none, which a cycle never does: the method never returned. Every request that asked for that topic's path was a worker held until it was killed — a denial of service on a hosted site, reachable in two clicks from a screen the form itself pointed at. | **fixed** | probe `pe Topic.path() on a cycle: alive_after_5s=True result=<none>`, against `alive_after_5s=False result=parent` after |
+| **D1309** | `app/admin/routes.py:1710` | `flash(_('Cannot delete topic with communities assigned to it.', 'error'))` — the category inside `_()` rather than beside it, and `flask_babel.gettext` takes no second positional argument. Refusing the delete was a 500. The refusal is load-bearing: `Topic.communities` cascades `"all, delete-orphan"`, so a topic deleted with communities in it takes the communities with it. | **fixed** | `TypeError: Domain.gettext() takes 2 positional arguments but 3 were given` |
+| **D1310** | `app/admin/routes.py:1703` and `app/utils.py:2979` | `Topic.parent_id` is a plain Integer with no foreign key, and deleting a parent left its children naming a row that is gone. `topic_tree` roots on `parent_id is None` and files every other topic under its parent, so those children — and everything beneath them — appeared on no screen and in no menu. | **fixed** | probe `pc2 delete a parent with a child: child_still_there=True child.parent_id=4` with 4 deleted, and `pd ... roots=['lonely']` for four surviving topics |
+
+**How the four compound, which is the point.** The form offers the cycle
+(D1307); `topic_tree` then hides both topics because neither is rooted, so the
+admin screen no longer lists the thing to fix; and `path()` hangs on every
+visit to either (D1308). One click, and the only route back is SQL. The fixes
+close it at three depths: the offer is withdrawn (which is also what refuses the
+POST, since a `SelectField` validates its choices), the walk is bounded by what
+it has seen, and a topic whose parent row has gone is shown at the top rather
+than nowhere.
+
+**A choice worth naming.** Deleting a parent now moves its children up to where
+the parent was, rather than refusing the delete. Least data loss, and it keeps
+every topic reachable; the alternative — refusing, as the screen already does
+for a topic with communities in it — would leave an admin unable to delete a
+branch without emptying it first. `path()` on a cycle answers with each
+ancestor the walk saw before it came back round, once, which is deterministic
+and bounded rather than correct, because there is no correct path for a cycle.
+
+### What the slice pins
+
+57 tests: the topics screen; adding a topic at the top level and under a
+parent, its slug slugified, countries one per line with blank lines and stray
+spaces dropped, and refusals for a missing name or slug; editing one — renamed,
+reslugged, given and deprived of a parent, countries rewritten, the child-posts
+switch, the community count refreshed, the form filled in on GET, and a topic
+nobody has; the subtree exclusion at the top level and one level down, with the
+POST refused in both places and a topic refused as its own parent; `Topic.path`
+for a top-level topic, a child, a grandchild, a parent that is gone, a cycle of
+one, of two and of three, and from each member of a cycle; the tree for a
+parent and child, for a topic whose parent is gone, and for that topic's own
+children; deleting a topic with nothing in it, one with communities (refused,
+with the communities still there and the message said), a stale zero count, the
+children moving up — every one of them, to the grandparent or to the top — a
+grandchild left where it was, a topic nobody has, the menu rebuilt; and deleting
+a community, banned first then gone, with its members and its posts, remote and
+local, plus the two permission refusals on every screen.
+
+---
+
+**Next free number: D1311.**
