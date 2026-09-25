@@ -2987,7 +2987,12 @@ def topic_tree() -> List:
             if parent_topic:
                 parent_topic['children'].append(topics_dict[topic.id])
 
-    return [topic for topic in topics_dict.values() if topic['topic'].parent_id is None]
+    # A topic whose parent row is gone is shown at the top rather than not at
+    # all (D1310): the tree used to root on `parent_id is None` alone, so a
+    # dangling parent_id -- which nothing in the schema forbids, the column
+    # being a plain Integer -- hid the topic and everything under it.
+    return [topic for topic in topics_dict.values()
+            if topic['topic'].parent_id is None or topic['topic'].parent_id not in topics_dict]
 
 
 # feeds, in a tree

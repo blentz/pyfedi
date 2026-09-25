@@ -1772,10 +1772,23 @@ def admin_topic_delete(topic_id):
     topic = db.session.get(Topic, topic_id) or abort(404)
     topic.num_communities = topic.communities.count()
     if topic.num_communities == 0:
+        # D1310. `Topic.parent_id` is a plain Integer with no foreign key, so
+        # deleting a parent left its children naming a row that is gone --
+        # `topic_tree` roots on `parent_id is None` and files everything else
+        # under its parent, so those children silently disappeared from the
+        # topics screen and the menu. They move up to where their parent was.
+        for child in Topic.query.filter(Topic.parent_id == topic.id).all():
+            child.parent_id = topic.parent_id
         db.session.delete(topic)
         flash(_('Topic deleted'))
     else:
-        flash(_('Cannot delete topic with communities assigned to it.', 'error'))
+        # D1309. The category was inside `_()` rather than beside it, and
+        # `flask_babel.gettext` takes no second positional argument: refusing
+        # this delete was `TypeError: Domain.gettext() takes 2 positional
+        # arguments but 3 were given`, a 500. The refusal matters -- `Topic.
+        # communities` cascades "all, delete-orphan", so deleting a topic that
+        # still has communities would take the communities with it.
+        flash(_('Cannot delete topic with communities assigned to it.'), 'error')
     db.session.commit()
 
     cache.delete_memoized(menu_topics)

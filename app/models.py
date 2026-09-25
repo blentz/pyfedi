@@ -556,8 +556,16 @@ class Topic(db.Model):
 
     def path(self):
         return_value = [self.machine_name]
+        # D1308. The walk ended at a topic with no parent, and a cycle has none:
+        # two topics each naming the other went round for ever, with the request
+        # that asked for the path never answered. `topics_for_form` no longer
+        # offers a topic its own descendant (D1307), so no new cycle can be
+        # written here -- but a database that already holds one is a hung worker
+        # per request, and this ends the walk instead.
+        seen = {self.id}
         parent_id = self.parent_id
-        while parent_id is not None:
+        while parent_id is not None and parent_id not in seen:
+            seen.add(parent_id)
             parent_topic = db.session.get(Topic, parent_id)
             if parent_topic is None:
                 break

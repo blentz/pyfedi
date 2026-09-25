@@ -123,11 +123,23 @@ def send_newsletter(form):
 
 
 def topics_for_form(current_topic: int) -> List[Tuple[int, str]]:
+    """The parents `current_topic` may be given, which is every topic but its own
+    subtree.
+
+    D1307. This skipped `current_topic` itself and then walked into its children
+    anyway, so the edit form OFFERED a topic its own child as a parent. Choosing
+    it wrote a cycle -- each of the two the other's parent -- and `Topic.path()`
+    walks parents until it reaches None, so it never returned. `topic_tree` roots
+    on `parent_id is None`, so both topics also vanished from the topics screen
+    and from the menu, leaving nothing to undo it with. A `SelectField` validates
+    its choices, so withdrawing the offer is also what refuses the POST.
+    """
     result = [(-1, _('None'))]
     topics = topic_tree()
     for topic in topics:
-        if topic['topic'].id != current_topic:
-            result.append((topic['topic'].id, topic['topic'].name))
+        if topic['topic'].id == current_topic:
+            continue
+        result.append((topic['topic'].id, topic['topic'].name))
         if topic['children']:
             result.extend(topics_for_form_children(topic['children'], current_topic, 1))
     return result
@@ -136,8 +148,9 @@ def topics_for_form(current_topic: int) -> List[Tuple[int, str]]:
 def topics_for_form_children(topics, current_topic: int, depth: int) -> List[Tuple[int, str]]:
     result = []
     for topic in topics:
-        if topic['topic'].id != current_topic:
-            result.append((topic['topic'].id, '--' * depth + ' ' + topic['topic'].name))
+        if topic['topic'].id == current_topic:
+            continue
+        result.append((topic['topic'].id, '--' * depth + ' ' + topic['topic'].name))
         if topic['children']:
             result.extend(topics_for_form_children(topic['children'], current_topic, depth + 1))
     return result
