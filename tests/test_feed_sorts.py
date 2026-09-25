@@ -165,15 +165,32 @@ class TestGetDedupedPostIdsScaledAlsoFilters:
     That is a filter, not just an ordering -- both directions, on both columns.
     """
 
-    def test_a_post_with_null_ranking_scaled_is_absent(self, app, db_session, redis_double):
+    def test_a_null_ranking_scaled_can_no_longer_be_written(self, app, db_session,
+                                                            redis_double):
+        """This used to seed a post with `ranking_scaled=None` and assert the
+        scaled feed left it out -- the filter is still there, and can no longer
+        exclude anything.
+
+        Migration c4f1a9d7e2b8 made the column NOT NULL, because a keyset page
+        ordered by a nullable column drops rows from EVERY page silently
+        (D1323). The filter's subject is gone, so what is asserted now is that
+        the database refuses the value the test used to write."""
+        from sqlalchemy.exc import IntegrityError
+
         author, viewer, community = _setup('scalednull', with_viewer=True)
-        excluded = _seed_post(community, author, 'https://scalednull.example/1', ranking_scaled=None)
-        included = _seed_post(community, author, 'https://scalednull.example/2', ranking_scaled=1.0)
+        post = _seed_post(community, author, 'https://scalednull.example/2',
+                          ranking_scaled=1.0)
+        post.ranking_scaled = None
+        with pytest.raises(IntegrityError):
+            db.session.commit()
+        db.session.rollback()
 
-        ids = feed_ids(app, viewer, 'scaled', community)
-
-        assert excluded.id not in ids
-        assert included.id in ids
+    def test_a_post_with_a_scaled_ranking_is_present(self, app, db_session,
+                                                     redis_double):
+        author, viewer, community = _setup('scaledok', with_viewer=True)
+        included = _seed_post(community, author, 'https://scaledok.example/1',
+                              ranking_scaled=1.0)
+        assert included.id in feed_ids(app, viewer, 'scaled', community)
 
     def test_a_post_from_a_bot_is_absent(self, app, db_session, redis_double):
         author, viewer, community = _setup('scaledbot', with_viewer=True)
