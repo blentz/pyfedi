@@ -301,7 +301,10 @@ def domain_blocks():
 def api_is_ip_banned():
     result = []
     counter = 0
-    for ip in request.form.get('ip_addresses').split(','):
+    # `.get('ip_addresses')` is None when the field is absent, and
+    # `None.split(',')` was an AttributeError -- a 500 from an unauthenticated
+    # POST anybody can make.
+    for ip in (request.form.get('ip_addresses') or '').split(','):
         banned_ip = IpBan.query.filter(IpBan.ip_address == ip).first()
         result.append(banned_ip is not None)
         counter += 1
@@ -315,7 +318,7 @@ def api_is_ip_banned():
 def api_is_email_banned():
     result = []
     counter = 0
-    for email in request.form.get('emails').split(','):
+    for email in (request.form.get('emails') or '').split(','):
         user_id = db.session.query(User.id).filter(User.banned == True, User.email == email.strip(),
                                                    User.ap_id == None).scalar()
         result.append(user_id is not None)
