@@ -494,7 +494,7 @@ def test_delete_feed_announces_only_for_a_public_feed(app, db_session, public, d
     announce = MagicMock()
     with web_ctx(app, s.owner):
         with patch('app.shared.feed.announce_feed_delete_to_subscribers', announce), \
-                patch('app.shared.feed.current_app') as current_app_stub:
+                patch('app.shared.feed.current_app', new_callable=MagicMock) as current_app_stub:
             current_app_stub.debug = debug
             delete_feed(s.feed.id, SRC_WEB)
 
@@ -1102,7 +1102,7 @@ def test_join_feed_subscribes_to_the_feeds_communities_only_when_asked(
     subscribe = MagicMock()
     with web_ctx(app, s.member):
         with patch('app.community.routes.do_subscribe', subscribe), \
-                patch('app.shared.feed.current_app') as current_app_stub:
+                patch('app.shared.feed.current_app', new_callable=MagicMock) as current_app_stub:
             current_app_stub.debug = debug
             join_feed('localjoinfeed', member_id, SRC_API)
 

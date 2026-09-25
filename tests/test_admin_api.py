@@ -24,7 +24,7 @@ sub-project 45 was named for.
 No production change. Three shapes are registered; see the design note.
 """
 import pytest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from flask_limiter import RateLimitExceeded
 from sqlalchemy.orm.exc import NoResultFound
@@ -548,7 +548,7 @@ def test_only_unexpected_failures_are_logged(app, db_session, message, logged):
     from app.api.alpha import shared_error_handler
 
     with app.test_request_context('/api/alpha/site'):
-        with patch('app.api.alpha.current_app') as current_app_mock:
+        with patch('app.api.alpha.current_app', new_callable=MagicMock) as current_app_mock:
             current_app_mock.config = {'SENTRY_DSN': None}
             shared_error_handler(Exception(message))
 
@@ -564,7 +564,7 @@ def test_sentry_is_told_only_when_it_is_configured(app, db_session, dsn, capture
 
     with app.test_request_context('/api/alpha/site'):
         with patch('app.api.alpha.sentry_sdk') as sentry:
-            with patch('app.api.alpha.current_app') as current_app_mock:
+            with patch('app.api.alpha.current_app', new_callable=MagicMock) as current_app_mock:
                 current_app_mock.config = {'SENTRY_DSN': dsn}
                 shared_error_handler(Exception('something genuinely broke'))
 
@@ -584,7 +584,7 @@ def test_a_validation_failure_is_captured_when_sentry_is_configured(app, db_sess
 
     with app.test_request_context('/api/alpha/site'):
         with patch('app.api.alpha.sentry_sdk') as sentry:
-            with patch('app.api.alpha.current_app') as current_app_mock:
+            with patch('app.api.alpha.current_app', new_callable=MagicMock) as current_app_mock:
                 current_app_mock.config = {'SENTRY_DSN': 'https://public@sentry.example/1'}
                 shared_error_handler(error)
 

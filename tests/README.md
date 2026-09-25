@@ -11568,3 +11568,13 @@ count 4,800 tests short of the suite. `--max-worker-restart 0` makes a dead
 worker fail the run instead. Any harness that can silently run FEWER tests than
 it collected needs that setting, because a short green run is worse than a red
 one.
+
+**682. `patch('...current_app')` GIVES YOU AN AsyncMock.**
+`unittest.mock` picks AsyncMock when `_is_async_obj(original)` is true, and that
+asks `inspect.isawaitable`, satisfied by anything with `__await__` -- which
+werkzeug's LocalProxy defines. `asyncio.iscoroutinefunction(current_app)` is
+False, so the obvious check does not explain it. Every attribute of the result is
+an AsyncMock too, so `current_app.logger.exception(...)` builds a coroutine
+nobody awaits: `RuntimeWarning: coroutine 'AsyncMockMixin._execute_mock_call' was
+never awaited`. Pass `new_callable=MagicMock`. The same applies to any proxy --
+`request`, `session`, `g`.
