@@ -11268,3 +11268,16 @@ VALIDATOR ALREADY COVERS IT.** Three `if x.data.strip() == '':` arms and one
 Before writing a test for a validator's first branch, ask what the field's own
 validators have already refused -- if the answer is "this exact input", the
 branch is dead code, not a gap.
+
+**641. A MEMBERSHIP TEST IN A LOOP'S CONDITION COVERS ONE ITEM, NOT THE
+LOOP.** `Post.new` guards with `'type' in request_json['object']['attachment'][0]`
+and then reads `attachment['type']` for every entry (D1294). The first
+attachment is the only one that was ever checked. When a condition indexes
+`[0]` and the body iterates, the body needs its own guard.
+
+**642. PATCH WHERE THE NAME IS DEFINED WHEN THE MODULE IMPORTS IT LATE.**
+`app/models.py` imports `blocked_phrases` and `opengraph_parse` from
+`app.utils` INSIDE `Post.new`, so `patch('app.models.opengraph_parse')` raises
+`AttributeError: does not have the attribute` -- the name never exists on the
+module. Patch `app.utils.opengraph_parse` instead. A function-level import is
+the tell.
