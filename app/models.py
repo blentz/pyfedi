@@ -53,6 +53,26 @@ def votes_cast_today(user_id: int) -> int:
     return int(num)
 
 
+def reputation_delta(old_effect: float, new_effect: float, low_quality: bool) -> float:
+    """What a change of vote does to the author's reputation.
+
+    The policy, which the community flag states in its own label ("Low quality /
+    toxic - upvotes in here don't add to reputation"): an upvote in a low-quality
+    community earns nothing, a downvote always costs, and no vote is worth
+    nothing. The delta is the difference between the two votes, so withdrawing a
+    vote gives back exactly what it gave, and reversing one applies the new vote
+    as well as removing the old.
+
+    `old_effect` and `new_effect` are 0 for 'no vote', +1 for an upvote and -1
+    for a downvote.
+    """
+
+    def earned(effect: float) -> float:
+        return 0.0 if low_quality and effect > 0 else float(effect)
+
+    return earned(new_effect) - earned(old_effect)
+
+
 class PostReplyValidationError(Exception):
     """Custom exception for PostReply validation errors"""
     pass
@@ -2818,12 +2838,22 @@ class Post(db.Model):
                     return None  # No undo, vote stays as-is with new emoji
 
                 with redis_client.lock(f"lock:vote:{existing_vote.id}", timeout=10, blocking_timeout=6):
-                    if not self.community.low_quality:
-                        with redis_client.lock(f"lock:user:{self.user_id}", timeout=10, blocking_timeout=6):
-                            db.session.execute(
-                                text('UPDATE "user" SET reputation = reputation - :effect WHERE id = :user_id'),
-                                {'effect': existing_vote.effect, 'user_id': self.user_id})
-                            db.session.commit()
+                    # D1302. This subtracted the old vote's effect and stopped there,
+                    # so a reversal moved the score by 2 and the reputation by 1: an
+                    # author's reputation depended on the order a voter clicked in
+                    # rather than on the votes standing against them. And the whole
+                    # update was skipped in a low-quality community, where only
+                    # UPVOTES are meant to be worth nothing, so a downvote taken back
+                    # there kept costing the author forever (D1303).
+                    same_direction = (existing_vote.effect > 0) == (vote_direction == 'upvote')
+                    new_effect = 0.0 if same_direction else -existing_vote.effect
+                    with redis_client.lock(f"lock:user:{self.user_id}", timeout=10, blocking_timeout=6):
+                        db.session.execute(
+                            text('UPDATE "user" SET reputation = reputation + :effect WHERE id = :user_id'),
+                            {'effect': reputation_delta(existing_vote.effect, new_effect,
+                                                        self.community.low_quality),
+                             'user_id': self.user_id})
+                        db.session.commit()
                     if existing_vote.effect > 0:  # previous vote was up
                         if vote_direction == 'upvote':  # new vote is also up, so remove it
                             db.session.delete(existing_vote)
@@ -2879,11 +2909,11 @@ class Post(db.Model):
                 vote = PostVote(user_id=user.id, post_id=self.id, author_id=self.author.id,
                                 effect=effect, emoji=emoji)
                 # upvotes do not increase reputation in low quality communities
-                if self.community.low_quality and effect > 0:
-                    effect = 0
                 with redis_client.lock(f"lock:user:{self.user_id}", timeout=10, blocking_timeout=6):
                     db.session.execute(text('UPDATE "user" SET reputation = reputation + :effect WHERE id = :user_id'),
-                                       {'effect': effect, 'user_id': self.user_id})
+                                       {'effect': reputation_delta(0.0, effect,
+                                                                   self.community.low_quality),
+                                        'user_id': self.user_id})
                     db.session.commit()
                 db.session.add(vote)
 
@@ -3377,6 +3407,13 @@ class PostReply(db.Model):
     def vote(self, user: User, vote_direction: str, emoji: str):
         from app import redis_client
         from app.utils import wilson_confidence_lower_bound
+        # D1304. `Post.vote` has had this refusal all along and this method had
+        # none, so blocking someone stopped them downvoting your POSTS and left
+        # them free to downvote every COMMENT you wrote -- which is where a
+        # follow-around does its work.
+        if vote_direction == 'downvote':
+            if self.author.has_blocked_user(user.id) or self.author.has_blocked_instance(user.instance_id):
+                return None
         with redis_client.lock(f"lock:post_reply:{self.id}", timeout=10, blocking_timeout=6):
             existing_vote = db.session.query(PostReplyVote).filter_by(user_id=user.id, post_reply_id=self.id).first()
             # D1196. This used to read `if existing_vote and vote_direction ==
@@ -3420,9 +3457,16 @@ class PostReply(db.Model):
                     db.session.commit()
                     return None  # No undo, vote stays as-is with new emoji
 
+                # D1302, the comment half: the same half-applied reversal as
+                # `Post.vote` had, on a method that never exempted a low-quality
+                # community from earning reputation on an upvote at all (D1305).
+                same_direction = (existing_vote.effect > 0) == (vote_direction == 'upvote')
+                new_effect = 0.0 if same_direction else -existing_vote.effect
                 with redis_client.lock(f"lock:user:{self.user_id}", timeout=10, blocking_timeout=6):
-                    db.session.execute(text('UPDATE "user" SET reputation = reputation - :effect WHERE id = :user_id'),
-                                       {'effect': existing_vote.effect, 'user_id': self.user_id})
+                    db.session.execute(text('UPDATE "user" SET reputation = reputation + :effect WHERE id = :user_id'),
+                                       {'effect': reputation_delta(existing_vote.effect, new_effect,
+                                                                   self.community.low_quality),
+                                        'user_id': self.user_id})
                     db.session.commit()
                 if existing_vote.effect > 0:  # previous vote was up
                     if vote_direction == 'upvote':  # new vote is also up, so remove it
@@ -3462,9 +3506,12 @@ class PostReply(db.Model):
                 self.score += effect
                 vote = PostReplyVote(user_id=user.id, post_reply_id=self.id, author_id=self.author.id,
                                      effect=effect, emoji=emoji)
+                # upvotes do not increase reputation in low quality communities
                 with redis_client.lock(f"lock:user:{self.user_id}", timeout=10, blocking_timeout=6):
                     db.session.execute(text('UPDATE "user" SET reputation = reputation + :effect WHERE id = :user_id'),
-                                       {'effect': effect, 'user_id': self.user_id})
+                                       {'effect': reputation_delta(0.0, effect,
+                                                                   self.community.low_quality),
+                                        'user_id': self.user_id})
                     db.session.commit()
                 db.session.add(vote)
 

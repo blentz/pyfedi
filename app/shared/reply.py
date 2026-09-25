@@ -45,6 +45,23 @@ def vote_for_reply(reply_id: int, vote_direction, federate: bool, emoji: str | N
     if user.banned or user_ip_banned():
         abort(403)
 
+    # D1306. `vote_for_post` gates its web path with these two and this function
+    # gated only its API path, so every permission they carry was enforced on
+    # posts and unenforced on comments for anybody using the site in a browser:
+    # a community that accepts no downvotes took them, a voter the community had
+    # banned kept voting, and so did a user whose reputation or attitude had put
+    # voting out of reach.
+    #
+    # It sits BELOW the ban refusal, where `vote_for_post` has it above: a
+    # banned user is refused with 403 rather than handed the buttons back
+    # unchanged, which says what happened, and `can_upvote` is false for them
+    # too so the order is what decides which answer they get.
+    if src == SRC_WEB and ((vote_direction == 'upvote' and not can_upvote(user, reply.community)) or (
+            vote_direction == 'downvote' and not can_downvote(user, reply.community))):
+        return render_template('post/_comment_voting_buttons.html', comment=reply,
+                               recently_upvoted_replies=[], recently_downvoted_replies=[],
+                               community=reply.community)
+
     if votes_cast_today(user.id) > current_app.config['VOTE_QUOTA']:
         abort(429)
 
