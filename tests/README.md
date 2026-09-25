@@ -11254,3 +11254,17 @@ resize or a re-encode was needed, and read unconditionally (D1292). It never
 fired in development, because a configured `MEDIA_IMAGE_MEDIUM_FORMAT` keeps
 the branch true -- it fires on an instance that has configured nothing, with a
 small image. Test with the config EMPTY as well as set.
+
+**639. A SUBCLASS THAT LOOSENS A VALIDATOR INHERITS THE PARENT'S ASSUMPTIONS.**
+`CreateImageForm.image_file` is `DataRequired()`, so its `validate` may read
+`request.files['image_file']` by key. `EditImageForm` makes the same field
+`Optional()` and inherits that method, so the key it relies on is gone and the
+edit is a 400 (D1293). When a form subclass changes a field's validators, test
+the INHERITED validate against the new possibility.
+
+**640. A CHECK BEFORE `super().validate()` RETURNS IS DEAD IF A FIELD
+VALIDATOR ALREADY COVERS IT.** Three `if x.data.strip() == '':` arms and one
+`if not password.data: return` were all unreachable behind `DataRequired()`.
+Before writing a test for a validator's first branch, ask what the field's own
+validators have already refused -- if the answer is "this exact input", the
+branch is dead code, not a gap.
