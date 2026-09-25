@@ -11331,3 +11331,17 @@ nullable-column warnings -- the same kind the campaign has recorded as needing
 a migration. The count is a ratchet like the floors, so that route is excluded
 from the half of the sweep that turns the API on, with the reason written
 beside it, rather than the filter being widened to hide them.
+
+**650. A TEST THAT WRITES INTO `app/static/media` MUST CLEAN UP.** The
+ban-list import saves its upload there before handing it to the task, and
+`tests/test_admin_federation.py` asserts that directory holds no `*.json` --
+so a new test that imported a list broke an old one that had nothing to do
+with it. Record what is in the directory before, delete the difference in a
+`finally`.
+
+**651. ONE FIX, FIFTEEN COPIES LEFT.** `request.files['name']` was found in
+2026 as D1047 and fixed in one file, with a comment explaining the failure.
+Fifteen other routes kept it (D1299). The sweep that finds them is one
+`grep -rn "request.files\["`, and the test that keeps them gone is a property
+over the source of the six files -- both cheaper than the four rounds it took
+to notice.
