@@ -18896,4 +18896,44 @@ that names an instance; the export; and the sweep property over all six files.
 
 ---
 
-**Next free number: D1300.**
+---
+
+## Round 135 — sub-project 109: a peer taking a vote back, and a peer reporting something
+
+**The round in one line: a report of a comment named its reporter with an
+attribute `User` does not have, and the id an Undo names was read as a string
+whatever the peer sent.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1300** | `app/activitypub/util.py:3762` | `'reporter_user_name': user.ap_id if user.ap_id else user.name` -- `User` has no `name`; the column is `user_name`, and the account and post branches above this one spell it correctly. A reporter with no `ap_id`, which is what a LOCAL actor is, was an `AttributeError` and the report was never filed. Its only protection is the invariant that the inbox's actor is always remote, which nothing in the code states. | **fixed** | `test_a_local_reporter_is_named_by_their_user_name`; the mutant that restores `.name` dies |
+| **D1301** | `app/activitypub/util.py:2067` | `find_liked_object` passes its argument to `'/comment/' in ap_id`, which is `TypeError: argument of type 'NoneType' is not iterable` for anything that is not a string -- and the argument is `core_activity['object']['object']` from a peer's Undo, so it is whatever the peer put there, including nothing and including an object. | **fixed** | `TypeError: argument of type 'NoneType' is not iterable` from `undo_vote(None, None, None, user)` |
+
+**Also guarded**: `session.get(Instance, user.instance_id).domain` at three
+sites in `process_report`, read without checking the row is there. The test for
+that arm simulates the absence at the session, because a foreign key stops the
+row being deleted while an account points at it -- which is the only way the
+arm can be reached at all, and worth saying rather than leaving as a guard
+nobody can exercise.
+
+**What `undo_vote` gets right, now pinned.** Lemmy sends `Like` for an upvote
+and `Dislike` for a downvote but undoes BOTH with `Undo Like`, so which counter
+comes down is decided by the stored vote's own effect. The mutant that flips
+that comparison dies on both the post and the reply path.
+
+### What the slice pins
+
+39 tests: an upvote and a downvote undone on a post and on a reply, the
+author's reputation moving the right way for each, the vote row removed, a
+repeated Undo as a no-op, somebody else's vote left alone, an id that names
+nothing here, no id at all and an id that is an object; then a report filed
+against an account, a post and a comment, what each one records for the
+moderators, who is told (the moderators, and the admins only when a local
+community is unmoderated), the count going up, the three dismissals that stop a
+report being filed at all, a reason from `summary` and from PeerTube's
+`content` and from neither, one longer than the column, a local reporter and a
+remote one, and an instance row that has gone.
+
+---
+
+**Next free number: D1302.**

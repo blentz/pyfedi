@@ -11345,3 +11345,17 @@ Fifteen other routes kept it (D1299). The sweep that finds them is one
 `grep -rn "request.files\["`, and the test that keeps them gone is a property
 over the source of the six files -- both cheaper than the four rounds it took
 to notice.
+
+**652. A TYPO IN ONE BRANCH OF THREE IS WHAT THE OTHER TWO ARE FOR.**
+`process_report` builds nearly the same `targets_data` three times; two spell
+it `user.user_name` and the third `user.name`, which does not exist (D1300).
+Reading the third alone shows nothing wrong. When a function repeats a dict
+literal per type, diff the copies -- and give each branch a test, because the
+branch that is wrong is the one nothing exercised.
+
+**653. AN ARM A FOREIGN KEY MAKES UNREACHABLE IS STILL WORTH A TEST.**
+`process_report`'s `source_instance` can only be None if the Instance row is
+gone while an account still points at it, which the schema forbids. The test
+simulates it at the session -- a small wrapper whose `get` answers None for
+`Instance` and delegates everything else -- rather than pretending the
+database can produce it. That says exactly how reachable the guard is.
