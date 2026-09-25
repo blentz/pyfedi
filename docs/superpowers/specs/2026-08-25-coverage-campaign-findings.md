@@ -19250,4 +19250,42 @@ are replaced by the ones asserting they cannot exist.
 
 ---
 
-**Next free number: D1324.**
+## Round 142 — sub-project 116: the path a File is allowed to delete
+
+**The round in one line: a remote instance could delete any file the application
+user can, by naming it in a post's image url and waiting for the post to be
+deleted.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1324** | `app/models.py`, `File.delete_from_disk` | The `source_url` arm turned a URL into a local path by string replacement — `self.source_url.replace(f"{SERVER_URL}/", 'app/')` — behind the test `self.source_url.startswith('http') and SERVER_NAME in self.source_url`, then `os.unlink`ed the result. `source_url` is not ours: it is set from `request_json['object']['image']['url']` and `['icon'][-1]['url']` when a Create is processed (`app/models.py:2186`, `:2204`, `:2350`) and from a remote actor's icon and image on refresh (`app/activitypub/util.py:741`, `:750`). `SERVER_NAME in url` is a substring test and `replace` anchors nothing, so the path could climb out of `app/` entirely. **Remote arbitrary file deletion.** | **fixed** | probe: a File with `source_url = 'https://<this host>/../../tmp/probe_delete_target'` gave `PROBE pf target still there: False` — a file no part of PieFed owns |
+
+**What the repair is.** `File.local_path_for_url` answers the file a URL names on
+this server's disk, or None, and `delete_from_disk` unlinks only what it answers:
+the host must EQUAL `SERVER_NAME` (checked against `hostname` AND `netloc`, so
+`https://<us>@evil.test/` does not pass), the path is unquoted before it is
+resolved because `%2e%2e` is `..`, and the resolved path must still be inside
+`app/` — compared with a trailing separator, so `/appendix/x` is not "inside
+`/app`". A URL that is not ours is no longer purged from the CDN either; asking
+Cloudflare to drop a peer's url could only ever fail.
+
+**What the old code got right, and is now pinned.** The S3 arms strip the public
+URL prefix and hand the keys to `delete_from_s3`, and `purge_cdn=False` suppresses
+the CDN call — both unchanged, both asserted, because the repair touches the
+function they live in.
+
+### What the slice pins
+
+36 tests: `local_path_for_url` for a url of ours, a peer's, a host that merely
+contains ours, ours as a subdomain of another, ours in the query string, ours in
+the userinfo, six spellings of traversal (plain, nested, and `%2e%2e`/`%2f`
+encoded), a sibling directory called `appendix`, a path that climbs and comes
+back, no path at all, and a string that is not a url; the delete itself for
+`file_path`, `thumbnail_path`, both at once, a file already gone, a `source_url`
+of ours, one pointing outside `app/`, one on a peer, one that is not http, and a
+File with nothing set; what reaches the CDN in each of those cases and when
+`purge_cdn=False`; and the three S3 arms.
+
+---
+
+**Next free number: D1325.**
