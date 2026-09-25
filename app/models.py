@@ -2000,6 +2000,12 @@ class Post(db.Model):
                 'type' in request_json['object']['attachment'][0]):
             for attachment in request_json['object']['attachment']:
                 alt_text = None
+                # Only the FIRST attachment's `type` is checked in the
+                # condition above, and every one of them is read here -- so a
+                # list whose second entry was shaped differently was a
+                # KeyError, and the post never arrived.
+                if not isinstance(attachment, dict) or 'type' not in attachment:
+                    continue
                 if attachment['type'] == 'Link':
                     if 'href' in attachment:
                         post.url = attachment['href']  # Lemmy < 0.19.4
@@ -2008,12 +2014,16 @@ class Post(db.Model):
                     if post.url:
                         break
                 elif attachment['type'] == 'Document':
+                    if 'url' not in attachment:     # as the Link branch above
+                        continue                    # already tests for
                     post.url = attachment['url']  # Mastodon
                     if 'name' in attachment:
                         alt_text = attachment['name']
                     if post.url:
                         break
                 elif attachment['type'] == 'Audio':  # WordPress podcast
+                    if 'url' not in attachment:
+                        continue
                     post.url = attachment['url']
                     if 'name' in attachment:
                         post.title = attachment['name']
@@ -2022,7 +2032,9 @@ class Post(db.Model):
             # Lastly, check for image posts. Mbin sends link posts with both image and link and we want to ignore the image in that case.
             if not post.url:
                 for attachment in request_json['object']['attachment']:
-                    if attachment['type'] == 'Image':
+                    if not isinstance(attachment, dict) or 'type' not in attachment:
+                        continue
+                    if attachment['type'] == 'Image' and 'url' in attachment:
                         post.url = attachment['url']  # PixelFed, PieFed, Lemmy >= 0.19.4
                         alt_text = attachment.get("name")
                         file_path = attachment.get("file_path")
@@ -2030,7 +2042,8 @@ class Post(db.Model):
         if 'attachment' in request_json['object'] and isinstance(request_json['object']['attachment'],
                                                                  dict):  # a.gup.pe (Mastodon)
             alt_text = None
-            post.url = request_json['object']['attachment']['url']
+            if 'url' in request_json['object']['attachment']:
+                post.url = request_json['object']['attachment']['url']
 
         # Every write above this line takes a url straight from a REMOTE peer.
         # One site for all of them, the Create twin of the guard in
@@ -2160,7 +2173,9 @@ class Post(db.Model):
                     post.image = icon
 
             # Language. Lemmy uses 'language' while Mastodon has 'contentMap'
-            if 'language' in request_json['object'] and isinstance(request_json['object']['language'], dict):
+            if 'language' in request_json['object'] and isinstance(request_json['object']['language'], dict) \
+                    and 'identifier' in request_json['object']['language'] \
+                    and 'name' in request_json['object']['language']:
                 language = find_language_or_create(request_json['object']['language']['identifier'],
                                                    request_json['object']['language']['name'])
                 post.language = language
@@ -2170,17 +2185,23 @@ class Post(db.Model):
             else:
                 from app.utils import site_language_id
                 post.language_id = site_language_id()
-            if 'licence' in request_json['object'] and isinstance(request_json['object']['licence'], dict):
+            if 'licence' in request_json['object'] and isinstance(request_json['object']['licence'], dict) \
+                    and 'name' in request_json['object']['licence']:
                 licence = find_licence_or_create(request_json['object']['licence']['name'])
                 post.licence = licence
             if 'tag' in request_json['object'] and isinstance(request_json['object']['tag'], list):
                 for json_tag in request_json['object']['tag']:
-                    if json_tag and json_tag['type'] == 'Hashtag':
+                    # A tag that is not an object was `TypeError: string
+                    # indices must be integers`, and one with no `type` a
+                    # KeyError -- either killed the whole post.
+                    if not isinstance(json_tag, dict) or 'type' not in json_tag:
+                        continue
+                    if json_tag['type'] == 'Hashtag' and 'name' in json_tag:
                         if json_tag['name'][1:].lower() != community.name.lower():  # Lemmy adds the community slug as a hashtag on every post in the community, which we want to ignore
                             hashtag = find_hashtag_or_create(json_tag['name'])
                             if hashtag:
                                 post.tags.append(hashtag)
-                    if json_tag and json_tag['type'] == 'lemmy:CommunityTag':
+                    if json_tag['type'] == 'lemmy:CommunityTag':
                         flair = find_flair_or_create(json_tag, post.community_id)
                         if flair:
                             post.flair.append(flair)
