@@ -18686,4 +18686,36 @@ page being edited.
 
 ---
 
-**Next free number: D1294.**
+---
+
+## Round 129 — sub-project 103: turning a peer's Create into a Post
+
+**The round in one line: six keys read out of another instance's JSON without
+asking, in the one function that decides whether a federated post arrives at
+all.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1294** | `app/models.py:1996-2170` | `Post.new`, six sites. The attachment loop tests `'type' in ...attachment[0]` in its CONDITION and then reads `attachment['type']` for every entry, so a list whose second entry was shaped differently was a `KeyError`. The `Document` and `Audio` branches read `attachment['url']` outright, while the `Link` branch beside them tests for both `href` and `url`. The image loop below them repeats the first mistake. `json_tag['type']` was a `KeyError` for a tag with none and `TypeError: string indices must be integers` for a tag that was a string; `json_tag['name']` a `KeyError` for a Hashtag with none. `licence['name']` and `language['identifier']` the same. Every one of them killed `Post.new`, which means the post never arrived. | **fixed** | `PROBE ab a Document with no url: KeyError: 'url'`; `PROBE ba a tag with no type: KeyError: 'type'`; `PROBE bc a tag that is not an object: TypeError: string indices must be integers`; `PROBE ca a licence with no name: KeyError: 'name'`; `PROBE da a language with no identifier: KeyError: 'identifier'` |
+
+`app/models.py` gets its first floor in this round, at 74. It is the largest
+file in the project and the campaign had left it unfloored; `Post.new` is the
+part of it that reads federated input, so it is the part that goes first.
+
+### What the slice pins
+
+55 tests: six malformed attachment shapes, the four places a url can come from
+(Lemmy's `href`, NodeBB's `url`, Mastodon's Document, a WordPress podcast's
+Audio) and a.gup.pe's single-object form, a url `urlparse` cannot read being
+dropped rather than the post refused, all five post types including PixelFed
+and loops.video with and without an OpenGraph answer, seven tag shapes
+including the community's own slug being ignored, flair a peer names, the
+licence and the language in four shapes each plus Mastodon's `contentMap`,
+what is refused outright (a blocked phrase in the title or body, a microblog
+with no content, an image whose hash is blocked), and a microblog post's
+derived title, its NSFW and NSFL markers, and the three ways its audience
+decides whether it is private.
+
+---
+
+**Next free number: D1295.**
