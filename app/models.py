@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, date
 from hashlib import sha256
 from time import time
 from typing import List, Union
-from urllib.parse import urlparse, parse_qs, urlencode
+from urllib.parse import urlparse, parse_qs, urlencode, unquote
 from zoneinfo import ZoneInfo
 
 import pendulum
@@ -439,6 +439,42 @@ class File(db.Model):
         path = parsed_url.path.lower()
         return any(path.endswith(extension) for extension in common_image_extensions)
 
+    def local_path_for_url(self, url: str):
+        """The file this URL names on THIS server's disk, or None if it names none.
+
+        D1324. `delete_from_disk` used to turn `source_url` into a path by string
+        replacement -- `url.replace(f"{SERVER_URL}/", 'app/')` -- behind the test
+        `url.startswith('http') and SERVER_NAME in url`. Both halves are wrong for
+        a value that ARRIVES FROM A PEER, and `source_url` does: it is set from
+        `request_json['object']['image']['url']` and `['icon'][-1]['url']` when a
+        Create is processed (:2186, :2204, :2350) and from a remote actor's icon
+        and image in `app/activitypub/util.py` (:741, :750).
+
+        `SERVER_NAME in url` is a substring test, so any URL mentioning this
+        instance anywhere passed it; and `replace` does not anchor, so a path
+        could climb out of `app/`. Measured: a File whose source_url was
+        `https://<this host>/../../tmp/probe_delete_target` deleted
+        `/tmp/probe_delete_target` -- a remote instance could delete any file the
+        application user can, by naming it in a post's image url and waiting for
+        the post to be deleted.
+
+        So: the host must EQUAL this server's, the path is unquoted before it is
+        resolved (`%2e%2e` is `..`), and the resolved path must still be inside
+        `app/`.
+        """
+        parsed = urlparse(url)
+        if parsed.hostname != current_app.config['SERVER_NAME'] and \
+                parsed.netloc != current_app.config['SERVER_NAME']:
+            return None
+        relative = unquote(parsed.path).lstrip('/')
+        if not relative:
+            return None
+        root = os.path.realpath('app')
+        candidate = os.path.realpath(os.path.join(root, relative))
+        if candidate != root and not candidate.startswith(root + os.sep):
+            return None
+        return candidate
+
     def delete_from_disk(self, purge_cdn=True):
         purge_from_cache = []
         s3_files_to_delete = []
@@ -472,12 +508,17 @@ class File(db.Model):
                 s3_path = self.source_url.replace(f'https://{current_app.config["S3_PUBLIC_URL"]}/', '')
                 s3_files_to_delete.append(s3_path)
                 purge_from_cache.append(self.source_url)
-            elif self.source_url.startswith('http') and current_app.config['SERVER_NAME'] in self.source_url:
-                try:
-                    os.unlink(self.source_url.replace(f"{current_app.config['SERVER_URL']}/", 'app/'))
-                except FileNotFoundError:
-                    ...
-                purge_from_cache.append(self.source_url)
+            elif self.source_url.startswith('http'):
+                # `local_path_for_url` answers None for anything that is not a
+                # file of ours, which is what stops a peer naming someone else's
+                # (D1324).
+                local_path = self.local_path_for_url(self.source_url)
+                if local_path:
+                    try:
+                        os.unlink(local_path)
+                    except FileNotFoundError:
+                        ...
+                    purge_from_cache.append(self.source_url)
 
         if len(s3_files_to_delete) > 0:
             from app.shared.tasks.maintenance import delete_from_s3
