@@ -1771,28 +1771,27 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
                                                     'file_id': file.id
                                                 })
 
-                                    content_type_parts = content_type.split('/')
-                                    if content_type_parts:
-                                        # content type headers often are just 'image/jpeg' but sometimes 'image/jpeg;charset=utf8'
+                                    # content type headers often are just 'image/jpeg' but sometimes 'image/jpeg;charset=utf8'
+                                    # `str.split('/')` always returns a
+                                    # non-empty list, so the `if
+                                    # content_type_parts:` that used to wrap
+                                    # this -- with an `else` deriving the
+                                    # extension from the url instead -- could
+                                    # never take its second arm.
 
-                                        # Remove ;charset=whatever
-                                        main_part = content_type.split(';')[0]
+                                    # Remove ;charset=whatever
+                                    main_part = content_type.split(';')[0]
 
-                                        # Split the main part on the '/' character and take the second part
-                                        file_ext = '.' + main_part.split('/')[1].lower()
-                                        file_ext = file_ext.strip()  # just to be sure
+                                    # Split the main part on the '/' character and take the second part
+                                    file_ext = '.' + main_part.split('/')[1].lower()
+                                    file_ext = file_ext.strip()  # just to be sure
 
-                                        if file_ext == '.jpeg':
-                                            file_ext = '.jpg'
-                                        elif file_ext == '.svg+xml':
-                                            return  # no need to resize SVG images
-                                        elif file_ext == '.octet-stream':
-                                            file_ext = '.avif'
-                                    else:
-                                        file_ext = os.path.splitext(file.source_url)[1].lower()
-                                        file_ext = file_ext.replace('%3f', '?')  # sometimes urls are not decoded properly
-                                        if '?' in file_ext:
-                                            file_ext = file_ext.split('?')[0]
+                                    if file_ext == '.jpeg':
+                                        file_ext = '.jpg'
+                                    elif file_ext == '.svg+xml':
+                                        return  # no need to resize SVG images
+                                    elif file_ext == '.octet-stream':
+                                        file_ext = '.avif'
 
                                     new_filename = gibberish(15)
 
@@ -1853,8 +1852,18 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
 
                                     # Resize the image to medium
                                     if medium_width:
+                                        # `medium_image` is assigned here and
+                                        # read unconditionally below. An image
+                                        # already narrower than `medium_width`,
+                                        # on an instance that has configured no
+                                        # medium format, took neither arm and
+                                        # the save was
+                                        # `UnboundLocalError: cannot access
+                                        # local variable 'medium_image'` -- so
+                                        # no medium copy, no thumbnail and no
+                                        # dimensions for any small image.
+                                        medium_image = image.copy()
                                         if img_width > medium_width or medium_image_format:
-                                            medium_image = image.copy()
                                             if (medium_image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg']):
                                                 medium_image = to_srgb(medium_image)
                                             else:
@@ -1942,8 +1951,14 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
                                             final_place_thumbnail = f"https://{current_app.config['S3_PUBLIC_URL']}/{original_directory}/{new_filename[0:2]}/{new_filename[2:4]}" + \
                                                                     '/' + new_filename + '_thumbnail' + thumbnail_ext
                                         file.thumbnail_path = final_place_thumbnail
-                                        file.thumbnail_width = image.width
-                                        file.thumbnail_height = image.height
+                                        # `thumbnail_image`, not `image`. These
+                                        # recorded the SOURCE image's size, so
+                                        # every thumbnail this instance made was
+                                        # described with the dimensions of the
+                                        # full-size original -- the medium
+                                        # branch above reads its own copy.
+                                        file.thumbnail_width = thumbnail_image.width
+                                        file.thumbnail_height = thumbnail_image.height
 
                                     if s3:
                                         s3.close()
