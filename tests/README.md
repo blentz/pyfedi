@@ -11413,3 +11413,30 @@ catches it is any test of the branch that flashes.
 with communities assigned to it" branch is all that stands between an admin's
 click and the deletion of every community in that topic. The test asserts the
 communities are still there, not only that the topic is.
+
+**662. `int(request.args.get(...))` IS A 500 WAITING FOR AN EMPTY SELECT.**
+Nine sites did this (D1311-D1313). The value that finds them is not a word but
+`''` -- what a `<select>` submits when nothing is chosen -- and a missing
+parameter gives `TypeError` rather than `ValueError`. `request.args.get(name, 0,
+type=int)` answers the default instead. Sweep with
+`grep -rn "int(request.args.get(" app/` and keep a property test over the files
+that read query arguments.
+
+**663. AN ID FROM THE CALLER NAMES A ROW THAT MIGHT NOT EXIST.**
+`db.session.get(Feed, feed_id).user_id` sat one line above `abort(404)`
+(D1314), and `db.session.delete(item)` sat below a `.first()` that can answer
+None (D1316). Both are 500s for a value anybody can type. For every id that
+arrives in a request: test the id that resolves, the id that does not, and -- if
+a pair is looked up -- the pair that is not there.
+
+**664. A STATE-CHANGING GET MUST BE IDEMPOTENT, SO TEST IT THREE TIMES.**
+`/feed/add_community` is a GET, and running it twice made a second FeedItem and
+counted it again (D1317). The test asks for the same thing three times and
+asserts one row and one count. Any route that writes on GET deserves that shape.
+
+**665. A KILLED MUTATION RUN LEAVES ITS MUTANT BEHIND.**
+The restore in the runner's `finally` (and its sha256 check) does not run if the
+process is killed. After any interrupted mutation pass, `git diff` the files it
+touches before trusting a green suite -- one mutant was still applied here, and
+the tests passed with it in place, which is exactly what the surviving-mutant
+report then showed.
