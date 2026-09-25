@@ -1226,11 +1226,17 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
             desc(Post.ranking), desc(Post.posted_at), desc(Post.id))
     elif sort == "Active":
         # `last_active != None` as well as the reply count, which is what
-        # get_post_list's Active arm filters on. Post.last_active is the one
-        # column in this ORDER BY with no default of any kind, so it really can
-        # be NULL -- and sqlakeyset warns, correctly, that ordering a keyset
-        # page by a nullable column can omit rows from it silently. A post with
-        # replies but no last_active was exactly that row.
+        # get_post_list's Active arm filters on.
+        #
+        # The NULL it guards against can no longer happen: migration
+        # c4f1a9d7e2b8 backfilled the column and made it NOT NULL, and the model
+        # now defaults it, because a keyset page ordered by a nullable column
+        # drops rows silently -- `WHERE (sort columns) < (last row)` is NULL
+        # rather than true for them -- and a post with replies but no
+        # last_active was exactly that row. The predicate is left here (and in
+        # the raw `post_query_criteria` beside it) because Postgres removes it
+        # against a NOT NULL column and it costs nothing to keep the two spellings
+        # of this query identical.
         posts = posts.filter(Post.reply_count > 0, Post.last_active != None)
         posts = posts.order_by(desc(Post.last_active), desc(Post.id))
 

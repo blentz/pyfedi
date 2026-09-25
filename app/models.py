@@ -1786,24 +1786,35 @@ class Post(db.Model):
     has_embed = db.Column(db.Boolean, default=False)
     reply_count = db.Column(db.Integer, default=0, index=True)
     reply_count_cross_posted = db.Column(db.Integer, default=0)
-    score = db.Column(db.Integer, default=0, index=True)  # used for 'top' ranking
+    # The seven columns the API's post sorts page by are NOT NULL, and that is
+    # load-bearing rather than tidiness: sqlakeyset pages with
+    # `WHERE (sort columns) < (the last row's values)`, and a NULL anywhere in
+    # that comparison makes the predicate NULL instead of true, so the row comes
+    # back on NO page of that sort while still being counted in the total. It
+    # warns about exactly this, and migration c4f1a9d7e2b8 backfilled the rows
+    # written before these defaults existed.
+    score = db.Column(db.Integer, default=0, server_default='0', index=True, nullable=False)  # used for 'top' ranking
     nsfw = db.Column(db.Boolean, default=False, index=True)
     nsfl = db.Column(db.Boolean, default=False, index=True)
-    sticky = db.Column(db.Boolean, default=False, index=True)
-    instance_sticky = db.Column(db.Boolean, default=False, index=True)
+    sticky = db.Column(db.Boolean, default=False, server_default='false', index=True, nullable=False)
+    instance_sticky = db.Column(db.Boolean, default=False, server_default='false', index=True, nullable=False)
     ai_generated = db.Column(db.Boolean, default=False, index=True)
     notify_author = db.Column(db.Boolean, default=True)
     indexable = db.Column(db.Boolean, default=True, index=True)
     from_bot = db.Column(db.Boolean, default=False, index=True)
     private = db.Column(db.Boolean, default=False, index=True)
     created_at = db.Column(db.DateTime, index=True, default=utcnow)  # this is when the content arrived here
-    posted_at = db.Column(db.DateTime, index=True, default=utcnow)  # this is when the original server created it
-    last_active = db.Column(db.DateTime, index=True)
+    posted_at = db.Column(db.DateTime, index=True, default=utcnow, server_default=db.func.now(), nullable=False)  # this is when the original server created it
+    # `default=utcnow` is new with the NOT NULL: this column had no default of
+    # any kind, so a post whose last_active was never written was omitted from
+    # every page of the Active sort. A new post's last activity is its own
+    # arrival, which is what Community.last_active and Feed.last_active use.
+    last_active = db.Column(db.DateTime, index=True, default=utcnow, server_default=db.func.now(), nullable=False)
     ip = db.Column(db.String(50))
     up_votes = db.Column(db.Integer, default=0)
     down_votes = db.Column(db.Integer, default=0)
-    ranking = db.Column(db.Float, default=0.0, index=True)  # used for 'hot' ranking
-    ranking_scaled = db.Column(db.Float, default=0.0, index=True)  # used for 'scaled' ranking
+    ranking = db.Column(db.Float, default=0.0, server_default='0', index=True, nullable=False)  # used for 'hot' ranking
+    ranking_scaled = db.Column(db.Float, default=0.0, server_default='0', index=True, nullable=False)  # used for 'scaled' ranking
     edited_at = db.Column(db.DateTime)
     reports = db.Column(db.Integer, default=0)  # how many times this post has been reported. Set to -1 to ignore reports
     language_id = db.Column(db.Integer, db.ForeignKey('language.id'), index=True)
