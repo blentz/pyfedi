@@ -108,7 +108,8 @@ def _aged(user, days=30):
     (1, 45, True),    # page 1 shows 20 of 45 -- there IS a third
 ])
 def test_the_next_link_appears_only_when_a_next_page_exists(app, db_session, page,
-                                                            total, expects_next):
+                                                            total, expects_next,
+                                                            monkeypatch):
     """Before the repair, `page + 1 * page_length` read as `page +
     page_length`, so page 1 of 30 posts offered a page 2 that renders nothing:
 
@@ -121,7 +122,11 @@ def test_the_next_link_appears_only_when_a_next_page_exists(app, db_session, pag
     topic = _topic()
     community = _community_in(topic)
     _posts(community, alice, total)
-    app.config['PAGE_LENGTH'] = 20
+    # monkeypatch, not a bare assignment: `app` is session-scoped, so a plain
+    # write leaks this value into every test that runs after it in this
+    # process. It cost two parallel-only failures in
+    # tests/test_feed_reading_routes.py, which expects the site's 100.
+    monkeypatch.setitem(app.config, 'PAGE_LENGTH', 20)
     client = app.test_client()
 
     with patch('app.topic.routes.render_template', return_value='rendered') as render:
@@ -131,12 +136,16 @@ def test_the_next_link_appears_only_when_a_next_page_exists(app, db_session, pag
     assert (render.call_args.kwargs['next_url'] is not None) is expects_next
 
 
-def test_the_previous_link_appears_on_every_page_but_the_first(app, db_session):
+def test_the_previous_link_appears_on_every_page_but_the_first(app, db_session, monkeypatch):
     instance, alice, bob = _seed()
     topic = _topic()
     community = _community_in(topic)
     _posts(community, alice, 45)
-    app.config['PAGE_LENGTH'] = 20
+    # monkeypatch, not a bare assignment: `app` is session-scoped, so a plain
+    # write leaks this value into every test that runs after it in this
+    # process. It cost two parallel-only failures in
+    # tests/test_feed_reading_routes.py, which expects the site's 100.
+    monkeypatch.setitem(app.config, 'PAGE_LENGTH', 20)
     client = app.test_client()
 
     with patch('app.topic.routes.render_template', return_value='rendered') as render:
@@ -580,7 +589,7 @@ def test_an_unknown_content_type_is_a_400(app, db_session):
     ('masonry', 200),
     ('masonry_wide', 300),
 ])
-def test_a_masonry_layout_asks_for_a_longer_page(app, db_session, layout, expected_length):
+def test_a_masonry_layout_asks_for_a_longer_page(app, db_session, layout, expected_length, monkeypatch):
     """Both layout branches change page_length, which is visible through the
     next link: with fewer posts than the long page holds, there is no next
     page at all.
@@ -589,7 +598,11 @@ def test_a_masonry_layout_asks_for_a_longer_page(app, db_session, layout, expect
     topic = _topic()
     community = _community_in(topic)
     _posts(community, alice, 25)
-    app.config['PAGE_LENGTH'] = 20
+    # monkeypatch, not a bare assignment: `app` is session-scoped, so a plain
+    # write leaks this value into every test that runs after it in this
+    # process. It cost two parallel-only failures in
+    # tests/test_feed_reading_routes.py, which expects the site's 100.
+    monkeypatch.setitem(app.config, 'PAGE_LENGTH', 20)
     client = app.test_client()
 
     with patch('app.topic.routes.render_template', return_value='rendered') as render:
@@ -599,7 +612,7 @@ def test_a_masonry_layout_asks_for_a_longer_page(app, db_session, layout, expect
     assert render.call_args.kwargs['post_layout'] == layout
 
 
-def test_a_low_bandwidth_reader_gets_a_short_page_and_no_layout(app, db_session):
+def test_a_low_bandwidth_reader_gets_a_short_page_and_no_layout(app, db_session, monkeypatch):
     """The low_bandwidth cookie decides two things at once -- the page length
     and the default layout -- so both are asserted.
     """
@@ -607,7 +620,11 @@ def test_a_low_bandwidth_reader_gets_a_short_page_and_no_layout(app, db_session)
     topic = _topic()
     community = _community_in(topic)
     _posts(community, alice, 25)
-    app.config['PAGE_LENGTH'] = 100
+    # monkeypatch, not a bare assignment: `app` is session-scoped, so a plain
+    # write leaks this value into every test that runs after it in this
+    # process. It cost two parallel-only failures in
+    # tests/test_feed_reading_routes.py, which expects the site's 100.
+    monkeypatch.setitem(app.config, 'PAGE_LENGTH', 100)
     client = app.test_client()
     # THE COOKIE'S DOMAIN HAS TO BE THE APP'S SERVER_NAME. Fact 300 records
     # that this client "delivers no cookies at all"; it does, but only when the
@@ -623,7 +640,7 @@ def test_a_low_bandwidth_reader_gets_a_short_page_and_no_layout(app, db_session)
     assert render.call_args.kwargs['next_url'] is not None   # 25 posts, 20 per page
 
 
-def test_a_readers_own_page_length_wins_when_it_is_shorter(app, db_session):
+def test_a_readers_own_page_length_wins_when_it_is_shorter(app, db_session, monkeypatch):
     """`if current_user.page_length and current_user.page_length < page_length`
     -- both operands matter, so the shorter preference is applied and a LONGER
     one is ignored.
@@ -635,7 +652,11 @@ def test_a_readers_own_page_length_wins_when_it_is_shorter(app, db_session):
     # repair the site's 20 wins and there is a next page, and a mutant that
     # took the preference unconditionally would show 50 per page and none
     _posts(community, alice, 25)
-    app.config['PAGE_LENGTH'] = 20
+    # monkeypatch, not a bare assignment: `app` is session-scoped, so a plain
+    # write leaks this value into every test that runs after it in this
+    # process. It cost two parallel-only failures in
+    # tests/test_feed_reading_routes.py, which expects the site's 100.
+    monkeypatch.setitem(app.config, 'PAGE_LENGTH', 20)
     alice.page_length = 10
     db.session.commit()
     client = app.test_client()

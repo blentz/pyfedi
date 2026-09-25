@@ -119,8 +119,13 @@ names_a_subset() {
     return 1
 }
 
+# `--max-worker-restart 0`, so a worker that dies FAILS THE RUN. Without it xdist
+# silently starts a replacement, and a run whose workers kept dying reported
+# "5 failed, 7073 passed" -- 4,800 tests short -- followed by an INTERNALERROR
+# from its own scheduler. A short count is not a pass, and this makes it say so.
 if [ "$WORKERS" -gt 1 ] && ! names_a_subset "$@"; then
-    exec $COMPOSE exec -T test-runner pytest -n "$WORKERS" --dist loadgroup "$@"
+    exec $COMPOSE exec -T test-runner pytest -n "$WORKERS" --dist loadgroup \
+        --max-worker-restart 0 "$@"
 fi
 
 exec $COMPOSE exec -T test-runner pytest "$@"

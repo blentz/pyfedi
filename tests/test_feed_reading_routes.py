@@ -714,7 +714,7 @@ def test_the_rss_feed_404s_for_a_feed_that_is_not_there(app, db_session):
     assert response.status_code == 404
 
 
-def test_the_feeds_next_link_appears_only_when_a_next_page_exists(app, db_session):
+def test_the_feeds_next_link_appears_only_when_a_next_page_exists(app, db_session, monkeypatch):
     """show_feed's pagination, and the reason this row exists at all.
 
     `has_next_page = len(post_ids) > page + 1 * page_length` reads as `page +
@@ -735,7 +735,11 @@ def test_the_feeds_next_link_appears_only_when_a_next_page_exists(app, db_sessio
     for index in range(30):
         make_post(community, owner, ap_id=f'https://test.piefed.local/post/feedpage{index}',
                   title=f'feedpage {index}')
-    app.config['PAGE_LENGTH'] = 20
+    # monkeypatch, not a bare assignment: `app` is session-scoped, so a plain
+    # write leaks this value into every test that runs after it in this
+    # process. It cost two parallel-only failures in
+    # tests/test_feed_reading_routes.py, which expects the site's 100.
+    monkeypatch.setitem(app.config, 'PAGE_LENGTH', 20)
 
     with app.test_client() as client:
         login(client, owner)

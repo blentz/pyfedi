@@ -34,10 +34,35 @@ class TestNamingAWorker:
     def test_a_serial_run_has_no_index(self):
         assert worker_index(None) is None
 
-    def test_a_name_with_no_digits_counts_as_the_first(self):
-        """xdist calls the controller 'master'; nothing asks it for a database,
-        but a name that arrives without a number must not be a ValueError."""
-        assert worker_index('master') == 0
+    def test_a_name_with_no_digits_is_not_a_worker(self):
+        """xdist calls the controller 'master'. It must not map onto 0:
+        `build_worker_database` DROPs the database it is about to build, so a
+        controller holding gw0's name would delete a running worker's database
+        underneath it -- and a name with no number must not be a ValueError
+        either."""
+        assert worker_index('master') is None
+
+    def test_a_process_that_is_not_a_worker_keeps_the_shared_database(self):
+        assert worker_database_url(DATABASE, 'master') == DATABASE
+        assert worker_redis_url(REDIS, 'master', 0) == REDIS
+
+
+class TestTheTemplateIsNeverTheTarget:
+    """`build_worker_database` DROPs the database it builds, so being pointed at
+    the template would delete what every worker copies from."""
+
+    def test_it_refuses_to_rebuild_the_template(self):
+        from tests.conftest import build_worker_database
+
+        with pytest.raises(RuntimeError, match='refusing to rebuild'):
+            build_worker_database(DATABASE, DATABASE)
+
+    def test_it_refuses_even_when_the_hosts_differ(self):
+        from tests.conftest import build_worker_database
+
+        with pytest.raises(RuntimeError, match='refusing to rebuild'):
+            build_worker_database(
+                'postgresql+psycopg2://u:p@elsewhere:5432/pyfedi_test', DATABASE)
 
 
 class TestTheDatabaseEachWorkerGets:
@@ -207,3 +232,69 @@ class TestTheCollectionHook:
         pytest_collection_modifyitems(pytestconfig, items)
         first, second = (item.markers[0].args[0] for item in items)
         assert first == second
+
+
+class TestNothingLeaksConfigIntoLaterTests:
+    """`app` is session-scoped, so `app.config['X'] = y` outlives the test.
+
+    It cost two parallel-only failures: six bare writes of `PAGE_LENGTH` left 20
+    behind, and `test_the_page_length_ladder` expects the site's 100. Serially it
+    passed because of the order the modules happened to run in -- which is not a
+    property of the tests, it is luck. Those six are `monkeypatch.setitem` now.
+
+    The rest are pinned here by count rather than converted in one go: most set a
+    value and restore it by hand in the same test, which is fragile (an
+    exception on the way skips the restore) but not a leak in the happy path.
+    The list can only shrink -- a new bare write, in any file, fails this.
+    """
+
+    KNOWN = {
+        'test_activitypub_signature.py': 2, 'test_ap_create_reply.py': 2,
+        'test_ap_notify_post.py': 2, 'test_app_factory.py': 1,
+        'test_client_ip.py': 2, 'test_community_show.py': 4,
+        'test_community_syndication.py': 3, 'test_error_handlers.py': 2,
+        'test_feed_display_preferences.py': 4,
+        'test_form_validate_guards_super.py': 2, 'test_instance_stickies.py': 2,
+        'test_redirect_policy.py': 2, 'test_safe_redirect_target.py': 4,
+        'test_shared_community_membership.py': 2,
+        'test_shared_tasks_maintenance_cleanup.py': 8,
+        'test_shared_tasks_maintenance_lifecycle.py': 33,
+        'test_shared_upload.py': 12, 'test_user_misc.py': 4,
+        'test_user_settings.py': 2, 'test_utils_request_context.py': 6,
+    }
+
+    # This module is skipped: it QUOTES the pattern in its own assertions below,
+    # so scanning itself counts the guard as an offender.
+    SELF = 'test_parallel_workers.py'
+
+    def bare_writes(self):
+        import collections
+        import re
+
+        pattern = re.compile(r"(app|current_app)\.config\['[A-Z_]+'\]\s*=\s")
+        counts = collections.Counter()
+        for path in sorted(Path('tests').glob('test_*.py')):
+            if path.name == self.SELF:
+                continue
+            for line in path.read_text(encoding='utf8').splitlines():
+                if pattern.search(line) and 'monkeypatch' not in line:
+                    counts[path.name] += 1
+        return counts
+
+    def test_no_file_has_more_of_them_than_it_did(self):
+        counts = self.bare_writes()
+        grew = {name: count for name, count in counts.items()
+                if count > self.KNOWN.get(name, 0)}
+        assert grew == {}, \
+            'use monkeypatch.setitem(app.config, ...) instead: ' + repr(grew)
+
+    def test_the_page_length_writes_are_all_scoped(self):
+        """The six that caused the failure, named so they cannot come back."""
+        for name in ('test_topic_routes.py', 'test_feed_reading_routes.py'):
+            text = (Path('tests') / name).read_text(encoding='utf8')
+            assert "app.config['PAGE_LENGTH'] = " not in text, name
+            assert "monkeypatch.setitem(app.config, 'PAGE_LENGTH'" in text, name
+
+    def test_the_list_names_files_that_exist(self):
+        for name in sorted(self.KNOWN):
+            assert (Path('tests') / name).is_file(), name

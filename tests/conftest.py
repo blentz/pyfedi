@@ -28,11 +28,17 @@ MAX_XDIST_WORKERS = 7
 
 
 def worker_index(worker):
-    """0 for 'gw0', 1 for 'gw1'. None when not running under xdist."""
+    """0 for 'gw0', 1 for 'gw1'. None for anything that is not a worker.
+
+    A name with no number in it -- xdist calls the controller 'master' -- gets
+    None rather than 0. Mapping it onto 0 would give it gw0's database, and
+    `build_worker_database` DROPs the database it is about to build: the
+    controller would have deleted a running worker's database underneath it.
+    """
     if not worker:
         return None
     digits = ''.join(character for character in worker if character.isdigit())
-    return int(digits) if digits else 0
+    return int(digits) if digits else None
 
 
 def worker_database_url(url, worker):
@@ -160,6 +166,15 @@ def build_worker_database(url, template_url):
 
     base, _, name = url.rpartition('/')
     template = template_url.rpartition('/')[2]
+    # The one thing this function must never do. It drops the database it is
+    # about to build, so being pointed at the template -- by a worker whose name
+    # carried no number, or a url that failed to be rewritten -- would delete the
+    # database every other worker is copying from, and take the run with it.
+    if name == template:
+        raise RuntimeError(
+            f'refusing to rebuild {name}: it is the template every worker copies '
+            f'from. The worker database url was not rewritten, so '
+            f'PYTEST_XDIST_WORKER did not name a numbered worker.')
     engine = create_engine(f'{base}/postgres', isolation_level='AUTOCOMMIT')
     try:
         with engine.connect() as connection:
