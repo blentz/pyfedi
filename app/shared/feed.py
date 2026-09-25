@@ -451,22 +451,37 @@ def _feed_add_community(community_id: int, current_feed_id: int, feed_id: int, u
     if current_feed_id != 0:
         current_feed_item = FeedItem.query.filter_by(feed_id=current_feed_id).filter_by(
             community_id=community_id).first()
-        db.session.delete(current_feed_item)
-        db.session.commit()
+        # D1316. `db.session.delete(None)` is `UnmappedInstanceError: Class
+        # 'builtins.NoneType' is not mapped`, and the caller chooses both ids, so
+        # naming a feed the community is not in was a 500. Nothing has to be
+        # moved out of a feed it was never in, and the count below must not come
+        # down for a row that was not there.
+        if current_feed_item is None:
+            current_feed_id = 0
+        else:
+            db.session.delete(current_feed_item)
+            db.session.commit()
 
-        # also update the num_communities for the old feed
-        current_feed = db.session.get(Feed, current_feed_id)
-        current_feed.num_communities = current_feed.num_communities - 1
-        db.session.add(current_feed)
-        db.session.commit()
+            # also update the num_communities for the old feed
+            current_feed = db.session.get(Feed, current_feed_id)
+            current_feed.num_communities = current_feed.num_communities - 1
+            db.session.add(current_feed)
+            db.session.commit()
 
         # announce the change to any potential subscribers
-        if current_feed.public:
+        if current_feed_id != 0 and current_feed.public:
             community = db.session.get(Community, community_id)
             if current_app.debug:
                 announce_feed_add_remove_to_subscribers("Remove", current_feed.id, community.id)
             else:
                 announce_feed_add_remove_to_subscribers.delay("Remove", current_feed.id, community.id)
+
+    # D1317. Adding a community a feed already holds made a SECOND FeedItem and
+    # counted it again -- nothing in the schema stops the pair repeating, and the
+    # route is a GET, so a reload or a double click was enough. num_communities
+    # then overstated the feed for good.
+    if FeedItem.query.filter_by(feed_id=feed_id, community_id=community_id).first():
+        return
 
     # make the new feeditem and commit it
     feed_item = FeedItem(feed_id=feed_id, community_id=community_id)
