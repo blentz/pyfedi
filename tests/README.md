@@ -11359,3 +11359,30 @@ gone while an account still points at it, which the schema forbids. The test
 simulates it at the session -- a small wrapper whose `get` answers None for
 `Instance` and delegates everything else -- rather than pretending the
 database can produce it. That says exactly how reachable the guard is.
+
+**654. WHEN TWO COUNTERS MOVE TOGETHER, TEST BOTH OR NEITHER IS TESTED.**
+`Post.vote` moved the score by 2 on a reversal and the author's reputation by 1
+(D1302), and every test of voting that existed looked at the score. The score
+was right. Two quantities updated from one event need an assertion each, and the
+useful one is the property that ties them: the same votes standing must give the
+same reputation whatever order they were cast in.
+
+**655. A METHOD WITH A TWIN: DIFF THEM BEFORE TESTING EITHER.**
+`Post.vote` and `PostReply.vote` are the same method written twice, and three of
+this round's five defects are things one of them does and the other does not
+(D1303, D1304, D1305) -- a refusal, an exemption, a gate. The same shape gave
+D1196 in an earlier round on the same pair. `diff <(sed -n 'a,bp' file) <(sed -n
+'c,dp' file)` is a minute, and every difference it shows is either deliberate or
+a defect.
+
+**656. A GATE ON ONE PATH IS NOT A GATE.** `vote_for_reply` checked
+`can_upvote`/`can_downvote` on its API path and not on its web path (D1306), so
+the permission was real for scripts and absent for browsers. When a function
+serves both `SRC_API` and `SRC_WEB`, read the two branches side by side and test
+every gate through both -- and when the twin function (`vote_for_post`) gates
+both, that is the specification.
+
+**657. AN INTEGER COLUMN QUIETLY ROUNDS A FLOAT.** `Post.score` is
+`db.Column(db.Integer)` and `spicy_effect` is a float, so `SPICY_UNDER_60=1.5`
+stores 2. A test that asserted 1.5 would be a test of a fiction. Measure what
+the database gives back, not what the Python line computes.

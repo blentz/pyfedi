@@ -18936,4 +18936,65 @@ remote one, and an instance row that has gone.
 
 ---
 
-**Next free number: D1302.**
+## Round 136 — sub-project 110: voting and un-voting, every transition
+
+**The round in one line: the score of a post was always right and the
+reputation of its author was not — a reversal moved one by two and the other by
+one — and the web path that votes on a COMMENT asked for no permission at all.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1302** | `app/models.py`, `Post.vote` and `PostReply.vote` | The existing-vote branch ran `reputation = reputation - :effect` with the OLD vote's effect and stopped there, so a voter who turned an upvote into a downvote moved the score by 2 and the author's reputation by 1. The new vote's effect was never applied, so reputation depended on the order a voter clicked in rather than on the votes standing: switching up→down left the author where they started, while a plain downvote cost them 1. | **fixed** | `test_the_order_of_the_clicks_does_not_matter`; measured at 10.0 where the votes standing say 9 |
+| **D1303** | `app/models.py`, `Post.vote` | The same branch was wrapped in `if not self.community.low_quality:`, so in a low-quality community NO vote change touched reputation. A downvote there costs the author 1 when cast (the new-vote branch exempts upvotes only), and taking it back refunded nothing — the cost stood for good, and an author could be held down by downvotes that no longer existed. | **fixed** | `TestReputationInALowQualityCommunity::test_and_taking_it_back_gives_it_back` |
+| **D1304** | `app/models.py:3368`, `PostReply.vote` | No downvote refusal for an author who has blocked the voter or the voter's instance. `Post.vote` opens with exactly that refusal, so blocking someone stopped them downvoting your posts and left them free to downvote every comment you wrote — which is where a follow-around does its work. | **fixed** | `TestWhoMayDownvoteAComment`; the reply reached (0, 1, -1) with the block in place |
+| **D1305** | `app/models.py`, `PostReply.vote` | No low-quality exemption either. The flag's own label reads "Low quality / toxic - upvotes in here don't add to reputation", and it held for posts only: reputation was farmable at full rate by commenting in the communities the flag exists to exclude. | **fixed** | `test_a_comment_upvote_earns_nothing_either`; measured 11.0 where the policy says 10 |
+| **D1306** | `app/shared/reply.py`, `vote_for_reply` | The web path called neither `can_upvote` nor `can_downvote`. Its API path calls both, and `vote_for_post` gates both of its paths, so every permission those two carry was enforced on posts and unenforced on comments for anybody using the site in a browser: a community set to accept no downvotes took them, a voter the community had banned kept voting, and so did a user whose reputation or attitude had put voting out of reach. | **fixed** | probe: `pa comment downvote, community accepts none: counts=(0, 1, -1)` beside `pb post downvote, community accepts none: counts=(0, 0, 0)`; `pc` and `pd` the same pair for a banned voter |
+
+**Where the gate sits, and why not where its twin's sits.** `vote_for_post`
+has its web gate ABOVE the `user.banned` refusal, so a banned user is answered
+with the buttons unchanged and only a 'reversal' — which neither gate matches —
+reaches the 403. The comment gate goes BELOW that refusal instead, because
+`test_a_banned_user_is_refused_with_403` in
+tests/test_shared_reply_interactions.py pins the 403 for a banned user's upvote
+and 403 says what happened. No vote is cast either way: `can_upvote` is false
+for a banned user, so the order decides only which answer they get. Both
+behaviours are now pinned, each beside the other.
+
+**The policy now has one statement.** `reputation_delta(old_effect,
+new_effect, low_quality)` is the difference between what the two votes earn,
+where an upvote in a low-quality community earns nothing and a downvote always
+costs. All four call sites — a new vote and a changed vote, on a post and on a
+comment — go through it, which is what makes withdrawing a vote give back
+exactly what it gave and a reversal apply both halves. Sixteen mutants over the
+rule, the four call sites and the two gates all die.
+
+**Not a defect, but worth knowing.** `Post.score` is an `Integer` column while
+`spicy_effect` is a float, so a fractional `SPICY_UNDER_*` is rounded on the way
+to the database: an instance that sets 1.5 buys the same amplification as one
+that sets 2 for the first vote on an empty post. The test says so rather than
+asserting 1.5 and failing.
+
+**What the pair gets right, now pinned.** Which counter moves is decided by the
+stored vote's effect and not by the direction asked for, so `score -= effect`
+(a withdrawal) and `score += effect * 2` (a reversal) are correct only under the
+signs they sit beneath. Every mutant that swaps one of the eight counter
+adjustments dies.
+
+### What the slice pins
+
+98 tests: an upvote and a downvote on a post and on a comment, cast, repeated
+(which withdraws it), reversed each way, and reversed through the API's 'reversal'
+including a reversal of nothing; a direction that is none of the three; the
+author's reputation for every one of those transitions, in an ordinary community
+and in a low-quality one; `reputation_delta` on its own, including the property
+that withdrawing gives back what was given; the blocked-downvote refusal on both
+models, by user and by instance, with an upvote and a withdrawal still allowed;
+the spicy amplification at each of its three thresholds and past the last one;
+an emoji reaction cast, changed without changing the vote, and carried through a
+reversal; two voters adding up; and the web gates — a community accepting no
+downvotes, a voter the community has banned, a voter whose reputation is spent,
+each asserted for the comment path beside the post path it disagreed with.
+
+---
+
+**Next free number: D1307.**
