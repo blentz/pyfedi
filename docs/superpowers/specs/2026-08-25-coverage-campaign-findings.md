@@ -19143,4 +19143,47 @@ that name not blocking it, no name at all, and the permission refusal.
 
 ---
 
-**Next free number: D1322.**
+## Round 140 — sub-project 114: what goes on the wire, and the first of the warning burn-down
+
+**The round in one line: every outbound federation request handed httpx its
+body the deprecated way, which is 199 of the suite's 455 warnings and an
+outage the day httpx drops it.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1322** | `app/activitypub/signature.py:529` | A branch raising `ValueError` for a 4xx POST that had never run once: `method` is `Literal["get", "post"]` and every caller passes it lowercase, while the comparison was `method == "POST"`. **Removed rather than corrected.** `post_request` is the caller and it READS 4xx responses — `community_has_no_followers` repairs the membership, `person_is_banned_from_site` processes the ban, and 410/418 marks the peer gone forever and empties its SendQueue. A raise lands in that function's `except Exception`, which records `http_status_code = 404` and does none of them, so waking the branch up would stop this instance ever noticing a peer is gone. | **fixed** | `Failed: DID NOT RAISE ValueError` for a 400, against the branch's plain intent |
+
+**The warning, and why it is a defect rather than noise.**
+`httpx_client.request(..., data=body_bytes)` raises `DeprecationWarning: Use
+'content=<...>' to upload raw bytes/text content.` — once per federated send,
+199 times across the suite. `data=` is httpx's FORM ENCODING argument and it
+keeps raw bytes only for compatibility; when that goes, every outbound activity
+from this instance goes with it. Measured identical on the wire with both
+spellings: same body, same `Content-Type`, same `Content-Length` — which is what
+the signature requires, the Digest being computed over exactly those bytes.
+
+**An earlier round had pinned the dead branch alive.**
+`test_a_client_error_on_a_post_is_raised_but_404_and_5xx_are_returned` covered
+those lines by passing `method='POST'` — a value no caller passes — and its
+docstring describes the three operands it separates without ever asking whether
+anything reaches them. That is how dead code acquires a test: cover the line by
+supplying whatever makes it run. It has been replaced by one that asserts the
+status comes back for BOTH spellings of the method, so the removal holds at the
+entry point the old test used as well as the one callers use.
+
+**Warning count: 455 → 217.**
+
+### What the slice pins
+
+22 tests: the body is the activity and is byte-identical to what was signed; the
+Content-Type asked for, and a different one carried through; Content-Length
+matching the body; nothing form-encoded; the signature and digest headers
+present; the digest recomputed from the bytes that were actually sent (the
+property a peer checks); the user agent; a send and a get that warn about
+nothing at all; the deprecated spelling absent from the source; the response
+returned for 400, 403, 404, 410, 418, 422 and 503; and `send_via_async` handing
+back the uri, headers and bytes without sending anything.
+
+---
+
+**Next free number: D1323.**

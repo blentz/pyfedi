@@ -863,11 +863,26 @@ def test_a_transport_error_is_reraised_with_the_url(app):
                                          private_key, 'kid')
 
 
-@pytest.mark.parametrize('status, raises', [(400, True), (403, True), (404, False), (500, False)])
-def test_a_client_error_on_a_post_is_raised_but_404_and_5xx_are_returned(app, status, raises):
-    """signature.py:520-527 raises for 4xx EXCEPT 404, and returns everything
-    else for post_request to log. Four rows, because each of the three operands
-    -- the method, the range and the 404 exclusion -- needs its own separator.
+@pytest.mark.parametrize('status', [400, 403, 404, 410, 418, 500])
+@pytest.mark.parametrize('method', ['post', 'POST'])
+def test_a_status_is_always_returned_rather_than_raised(app, status, method):
+    """D1322. This used to read
+    `test_a_client_error_on_a_post_is_raised_but_404_and_5xx_are_returned`, and
+    it pinned a branch that raised ValueError for a 4xx POST -- reaching it by
+    passing `method='POST'`, which NO CALLER DOES: the parameter is
+    `Literal["get", "post"]` and every call site in app/ passes it lowercase or
+    not at all, so the comparison `method == "POST"` was never true in
+    production and the branch had never run.
+
+    It is gone rather than corrected to `.lower()`, because `post_request` reads
+    those 4xx responses: 410 and 418 mark the peer gone forever and empty its
+    SendQueue, `community_has_no_followers` repairs the membership, and
+    `person_is_banned_from_site` processes the ban. A raise here lands in that
+    function's `except Exception`, which records `http_status_code = 404` and
+    does none of them.
+
+    Both spellings of the method are asserted, so the removal holds for the
+    entry point the old test used as well as the one callers use.
     """
     from unittest.mock import patch
     from app.activitypub.signature import HttpSignature, RsaKeys
@@ -879,16 +894,16 @@ def test_a_client_error_on_a_post_is_raised_but_404_and_5xx_are_returned(app, st
             self.status_code = code
             self.content = b'body'
 
+        def close(self):
+            pass
+
     with patch('app.activitypub.signature.httpx_client') as client:
         client.request.return_value = _Resp(status)
-        if raises:
-            with pytest.raises(ValueError, match=f'POST error to .*: {status}'):
-                HttpSignature.signed_request('https://remote.example/inbox', {'id': 'x'},
-                                             private_key, 'kid', method='POST')
-        else:
-            result = HttpSignature.signed_request('https://remote.example/inbox', {'id': 'x'},
-                                                  private_key, 'kid', method='POST')
-            assert result.status_code == status
+        result = HttpSignature.signed_request('https://remote.example/inbox',
+                                              {'id': 'x'}, private_key, 'kid',
+                                              method=method)
+
+    assert result.status_code == status
 
 
 def test_a_signed_get_is_the_same_request_without_a_body(app):

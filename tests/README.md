@@ -11506,3 +11506,27 @@ workers plus the controller, which made the suite's warning count -- a ratchet
 in this campaign -- depend on how it was run. They are pinned in pytest.ini's
 `filterwarnings` with that reasoning. Any warning emitted at import time
 behaves this way; a per-test one does not.
+
+**674. A DEPRECATION WARNING IS A DATED OUTAGE.**
+`httpx_client.request(..., data=body_bytes)` worked and warned; `data=` is
+httpx's form-encoding argument, and raw bytes belong in `content=`. It was 199
+of the suite's 455 warnings AND every outbound federation request, so the day
+httpx drops the compatibility this instance stops federating (D1322's round).
+Treat a third-party deprecation in OUR call as a defect with a deadline, not as
+noise to filter.
+
+**675. A COMPARISON THAT NEVER MATCHES MAY BE HOLDING THE SYSTEM UP.**
+`if method == "POST"` never fired, because the type is `Literal["get", "post"]`
+and every caller passes lowercase. Correcting it to `.lower()` would have been a
+regression: the caller reads 4xx RESPONSES to mark a peer gone forever, repair a
+membership and process a ban, and a raise lands in its `except Exception`
+instead (D1322). Before waking dead code up, read what the caller does with the
+value it currently gets.
+
+**676. COVERING A LINE IS NOT THE SAME AS ASKING WHO REACHES IT.**
+A branch raising on a 4xx POST had a passing, parametrised test with a careful
+docstring -- which reached it by passing `method='POST'`, a value no caller in
+app/ passes (D1322). The test made dead code look load-bearing and would have
+failed anybody who removed it. When a test has to supply an unusual value to
+enter a branch, say in the docstring which caller supplies that value in
+production; if none does, that is a finding, not a test.
