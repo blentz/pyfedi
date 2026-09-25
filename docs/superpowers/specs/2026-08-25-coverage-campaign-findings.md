@@ -18755,4 +18755,38 @@ report with its four conditions and its once-per-account flag.
 
 ---
 
-**Next free number: D1295.**
+---
+
+## Round 131 — sub-project 105: subscribing to somebody else's blocklist
+
+**The round in one line: a defederation subscription is an instance saying
+"ban whoever they ban", and six values in that answer were read without asking
+-- in a worker that also leaked its session when they were missing.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1295** | `app/utils.py:3808,3825` | `instance_data['federated_instances']['blocked']` and `row['domain']` for a Lemmy-compatible peer; `row['domain']` and the list itself for a Mastodon-compatible one; and neither answer was checked for being JSON. Each was a `KeyError` or `TypeError` inside `download_defeds_worker`, which has no `try/finally` -- so the subscription stopped updating AND the task session was left open. | **fixed** | `PROBE aa: KeyError: 'federated_instances'`; `ba: KeyError: 'blocked'`; `ca`/`da: KeyError: 'domain'`; `ea: TypeError: string indices must be integers` |
+| **D1296** | `app/utils.py:3800` | The worker inserted a `BannedInstances` row for every domain the list named, without looking for one that was already there, and `BannedInstances.domain` carries an index but no unique constraint. A domain the remote names twice, or a subscription downloaded twice from the admin screen, produced duplicate rows. The periodic sync deletes every subscription row before reloading, so only the direct path could grow. | **fixed** | `BannedInstances.query.filter_by(domain='nasty.test').count() == 1` failed at 2 |
+| **D1297** | `app/utils.py:4465` | `days_to_add_for_next_month` built a midnight `datetime` for the target day and subtracted the scheduled `datetime` from it, then read `.days` -- which floors. A monthly repeat scheduled for 12:00 on the 15th moved 30 days, to the 14th, and 30 again from there, walking backwards a day a month. The subtraction is on the dates now. | **fixed** | `assert datetime.timedelta(days=30) == datetime.timedelta(days=31)` |
+
+**One equivalent mutant.** `if post.repeat is not None and post.repeat !=
+'none'` loses nothing if the second clause goes: none of the three inner
+branches matches `'none'`, so the function falls through to the same
+`timedelta(seconds=0)`.
+
+### What the slice pins
+
+63 tests: nine shapes of a Lemmy-compatible blocklist and six of a
+Mastodon-compatible one, the three softwares that answer the first way and the
+fallback for anything else, what the subscription writes and the four reasons
+it writes nothing, both dispatch paths; `move_file_to_s3` moving all three
+paths, refusing one already in the bucket, one outside the media root and one
+that is not there -- each with a file that EXISTS, so the guard is what keeps
+it rather than the absence; the storage class and ACL; an instance with no
+bucket; and then the scheduled-repeat arithmetic in six cases including the
+31st and the turn of the year, the community keyword filter in five, and every
+notification kind's name.
+
+---
+
+**Next free number: D1298.**

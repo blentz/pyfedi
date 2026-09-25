@@ -11294,3 +11294,16 @@ fails -- the cache the suite uses answers None every time. Patch
 -- a test that only turns the setting ON leaves the mutant that drops the
 setting from the condition alive. Every gated refusal here is tested with the
 setting on AND off, with the detector forced true both times.
+
+**645. A GUARD ON A PATH IS ONLY TESTED IF THE FILE EXISTS.** Three
+`move_file_to_s3` tests asserted a path was left alone -- with paths that were
+not on disk, so `os.path.isfile` was doing the work and the mutant that drops
+the `app/static/media` prefix check survived. Create the file, then assert the
+path is unchanged AND the file is still there.
+
+**646. `.days` ON A timedelta FLOORS, SO MIXING MIDNIGHT WITH A REAL TIME
+LOSES A DAY.** `days_to_add_for_next_month` subtracted a scheduled datetime
+from a midnight one (D1297): 30 days 12 hours reads as 30. Any arithmetic that
+means "how many days between these two DATES" should subtract `.date()` from
+`.date()`, and the test that catches it needs a time of day that is not
+midnight.
