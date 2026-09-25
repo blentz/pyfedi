@@ -508,7 +508,16 @@ class HttpSignature:
                     method,
                     uri,
                     headers=headers,
-                    data=body_bytes,
+                    # `content=`, not `data=`. httpx takes raw bytes through
+                    # `content=` and has deprecated passing them as `data=`,
+                    # which it keeps only for form encoding -- so every
+                    # outbound federation request raised
+                    # `DeprecationWarning: Use 'content=<...>' to upload raw
+                    # bytes/text content.` and will stop working when httpx
+                    # drops it. Measured identical on the wire: same body,
+                    # same Content-Type, same Content-Length, which is what
+                    # the HTTP signature over the digest requires.
+                    content=body_bytes,
                     timeout=timeout,
                     follow_redirects=method == "GET",
                 )
@@ -516,15 +525,19 @@ class HttpSignature:
                 # Convert to a more generic error we handle
                 raise httpx.HTTPError(f"HTTP Exception for {ex.request.url} - {ex}") from None
 
-            if (
-                    method == "POST"
-                    and 400 <= response.status_code < 500
-                    and response.status_code != 404
-            ):
-                raise ValueError(
-                    f"POST error to {uri}: {response.status_code} {response.content!r}"
-                )
-
+            # D1322. There was a branch here raising ValueError for a 4xx POST.
+            # It had never run: `method` is `Literal["get", "post"]` and every
+            # caller passes it lowercase, so `method == "POST"` is always False.
+            #
+            # DO NOT "FIX" IT TO `method.lower() == "post"`. `post_request`
+            # above is the caller, and it reads 4xx RESPONSES rather than
+            # catching an exception: `community_has_no_followers` calls
+            # `fix_local_community_membership`, `person_is_banned_from_site`
+            # calls `process_banned_message`, and 410/418 marks the instance
+            # gone forever and empties its SendQueue. A raise here lands in that
+            # function's `except Exception`, which records `http_status_code =
+            # 404` and does none of them -- so waking this branch up would stop
+            # this instance ever noticing that a peer is gone.
             return response
 
 
