@@ -1556,7 +1556,7 @@ def test_feed_add_community_announces_with_both_ids_on_each_arm(app, db_session)
 
     with app.test_request_context('/'):
         with patch('app.shared.feed.announce_feed_add_remove_to_subscribers') as announce, \
-                patch('app.shared.feed.current_app') as current_app_stub:
+                patch('app.shared.feed.current_app', new_callable=MagicMock) as current_app_stub:
             current_app_stub.debug = True
             _feed_add_community(s.community.id, s.bystander_feed.id, s.feed.id, s.actor.id)
 
@@ -1571,7 +1571,7 @@ def test_feed_add_community_announces_with_both_ids_on_each_arm(app, db_session)
 
     with app.test_request_context('/'):
         with patch('app.shared.feed.announce_feed_add_remove_to_subscribers') as announce, \
-                patch('app.shared.feed.current_app') as current_app_stub:
+                patch('app.shared.feed.current_app', new_callable=MagicMock) as current_app_stub:
             current_app_stub.debug = False
             _feed_remove_community(s.community.id, s.feed.id)
 

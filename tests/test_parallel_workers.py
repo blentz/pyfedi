@@ -298,3 +298,63 @@ class TestNothingLeaksConfigIntoLaterTests:
     def test_the_list_names_files_that_exist(self):
         for name in sorted(self.KNOWN):
             assert (Path('tests') / name).is_file(), name
+
+
+class TestPatchingAProxyDoesNotGiveAnAsyncMock:
+    """`patch('...current_app')` hands back an AsyncMock, not a MagicMock.
+
+    `unittest.mock` picks AsyncMock when `_is_async_obj(original)` is true, and
+    that asks `inspect.isawaitable`, which is satisfied by anything with
+    `__await__` -- which werkzeug's LocalProxy defines so it can proxy an async
+    object. `asyncio.iscoroutinefunction(current_app)` is False, so the usual
+    check does not explain it; measured, the mock is an AsyncMock and so is every
+    attribute of it.
+
+    Calling `current_app.logger.exception(...)` on one therefore builds a
+    coroutine nobody awaits: `RuntimeWarning: coroutine
+    'AsyncMockMixin._execute_mock_call' was never awaited`, the suite's last
+    three warnings. `new_callable=MagicMock` is the fix.
+    """
+
+    def test_the_proxy_is_what_mock_reads_as_async(self, app):
+        """`unittest.mock._is_async_obj` is what decides, and it is satisfied by
+        LocalProxy while `asyncio.iscoroutinefunction` is not -- which is why the
+        usual check does not explain the AsyncMock below."""
+        import asyncio
+        from unittest.mock import _is_async_obj
+
+        import app.api.alpha as alpha
+
+        assert asyncio.iscoroutinefunction(alpha.current_app) is False
+        assert _is_async_obj(alpha.current_app) is True
+
+    def test_a_bare_patch_of_it_is_an_async_mock(self, app):
+        """The behaviour being worked around, asserted so the workaround has a
+        reason a reader can check."""
+        from unittest.mock import AsyncMock, patch
+
+        with patch('app.api.alpha.current_app') as mock:
+            assert isinstance(mock, AsyncMock)
+
+    def test_new_callable_gives_a_plain_mock(self, app):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        with patch('app.api.alpha.current_app', new_callable=MagicMock) as mock:
+            assert isinstance(mock, MagicMock)
+            assert not isinstance(mock, AsyncMock)
+            assert not isinstance(mock.logger.exception, AsyncMock)
+
+    def test_no_test_patches_a_current_app_proxy_bare(self):
+        """The property. A bare patch of any `current_app` leaves a coroutine
+        behind the moment the code under test calls a method on it."""
+        import re
+
+        offenders = []
+        pattern = re.compile(r"patch\((['\"])app\.[a-z_.]*current_app\1\)")
+        for path in sorted(Path('tests').glob('test_*.py')):
+            if path.name == 'test_parallel_workers.py':
+                continue
+            for number, line in enumerate(path.read_text(encoding='utf8').splitlines(), 1):
+                if pattern.search(line):
+                    offenders.append(f'{path.name}:{number}')
+        assert offenders == []

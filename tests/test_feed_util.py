@@ -447,7 +447,7 @@ def test_new_communities_are_backfilled_once_in_debug_and_all_of_them_otherwise(
     backfill = MagicMock()
     with app.test_request_context('/'):
         with patch('app.feed.util.retrieve_mods_and_backfill', backfill), \
-                patch('app.feed.util.current_app') as current_app_stub:
+                patch('app.feed.util.current_app', new_callable=MagicMock) as current_app_stub:
             current_app_stub.debug = debug
             initialise_new_communities(feed)
 
