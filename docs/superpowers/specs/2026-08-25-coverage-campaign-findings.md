@@ -18859,4 +18859,41 @@ field type, and the three validator kinds that constrain a value.
 
 ---
 
-**Next free number: D1299.**
+---
+
+## Round 134 — sub-project 108: every form that takes a file, submitted without one
+
+**The round in one line: fifteen routes read `request.files['name']`, which is
+a 400 for any client that does not send an empty file input -- which is every
+client that is not a browser. The shape had been found once before and fixed in
+exactly one of the sixteen places it appears.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1299** | `app/admin/routes.py` (6), `app/community/routes.py` (6), `app/feed/routes.py` (2), `app/post/routes.py` (1) | `request.files['name']` raises `werkzeug.exceptions.BadRequestKeyError` -- a 400 -- when the submission does not carry that field. Every one of the fifteen is followed by an `if x and x.filename != '':` that already handles None, so `.get` is the whole fix. The sites are the site icon, the ban-list import, a community's icon and banner on two screens each, an account's avatar and banner, a new community's icon and banner, the image on a post being created and on one being edited, and a feed's icon and banner. | **fixed** | `jinja2`/`werkzeug` 400 on a POST with no file part; the mutants that restore any of them die |
+
+**This was D1047, found and fixed once.** Its comment in
+`app/user/routes.py` says exactly what the failure is and why a browser hides
+it. Nobody swept for the shape then, and fifteen copies stayed. The last test
+in the new file is the sweep as a property: every `request.files['...']` in
+those six files must either be gone or sit under an
+`if '...' in request.files:` two lines above -- the other correct spelling,
+which `app/community/forms.py` uses.
+
+**A test-fixture gap worth writing down.** `admin_community_edit` always
+appends the `und` language row, and `.append(None)` is a `FlushError`. A
+seeded instance has that row; a test database has it only if the test creates
+it. That is a fixture requirement, not a defect, and the fixture now says so.
+
+### What the slice pins
+
+17 tests: a community edited by an admin with no file fields at all, with them
+present but empty (what a browser sends), and with an icon that is actually
+stored; the same three shapes for an account; a community and an account that
+do not exist; a caller holding the wrong permission; the ban-list import with
+no file, with an empty field, with something that is not JSON, and with a list
+that names an instance; the export; and the sweep property over all six files.
+
+---
+
+**Next free number: D1300.**
