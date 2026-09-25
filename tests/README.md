@@ -11596,3 +11596,12 @@ The hole was invisible while reading `delete_from_disk` alone; it needed
 straight out of a peer's JSON. For any column a destructive operation reads, list
 its writers first -- the question is not what the code does with the value but
 who chose it.
+
+**685. A `str.replace` THAT MATCHES NOTHING SUCCEEDS.**
+The round 142 floor ratchet silently did not happen: the edit script called
+`s.replace(old, new)` on an anchor that had drifted, wrote the file unchanged,
+and reported nothing. `coverage_floors.ini` still said 77 after a commit whose
+message said 78. Every scripted edit in this campaign asserts
+`s.count(old) == 1` before replacing -- the two that skipped it are the two that
+went wrong (this, and an earlier probe that patched a comment that was no longer
+there).
