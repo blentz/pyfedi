@@ -11469,3 +11469,40 @@ transaction, so it cannot show that a missing rollback breaks the session -- the
 mutant survived against it. A real `UniqueViolation` does. Where the point is the
 state the database is left in, cause the error in the database (here by
 switching off the form check that normally prevents it) rather than in Python.
+
+**670. THE SUITE RUNS IN PARALLEL, AND WHAT THAT COSTS TO KEEP.**
+`./run_tests.sh tests/` runs on four workers (`-n 4 --dist loadgroup`); a run
+that NAMES a path stays serial, so every mutation pass keeps the old, cheap
+path. Each worker gets its own database, copied from the migrated one with
+`CREATE DATABASE ... TEMPLATE` (about a second, against eight for a migration
+replay), and its own pair of Redis databases. Measured 23:14 serial against
+7:58 parallel, same 11,909 tests. What a new test has to respect: it must not
+depend on another test file's rows, and if it touches `app/static/` it must be
+in the shared-static group (conftest groups it automatically if it NAMES the
+path; if it only reaches that tree through app code, add it to
+SHARED_STATIC_MODULES -- re-measure with `PYFEDI_WATCH_STATIC=1`).
+
+**671. VERIFY THE MECHANISM BEFORE TUNING ITS INPUTS.**
+Three full parallel runs were spent adding modules to an `xdist_group` that was
+never honoured: xdist reads that mark in its OWN
+`pytest_collection_modifyitems` and rewrites the node ids, so a mark added by a
+later hook is invisible and the scheduler quietly falls back to distributing
+test by test. `@pytest.hookimpl(tryfirst=True)` fixed it. One `-v` run grepped
+for `[gw0]`/`[gw1]` would have shown a single module running on two workers at
+once -- check that the machinery does what you think before deciding your
+inputs to it are wrong.
+
+**672. A BEFORE/AFTER LISTING MISSES THE FILE THAT WAS THERE IN BETWEEN.**
+The first attempt to find which tests write to `app/static/` snapshotted the
+tree around each test and compared. That finds nothing for a test that writes a
+file and cleans it up -- which is exactly the upload tests, and exactly the
+files another worker trips over. Intercepting `builtins.open`, `os.unlink` and
+friends finds them, and attributes each call to the process that made it, so
+the measurement can run in parallel itself.
+
+**673. A WARNING RAISED AT IMPORT IS COUNTED ONCE PER PROCESS.**
+`ldap3`'s two pyasn1 deprecations were 2 warnings serially and 10 on four
+workers plus the controller, which made the suite's warning count -- a ratchet
+in this campaign -- depend on how it was run. They are pinned in pytest.ini's
+`filterwarnings` with that reasoning. Any warning emitted at import time
+behaves this way; a per-test one does not.
