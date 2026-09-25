@@ -380,15 +380,33 @@ def feed_add_community():
     # it will get those and then add a community to 
     # a feed using the FeedItem model
     user_id = current_user.id
-    feed_id = int(request.args.get('new_feed_id'))
-    current_feed_id = int(request.args.get('current_feed_id'))
-    community_id = int(request.args.get('community_id'))
+    # D1313. These read `int(request.args.get('new_feed_id'))`, so a request
+    # that leaves the parameter out was `TypeError: int() argument must be a
+    # string, a bytes-like object or a real number, not 'NoneType'` and one
+    # carrying a word was a ValueError -- a 500 either way, where the checks
+    # below already say what the answer should be.
+    feed_id = request.args.get('new_feed_id', 0, type=int)
+    current_feed_id = request.args.get('current_feed_id', 0, type=int)
+    community_id = request.args.get('community_id', 0, type=int)
 
     # make sure the signed-in user owns the feed being added to, and -- when a
     # community is being moved out of another feed -- the feed it is moving from
-    if db.session.get(Feed, feed_id).user_id != user_id:
+    #
+    # D1314. `db.session.get(...).user_id` on an id nobody has is
+    # `AttributeError: 'NoneType' object has no attribute 'user_id'`, a 500
+    # where the very next line says 404.
+    feed = db.session.get(Feed, feed_id)
+    if feed is None or feed.user_id != user_id:
         abort(404)
-    if current_feed_id != 0 and db.session.get(Feed, current_feed_id).user_id != user_id:
+    if current_feed_id != 0:
+        current_feed = db.session.get(Feed, current_feed_id)
+        if current_feed is None or current_feed.user_id != user_id:
+            abort(404)
+    # D1315. Without this the FeedItem below named a community that does not
+    # exist, and the insert was a ForeignKeyViolation -- the post-level twin of
+    # D1125, and a 500 rather than the 404 this route gives for everything else
+    # it cannot resolve.
+    if db.session.get(Community, community_id) is None:
         abort(404)
 
     _feed_add_community(community_id, current_feed_id, feed_id, user_id)

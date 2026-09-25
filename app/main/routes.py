@@ -286,9 +286,13 @@ def list_communities():
     search_param = request.args.get('search', '').strip()
     home_select = request.args.get('home_select', 'any')
     subscribe_select = request.args.get('subscribe_select', 'any')
-    topic_id = int(request.args.get('topic_id', 0))
-    feed_id = int(request.args.get('feed_id', 0))
-    language_id = int(request.args.get('language_id', 0))
+    # D1311. `int(request.args.get('topic_id', 0))` is a 500 for anything that
+    # is not a number, and one of those is the empty string a select sends when
+    # nothing is chosen -- so `/communities?topic_id=` crashed a page anybody
+    # can reach. `type=int` answers the default instead of raising.
+    topic_id = request.args.get('topic_id', 0, type=int)
+    feed_id = request.args.get('feed_id', 0, type=int)
+    language_id = request.args.get('language_id', 0, type=int)
     nsfw = request.args.get('nsfw', 'all')
     page = request.args.get('page', 1, type=int)
     instance = request.args.get('instance', '')
@@ -311,6 +315,10 @@ def list_communities():
     # filter private communities: show only to members
     if current_user.is_authenticated:
         # for authenticated users, show non-private communities OR private communities where they are members
+        # `.subquery()` inside `in_()` is an SAWarning ("Coercing Subquery
+        # object into a select()") on every request that reaches this line;
+        # `.scalar_subquery()` is what SQLAlchemy 2 wants for a one-column
+        # subquery and emits the same SQL.
         member_check = db.session.query(CommunityMember.community_id).filter(
             CommunityMember.user_id == current_user.id,
             CommunityMember.is_banned == False
@@ -1491,9 +1499,10 @@ def health2():
     # This is all busy-work to give an indication to the caller of the instance performance so there is a lot of # noqa comments to silence ruff.
 
     search_param = request.args.get('search', '')
-    topic_id = int(request.args.get('topic_id', 0))
-    feed_id = int(request.args.get('feed_id', 0))
-    language_id = int(request.args.get('language_id', 0))
+    # D1312, the same three reads as :289 -- and this endpoint takes no login.
+    topic_id = request.args.get('topic_id', 0, type=int)
+    feed_id = request.args.get('feed_id', 0, type=int)
+    language_id = request.args.get('language_id', 0, type=int)
     nsfw = request.args.get('nsfw', None)
     sort_by = request.args.get('sort_by', 'post_reply_count desc')
 
