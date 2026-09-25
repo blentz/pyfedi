@@ -141,23 +141,114 @@ class TestSorts:
         res = get_post_list2(None, {'sort': 'Active', 'limit': 50})
         assert len(res['posts']) == 1
 
-    def test_the_active_sort_wants_a_last_active(self, spread):
-        """D1243. `Post.last_active` has no default of any kind, so it is the
-        one column in this ORDER BY that really can be NULL -- and a keyset
-        page ordered by a nullable column can drop rows without saying so.
-        get_post_list's Active arm has always filtered it out."""
+    def test_a_post_cannot_have_no_last_active_any_more(self, spread):
+        """D1243 was that `Post.last_active` had no default of any kind, so it
+        was the one column in this ORDER BY that really could be NULL -- and a
+        keyset page is `WHERE (sort columns) < (the last row's values)`, in which
+        a NULL makes the predicate NULL rather than true. The row then appears on
+        NO page of that sort while still being counted in the total.
+
+        Migration c4f1a9d7e2b8 took the possibility away rather than leaving the
+        Active arm to filter it out: the column is NOT NULL and defaults to the
+        post's own time. This test used to write the NULL it is now asserting
+        cannot exist."""
+        from sqlalchemy.exc import IntegrityError
+
+        spread.posts[0].last_active = None
+        with pytest.raises(IntegrityError):
+            db.session.commit()
+        db.session.rollback()
+
+    def test_nor_a_null_scaled_ranking(self, spread):
+        from sqlalchemy.exc import IntegrityError
+
+        spread.posts[0].ranking_scaled = None
+        with pytest.raises(IntegrityError):
+            db.session.commit()
+        db.session.rollback()
+
+    def test_every_post_with_replies_reaches_the_active_sort(self, spread):
+        """The other half of the repair. A post with replies whose last_active
+        had never been written was dropped from every page of Active; now there
+        is no such post, so the sort returns all of them."""
         for post in spread.posts:
-            post.last_active = None
-        spread.posts[0].last_active = utcnow()
+            post.reply_count = 1
         db.session.commit()
         res = get_post_list2(None, {'sort': 'Active', 'limit': 50})
-        assert len(res['posts']) == 1
+        assert len(res['posts']) == len(spread.posts)
 
-    def test_the_scaled_sort_wants_a_scaled_ranking(self, spread):
-        for post in spread.posts:
-            post.ranking_scaled = None
+    @pytest.mark.parametrize('sort', ['Hot', 'Top', 'New', 'Active', 'Scaled',
+                                      'Old'])
+    def test_no_sort_warns_about_a_nullable_column(self, spread, sort):
+        """The burn-down's own assertion, and what pins `nullable=False` on the
+        MODEL: the database constraint stops the NULL, but sqlakeyset reads
+        `column.nullable` off the SQLAlchemy column, so a model that still
+        claimed the column was nullable would go on warning -- 199 warnings, one
+        per page built in the suite."""
+        import warnings
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            get_post_list2(None, {'sort': sort, 'limit': 50})
+        omitted = [str(warning.message) for warning in caught
+                   if 'incorrectly omitted' in str(warning.message)]
+        assert omitted == []
+
+    @pytest.mark.parametrize('sort', ['Hot', 'New', 'Active'])
+    def test_nor_does_a_community_page_that_orders_by_sticky(self, spread, sort):
+        """`sticky` and `instance_sticky` only enter the ORDER BY for a
+        community-scoped list with stickies left in -- which is why the sorts
+        above cannot pin them, and a mutant restoring their nullability survived
+        against that test alone."""
+        import warnings
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            get_post_list2(None, {'sort': sort, 'limit': 50,
+                                  'community_id': spread.posts[0].community_id})
+        omitted = [str(warning.message) for warning in caught
+                   if 'incorrectly omitted' in str(warning.message)]
+        assert omitted == []
+
+    def test_a_raw_insert_gets_the_same_defaults(self, spread):
+        """The schema carries the defaults too, not just the model. A NOT NULL
+        column with no SERVER default makes every INSERT that omits it fail, and
+        a raw `INSERT INTO post` -- in a migration, a test, a psql session --
+        does not run the ORM's Python-side defaults. One test in the suite does
+        exactly that and broke until the migration set them."""
+        from sqlalchemy import text
+
+        db.session.execute(text(
+            'INSERT INTO post (user_id, community_id, title, ap_id)'
+            ' VALUES (:user_id, :community_id, :title, :ap_id)'),
+            {'user_id': spread.posts[0].user_id,
+             'community_id': spread.posts[0].community_id,
+             'title': 'raw', 'ap_id': 'https://test.piefed.local/p/raw'})
         db.session.commit()
-        assert get_post_list2(None, {'sort': 'Scaled'})['posts'] == []
+        row = db.session.execute(text(
+            'SELECT sticky, instance_sticky, score, ranking, ranking_scaled,'
+            ' posted_at, last_active FROM post WHERE title = :title'),
+            {'title': 'raw'}).one()
+        assert row.sticky is False
+        assert row.instance_sticky is False
+        assert row.score == 0
+        assert row.ranking == 0
+        assert row.ranking_scaled == 0
+        assert row.posted_at is not None
+        assert row.last_active is not None
+
+    def test_a_new_post_gets_a_last_active_without_being_told(self, spread):
+        from app.models import Post
+        post = Post(user_id=spread.posts[0].user_id,
+                    community_id=spread.posts[0].community_id,
+                    title='fresh', ap_id='https://test.piefed.local/p/fresh')
+        db.session.add(post)
+        db.session.commit()
+        assert post.last_active is not None
+        assert post.sticky is False
+        assert post.score == 0
+        assert post.ranking == 0
+        assert post.ranking_scaled == 0
 
     def test_the_old_sort(self, spread):
         """'Old' is named only in this function's FIRST copy of the sort
