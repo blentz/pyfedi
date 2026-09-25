@@ -11386,3 +11386,30 @@ both, that is the specification.
 `db.Column(db.Integer)` and `spicy_effect` is a float, so `SPICY_UNDER_60=1.5`
 stores 2. A test that asserted 1.5 would be a test of a fiction. Measure what
 the database gives back, not what the Python line computes.
+
+**658. A TREE IN ONE INTEGER COLUMN HAS NO TREE INVARIANTS.**
+`Topic.parent_id` is `db.Column(db.Integer)` -- no foreign key, so nothing says
+the parent exists, and nothing says following parents terminates. Both
+assumptions were made: deleting a parent hid its children (D1310) and a cycle
+hung `Topic.path()` for ever (D1308). For any self-referential column with no
+constraint behind it, test three cases -- a parent that is gone, a cycle of one,
+and a cycle of two -- and put a bound on every walk that follows it.
+
+**659. A FORM'S CHOICES ARE A PERMISSION.** `topics_for_form` excluded the topic
+being edited and then listed its children anyway, so the edit form OFFERED the
+cycle (D1307). A `SelectField` validates what it is given against its choices,
+so withdrawing the offer was also the fix for the POST -- and asserting the
+choices is a cheaper test than asserting the refusal. Test both: the list, and
+the request that the list rejects.
+
+**660. `flash(_('...', 'error'))` IS A 500, NOT A CATEGORY.**
+`flask_babel.gettext` takes one positional argument, so a category written
+inside `_()` instead of beside it is `TypeError: Domain.gettext() takes 2
+positional arguments but 3 were given` (D1309). `grep -rn "_('.*', '\(error\|warning\|success\)')" app/` finds the shape, and the test that
+catches it is any test of the branch that flashes.
+
+**661. A CASCADE MAKES A GUARD LOAD-BEARING, SO SAY SO IN THE TEST.**
+`Topic.communities` cascades `"all, delete-orphan"`, so the "cannot delete topic
+with communities assigned to it" branch is all that stands between an admin's
+click and the deletion of every community in that topic. The test asserts the
+communities are still there, not only that the topic is.
