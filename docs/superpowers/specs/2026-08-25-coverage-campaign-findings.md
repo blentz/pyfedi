@@ -19186,4 +19186,68 @@ back the uri, headers and bytes without sending anything.
 
 ---
 
-**Next free number: D1323.**
+## Round 141 — sub-project 115: the seven columns a keyset page sorts by
+
+**The round in one line: a post whose `last_active` had never been written
+appeared on no page of the Active sort, at any limit, while still being counted
+in the total — and six other columns could do the same to older rows.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1323** | `app/models.py`, `Post`; migration `c4f1a9d7e2b8` | `sticky`, `instance_sticky`, `score`, `ranking`, `ranking_scaled`, `posted_at` and `last_active` were all nullable, and `/api/alpha/post/list2` pages by them with sqlakeyset. A keyset page is `WHERE (sort columns) < (the last row's values)`; a NULL anywhere in that comparison makes the predicate NULL rather than true, so the row is returned by NO page of that sort — silently, with the count still including it. `last_active` had no default of any kind, so this was reachable for any post whose activity was never recorded; the other six were nullable for rows written before their defaults existed. | **fixed** | 213 `UserWarning: Ordering by nullable column post.X can cause rows to be incorrectly omitted from the results` across three test files, and the Active arm's hand-written `last_active != None` filter, whose comment said "a post with replies but no last_active was exactly that row" |
+
+**What the repair is, and what it costs to run.** Migration `c4f1a9d7e2b8`
+backfills and then makes all seven NOT NULL. `last_active` is backfilled from the
+newest reply where there are replies — the truthful value, and those are exactly
+the rows the Active sort was dropping — and from the post's own time where there
+are none. `SET NOT NULL` normally scans the table under an ACCESS EXCLUSIVE lock,
+so each column instead goes through the PostgreSQL 12+ recipe: `CHECK ... NOT
+VALID` (instant), `VALIDATE CONSTRAINT` (scans under SHARE UPDATE EXCLUSIVE, so
+reads and writes continue), `SET NOT NULL` (no scan), `DROP CONSTRAINT`. The
+migration's docstring carries that reasoning, because the next person to add a
+NOT NULL will copy whatever is there.
+
+**The model matters as much as the schema.** sqlakeyset reads
+`column.nullable` off the SQLAlchemy column, not the database, so the model
+declaring `nullable=False` is what stops the warning — and a mutant that removes
+it from any one of the seven now dies. `sticky` and `instance_sticky` needed a
+community-scoped list to pin, because they only enter the ORDER BY there; the
+first mutation pass let that one survive.
+
+**The filters left in place.** `Post.last_active != None` and
+`Post.ranking_scaled != None` stay in `app/api/alpha/utils/post.py`, with their
+comments corrected. They can no longer exclude anything, Postgres drops the
+predicate against a NOT NULL column, and each has a raw-SQL twin in
+`post_query_criteria` that would have to move with it — the two spellings of that
+query being identical is worth more than removing a no-op.
+
+**The schema needed the defaults as well as the constraint.** A NOT NULL column
+with no SERVER default makes every INSERT that omits it fail, and a raw `INSERT
+INTO post` — in a migration, a test, a psql session — does not run the ORM's
+Python-side defaults. One test in the suite does exactly that, to check another
+column's server default, and it broke: `null value in column "score" of relation
+"post" violates not-null constraint`. The migration now sets the same defaults
+the model has, so the two agree whoever is writing, and a raw insert is pinned.
+
+**Two other tests wrote the NULL this round forbids.**
+`tests/test_feed_sorts.py` seeded `ranking_scaled=None` to assert the scaled feed
+excluded it, and `tests/test_api_post_list2.py` had two of the same shape. Their
+subject is gone — the filters can no longer exclude anything — so each now
+asserts the database refuses the value it used to write. A test that writes an
+impossible value is a test of a fiction.
+
+**Warning count: 217 → 3.**
+
+### What the slice pins
+
+102 tests in the file, 9 of them new: no sort warns about a nullable column, for
+each of the six sorts and again for a community-scoped list where `sticky` and
+`instance_sticky` join the ordering; a NULL `last_active` and a NULL
+`ranking_scaled` refused by the database; every post with replies reaching the
+Active sort; and a new post getting `last_active`, `sticky`, `score`, `ranking`
+and `ranking_scaled` without being told. Two tests that used to WRITE those NULLs
+are replaced by the ones asserting they cannot exist.
+
+---
+
+**Next free number: D1324.**
