@@ -11281,3 +11281,16 @@ attachment is the only one that was ever checked. When a condition indexes
 `AttributeError: does not have the attribute` -- the name never exists on the
 module. Patch `app.utils.opengraph_parse` instead. A function-level import is
 the tell.
+
+**643. THE TEST CACHE DOES NOT CARRY A VALUE BETWEEN TWO CALLS IN ONE TEST.**
+`PostReply.new`'s "only report this account once" rule reads a redis key the
+first report writes. Asserting it by making two replies and counting reports
+fails -- the cache the suite uses answers None every time. Patch
+`app.models.cache.get` for the already-reported case and
+`app.models.cache.set` for the writing case, and assert each separately.
+
+**644. SETTINGS THAT GATE A REFUSAL NEED BOTH SIDES, OR THE `and` IS FREE.**
+`if reply_is_just_link_to_gif_reaction(...) and site.enable_gif_reply_rep_decrease:`
+-- a test that only turns the setting ON leaves the mutant that drops the
+setting from the condition alive. Every gated refusal here is tested with the
+setting on AND off, with the detector forced true both times.
