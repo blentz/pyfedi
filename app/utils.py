@@ -3797,12 +3797,22 @@ def download_defeds(defederation_subscription_id: int, domain: str):
 @celery.task
 def download_defeds_worker(defederation_subscription_id: int, domain: str):
     session = get_task_session()  # noqa: F811
-    allowed_instances = [instance.domain for instance in session.query(AllowedInstances).all()]
-    for defederation_url in retrieve_defederation_list(domain):
-        if defederation_url not in allowed_instances:
-            session.add(BannedInstances(domain=defederation_url, reason='auto', subscription_id=defederation_subscription_id))
-    session.commit()
-    session.close()
+    try:
+        allowed_instances = [instance.domain for instance in session.query(AllowedInstances).all()]
+        # A domain the list names twice, or a subscription downloaded twice
+        # from the admin screen, used to insert a second row: nothing here
+        # looked for one, and `BannedInstances.domain` is not unique. The
+        # periodic sync deletes every subscription row before reloading, so
+        # only the direct path could grow.
+        already = {row.domain for row in session.query(BannedInstances).filter(
+            BannedInstances.subscription_id == defederation_subscription_id)}
+        for defederation_url in retrieve_defederation_list(domain):
+            if defederation_url not in allowed_instances and defederation_url not in already:
+                already.add(defederation_url)
+                session.add(BannedInstances(domain=defederation_url, reason='auto', subscription_id=defederation_subscription_id))
+        session.commit()
+    finally:
+        session.close()
 
 
 def retrieve_defederation_list(domain: str) -> List[str]:
@@ -3814,18 +3824,32 @@ def retrieve_defederation_list(domain: str) -> List[str]:
         except:
             response = None
         if response and response.status_code == 200:
-            instance_data = response.json()
-            for row in instance_data['federated_instances']['blocked']:
-                result.append(row['domain'])
+            # Everything below is another instance's answer, and this runs in a
+            # Celery worker: a missing key was a KeyError that stopped the
+            # subscription updating and left the task session open.
+            try:
+                instance_data = response.json()
+            except ValueError:
+                instance_data = {}
+            blocked = (instance_data or {}).get('federated_instances') or {}
+            for row in blocked.get('blocked') or []:
+                if isinstance(row, dict) and row.get('domain'):
+                    result.append(row['domain'])
     else:  # Assume mastodon-compatible API
         try:
             response = get_request(f'https://{domain}/api/v1/instance/domain_blocks')
         except:
             response = None
         if response and response.status_code == 200:
-            instance_data = response.json()
+            try:
+                instance_data = response.json()
+            except ValueError:
+                instance_data = []
+            if not isinstance(instance_data, list):
+                instance_data = []
             for row in instance_data:
-                result.append(row['domain'])
+                if isinstance(row, dict) and row.get('domain'):
+                    result.append(row['domain'])
 
     return result
 
@@ -4436,8 +4460,12 @@ def days_to_add_for_next_month(start_date):
                 # Should never happen, but just in case
                 new_day = 1
 
-    # Calculate the number of days to add
-    days_to_add = (target_date - start_date).days
+    # Calculate the number of days to add. On the DATES, not the datetimes:
+    # `target_date` is midnight, so subtracting a `start_date` with any time of
+    # day on it lost the remainder and answered one day short -- a post
+    # scheduled for 12:00 on the 15th moved to the 14th, and again the month
+    # after that.
+    days_to_add = (target_date.date() - start_date.date()).days
 
     return days_to_add
 
