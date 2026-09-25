@@ -11578,3 +11578,21 @@ an AsyncMock too, so `current_app.logger.exception(...)` builds a coroutine
 nobody awaits: `RuntimeWarning: coroutine 'AsyncMockMixin._execute_mock_call' was
 never awaited`. Pass `new_callable=MagicMock`. The same applies to any proxy --
 `request`, `session`, `g`.
+
+**683. A URL FROM A PEER IS NOT A PATH, AND `replace` IS NOT A HOST CHECK.**
+`File.delete_from_disk` built a local path with
+`source_url.replace(f"{SERVER_URL}/", 'app/')` behind `SERVER_NAME in source_url`
+and unlinked it -- remote arbitrary file deletion, because `source_url` comes
+from a peer's `image.url` (D1324). To turn a URL into a path: parse it, compare
+the HOST for equality (against `hostname` and `netloc`, so userinfo cannot spoof
+it), unquote the path (`%2e%2e` is `..`), resolve it, and require the result to be
+inside the root WITH a trailing separator -- `startswith('/app')` accepts
+`/appendix`. All five steps have a mutant here, and the separator one survived the
+first pass.
+
+**684. ASK WHO WRITES THE COLUMN BEFORE TRUSTING IT.**
+The hole was invisible while reading `delete_from_disk` alone; it needed
+`grep -rn "source_url=" app/` to show that three of its writers take the value
+straight out of a peer's JSON. For any column a destructive operation reads, list
+its writers first -- the question is not what the code does with the value but
+who chose it.
