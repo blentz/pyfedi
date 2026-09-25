@@ -18604,4 +18604,41 @@ nodeinfo fails.
 
 ---
 
-**Next free number: D1291.**
+---
+
+## Round 127 — sub-project 101: resizing an image another instance sent
+
+**The round in one line: every thumbnail this instance has made was described
+with the dimensions of the full-size original, and any image narrower than
+120px got no thumbnail at all.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1291** | `app/activitypub/util.py:1947` | `file.thumbnail_width = image.width` / `file.thumbnail_height = image.height`. `image` is the SOURCE; the local it should read is `thumbnail_image`, and the medium branch twelve lines above does read its own copy (`medium_image.width`). So every thumbnail was recorded with the original's dimensions -- a 50px image described as 800px wide, which is what the template puts in the `width` and `height` attributes. | **fixed** | `stored.thumbnail_width <= 50` failed at 800 |
+| **D1292** | `app/activitypub/util.py:1854` | `medium_image = image.copy()` sat INSIDE `if img_width > medium_width or medium_image_format:` and was then read unconditionally by the save below. An image already narrower than `medium_width` -- on an instance that has configured no medium format, which is the default -- took neither arm, so the save was `UnboundLocalError: cannot access local variable 'medium_image'`. The task died there, so a small image got no medium copy, no thumbnail and no dimensions at all. | **fixed** | `UnboundLocalError: cannot access local variable 'medium_image' where it is not associated with a value` |
+
+**A third copy of D1193's shape, removed.** `content_type_parts =
+content_type.split('/')` followed by `if content_type_parts:` and an `else`
+deriving the extension from the url. `str.split` never returns an empty list.
+The first two copies were removed in round 123.
+
+**One equivalent mutant.** Removing `if img_width > thumbnail_width:` survives
+because `Image.thumbnail()` never enlarges -- Pillow's own contract makes the
+guard redundant.
+
+### What the slice pins
+
+38 tests: the sizes recorded for each copy, an image smaller than both widths,
+a medium-only and a thumbnail-only run, three content types and a charset on
+the header, a jpeg's extension, an SVG left alone, an AVIF arriving as a byte
+stream and a byte stream that is not one, something that is not an image, an
+answer with no content type, a gif left animated, a File row that is gone, a
+source with no url, one that cannot be reached and one that 404s, Lemmy's
+image proxy unwrapped on 404 and on 500 and what happens when it names no url,
+the configured output format and quality, an avatar keeping the format it
+arrived in, both dispatch paths, and the whole S3 arm including a
+thumbnail-only run that has to open its own connection.
+
+---
+
+**Next free number: D1293.**
