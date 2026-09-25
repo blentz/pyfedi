@@ -11307,3 +11307,11 @@ from a midnight one (D1297): 30 days 12 hours reads as 30. Any arithmetic that
 means "how many days between these two DATES" should subtract `.date()` from
 `.date()`, and the test that catches it needs a time of day that is not
 midnight.
+
+**647. TWO TESTS WITH THE SAME NAME IN ONE CLASS: THE FIRST SILENTLY VANISHES.**
+`tests/test_ap_instance_metadata.py` had `test_a_request_that_names_no_addresses_at_all`
+twice in one class -- once for the IP endpoint, once for the email one. Python
+kept the second, pytest reported one test, and the count still went up. The
+mutation pass is what found it: the mutant on the IP endpoint survived while
+the identical one on the email endpoint died. A surviving mutant whose twin
+dies is a strong hint that the test you think covers it is not running.

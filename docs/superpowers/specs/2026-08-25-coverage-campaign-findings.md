@@ -18789,4 +18789,36 @@ notification kind's name.
 
 ---
 
-**Next free number: D1298.**
+---
+
+## Round 132 — sub-project 106: what this instance says about itself
+
+**The round in one line: the two unauthenticated POST endpoints that let
+another instance check a blocklist were a 500 to anybody who posted nothing.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1298** | `app/activitypub/routes.py:303,319` | `api_is_ip_banned` and `api_is_email_banned` read `request.form.get('ip_addresses').split(',')` and `request.form.get('emails').split(',')`. `.get` answers None when the field is absent, and `None.split(',')` is an `AttributeError` -- a 500 from a POST anybody can make. Both are open by design (they are how one instance shares a blocklist with another) and rate-limited rather than authenticated, so the missing field is not an unusual request but the first one a scanner makes. | **fixed** | the mutant that restores either line dies on a POST with an empty body |
+
+**A test that was never running.** The mutation pass found it: the IP case and
+the email case had been given the SAME method name in one class, so the second
+definition replaced the first and only one of the two was ever executed. The
+`api_is_ip_banned` mutant survived until they were renamed. Fact 647.
+
+### What the slice pins
+
+33 tests: the nodeinfo index and both documents at both of their paths,
+host-meta pointing at webfinger, Mastodon's instance document against all three
+registration modes, its blocklist with and without a reason and the allowlist
+case that publishes nothing, Lemmy's site document, and its federated-instances
+list -- an instance's software and version when it has them and the keys absent
+when it does not, this instance excluded from its own list, one that is gone
+forever excluded, a blocked one listed as blocked rather than linked, and an
+allowed one listed as allowed. Then the two ban questions: an address that is
+banned and one that is not, several answered in order, the ten-address cap, a
+banned account on another instance not counting, whitespace around an address,
+and a request naming nothing at all.
+
+---
+
+**Next free number: D1299.**
