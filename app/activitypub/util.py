@@ -2063,6 +2063,12 @@ def find_liked_object(ap_id) -> Union[Post, PostReply, None]:
     This function caches the object ID in Redis and then fetches the fresh
     model from the database using primary key lookup for better performance.
     """
+    # `'/comment/' in ap_id` below is `TypeError: argument of type 'NoneType'
+    # is not iterable` for anything that is not a string, and the id comes
+    # from `core_activity['object']['object']` on an Undo -- whatever the peer
+    # put there, including nothing and including an object.
+    if not isinstance(ap_id, str):
+        return None
     # Try to get cached ID and type
     result = _find_liked_object_id(ap_id)
 
@@ -3678,7 +3684,7 @@ def process_report(user, reported, request_json, session):
                         'reporter_id': user.id,
                         'reporter_user_name': user.ap_id if user.ap_id else user.user_name,
                         'source_instance_id': user.instance_id,
-                        'source_instance_domain': source_instance.domain,
+                        'source_instance_domain': source_instance.domain if source_instance else '',
                         'reasons': reasons,
                         'description': description
                         }
@@ -3712,7 +3718,7 @@ def process_report(user, reported, request_json, session):
                         'reporter_id': user.id,
                         'reporter_user_name': user.ap_id if user.ap_id else user.user_name,
                         'source_instance_id': user.instance_id,
-                        'source_instance_domain': source_instance.domain,
+                        'source_instance_domain': source_instance.domain if source_instance else '',
                         'orig_post_title': reported.title,
                         'orig_post_body': reported.body
                         }
@@ -3759,9 +3765,14 @@ def process_report(user, reported, request_json, session):
                         'suspect_user_id': reported.author.id,
                         'suspect_user_user_name': suspect_author.ap_id if suspect_author.ap_id else suspect_author.user_name,
                         'reporter_id': user.id,
-                        'reporter_user_name': user.ap_id if user.ap_id else user.name,
+                        # `user_name`, not `name`: `User` has no `name`, so a
+                        # reporter with no ap_id -- which is what a LOCAL actor
+                        # is -- was an AttributeError here and the report was
+                        # never filed. The two branches above spell it
+                        # correctly.
+                        'reporter_user_name': user.ap_id if user.ap_id else user.user_name,
                         'source_instance_id': user.instance_id,
-                        'source_instance_domain': source_instance.domain,
+                        'source_instance_domain': source_instance.domain if source_instance else '',
                         'orig_comment_body': reported.body
                         }
         report = Report(reasons=reasons[:255], description=description[:255], type=type, reporter_id=user.id,
