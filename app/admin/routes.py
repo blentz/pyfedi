@@ -2425,15 +2425,21 @@ def admin_instance_edit(instance_id):
 def admin_instance_create_offline():
     form = CreateOfflineInstanceForm()
     if form.validate_on_submit():
-        new_instance = Instance(domain=form.domain.data,
-                                inbox=f"https://{form.domain.data}/inbox",
+        domain = form.domain.data.strip().lower()
+        new_instance = Instance(domain=domain,
+                                inbox=f"https://{domain}/inbox",
                                 created_at=utcnow(),
                                 gone_forever=True)
         try:
             db.session.add(new_instance)
             db.session.commit()
             flash(_("Saved"))
-        except:
+        except Exception:
+            # D1320. Without the rollback the session stays in the failed state
+            # -- `PendingRollbackError` for anything that touches the database
+            # after this point in the request -- and the commonest way in is the
+            # domain already being here.
+            db.session.rollback()
             flash(_("Problem adding instance to database"))
             
         return redirect(url_for("admin.admin_instances"))
@@ -2471,13 +2477,26 @@ def admin_community_move(community_id, new_owner):
         if form.new_owner.data:
             community.user_id = new_owner_user.id
         db.session.commit()
-        try:
-            membership = CommunityMember(user_id=new_owner_user.id, community_id=community.id,
-                                         is_owner=new_owner_user.id)
-            db.session.add(membership)
+        # D1318. This read `is_owner=new_owner_user.id` -- a user id into a
+        # Boolean column -- which SQLAlchemy refuses with `StatementError:
+        # (builtins.ValueError) Value 6 is not None, True, or False`. The bare
+        # `except` then swallowed it, so EVERY move left the new owner without a
+        # `community_member` row: `Community.moderators()` and
+        # `moderating_communities` both read that table, so the person the
+        # community was moved to could not moderate it. An owner elsewhere in
+        # the codebase is always `is_moderator=True, is_owner=True`, and a
+        # caller who is already a member is promoted rather than inserted twice.
+        if form.new_owner.data:
+            membership = CommunityMember.query.filter_by(
+                user_id=new_owner_user.id, community_id=community.id).first()
+            if membership is None:
+                membership = CommunityMember(user_id=new_owner_user.id,
+                                             community_id=community.id)
+                db.session.add(membership)
+            membership.is_moderator = True
+            membership.is_owner = True
+            membership.is_banned = False
             db.session.commit()
-        except:
-            db.session.rollback()
 
         cache.delete_memoized(community_membership, new_owner_user, community)
         cache.delete_memoized(joined_communities, new_owner_user.id)

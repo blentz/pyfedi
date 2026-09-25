@@ -1,5 +1,6 @@
 from flask_wtf import FlaskForm
 from flask_wtf.file import FileAllowed
+from slugify import slugify
 from sqlalchemy import func
 from wtforms import StringField, PasswordField, SubmitField, EmailField, BooleanField, TextAreaField, \
     SelectField, FileField, IntegerField, RadioField
@@ -10,7 +11,7 @@ from flask_babel import _, lazy_gettext as _l
 
 from app.constants import DOWNVOTE_ACCEPT_ALL, DOWNVOTE_ACCEPT_MEMBERS, DOWNVOTE_ACCEPT_INSTANCE, \
     DOWNVOTE_ACCEPT_TRUSTED, DOWNVOTE_ACCEPT_NONE
-from app.models import Community, User, CmsPage
+from app.models import Community, User, CmsPage, Instance
 from app.utils import REDIRECT_POLICY_ALL_REFERRERS, REDIRECT_POLICY_FEDERATED_SERVERS, \
     REDIRECT_POLICY_SAME_ORIGIN, REDIRECT_POLICY_TRUSTED_SERVERS, validate_user_name_charset
 
@@ -265,6 +266,18 @@ class CreateOfflineInstanceForm(FlaskForm):
     domain = StringField(_l('Domain (not including https://)'))
     submit = SubmitField(_l('Save'))
 
+    def validate_domain(self, domain):
+        # D1321. The field had no validators at all, so an empty box inserted an
+        # Instance with `domain = ''` and `inbox = 'https:///inbox'` -- a row the
+        # federation code then treats as a peer. The value is interpolated
+        # straight into that URL, so a path or a space in it builds an inbox
+        # pointing somewhere else entirely.
+        value = domain.data.strip().lower()
+        if '/' in value or ' ' in value or '.' not in value:
+            raise ValidationError(_l('Enter a domain name, with no https:// and no path'))
+        if Instance.query.filter(func.lower(Instance.domain) == value).first():
+            raise ValidationError(_l('That instance is already known here'))
+
 
 class EditBlockedImageForm(FlaskForm):
     hash = TextAreaField(_l('Hash'), validators=[DataRequired(), Length(min=256, max=256)])
@@ -403,7 +416,13 @@ class MoveCommunityForm(FlaskForm):
     submit = SubmitField(_l('Submit'))
 
     def validate_new_url(self, new_url):
-        existing_community = Community.query.filter(Community.ap_id == None, Community.name == new_url.data.lower()).first()
+        # D1319. This compared the RAW value while the route slugifies it before
+        # writing, so 'My Community' passed the check and then collided with the
+        # local `my_community` at the database -- `UniqueViolation` on
+        # `ix_community_ap_profile_id`, a 500. The check has to run the same
+        # transform the route does.
+        name = slugify(new_url.data, separator='_').lower()
+        existing_community = Community.query.filter(Community.ap_id == None, Community.name == name).first()
         if existing_community:
             raise ValidationError(_l('A local community at that url already exists'))
 
