@@ -82,4 +82,45 @@ fi
 echo "Applying migrations..."
 $COMPOSE exec -T test-runner flask db upgrade
 
+# Parallel, but only for a WHOLE-suite run.
+#
+# Each worker builds its own copy of the database (tests/conftest.py's
+# build_worker_database) and takes its own pair of Redis databases, because the
+# suite's per-test teardown DELETEs every row and resets every sequence -- two
+# workers against one database would wipe each other's rows mid-test. That copy
+# costs about a second per worker, which is nothing against a 35-minute suite
+# and most of the cost of a single-file run, so a run that NAMES A PATH stays
+# serial and behaves exactly as it always has. That keeps every mutation pass
+# (which runs one file, hundreds of times) on the old, cheap path.
+#
+# PYTEST_WORKERS overrides the count; 0 or 1 forces serial. Seven is the ceiling
+# because Redis ships with 16 databases and each worker takes two of them.
+WORKERS="${PYTEST_WORKERS:-4}"
+if [ "$WORKERS" -gt 7 ]; then
+    echo "run_tests.sh: PYTEST_WORKERS is capped at 7 (Redis has 16 databases," >&2
+    echo "and each worker takes two). Using 7." >&2
+    WORKERS=7
+fi
+
+# True when the caller asked for a SUBSET of the suite -- a file, a node id, a
+# -k expression -- or has already said how it wants to be distributed. `tests`
+# and `tests/` are the whole suite, so they do not count as a subset; anything
+# else that is not an option does. A value that follows -k or -m looks like a
+# path here, which keeps those runs serial: they are subsets anyway.
+names_a_subset() {
+    for argument in "$@"; do
+        case "$argument" in
+            -n|-n*|--dist|--dist=*|-p) return 0 ;;
+            -*) ;;
+            tests|tests/) ;;
+            *) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+if [ "$WORKERS" -gt 1 ] && ! names_a_subset "$@"; then
+    exec $COMPOSE exec -T test-runner pytest -n "$WORKERS" --dist loadgroup "$@"
+fi
+
 exec $COMPOSE exec -T test-runner pytest "$@"

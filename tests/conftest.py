@@ -2,6 +2,77 @@ import json
 import os
 import re
 
+# --- One database and one pair of Redis dbs per xdist worker -----------------
+#
+# THIS BLOCK RUNS BEFORE `import app` BELOW, AND HAS TO. app/__init__.py builds
+# the rate limiter (:99) and the Celery app from `Config` at IMPORT time, and
+# config.py reads these variables at import time in turn, so rewriting them in a
+# fixture would be too late for both.
+#
+# Everything the suite shares is process-global or server-global: the database
+# (the db_session fixture DELETEs every row before each test), the three Redis
+# key families that outlive it (votes_cast_*, honeypot:*, ban:*, deleted in the
+# same fixture), and the sequences reset to 1 so fixtures can hardcode
+# instance_id=1. Two workers against one database would wipe each other's rows
+# mid-test, so each gets its own copy of it.
+#
+# `PYTEST_XDIST_WORKER` is 'gw0', 'gw1', ... in a worker process and absent in a
+# serial run, where every name below keeps the value .env.test gives it.
+XDIST_WORKER = os.environ.get('PYTEST_XDIST_WORKER')
+
+# Redis ships with 16 databases. .env.test uses 0 (Celery) and 1 (cache), so
+# worker n takes 2n+2 and 2n+3 -- seven workers before it runs out, which
+# run_tests.sh refuses to exceed.
+REDIS_DBS_PER_WORKER = 2
+MAX_XDIST_WORKERS = 7
+
+
+def worker_index(worker):
+    """0 for 'gw0', 1 for 'gw1'. None when not running under xdist."""
+    if not worker:
+        return None
+    digits = ''.join(character for character in worker if character.isdigit())
+    return int(digits) if digits else 0
+
+
+def worker_database_url(url, worker):
+    """The worker's own copy of the test database.
+
+    The name keeps its `_test` ending, because `is_disposable_database_url`
+    below refuses to let the DELETE-everything teardown near a name that does
+    not have one -- so it is `pyfedi_gw0_test`, not `pyfedi_test_gw0`.
+    """
+    index = worker_index(worker)
+    if not url or index is None:
+        return url
+    base, _, name = url.rpartition('/')
+    stem = name[:-len('_test')] if name.endswith('_test') else name
+    return f'{base}/{stem}_gw{index}_test'
+
+
+def worker_redis_url(url, worker, offset):
+    """The same Redis server, a database of this worker's own."""
+    index = worker_index(worker)
+    if not url or index is None:
+        return url
+    base, _, _db = url.rpartition('/')
+    return f'{base}/{REDIS_DBS_PER_WORKER * index + 2 + offset}'
+
+
+# The database every worker's copy is made FROM: the one `run_tests.sh` has just
+# run `flask db upgrade` against. None in a serial run, where there is nothing to
+# copy.
+TEMPLATE_DATABASE_URL = os.environ.get('TEST_DATABASE_URL') if XDIST_WORKER else None
+
+if XDIST_WORKER:
+    for _name, _offset in (('CELERY_BROKER_URL', 0), ('RESULT_BACKEND', 0),
+                           ('CACHE_REDIS_URL', 1)):
+        if os.environ.get(_name):
+            os.environ[_name] = worker_redis_url(os.environ[_name], XDIST_WORKER, _offset)
+    for _name in ('DATABASE_URL', 'TEST_DATABASE_URL'):
+        if os.environ.get(_name):
+            os.environ[_name] = worker_database_url(os.environ[_name], XDIST_WORKER)
+
 import boto3
 import fakeredis
 import httpx
@@ -59,6 +130,67 @@ def is_disposable_database_url(url):
     return segment.endswith('_test')
 
 
+def build_worker_database(url, template_url):
+    """Give this worker a database of its own, copied from the migrated one.
+
+    `CREATE DATABASE ... TEMPLATE` is a file copy of a schema-only database and
+    takes about a second, against the eight seconds `flask db upgrade` needs to
+    replay ~269 migrations -- and the template is already migrated, because
+    run_tests.sh upgrades it before pytest starts.
+
+    Dropped and rebuilt every session rather than reused: a reused copy is one
+    migration behind the moment anybody adds one, and the failure that follows
+    reads as a broken test rather than a stale database.
+
+    The advisory lock serializes the workers, which all arrive here at once, and
+    every session on the template is closed before the copy: `CREATE DATABASE`
+    refuses to copy a database anything else is connected to, and PostgreSQL says
+    so as `source database "pyfedi_test" is being accessed by other users.
+    DETAIL: There are 4 other sessions using the database.`
+
+    Those sessions are strays -- an earlier run's connection that outlived the
+    process that opened it, or a psql someone left open -- because nothing in a
+    parallel run has any business on the template: every worker moves to its own
+    copy before it opens a connection. This is the disposable container from
+    compose.test.yaml, whose data lives in tmpfs, so closing them is cheap and
+    the alternative is a suite that fails for a reason nobody can see. It still
+    retries, because a stray can reconnect between the two statements.
+    """
+    from sqlalchemy import create_engine
+
+    base, _, name = url.rpartition('/')
+    template = template_url.rpartition('/')[2]
+    engine = create_engine(f'{base}/postgres', isolation_level='AUTOCOMMIT')
+    try:
+        with engine.connect() as connection:
+            connection.exec_driver_sql('SELECT pg_advisory_lock(%(key)s)',
+                                       {'key': 8_675_309})
+            try:
+                connection.exec_driver_sql(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+                last_error = None
+                for _attempt in range(3):
+                    connection.exec_driver_sql(
+                        'SELECT pg_terminate_backend(pid) FROM pg_stat_activity'
+                        ' WHERE datname = %(template)s AND pid <> pg_backend_pid()',
+                        {'template': template})
+                    try:
+                        connection.exec_driver_sql(
+                            f'CREATE DATABASE "{name}" TEMPLATE "{template}"')
+                        break
+                    except Exception as error:  # pragma: no cover - a racing stray
+                        last_error = error
+                else:  # pragma: no cover - environment fault
+                    raise RuntimeError(
+                        f'could not copy {template} into {name} in three attempts: '
+                        f'{last_error}. Something keeps reconnecting to {template} '
+                        f'-- nothing in a parallel run should.') from last_error
+            finally:
+                connection.exec_driver_sql('SELECT pg_advisory_unlock(%(key)s)',
+                                           {'key': 8_675_309})
+    finally:
+        engine.dispose()
+
+
 class TestConfig(Config):
     """Test configuration. Inherits the real Config so tests exercise real settings."""
     TESTING = True
@@ -84,6 +216,9 @@ def app():
     if not is_disposable_database_url(TEST_DATABASE_URL):
         pytest.fail(f'TEST_DATABASE_URL must name a disposable test database '
                     f'(name ending in "_test"), got {TEST_DATABASE_URL!r}')
+
+    if TEMPLATE_DATABASE_URL:
+        build_worker_database(TEST_DATABASE_URL, TEMPLATE_DATABASE_URL)
 
     from app import create_app
     application = create_app(TestConfig)
@@ -876,3 +1011,118 @@ def ld_signed_body(actor, *, signing_key=None, **fields) -> bytes:
         activity, signing_key if signing_key is not None else actor.private_key,
         f'{actor.ap_profile_id}#main-key')
     return json.dumps(activity).encode('utf8')
+
+
+# --- Which worker gets which test -------------------------------------------
+
+SHARED_STATIC_GROUP = 'shared-static'
+
+# Modules that reach the shared static tree THROUGH APP CODE, naming no path of
+# their own -- an upload route, `make_image_sizes`, a community's icon being
+# fetched. Reading the sources finds the VICTIMS of a collision (they name the
+# directory because they assert on it) and misses every one of these, which are
+# the causes: measured with PYFEDI_WATCH_STATIC=1 (see below) rather than
+# guessed, after a parallel run failed with files vanishing mid-test
+# (`FileNotFoundError: 'app/static/media/logo_SBQ2i.png'`) and files appearing
+# that the test had not written.
+#
+# A superset is safe -- a module in this group costs a little parallelism and
+# nothing else -- so a module measured under a concurrent write it did not make
+# is left in rather than argued about.
+SHARED_STATIC_MODULES = frozenset({
+    'tests/test_allowlist_html.py',
+    'tests/test_ap_moderation.py',
+    'tests/test_community_lifecycle.py',
+    'tests/test_shared_user_bans.py',
+    'tests/test_utils_context_globals.py',
+})
+
+_SHARED_STATIC_MODULES = {}
+
+
+def touches_shared_static(path):
+    """True if this test module names `app/static/` -- media, tmp or posts.
+
+    Those are one directory each for the whole container, whatever else a worker
+    gets of its own, and the tests in them are not independent: one file writes
+    an upload and another asserts the directory holds none
+    (`test_admin_upload_forms.py` against `test_admin_federation.py`, the pair
+    that produced fact 650). Run on different workers they would see each
+    other's files, so every module that names one goes to the same worker.
+
+    Two ways in: the module names the directory, which is how the ones that
+    ASSERT on it are found and needs nobody to remember to add them; or it is
+    listed in SHARED_STATIC_MODULES above, which is how the ones that write there
+    through app code are found, because those name nothing.
+    """
+    if path in SHARED_STATIC_MODULES:
+        return True
+    if path not in _SHARED_STATIC_MODULES:
+        try:
+            with open(path, encoding='utf8') as handle:
+                _SHARED_STATIC_MODULES[path] = 'app/static/' in handle.read()
+        except OSError:  # pragma: no cover - a module pytest could not read
+            _SHARED_STATIC_MODULES[path] = False
+    return _SHARED_STATIC_MODULES[path]
+
+
+# A measurement mode, off unless asked for. `PYFEDI_WATCH_STATIC=1` makes every
+# test report whether it added or removed a file under the shared static tree,
+# which is how SHARED_STATIC_MODULES below was arrived at: a test that reaches
+# that tree THROUGH APP CODE names no path of its own, so reading the sources
+# finds the victims of a collision and not the causes. Re-measure with:
+#
+#   podman-compose -f compose.test.yaml exec -T -e PYFEDI_WATCH_STATIC=1 \
+#       test-runner pytest tests/ -q -p no:xdist
+#   podman-compose -f compose.test.yaml exec -T test-runner \
+#       sort -u /tmp/static_touchers.txt
+WATCH_STATIC = os.environ.get('PYFEDI_WATCH_STATIC') == '1'
+STATIC_TREES = ('app/static/media', 'app/static/tmp', 'app/static/posts')
+STATIC_TOUCHERS_LOG = '/tmp/static_touchers.txt'
+
+
+def static_tree_snapshot():
+    found = set()
+    for tree in STATIC_TREES:
+        for directory, _subdirectories, filenames in os.walk(tree):
+            found.update(os.path.join(directory, name) for name in filenames)
+    return found
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item):
+    if not WATCH_STATIC:
+        return (yield)
+    before = static_tree_snapshot()
+    try:
+        return (yield)
+    finally:
+        if static_tree_snapshot() != before:
+            with open(STATIC_TOUCHERS_LOG, 'a', encoding='utf8') as log:
+                log.write(item.nodeid.split('::', 1)[0] + '\n')
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(config, items):
+    """Group every test by its module, and the static-touching modules together.
+
+    `--dist loadgroup` sends tests carrying the same `xdist_group` to the same
+    worker and distributes the rest one at a time. Grouping by module gives
+    `--dist loadfile`'s guarantee -- a module's class- and module-scoped
+    fixtures are built once, on one worker -- while still letting the
+    static-touching modules share a group of their own, which loadfile cannot
+    express.
+
+    `tryfirst` IS LOAD-BEARING. xdist reads the `xdist_group` mark in its own
+    `pytest_collection_modifyitems` and rewrites each node id to carry the group
+    -- a mark added after that runs is never seen, and the scheduler falls back
+    to distributing test by test. Measured: without it,
+    `test_admin_site_profile.py` ran on gw0 AND gw1 at once, which is exactly the
+    interference the grouping exists to prevent.
+
+    Harmless in a serial run, where the marker is never read.
+    """
+    for item in items:
+        module = item.nodeid.split('::', 1)[0]
+        group = SHARED_STATIC_GROUP if touches_shared_static(module) else module
+        item.add_marker(pytest.mark.xdist_group(group))

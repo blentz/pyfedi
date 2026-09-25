@@ -29,6 +29,11 @@
 pytest
 pytest-cov
 pytest-timeout
+# Parallel runs. run_tests.sh passes `-n` only for a WHOLE-suite run (see the
+# script); a run that names a path stays serial, because the per-worker database
+# each worker builds costs more than a short run saves. tests/conftest.py gives
+# every worker its own database and its own pair of Redis dbs.
+pytest-xdist
 respx
 moto
 fakeredis
