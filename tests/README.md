@@ -11239,3 +11239,18 @@ code under test swallows the unmocked-request error.
 it changes nothing observable -- the KeyError lands in the same place the
 guard's absence does. Recorded as equivalent rather than chased, which is the
 same disposition as rounds 113, 118 and 121.
+
+**637. TWO BRANCHES THAT BUILD THE SAME THING ARE WHERE THE COPY-PASTE BUG
+IS.** `make_image_sizes_async` writes a medium copy and a thumbnail with
+near-identical blocks. The medium one recorded `medium_image.width`; the
+thumbnail one recorded `image.width` (D1291). Reading either block alone shows
+nothing. Diff the two, or assert a property that distinguishes them -- here,
+that the thumbnail's recorded width is no bigger than the thumbnail width
+asked for.
+
+**638. A VARIABLE ASSIGNED INSIDE AN `if` AND READ OUTSIDE IT IS A BUG WAITING
+FOR THE DEFAULT CONFIGURATION.** `medium_image` was assigned only when a
+resize or a re-encode was needed, and read unconditionally (D1292). It never
+fired in development, because a configured `MEDIA_IMAGE_MEDIUM_FORMAT` keeps
+the branch true -- it fires on an instance that has configured nothing, with a
+small image. Test with the config EMPTY as well as set.
