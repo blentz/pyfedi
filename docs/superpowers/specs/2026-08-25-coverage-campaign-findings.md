@@ -18718,4 +18718,41 @@ decides whether it is private.
 
 ---
 
+---
+
+## Round 130 — sub-project 104: every reason a reply is refused
+
+**The round in one line: eight refusals in `PostReply.new`, each one the only
+thing standing between a setting an admin turned on and a reply that ignores
+it, and none of them had a test.**
+
+No defect fixed. The refusals all work, and a mutant that removes any of the
+seventeen behaviours checked here dies.
+
+**Two things recorded, both narrow and both left alone:**
+
+* `notification_target.author` is read after
+  `db.session.get(PostReply, in_reply_to.parent_id)`, which answers None for a
+  parent that has been deleted. The child row would normally go with its
+  parent, so this needs a partial delete to reach;
+* the `IntegrityError` handler reads `request_json['object']['id']`, and
+  `request_json` is None for a locally written reply -- so a local duplicate
+  that got past `reply_already_exists` and hit the unique index would be a
+  `TypeError` rather than the existing row. `reply_already_exists` catches
+  every local case that can be constructed, which is why it stays recorded
+  rather than fixed.
+
+### What the slice pins
+
+39 tests: eight refusals, both sides of the two that a setting controls, what
+an accepted reply stores and what it counts (its own upvote, its path, its
+parent's child count, the post's reply count, a bot's reply not counted, the
+cross-posted total shared across every copy), the notification subscription
+asked for and not, collapsibility for the author and for everybody else, what
+a peer's activity decides (an Update marked as edited, a followers-only reply
+private, `searchableBy`, a private community never indexable), and the em-dash
+report with its four conditions and its once-per-account flag.
+
+---
+
 **Next free number: D1295.**
