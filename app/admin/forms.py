@@ -227,10 +227,11 @@ class EditCommunityForm(FlaskForm):
     def validate(self, extra_validators=None):
         if not super().validate():
             return False
-        if self.url.data.strip() == '':
-            self.url.errors.append(_l('Url is required.'))
-            return False
-        # commented out as PeerTube and NodeBB can both use dashes in their URLs
+        # `if self.url.data.strip() == '':` used to stand here. The field
+        # carries DataRequired(), which fails on whitespace-only input inside
+        # super().validate() above, so that arm could never run.
+        # The check below is commented out as PeerTube and NodeBB can both use
+        # dashes in their URLs
         #else:
         #    if '-' in self.url.data.strip():
         #        self.url.errors.append(_l('- cannot be in Url. Use _ instead?'))
@@ -337,8 +338,10 @@ class AddUserForm(FlaskForm):
             raise ValidationError(_l('A community with this name exists so it cannot be used for a user.'))
 
     def validate_password(self, password):
-        if not password.data:
-            return
+        # `if not password.data: return` used to stand here. The field carries
+        # DataRequired(), which fails before any of this runs, so there is no
+        # empty password for it to let through -- an admin creating an account
+        # must set one.
         password.data = password.data.strip()
         if password.data == 'password' or password.data == '12345678' or password.data == '1234567890':
             raise ValidationError(_l('This password is too common.'))
@@ -353,8 +356,9 @@ class AddUserForm(FlaskForm):
         if all_the_same:
             raise ValidationError(_l('This password is not secure.'))
 
-        if password.data == 'password' or password.data == '12345678' or password.data == '1234567890':
-            raise ValidationError(_l('This password is too common.'))
+        # The 'too common' check that used to be repeated here is gone: the
+        # identical one at the top of this method has already raised for every
+        # value it could match.
 
 
 class EditUserForm(FlaskForm):

@@ -202,10 +202,10 @@ class SearchRemoteCommunity(FlaskForm):
     def validate(self, extra_validators=None):
         if not super().validate():
             return False
-        if self.address.data.strip() == '':
-            self.address.errors.append(_l('Address is required.'))
-            return False
-        elif self.address.data.strip().startswith('https://') or self.address.data.strip().startswith('http://'):
+        # `if self.address.data.strip() == '':` used to stand here. The field
+        # carries DataRequired(), which fails on whitespace-only input inside
+        # super().validate() above, so that arm could never run.
+        if self.address.data.strip().startswith('https://') or self.address.data.strip().startswith('http://'):
             return True
         else:
             if not self.address.data.strip().startswith('!'):
@@ -378,7 +378,13 @@ class CreateImageForm(CreatePostForm):
         if not super().validate(extra_validators):
             return False
 
-        uploaded_file = request.files['image_file']
+        # `.get`, not `['image_file']`. This form's own field carries
+        # DataRequired(), so the key is always there on a create -- but
+        # EditImageForm overrides the field to Optional() and inherits this
+        # method, so an edit that keeps the existing image reached
+        # `request.files['image_file']` and was
+        # `werkzeug.exceptions.BadRequestKeyError: 400`.
+        uploaded_file = request.files.get('image_file')
         if uploaded_file and uploaded_file.filename != '' and not uploaded_file.filename.endswith('.svg') and not uploaded_file.filename.endswith('.gif'):
             Image.MAX_IMAGE_PIXELS = 89478485
 
@@ -401,7 +407,7 @@ class CreateImageForm(CreatePostForm):
                     self.image_file.errors.append("This image is from 4chan.")
                     db.session.commit()
                     return False
-        if uploaded_file.filename.endswith('.gif'):
+        if uploaded_file and uploaded_file.filename.endswith('.gif'):
             max_size_in_mb = 10 * 1024 * 1024  # 10 MB
             if len(uploaded_file.read()) > max_size_in_mb:
                 error_message = "This image filesize is too large."
@@ -425,24 +431,17 @@ class CreateImageForm(CreatePostForm):
 
 
 class EditImageForm(CreateImageForm):
-    image_file = FileField(_l('Replace Image'), validators=[DataRequired()], render_kw={'accept': 'image/*'})
+    # There were two `image_file` declarations here, the first carrying
+    # DataRequired() and immediately shadowed by this one -- so the field has
+    # always been optional on an edit, and the line above it only read as
+    # though it were required.
     image_file = FileField(_l('Image'), validators=[Optional()], render_kw={'accept': 'image/*'})
 
-    def validate(self, extra_validators=None) -> bool:
-        if not super().validate(extra_validators):
-            return False
-
-        if self.communities:
-            community = db.session.get(Community, self.communities.data)
-            if community.is_local() and g.site.allow_local_image_posts is False:
-                # D1001. This appended the error and then returned True, so
-                # `allow_local_image_posts = False` recorded a complaint and
-                # accepted the image anyway. Measured: with the setting off,
-                # an image post to a local community still reached make_post.
-                self.communities.errors.append(_l('Images cannot be posted to local communities.'))
-                return False
-
-        return True
+    # `validate` used to be overridden here, to repeat the
+    # `allow_local_image_posts` check that CreateImageForm.validate -- the
+    # super() this called first -- has already made. The parent refuses before
+    # the copy is ever reached, so no input could tell them apart. Removed;
+    # the inherited method is the one that runs.
 
 
 class CreateEventForm(SubmittedUrlMixin, CreatePostForm):
