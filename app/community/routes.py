@@ -135,12 +135,12 @@ def add_local():
                               low_quality=('memes' in form.url.data or 'shitpost' in form.url.data) and
                                            get_setting('meme_comms_low_quality', False),
                               question_answer=form.question_answer.data, first_federated_at=utcnow())
-        icon_file = request.files['icon_file']
+        icon_file = request.files.get('icon_file')
         if icon_file and icon_file.filename != '':
             file = save_icon_file(icon_file)
             if file:
                 community.icon = file
-        banner_file = request.files['banner_file']
+        banner_file = request.files.get('banner_file')
         if banner_file and banner_file.filename != '':
             file = save_banner_file(banner_file)
             if file:
@@ -1169,9 +1169,9 @@ def add_post(actor, type=None):
             plugins.fire_hook('before_post_create', post_data)
 
             if type == 'image' or type == 'event':
-                uploaded_file = request.files['image_file']
+                uploaded_file = request.files.get('image_file')
             elif type == 'video' and can_upload_video():
-                uploaded_file = request.files['image_file']
+                uploaded_file = request.files.get('image_file')
             else:
                 uploaded_file = None
             post = make_post(form, community, post_type, SRC_WEB, uploaded_file=uploaded_file)
@@ -1385,7 +1385,7 @@ def community_edit(community_id: int):
             community.post_url_type = form.post_url_type.data
             community.question_answer = form.question_answer.data
 
-            icon_file = request.files['icon_file']
+            icon_file = request.files.get('icon_file')
             if icon_file and icon_file.filename != '':
                 # Store old icon ID before uploading new one
                 old_icon_id = community.icon_id
@@ -1397,7 +1397,7 @@ def community_edit(community_id: int):
                         old_icon_file = db.session.get(File, old_icon_id)
                         db.session.delete(old_icon_file)
                         old_icon_file.delete_from_disk()
-            banner_file = request.files['banner_file']
+            banner_file = request.files.get('banner_file')
             if banner_file and banner_file.filename != '':
                 # Store old banner ID before uploading new one
                 old_banner_id = community.image_id

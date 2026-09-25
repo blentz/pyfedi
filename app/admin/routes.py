@@ -156,7 +156,11 @@ def admin_site():
         if site.id is None:
             db.session.add(site)
         # Save site icon
-        uploaded_icon = request.files['icon']
+        # `.get`, not `['icon']`: `request.files[...]` is a
+        # BadRequestKeyError -- a 400 -- for a submission that does not
+        # carry the field, and the `if` below already handles None. Same
+        # shape as D1047, fixed once in app/user/routes.py.
+        uploaded_icon = request.files.get('icon')
         if uploaded_icon and uploaded_icon.filename != '':
             allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.svg']
             file_ext = os.path.splitext(uploaded_icon.filename)[1]
@@ -1090,7 +1094,7 @@ def admin_federation_ban_lists():
 
     # this is the import bans button
     if ban_lists_form.import_submit.data and ban_lists_form.validate():
-        import_file = request.files['import_file']
+        import_file = request.files.get('import_file')
         if import_file and import_file.filename != '':
             file_ext = os.path.splitext(import_file.filename)[1]
             if file_ext.lower() != '.json':
@@ -1518,14 +1522,14 @@ def admin_community_edit(community_id):
         community.can_be_archived = form.can_be_archived.data
         community.downvote_accept_mode = form.downvote_accept_mode.data
 
-        icon_file = request.files['icon_file']
+        icon_file = request.files.get('icon_file')
         if icon_file and icon_file.filename != '':
             if community.icon_id:
                 community.icon.delete_from_disk()
             file = save_icon_file(icon_file)
             if file:
                 community.icon = file
-        banner_file = request.files['banner_file']
+        banner_file = request.files.get('banner_file')
         if banner_file and banner_file.filename != '':
             if community.image_id:
                 community.image.delete_from_disk()
@@ -2119,12 +2123,12 @@ def admin_users_add():
         # `user` is the User() built at the top of this function, so avatar_id
         # and cover_id are always None and the ten lines that used to stand
         # here could never run.
-        profile_file = request.files['profile_file']
+        profile_file = request.files.get('profile_file')
         if profile_file and profile_file.filename != '':
             file = save_icon_file(profile_file, 'users')
             if file:
                 user.avatar = file
-        banner_file = request.files['banner_file']
+        banner_file = request.files.get('banner_file')
         if banner_file and banner_file.filename != '':
             file = save_banner_file(banner_file, 'users')
             if file:

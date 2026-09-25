@@ -286,12 +286,12 @@ def feed_copy(feed_id: int):
             feed.parent_feed_id = copy_feed_form.parent_feed_id.data
         else:
             feed.parent_feed_id = None
-        icon_file = request.files['icon_file']
+        icon_file = request.files.get('icon_file')
         if icon_file and icon_file.filename != '':
             file = save_icon_file(icon_file, directory='feeds')
             if file:
                 feed.icon = file
-        banner_file = request.files['banner_file']
+        banner_file = request.files.get('banner_file')
         if banner_file and banner_file.filename != '':
             file = save_banner_file(banner_file, directory='feeds')
             if file:
