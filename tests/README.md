@@ -11530,3 +11530,41 @@ app/ passes (D1322). The test made dead code look load-bearing and would have
 failed anybody who removed it. When a test has to supply an unusual value to
 enter a branch, say in the docstring which caller supplies that value in
 production; if none does, that is a finding, not a test.
+
+**677. A NULL IN A KEYSET SORT COLUMN HIDES THE ROW FROM EVERY PAGE.**
+sqlakeyset pages with `WHERE (sort columns) < (the last row's values)`, and a
+NULL makes that predicate NULL rather than true -- so the row appears on no page
+while the count still includes it (D1323). Its warning is not noise. When a
+column is ordered by, it wants NOT NULL in the DATABASE and `nullable=False` in
+the MODEL: the first stops the data, the second is what sqlakeyset reads.
+
+**678. A COLUMN ONLY IN SOME QUERIES NEEDS THE QUERY THAT USES IT.**
+`sticky` and `instance_sticky` enter the post ORDER BY only for a
+community-scoped list with stickies left in, so the six plain sorts could not pin
+their nullability and a mutant restoring it survived. When pinning a column-level
+property, check which call shapes actually mention the column -- `grep -n
+'<column>' <module>` and read the conditions above each hit.
+
+**679. MAKING A COLUMN NOT NULL IS A MIGRATION WITH AN OUTAGE IN IT.**
+`SET NOT NULL` scans the table under ACCESS EXCLUSIVE, which on a big table is a
+write outage. PostgreSQL 12+ accepts a validated CHECK constraint as proof
+instead: `CHECK ... NOT VALID`, `VALIDATE CONSTRAINT` (SHARE UPDATE EXCLUSIVE,
+reads and writes continue), `SET NOT NULL`, `DROP CONSTRAINT`. Migration
+c4f1a9d7e2b8 does it that way and says so, because the next NOT NULL will be
+copied from it.
+
+**680. NOT NULL WITHOUT A SERVER DEFAULT BREAKS EVERY RAW INSERT.**
+Making seven `post` columns NOT NULL was not enough: the ORM's `default=` is
+Python-side, so a raw `INSERT INTO post` that omits them fails with `null value
+in column "score" ... violates not-null constraint`. Migration c4f1a9d7e2b8 sets
+the same defaults in the schema, and a test inserts a row with `text()` to pin
+it. When adding NOT NULL, add the server default in the same migration and test
+the raw path, not only the ORM one.
+
+**681. A RUN THAT LOST ITS WORKERS REPORTED "7073 passed".**
+Four xdist workers died, xdist quietly started replacements, and its own
+scheduler then raised `KeyError: <WorkerController gw5>` -- after printing a pass
+count 4,800 tests short of the suite. `--max-worker-restart 0` makes a dead
+worker fail the run instead. Any harness that can silently run FEWER tests than
+it collected needs that setting, because a short green run is worse than a red
+one.
