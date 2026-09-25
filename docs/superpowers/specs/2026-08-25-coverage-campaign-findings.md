@@ -18821,4 +18821,42 @@ and a request naming nothing at all.
 
 ---
 
+---
+
+## Round 133 — sub-project 107: reaching the refusal on every API route
+
+**The round in one line: the sweep that proved nothing answers while the API
+is off never reached the line that refuses, because its empty bodies were
+turned away by schema validation first -- ninety-odd refusals that no test had
+executed.**
+
+No defect. Every route refuses, and now every route's refusal has been run.
+
+**How.** flask-smorest records the request schema on each view
+(`view._apidoc['arguments']['parameters']`), so the sweep reads it and
+synthesises a minimal valid payload: every required field, with a value chosen
+from the field's type and from a `OneOf`, `Range` or `Length` validator if it
+carries one. 113 of the 118 routes get past validation that way and are
+answered by the gate. The five that do not are the three upload endpoints,
+which want a multipart file rather than JSON, and two GETs whose synthesised id
+has to name a row that exists; all five are covered by name in
+`tests/test_api_routes_*.py`, and the count is asserted rather than described,
+so a route that stops being reachable here fails the test.
+
+**One route excluded from the API-ON half**, `/api/alpha/post/list2`: with the
+API on it runs a keyset query and sqlakeyset warns once per nullable column it
+orders by. Those warnings are the campaign's recorded outstanding item -- seven
+`Post` columns want a migration -- and the suite counts them, so a test that
+added three more copies would have raised the count. It is swept with the API
+off like everything else.
+
+### What the slice pins
+
+8 tests: every documented route refusing by name with the API off and none of
+them refusing with it on, the sweep finding more than ninety routes, and the
+payload builder itself -- a schema with required fields, one with none, each
+field type, and the three validator kinds that constrain a value.
+
+---
+
 **Next free number: D1299.**

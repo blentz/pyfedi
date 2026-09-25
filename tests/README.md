@@ -11315,3 +11315,19 @@ kept the second, pytest reported one test, and the count still went up. The
 mutation pass is what found it: the mutant on the IP endpoint survived while
 the identical one on the email endpoint died. A surviving mutant whose twin
 dies is a strong hint that the test you think covers it is not running.
+
+**648. A SWEEP THAT SENDS NOTHING TESTS THE VALIDATOR, NOT THE ROUTE.** The
+alpha API gate sweep posted `{}` to every route, so flask-smorest refused most
+of them at 422 and the `if not enable_api()` line below was never executed --
+the property held, and ninety refusals stayed uncovered. flask-smorest records
+the schema on the view (`view._apidoc['arguments']['parameters']`), so a
+minimal valid payload can be synthesised from it: required fields only, values
+from the field type and from any `OneOf`, `Range` or `Length` validator. Assert
+how many routes reached the gate, not just that none answered.
+
+**649. A NEW TEST MUST NOT ADD COPIES OF A WARNING THE SUITE ALREADY COUNTS.**
+Exercising `/api/alpha/post/list2` with the API on adds three sqlakeyset
+nullable-column warnings -- the same kind the campaign has recorded as needing
+a migration. The count is a ratchet like the floors, so that route is excluded
+from the half of the sweep that turns the API on, with the reason written
+beside it, rather than the filter being widened to hide them.
