@@ -11440,3 +11440,32 @@ process is killed. After any interrupted mutation pass, `git diff` the files it
 touches before trusting a green suite -- one mutant was still applied here, and
 the tests passed with it in place, which is exactly what the surviving-mutant
 report then showed.
+
+**666. `current_user` IS CACHED ON THE APP CONTEXT, WHICH A TEST HOLDS OPEN.**
+flask-login stores the resolved user on `g` (`_login_user`), and a test that
+makes two requests with two clients reuses the app context the fixture pushed --
+so the second client is answered as the FIRST user. Two probe rounds read as an
+authorisation swap because of it. `g.pop('_login_user', None)` before each
+request, or one client per test. The symptom to watch for: a permission answer
+that is right for the caller you logged in first and wrong for every caller
+after.
+
+**667. A USER ID IN A BOOLEAN COLUMN IS A `ValueError`, NOT A TRUTHY 1.**
+`is_owner=new_owner_user.id` looks like it would coerce. SQLAlchemy's Boolean
+refuses it: `StatementError: (builtins.ValueError) Value 6 is not None, True, or
+False` (D1318). Under a bare `except` that is silence. When a column is Boolean,
+assert the stored value `is True`, not that it is truthy.
+
+**668. A FORM THAT VALIDATES THE RAW VALUE VALIDATES THE WRONG THING.**
+`validate_new_url` compared the field against existing names while the route
+slugified before writing (D1319). Any transform between validation and the
+INSERT has to be applied in the check too. The test that finds it submits a value
+that differs from its own slug -- 'My Community' against an existing
+`my_community`.
+
+**669. FORCE A FAILURE THE WAY THE REAL ONE FAILS.**
+A monkeypatched `commit` that raises `IntegrityError` does NOT poison the
+transaction, so it cannot show that a missing rollback breaks the session -- the
+mutant survived against it. A real `UniqueViolation` does. Where the point is the
+state the database is left in, cause the error in the database (here by
+switching off the form check that normally prevents it) rather than in Python.

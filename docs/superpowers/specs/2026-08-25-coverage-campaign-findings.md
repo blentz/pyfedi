@@ -19093,4 +19093,54 @@ feed the community was never in.
 
 ---
 
-**Next free number: D1318.**
+## Round 139 — sub-project 113: instances in the admin, and moving a community here
+
+**The round in one line: every admin move of a community wrote the new owner's
+membership row with a user id in a Boolean column, and a bare `except` hid the
+refusal — so the person the community was handed to could not moderate it.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1318** | `app/admin/routes.py:2394`, `admin_community_move` | `CommunityMember(..., is_owner=new_owner_user.id)` — a user id into `db.Column(db.Boolean)`, which SQLAlchemy refuses outright. `except: db.session.rollback()` swallowed it, so EVERY move left the community with no `community_member` row for its new owner. `Community.moderators()` and `moderating_communities` both read that table, so the new owner held `community.user_id` and no moderation powers at all. Everywhere else in the codebase an owner is `is_moderator=True, is_owner=True`. | **fixed** | `StatementError: (builtins.ValueError) Value 6 is not None, True, or False`, and `PROBE pn membership rows: []` after a move that reported success |
+| **D1319** | `app/admin/forms.py`, `MoveCommunityForm.validate_new_url` | Compared the raw field against existing names while the route slugifies before writing, so 'My Community' passed the check and then collided with the local `my_community`. | **fixed** | `IntegrityError: (psycopg2.errors.UniqueViolation) duplicate key value violates unique constraint "ix_community_ap_profile_id"` |
+| **D1320** | `app/admin/routes.py`, `admin_instance_create_offline` | `except:` with no `db.session.rollback()`. A duplicate domain is a real `UniqueViolation`, which poisons the transaction, so everything after it in that request answered `PendingRollbackError`. | **fixed** | `PROBE ph session usable after the failed insert: PendingRollbackError` |
+| **D1321** | `app/admin/forms.py`, `CreateOfflineInstanceForm` | The domain field had no validators at all: an empty box inserted an Instance with `domain = ''` and `inbox = 'https:///inbox'`, a row the federation code then treats as a peer. The value goes straight into that URL, so a path or a space in it builds an inbox pointing somewhere else, and the same domain in another case made a second row. | **fixed** | `PROBE pi offline.test rows` after a submission with `domain=''` |
+
+**Recorded, not repaired: the two instance screens ask for different
+permissions.** `/admin/instances` is gated by `change instance settings` and
+`/admin/instance/<id>/edit` by `administer all communities`, so a role that
+cannot see the list can mark a remote instance **trusted** — which is a
+federation-wide grant — and a role that can see the list cannot edit it.
+Measured both ways (`pa`/`pb`/`pc`). Narrowing a permission gate on a live
+instance can lock out the admins who rely on it, so this is a decision for the
+operator rather than a repair, and both gates are now pinned as they stand.
+
+**A harness fact that cost two probe rounds.** flask-login caches
+`current_user` on the app context, and a test holds one open across every
+request it makes, so the second client in a test is answered as the first user.
+Two probes read as an authorisation swap until `g.pop('_login_user', None)` went
+in before each request (fact 666).
+
+### What the slice pins
+
+51 tests: the instance list, searched, each of its six filters showing only what
+it names, a filter that names nothing, a sort column that does not exist, a page
+past the last, and the permission refusal; the edit screen, an instance nobody
+has, marking one trusted and the trusted-id cache dropping, silencing one and
+its communities losing `show_all`, `show_popular` and their topic, unsilencing
+one and getting them back, unsilencing a trusted one into popular, the six other
+fields saved, and the refusal leaving `trusted` False; the offline shortcut, a
+domain created as gone-forever with the right inbox, an empty domain, four
+values that are not domains, a duplicate, a duplicate in another case, stray
+spaces trimmed, an insert that fails at the database anyway leaving a session
+that still works, and the permission refusal; and the move — the form, a
+community and an owner nobody has, the nine columns it rewrites, the keypair,
+the slug, the ownership, the owner's membership row with both flags, the owner
+showing up in `moderators()`, an existing member promoted rather than duplicated,
+a banned one unbanned, the box left unticked leaving ownership alone, a name that
+is taken, a name that slugifies onto one that is taken, a REMOTE community at
+that name not blocking it, no name at all, and the permission refusal.
+
+---
+
+**Next free number: D1322.**
