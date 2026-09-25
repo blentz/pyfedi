@@ -18641,4 +18641,49 @@ thumbnail-only run that has to open its own connection.
 
 ---
 
-**Next free number: D1293.**
+---
+
+## Round 128 — sub-project 102: what the forms refuse
+
+**The round in one line: every edit of an image post that kept its existing
+image was a 400, because the field is optional on the edit form and required
+on the create form they share a `validate` with.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1293** | `app/community/forms.py:381` | `CreateImageForm.validate` reads `request.files['image_file']`. Its own field carries `DataRequired()`, so on a create the key is always there -- but `EditImageForm` overrides the field to `Optional()` and inherits the method, and an edit that keeps the existing image sends no file. That is `werkzeug.exceptions.BadRequestKeyError: 400`, on the ordinary path of editing an image post's title or body. `.get` now, and the `.gif` size check below it guarded for the same absence. | **fixed** | `werkzeug.exceptions.BadRequestKeyError: 400 Bad Request` from `test_an_edit_that_leaves_it_alone` |
+
+**Five things removed as unreachable**, in the shape D1193 established and
+rounds 123 and 127 continued:
+
+* `SearchRemoteCommunity.validate`'s `if self.address.data.strip() == '':` --
+  the field carries `DataRequired()`, which fails on whitespace inside
+  `super().validate()` first;
+* `EditCommunityForm.validate`'s identical arm, for the identical reason;
+* `AddUserForm.validate_password`'s `if not password.data: return` -- same;
+* the second, identical "this password is too common" check at the END of that
+  method, which the one at its start has already raised for;
+* `EditImageForm`'s `image_file` declared twice, the first with
+  `DataRequired()` and immediately shadowed by an `Optional()` one.
+
+**And one redundant override.** `EditImageForm.validate` called
+`super().validate()` and then repeated the `allow_local_image_posts` check the
+parent had already made, so no input could tell the two apart. Deleted; the
+inherited method is the one that runs.
+
+### What the slice pins
+
+49 tests: the four shapes of remote-community address, NSFW and NSFL against
+both settings, a post scheduled for the past and for the future, an image a
+local community accepts and one it does not (D1001's site, asserted as a
+refusal rather than a complaint), a remote community unaffected by that
+setting, a gif at and over the size limit, an SVG skipping the inspection, the
+4chan filter's two giveaway spellings and its three ways of not firing, an
+edit that replaces the image and one that does not, and on the admin side a
+community url with a dash in it, six ways an account cannot be added, a
+community url already taken, and a CMS path normalised, taken, or kept by the
+page being edited.
+
+---
+
+**Next free number: D1294.**
