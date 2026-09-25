@@ -19048,4 +19048,49 @@ local, plus the two permission refusals on every screen.
 
 ---
 
-**Next free number: D1311.**
+## Round 138 — sub-project 112: integers that arrive in a query string
+
+**The round in one line: `int(request.args.get('topic_id', 0))` is a 500 for
+anything that is not a number — and one of those is the empty string a select
+sends when nothing is chosen — at nine sites, two of which need no account.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1311** | `app/main/routes.py:289-291`, `list_communities` | Three ids read through bare `int()`. `/communities?topic_id=` — what a `<select>` with nothing chosen submits — was a `ValueError`, and so was any word, decimal or stray space. The page is reachable without an account on an open instance. | **fixed** | `ValueError: invalid literal for int() with base 10: ''` |
+| **D1312** | `app/main/routes.py:1494-1496`, `health2` | The same three reads on the endpoint monitoring calls, which has no login at all. | **fixed** | `PROBE ph /health2 topic_id=x: ValueError: invalid literal for int() with base 10: 'x'` |
+| **D1313** | `app/feed/routes.py:383-385`, `feed_add_community` | `int(request.args.get('new_feed_id'))` with no default: a request that leaves the parameter out is `TypeError: int() argument must be a string, a bytes-like object or a real number, not 'NoneType'`. | **fixed** | `PROBE pj no params at all: TypeError` |
+| **D1314** | `app/feed/routes.py:388,391` | `db.session.get(Feed, feed_id).user_id` for an id nobody has is `AttributeError: 'NoneType' object has no attribute 'user_id'` — on the line before the one that says `abort(404)`. Both feed ids had it. | **fixed** | `PROBE pm a feed nobody has: AttributeError` |
+| **D1315** | `app/feed/routes.py` | `community_id` was never checked, so the FeedItem below it named a community that does not exist and the insert was a `ForeignKeyViolation`. The post-level twin of D1125. | **fixed** | `IntegrityError: ... violates foreign key constraint "feed_item_community_id_fkey"` |
+| **D1316** | `app/shared/feed.py:448`, `_feed_add_community` | `db.session.delete(current_feed_item)` on the row it had just failed to find: `UnmappedInstanceError: Class 'builtins.NoneType' is not mapped` for any request naming a feed the community is not in. Both ids come from the caller. | **fixed** | `PROBE pq0 moving a community out of a feed it is NOT in: UnmappedInstanceError` |
+| **D1317** | `app/shared/feed.py:472` | Adding a community a feed already holds inserted a SECOND FeedItem and counted it again. The route is a GET, so a reload was enough, and `num_communities` overstated the feed from then on. | **fixed** | `PROBE pt rows after the repeat: feed_items=2 other.num_communities=2` for one community |
+
+**Also fixed, because the tests would otherwise have raised the suite's warning
+count.** `list_communities` passed a `.subquery()` to `in_()`, which is an
+SAWarning ("Coercing Subquery object into a select()") on every request that
+reaches that line — 36 of them from this file alone. `.scalar_subquery()` is
+what SQLAlchemy 2 wants for a one-column subquery and emits the same SQL. The
+suite's warning count comes down rather than up.
+
+**The sweep.** `grep -rn "int(request.args.get(" app/` is the whole search, and
+a property test over the two files keeps the tenth site from being written.
+`request.args.get(name, 0, type=int)` answers the default when conversion
+fails, so every one of these is now the filter being ignored rather than a 500.
+
+### What the slice pins
+
+85 tests: nine non-numeric values for each of the three community-list ids, an
+anonymous visitor on an open instance and the login redirect on a private one, a
+number beyond any row, a negative one, all three at once, and then the filters
+doing their job — topic, language, feed, search, and a sort column that does not
+exist; `/health2` for each id and value, HEAD and GET, the prompt flash, each
+nsfw choice, nsfw off site-wide, a logged-in caller who hides low-quality, nsfw
+and nsfl content, one banned from a community, and `/health` beside it; and the
+feed route — no parameters at all, each id missing, non-numeric or naming
+nothing, somebody else's feed as the destination and as the source, the happy
+path, the same request three times over, a second community joining the same
+feed, a move between two feeds with both counts checked, and a move out of a
+feed the community was never in.
+
+---
+
+**Next free number: D1318.**
