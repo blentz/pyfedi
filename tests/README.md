@@ -11619,3 +11619,19 @@ Three refresh tasks were repaired, and the property test then failed on
 the functions named in the coverage gap would never have shown them. Write the
 property test BEFORE believing a sweep is complete, and make it scan the file
 rather than the functions you happened to open.
+
+**688. A REMOTE HEADER MUST NOT CHOOSE A FILENAME EXTENSION.**
+`url_to_thumbnail_file` built one from the peer's `Content-Type`
+(`'.' + content_type.split('/')[-1]`) and wrote the peer's body under it, inside a
+served directory: `image/html` gave a `.html` file full of script on our own
+origin (D1327). Map a content type through an ALLOWLIST to an extension, and give
+anything unrecognised a name no server will execute. The inputs that find this are
+`image/html`, `image/php`, `image/` and a 200-character subtype.
+
+**689. TWO REPAIRS CAN HIDE EACH OTHER FROM THE TESTS.**
+The allowlist stops a `.html` file being created; the cleanup removes it whatever
+it is called. Either alone closes the hole, so three mutants survived against
+tests that asserted only on what was left on disk. The test that kills them
+records the path handed to `Image.open` -- the state DURING the operation, not
+after it. When two fixes overlap, find an observable that only one of them
+produces.
