@@ -438,13 +438,16 @@ END_TIME = '2027-01-01T12:00:00+00:00'
 # DISCARDED rather than converted by.
 #
 # END_TIME_OTHER_OFFSET is the same wall-clock time under a different offset --
-# a DIFFERENT instant, five hours earlier. It stores as the SAME
-# END_TIME_STORED, which is the whole finding, and it is asserted rather than
-# merely described: `test_the_end_time_string_is_cast_by_postgres_to_a_naive_datetime`
-# sends both. END_TIME alone could not show it, because `+00:00` cannot
-# distinguish "offset discarded" from "converted to UTC".
+# a DIFFERENT instant, five hours earlier. It USED to store as the same value as
+# END_TIME, because the peer's string was assigned raw and PostgreSQL discarded
+# the offset, so a peer outside UTC recorded its deadline wrong by its offset.
+# D1330 sent both through `parse_poll_end_time`, which converts to UTC and drops
+# the tzinfo, so they now store as the two different instants they name.
+# END_TIME alone could not show any of this, because `+00:00` cannot distinguish
+# "offset discarded" from "converted to UTC".
 END_TIME_STORED = datetime(2027, 1, 1, 12, 0)
 END_TIME_OTHER_OFFSET = '2027-01-01T12:00:00+05:00'
+END_TIME_OTHER_OFFSET_STORED = datetime(2027, 1, 1, 7, 0)
 
 # A contrary baseline for `end_poll`, far enough from END_TIME_STORED that no
 # assertion below can be satisfied by the seeded value.
@@ -967,24 +970,22 @@ class TestQuestionEditPath:
         is `db.Column(db.DateTime)` (app/models.py:3782) with no `timezone=True`,
         i.e. `timestamp without time zone`.
 
-        THE SECOND UPDATE IS THE POINT. `END_TIME`'s `+00:00` cannot distinguish
-        "the offset was discarded" from "the value was converted to UTC" -- both
-        give 12:00. `END_TIME_OTHER_OFFSET` is the same wall clock at `+05:00`,
-        a genuinely different instant five hours earlier, and it stores as the
-        SAME `END_TIME_STORED`. So the offset is DISCARDED, and a peer in a
-        non-UTC offset silently records a poll deadline wrong by that offset.
+        THE SECOND UPDATE IS THE POINT, AND IT HAS CHANGED SIDES. `END_TIME`'s
+        `+00:00` cannot distinguish "the offset was discarded" from "the value was
+        converted to UTC" -- both give 12:00. `END_TIME_OTHER_OFFSET` is the same
+        wall clock at `+05:00`, a genuinely different instant five hours earlier.
 
-        This is NOT what the Event block below does with the same field.
-        `:3375-3376` read `startTime`/`endTime` through `datetime.fromisoformat`,
-        which yields an AWARE datetime; psycopg2 tags an aware datetime
-        `::timestamptz`, and the assignment cast into a naive column then
-        CONVERTS by the server's session TimeZone (`Etc/UTC` under this harness)
-        instead of truncating. Measured both ways. The two blocks are not twins
-        in outcome -- only this one corrupts.
+        It USED to store as the same 12:00, because the string was assigned raw
+        and PostgreSQL discarded the offset: a peer outside UTC recorded its poll
+        deadline wrong by its own offset. This test asserted that, and said of it
+        and of the DataError below that neither was repaired.
 
-        The `sqlalchemy.exc.DataError` a malformed `endTime` raises out of the
-        function at commit time is the other finding on this line. Neither is
-        repaired here.
+        Both are repaired now (D1330). `parse_poll_end_time` reads the string with
+        `datetime.fromisoformat`, converts an aware result to UTC and drops the
+        tzinfo -- so the two offsets store as the two different instants they
+        name, and the conversion does not depend on the database session's own
+        TimeZone the way storing an aware datetime would. What the Event block
+        below does with the same field is now what this block does.
 
         The seeded 2020 date is the contrary baseline: `end_poll` is nullable and
         `make_poll` leaves it None, so asserting a value over None would be
@@ -1011,7 +1012,51 @@ class TestQuestionEditPath:
 
         db.session.expire_all()
 
-        assert poll.end_poll == END_TIME_STORED
+        assert poll.end_poll == END_TIME_OTHER_OFFSET_STORED
+        assert poll.end_poll != END_TIME_STORED
+
+    def test_an_end_time_that_is_not_a_date_leaves_the_poll_alone(
+            self, app, db_session, redis_lock_only_double):
+        """The other half of what this cluster recorded and did not repair: the
+        string went into a `db.DateTime` column, so `endTime: "not a date"` was
+
+            sqlalchemy.exc.DataError: (psycopg2.errors.InvalidDatetimeFormat)
+            invalid input syntax for type timestamp: "not a date"
+
+        raised out of `update_post_from_activity` AT COMMIT, which also poisons
+        the transaction, so the whole edit was lost rather than the end time.
+
+        `parse_poll_end_time` answers None for it, and the function returns
+        without touching the poll -- the same answer it already gave for an
+        Update carrying no `endTime` at all.
+        """
+        post = _seed_post()
+        poll, _ = _seed_poll(post, [('Old A', 7)])
+        poll.end_poll = SEEDED_END_TIME
+        db.session.commit()
+
+        update_post_from_activity(post, _poll_update(_choice('Yes', 0),
+                                                     end_time='not a date'))
+
+        db.session.expire_all()
+
+        assert poll.end_poll == SEEDED_END_TIME
+        assert [choice.choice_text for choice
+                in PollChoice.query.filter_by(post_id=post.id)] == ['Old A']
+
+    @pytest.mark.parametrize('end_time', [5, [], {}, '', '2027-13-45T99:99:99Z'])
+    def test_other_end_times_it_will_not_read(self, app, db_session,
+                                              redis_lock_only_double, end_time):
+        post = _seed_post()
+        poll, _ = _seed_poll(post, [('Old A', 7)])
+        poll.end_poll = SEEDED_END_TIME
+        db.session.commit()
+
+        update_post_from_activity(post, _poll_update(_choice('Yes', 0),
+                                                     end_time=end_time))
+
+        db.session.expire_all()
+        assert poll.end_poll == SEEDED_END_TIME
 
     def test_choices_are_numbered_from_one_in_the_order_the_update_lists_them(
             self, app, db_session, redis_lock_only_double):
