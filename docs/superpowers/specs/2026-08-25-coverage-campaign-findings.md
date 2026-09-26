@@ -19334,4 +19334,47 @@ and which end of a list each of icon and image takes, on creation and on refresh
 
 ---
 
-**Next free number: D1327.**
+## Round 144 — sub-project 118: the name a remote thumbnail is written under
+
+**The round in one line: a peer serving `Content-Type: image/html` got its body
+written to `app/static/media/posts/xx/yy/<name>.html` and left there — stored XSS
+on the instance's own origin, from being federated a post.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1327** | `app/utils.py`, `url_to_thumbnail_file` | `file_extension = '.' + content_type.split('/')[-1]`, behind a gate of `content_type.startswith('image')`. The REMOTE SERVER therefore chose the extension of a file written into a directory this instance serves, and the body written is the remote body, unaltered. Measured: `image/html` → `<name>.html` holding `<html><script>alert(document.domain)</script>`; also `.php`, an extension with a space in it, a bare `.`, and a 200-character one. | **fixed** | `PROBE html dressed as an image: content of EzQjV1ayKXOudrX.html=b'<html><script>alert(document.domain)</sc'` |
+| **D1328** | same function | The Pillow block ran unguarded, so a body Pillow refuses — which is anything that is not an image — raised `UnidentifiedImageError` out of the function **and left the download on disk**. That is what made D1327 permanent rather than momentary, and the exception also reached `edit_post`, which does not catch it. | **fixed** | `PROBE html dressed as an image: UnidentifiedImageError: cannot identify image file '.../EzQjV1ayKXOudrX.html'` with `files left=['EzQjV1ayKXOudrX.html']` |
+
+**The repair, and why it is two things.** An extension PieFed itself accepts is
+kept (`allowed_thumbnail_extensions`, taken from `app/community/util.py` plus the
+two other formats Pillow reads); anything else becomes `.img`, which no web server
+serves as script. Pillow sniffs content rather than names, so a format it supports
+under an unlisted content type still works — and one it does not support is now
+dropped, with its bytes, instead of raising. A thumbnail that cannot be processed
+is dropped exactly as one that cannot be fetched or sanitised already was.
+
+**Also removed: a dead `else`.** The old code guarded the split with
+`if content_type_parts:`, and `str.split` never returns an empty list, so the
+url-derived fallback beneath it had never run. Fourth instance of that shape in
+this campaign (fact 640).
+
+**What the mutation pass caught that the tests did not.** Either repair alone
+hides the other: the allowlist stops `.html` being chosen, and the cleanup removes
+the file whatever it is called, so three mutants survived against tests that only
+looked at what was left on disk. The test that kills them records the path handed
+to `Image.open` — the file as it exists before anything tidies up.
+
+### What the slice pins
+
+189 tests in the file, 12 of them new: eight content types that are not images
+dropped with nothing left behind; the property that no path written ends in a
+scriptable extension; a body Pillow refuses under an accepted content type; the
+refusal being a return value rather than an exception, because `edit_post` catches
+nothing; a real PNG still thumbnailed and a JPEG keeping the `.jpg` spelling; the
+allowlist holding only image extensions; the source no longer containing the
+expression that caused it; and the name six content types are actually written
+under.
+
+---
+
+**Next free number: D1329.**
