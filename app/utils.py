@@ -3040,6 +3040,14 @@ def opengraph_parse(url):
         return None
 
 
+# The extensions a remote thumbnail may be written under. Taken from
+# `app/community/util.py:allowed_extensions`, which is what PieFed accepts from
+# its own users, plus the two Pillow reads that are not in that list. Anything
+# else becomes '.img': see D1327 in `url_to_thumbnail_file`.
+allowed_thumbnail_extensions = ('.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic',
+                                '.mpo', '.avif', '.svg', '.bmp', '.tiff')
+
+
 def url_to_thumbnail_file(filename) -> File:
     if is_invalid_get_request_uri(filename):
         return None
@@ -3072,16 +3080,30 @@ def url_to_thumbnail_file(filename) -> File:
                     if ';' in content_type:
                         content_type_parts = content_type.split(';')
                         content_type = content_type_parts[0]
-                    content_type_parts = content_type.split('/')
-                    if content_type_parts:
-                        file_extension = '.' + content_type_parts[-1]
-                        if file_extension == '.jpeg':
-                            file_extension = '.jpg'
-                    else:
-                        file_extension = os.path.splitext(filename)[1]
-                        file_extension = file_extension.replace('%3f', '?')  # sometimes urls are not decoded properly
-                        if '?' in file_extension:
-                            file_extension = file_extension.split('?')[0]
+                    # D1327. This used to be `'.' + content_type.split('/')[-1]`,
+                    # so the REMOTE SERVER chose the extension of a file written
+                    # into `app/static/media/posts`, which this instance serves.
+                    # `Content-Type: image/html` passed the `startswith('image')`
+                    # gate above and wrote the peer's body to `<name>.html` --
+                    # measured, `<html><script>alert(document.domain)</script>`
+                    # served from our own origin, which is stored XSS. Other
+                    # measured spellings: `.php`, an extension with a space in
+                    # it, a bare `.`, and a 200-character one.
+                    #
+                    # An extension PieFed itself accepts is kept, because Pillow
+                    # and the code below read it; anything else becomes `.img`,
+                    # which no web server serves as script. Pillow sniffs the
+                    # CONTENT, so a format it supports under a content type not
+                    # listed here still works -- and one it does not support is
+                    # dropped below either way.
+                    #
+                    # The `else` this replaces was dead: `str.split` never
+                    # returns an empty list, so `if content_type_parts:` was
+                    # always true and the url-derived fallback never ran.
+                    subtype = content_type.split('/')[-1].strip().lower()
+                    file_extension = '.jpg' if subtype == 'jpeg' else '.' + subtype
+                    if file_extension not in allowed_thumbnail_extensions:
+                        file_extension = '.img'
 
                 # Also sanitize if file extension is .svg (regardless of content-type)
                 if file_extension == '.svg' and "svg" not in content_type:
@@ -3115,35 +3137,54 @@ def url_to_thumbnail_file(filename) -> File:
                     import pillow_avif  # NOQA
 
                 Image.MAX_IMAGE_PIXELS = 89478485
-                with Image.open(temp_file_path) as img:
-                    img = ImageOps.exif_transpose(img)
-                    img = img.convert('RGB' if (medium_image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg']) else 'RGBA')
+                # D1328. This used to run unguarded, so a body Pillow refuses --
+                # anything that is not an image, and a peer chooses what it serves --
+                # raised `UnidentifiedImageError` out of this function AND LEFT THE
+                # DOWNLOAD ON DISK, under `app/static/media/posts`, which this
+                # instance serves. That is how the html measured in D1327 stayed
+                # reachable. The exception also reached `edit_post`, which does not
+                # catch it.
+                #
+                # A thumbnail that cannot be processed is dropped, exactly as one
+                # that cannot be fetched or sanitized is, and its bytes go with it.
+                try:
+                    with Image.open(temp_file_path) as img:
+                        img = ImageOps.exif_transpose(img)
+                        img = img.convert('RGB' if (medium_image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg']) else 'RGBA')
 
-                    # Create 170px thumbnail
-                    img_170 = img.copy()
-                    img_170.thumbnail((170, 170), resample=Image.LANCZOS)
+                        # Create 170px thumbnail
+                        img_170 = img.copy()
+                        img_170.thumbnail((170, 170), resample=Image.LANCZOS)
 
-                    kwargs = {}
-                    if medium_image_format:
-                        kwargs['format'] = medium_image_format.upper()
-                        final_ext = '.' + medium_image_format.lower()
-                        temp_file_path = os.path.splitext(temp_file_path)[0] + final_ext
-                    if medium_image_quality:
-                        kwargs['quality'] = int(medium_image_quality)
+                        kwargs = {}
+                        if medium_image_format:
+                            kwargs['format'] = medium_image_format.upper()
+                            final_ext = '.' + medium_image_format.lower()
+                            temp_file_path = os.path.splitext(temp_file_path)[0] + final_ext
+                        if medium_image_quality:
+                            kwargs['quality'] = int(medium_image_quality)
 
-                    img_170.save(temp_file_path, optimize=True, **kwargs)
-                    thumbnail_width = img_170.width
-                    thumbnail_height = img_170.height
+                        img_170.save(temp_file_path, optimize=True, **kwargs)
+                        thumbnail_width = img_170.width
+                        thumbnail_height = img_170.height
 
-                    # Create 512px thumbnail
-                    img_512 = img.copy()
-                    img_512.thumbnail((512, 512), resample=Image.LANCZOS)
+                        # Create 512px thumbnail
+                        img_512 = img.copy()
+                        img_512.thumbnail((512, 512), resample=Image.LANCZOS)
 
-                    # Create filename for 512px thumbnail
-                    temp_file_path_512 = os.path.splitext(temp_file_path)[0] + '_512' + final_ext
-                    img_512.save(temp_file_path_512, optimize=True, **kwargs)
-                    thumbnail_512_width = img_512.width
-                    thumbnail_512_height = img_512.height
+                        # Create filename for 512px thumbnail
+                        temp_file_path_512 = os.path.splitext(temp_file_path)[0] + '_512' + final_ext
+                        img_512.save(temp_file_path_512, optimize=True, **kwargs)
+                        thumbnail_512_width = img_512.width
+                        thumbnail_512_height = img_512.height
+                except Exception as e:
+                    current_app.logger.info(
+                        f'Discarding remote thumbnail {filename}: {e}')
+                    for path in (temp_file_path,
+                                 os.path.splitext(temp_file_path)[0] + '_512' + final_ext):
+                        if os.path.isfile(path):
+                            os.unlink(path)
+                    return None
             else:
                 thumbnail_width = thumbnail_height = None
                 thumbnail_512_width = thumbnail_512_height = None
