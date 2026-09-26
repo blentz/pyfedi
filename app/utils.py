@@ -2629,6 +2629,13 @@ def reply_already_exists(user_id, post_id, parent_id, body) -> bool:
 
 
 def reply_is_just_link_to_gif_reaction(body) -> bool:
+    # D1333. `body` reaches here from a peer's Note, where
+    # `request_json['object']['source']['content']` is whatever the peer put
+    # there -- including null, which made this `AttributeError: 'NoneType' object
+    # has no attribute 'strip'` and lost the comment. A comment with no body is
+    # not a gif link.
+    if not isinstance(body, str):
+        return False
     tmp_body = body.strip()
     if tmp_body.startswith('https://media.tenor.com/') or \
             tmp_body.startswith('https://media1.tenor.com/') or \
@@ -2646,6 +2653,9 @@ def reply_is_just_link_to_gif_reaction(body) -> bool:
 
 
 def reply_is_low_effort(body) -> bool:
+    # D1333's sibling, reached from the same call site with the same value.
+    if not isinstance(body, str):
+        return False
     lower_body = body.lower().strip()
     if lower_body == 'this' or lower_body == 'this.' or lower_body == 'this!':
         return True

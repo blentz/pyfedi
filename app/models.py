@@ -6,7 +6,7 @@ import os
 import uuid
 import re
 import unicodedata
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from hashlib import sha256
 from time import time
 from typing import List, Union
@@ -51,6 +51,74 @@ def votes_cast_today(user_id: int) -> int:
     if num is None:
         return 0
     return int(num)
+
+
+def ai_verdict(response):
+    """The AI-detection endpoint's answer as `(detection_result, confidence)`.
+
+    None when the endpoint did not answer usably. D1331: `Post.new` and
+    `PostReply.new` both read `is_ai.json()['confidence']` and
+    `['detection_result']` outright, so an endpoint answering a 200 with an error
+    body, a different version of its API, or a proxy's own HTML page raised a
+    KeyError (or a JSON decode error before that) and lost the post or the
+    comment. Neither one is worth a post.
+
+    `bool` is excluded explicitly because `True` is an `int` in Python and
+    `True > 0.8`, so a `confidence: true` would otherwise count as certainty.
+    """
+    try:
+        payload = response.json()
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    confidence = payload.get('confidence')
+    detection = payload.get('detection_result')
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+        return None
+    if not isinstance(detection, str):
+        return None
+    return detection, confidence
+
+
+def parse_poll_end_time(value):
+    """The moment a remote poll closes, or None if the peer did not say usably.
+
+    D1330. `Post.new` assigned `request_json['object']['endTime']` straight into
+    `Poll.end_poll`, a DateTime column, so a peer sending `endTime: "not a
+    date"` was
+
+        DataError: (psycopg2.errors.InvalidDatetimeFormat) invalid input syntax
+        for type timestamp: "not a date"
+
+    -- which also poisons the transaction, so the post is lost as well as the
+    poll. The UPDATE path in `app/activitypub/util.py` already refused a missing
+    endTime and assigned the string the same way; both go through this now.
+
+    `parse_ban_expiry` beside it is the same two-step parse and is NOT reused: it
+    answers None for a date in the past, which is right for a ban and wrong for a
+    poll, since a poll that has already closed still has an end time.
+
+    An offset is converted to UTC and dropped, because `Poll.end_poll` is
+    `timestamp without time zone` and everything else in this file stores naive
+    UTC (`utcnow`). Storing an AWARE datetime there would leave the conversion to
+    the database session's own TimeZone, so the same document would mean different
+    instants on differently configured servers. What the peer's string used to do
+    was worse still: assigned as a string, PostgreSQL discarded the offset
+    entirely, so `12:00+05:00` stored as 12:00 rather than 07:00 and the poll
+    closed five hours late (recorded by round 129's
+    `test_the_end_time_string_is_cast_by_postgres_to_a_naive_datetime`, which now
+    asserts the conversion instead).
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
 
 
 def reputation_delta(old_effect: float, new_effect: float, low_quality: bool) -> float:
@@ -2313,7 +2381,16 @@ class Post(db.Model):
                             if recipient:
                                 blocked_senders = blocked_users(recipient.id)
                                 if post.user_id not in blocked_senders:
-                                    author = db.session.get(User, post.user_id).first()
+                                    # D1329. `db.session.get` answers a model
+                                    # or None and has no `.first()`, so this was
+                                    # `AttributeError: 'User' object has no
+                                    # attribute 'first'` for EVERY federated post
+                                    # that mentions a local user who has not
+                                    # blocked the sender -- the ordinary case.
+                                    author = db.session.get(User, post.user_id)
+                                    if author is None:
+                                        continue
+
                                     targets_data = {'gen': '0',
                                                     'post_id': post.id,
                                                     'post_body': post.body,
@@ -2334,18 +2411,38 @@ class Post(db.Model):
 
             # Polls need to be processed quite late because they need a post_id to refer to
             if request_json['object']['type'] == 'Question':
-                post.type = constants.POST_TYPE_POLL
-                mode = 'single'
-                if 'anyOf' in request_json['object']:
-                    mode = 'multiple'
-                poll = Poll(post_id=post.id, end_poll=request_json['object']['endTime'], mode=mode, local_only=False)
-                db.session.add(poll)
-                i = 1
-                for choice_ap in request_json['object']['oneOf' if mode == 'single' else 'anyOf']:
-                    new_choice = PollChoice(post_id=post.id, choice_text=choice_ap['name'], sort_order=i)
-                    db.session.add(new_choice)
-                    i += 1
-                db.session.commit()
+                # D1330. Four reads out of the peer's document, none of them
+                # asked first: `endTime` was a KeyError when absent and a
+                # DataError when not a date, `oneOf` a KeyError for a Question
+                # carrying neither collection, and `choice_ap['name']` a KeyError
+                # for a choice without one and a TypeError for a choice that is a
+                # string. Any of them lost the whole post, not just the poll.
+                #
+                # A poll is built only when the peer gave both an end time and at
+                # least one usable choice; otherwise the post stays an ordinary
+                # post rather than becoming a poll with nothing in it. An end time
+                # is required because `ap_datetime(poll.end_poll)` serialises this
+                # poll back out again and a None there would break that.
+                mode = 'multiple' if 'anyOf' in request_json['object'] else 'single'
+                choices = request_json['object'].get('anyOf' if mode == 'multiple' else 'oneOf')
+                end_poll = parse_poll_end_time(request_json['object'].get('endTime'))
+                names = []
+                if end_poll and isinstance(choices, list):
+                    for choice_ap in choices:
+                        if isinstance(choice_ap, dict):
+                            name = choice_ap.get('name')
+                        else:
+                            name = choice_ap if isinstance(choice_ap, str) else None
+                        if isinstance(name, str) and name.strip():
+                            names.append(name)
+                if names:
+                    post.type = constants.POST_TYPE_POLL
+                    db.session.add(Poll(post_id=post.id, end_poll=end_poll, mode=mode,
+                                        local_only=False))
+                    for sort_order, name in enumerate(names, start=1):
+                        db.session.add(PollChoice(post_id=post.id, choice_text=name,
+                                                  sort_order=sort_order))
+                    db.session.commit()
 
             if request_json['object']['type'] == 'Event':
                 post.type = constants.POST_TYPE_EVENT
@@ -2425,16 +2522,26 @@ class Post(db.Model):
             db.session.commit()
 
             # check new accounts to see if their comments are AI generated
-            if current_app.config['DETECT_AI_ENDPOINT'] and user.created_very_recently() and len(post.body) > 250:
+            # D1332. `len(post.body)` was `TypeError: object of type 'NoneType'
+            # has no len()` for a post with no body at all -- a link post, an
+            # image post with no text -- so on an instance with AI detection
+            # configured, a new account's first link post was lost. Only such an
+            # instance reaches this line, which is why it survived.
+            if current_app.config['DETECT_AI_ENDPOINT'] and user.created_very_recently() \
+                    and len(post.body or '') > 250:
                 from app.utils import get_request, notify_admin
                 try:
                     is_ai = get_request(f"{current_app.config['DETECT_AI_ENDPOINT']}?url={post.ap_id}")
                 except Exception:
                     is_ai = None
-                if is_ai and is_ai.status_code == 200:
-                    is_ai_result = is_ai.json()
-                    if is_ai_result['confidence'] > 0.8:
-                        if is_ai_result['detection_result'] == 'ai':
+                # D1331. Both keys were read outright, here and in
+                # `PostReply.new`; `ai_verdict` answers None for anything the
+                # endpoint says that cannot be read, and neither is worth a post.
+                verdict = ai_verdict(is_ai) if is_ai and is_ai.status_code == 200 else None
+                if verdict:
+                    detection_result, confidence = verdict
+                    if confidence > 0.8:
+                        if detection_result == 'ai':
                             post.ai_generated = True
                             db.session.commit()
                         # use redis to keep track of the posts this person has done in the last day and whether each is AI-generated
@@ -2445,8 +2552,8 @@ class Post(db.Model):
 
                         # Store each detection as a JSON entry with timestamp
                         detection_data = {
-                            'detection': is_ai_result['detection_result'],
-                            'confidence': is_ai_result['confidence'],
+                            'detection': detection_result,
+                            'confidence': confidence,
                             'timestamp': utcnow().isoformat()
                         }
 
@@ -3287,16 +3394,19 @@ class PostReply(db.Model):
                 # Store this in redis for a day so that duplicate reports aren't created if that setting is enabled
                 if cache_report:
                     cache.set(f'em-dash_used_by_{repr(reply.author)}', True, timeout=86400)
-        elif current_app.config['DETECT_AI_ENDPOINT'] and user.created_very_recently() and len(reply.body) >= 250:
+        elif current_app.config['DETECT_AI_ENDPOINT'] and user.created_very_recently() \
+                and len(reply.body or '') >= 250:
             # Use API to check new accounts to see if their comments are AI generated
             from app.utils import get_request, notify_admin
             try:
                 is_ai = get_request(f"{current_app.config['DETECT_AI_ENDPOINT']}?url={reply.ap_id}")
             except Exception:
                 is_ai = None
-            if is_ai and is_ai.status_code == 200:
-                is_ai_result = is_ai.json()
-                if is_ai_result['confidence'] > 0.8:
+            # D1331's other half, which had no guard of any kind.
+            verdict = ai_verdict(is_ai) if is_ai and is_ai.status_code == 200 else None
+            if verdict:
+                detection_result, confidence = verdict
+                if confidence > 0.8:
                     # use redis to keep track of the posts this person has done in the last day and whether each is AI-generated
                     from app import redis_client
 
@@ -3306,8 +3416,8 @@ class PostReply(db.Model):
                     # Store each detection as a JSON entry with timestamp
                     detection_data = {
                         'reply_id': reply.id,
-                        'detection': is_ai_result['detection_result'],
-                        'confidence': is_ai_result['confidence'],
+                        'detection': detection_result,
+                        'confidence': confidence,
                         'timestamp': utcnow().isoformat()
                     }
 

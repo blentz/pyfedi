@@ -28,7 +28,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
     Licence, UserExtraField, Feed, FeedMember, FeedItem, CommunityFlair, UserFlair, Topic, Event, InstanceBan, Emoji, \
-    UserFollower, PostBoost
+    UserFollower, PostBoost, parse_poll_end_time
 from app.utils import get_request, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
     is_image_url, domain_from_url, gibberish, ensure_directory_exists, shorten_string, fixup_url, \
     microblog_content_to_title, is_video_url, \
@@ -3342,9 +3342,14 @@ def update_post_from_activity(post: Post, request_json: dict):
             if total_vote_count == 0:  # Edit, not a totals update
                 poll = Poll.query.filter_by(post_id=post.id).first()
                 if poll:
-                    if not 'endTime' in request_json['object']:
+                    # D1330's other half. The membership test was here already;
+                    # the string still went straight into a DateTime column, so a
+                    # peer sending `endTime: "not a date"` was a DataError that
+                    # took the whole edit with it.
+                    end_poll = parse_poll_end_time(request_json['object'].get('endTime'))
+                    if end_poll is None:
                         return
-                    poll.end_poll = request_json['object']['endTime']
+                    poll.end_poll = end_poll
                     poll.mode = mode
 
                     db.session.execute(text('DELETE FROM "poll_choice_vote" WHERE post_id = :post_id'),
