@@ -5099,6 +5099,21 @@ def archive_post(post_id: int, s3_connection):
             if post is None:
                 return
 
+            # D1335. Archiving moves the post's body and every reply INTO the
+            # archive and removes them from the database, so a second run starts
+            # from a post that has nothing left: it writes `body: null` and
+            # `replies: []` over the archive the first run made, at the same
+            # path, and the text is then gone from both places. Measured:
+            #
+            #   PROBE pi after one archive:    body='wwwwwwwwwwww' replies=1
+            #   PROBE pj after a second archive: path_same=True body=None replies=0
+            #
+            # `archive_old_posts` selects `WHERE p.archived IS NULL`, so nothing
+            # reaches here twice today. That is the caller's care, not this
+            # function's, and the cost of being wrong about it is unrecoverable.
+            if post.archived:
+                return
+
             # Delete thumbnail and medium sized versions if post has an image
             if post.image_id is not None:
 
