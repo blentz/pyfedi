@@ -4601,18 +4601,49 @@ def filtered_out_communities(user: User) -> List[int]:
 @cache.memoize(timeout=300)
 def retrieve_image_hash(image_url):
     def fetch_hash(retries_left):
+        # D1336. Everything this reads comes out of the hashing endpoint's answer,
+        # and none of it was checked. Measured against the four shapes an endpoint
+        # can return with a 200:
+        #
+        #   quality as a string -> TypeError: '>=' not supported between
+        #                          instances of 'str' and 'int'
+        #   quality as null     -> the same (the key EXISTS, so `.get('quality', 0)`
+        #                          answers None rather than the default)
+        #   a body that is not json -> JSONDecodeError
+        #   a json list         -> AttributeError: 'list' object has no attribute 'get'
+        #
+        # None of those is an `httpx.HTTPError`, so all four escaped the clauses
+        # below -- and this function is called from `Post.new`, so a federated post
+        # was lost, and from `app/post/routes.py` and `app/admin/routes.py`, where
+        # it is a 500. A hash this instance cannot obtain is no hash, which is what
+        # every caller already handles.
         try:
             response = get_request(current_app.config['IMAGE_HASHING_ENDPOINT'], {'image_url': image_url})
             if response.status_code == 200:
-                result = response.json()
-                if result.get('quality', 0) >= 70:
-                    return result.get('pdq_hash_binary', '')
+                try:
+                    result = response.json()
+                except ValueError:
+                    return None
+                if not isinstance(result, dict):
+                    return None
+                quality = result.get('quality', 0)
+                # No `isinstance(quality, bool)` clause: `True >= 70` and
+                # `False >= 70` are both False, so a boolean is refused by the
+                # comparison itself and excluding it explicitly changes nothing.
+                # A mutant removing such a clause survives, which is the test
+                # telling the truth about it.
+                if not isinstance(quality, (int, float)):
+                    return None
+                if quality >= 70:
+                    pdq_hash = result.get('pdq_hash_binary', '')
+                    return pdq_hash if isinstance(pdq_hash, str) else None
             elif response.status_code == 429 and retries_left > 0:
                 sleep(random.uniform(1, 3))
                 return fetch_hash(retries_left - 1)
+        # `httpx.ReadError` had a clause of its own below this one, and it is a
+        # subclass of `HTTPError` (ReadError -> NetworkError -> TransportError ->
+        # RequestError -> HTTPError), so it never ran.
         except httpx.HTTPError as e:
-            current_app.logger.warning(f"Error retrieving image hash: {e}")
-        except httpx.ReadError as e:
             current_app.logger.warning(f"Error retrieving image hash: {e}")
         finally:
             try:
