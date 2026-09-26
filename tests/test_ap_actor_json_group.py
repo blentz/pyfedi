@@ -1061,14 +1061,19 @@ class TestImage:
         community = actor_json_to_model(document, '!memes', PEER)
         assert db.session.get(File, community.image_id).source_url == f'https://{PEER}/first.png'
 
-    def test_image_as_a_bare_string_creates_no_file(self, app, db_session):
-        """The shape the icon block accepts and this one does not: neither
-        isinstance test matches, so image_entry stays None."""
+    def test_image_as_a_bare_string_is_taken(self, app, db_session):
+        """This used to assert the opposite, and the asymmetry it pinned --
+        `icon` accepting a bare url string while `image` dropped it -- was drift
+        rather than a decision. Sub-project 117 gave both keys one reading
+        (`image_url_from`), which also stopped four spellings of the same value
+        raising inside the refresh tasks.
+
+        What changed with it: a peer sending `image: "https://..."` now gets a
+        cover stored, where before it was silently dropped."""
         peer_instance(PEER)
         document = _group('memes', fields={'image': f'https://{PEER}/c.png'})
         community = actor_json_to_model(document, '!memes', PEER)
-        assert community.image_id is None
-        assert db.session.query(File).count() == 0
+        assert community.image.source_url == f'https://{PEER}/c.png'
 
     def test_null_image_creates_no_file(self, app, db_session):
         peer_instance(PEER)
