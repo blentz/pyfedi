@@ -19288,4 +19288,50 @@ File with nothing set; what reaches the CDN in each of those cases and when
 
 ---
 
-**Next free number: D1325.**
+## Round 143 — sub-project 117: the `icon` and `image` a peer puts on an actor
+
+**The round in one line: `icon: []` was an IndexError in all six places PieFed
+reads an actor's images, and one of those is what picks up a rotated public key.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1325** | `app/activitypub/util.py`, six sites — `refresh_user_profile_task`, `refresh_community_profile_task`, `refresh_feed_profile_task` and the three arms of `actor_json_to_model`, each for `icon` and `image` | All read `elif isinstance(activity_json['icon'], list) and 'url' in activity_json['icon'][-1]:`. The membership test indexes the list it has not checked, so `icon: []` is `IndexError: list index out of range` and `icon: [5]` is `TypeError: argument of type 'int' is not iterable`. The refresh tasks roll back and re-raise, so a peer serving such a document is **never refreshed again while it keeps serving it** — and `refresh_user_profile_task` is what applies a rotated `publicKey`, so a peer could make itself permanently unverifiable here with one empty list. `actor_json_to_model` is reached the first time a peer is so much as mentioned. | **fixed** | probe: `PROBE guarded icon an empty list: IndexError: list index out of range`, `PROBE guarded icon a list of numbers: TypeError: argument of type 'int' is not iterable` |
+| **D1326** | `app/activitypub/util.py`, `refresh_user_profile_task`'s `image` arm | The sixth copy had no guards at all: `activity_json['image']['url']` and `['image'][0]['url']` straight out of the peer's document. A list of strings was `TypeError: string indices must be integers`, a dict or entry without a url a `KeyError`. | **fixed** | `PROBE unguarded image a list of strings: TypeError: string indices must be integers, not 'str'` |
+
+**One reading for all six.** `image_url_from(value, prefer_last=False)` answers
+the url or None for any shape at all. Which end of a list is used is kept as it
+was — the LAST entry for an icon, where the largest is conventionally offered,
+and the FIRST for an image — and an unusable entry gives None rather than a look
+at the other end, so nothing about the well-formed cases moves.
+
+**A deliberate behaviour change, and the only one.** A bare url string was
+accepted for `icon` by `actor_json_to_model` and ignored by the refresh tasks, and
+for `image` ignored everywhere. So an actor created with `icon: "https://..."`
+had an avatar until its first refresh and none afterwards. That asymmetry was
+drift rather than a decision: the helper accepts a bare string for both keys,
+everywhere. What changes for an operator: a peer sending `image: "https://..."`
+now gets a cover stored where it was previously dropped.
+`tests/test_ap_actor_json_group.py::TestImage::test_image_as_a_bare_string_creates_no_file`
+pinned the old asymmetry and has been replaced by one asserting the new reading,
+with that reasoning in its docstring.
+
+**The property test found the other six.** The first pass replaced three
+functions' worth; `test_no_task_indexes_into_an_icon_or_image_by_hand` then failed
+on `actor_json_to_model`'s three copies, which reading the refresh tasks would
+never have shown.
+
+### What the slice pins
+
+98 tests: `image_url_from` over 21 shapes, from each end of a list — a dict, a
+dict with no url, a url that is null, a number or empty, one- and two-entry
+lists, an empty list, lists of strings, numbers and empty dicts, a list whose
+entry's url is not a string, a list whose other end is usable, a bare string, an
+empty string, a number, null and a nested list — plus the property that nothing
+raises for any of them, including an `object()`, a tuple, a set and bytes; then
+each of the three refresh tasks and `actor_json_to_model` against five documents
+that used to raise, for both keys, with the public key still applied afterwards;
+and which end of a list each of icon and image takes, on creation and on refresh.
+
+---
+
+**Next free number: D1327.**

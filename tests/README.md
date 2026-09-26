@@ -11605,3 +11605,17 @@ message said 78. Every scripted edit in this campaign asserts
 `s.count(old) == 1` before replacing -- the two that skipped it are the two that
 went wrong (this, and an earlier probe that patched a comment that was no longer
 there).
+
+**686. A MEMBERSHIP TEST CAN RAISE.**
+`'url' in activity_json['icon'][-1]` looks like a guard and is two operations: the
+index runs first, so `icon: []` is an IndexError and `icon: [5]` a TypeError
+(D1325). Six copies of it existed. When a guard subscripts the thing it is
+guarding, the guard is the bug -- and the shapes that find it are the empty
+container and the container of the wrong element type, not the missing key.
+
+**687. THE SWEEP IS NOT DONE WHEN THE FUNCTIONS YOU READ ARE DONE.**
+Three refresh tasks were repaired, and the property test then failed on
+`actor_json_to_model`, which holds three more copies of the same read. Reading
+the functions named in the coverage gap would never have shown them. Write the
+property test BEFORE believing a sweep is complete, and make it scan the file
+rather than the functions you happened to open.
