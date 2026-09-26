@@ -4736,6 +4736,21 @@ class CronJobLog(db.Model):
             return timedelta(hours=25)
         elif self.name == 'send_queue':
             return timedelta(minutes=5)
+        # D1334. This used to fall off the end and answer None for any name not
+        # listed above, and `app/admin/routes.py` does
+        # `if diff_last_run > cron_task.get_frequency():`, so the admin dashboard
+        # answered `TypeError: '>' not supported between instances of
+        # 'datetime.timedelta' and 'NoneType'`. `log_cron_task_to_db` writes its
+        # row with `frequency` NULL, so ADDING OR RENAMING A CRON TASK broke the
+        # first page an admin opens, with the failure landing nowhere near the
+        # change that caused it.
+        #
+        # A day is the conservative answer: a task whose schedule nobody declared
+        # is still watched, and an operator is told late rather than not at all.
+        # `tests/test_admin_cron_overdue.py` asserts that every name actually
+        # passed to `log_cron_task_to_db` is listed above, so a rename fails a
+        # test rather than quietly falling back to this.
+        return timedelta(days=1)
 
 
 class RevokedToken(db.Model):
