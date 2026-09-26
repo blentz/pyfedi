@@ -11675,3 +11675,18 @@ on a page that mentions neither the task nor their change. The repair worth havi
 is not only the fallback but the property test that greps the call sites and
 asserts each name is declared -- it moves the failure from a stranger's admin
 dashboard to the test run of whoever renames the task.
+
+**695. A RECORDER IN THE CALLER'S TEST LEAVES THE CALLEE UNTESTED.**
+`archive_post` was replaced by a recorder wherever `archive_old_posts` is tested
+-- correct for those tests, and it meant 35 lines of file deletion, JSON writing
+and reply removal had never run once (D1335 lived there). When a test patches a
+function to observe that it was CALLED, note who tests the function itself; if
+the answer is nobody, that is a gap the coverage number may not show, because the
+caller's test still executes its own lines.
+
+**696. AN OPERATION THAT MOVES DATA IS NOT IDEMPOTENT -- ASK WHAT A SECOND RUN
+SEES.** `archive_post` moves a post's body out of the row and into a file, so the
+second run archives the emptiness it created and overwrites the good archive at
+the same path (D1335). For anything that MOVES rather than copies, run it twice in
+a test. The caller's `WHERE archived IS NULL` is not a substitute: guards belong
+with the destruction they prevent.

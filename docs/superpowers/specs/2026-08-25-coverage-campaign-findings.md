@@ -19481,4 +19481,49 @@ adding a row.
 
 ---
 
-**Next free number: D1335.**
+## Round 147 — sub-project 121: archiving an old post
+
+**The round in one line: archiving a post twice replaced its archive with an
+empty one, and the database copy was already gone.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1335** | `app/utils.py`, `archive_post` | Archiving is destructive by design: the body and every reply move INTO a gzipped file and out of the database. A second run therefore starts from a post with nothing left, and writes `body: null, replies: []` over the archive the first run made — at the same path, because the filename is derived from the post id. The text is then gone from both places, unrecoverably. | **fixed** | `PROBE pi after one archive: body='wwwwwwwwwwww' replies=1` against `PROBE pj after a second archive: path_same=True body=None replies=0` |
+
+**Armed, not firing — for the second round running.** `archive_old_posts`
+selects `WHERE p.archived IS NULL`, so nothing reaches `archive_post` twice
+today. That is the caller's care and not the function's, the function is public,
+and the cost of being wrong about it is a post's entire text. The guard is four
+lines; a test asserts the caller's filter still exists, so the guard is known to
+be a second line of defence rather than the only one.
+
+**Why this was never noticed.** `archive_post` had never been executed by a test
+at all: `tests/test_shared_tasks_maintenance_lifecycle.py` replaces it with a
+recorder, which is the right call for testing its CALLER and left 35 lines of
+file deletion, JSON serialisation and reply removal unasserted.
+
+**Two tests corrected while writing them, both mine rather than the code's.**
+`image_id = 999999` is refused by `post_image_id_fkey`, so `if image_file:` guards
+something the schema forbids and the absence is simulated at the session (fact
+653). And the archive keeps the reply TREE rather than flattening it —
+`serialize_tree` recurses into each entry's own `replies` — so a child is inside
+its parent, not beside it.
+
+### What the slice pins
+
+24 tests: a long post archived to the expected path; the body moving out of the
+row and into the file; the version and id recorded; the replies moving with it; an
+`ArchivedPostReply` row per reply naming the right user; a bookmarked reply kept
+because a bookmark points at the row; a short post with no replies left alone, and
+one with a reply archived anyway; a post with no body; a post that does not exist,
+writing nothing; archiving twice, which must not empty the archive, must not move
+the path, and must not sweep up a reply written afterwards; the caller's
+`archived IS NULL` still in place; local image files deleted and their columns
+cleared while `source_url` is kept; a file already off disk; an image row hidden
+at the session; a short post still losing its generated images; and the fields
+each serialised reply carries, its author, and a nested reply keeping its parent
+and depth.
+
+---
+
+**Next free number: D1336.**
