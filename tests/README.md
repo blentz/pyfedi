@@ -11659,3 +11659,19 @@ TimeZone is Etc/UTC -- so a mutant skipping the normalisation passed every test
 that went through a commit. The test that kills it asserts the RETURN VALUE.
 Round 144 needed the same move for a different reason: look at the step when the
 outcome cannot tell two implementations apart.
+
+**693. A FUNCTION THAT FALLS OFF THE END ANSWERS None, AND `>` DOES NOT LIKE IT.**
+`CronJobLog.get_frequency` mapped seven names to schedules and had nothing after
+the last `elif`, so an unlisted name gave None and the caller's
+`diff_last_run > get_frequency()` was a TypeError on the admin dashboard (D1334).
+Same shape as D1289's `/protocol_handler`. For any mapping function, ask what it
+answers for an input that matches no arm, then look at what the caller does with
+that answer.
+
+**694. A DEFECT CAN BE ARMED RATHER THAN FIRING, AND THAT IS STILL WORTH FIXING.**
+All seven cron names in the codebase today are on `get_frequency`'s list, so
+D1334 breaks nothing as it stands. It breaks for the next person who adds a task,
+on a page that mentions neither the task nor their change. The repair worth having
+is not only the fallback but the property test that greps the call sites and
+asserts each name is declared -- it moves the failure from a stranger's admin
+dashboard to the test run of whoever renames the task.
