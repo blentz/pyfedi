@@ -11635,3 +11635,27 @@ tests that asserted only on what was left on disk. The test that kills them
 records the path handed to `Image.open` -- the state DURING the operation, not
 after it. When two fixes overlap, find an observable that only one of them
 produces.
+
+**690. THE FIRST OPERAND OF A GATE HIDES THE REST OF IT.**
+`if DETECT_AI_ENDPOINT and user.created_very_recently() and len(post.body) > 250:`
+-- the config check is False on every instance that has not configured it, so
+`len(None)` behind it was never reached by anyone, including the test suite
+(D1332). When a branch opens with a configuration flag, the tests have to set
+that flag, or nothing after it is being tested at all. The same shape hid an
+entire mention-notification branch behind a tag nobody sent in a test (D1329).
+
+**691. `db.session.get(...)` HAS NO `.first()`.**
+`db.session.get(User, id)` answers a model or None; `.first()` belongs to a
+Query. `db.session.get(User, post.user_id).first()` was therefore an
+AttributeError on every execution -- and it sat in the branch that notifies a
+mentioned user, so no federated mention had ever worked (D1329). Third defect in
+this campaign from confusing the two APIs. `grep -rn "session.get(.*).first()"
+app/` finds the rest.
+
+**692. WHEN THE ENVIRONMENT AGREES WITH THE BUG, ASSERT THE STEP.**
+`parse_poll_end_time` normalises an aware datetime to naive UTC. Storing it
+unnormalised gives the identical row, because the test database's session
+TimeZone is Etc/UTC -- so a mutant skipping the normalisation passed every test
+that went through a commit. The test that kills it asserts the RETURN VALUE.
+Round 144 needed the same move for a different reason: look at the step when the
+outcome cannot tell two implementations apart.

@@ -19377,4 +19377,60 @@ under.
 
 ---
 
-**Next free number: D1329.**
+## Round 145 — sub-project 119: the rest of `Post.new`, and the same reads in `PostReply.new`
+
+**The round in one line: every federated post that mentioned a local user was
+lost, because the notification looked its own author up with a method
+`db.session.get` does not have.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1329** | `app/models.py`, `Post.new`'s Mention branch | `author = db.session.get(User, post.user_id).first()`. `db.session.get` answers a model or None; there is no `.first()`. The branch needs only a tag of type Mention whose href is a local profile and a recipient who has not blocked the sender — the ordinary case — so **no federated post mentioning a local user has ever been created** while this line stood. The whole branch was uncovered, which is why. | **fixed** | `PROBE pa a mention of a local user: AttributeError: 'User' object has no attribute 'first'` |
+| **D1330** | `app/models.py`, `Post.new`'s Question branch | `endTime`, `oneOf` and each `choice_ap['name']` read straight out of the peer's document: a KeyError for a Question with no endTime, another for one carrying neither collection, another for a choice without a name, a `TypeError` for a choice that is a string, and a `DataError` for an endTime that is not a date — which poisons the transaction, so the post went with the poll. | **fixed** | `PROBE pg ... KeyError: 'endTime'`, `ph KeyError: 'oneOf'`, `pi KeyError: 'name'`, `pj TypeError: string indices must be integers`, `pk DataError: invalid input syntax for type timestamp: "not a date"` |
+| **D1331** | `app/models.py`, `Post.new` and `PostReply.new` | `is_ai.json()['confidence']` and `['detection_result']` off the configured AI endpoint. A 200 with an error body, a different version of that API, or a proxy's HTML page was a KeyError (or a decode error before it) and lost the post or the comment. `PostReply.new`'s copy had no guard of any kind. | **fixed** | `KeyError: 'detection_result'` for `{'confidence': 0.9}` |
+| **D1332** | `app/models.py`, both AI gates | `len(post.body) > 250` with `post.body` None — a link post, an image post with no text. `TypeError: object of type 'NoneType' has no len()`. Only an instance with `DETECT_AI_ENDPOINT` configured reaches the line, which is how it survived: **the gate's first operand hides the other two.** | **fixed** | `TypeError: object of type 'NoneType' has no len()` from a titled post with no content |
+| **D1333** | `app/utils.py`, `reply_is_just_link_to_gif_reaction` and `reply_is_low_effort` | Both do `body.strip()` two lines into `PostReply.new`, and `body` comes from `request_json['object']['source']['content']` — `null` from a peer gives None. `AttributeError: 'NoneType' object has no attribute 'strip'`, and the comment is lost. | **fixed** | `AttributeError: 'NoneType' object has no attribute 'strip'` |
+
+**D1330 also repaired what round 129 recorded and left.** That round's
+`test_the_end_time_string_is_cast_by_postgres_to_a_naive_datetime` measured the
+peer's string being assigned raw into a naive `DateTime` column and PostgreSQL
+**discarding the offset**: `12:00+05:00` stored as 12:00, so a peer outside UTC
+closed its poll late by its own offset. Its docstring said of that and of the
+DataError that "Neither is repaired here." Both are now.
+`parse_poll_end_time` reads the string, converts an aware result to UTC and drops
+the tzinfo, so the stored instant does not depend on the database session's
+TimeZone the way handing it an aware datetime would. That test now asserts the
+conversion, with the history in its docstring, and the two offsets store as the
+two different instants they name.
+
+**What the mutation pass needed that the tests did not give it.** The harness's
+database session is `Etc/UTC`, so a mutant that returns the aware datetime
+unconverted stores exactly the same value and passes everything that goes through
+a commit. It dies only against an assertion on the parser's own return value.
+Same lesson as round 144's, from the other direction: when the environment
+happens to agree with the bug, the test has to look at the step, not the outcome.
+
+**A poll built from a document it cannot read.** The repair builds a poll only
+when the peer gave both an end time and at least one usable choice; otherwise the
+post stays an ordinary post rather than becoming a poll with nothing in it. A
+choice given as a bare string is now taken, which is a deliberate widening.
+
+### What the slice pins
+
+90 tests: a mention that arrives, notifies, counts, names its author, is skipped
+for a blocker, for somebody not here, for a remote actor, for an href that is
+missing or not a string, twice over for two mentions, and for a tag list that is
+not a list; the author guard simulated at the session, since a foreign key makes
+it unreachable; nine malformed Questions each landing as an ordinary post, the
+two well-formed modes, the end time stored as a moment, choices as bare strings,
+unusable choices skipped without leaving gaps in `sort_order`, and a poll that
+has already closed still being a poll; the end-time parser over four shapes it
+reads and eight it refuses, the offset converted in both directions, and the
+property that it never raises; the AI verdict reader over ten answers, a boolean
+confidence refused as certainty, a body that is not JSON, and a failure status;
+the same check on a comment; and a post with no body, a short body, and an
+instance with no endpoint configured.
+
+---
+
+**Next free number: D1334.**
