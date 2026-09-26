@@ -33,7 +33,7 @@ from werkzeug.exceptions import BadRequest
 
 from app.community.util import save_banner_file, save_icon_file
 from app.shared.upload import process_upload
-from app.utils import (MAX_SVG_SIZE, is_valid_xml_utf8, refuse_svg_entity_declarations,
+from app.utils import (MAX_SVG_SIZE, gibberish, is_valid_xml_utf8, refuse_svg_entity_declarations,
                        sanitize_svg, sanitize_svg_bytes, url_to_thumbnail_file)
 
 KEEP_DATA_URL_MIME_TYPES = {"image": ["jpeg", "png", "gif", "webp", "avif"]}
@@ -1257,3 +1257,201 @@ class TestUrlToThumbnailFileDropsUnsanitizableSvg:
                 assert b'<rect' in content
             finally:
                 os.remove(file.thumbnail_path)
+
+
+class TestARemoteServerDoesNotChooseTheFileExtension:
+    """D1327/D1328. `url_to_thumbnail_file` took the extension of the file it
+    wrote from the REMOTE `Content-Type`:
+
+        file_extension = '.' + content_type.split('/')[-1]
+
+    behind a gate of `content_type.startswith('image')`. So
+    `Content-Type: image/html` wrote the peer's body to
+    `app/static/media/posts/xx/yy/<name>.html` -- a directory this instance
+    serves -- and Pillow's refusal of it then propagated out of the function,
+    LEAVING THE FILE THERE. Measured before the repair:
+
+        PROBE html dressed as an image: UnidentifiedImageError: cannot identify
+            image file 'app/static/media/posts/Ez/Qj/EzQjV1ayKXOudrX.html'
+        PROBE html dressed as an image: content=b'<html><script>alert(document.domain)</sc'
+
+    which is stored XSS on the instance's own origin, reachable by being
+    federated a post whose image url points at the attacker.
+
+    An extension PieFed itself accepts is kept; anything else becomes `.img`,
+    which no web server serves as script. Pillow sniffs content rather than
+    names, so a format it supports under an unlisted content type still works.
+    """
+
+    HOSTILE = b'<html><script>alert(document.domain)</script></html>'
+
+    @staticmethod
+    def _response(content: bytes, content_type: str) -> httpx.Response:
+        return httpx.Response(200, content=content,
+                              headers={'content-type': content_type})
+
+    def _fetch(self, app, http_mock, content_type, content=None, url=None):
+        """Fetch one thumbnail and report what it returned and what it left."""
+        url = url or f'https://thumbnails.example/{gibberish(8)}.img'
+        http_mock.get(url).mock(return_value=self._response(
+            content if content is not None else self.HOSTILE, content_type))
+        before = files_under(MEDIA_ROOT)
+        with app.app_context():
+            result = url_to_thumbnail_file(url)
+        left = sorted(set(files_under(MEDIA_ROOT)) - set(before))
+        return result, left
+
+    @pytest.mark.parametrize('content_type', [
+        'image/html',
+        'image/xhtml+xml',
+        'image/php',
+        'image/javascript',
+        'image/svg',            # not svg+xml, so the sanitiser is not reached
+        'image/png x',
+        'image/',
+        'image/' + 'a' * 200,
+    ])
+    def test_a_content_type_that_is_not_an_image_is_dropped(self, app, http_mock,
+                                                            content_type):
+        result, left = self._fetch(app, http_mock, content_type)
+        try:
+            assert result is None
+            assert left == [], f'left behind: {left}'
+        finally:
+            for path in left:
+                os.remove(path)
+
+    def test_nothing_is_written_with_a_scriptable_extension(self, app, http_mock):
+        """The property. Whatever the peer says, the name it gets cannot be one
+        a web server executes or renders."""
+        forbidden = ('.html', '.htm', '.xhtml', '.xhtml+xml', '.php', '.js',
+                     '.javascript', '.phtml')
+        for content_type in ('image/html', 'image/php', 'image/js',
+                             'image/javascript', 'image/xhtml+xml'):
+            result, left = self._fetch(app, http_mock, content_type)
+            try:
+                assert result is None
+                for path in left:
+                    assert not path.lower().endswith(forbidden), path
+            finally:
+                for path in left:
+                    os.remove(path)
+
+    def test_a_body_pillow_refuses_leaves_nothing_behind(self, app, http_mock):
+        """D1328 on its own: the content type is one PieFed accepts, and the
+        body is not an image at all."""
+        result, left = self._fetch(app, http_mock, 'image/png',
+                                   content=b'not a png at all')
+        try:
+            assert result is None
+            assert left == [], f'left behind: {left}'
+        finally:
+            for path in left:
+                os.remove(path)
+
+    def test_it_returns_none_rather_than_raising(self, app, http_mock):
+        """`edit_post` calls this and does not catch anything, so the refusal has
+        to be a return value."""
+        url = 'https://thumbnails.example/notanimage.png'
+        http_mock.get(url).mock(return_value=self._response(b'nope', 'image/png'))
+        with app.app_context():
+            assert url_to_thumbnail_file(url) is None
+
+    def test_a_real_png_is_still_thumbnailed(self, app, http_mock):
+        """The happy path is not collateral damage."""
+        import io
+
+        from PIL import Image as PILImage
+
+        buffer = io.BytesIO()
+        PILImage.new('RGB', (400, 300), (10, 20, 30)).save(buffer, format='PNG')
+        result, left = self._fetch(app, http_mock, 'image/png',
+                                   content=buffer.getvalue())
+        try:
+            assert result is not None
+            assert result.thumbnail_path
+            assert result.thumbnail_width <= 170
+        finally:
+            for path in left:
+                if os.path.isfile(path):
+                    os.remove(path)
+
+    def test_a_jpeg_keeps_the_jpg_spelling(self, app, http_mock):
+        """`image/jpeg` maps to `.jpg`, which the code below the write compares
+        against explicitly when it decides the colour mode."""
+        import io
+
+        from PIL import Image as PILImage
+
+        buffer = io.BytesIO()
+        PILImage.new('RGB', (200, 200), (1, 2, 3)).save(buffer, format='JPEG')
+        result, left = self._fetch(app, http_mock, 'image/jpeg',
+                                   content=buffer.getvalue())
+        try:
+            assert result is not None
+        finally:
+            for path in left:
+                if os.path.isfile(path):
+                    os.remove(path)
+
+    def test_the_allowlist_holds_only_image_extensions(self):
+        """A property over the list itself, so nothing scriptable is ever added
+        to it by hand."""
+        from app.utils import allowed_thumbnail_extensions
+
+        for extension in allowed_thumbnail_extensions:
+            assert extension.startswith('.')
+            assert extension == extension.lower()
+            assert extension not in ('.html', '.htm', '.php', '.js', '.xhtml')
+
+    def test_the_extension_is_never_taken_from_the_content_type_verbatim(self):
+        """The source-level guard: the expression that caused this is gone."""
+        from pathlib import Path
+
+        source = Path('app/utils.py').read_text(encoding='utf8')
+        for line in source.splitlines():
+            stripped = line.strip()
+            if stripped.startswith('#'):
+                continue
+            assert "file_extension = '.' + content_type_parts[-1]" not in stripped
+
+    def test_the_name_the_bytes_are_written_under(self, app, http_mock, monkeypatch):
+        """The extension itself, observed rather than inferred.
+
+        Both repairs close the hole -- the allowlist stops `.html` being chosen,
+        and the cleanup removes the file either way -- so a test that looks only
+        at what survives cannot tell which one is working, and a mutant dropping
+        the allowlist passed against them. What pins it is the path handed to
+        `Image.open`, which is the file as it exists on disk before anything
+        tidies up.
+        """
+        recorded = []
+
+        class _Image:
+            MAX_IMAGE_PIXELS = None
+            LANCZOS = 1
+
+            @staticmethod
+            def open(path, *args, **keywords):
+                recorded.append(path)
+                raise OSError('cannot identify image file')
+
+        monkeypatch.setattr('app.utils.Image', _Image)
+
+        for content_type, expected in (('image/html', '.img'),
+                                       ('image/php', '.img'),
+                                       ('image/' + 'a' * 200, '.img'),
+                                       ('image/jpeg', '.jpg'),
+                                       ('image/png', '.png'),
+                                       ('image/webp', '.webp')):
+            recorded.clear()
+            result, left = self._fetch(app, http_mock, content_type)
+            try:
+                assert result is None
+                assert recorded, f'Image.open was never reached for {content_type}'
+                assert recorded[0].endswith(expected), \
+                    f'{content_type} was written as {recorded[0]}'
+            finally:
+                for path in left:
+                    if os.path.isfile(path):
+                        os.remove(path)
