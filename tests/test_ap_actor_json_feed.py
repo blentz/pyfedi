@@ -1477,14 +1477,18 @@ class TestImage:
         feed = actor_json_to_model(document, '~news', PEER)
         assert db.session.get(File, feed.image_id).source_url == f'https://{PEER}/first.png'
 
-    def test_image_as_a_bare_string_creates_no_file(self, app, db_session, http_mock):
-        """The shape the icon block accepts and this one does not: neither
-        isinstance test matches, so image_entry stays None."""
+    def test_image_as_a_bare_string_is_taken(self, app, db_session, http_mock):
+        """This used to assert the opposite. The asymmetry it pinned -- `icon`
+        accepting a bare url string while `image` dropped it -- was drift rather
+        than a decision, and sub-project 117 gave both keys one reading
+        (`image_url_from`), which also stopped four spellings of the same value
+        raising inside the three refresh tasks.
+
+        Its twin in tests/test_ap_actor_json_group.py moved with it."""
         _peer_with_one_owner(http_mock)
         document = _owned_feed(fields={'image': f'https://{PEER}/c.png'})
         feed = actor_json_to_model(document, '~news', PEER)
-        assert feed.image_id is None
-        assert db.session.query(File).count() == 0
+        assert feed.image.source_url == f'https://{PEER}/c.png'
 
     def test_null_image_creates_no_file(self, app, db_session, http_mock):
         _peer_with_one_owner(http_mock)
