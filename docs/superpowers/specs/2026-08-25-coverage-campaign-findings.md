@@ -19433,4 +19433,52 @@ instance with no endpoint configured.
 
 ---
 
-**Next free number: D1334.**
+## Round 146 — sub-project 120: the overdue-cron warning on the admin dashboard
+
+**The round in one line: adding or renaming a cron task broke the first page an
+admin opens, and the failure landed nowhere near the change.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1334** | `app/models.py`, `CronJobLog.get_frequency` | Seven `elif`s mapping a task's name to its schedule, and nothing after them — so a name not on the list answered None. `app/admin/routes.py` does `if diff_last_run > cron_task.get_frequency():`, and `log_cron_task_to_db` writes its row with `frequency` NULL, so the moment a cron task is added or renamed the admin home page answers `TypeError: '>' not supported between instances of 'datetime.timedelta' and 'NoneType'` — taking the host's load averages, disk usage and plugin list with it. | **fixed** | `PROBE pg a task get_frequency does not know: TypeError: '>' not supported between instances of 'datetime.timedelta' and 'NoneType'`, against `PROBE pe/pf: status=200` for a listed name |
+
+**Not reachable today, which is the interesting part.** All seven names currently
+passed to `log_cron_task_to_db` are on the list, so nothing is broken as it
+stands: `grep -rhn 'log_cron_task_to_db(' app/` gives exactly
+`clean_up_old_activities`, `daily_maintenance`, `daily_maintenance_celery`,
+`process_email_bounces`, `remove_orphan_files`, `send_missed_notifs`,
+`send_queue`. The defect is armed rather than firing, and it fires on the next
+person to add a task — in a place that names neither the task nor the commit.
+
+**The fallback is a day, and the property is what matters.** A name the model does
+not know is now watched on a one-day schedule, so an operator is told late rather
+than not at all. More usefully,
+`test_every_logged_name_has_a_declared_schedule` greps `app/` for every name
+handed to `log_cron_task_to_db` and asserts the model has a schedule for it, so a
+rename fails a test instead of silently inheriting the fallback. The seven
+schedules are also held in the test file as data, so changing one has to be done
+twice, deliberately.
+
+**Recorded, not repaired.** The dashboard writes `cron_task.last_run.strftime(...)
+if cron_task.last_run else 'never'`, which says its author thought a null
+`last_run` possible. It is not through the ORM: the column has `default=utcnow`,
+and SQLAlchemy applies a column default when the value is None at flush, so
+`CronJobLog(name='x', last_run=None)` still stores a timestamp — asserted. The
+guard is harmless and the alternative is inventing a case nothing produces.
+
+### What the slice pins
+
+31 tests: each of the seven names against its schedule, six names the model does
+not know, an explicit `frequency` overriding both a known and an unknown name, and
+the property that the answer is always comparable; the sweep over every logged
+name, and the schedules held twice; the dashboard with no rows, with a fresh task,
+with an overdue one, with a task whose name the model does not know (the 500),
+with such a task overdue so the fallback is shown to be a schedule rather than a
+shrug, with several overdue at once, with a fresh one beside an overdue one, and
+with an explicit frequency deciding lateness; and what the writer leaves out —
+`frequency` NULL, `last_run` set, the upsert moving the timestamp rather than
+adding a row.
+
+---
+
+**Next free number: D1335.**
