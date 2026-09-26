@@ -11690,3 +11690,18 @@ second run archives the emptiness it created and overwrites the good archive at
 the same path (D1335). For anything that MOVES rather than copies, run it twice in
 a test. The caller's `WHERE archived IS NULL` is not a substitute: guards belong
 with the destruction they prevent.
+
+**697. A SURVIVING MUTANT CAN MEAN THE CODE IS REDUNDANT, NOT THE TEST WEAK.**
+`retrieve_image_hash` excluded a boolean `quality` explicitly, and the mutant
+dropping that clause survived. The tests were right: `True >= 70` and
+`False >= 70` are both False, so the comparison already refuses a boolean and no
+input can tell the two versions apart. The clause went, not the test. Before
+writing a test to kill a survivor, check whether the mutant is actually
+equivalent -- if no input distinguishes them, the code is the thing to change.
+
+**698. SCOPE A SOURCE-LEVEL ASSERTION TO THE FUNCTION, NOT THE FILE.**
+A test asserting `'except httpx.ReadError' not in app/utils.py` failed on a
+DIFFERENT and load-bearing clause in `get_request`, which retries with a longer
+timeout. `inspect.getsource(target)` narrows it to the function the round is
+about. A whole-file grep in a test is a claim about code the round never looked
+at.

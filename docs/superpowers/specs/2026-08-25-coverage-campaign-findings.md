@@ -19526,4 +19526,48 @@ and depth.
 
 ---
 
-**Next free number: D1336.**
+## Round 148 — sub-project 122: asking the hashing endpoint what an image is
+
+**The round in one line: four answers the hashing endpoint can give with a 200
+raised out of `retrieve_image_hash`, and it is called from `Post.new`.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1336** | `app/utils.py`, `retrieve_image_hash` | Every value came out of the endpoint's response and none was checked: `quality` as a string or null was `TypeError: '>=' not supported between instances of 'str' and 'int'`, a body that is not JSON was `JSONDecodeError`, and a JSON list was `AttributeError: 'list' object has no attribute 'get'`. None of the four is an `httpx.HTTPError`, so none was caught by the two clauses below them — and the callers are `Post.new` (the federated post is lost), `app/post/routes.py` and `app/admin/routes.py` (a 500). The answer feeds `hash_matches_blocked_image`, which is how an instance refuses an image it has blocked. | **fixed** | `PROBE pe quality as a string: TypeError`, `pf quality as null: TypeError`, `pg a body that is not json: JSONDecodeError`, `ph a json list rather than an object: AttributeError` |
+
+**Also removed: a clause that had never run.** `except httpx.ReadError` sat
+directly after `except httpx.HTTPError`, and `ReadError` is a subclass of it
+(`ReadError -> NetworkError -> TransportError -> RequestError -> HTTPError`,
+asserted in the tests rather than described). The remaining `ReadError` clause in
+`get_request` further up the file IS load-bearing — it retries with a longer
+timeout — so the source-level test is scoped to this function with
+`inspect.getsource` rather than to the module.
+
+**A check removed because a mutant told the truth about it.** The first fix also
+excluded a boolean `quality` explicitly. The mutant that dropped that clause
+survived, and correctly: `True >= 70` and `False >= 70` are both False, so the
+comparison already refuses a boolean and the clause could not change an answer. It
+is gone, with a comment saying why, and the two booleans stay in the test — they
+reach None by the comparison rather than by the type check, which is worth
+recording.
+
+**Recorded, not repaired.** A 429 sleeps `random.uniform(1, 3)` and retries twice,
+inside the inbox path, so a rate-limited endpoint can hold a worker for up to six
+seconds per image. Changing a retry policy is an operator's decision; the test
+patches `sleep` and asserts the call count instead.
+
+### What the slice pins
+
+35 tests: a hash of good quality, quality exactly at the threshold, a float
+quality, and the image url reaching the endpoint; quality below the threshold,
+absent, or not a number (six shapes), a hash that is not a string, a body that is
+not JSON, an empty body, five JSON shapes that are not objects, and six statuses
+that are not 200; a read error, a connect error and a timeout, with the dead clause
+asserted gone from this function and `ReadError`'s ancestry asserted directly; and
+a 429 retried twice then given up on, a 429 followed by a good answer, and a 429
+whose retry returns something unreadable — which goes through the same guards
+rather than around them.
+
+---
+
+**Next free number: D1337.**
