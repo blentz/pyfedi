@@ -381,6 +381,52 @@ def find_language(code: str) -> Language | None:
         return None
 
 
+def image_url_from(value, prefer_last: bool = False):
+    """The url out of an actor's `icon` or `image`, whatever shape a peer sent.
+
+    D1325. Three tasks refresh a remote profile -- user, community and feed --
+    and each reads `icon` and `image` the same way:
+
+        if isinstance(activity_json[key], dict) and 'url' in activity_json[key]:
+            ...
+        elif isinstance(activity_json[key], list) and 'url' in activity_json[key][-1]:
+
+    The membership test on the last element is itself unguarded, so `icon: []`
+    is `IndexError: list index out of range` and `icon: [5]` is
+    `TypeError: argument of type 'int' is not iterable`. The refresh task then
+    rolls back and re-raises, so the actor is never refreshed again while the
+    peer keeps serving that document -- and `refresh_user_profile_task` is what
+    picks up a rotated `publicKey`, so a peer could make itself permanently
+    unverifiable here by serving one empty list.
+
+    `refresh_user_profile_task`'s `image` arm had no guards at all (D1326): a
+    list of strings was `TypeError: string indices must be integers`, and a dict
+    or list entry without a url was `KeyError: 'url'`.
+
+    Which end of a list is used is kept as it was -- the LAST entry for an icon,
+    where the largest is conventionally offered, and the FIRST for an image -- so
+    this is a repair and not a change of behaviour. An entry that is unusable
+    gives None rather than a look at the other end, exactly as before.
+    """
+    if isinstance(value, str):
+        # `icon: "https://..."`. `actor_json_to_model` has always taken this and
+        # the refresh tasks ignored it, so an actor created with a bare-string
+        # icon had an avatar until the first refresh and none after. One reading
+        # for both.
+        return value or None
+    if isinstance(value, dict):
+        url = value.get('url')
+        return url if isinstance(url, str) and url else None
+    if isinstance(value, list) and value:
+        entry = value[-1] if prefer_last else value[0]
+        if isinstance(entry, dict):
+            url = entry.get('url')
+            return url if isinstance(url, str) and url else None
+        if isinstance(entry, str):
+            return entry or None
+    return None
+
+
 def find_language_or_create(code: str, name: str, session=None) -> Language:
     if session:
         existing_language: Language = session.query(Language).filter(Language.code == code).first()
@@ -728,12 +774,7 @@ def refresh_user_profile_task(user_id):
 
                     avatar_changed = cover_changed = False
                     if 'icon' in activity_json and activity_json['icon'] is not None:
-                        if isinstance(activity_json['icon'], dict) and 'url' in activity_json['icon']:
-                            icon_entry = activity_json['icon']['url']
-                        elif isinstance(activity_json['icon'], list) and 'url' in activity_json['icon'][-1]:
-                            icon_entry = activity_json['icon'][-1]['url']
-                        else:
-                            icon_entry = None
+                        icon_entry = image_url_from(activity_json['icon'], prefer_last=True)
                         if icon_entry:
                             if user.avatar_id and icon_entry != user.avatar.source_url:
                                 user.avatar.delete_from_disk()
@@ -743,19 +784,12 @@ def refresh_user_profile_task(user_id):
                                 session.add(avatar)
                                 avatar_changed = True
                     if 'image' in activity_json and activity_json['image'] is not None:
-                        if isinstance(activity_json['image'], dict):
-                            if user.cover_id and activity_json['image']['url'] != user.cover.source_url:
+                        cover_entry = image_url_from(activity_json['image'])
+                        if cover_entry:
+                            if user.cover_id and cover_entry != user.cover.source_url:
                                 user.cover.delete_from_disk()
-                            if not user.cover_id or (user.cover_id and activity_json['image']['url'] != user.cover.source_url):
-                                cover = File(source_url=activity_json['image']['url'])
-                                user.cover = cover
-                                session.add(cover)
-                                cover_changed = True
-                        elif isinstance(activity_json['image'], list):
-                            if user.cover_id and activity_json['image'][0]['url'] != user.cover.source_url:
-                                user.cover.delete_from_disk()
-                            if not user.cover_id or (user.cover_id and activity_json['image'][0]['url'] != user.cover.source_url):
-                                cover = File(source_url=activity_json['image'][0]['url'])
+                            if not user.cover_id or (user.cover_id and cover_entry != user.cover.source_url):
+                                cover = File(source_url=cover_entry)
                                 user.cover = cover
                                 session.add(cover)
                                 cover_changed = True
@@ -855,12 +889,7 @@ def refresh_community_profile_task(community_id, activity_json):
                         community.theme = activity_json['theme']
                     icon_changed = cover_changed = False
                     if 'icon' in activity_json:
-                        if isinstance(activity_json['icon'], dict) and 'url' in activity_json['icon']:
-                            icon_entry = activity_json['icon']['url']
-                        elif isinstance(activity_json['icon'], list) and 'url' in activity_json['icon'][-1]:
-                            icon_entry = activity_json['icon'][-1]['url']
-                        else:
-                            icon_entry = None
+                        icon_entry = image_url_from(activity_json['icon'], prefer_last=True)
                         if icon_entry:
                             if community.icon_id and icon_entry != community.icon.source_url:
                                 community.icon.delete_from_disk()
@@ -870,12 +899,7 @@ def refresh_community_profile_task(community_id, activity_json):
                                 session.add(icon)
                                 icon_changed = True
                     if 'image' in activity_json:
-                        if isinstance(activity_json['image'], dict) and 'url' in activity_json['image']:
-                            image_entry = activity_json['image']['url']
-                        elif isinstance(activity_json['image'], list) and 'url' in activity_json['image'][0]:
-                            image_entry = activity_json['image'][0]['url']
-                        else:
-                            image_entry = None
+                        image_entry = image_url_from(activity_json['image'])
                         if image_entry:
                             if community.image_id and image_entry != community.image.source_url:
                                 community.image.delete_from_disk()
@@ -1076,12 +1100,7 @@ def refresh_feed_profile_task(feed_id):
 
                     icon_changed = cover_changed = False
                     if 'icon' in activity_json:
-                        if isinstance(activity_json['icon'], dict) and 'url' in activity_json['icon']:
-                            icon_entry = activity_json['icon']['url']
-                        elif isinstance(activity_json['icon'], list) and 'url' in activity_json['icon'][-1]:
-                            icon_entry = activity_json['icon'][-1]['url']
-                        else:
-                            icon_entry = None
+                        icon_entry = image_url_from(activity_json['icon'], prefer_last=True)
                         if icon_entry:
                             if feed.icon_id and icon_entry != feed.icon.source_url:
                                 feed.icon.delete_from_disk()
@@ -1091,12 +1110,7 @@ def refresh_feed_profile_task(feed_id):
                                 session.add(icon)
                                 icon_changed = True
                     if 'image' in activity_json:
-                        if isinstance(activity_json['image'], dict) and 'url' in activity_json['image']:
-                            image_entry = activity_json['image']['url']
-                        elif isinstance(activity_json['image'], list) and 'url' in activity_json['image'][0]:
-                            image_entry = activity_json['image'][0]['url']
-                        else:
-                            image_entry = None
+                        image_entry = image_url_from(activity_json['image'])
                         if image_entry:
                             if feed.image_id and image_entry != feed.image.source_url:
                                 feed.image.delete_from_disk()
@@ -1263,27 +1277,15 @@ def actor_json_to_model(activity_json, address, server):
         if user.title and user.title.strip().lower() == '[deleted]':
             user.title = ''
 
-        if 'icon' in activity_json and activity_json['icon'] is not None:
-            if isinstance(activity_json['icon'], dict) and 'url' in activity_json['icon']:
-                icon_entry = activity_json['icon']['url']
-            elif isinstance(activity_json['icon'], list) and 'url' in activity_json['icon'][-1]:
-                icon_entry = activity_json['icon'][-1]['url']
-            elif isinstance(activity_json['icon'], str):
-                icon_entry = activity_json['icon']
-            else:
-                icon_entry = None
-            if icon_entry:
-                avatar = File(source_url=icon_entry)
-                user.avatar = avatar
-                db.session.add(avatar)
-        if 'image' in activity_json and activity_json['image'] is not None and isinstance(activity_json['image'], dict) and 'url' in activity_json['image']:
-            cover = File(source_url=activity_json['image']['url'])
-            user.cover = cover
-            db.session.add(cover)
-        elif 'image' in activity_json and activity_json['image'] is not None \
-                and isinstance(activity_json['image'], list) \
-                and len(activity_json['image']) > 0:                    # bridgy-fed
-            cover = File(source_url=activity_json['image'][0]['url'])
+        icon_entry = image_url_from(activity_json.get('icon'), prefer_last=True)
+        if icon_entry:
+            avatar = File(source_url=icon_entry)
+            user.avatar = avatar
+            db.session.add(avatar)
+        # The list arm is bridgy-fed's, which sends `image` as a list.
+        cover_entry = image_url_from(activity_json.get('image'))
+        if cover_entry:
+            cover = File(source_url=cover_entry)
             user.cover = cover
             db.session.add(cover)
         if 'attachment' in activity_json and isinstance(activity_json['attachment'], list):
@@ -1405,30 +1407,16 @@ def actor_json_to_model(activity_json, address, server):
         if 'theme' in activity_json and activity_json['theme']:
             community.theme = activity_json['theme']
 
-        if 'icon' in activity_json and activity_json['icon'] is not None:
-            if isinstance(activity_json['icon'], dict) and 'url' in activity_json['icon']:
-                icon_entry = activity_json['icon']['url']
-            elif isinstance(activity_json['icon'], list) and 'url' in activity_json['icon'][-1]:
-                icon_entry = activity_json['icon'][-1]['url']
-            elif isinstance(activity_json['icon'], str):
-                icon_entry = activity_json['icon']
-            else:
-                icon_entry = None
-            if icon_entry:
-                icon = File(source_url=icon_entry)
-                community.icon = icon
-                db.session.add(icon)
-        if 'image' in activity_json and activity_json['image'] is not None:
-            if isinstance(activity_json['image'], dict) and 'url' in activity_json['image']:
-                image_entry = activity_json['image']['url']
-            elif isinstance(activity_json['image'], list) and 'url' in activity_json['image'][0]:
-                image_entry = activity_json['image'][0]['url']
-            else:
-                image_entry = None
-            if image_entry:
-                image = File(source_url=image_entry)
-                community.image = image
-                db.session.add(image)
+        icon_entry = image_url_from(activity_json.get('icon'), prefer_last=True)
+        if icon_entry:
+            icon = File(source_url=icon_entry)
+            community.icon = icon
+            db.session.add(icon)
+        image_entry = image_url_from(activity_json.get('image'))
+        if image_entry:
+            image = File(source_url=image_entry)
+            community.image = image
+            db.session.add(image)
         if 'language' in activity_json and isinstance(activity_json['language'], list):
             for ap_language in activity_json['language']:
                 community.languages.append(find_language_or_create(ap_language['identifier'], ap_language['name']))
@@ -1637,30 +1625,16 @@ def actor_json_to_model(activity_json, address, server):
             else:
                 feed.description = html_to_text(feed.description_html)
 
-        if 'icon' in activity_json and activity_json['icon'] is not None:
-            if isinstance(activity_json['icon'], dict) and 'url' in activity_json['icon']:
-                icon_entry = activity_json['icon']['url']
-            elif isinstance(activity_json['icon'], list) and 'url' in activity_json['icon'][-1]:
-                icon_entry = activity_json['icon'][-1]['url']
-            elif isinstance(activity_json['icon'], str):
-                icon_entry = activity_json['icon']
-            else:
-                icon_entry = None
-            if icon_entry:
-                icon = File(source_url=icon_entry)
-                feed.icon = icon
-                db.session.add(icon)
-        if 'image' in activity_json and activity_json['image'] is not None:
-            if isinstance(activity_json['image'], dict) and 'url' in activity_json['image']:
-                image_entry = activity_json['image']['url']
-            elif isinstance(activity_json['image'], list) and 'url' in activity_json['image'][0]:
-                image_entry = activity_json['image'][0]['url']
-            else:
-                image_entry = None
-            if image_entry:
-                image = File(source_url=image_entry)
-                feed.image = image
-                db.session.add(image)
+        icon_entry = image_url_from(activity_json.get('icon'), prefer_last=True)
+        if icon_entry:
+            icon = File(source_url=icon_entry)
+            feed.icon = icon
+            db.session.add(icon)
+        image_entry = image_url_from(activity_json.get('image'))
+        if image_entry:
+            image = File(source_url=image_entry)
+            feed.image = image
+            db.session.add(image)
 
         try:
             db.session.add(feed)
