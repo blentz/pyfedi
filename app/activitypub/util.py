@@ -28,7 +28,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
     Licence, UserExtraField, Feed, FeedMember, FeedItem, CommunityFlair, UserFlair, Topic, Event, InstanceBan, Emoji, \
-    UserFollower, PostBoost, parse_ap_timestamp
+    UserFollower, PostBoost, parse_ap_timestamp, image_url_from
 from app.utils import get_request, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
     is_image_url, domain_from_url, gibberish, ensure_directory_exists, shorten_string, fixup_url, \
     microblog_content_to_title, is_video_url, \
@@ -410,52 +410,6 @@ def find_language(code: str) -> Language | None:
         return existing_language
     else:
         return None
-
-
-def image_url_from(value, prefer_last: bool = False):
-    """The url out of an actor's `icon` or `image`, whatever shape a peer sent.
-
-    D1325. Three tasks refresh a remote profile -- user, community and feed --
-    and each reads `icon` and `image` the same way:
-
-        if isinstance(activity_json[key], dict) and 'url' in activity_json[key]:
-            ...
-        elif isinstance(activity_json[key], list) and 'url' in activity_json[key][-1]:
-
-    The membership test on the last element is itself unguarded, so `icon: []`
-    is `IndexError: list index out of range` and `icon: [5]` is
-    `TypeError: argument of type 'int' is not iterable`. The refresh task then
-    rolls back and re-raises, so the actor is never refreshed again while the
-    peer keeps serving that document -- and `refresh_user_profile_task` is what
-    picks up a rotated `publicKey`, so a peer could make itself permanently
-    unverifiable here by serving one empty list.
-
-    `refresh_user_profile_task`'s `image` arm had no guards at all (D1326): a
-    list of strings was `TypeError: string indices must be integers`, and a dict
-    or list entry without a url was `KeyError: 'url'`.
-
-    Which end of a list is used is kept as it was -- the LAST entry for an icon,
-    where the largest is conventionally offered, and the FIRST for an image -- so
-    this is a repair and not a change of behaviour. An entry that is unusable
-    gives None rather than a look at the other end, exactly as before.
-    """
-    if isinstance(value, str):
-        # `icon: "https://..."`. `actor_json_to_model` has always taken this and
-        # the refresh tasks ignored it, so an actor created with a bare-string
-        # icon had an avatar until the first refresh and none after. One reading
-        # for both.
-        return value or None
-    if isinstance(value, dict):
-        url = value.get('url')
-        return url if isinstance(url, str) and url else None
-    if isinstance(value, list) and value:
-        entry = value[-1] if prefer_last else value[0]
-        if isinstance(entry, dict):
-            url = entry.get('url')
-            return url if isinstance(url, str) and url else None
-        if isinstance(entry, str):
-            return entry or None
-    return None
 
 
 def find_language_or_create(code: str, name: str, session=None) -> Language:
@@ -4364,9 +4318,15 @@ def create_resolved_object(uri, post_data, uri_domain, community, announce_id, s
             if activity == 'create':
                 post_reply = create_post_reply(store_ap_json, community, request_json['object']['inReplyTo'], request_json, user)
                 if post_reply:
-                    if 'published' in post_data:
-                        post_reply.posted_at = post_data['published']
-                        post_reply.post.last_active = post_data['published']
+                    # D1340's third and fourth sites. Same shape as the tail of
+                    # `resolve_remote_post`: a peer's string into a DateTime
+                    # column, which is a DatatypeMismatch or a DataError at
+                    # commit -- `UPDATE post SET posted_at=5` measured -- and the
+                    # comment that had just been created goes with it.
+                    published = parse_ap_timestamp(post_data.get('published'))
+                    if published is not None:
+                        post_reply.posted_at = published
+                        post_reply.post.last_active = published
                         post_reply.community.last_active = utcnow()
                         db.session.commit()
             if post_reply:
@@ -4381,9 +4341,10 @@ def create_resolved_object(uri, post_data, uri_domain, community, announce_id, s
             if activity == 'create':
                 post = create_post(store_ap_json, community, request_json, user, announce_id)
                 if post:
-                    if 'published' in post_data:
-                        post.posted_at = post_data['published']
-                        post.last_active = post_data['published']
+                    published = parse_ap_timestamp(post_data.get('published'))
+                    if published is not None:
+                        post.posted_at = published
+                        post.last_active = published
                         post.community.last_active = utcnow()
                         db.session.commit()
             if post:
@@ -4394,15 +4355,37 @@ def create_resolved_object(uri, post_data, uri_domain, community, announce_id, s
 
 @celery.task
 def get_nodebb_replies_in_background(replies_uri_list, community_id):
+    """Fetch the first few replies of a NodeBB topic.
+
+    D1340. `replies_uri_list` comes from a peer's `orderedItems`, sliced, and was
+    iterated without being looked at. Measured:
+
+      * a string -- `orderedItems: "https://..."` -- iterates its CHARACTERS, so
+        this asked the peer for ten single-letter "uris";
+      * None or a number is `TypeError: 'NoneType' object is not iterable`, which
+        the `except` below re-raises;
+      * a dict iterates its keys.
+
+    And one reply that failed abandoned the rest, because the raise left the loop:
+    nine good replies were dropped for one bad one. A reply that cannot be
+    resolved is skipped now, and the exception is logged rather than lost.
+    """
     try:
         max = 10 if not current_app.debug else 2  # magic number alert
         community = db.session.get(Community, community_id)
         if not community:
             return
+        if not isinstance(replies_uri_list, list):
+            return
         reply_count = 0
         for uri in replies_uri_list:
+            if not isinstance(uri, str) or not uri:
+                continue
             reply_count += 1
-            resolve_remote_post(uri, community, None, False, nodebb=True)
+            try:
+                resolve_remote_post(uri, community, None, False, nodebb=True)
+            except Exception as e:
+                current_app.logger.info(f'Could not resolve nodebb reply {uri}: {e}')
             if reply_count >= max:
                 break
     except Exception:
@@ -4459,9 +4442,13 @@ def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
         if not post_data:
             return None
         topic_post_data = post_data
+    # `isinstance(..., int)` rather than `'totalItems' in post_data`: the membership
+    # test let a STRING through to `> 0`, which is `TypeError: '>' not supported
+    # between instances of 'str' and 'int'` -- the same reason the sibling read
+    # further down needed guarding (D1340).
     if ('type' in post_data and post_data['type'] == 'OrderedCollection' and
-            'totalItems' in post_data and post_data['totalItems'] > 0 and
-            'orderedItems' in post_data and isinstance(post_data['orderedItems'], list)):
+            isinstance(post_data.get('totalItems'), int) and post_data['totalItems'] > 0 and
+            isinstance(post_data.get('orderedItems'), list) and post_data['orderedItems']):
         nodebb = True
         uri = post_data['orderedItems'][0]
         parsed_url = urlparse(uri)
@@ -4515,15 +4502,32 @@ def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
             object = create_post(False, community, request_json, user)
         if object:
             if 'published' in post_data:
-                object.posted_at = post_data['published']
-                if not in_reply_to:
-                    object.last_active = post_data['published']
-                db.session.commit()
-            if nodebb and topic_post_data['totalItems'] > 1:
+                # D1340. The peer's string went straight into `posted_at`, a
+                # DateTime column -- and `last_active`, which round 141 made NOT
+                # NULL -- so `published: "whenever"` was a DataError at commit that
+                # poisoned the transaction and lost the post it had just created.
+                published = parse_ap_timestamp(post_data['published'])
+                if published is not None:
+                    object.posted_at = published
+                    if not in_reply_to:
+                        object.last_active = published
+                    db.session.commit()
+            # The same two keys are read 70 lines above this with
+            # `'totalItems' in post_data and post_data['totalItems'] > 0 and
+            # 'orderedItems' in post_data and isinstance(..., list)`; here they had
+            # no guard at all, so a topic without them was a KeyError and a
+            # `totalItems` that is a string was `TypeError: '>' not supported
+            # between instances of 'str' and 'int'`.
+            ordered_items = topic_post_data.get('orderedItems') if isinstance(
+                topic_post_data, dict) else None
+            total_items = topic_post_data.get('totalItems') if isinstance(
+                topic_post_data, dict) else None
+            if nodebb and isinstance(total_items, int) and total_items > 1 \
+                    and isinstance(ordered_items, list):
                 if current_app.debug:
-                    get_nodebb_replies_in_background(topic_post_data['orderedItems'][1:], community.id)
+                    get_nodebb_replies_in_background(ordered_items[1:], community.id)
                 else:
-                    get_nodebb_replies_in_background.delay(topic_post_data['orderedItems'][1:], community.id)
+                    get_nodebb_replies_in_background.delay(ordered_items[1:], community.id)
             return object if not in_reply_to else object.post
 
     return None

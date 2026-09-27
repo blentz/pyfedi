@@ -81,6 +81,40 @@ def ai_verdict(response):
     return detection, confidence
 
 
+def image_url_from(value, prefer_last: bool = False):
+    """The url out of an actor's or object's `icon`/`image`, whatever shape a peer
+    sent.
+
+    D1325 gave the three profile-refresh tasks and `actor_json_to_model` one
+    reading of these two keys. D1341 is the copy this file kept: `Post.new`'s Video
+    branch read `request_json['object']['icon'][-1]['url']` behind an
+    `isinstance(..., list)` test that says nothing about the list being non-empty
+    or its entries being objects, so a peer's Video with `icon: []` was an
+    IndexError and `icon: [5]` a TypeError -- and the post was lost either way.
+
+    Round 143's property test looked for the shape in `app/activitypub/util.py`
+    only, which is why this one survived it (fact 687, one file over). It now scans
+    every file under app/.
+
+    Which end of a list is used is kept as it was: the LAST entry for an icon, where
+    the largest is conventionally offered, and the FIRST for an image. An entry that
+    is unusable gives None rather than a look at the other end.
+    """
+    if isinstance(value, str):
+        return value or None
+    if isinstance(value, dict):
+        url = value.get('url')
+        return url if isinstance(url, str) and url else None
+    if isinstance(value, list) and value:
+        entry = value[-1] if prefer_last else value[0]
+        if isinstance(entry, dict):
+            url = entry.get('url')
+            return url if isinstance(url, str) and url else None
+        if isinstance(entry, str):
+            return entry or None
+    return None
+
+
 def _as_int(value, default):
     """An integer out of a peer's document, or `default`.
 
@@ -2349,8 +2383,13 @@ class Post(db.Model):
             if request_json['object']['type'] == 'Video':
                 post.type = constants.POST_TYPE_VIDEO
                 post.url = request_json['object']['id']
-                if 'icon' in request_json['object'] and isinstance(request_json['object']['icon'], list):
-                    icon = File(source_url=request_json['object']['icon'][-1]['url'])
+                # D1341. `['icon'][-1]['url']` behind a bare `isinstance(...,
+                # list)`: `icon: []` was an IndexError and `icon: [5]` a TypeError,
+                # and a peer's Video post was lost to either.
+                icon_url = image_url_from(request_json['object'].get('icon'),
+                                          prefer_last=True)
+                if icon_url:
+                    icon = File(source_url=icon_url)
                     db.session.add(icon)
                     post.image = icon
 
