@@ -29,7 +29,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
     Licence, UserExtraField, Feed, FeedMember, FeedItem, CommunityFlair, UserFlair, Topic, Event, InstanceBan, Emoji, \
-    UserFollower, PostBoost, parse_poll_end_time
+    UserFollower, PostBoost, parse_ap_timestamp
 from app.utils import get_request, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
     is_image_url, domain_from_url, gibberish, ensure_directory_exists, shorten_string, fixup_url, \
     microblog_content_to_title, is_video_url, \
@@ -185,40 +185,54 @@ def post_to_page(post: Post):
         activity_data["attachment"].append({"href": post.ap_id, "type": "Link"})
     if post.type == POST_TYPE_POLL:
         poll = Poll.query.filter_by(post_id=post.id).first()
-        activity_data['type'] = 'Question'
-        del activity_data['name']
-        activity_data['content'] = f"<p>{post.title}</p>{post.body_html if post.body_html else ''}"
-        mode = 'oneOf' if poll.mode == 'single' else 'anyOf'
-        choices = []
-        for choice in PollChoice.query.filter_by(post_id=post.id).order_by(PollChoice.sort_order).all():
-            choices.append({
-                "type": "Note",
-                "name": choice.choice_text,
-                "replies": {
-                    "type": "Collection",
-                    "totalItems": choice.num_votes
-                }
-            })
-        activity_data[mode] = choices
-        activity_data['endTime'] = ap_datetime(poll.end_poll)
-        activity_data['votersCount'] = poll.total_votes()
+        if poll is not None and poll.end_poll is not None:
+            activity_data['type'] = 'Question'
+            del activity_data['name']
+            activity_data['content'] = f"<p>{post.title}</p>{post.body_html if post.body_html else ''}"
+            mode = 'oneOf' if poll.mode == 'single' else 'anyOf'
+            choices = []
+            for choice in PollChoice.query.filter_by(post_id=post.id).order_by(PollChoice.sort_order).all():
+                choices.append({
+                    "type": "Note",
+                    "name": choice.choice_text,
+                    "replies": {
+                        "type": "Collection",
+                        "totalItems": choice.num_votes
+                    }
+                })
+            activity_data[mode] = choices
+            activity_data['endTime'] = ap_datetime(poll.end_poll)
+            activity_data['votersCount'] = poll.total_votes()
     elif post.type == POST_TYPE_EVENT:
+        # D1338, the same shape as D1337 one branch up and reachable the same two
+        # ways: a post typed EVENT with no `event` row was `AttributeError:
+        # 'NoneType' object has no attribute 'start'`, and `Event.start`/`Event.end`
+        # are nullable -- `app/shared/post.py` sets `end` only `if 'end' in
+        # event_data and event_data['end']` -- so `ap_datetime(None)` was
+        # `AttributeError: 'NoneType' object has no attribute 'isoformat'`.
+        #
+        # An event with no start is not an event this instance can describe, so it
+        # goes out as the Page it can. An end time is optional in the document:
+        # `Post.new` reads it with `.get` (D1339), so a peer running PieFed takes
+        # the event without one.
         event = Event.query.filter_by(post_id=post.id).first()
-        activity_data['type'] = 'Event'
-        activity_data['startTime'] = ap_datetime(event.start)
-        activity_data['endTime'] = ap_datetime(event.end)
-        activity_data['timezone'] = event.timezone
-        activity_data['maximumAttendeeCapacity'] = event.max_attendees
-        activity_data['participantCount'] = event.participant_count
-        activity_data['onlineLink'] = event.online_link
-        activity_data['joinMode'] = event.join_mode
-        activity_data['externalParticipationUrl'] = event.external_participation_url
-        activity_data['anonymousParticipation'] = event.anonymous_participation
-        activity_data['isOnline'] = event.online
-        activity_data['buyTicketsLink'] = event.buy_tickets_link
-        activity_data['feeCurrency'] = event.event_fee_currency
-        activity_data['feeAmount'] = event.event_fee_amount
-        activity_data['location'] = event.location
+        if event is not None and event.start is not None:
+            activity_data['type'] = 'Event'
+            activity_data['startTime'] = ap_datetime(event.start)
+            if event.end is not None:
+                activity_data['endTime'] = ap_datetime(event.end)
+            activity_data['timezone'] = event.timezone
+            activity_data['maximumAttendeeCapacity'] = event.max_attendees
+            activity_data['participantCount'] = event.participant_count
+            activity_data['onlineLink'] = event.online_link
+            activity_data['joinMode'] = event.join_mode
+            activity_data['externalParticipationUrl'] = event.external_participation_url
+            activity_data['anonymousParticipation'] = event.anonymous_participation
+            activity_data['isOnline'] = event.online
+            activity_data['buyTicketsLink'] = event.buy_tickets_link
+            activity_data['feeCurrency'] = event.event_fee_currency
+            activity_data['feeAmount'] = event.event_fee_amount
+            activity_data['location'] = event.location
 
     if post.indexable:
         activity_data['searchableBy'] = 'https://www.w3.org/ns/activitystreams#Public'
@@ -3373,7 +3387,7 @@ def update_post_from_activity(post: Post, request_json: dict):
                         # the string still went straight into a DateTime column, so a
                         # peer sending `endTime: "not a date"` was a DataError that
                         # took the whole edit with it.
-                        end_poll = parse_poll_end_time(request_json['object'].get('endTime'))
+                        end_poll = parse_ap_timestamp(request_json['object'].get('endTime'))
                         if end_poll is None:
                             return
                         poll.end_poll = end_poll
