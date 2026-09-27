@@ -12007,3 +12007,24 @@ comment as the answer. It looked like a copy-paste mistake until the API path tu
 out to apply the same rule. Two independent sites agreeing is evidence of intent, so
 the round pinned it and wrote the question down instead of quietly changing it --
 and the test says out loud what a reader should find surprising.
+
+**741. A HOST FROM A URL PARSER IS NOT AN ADDRESS.**
+`furl(...).host` for `https://[::1]/x` is `'[::1]'`, brackets included. Every IPv6
+literal therefore failed `ipaddress.ip_address`, failed `getaddrinfo`, and landed in
+a fail-open DNS handler -- so the SSRF guard allowed `[::1]`. Before comparing a
+parsed host against anything, normalise it: strip the RFC 3986 brackets, and assert
+a bracketed literal in the tests, because the IPv4 cases all pass without it.
+
+**742. `is_global` IS NOT "SAFE TO FETCH".**
+Python's `is_global` returns True for IPv4-compatible IPv6 (`::7f00:1`), for the
+NAT64 well-known prefix (`64:ff9b::/96`), and for multicast (`ff02::1`,
+`224.0.0.1`). The first two carry an embedded IPv4 address that a host with the
+right routing will deliver to loopback. `not is_global or is_reserved or
+is_multicast` closes all of them without a prefix list.
+
+**743. AN UNORDERED `.first()` IN A TEST IS A TIME BOMB.**
+`Post.query.filter_by(user_id=...).first()` picked the post a later test needed for
+six rounds and then, in a full-suite run with more work ahead of it, returned a
+different row -- and the next line dereferenced None. PostgreSQL promises no order
+without `ORDER BY`. A test that needs a specific row names it (`db.session.get`), and
+one that needs any N rows orders them.
