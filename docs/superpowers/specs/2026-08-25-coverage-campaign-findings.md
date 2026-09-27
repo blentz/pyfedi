@@ -19627,4 +19627,79 @@ objects; and six values longer than the column that holds them.
 
 ---
 
-**Next free number: D1340.**
+## Round 150 — sub-project 124: a NodeBB topic's replies, and the time a peer says it posted
+
+**The round in one line: a peer's `orderedItems` given as a string made this
+instance fetch ten single-letter urls, and a `published` that was not a date lost
+the post it had just created — at five separate sites.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1340** | `app/activitypub/util.py`: `get_nodebb_replies_in_background`, `resolve_remote_post_from_search` (three reads) and `create_resolved_object` (two) | `replies_uri_list` comes from a peer's `orderedItems`, sliced, and was iterated without being looked at: a **string** iterates its CHARACTERS, so ten single-letter "uris" were fetched; None or a number is `TypeError: 'NoneType' object is not iterable`; a dict iterates its keys. One reply that failed abandoned the rest, because the `raise` left the loop. `topic_post_data['totalItems'] > 1` and `['orderedItems'][1:]` had no guard, while the SAME FUNCTION guards the same two keys fully seventy lines earlier — and that guarded read still let a string reach `> 0`. And `post_data['published']` went straight into `posted_at` and `last_active` — the latter NOT NULL since round 141 — at three sites. | **fixed** | `PROBE pd a string: resolved=10 first='h'`; `PROBE pc None: TypeError: 'NoneType' object is not iterable`; `PROBE pj one reply raising: ValueError after 1 attempted`; `UPDATE post SET posted_at=5` → `psycopg2.errors.DatatypeMismatch` |
+
+**Four of the five sites are pinned only by their text, and that is recorded in
+the test file rather than glossed.** The behavioural tests for the nodebb topic
+flow need a two-fetch conversation (the topic as an OrderedCollection, then
+`orderedItems[0]` as the post). The attempt made here was built against
+`resolve_remote_post` and the guards are in `resolve_remote_post_from_search` —
+the nodebb path is reached from SEARCH, when somebody pastes a NodeBB topic url,
+not from an inbox. `tests/test_ap_resolve_from_search.py` already drives the right
+function and is where those tests belong. A source-level assertion holds the line
+until then, and its docstring says plainly that it would pass against a guard that
+was present and wrong.
+
+**Two tests asked for this repair by name, and a third recorded its consequence.**
+`tests/test_ap_create_resolved_object.py` held
+`TestAPublishedOffsetIsDiscardedNotConverted` and
+`TestAPublishedValueTheColumnCannotStore`, which measured the offset being dropped
+(a peer at `00:00+05:00` stored as `00:00`, so every timestamp from a non-zero
+offset was wrong by that offset, and `last_active` with it — the column a
+community's listings are ordered by) and the `DataError` leaving the function with
+the Post row already committed, which that file calls partially-applied ingest and
+had found six times. Both docstrings named the fix: *"parsing `published` before
+assigning it — which is the fix, and this test then records what changed"*, and
+*"parsing or validating `published` before the assignment, or moving the enrichment
+in front of the commit"*. This round took the first. All three are rewritten to
+assert the repaired behaviour, with that history in their docstrings — and the
+offset one now asserts the conversion in both directions plus `last_active`
+following it.
+
+**The sibling-divergence that made this worth reading.** `resolve_remote_post_from_search`
+checks `'totalItems' in post_data and post_data['totalItems'] > 0 and 'orderedItems'
+in post_data and isinstance(post_data['orderedItems'], list)` at one point and
+`topic_post_data['totalItems'] > 1` seventy lines later. One author knew the shape
+was untrustworthy; the same function then forgot.
+
+### What the slice pins
+
+37 tests: a list of uris; an empty list; seven values that are not lists, including
+the string that used to become ten fetches; six entry types that are skipped; a
+skipped entry not spending the allowance; the cap at ten, in order, and under it; a
+failing reply leaving the rest attempted, still counting towards the cap, and being
+logged; a community that is gone; the community and `nodebb=True` passed on; a
+published time applied, seven that are not dates leaving the post alone, an offset
+converted, and no published time at all.
+
+---
+
+**Also in this round: D1341, the seventh copy of D1325's shape, found by a floor
+breach rather than by looking.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1341** | `app/models.py`, `Post.new`'s Video branch | `File(source_url=request_json['object']['icon'][-1]['url'])` behind a bare `isinstance(request_json['object']['icon'], list)`, which says nothing about the list being non-empty or its entries being objects. `icon: []` was an IndexError and `icon: [5]` a TypeError, and a peer's Video post was lost to either. | **fixed** | the same probe shapes as D1325; `image_url_from` now reads it |
+
+Round 143 found six copies of this read and wrote a property test to catch the
+seventh. The test scanned `app/activitypub/util.py` alone, so this one — one file
+over, in `Post.new` — survived it for seven rounds. It scans every file under
+`app/` now, and excludes string literals by walking the AST rather than skipping
+lines that start with `#`: the first widened version failed on its own docstring,
+which quotes the pattern it forbids. `image_url_from` moved to `app/models.py` so
+both files share one reading.
+
+It surfaced because `app/models.py` fell to 81.84% against a floor of 82.00% — the
+ratchet caught a gap that reading had not. Fact 687 said to write the property test
+before believing a sweep is complete; the correction is that the scan has to be as
+wide as the shape, not as wide as the round.
+
+**Next free number: D1342.**
