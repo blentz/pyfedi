@@ -11874,3 +11874,23 @@ fixed the site in front of it. The property test that would have found all three
 at once greps every file under `app/` for a peer document's timestamp key on a
 line with no `parse_ap_timestamp`, and it exists now -- which is the point: write
 the scan when the shape repeats, not when the round ends.
+
+**722. DELETING THE FILE IS NOT THE TAKEDOWN; PURGING THE CACHE IS.**
+Two defects in one round came from treating the disk as the thing that matters.
+`purge_from_cache.append(...)` lived inside `if os.path.isfile(...)`, so a file
+already gone was never purged -- exactly when the cache is the only copy left. And
+a banned user's uploads were unlinked with `purge_cdn=False`. For anything behind
+a CDN, assert the purge list, not just the absence of the file.
+
+**723. A FLAG THAT CANNOT REACH ITS SUBJECT IS WORSE THAN NO FLAG.**
+`purge_content(flush=...)` looked like it controlled the CDN purge for a deleted
+user's files. It could not: `delete_dependencies` had already deleted them, with
+the purge turned off, before the flag was read -- and the block that would have
+honoured it was unreachable. When a parameter names an effect, find the line that
+performs the effect and check the parameter is still in scope there.
+
+**724. CODE THAT CANNOT RUN IS EVIDENCE, NOT CLUTTER.**
+`purge_content`'s `user_file` block was 7 uncovered lines. The reason no test
+covered them is that nothing can: an earlier call in the same method removes every
+row the query looks for. The uncovered lines were the report of the defect --
+the work they describe was never being done anywhere.
