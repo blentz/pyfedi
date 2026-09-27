@@ -11991,3 +11991,19 @@ assertion has to be a piece of CONTENT that differs -- here a post in a communit
 the caller joined. For "did this arm read the memberships", that is still not
 enough: an arm that ignores them falls through to the All feed, so a second post in
 a community they did NOT join is what separates the two.
+
+**739. SHORT-CIRCUIT ORDER DECIDES WHO CAN REACH A BUG.**
+`is_authenticated and (is_admin_or_staff() or reply.user_id == me or ...)` hid a
+missing None check from everyone except admins and moderators: anonymous callers
+stopped at the first conjunct, ordinary users would have raised inside the
+condition, and the privileged arm short-circuited past both and carried the None
+into the next function. When auditing a guard, ask which callers reach each term --
+the answer is often "only the ones with permission", and they are the ones clicking
+stale links in a mod queue.
+
+**740. WHEN TWO ENTRY POINTS AGREE ON A SURPRISING RULE, IT IS A POLICY.**
+`post_reply.user_id == current_user.id` lets a comment's author accept their own
+comment as the answer. It looked like a copy-paste mistake until the API path turned
+out to apply the same rule. Two independent sites agreeing is evidence of intent, so
+the round pinned it and wrote the question down instead of quietly changing it --
+and the test says out loud what a reader should find surprising.
