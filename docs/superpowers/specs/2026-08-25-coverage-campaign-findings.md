@@ -19992,4 +19992,56 @@ surfaced the thirteen reads beside it.
 Thirteen mutants, all dead. 12,747 tests, 0 failures, 0 warnings. Floors ratcheted:
 `app/models.py` 84 → 85 (85.01%), `app/activitypub/util.py` 91 → 92 (92.02%).
 
-**Next free number: D1354.**
+## Round 158 — eleven ways to make an actor unrefreshable
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1354** | `refresh_user_profile_task` and `actor_json_to_model` in `app/activitypub/util.py` | Two copies of the `attachment` loop read `field_data['type']`, `['value']` and `['name']` outright and then `.strip()` both, and the refresh task read `activity_json['publicKey']['publicKeyPem']` the same way. Every shape below raised out of the task, and a refresh task that raises leaves the actor UNREFRESHABLE -- their display name, bio, deleted flag and KEY all stop being picked up, which is the consequence D1325 was about. | **fixed** | table below |
+
+Measured through `refresh_user_profile_task`, each as the only entry of
+`attachment`:
+
+    {'type': 'PropertyValue'}                 KeyError: 'value'
+    {'type': 'PropertyValue', 'value': 'x'}   KeyError: 'name'
+    {'type': 'PropertyValue', 'name': 'n'}    KeyError: 'value'
+    {..., 'name': 'n', 'value': 5}            TypeError: argument of type 'int'
+                                              is not iterable
+    {..., 'name': 5, 'value': 'x'}            AttributeError: 'int' object has
+                                              no attribute 'strip'
+    {..., 'name': 'n', 'value': None}         TypeError: argument of type
+                                              'NoneType' is not iterable
+    {'value': 'x', 'name': 'n'}               KeyError: 'type'
+    'a string'                                TypeError: string indices must be
+                                              integers
+    5                                         TypeError: 'int' object is not
+                                              subscriptable
+    None                                      TypeError: 'NoneType' object is
+                                              not subscriptable
+    name and value of 3000 characters         DataError: value too long for type
+                                              character varying
+
+and the same for the key:
+
+    no publicKey at all           KeyError: 'publicKey'
+    publicKey: None / 5 / 'str'   TypeError: not subscriptable / string indices
+    publicKey: {}                 KeyError: 'publicKeyPem'
+    publicKey: {'publicKeyPem': None}   stored the STRING 'None' as the key
+
+The last line is the worst of them: no signature can verify against `'None'`, and
+nothing raises to say so. `public_key_pem` returns None for every unusable shape
+and the refresh then KEEPS the key this instance already holds — an actor that
+stops publishing one has not rotated to nothing (fact 729's rule, on a second
+path).
+
+`property_value_fields` skips an entry it cannot read rather than refusing the
+list: one malformed field is not a reason to lose the rest of a profile. Both
+label and value are capped at `UserExtraField`'s own String(1024), because a
+column width is not a validation rule the peer knows about. `actor_json_to_model`
+keeps its `shorten_string` on the LABEL, which the refresh task does not do —
+that difference is presentational and is asserted so the shared helper is known
+not to have flattened it.
+
+Seventeen mutants, all dead. 12,813 tests, 0 failures, 0 warnings. All 92 floors
+met.
+
+**Next free number: D1355.**
