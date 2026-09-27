@@ -20218,4 +20218,40 @@ than chased.
 
 Twelve mutants, all dead. 12,995 tests, 0 failures, 0 warnings. All 92 floors met.
 
-**Next free number: D1359.**
+## Round 163 — the open redirect on the page built to redirect people
+
+`check_anoobis` sends an anonymous visitor to `/anoobis?next=<the path they asked
+for>`, and `anoobis.html` puts that value straight into `location.href = '{{ next
+}}'`. Whatever the route accepts is where an anonymous visitor's browser goes. It
+had no tests.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1359** | `app/main/routes.py`, `anoobis` | The guard was a second implementation of the origin check, and a weaker one: `f.host is None or f.host == SERVER_NAME`. `f.host is None` accepts everything furl reads as having no authority, and a browser does not agree with furl about what that means. | **fixed** | four values served that a browser sends off-origin |
+
+Measured against furl, with the route's answer beside the canonical check's:
+
+    \\evil.test/x      furl host=None          served -- browsers fold \ to /,
+                                               so this is //evil.test/x
+    /\evil.test        furl host=None          served -- /\ folds to // too
+    https:/\evil.test  furl host=None, https   served -- becomes https://evil.test
+    http:evil.test     furl host=None, http    served -- scheme-relative; Chrome
+                                               resolves it as http://evil.test/
+
+`is_safe_redirect_target` is THE origin check. `back()` and all three of
+`referrer()`'s sources already go through it, and **its own docstring names the
+back()/referrer() divergence that having two implementations produced** — the
+warning was already written down, one file over, and this route was the third copy.
+It rejects all four, accepts a relative path and this server's own host, and honours
+the admin's `redirect_policy` like every other redirect.
+
+The file ends with a property: for twenty-five values, the route's answer and
+`is_safe_redirect_target`'s answer must MATCH. A future fourth implementation is
+what that catches, which is more useful than another list of bad strings.
+
+Also asserted, because it is the one path that returns neither a page nor a refusal:
+no `next` at all gives an empty 200.
+
+Eight mutants, all dead. 13,044 tests, 0 failures, 0 warnings. All 92 floors met.
+
+**Next free number: D1360.**
