@@ -19702,4 +19702,51 @@ ratchet caught a gap that reading had not. Fact 687 said to write the property t
 before believing a sweep is complete; the correction is that the scan has to be as
 wide as the shape, not as wide as the round.
 
-**Next free number: D1342.**
+## Round 151 — the behavioural tests round 150 owed, and what they found
+
+Round 150 guarded five reads and could pin four of them only by their text: it had
+built its harness against `resolve_remote_post`, and the reads are in
+`resolve_remote_post_from_search`. `tests/test_ap_resolve_from_search.py` drives the
+right function, so this round wrote the tests there and deleted the placeholder.
+
+Writing them changed the production code twice.
+
+**First, two of the guards could not fail.** The tail of the resolver re-read
+`topic_post_data['totalItems']` and `['orderedItems']` and re-tested their types --
+seventy lines after the gate that sets `nodebb = True` had already established that
+one is an `int` and the other a non-empty `list`. `nodebb` is only true when that
+gate passed, so `isinstance(total_items, int) and isinstance(ordered_items, list)`
+in the tail were unfalsifiable, and no test could kill a mutant that removed them.
+That is fact 697's shape again: a surviving mutant reporting redundant code rather
+than a weak test. The two values are now read once, at the gate that vetted them,
+and carried down; the tail is `if nodebb and total_items > 1:`. The gate is the one
+read left, and every arc of it is now exercised: a `totalItems` that is a string, a
+float, a list, a dict or absent; an `orderedItems` that is a string or an empty
+list; and `totalItems: true`, which passes because `isinstance(True, int)` is true
+and then fails `True > 1`, so the post arrives and no replies are requested.
+
+**Second, a mutant survived because both arms of a branch were unobservable —
+and that was the defect.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1342** | `app/activitypub/util.py`, `resolve_remote_post_from_search`'s enrichment | `if not in_reply_to: object.last_active = published` had no else arm, so resolving a REPLY from search left its parent's `last_active` at the local now `PostReply.new` had just written. `last_active` orders a community's listings, so searching for a two-year-old reply promoted its entire thread to the top of the community. `create_resolved_object` — the same document arriving in an inbox instead — has always set the parent's `last_active` from the reply's `published`. | **fixed** | a reply published `2024-01-01T00:00:00Z` resolved from search, asserted against the same document put through `create_resolved_object`: the two parents' `last_active` now agree |
+
+`PostReply` has no `last_active` column — only `Post` does — so the True arm's
+assignment would have been a stray Python attribute had it ever run on a reply, and
+the else arm did nothing. Neither branch was observable, which is why
+`if not in_reply_to:` → `if True:` survived. An earlier round's test asserted the
+divergence between the two resolvers as a documented difference (`post.last_active
+!= datetime(2024, 1, 1, 0, 0)`); measuring it is what showed it was a defect. That
+test now asserts the repair, with the history kept in its docstring.
+
+Also pinned behaviourally for the first time: the dispatch reads the topic and not
+the post it resolved (the served note carries contradicting `totalItems` and
+`orderedItems`, and they are not what gets dispatched), and a malformed or
+offset-bearing `published` on a resolved REPLY in `create_resolved_object` — its
+post branch was covered, its reply branch only for a well-formed value.
+
+Thirteen mutants, all dead. 12,463 tests, 0 failures, 0 warnings. All 92 floors met.
+`app/activitypub/util.py` 91.95%.
+
+**Next free number: D1343.**
