@@ -2264,7 +2264,16 @@ class TestGenericOpengraphArm:
         assert file.thumbnail_path is not None  # app/utils.py:3157, this arm only
         assert file.source_url == THUMB_URL  # NOT None, app/utils.py:3158
         assert file.alt_text == ''  # `:666` overwrote `:648`'s 'A headline'
-        assert len(_written_media(chdir_upload)) == 3  # png + 170 webp + 512 webp
+        # Two files, not three. This read `== 3  # png + 170 webp + 512 webp`
+        # and was pinning D1345: the `.png` the peer's body was fetched into was
+        # left beside the two WEBPs the resize produced, named by no column, so
+        # nothing could ever delete it. The two files here are exactly
+        # `thumbnail_path` and `file_path` above.
+        written = _written_media(chdir_upload)
+        assert len(written) == 2
+        assert sorted(str(path) for path in written) == \
+            sorted([str(chdir_upload / file.thumbnail_path),
+                    str(chdir_upload / file.file_path)])
 
     def test_a_generic_url_falls_back_to_og_image_url(
             self, db_session, http_mock, chdir_upload):
