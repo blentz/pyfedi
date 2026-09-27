@@ -11894,3 +11894,24 @@ performs the effect and check the parameter is still in scope there.
 covered them is that nothing can: an earlier call in the same method removes every
 row the query looks for. The uncovered lines were the report of the defect --
 the work they describe was never being done anywhere.
+
+**725. A FLAG THAT TURNS OFF THE WORK IS NOT A BATCHING STRATEGY.**
+`purge_cdn=False` appeared at six delete sites, and in every case the reason was
+"do not make one request per file". Nobody made the batched request instead, so
+the work simply never happened. When the concern is volume, give the caller a
+collection to fill and flush it once; a boolean that skips the effect will be read
+as "this effect is not needed here".
+
+**726. TO TEST BATCHING, COUNT THE CALLS AND USE MORE THAN ONE ITEM.**
+Two mutants survived because one post produces one flush either way -- batched by
+the caller, or flushed by the post itself. The URLs are identical; only the number
+of requests differs. Two posts and an assertion of `len(flushes) == 1` containing
+both URLs separates them. A batching test with a single item tests nothing about
+batching.
+
+**727. AN API LIMIT IS PART OF THE CONTRACT, AND AN UNREAD RESPONSE HIDES IT.**
+`flush_cdn_cache_task` posted an unbounded `files` list and ignored the result, so
+exceeding Cloudflare's 30-file cap looked exactly like success. The two defects
+compound: the callers that batch are the ones that exceed the cap, so fixing the
+purge without chunking would have replaced "never purges" with "silently fails to
+purge". Read the status, and chunk to the documented limit.
