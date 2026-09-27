@@ -358,3 +358,69 @@ class TestPatchingAProxyDoesNotGiveAnAsyncMock:
                 if pattern.search(line):
                     offenders.append(f'{path.name}:{number}')
         assert offenders == []
+
+
+class TestWhichRunsGetWorkers:
+    """`run_tests.sh` only passes `-n <workers> --dist loadgroup` when the
+    arguments name the WHOLE suite, and `names_a_subset` is what decides.
+
+    An option that takes a separate value has to consume it, or the value is read
+    as a path and the whole suite quietly drops to a single worker. `-p` was
+    listed beside `-n` and `--dist` as if it conflicted with them, so
+    `./run_tests.sh tests/ -q -p no:randomly` ran 12,000 tests serially -- 23
+    minutes against 8 -- and printed nothing to say why. Silent loss of
+    parallelism looks exactly like a slow test suite, so the decision is asserted
+    here rather than left to be noticed.
+    """
+
+    def decide(self, *arguments):
+        import subprocess
+
+        script = Path('run_tests.sh').read_text(encoding='utf8')
+        start = script.index('names_a_subset() {')
+        end = script.index('\n}\n', start) + 3
+        harness = script[start:end] + \
+            '\nif names_a_subset "$@"; then echo subset; else echo whole; fi\n'
+        result = subprocess.run(['bash', '-c', harness, 'run_tests.sh', *arguments],
+                                capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        return result.stdout.strip()
+
+    @pytest.mark.parametrize('arguments', [
+        (),
+        ('tests',),
+        ('tests/',),
+        ('-q',),
+        ('tests/', '-q'),
+        ('tests/', '-q', '--cov=app', '--cov-report=json'),
+        ('tests/', '-q', '-p', 'no:randomly'),
+        ('-p', 'no:randomly'),
+        ('tests/', '-p', 'no:cacheprovider', '-q'),
+        ('tests/', '--ignore', 'tests/test_slow.py'),
+        ('tests/', '-o', 'addopts='),
+    ])
+    def test_the_whole_suite_keeps_its_workers(self, arguments):
+        assert self.decide(*arguments) == 'whole'
+
+    @pytest.mark.parametrize('arguments', [
+        ('tests/test_models_voting.py',),
+        ('tests/test_models_voting.py::TestAVote',),
+        ('tests/', '-k', 'voting'),
+        ('-k', 'voting'),
+        ('tests/', '-m', 'slow'),
+        ('tests/', '-kvoting'),
+    ])
+    def test_a_subset_stays_serial(self, arguments):
+        assert self.decide(*arguments) == 'subset'
+
+    @pytest.mark.parametrize('arguments', [
+        ('tests/', '-n', '2'),
+        ('tests/', '-n2'),
+        ('tests/', '--dist', 'loadfile'),
+        ('tests/', '--dist=loadfile'),
+    ])
+    def test_a_caller_that_said_how_to_distribute_is_obeyed(self, arguments):
+        """These genuinely conflict: the script passes its own `-n` and `--dist`,
+        and pytest takes the last one, so a caller asking for two workers would
+        get four."""
+        assert self.decide(*arguments) == 'subset'

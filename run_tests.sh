@@ -105,12 +105,28 @@ fi
 # True when the caller asked for a SUBSET of the suite -- a file, a node id, a
 # -k expression -- or has already said how it wants to be distributed. `tests`
 # and `tests/` are the whole suite, so they do not count as a subset; anything
-# else that is not an option does. A value that follows -k or -m looks like a
-# path here, which keeps those runs serial: they are subsets anyway.
+# else that is not an option does.
+#
+# Options that take a SEPARATE value have to consume it, or the value is read as
+# a path and the whole suite silently drops to one worker. `-p no:randomly` did
+# exactly that: `-p` was listed beside -n and --dist as if it conflicted with
+# them, so `./run_tests.sh tests/ -q -p no:randomly` ran the 12,000-test suite
+# serially -- 23 minutes instead of 8 -- and said nothing about why.
+#
+# -n and --dist stay here because they genuinely conflict: this script passes its
+# own, and pytest takes the last one. -k and -m name a subset by definition.
 names_a_subset() {
+    skip_next=false
     for argument in "$@"; do
+        if [ "$skip_next" = true ]; then
+            skip_next=false
+            continue
+        fi
         case "$argument" in
-            -n|-n*|--dist|--dist=*|-p) return 0 ;;
+            -n|-n*|--dist|--dist=*) return 0 ;;
+            -k|-k*|-m|-m*) return 0 ;;
+            -p|-c|-o|--rootdir|--override-ini|--deselect|--ignore|--junit-xml|--log-file)
+                skip_next=true ;;
             -*) ;;
             tests|tests/) ;;
             *) return 0 ;;
