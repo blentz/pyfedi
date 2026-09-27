@@ -11727,3 +11727,47 @@ a peer's 4,000-character value is a DataError at commit, which loses the post li
 any other. `String(4)` for a currency is the sharpest one. When a value from
 outside lands in a sized column, trim it to that size, and read the model for the
 sizes rather than guessing.
+
+**702. ITERATING A PEER'S LIST WITHOUT CHECKING IT IS A LIST FETCHES ITS LETTERS.**
+`orderedItems` given as a string, sliced `[1:]` and iterated, made
+`get_nodebb_replies_in_background` ask the peer for ten single-character urls
+(D1340). None and a number raise; a dict iterates its keys; a tuple would work by
+accident. `isinstance(value, list)` before the loop, and `isinstance(entry, str)`
+inside it -- and count a skipped entry against nothing, so the cap still means what
+it says.
+
+**703. ONE BAD ITEM SHOULD NOT ABANDON THE BATCH.**
+The same function re-raised out of its loop, so nine resolvable replies were
+dropped for one that failed. A loop over remote items wants the try INSIDE it, with
+the failure logged and the count still spent. The test that shows it asserts every
+item was attempted, not just that no exception escaped.
+
+**704. WHEN A TEST CANNOT BE MADE HONEST IN THE TIME AVAILABLE, WRITE THE GAP DOWN.**
+Four of round 150's five guarded sites have no behavioural test: the harness needed
+a two-fetch conversation, and the attempt was built against the wrong function
+(`resolve_remote_post` rather than `resolve_remote_post_from_search`). The class
+was deleted, a source-level assertion put in its place, and the docstring says it
+would pass against a guard that was present and wrong. An over-mocked test that
+asserts the mock would have hidden that; naming the file that already drives the
+right function makes it a next round rather than a loose end.
+
+**705. A PROPERTY TEST IS ONLY AS WIDE AS ITS SCAN.**
+Round 143 found six copies of `['icon'][-1]['url']` and wrote a test to catch the
+seventh -- scanning `app/activitypub/util.py` alone. The seventh was in
+`app/models.py` and survived seven rounds (D1341). A sweep test's file list is part
+of the claim it makes: scan `Path('app').rglob('*.py')`, not the file the round
+happened to be reading.
+
+**706. EXCLUDE STRING LITERALS FROM A SOURCE SCAN BY PARSING, NOT BY PREFIX.**
+The widened scan above failed on its own docstring, which quotes the pattern it
+forbids -- and on the production comment that explains the fix. Skipping lines that
+start with `#` does not cover either. Walk the AST, collect the line span of every
+`ast.Constant` string, and skip those: the test then reads code, which is what it
+claims to be about.
+
+**707. A FLOOR BREACH CAN BE A DEFECT REPORT.**
+`app/models.py` fell 0.16 points under its floor after a round that touched another
+file. Chasing which lines had stopped being executed led to the Video branch's
+unguarded `icon` read (D1341) -- a defect no one was looking for. When the ratchet
+trips, find out which lines moved before adjusting anything; the answer is
+occasionally better than the round you were running.
