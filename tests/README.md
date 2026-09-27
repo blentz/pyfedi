@@ -12048,3 +12048,28 @@ The strongest assertion in this round is not the four bad strings; it is that fo
 every one of twenty-five values, the ROUTE and the canonical function answer the
 same. A list of rejections passes again the moment someone writes a fourth guard
 that happens to reject those four. Agreement fails.
+
+**747. AN `IN` LIST IS A SET, SO PER-ROW ARITHMETIC NEEDS COUNTING.**
+`update(User).where(User.id.in_(ids)).values({col: col - 1})` takes ONE off each
+matching user, however many times their id appears in `ids`. Three sites built that
+list one entry per notification and expected one decrement per entry. When a list
+represents rows rather than keys, count it (`Counter`) and apply the total.
+
+**748. A FLOOR HIDES AN OVER-COUNT.**
+`GREATEST(x - n, 0)` is the right guard and it made five mutants unkillable: with the
+admin holding only the notifications being cleared, the count reaches 0 whether n is
+1 or 5. A test for "how much was taken off" must leave a REMAINDER -- something
+unrelated in the count -- or the floor answers for it.
+
+**749. A 400 CHANGES NOTHING, WHICH IS WHAT SOME TESTS ASSERT.**
+Two tests of a CSRF-protected POST passed before they worked: the request was a 400
+the route never saw, and they asserted that nothing changed. Any test whose
+assertion is an absence must first prove the request happened -- assert the status,
+or assert a change the same request makes.
+
+**750. AN ANCHOR ON `def` IS NOT AN ANCHOR ON THE FUNCTION.**
+Inserting a helper immediately above `def user_access` put it between that function
+and its `@cache.memoize` decorator: the decorator silently moved onto the new
+function, `user_access` lost its cache, and `cache.delete_memoized(user_access)`
+raised `AttributeError: 'function' object has no attribute 'make_cache_key'` in
+sixteen tests. When inserting before a function, anchor above its decorators.
