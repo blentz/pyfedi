@@ -11771,3 +11771,24 @@ file. Chasing which lines had stopped being executed led to the Video branch's
 unguarded `icon` read (D1341) -- a defect no one was looking for. When the ratchet
 trips, find out which lines moved before adjusting anything; the answer is
 occasionally better than the round you were running.
+
+**708. A GUARD THE CALLER ALREADY ESTABLISHED IS A GUARD NO TEST CAN KILL.**
+The tail of `resolve_remote_post_from_search` re-tested the types of two keys that
+the gate setting `nodebb = True` had already vetted seventy lines earlier. The
+mutant removing those tests survived because `nodebb` implies them. Read a vetted
+value once, where it was vetted, and carry it; if a guard can only be reached in
+states it accepts, delete it rather than writing a test that cannot fail.
+
+**709. WHEN BOTH ARMS OF A BRANCH ARE UNOBSERVABLE, SUSPECT THE BRANCH.**
+`if not in_reply_to: object.last_active = published` survived mutation because a
+PostReply has no `last_active` column, so the True arm was a stray attribute, and
+there was no else arm at all. The mutation report was not "write a better test" but
+"this branch does nothing for a reply" -- D1342, a reply resolved from search
+leaving its thread ordered as if just active. A guard whose removal changes nothing
+is either redundant (fact 708) or hiding missing work.
+
+**710. TO TEST THAT TWO PATHS AGREE, RUN BOTH IN ONE TEST.**
+`resolve_remote_post_from_search` and `create_resolved_object` handle the same
+document, by search and by inbox. Asserting each one's timestamp separately let them
+drift for as long as both assertions passed. Feeding one document to both and
+asserting the two results equal is what makes the agreement itself the subject.

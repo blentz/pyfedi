@@ -796,6 +796,38 @@ class TestAPublishedValueTheColumnCannotStore:
         assert Post.query.filter_by(ap_id=URI).one().id == result.id
         assert result.last_active is not None
 
+    @pytest.mark.parametrize('published', ['not a timestamp', 5, None])
+    def test_a_junk_published_on_a_REPLY_is_ignored_too(self, app, peer_author,
+                                                        published):
+        """The reply branch has its own copy of the enrichment, and its own copy
+        of the parse. A reply also writes `last_active` on its PARENT, so an
+        unreadable value here used to poison the transaction that was updating a
+        row the reply did not create.
+        """
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        post = parent_post(community, peer_author)
+        before = post.last_active
+
+        result = resolved(reply_note(published=published), community)
+
+        assert isinstance(result, PostReply)
+        assert result.posted_at is not None
+        # `create_post_reply` bumps the parent's `last_active` to now by itself,
+        # so the assertion is not that it did not move -- it did -- but that the
+        # enrichment did not then move it again to an unreadable value.
+        assert result.post.last_active >= before
+        assert result.post.last_active != PUBLISHED_AS_DATETIME
+
+    def test_a_replys_offset_is_converted_on_the_reply_and_the_parent(
+            self, app, peer_author):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        parent_post(community, peer_author)
+
+        result = resolved(reply_note(published='2024-01-01T00:00:00+05:00'), community)
+
+        assert result.posted_at == datetime(2023, 12, 31, 19, 0)
+        assert result.post.last_active == datetime(2023, 12, 31, 19, 0)
+
 
 class TestTheHelpersReturningFalsy:
     """create_post and create_post_reply both refuse a non-public object --
