@@ -2855,7 +2855,14 @@ def post_reply_check_ai(post_reply_id):
 
 @bp.route('/post_reply/<int:post_reply_id>/choose_answer', methods=['POST'])
 def post_reply_choose_answer(post_reply_id):
-    post_reply = db.session.get(PostReply, post_reply_id)
+    # D1357, which is D1127's repair on the two siblings it missed. `db.session.get`
+    # answers None, and an ADMIN or MODERATOR -- whose permission is the FIRST
+    # disjunct, so it short-circuits past the reads that would have raised here --
+    # reached `choose_answer`, where `post_reply.answer = True` was
+    # `AttributeError: 'NoneType' object has no attribute 'answer'`: a 500 for a
+    # reply id that does not exist. An anonymous caller never saw it, because
+    # `current_user.is_authenticated` short-circuits first.
+    post_reply = db.session.get(PostReply, post_reply_id) or abort(404)
     if current_user.is_authenticated and (current_user.is_admin_or_staff() or post_reply.user_id == current_user.id or post_reply.community.is_moderator()):
         choose_answer(post_reply_id, src=SRC_WEB)
         return _('Done')
@@ -2865,7 +2872,7 @@ def post_reply_choose_answer(post_reply_id):
 
 @bp.route('/post_reply/<int:post_reply_id>/unchoose_answer', methods=['POST'])
 def post_reply_unchoose_answer(post_reply_id):
-    post_reply = db.session.get(PostReply, post_reply_id)
+    post_reply = db.session.get(PostReply, post_reply_id) or abort(404)  # D1357
     if current_user.is_authenticated and (current_user.is_admin_or_staff() or post_reply.user_id == current_user.id or post_reply.community.is_moderator()):
         unchoose_answer(post_reply_id, src=SRC_WEB)
         return _('Done')
