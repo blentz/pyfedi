@@ -172,7 +172,7 @@ def ban_user(input, src, auth=None):
                 flash(_('%(actor)s has been banned, deleted and all their content deleted. This might take a few minutes.',
                         actor=to_ban.display_name()))
         else:
-            to_ban.delete_dependencies()
+            to_ban.delete_dependencies(purge_cdn=flush_cdn)  # D1348
             to_ban.purge_content(flush=flush_cdn)
             from app import redis_client
             with redis_client.lock(f"lock:user:{to_ban.id}", timeout=10, blocking_timeout=6):

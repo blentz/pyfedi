@@ -45,7 +45,7 @@ def purge_user_then_delete_task(user_id, flush):
                         community = session.get(Community, membership.community_id)
                         unsubscribe_from_community(community, user)
 
-                    user.delete_dependencies()
+                    user.delete_dependencies(purge_cdn=flush)  # D1348
                     # `flush` is the CDN flag. Passed positionally it landed
                     # in `soft`, so a deletion with the CDN purge turned OFF
                     # hard-deleted every post and reply instead of soft-deleting

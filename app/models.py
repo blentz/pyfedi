@@ -759,11 +759,18 @@ class File(db.Model):
             if s3_key:
                 s3_files_to_delete.append(s3_key)
                 purge_from_cache.append(self.file_path)
-            elif os.path.isfile(self.file_path):
-                try:
-                    os.unlink(self.file_path)
-                except FileNotFoundError:
-                    ...
+            else:
+                # D1349. The purge used to live inside `if os.path.isfile(...)`, so
+                # a file already gone from disk was never purged from the CDN --
+                # and the CDN is what the public reads. Measured: deleting a user
+                # whose files had already been removed by any other means purged
+                # nothing at all. Whether the local copy is still there says
+                # nothing about whether an edge still holds it.
+                if os.path.isfile(self.file_path):
+                    try:
+                        os.unlink(self.file_path)
+                    except FileNotFoundError:
+                        ...
                 purge_from_cache.append(self.file_path.replace('app/', f"{current_app.config['SERVER_URL']}/"))
 
         if self.thumbnail_path:
@@ -771,11 +778,12 @@ class File(db.Model):
             if s3_key:
                 s3_files_to_delete.append(s3_key)
                 purge_from_cache.append(self.thumbnail_path)
-            elif os.path.isfile(self.thumbnail_path):
-                try:
-                    os.unlink(self.thumbnail_path)
-                except FileNotFoundError:
-                    ...
+            else:
+                if os.path.isfile(self.thumbnail_path):  # D1349, as above
+                    try:
+                        os.unlink(self.thumbnail_path)
+                    except FileNotFoundError:
+                        ...
                 purge_from_cache.append(
                     self.thumbnail_path.replace('app/', f"{current_app.config['SERVER_URL']}/"))
         if self.source_url:
@@ -1872,7 +1880,10 @@ class User(UserMixin, db.Model):
             return
         return user
 
-    def delete_dependencies(self):
+    def delete_dependencies(self, purge_cdn=True):
+        """`purge_cdn` reaches the `user_file` uploads, which is what D1348 was
+        about: `purge_content(flush=...)` could not control them, because by the
+        time it ran they were already gone."""
         # Get cover and avatar file IDs before clearing references
         cover_file_id = self.cover_id
         avatar_file_id = self.avatar_id
@@ -1885,11 +1896,30 @@ class User(UserMixin, db.Model):
         if self.waiting_for_approval():
             db.session.query(UserRegistration).filter(UserRegistration.user_id == self.id).delete()
         
-        # Handle user_file associations
+        # Handle user_file associations -- the images this user uploaded.
+        #
+        # D1348. These were deleted with `purge_cdn=False` and their File rows
+        # left behind, and `purge_content`'s own `user_file` block -- the one that
+        # would have purged them with `purge_cdn=flush` and deleted the rows --
+        # could never run, because this method had already removed every
+        # association it looked for. So a banned user's uploads went from disk but
+        # stayed in the CDN, which is what the public reads.
+        #
+        # The other-user check is the same policy as round 152's S3 delete:
+        # `DELETE FROM user_file WHERE file_id = :file_id` removes EVERY user's
+        # association with that file, not only this user's, so a file somebody
+        # else also uploaded must lose this association and nothing more.
         user_files = db.session.query(File).join(user_file).filter(user_file.c.user_id == self.id).all()
         for file in user_files:
-            file.delete_from_disk(purge_cdn=False)
-            db.session.execute(text('DELETE FROM "user_file" WHERE file_id = :file_id'), {'file_id': file.id})
+            shared = db.session.query(user_file).filter(
+                user_file.c.file_id == file.id, user_file.c.user_id != self.id).count()
+            db.session.execute(
+                text('DELETE FROM "user_file" WHERE file_id = :file_id AND user_id = :user_id'),
+                {'file_id': file.id, 'user_id': self.id})
+            if shared:
+                continue
+            file.delete_from_disk(purge_cdn=purge_cdn)
+            db.session.delete(file)
         
         # Now handle cover and avatar files - delete them one at a time
         # after checking they're no longer referenced
@@ -1948,7 +1978,7 @@ class User(UserMixin, db.Model):
         for file in files:
             file.delete_from_disk(purge_cdn=flush)
         db.session.commit()
-        self.delete_dependencies()
+        self.delete_dependencies(purge_cdn=flush)
         db.session.commit()
         posts = Post.query.filter_by(user_id=self.id).all()
         for post in posts:
@@ -1968,12 +1998,11 @@ class User(UserMixin, db.Model):
                 db.session.delete(reply)
             db.session.commit()
 
-        files = File.query.join(user_file).filter(user_file.c.user_id == self.id).all()
-        for file in files:
-            file.delete_from_disk(purge_cdn=flush)
-            db.session.execute(text('DELETE FROM "user_file" WHERE file_id = :file_id'), {'file_id': file.id})
-            db.session.delete(file)
-            db.session.commit()
+        # The `user_file` block that used to be here is gone: `delete_dependencies`
+        # above has already removed every association this query looked for, so it
+        # could never run. Its intent -- purge the CDN and delete the row -- moved
+        # into that method instead, where it does happen (D1348).
+        db.session.commit()
 
     def mention_tag(self):
         if self.ap_domain is None:
