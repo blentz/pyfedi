@@ -20130,4 +20130,37 @@ being answered from local communities only, because the local arm's condition is
 Eleven mutants, all dead. 12,919 tests, 0 failures, 0 warnings. `app/main/routes.py`
 82.37%, floor ratcheted 81 → 82.
 
-**Next free number: D1357.**
+## Round 161 — the two siblings D1127 missed, and a policy worth naming
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1357** | `app/post/routes.py`, `post_reply_choose_answer` and `post_reply_unchoose_answer` | Both read `db.session.get(PostReply, post_reply_id)` and then dereferenced it. `post_set_ai`, thirty lines above, reads `... or abort(404)` for exactly this reason — that was D1127 — and these two kept the original shape. | **fixed** | `AttributeError: 'NoneType' object has no attribute 'answer'` at `app/shared/reply.py:593`, a 500 |
+
+**The order of the disjuncts is what hid it.** The condition is
+
+    current_user.is_authenticated and (current_user.is_admin_or_staff()
+        or post_reply.user_id == current_user.id
+        or post_reply.community.is_moderator())
+
+so an anonymous caller is refused before anything is read, and a logged-in
+non-moderator would have raised on `post_reply.user_id` — but an ADMIN or a
+MODERATOR passes on the FIRST disjunct, and the None then travelled into
+`choose_answer`, whose first line is `post_reply.answer = True`. The defect was
+reachable only by the people most likely to click a stale link, and invisible to
+everyone else. Measured with `api_baseline`'s user1, who is an admin.
+
+**A policy this round pins rather than changes.** `post_reply.user_id ==
+current_user.id` lets the REPLY'S OWN AUTHOR mark their comment as the accepted
+answer to somebody else's question — and `choose_answer` then sends that author a
+notification reading "Your answer was chosen as an answer to ...". The asker has no
+say unless they moderate. `post_reply_mark_as_answer` in
+`app/api/alpha/utils/reply.py` applies the identical rule, so it is the product's
+policy in two places rather than a slip in one, and changing a product policy is
+not this campaign's business. Both halves of the surprise are asserted as they
+behave today, with the question written down, so that a change to it has to be
+somebody's decision rather than a side effect.
+
+Eleven mutants, all dead. 12,938 tests, 0 failures, 0 warnings. All 92 floors met;
+`app/shared/reply.py` reached 100%.
+
+**Next free number: D1358.**
