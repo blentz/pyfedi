@@ -260,6 +260,38 @@ def public_key_pem(document):
     return pem if isinstance(pem, str) and pem else None
 
 
+def language_from_ap(value):
+    """The (code, name) of a Language out of a peer's `language` entry, or None.
+
+    D1355. Seven sites read `['identifier']` and `['name']` off whatever the peer
+    sent. Measured through `refresh_community_profile_task`, each as the only entry
+    of a community's `language` list:
+
+        'en'                                 TypeError: string indices must be
+                                             integers -- and a list of plain
+                                             language codes is a shape peers send
+        {'identifier': 'en'}                 KeyError: 'name'
+        {'name': 'English'}                  KeyError: 'identifier'
+        {'identifier': 5, 'name': '...'}     ProgrammingError: operator does not
+                                             exist: character varying = integer
+        None / 5                             TypeError: not subscriptable
+        a 50-character identifier            DataError: value too long for type
+                                             character varying
+
+    `Language.code` is String(5) and `Language.name` is String(50), so both are
+    capped: a column width is not a validation rule the peer knows about. A missing
+    name falls back to the code, because a language this instance can identify is
+    worth keeping even unnamed -- but without an identifier there is nothing to
+    key on, so that gives None and the caller skips the entry.
+    """
+    if not isinstance(value, dict):
+        return None
+    code = _as_text(value.get('identifier'), 5)
+    if not code:
+        return None
+    return code, _as_text(value.get('name'), 50) or code
+
+
 def markdown_source(document, require_media_type=True):
     """The markdown a peer offered in an object's `source`, or None if it offered
     none usable.
@@ -2682,12 +2714,13 @@ class Post(db.Model):
                     post.image = icon
 
             # Language. Lemmy uses 'language' while Mastodon has 'contentMap'
-            if 'language' in request_json['object'] and isinstance(request_json['object']['language'], dict) \
-                    and 'identifier' in request_json['object']['language'] \
-                    and 'name' in request_json['object']['language']:
-                language = find_language_or_create(request_json['object']['language']['identifier'],
-                                                   request_json['object']['language']['name'])
-                post.language = language
+            # D1355. The membership tests below were right about the keys and said
+            # nothing about their TYPES: `identifier: 5` reached a String(5) column
+            # as `ProgrammingError: operator does not exist: character varying =
+            # integer`, and a 50-character one was a DataError.
+            ap_language = language_from_ap(request_json['object'].get('language'))
+            if ap_language is not None:
+                post.language = find_language_or_create(*ap_language)
             elif 'contentMap' in request_json['object'] and isinstance(request_json['object']['contentMap'], dict):
                 language = find_language(next(iter(request_json['object']['contentMap'])))
                 post.language_id = language.id if language else None

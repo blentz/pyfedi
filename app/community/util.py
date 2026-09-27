@@ -20,7 +20,8 @@ from app.activitypub.util import find_actor_or_create, actor_json_to_model, \
 from app.community.forms import CreateLinkForm
 from app.constants import SRC_WEB, POST_TYPE_LINK
 from app.models import Community, File, PostReply, Post, utcnow, CommunityMember, Site, \
-    Instance, User, Tag, CommunityFlair, CommunityThemeAllowed, markdown_source
+    Instance, User, Tag, CommunityFlair, CommunityThemeAllowed, markdown_source, \
+    language_from_ap
 from app.utils import get_request, gibberish, ensure_directory_exists, ap_datetime, instance_banned, get_task_session, \
     store_files_in_s3, guess_mime_type, patch_db_session, instance_allowed, get_setting, scale_gif, theme_list, \
     sanitize_svg
@@ -284,12 +285,11 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                                                 
                                                 # Get language
                                                 language_id = None
-                                                if 'language' in reply_data and isinstance(reply_data['language'], dict) and \
-                                                        'identifier' in reply_data['language'] and 'name' in reply_data['language']:
+                                                ap_language = language_from_ap(reply_data.get('language'))  # D1355
+                                                if ap_language is not None:
                                                     from app.activitypub.util import find_language_or_create
-                                                    language = find_language_or_create(reply_data['language']['identifier'],
-                                                                                     reply_data['language']['name'],
-                                                                                     session=session)
+                                                    language = find_language_or_create(*ap_language,
+                                                                                       session=session)
                                                     # A language this instance
                                                     # has not seen before is
                                                     # added and not flushed, so

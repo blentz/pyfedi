@@ -29,7 +29,8 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
     Licence, UserExtraField, Feed, FeedMember, FeedItem, CommunityFlair, UserFlair, Topic, Event, InstanceBan, Emoji, \
     UserFollower, PostBoost, parse_ap_timestamp, image_url_from, markdown_source, \
-    _as_text, _as_int, _as_float, property_value_fields, public_key_pem
+    _as_text, _as_int, _as_float, property_value_fields, public_key_pem, \
+    language_from_ap
 from app.utils import get_request, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
     is_image_url, domain_from_url, gibberish, ensure_directory_exists, shorten_string, fixup_url, \
     microblog_content_to_title, is_video_url, \
@@ -730,7 +731,11 @@ def refresh_user_profile_task(user_id):
                     if 'name' in activity_json:
                         user.title = activity_json['name'].strip() if activity_json['name'] else ''
                     if 'summary' in activity_json:
-                        about_html = activity_json['summary']
+                        # D1355. `summary` is whatever the peer sent: a number, a
+                        # list or an object was `AttributeError: ... has no
+                        # attribute 'startswith'` out of this task, and the actor
+                        # was then unrefreshable.
+                        about_html = _as_text(activity_json['summary'])
                         if about_html is not None and not about_html.startswith('<'):  # PeerTube
                             about_html = '<p>' + about_html + '</p>'
                         user.about_html = allowlist_html(about_html)
@@ -858,17 +863,23 @@ def refresh_community_profile_task(community_id, activity_json):
                     if 'featured' in activity_json:
                         community.ap_featured_url = activity_json['featured']
                     community.ap_fetched_at = utcnow()
-                    community.public_key = activity_json['publicKey']['publicKeyPem']
+                    # D1355, D1354's twin: a community that cannot be refreshed keeps
+                    # its stale name, icon, description, moderator list AND key.
+                    refreshed_pem = public_key_pem(activity_json)
+                    if refreshed_pem:
+                        community.public_key = refreshed_pem
 
                     if 'postUrlType' in activity_json and activity_json['postUrlType']:
                         community.post_url_type = activity_json['postUrlType']
 
-                    if 'summary' in activity_json:
-                        description_html = activity_json['summary']
-                    elif 'content' in activity_json:
-                        description_html = activity_json['content']
-                    else:
-                        description_html = ''
+                    # D1355. Either key is whatever the peer sent, and a value that
+                    # is not a string was `AttributeError: ... has no attribute
+                    # 'startswith'` below -- out of this task, leaving the profile
+                    # stale for ever. The first READABLE of the two is used, so an
+                    # unusable `summary` falls back to `content` rather than
+                    # shadowing it.
+                    description_html = _as_text(activity_json.get('summary')) or \
+                        _as_text(activity_json.get('content')) or ''
 
                     if description_html is not None and description_html != '':
                         if not description_html.startswith('<'):  # PeerTube
@@ -906,7 +917,12 @@ def refresh_community_profile_task(community_id, activity_json):
                                 cover_changed = True
                     if 'language' in activity_json and isinstance(activity_json['language'], list) and not community.ignore_remote_language:
                         for ap_language in activity_json['language']:
-                            new_language = find_language_or_create(ap_language['identifier'], ap_language['name'], session)
+                            # D1355. An entry this instance cannot read is skipped
+                            # rather than losing the whole refresh.
+                            language = language_from_ap(ap_language)
+                            if language is None:
+                                continue
+                            new_language = find_language_or_create(*language, session)
                             if new_language not in community.languages:
                                 community.languages.append(new_language)
                     if 'genAI' in activity_json and not community.ignore_remote_gen_ai:
@@ -1074,15 +1090,19 @@ def refresh_feed_profile_task(feed_id):
                     feed.title = activity_json['name'].strip()
                     feed.ap_moderators_url = owners_url
                     feed.ap_fetched_at = utcnow()
-                    feed.public_key = activity_json['publicKey']['publicKeyPem']
+                    refreshed_pem = public_key_pem(activity_json)  # D1355
+                    if refreshed_pem:
+                        feed.public_key = refreshed_pem
 
                     description_html = ''
-                    if 'summary' in activity_json:
-                        description_html = activity_json['summary']
-                    elif 'content' in activity_json:
-                        description_html = activity_json['content']
-                    else:
-                        description_html = ''
+                    # D1355. Either key is whatever the peer sent, and a value that
+                    # is not a string was `AttributeError: ... has no attribute
+                    # 'startswith'` below -- out of this task, leaving the profile
+                    # stale for ever. The first READABLE of the two is used, so an
+                    # unusable `summary` falls back to `content` rather than
+                    # shadowing it.
+                    description_html = _as_text(activity_json.get('summary')) or \
+                        _as_text(activity_json.get('content')) or ''
 
                     if description_html is not None and description_html != '':
                         if not description_html.startswith('<'):  # PeerTube
@@ -1264,7 +1284,7 @@ def actor_json_to_model(activity_json, address, server):
             return None
 
         if 'summary' in activity_json:
-            about_html = activity_json['summary']
+            about_html = _as_text(activity_json['summary'])  # D1355
             if about_html is not None and not about_html.startswith('<'):  # PeerTube
                 about_html = '<p>' + about_html + '</p>'
             user.about_html = allowlist_html(about_html)
@@ -1387,12 +1407,8 @@ def actor_json_to_model(activity_json, address, server):
         if get_setting('meme_comms_low_quality', False):
             community.low_quality = 'memes' in activity_json['preferredUsername'] or 'shitpost' in activity_json['preferredUsername']
         description_html = ''
-        if 'summary' in activity_json:
-            description_html = activity_json['summary']
-        elif 'content' in activity_json:
-            description_html = activity_json['content']
-        else:
-            description_html = ''
+        description_html = _as_text(activity_json.get('summary')) or \
+            _as_text(activity_json.get('content')) or ''  # D1355
 
         community.show_popular = db.session.get(Instance, community.instance_id).popular
         community.show_all = not db.session.get(Instance, community.instance_id).silenced
@@ -1423,7 +1439,9 @@ def actor_json_to_model(activity_json, address, server):
             db.session.add(image)
         if 'language' in activity_json and isinstance(activity_json['language'], list):
             for ap_language in activity_json['language']:
-                community.languages.append(find_language_or_create(ap_language['identifier'], ap_language['name']))
+                language = language_from_ap(ap_language)  # D1355
+                if language is not None:
+                    community.languages.append(find_language_or_create(*language))
         try:
             db.session.add(community)
             db.session.commit()
@@ -1614,12 +1632,8 @@ def actor_json_to_model(activity_json, address, server):
             return None
 
         description_html = ''
-        if 'summary' in activity_json:
-            description_html = activity_json['summary']
-        elif 'content' in activity_json:
-            description_html = activity_json['content']
-        else:
-            description_html = ''
+        description_html = _as_text(activity_json.get('summary')) or \
+            _as_text(activity_json.get('content')) or ''  # D1355
 
         if description_html is not None and description_html != '':
             if not description_html.startswith('<'):  # PeerTube
@@ -2659,10 +2673,9 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
 
         # Language - Lemmy uses 'language' while Mastodon uses 'contentMap'
         language_id = None
-        if 'language' in request_json['object'] and isinstance(request_json['object']['language'], dict):
-            language = find_language_or_create(request_json['object']['language']['identifier'],
-                                               request_json['object']['language']['name'])
-            language_id = language.id
+        ap_language = language_from_ap(request_json['object'].get('language'))  # D1355
+        if ap_language is not None:
+            language_id = find_language_or_create(*ap_language).id
         elif 'contentMap' in request_json['object'] and isinstance(request_json['object']['contentMap'], dict):
             language = find_language(next(iter(request_json['object']['contentMap'])))  # Combination of next and iter gets the first key in a dict
             language_id = language.id if language else None
@@ -3038,9 +3051,9 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
             else:
                 reply.body = html_to_text(reply.body_html)
         # Language
-        if 'language' in request_json['object'] and isinstance(request_json['object']['language'], dict):
-            language = find_language_or_create(request_json['object']['language']['identifier'],
-                                               request_json['object']['language']['name'])
+        ap_language = language_from_ap(request_json['object'].get('language'))  # D1355
+        if ap_language is not None:
+            language = find_language_or_create(*ap_language)
             # find_language_or_create() can return a row it has only add()ed, whose id is
             # still None (the app factory sets autoflush=False). Assign the relationship
             # and let SQLAlchemy resolve the id at flush, as the tag and flair arms do.
@@ -3212,9 +3225,9 @@ def update_post_from_activity(post: Post, request_json: dict):
         # Language
         old_language_id = post.language_id
         new_language = None
-        if 'language' in request_json['object'] and isinstance(request_json['object']['language'], dict):
-            new_language = find_language_or_create(request_json['object']['language']['identifier'],
-                                                   request_json['object']['language']['name'])
+        ap_language = language_from_ap(request_json['object'].get('language'))  # D1355
+        if ap_language is not None:
+            new_language = find_language_or_create(*ap_language)
         elif 'contentMap' in request_json['object'] and isinstance(request_json['object']['contentMap'], dict):
             new_language = find_language(next(iter(request_json['object']['contentMap'])))
         # find_language_or_create() can return a row it has only add()ed, whose id is still
