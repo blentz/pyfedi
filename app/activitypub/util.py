@@ -4436,6 +4436,8 @@ def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
     # just gets orderedItems[0] to retrieve the post, and then replies are retrieved in the background
     topic_post_data = post_data
     nodebb = False
+    ordered_items = None
+    total_items = None
     if ('type' in post_data and post_data['type'] == 'Conversation' and
             'posts' in post_data and isinstance(post_data['posts'], str)):
         post_data = remote_object_to_json(post_data['posts'])
@@ -4450,7 +4452,13 @@ def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
             isinstance(post_data.get('totalItems'), int) and post_data['totalItems'] > 0 and
             isinstance(post_data.get('orderedItems'), list) and post_data['orderedItems']):
         nodebb = True
-        uri = post_data['orderedItems'][0]
+        # Read both here, where the gate above has just established that one is a
+        # list and the other an int. The tail of this function needed its own copy
+        # of those two isinstance() tests as long as it re-read the keys itself,
+        # and a guard that can never fail is a guard nothing can test (D1340).
+        ordered_items = post_data['orderedItems']
+        total_items = post_data['totalItems']
+        uri = ordered_items[0]
         parsed_url = urlparse(uri)
         uri_domain = parsed_url.netloc
         post_data = remote_object_to_json(uri)
@@ -4511,19 +4519,23 @@ def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
                     object.posted_at = published
                     if not in_reply_to:
                         object.last_active = published
+                    else:
+                        # D1342. This used to set nothing at all for a reply, so
+                        # the parent kept the local now that `PostReply.new` gave
+                        # it -- and `last_active` is what orders a community's
+                        # listings, so resolving a two-year-old reply from search
+                        # promoted its whole thread to the top of the community.
+                        # `create_resolved_object`, which handles the very same
+                        # document when it arrives in an inbox instead, has always
+                        # used the reply's `published` here.
+                        object.post.last_active = published
                     db.session.commit()
-            # The same two keys are read 70 lines above this with
-            # `'totalItems' in post_data and post_data['totalItems'] > 0 and
-            # 'orderedItems' in post_data and isinstance(..., list)`; here they had
-            # no guard at all, so a topic without them was a KeyError and a
-            # `totalItems` that is a string was `TypeError: '>' not supported
-            # between instances of 'str' and 'int'`.
-            ordered_items = topic_post_data.get('orderedItems') if isinstance(
-                topic_post_data, dict) else None
-            total_items = topic_post_data.get('totalItems') if isinstance(
-                topic_post_data, dict) else None
-            if nodebb and isinstance(total_items, int) and total_items > 1 \
-                    and isinstance(ordered_items, list):
+            # These two keys used to be re-read here, unguarded, seventy lines
+            # after the careful read above: a topic without `totalItems` was a
+            # KeyError, and a `totalItems` that is a string was `TypeError: '>'
+            # not supported between instances of 'str' and 'int'`. They are now
+            # carried down from the gate that vetted them (D1340).
+            if nodebb and total_items > 1:
                 if current_app.debug:
                     get_nodebb_replies_in_background(ordered_items[1:], community.id)
                 else:
