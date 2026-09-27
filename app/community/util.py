@@ -20,7 +20,7 @@ from app.activitypub.util import find_actor_or_create, actor_json_to_model, \
 from app.community.forms import CreateLinkForm
 from app.constants import SRC_WEB, POST_TYPE_LINK
 from app.models import Community, File, PostReply, Post, utcnow, CommunityMember, Site, \
-    Instance, User, Tag, CommunityFlair, CommunityThemeAllowed
+    Instance, User, Tag, CommunityFlair, CommunityThemeAllowed, markdown_source
 from app.utils import get_request, gibberish, ensure_directory_exists, ap_datetime, instance_banned, get_task_session, \
     store_files_in_s3, guess_mime_type, patch_db_session, instance_allowed, get_setting, scale_gif, theme_list, \
     sanitize_svg
@@ -263,9 +263,9 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                                                         reply_data['content'] = '<p>' + reply_data['content'] + '</p>'
                                                     from app.utils import allowlist_html, markdown_to_html, html_to_text
                                                     body_html = allowlist_html(reply_data['content'])
-                                                    if 'source' in reply_data and isinstance(reply_data['source'], dict) and \
-                                                            'mediaType' in reply_data['source'] and reply_data['source']['mediaType'] == 'text/markdown':
-                                                        body = reply_data['source']['content']
+                                                    source_markdown = markdown_source(reply_data)  # D1346
+                                                    if source_markdown is not None:
+                                                        body = source_markdown
                                                         body_html = markdown_to_html(body)
                                                     else:
                                                         body = html_to_text(body_html)

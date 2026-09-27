@@ -28,7 +28,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
     Licence, UserExtraField, Feed, FeedMember, FeedItem, CommunityFlair, UserFlair, Topic, Event, InstanceBan, Emoji, \
-    UserFollower, PostBoost, parse_ap_timestamp, image_url_from
+    UserFollower, PostBoost, parse_ap_timestamp, image_url_from, markdown_source
 from app.utils import get_request, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
     is_image_url, domain_from_url, gibberish, ensure_directory_exists, shorten_string, fixup_url, \
     microblog_content_to_title, is_video_url, \
@@ -735,8 +735,9 @@ def refresh_user_profile_task(user_id):
                         user.about_html = allowlist_html(about_html)
                     else:
                         user.about_html = ''
-                    if 'source' in activity_json and activity_json['source'].get('mediaType') == 'text/markdown':
-                        user.about = activity_json['source']['content']
+                    source_markdown = markdown_source(activity_json)  # D1346
+                    if source_markdown is not None:
+                        user.about = source_markdown
                         user.about_html = markdown_to_html(user.about)  # prefer Markdown if provided, overwrite version obtained from HTML
                     else:
                         user.about = html_to_text(user.about_html)
@@ -864,8 +865,9 @@ def refresh_community_profile_task(community_id, activity_json):
                         if not description_html.startswith('<'):  # PeerTube
                             description_html = '<p>' + description_html + '</p>'
                         community.description_html = allowlist_html(description_html)
-                        if 'source' in activity_json and activity_json['source'].get('mediaType') == 'text/markdown':
-                            community.description = activity_json['source']['content']
+                        source_markdown = markdown_source(activity_json)  # D1346
+                        if source_markdown is not None:
+                            community.description = source_markdown
                             community.description_html = markdown_to_html(community.description)          # prefer Markdown if provided, overwrite version obtained from HTML
                         else:
                             community.description = html_to_text(community.description_html)
@@ -1077,8 +1079,9 @@ def refresh_feed_profile_task(feed_id):
                         if not description_html.startswith('<'):  # PeerTube
                             description_html = '<p>' + description_html + '</p>'
                         feed.description_html = allowlist_html(description_html)
-                        if 'source' in activity_json and activity_json['source'].get('mediaType') == 'text/markdown':
-                            feed.description = activity_json['source']['content']
+                        source_markdown = markdown_source(activity_json)  # D1346
+                        if source_markdown is not None:
+                            feed.description = source_markdown
                             feed.description_html = markdown_to_html(feed.description)          # prefer Markdown if provided, overwrite version obtained from HTML
                         else:
                             feed.description = html_to_text(feed.description_html)
@@ -1226,7 +1229,12 @@ def actor_json_to_model(activity_json, address, server):
                         matrix_user_id=activity_json['matrixUserId'] if 'matrixUserId' in activity_json else '',
                         indexable=activity_json['indexable'] if 'indexable' in activity_json else True,
                         searchable=activity_json['discoverable'] if 'discoverable' in activity_json else True,
-                        created=activity_json['published'] if 'published' in activity_json else utcnow(),
+                        # D1347. A peer's string straight into a DateTime column:
+                        # `published: "whenever"` was a DataError at commit, so a
+                        # remote actor whose actor document carries an unreadable
+                        # `published` could never be created here -- and nothing
+                        # they ever posted could land either.
+                        created=parse_ap_timestamp(activity_json.get('published')) or utcnow(),
                         ap_id=f"{address.lower()}@{server.lower()}",
                         ap_public_url=activity_json['id'],
                         ap_profile_id=activity_json['id'].lower(),
@@ -1253,8 +1261,9 @@ def actor_json_to_model(activity_json, address, server):
             user.about_html = allowlist_html(about_html)
         else:
             user.about_html = ''
-        if 'source' in activity_json and activity_json['source'].get('mediaType') == 'text/markdown':
-            user.about = activity_json['source']['content']
+        source_markdown = markdown_source(activity_json)  # D1346
+        if source_markdown is not None:
+            user.about = source_markdown
             user.about_html = markdown_to_html(user.about)          # prefer Markdown if provided, overwrite version obtained from HTML
         else:
             user.about = html_to_text(user.about_html)
@@ -1330,8 +1339,9 @@ def actor_json_to_model(activity_json, address, server):
                                   private_mods=activity_json['privateMods'] if 'privateMods' in activity_json else False,
                                   question_answer=activity_json['questionAnswer'] if 'questionAnswer' in activity_json else False,
                                   default_post_type=activity_json['defaultPostType'] if 'defaultPostType' in activity_json else 'link',
-                                  created_at=activity_json['published'] if 'published' in activity_json else utcnow(),
-                                  last_active=activity_json['updated'] if 'updated' in activity_json else utcnow(),
+                                  # D1347, on a community rather than an actor.
+                                  created_at=parse_ap_timestamp(activity_json.get('published')) or utcnow(),
+                                  last_active=parse_ap_timestamp(activity_json.get('updated')) or utcnow(),
                                   posting_warning=activity_json['postingWarning'] if 'postingWarning' in activity_json else None,
                                   ap_id=f"{address[1:].lower()}@{server.lower()}" if address.startswith('!') else f"{address.lower()}@{server.lower()}",
                                   ap_public_url=activity_json['id'],
@@ -1383,8 +1393,9 @@ def actor_json_to_model(activity_json, address, server):
             if not description_html.startswith('<'):  # PeerTube
                 description_html = '<p>' + description_html + '</p>'
             community.description_html = allowlist_html(description_html)
-            if 'source' in activity_json and activity_json['source'].get('mediaType') == 'text/markdown':
-                community.description = activity_json['source']['content']
+            source_markdown = markdown_source(activity_json)  # D1346
+            if source_markdown is not None:
+                community.description = source_markdown
                 community.description_html = markdown_to_html(community.description)          # prefer Markdown if provided, overwrite version obtained from HTML
             else:
                 community.description = html_to_text(community.description_html)
@@ -1570,9 +1581,11 @@ def actor_json_to_model(activity_json, address, server):
                         nsfw=activity_json['sensitive'] if 'sensitive' in activity_json else False,
                         machine_name=activity_json['preferredUsername'],
                         description_html=activity_json['summary'] if 'summary' in activity_json else '',
-                        description=piefed_markdown_to_lemmy_markdown(activity_json['source']['content']) if 'source' in activity_json else '',
-                        created_at=activity_json['published'] if 'published' in activity_json else utcnow(),
-                        last_edit=activity_json['updated'] if 'updated' in activity_json else utcnow(),
+                        description=piefed_markdown_to_lemmy_markdown(
+                            markdown_source(activity_json, require_media_type=False) or ''),  # D1346
+                        # D1347, on a feed.
+                        created_at=parse_ap_timestamp(activity_json.get('published')) or utcnow(),
+                        last_edit=parse_ap_timestamp(activity_json.get('updated')) or utcnow(),
                         num_communities=0,
                         ap_id=f"{address[1:].lower()}@{server.lower()}" if address.startswith('~') else f"{address.lower()}@{server.lower()}",
                         ap_public_url=activity_json['id'],
@@ -1604,8 +1617,9 @@ def actor_json_to_model(activity_json, address, server):
             if not description_html.startswith('<'):  # PeerTube
                 description_html = '<p>' + description_html + '</p>'
             feed.description_html = allowlist_html(description_html)
-            if 'source' in activity_json and activity_json['source'].get('mediaType') == 'text/markdown':
-                feed.description = activity_json['source']['content']
+            source_markdown = markdown_source(activity_json)  # D1346
+            if source_markdown is not None:
+                feed.description = source_markdown
                 feed.description_html = markdown_to_html(feed.description)  # prefer Markdown if provided, overwrite version obtained from HTML
             else:
                 feed.description = html_to_text(feed.description_html)
@@ -2628,9 +2642,9 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
             if not (request_json['object']['content'].startswith('<p>') or request_json['object']['content'].startswith('<blockquote>')):
                 request_json['object']['content'] = '<p>' + request_json['object']['content'] + '</p>'
             body_html = allowlist_html(request_json['object']['content'])
-            if 'source' in request_json['object'] and isinstance(request_json['object']['source'], dict) and \
-                    'mediaType' in request_json['object']['source'] and request_json['object']['source']['mediaType'] == 'text/markdown':
-                body = request_json['object']['source']['content']
+            source_markdown = markdown_source(request_json['object'])  # D1346
+            if source_markdown is not None:
+                body = source_markdown
                 body_html = markdown_to_html(body)  # prefer Markdown if provided, overwrite version obtained from HTML
             else:
                 body = html_to_text(body_html)
@@ -3009,9 +3023,9 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
             if not (request_json['object']['content'].startswith('<p>') or request_json['object']['content'].startswith('<blockquote>')):
                 request_json['object']['content'] = '<p>' + request_json['object']['content'] + '</p>'
             reply.body_html = allowlist_html(request_json['object']['content'])
-            if 'source' in request_json['object'] and isinstance(request_json['object']['source'], dict) and \
-                'mediaType' in request_json['object']['source'] and request_json['object']['source']['mediaType'] == 'text/markdown':
-                reply.body = request_json['object']['source']['content']
+            source_markdown = markdown_source(request_json['object'])  # D1346
+            if source_markdown is not None:
+                reply.body = source_markdown
                 reply.body_html = markdown_to_html(reply.body)          # prefer Markdown if provided, overwrite version obtained from HTML
             else:
                 reply.body = html_to_text(reply.body_html)
@@ -3136,10 +3150,9 @@ def update_post_from_activity(post: Post, request_json: dict):
         # redo body without checking if it's changed
         if 'content' in request_json['object'] and request_json['object']['content'] is not None:
             # prefer Markdown in 'source' in provided
-            if 'source' in request_json['object'] and isinstance(request_json['object']['source'], dict) and \
-                    'mediaType' in request_json['object']['source'] and \
-                    request_json['object']['source']['mediaType'] == 'text/markdown':
-                post.body = request_json['object']['source']['content']
+            source_markdown = markdown_source(request_json['object'])  # D1346
+            if source_markdown is not None:
+                post.body = source_markdown
                 post.body_html = markdown_to_html(post.body)
             elif 'mediaType' in request_json['object'] and request_json['object']['mediaType'] == 'text/html':
                 post.body_html = allowlist_html(request_json['object']['content'])

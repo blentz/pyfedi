@@ -189,6 +189,55 @@ def parse_ap_timestamp(value):
     return parsed
 
 
+def markdown_source(document, require_media_type=True):
+    """The markdown a peer offered in an object's `source`, or None if it offered
+    none usable.
+
+    D1346. Eleven sites read this by hand, in three spellings, and every one of
+    them subscripted `content` outright:
+
+        if 'source' in x and x['source'].get('mediaType') == 'text/markdown':
+            body = x['source']['content']
+
+    `source` is optional in ActivityPub and its shape is entirely the peer's
+    choice, so each of those reads is a way to lose the whole object. Measured
+    against `Post.new`, with `content` present on the object as normal:
+
+        source={}                                       KeyError: 'mediaType'
+        source={'content': 'x'}                         KeyError: 'mediaType'
+        source={'mediaType': 'text/markdown'}           KeyError: 'content'
+        source={'mediaType': 'text/markdown',
+                'content': 5}                           TypeError: expected
+                                                        string or bytes-like
+                                                        object, got 'int'
+
+    -- the last from `markdown_to_html`, which hands the value to a regex. A
+    `source` that is a string rather than an object was `AttributeError: 'str'
+    object has no attribute 'get'` at the six sites spelled with `.get`.
+
+    Returning None means "the peer offered no markdown", which every caller
+    already has an arm for: they fall back to the HTML in `content`, which is
+    what an object without `source` has always done. An empty string is markdown
+    the peer really sent, so it is returned rather than treated as absent.
+
+    `require_media_type=False` for the one caller that has no HTML to fall back
+    to -- `Feed(description=...)`, whose html comes from `summary` instead, and
+    which accepted a `source` with no `mediaType` at all before this helper
+    existed. Everywhere else a missing `mediaType` means the HTML in `content` is
+    used, which is the older and safer reading of an ambiguous document.
+    """
+    if not isinstance(document, dict):
+        return None
+    source = document.get('source')
+    if not isinstance(source, dict):
+        return None
+    media_type = source.get('mediaType')
+    if media_type != 'text/markdown' and (require_media_type or media_type is not None):
+        return None
+    content = source.get('content')
+    return content if isinstance(content, str) else None
+
+
 def s3_key_from_url(url):
     """The object key this URL names in OUR bucket, or None if it names none.
 
@@ -2265,10 +2314,10 @@ class Post(db.Model):
         if community.private:
             post.indexable = False
         if 'content' in request_json['object'] and request_json['object']['content'] is not None:
-            # prefer Markdown in 'source' if provided
-            if 'source' in request_json['object'] and isinstance(request_json['object']['source'], dict) and \
-                    request_json['object']['source']['mediaType'] == 'text/markdown':
-                post.body = request_json['object']['source']['content']
+            # prefer Markdown in 'source' if provided (D1346)
+            source_markdown = markdown_source(request_json['object'])
+            if source_markdown is not None:
+                post.body = source_markdown
                 post.body_html = markdown_to_html(post.body)
             elif 'mediaType' in request_json['object'] and request_json['object']['mediaType'] == 'text/html':
                 post.body_html = allowlist_html(request_json['object']['content'])
