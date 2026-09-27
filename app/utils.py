@@ -5729,9 +5729,21 @@ def is_invalid_get_request_uri(uri):
         if f.scheme not in ("http", "https"):
             return True
 
+        # D1358, and the half that mattered most. `furl(...).host` keeps the
+        # BRACKETS of an IPv6 literal: for `https://[::1]/x` it is `'[::1]'`, so
+        # `ipaddress.ip_address` raised ValueError, `getaddrinfo('[::1]', None)`
+        # raised `gaierror [Errno -2] Name or service not known`, and the DNS
+        # handler below FAILS OPEN -- so every IPv6 literal was allowed, `[::1]`
+        # and `[fd00::1]` included, with no DNS control needed to get there.
+        # Measured for all three of `[::1]`, `[fd00::1]` and
+        # `[::ffff:127.0.0.1]`.
+        host = f.host
+        if host.startswith('[') and host.endswith(']'):
+            host = host[1:-1]
+
         # check if host is an IP literal
         try:
-            ip = ipaddress.ip_address(f.host)
+            ip = ipaddress.ip_address(host)
             ips = [ip]
         except ValueError:
             # otherwise, resolve hostname and check the IP(s) associated with that.
@@ -5740,7 +5752,7 @@ def is_invalid_get_request_uri(uri):
             # valid peer invalid: on a resolution failure, fail open (return False)
             # rather than treating the URI as invalid.
             try:
-                infos = socket.getaddrinfo(f.host, None)
+                infos = socket.getaddrinfo(host, None)
             except (socket.gaierror, socket.timeout):
                 return False
 
@@ -5750,7 +5762,32 @@ def is_invalid_get_request_uri(uri):
                 ip_str = sockaddr[0]
                 ips.append(ipaddress.ip_address(ip_str))
 
-        if any(not ip.is_global for ip in ips):
+        # D1358. `not ip.is_global` alone let four kinds of address through, all of
+        # which can reach this host or its neighbours. Measured with Python
+        # 3.13.15's own `ipaddress`:
+        #
+        #   ::7f00:1             is_global=True   IPv4-compatible IPv6 (RFC 4291),
+        #                                         127.0.0.1 in the low 32 bits
+        #   ::ffff:0:127.0.0.1   is_global=True   the same, in the other spelling
+        #   64:ff9b::7f00:1      is_global=True   the NAT64 well-known prefix
+        #                                         (RFC 6052) embedding 127.0.0.1 --
+        #                                         on a host behind a NAT64 gateway
+        #                                         that is a route to loopback
+        #   64:ff9b::a00:1       is_global=True   the same, embedding 10.0.0.1
+        #   ff02::1              is_global=True   IPv6 all-nodes multicast
+        #   224.0.0.1            is_global=True   IPv4 all-hosts multicast
+        #
+        # `is_reserved` covers the first four and `is_multicast` the last two, so
+        # the three tests together need no prefix list to maintain. Checked against
+        # 8.8.8.8, 1.1.1.1, 93.184.216.34, 2606:4700:4700::1111,
+        # 2001:4860:4860::8888 and 2a00:1450:4001:827::200e, all still accepted.
+        #
+        # What this does NOT fix: the address is resolved here and resolved again
+        # by whoever makes the request, so a name that answers differently the
+        # second time (DNS rebinding) still gets through. Closing that needs the
+        # request pinned to the address checked here, which is a change to the
+        # HTTP client rather than to this predicate.
+        if any(not ip.is_global or ip.is_reserved or ip.is_multicast for ip in ips):
             return True
 
         return False
