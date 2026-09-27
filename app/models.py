@@ -189,6 +189,77 @@ def parse_ap_timestamp(value):
     return parsed
 
 
+def property_value_fields(attachment, limit=1024):
+    """The (label, text) pairs out of an actor's `attachment`, ready to store.
+
+    D1354. Two copies of this loop read `field_data['type']`, `['value']` and
+    `['name']` outright and then called `.strip()` on both, so every one of these
+    raised out of `refresh_user_profile_task` -- and a task that raises leaves the
+    actor UNREFRESHABLE, which is the consequence D1325 was about. Measured, each
+    as the only entry of `attachment`:
+
+        {'type': 'PropertyValue'}                    KeyError: 'value'
+        {'type': 'PropertyValue', 'value': 'x'}      KeyError: 'name'
+        {'type': 'PropertyValue', 'name': 'n'}       KeyError: 'value'
+        {'type': ..., 'name': 'n', 'value': 5}       TypeError: argument of type
+                                                     'int' is not iterable
+        {'type': ..., 'name': 5, 'value': 'x'}       AttributeError: 'int' object
+                                                     has no attribute 'strip'
+        {'type': ..., 'name': 'n', 'value': None}    TypeError: argument of type
+                                                     'NoneType' is not iterable
+        {'value': 'x', 'name': 'n'}                  KeyError: 'type'
+        'a string'                                   TypeError: string indices
+                                                     must be integers
+        5                                            TypeError: 'int' object is
+                                                     not subscriptable
+        None                                         TypeError: 'NoneType' object
+                                                     is not subscriptable
+        name and value of 3000 characters            DataError: value too long
+                                                     for type character varying
+
+    An entry this instance cannot read is SKIPPED rather than losing the refresh:
+    the rest of the profile is still worth applying. `limit` is
+    `UserExtraField.label`/`text`'s own String(1024), because a column width is not
+    a validation rule the peer knows about.
+
+    The Mastodon anchor conversion stays here so both callers share it -- the
+    substring test `'<a ' in value` is only safe once `value` is known to be a str.
+    """
+    if not isinstance(attachment, list):
+        return []
+    from app.utils import mastodon_extra_field_link
+
+    fields = []
+    for entry in attachment:
+        if not isinstance(entry, dict) or entry.get('type') != 'PropertyValue':
+            continue
+        label, text = entry.get('name'), entry.get('value')
+        if not isinstance(label, str) or not isinstance(text, str):
+            continue
+        if '<a ' in text:
+            text = mastodon_extra_field_link(text)
+        fields.append((label.strip()[:limit], text.strip()[:limit]))
+    return fields
+
+
+def public_key_pem(document):
+    """The PEM a peer's actor document offers, or None.
+
+    D1354. `activity_json['publicKey']['publicKeyPem']` in
+    `refresh_user_profile_task` was a KeyError for a document with no `publicKey`,
+    a TypeError for one where it is a string or a number, and -- worse than either
+    -- `{'publicKeyPem': None}` stored the STRING 'None' as the key, which no
+    signature can ever verify against.
+    """
+    if not isinstance(document, dict):
+        return None
+    key = document.get('publicKey')
+    if not isinstance(key, dict):
+        return None
+    pem = key.get('publicKeyPem')
+    return pem if isinstance(pem, str) and pem else None
+
+
 def markdown_source(document, require_media_type=True):
     """The markdown a peer offered in an object's `source`, or None if it offered
     none usable.

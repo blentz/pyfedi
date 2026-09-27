@@ -29,7 +29,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
     Licence, UserExtraField, Feed, FeedMember, FeedItem, CommunityFlair, UserFlair, Topic, Event, InstanceBan, Emoji, \
     UserFollower, PostBoost, parse_ap_timestamp, image_url_from, markdown_source, \
-    _as_text, _as_int, _as_float
+    _as_text, _as_int, _as_float, property_value_fields, public_key_pem
 from app.utils import get_request, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
     is_image_url, domain_from_url, gibberish, ensure_directory_exists, shorten_string, fixup_url, \
     microblog_content_to_title, is_video_url, \
@@ -742,17 +742,25 @@ def refresh_user_profile_task(user_id):
                         user.about_html = markdown_to_html(user.about)  # prefer Markdown if provided, overwrite version obtained from HTML
                     else:
                         user.about = html_to_text(user.about_html)
-                    if 'attachment' in activity_json and isinstance(activity_json['attachment'], list):
-                        user.extra_fields = []
-                        for field_data in activity_json['attachment']:
-                            if field_data['type'] == 'PropertyValue':
-                                if '<a ' in field_data['value']:
-                                    field_data['value'] = mastodon_extra_field_link(field_data['value'])
-                                user.extra_fields.append(UserExtraField(label=field_data['name'].strip(), text=field_data['value'].strip()))
+                    if 'attachment' in activity_json:
+                        # D1354. One reading of these entries, which skips an entry
+                        # it cannot use rather than raising out of this task and
+                        # leaving the actor unrefreshable.
+                        user.extra_fields = [
+                            UserExtraField(label=label, text=text)
+                            for label, text in property_value_fields(
+                                activity_json['attachment'])]
                     if 'type' in activity_json:
                         user.bot = True if activity_json['type'] == 'Service' else False
                     user.ap_fetched_at = utcnow()
-                    user.public_key = activity_json['publicKey']['publicKeyPem']
+                    # D1354. A document with no readable `publicKey` leaves the
+                    # key this instance already holds: an actor that stops
+                    # publishing one has not rotated to nothing, and storing the
+                    # string 'None' -- which is what `{'publicKeyPem': None}` used
+                    # to do -- breaks every signature check against them.
+                    refreshed_pem = public_key_pem(activity_json)
+                    if refreshed_pem:
+                        user.public_key = refreshed_pem
                     user.accept_private_messages = activity_json['acceptPrivateMessages'] if 'acceptPrivateMessages' in activity_json else 3
                     user.indexable = new_indexable
 
@@ -1283,14 +1291,13 @@ def actor_json_to_model(activity_json, address, server):
             cover = File(source_url=cover_entry)
             user.cover = cover
             db.session.add(cover)
-        if 'attachment' in activity_json and isinstance(activity_json['attachment'], list):
-            user.extra_fields = []
-            for field_data in activity_json['attachment']:
-                if field_data['type'] == 'PropertyValue':
-                    if '<a ' in field_data['value']:
-                        field_data['value'] = mastodon_extra_field_link(field_data['value'])
-                    user.extra_fields.append(UserExtraField(label=shorten_string(field_data['name'].strip()),
-                                                            text=field_data['value'].strip()))
+        if 'attachment' in activity_json:
+            # D1354, the second copy. `shorten_string` stays: this site shortens the
+            # LABEL for display, which the refresh task does not, and that
+            # difference is deliberate rather than a second reading of the key.
+            user.extra_fields = [
+                UserExtraField(label=shorten_string(label), text=text)
+                for label, text in property_value_fields(activity_json['attachment'])]
         try:
             db.session.add(user)
             db.session.commit()
