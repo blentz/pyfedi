@@ -2575,8 +2575,15 @@ class Post(db.Model):
                     domain.post_count += 1
                     post.domain = domain
 
-            if 'image' in request_json['object'] and post.image is None:
-                image = File(source_url=request_json['object']['image']['url'])
+            # D1352. `request_json['object']['image']['url']` with no guard at all.
+            # A bare-string `image` -- valid ActivityPub, and the commonest
+            # spelling outside Lemmy -- was `TypeError: string indices must be
+            # integers`, `image: {}` was a KeyError, and a list or a number was a
+            # TypeError apiece. `create_post`'s `except Exception` then dropped the
+            # peer's whole post. `image_url_from` is the one reading of this key.
+            image_url = image_url_from(request_json['object'].get('image'))
+            if image_url and post.image is None:
+                image = File(source_url=image_url)
                 db.session.add(image)
                 post.image = image
             if post.image is None:  # This is a link post but the source instance has not provided a thumbnail image
@@ -2791,8 +2798,9 @@ class Post(db.Model):
                 # few lines up, and the two must not diverge.
                 if post.url and not url_is_parseable(post.url):
                     post.url = None
-                if 'image' in request_json['object'] and post.image is None:
-                    image = File(source_url=request_json['object']['image']['url'])
+                image_url = image_url_from(request_json['object'].get('image'))  # D1352
+                if image_url and post.image is None:
+                    image = File(source_url=image_url)
                     db.session.add(image)
                     post.image = image
 

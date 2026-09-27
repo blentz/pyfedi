@@ -28,7 +28,8 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
     Licence, UserExtraField, Feed, FeedMember, FeedItem, CommunityFlair, UserFlair, Topic, Event, InstanceBan, Emoji, \
-    UserFollower, PostBoost, parse_ap_timestamp, image_url_from, markdown_source
+    UserFollower, PostBoost, parse_ap_timestamp, image_url_from, markdown_source, \
+    _as_text, _as_int, _as_float
 from app.utils import get_request, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
     is_image_url, domain_from_url, gibberish, ensure_directory_exists, shorten_string, fixup_url, \
     microblog_content_to_title, is_video_url, \
@@ -3384,24 +3385,65 @@ def update_post_from_activity(post: Post, request_json: dict):
         if request_json['object']['type'] == 'Event':
             event = Event.query.filter_by(post_id=post.id).first()
             if event:
-                event.start = datetime.fromisoformat(request_json['object']['startTime'])
-                event.end = datetime.fromisoformat(request_json['object']['endTime'])
-                event.timezone = request_json['object']['timezone']
-                event.max_attendees = request_json['object']['maximumAttendeeCapacity']
-                event.participant_count = request_json['object']['participantCount']
-                event.online_link = request_json['object']['onlineLink']
-                event.join_mode = request_json['object']['joinMode']
-                event.external_participation_url = request_json['object']['externalParticipationUrl']
-                event.anonymous_participation = request_json['object']['anonymousParticipation']
-                event.online = request_json['object']['isOnline']
-                event.buy_tickets_link = request_json['object']['buyTicketsLink']
-                event.event_fee_currency = request_json['object']['feeCurrency']
-                event.event_fee_amount = request_json['object']['feeAmount']
+                # D1353, which is D1339 on the UPDATE side. Round 150 repaired the
+                # same thirteen reads in `Post.new`'s Event branch and left this
+                # copy alone: every one of them was `request_json['object'][...]`,
+                # so an Event edit missing ANY key was a KeyError, and nine of
+                # these are optional in the vocabulary. The two timestamps went
+                # into `datetime.fromisoformat` directly, which is `ValueError:
+                # Invalid isoformat string` for anything else -- and both raise out
+                # of the inbox, so the edit was simply lost.
+                #
+                # Every field keeps its previous value when the peer does not send
+                # a usable one, because an Update carries the whole object: a key
+                # this instance cannot read is not the same as the peer clearing
+                # the field, and guessing wrong in that direction silently erases
+                # an event's details.
+                event_json = request_json['object']
+                start = parse_ap_timestamp(event_json.get('startTime'))
+                if start is not None:
+                    event.start = start
+                end = parse_ap_timestamp(event_json.get('endTime'))
+                if end is not None:
+                    event.end = end
+                if 'timezone' in event_json:
+                    event.timezone = _as_text(event_json.get('timezone'), 30) or event.timezone
+                if 'maximumAttendeeCapacity' in event_json:
+                    event.max_attendees = _as_int(event_json.get('maximumAttendeeCapacity'),
+                                                  event.max_attendees or 0)
+                if 'participantCount' in event_json:
+                    event.participant_count = _as_int(event_json.get('participantCount'),
+                                                      event.participant_count or 0)
+                if 'onlineLink' in event_json:
+                    event.online_link = _as_text(event_json.get('onlineLink'), 1024)
+                if 'joinMode' in event_json:
+                    event.join_mode = _as_text(event_json.get('joinMode'), 10) or 'free'
+                if 'externalParticipationUrl' in event_json:
+                    event.external_participation_url = _as_text(
+                        event_json.get('externalParticipationUrl'), 1024)
+                if 'anonymousParticipation' in event_json:
+                    event.anonymous_participation = bool(event_json.get('anonymousParticipation'))
+                if 'isOnline' in event_json:
+                    event.online = bool(event_json.get('isOnline'))
+                if 'buyTicketsLink' in event_json:
+                    event.buy_tickets_link = _as_text(event_json.get('buyTicketsLink'), 1024)
+                if 'feeCurrency' in event_json:
+                    event.event_fee_currency = _as_text(event_json.get('feeCurrency'), 4)
+                if 'feeAmount' in event_json:
+                    event.event_fee_amount = _as_float(event_json.get('feeAmount'),
+                                                       event.event_fee_amount or 0)
                 if post.image:
                     post.image.delete_from_disk()
                     old_db_entry_to_delete = post.image_id
-                if 'image' in request_json['object'] and 'url' in request_json['object']['image']:
-                    image = File(source_url=request_json['object']['image']['url'])
+                # D1352. `'url' in request_json['object']['image']` is a guard that
+                # subscripts what it guards: on a bare-string `image` it is a
+                # SUBSTRING test, so `image: "https://peer.test/url.png"` passed it
+                # and the subscript below was then `TypeError: string indices must
+                # be integers`; `image: 5` failed the guard itself with `argument
+                # of type 'int' is not iterable`.
+                image_url = image_url_from(request_json['object'].get('image'))
+                if image_url:
+                    image = File(source_url=image_url)
                     db.session.add(image)
                     db.session.commit()
                     post.image = image
@@ -3496,8 +3538,9 @@ def update_post_from_activity(post: Post, request_json: dict):
                             'name' in request_json['object']['attachment'][0] and request_json['object']['attachment'][0]['name'] is not None:
                         image.alt_text = request_json['object']['attachment'][0]['name']
                 else:
-                    if 'image' in request_json['object'] and 'url' in request_json['object']['image']:
-                        image = File(source_url=request_json['object']['image']['url'])
+                    image_url = image_url_from(request_json['object'].get('image'))  # D1352
+                    if image_url:
+                        image = File(source_url=image_url)
                     else:
                         # Let's see if we can do better than the source instance did!
                         opengraph = opengraph_parse(thumbnail_url)
