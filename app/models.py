@@ -81,8 +81,42 @@ def ai_verdict(response):
     return detection, confidence
 
 
-def parse_poll_end_time(value):
-    """The moment a remote poll closes, or None if the peer did not say usably.
+def _as_int(value, default):
+    """An integer out of a peer's document, or `default`.
+
+    D1339's companions. These columns are Integer, Float and String, so a peer
+    sending a list where a number belongs is a DataError at commit -- which
+    poisons the transaction and loses the post, not just the field.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return int(value)
+
+
+def _as_float(value, default):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return float(value)
+
+
+def _as_text(value, limit=None):
+    """A string out of a peer's document, or None, trimmed to what fits.
+
+    `limit` is the column's own width. A peer choosing a 200-character timezone
+    for a `String(30)` is a DataError at commit, which loses the post and not just
+    the field -- the same arithmetic as every other value here.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    return value[:limit] if limit else value
+
+
+def parse_ap_timestamp(value):
+    """A timestamp out of a peer's document, or None if it does not read as one.
+
+    Named for polls when it was written (`parse_poll_end_time`) and renamed when
+    the Event branches turned out to need exactly the same thing: a string from a
+    peer going into a `db.DateTime` column.
 
     D1330. `Post.new` assigned `request_json['object']['endTime']` straight into
     `Poll.end_poll`, a DateTime column, so a peer sending `endTime: "not a
@@ -2425,7 +2459,7 @@ class Post(db.Model):
                 # poll back out again and a None there would break that.
                 mode = 'multiple' if 'anyOf' in request_json['object'] else 'single'
                 choices = request_json['object'].get('anyOf' if mode == 'multiple' else 'oneOf')
-                end_poll = parse_poll_end_time(request_json['object'].get('endTime'))
+                end_poll = parse_ap_timestamp(request_json['object'].get('endTime'))
                 names = []
                 if end_poll and isinstance(choices, list):
                     for choice_ap in choices:
@@ -2445,23 +2479,41 @@ class Post(db.Model):
                     db.session.commit()
 
             if request_json['object']['type'] == 'Event':
-                post.type = constants.POST_TYPE_EVENT
-                event = Event(post_id=post.id,
-                              start=request_json['object']['startTime'],
-                              end=request_json['object']['endTime'],
-                              timezone=request_json['object']['timezone'],
-                              max_attendees=request_json['object']['maximumAttendeeCapacity'],
-                              participant_count=request_json['object']['participantCount'],
-                              online_link=request_json['object']['onlineLink'],
-                              join_mode=request_json['object']['joinMode'],
-                              external_participation_url=request_json['object']['externalParticipationUrl'],
-                              anonymous_participation=request_json['object']['anonymousParticipation'],
-                              online=request_json['object']['isOnline'],
-                              buy_tickets_link=request_json['object']['buyTicketsLink'],
-                              event_fee_currency=request_json['object']['feeCurrency'],
-                              event_fee_amount=request_json['object']['feeAmount'],
-                              location=request_json['object']['location'])
-                db.session.add(event)
+                # D1339. Fourteen keys read out of the peer's document with `[...]`,
+                # so an Event missing ANY of them was a KeyError that lost the whole
+                # post -- and `maximumAttendeeCapacity`, `onlineLink`, `joinMode`,
+                # `externalParticipationUrl`, `anonymousParticipation`,
+                # `buyTicketsLink`, `feeCurrency`, `feeAmount` and `location` are
+                # all optional in the vocabulary, so this was not an edge case: it
+                # was most federated events.
+                #
+                # Only `startTime` is required to call it an event at all; without
+                # one the post stays an ordinary post, exactly as a Question with
+                # no usable choices does (D1330). The two timestamps go through
+                # `parse_ap_timestamp` because a string straight into a DateTime
+                # column is a DataError for anything that is not a date, which
+                # poisons the transaction and takes the post with it.
+                event_json = request_json['object']
+                start = parse_ap_timestamp(event_json.get('startTime'))
+                if start is not None:
+                    post.type = constants.POST_TYPE_EVENT
+                    event = Event(post_id=post.id,
+                                  start=start,
+                                  end=parse_ap_timestamp(event_json.get('endTime')),
+                                  timezone=_as_text(event_json.get('timezone'), 30),
+                                  max_attendees=_as_int(event_json.get('maximumAttendeeCapacity'), 0),
+                                  participant_count=_as_int(event_json.get('participantCount'), 0),
+                                  online_link=_as_text(event_json.get('onlineLink'), 1024),
+                                  join_mode=_as_text(event_json.get('joinMode'), 10) or 'free',
+                                  external_participation_url=_as_text(event_json.get('externalParticipationUrl'), 1024),
+                                  anonymous_participation=bool(event_json.get('anonymousParticipation')),
+                                  online=bool(event_json.get('isOnline')),
+                                  buy_tickets_link=_as_text(event_json.get('buyTicketsLink'), 1024),
+                                  event_fee_currency=_as_text(event_json.get('feeCurrency'), 4),
+                                  event_fee_amount=_as_float(event_json.get('feeAmount'), 0),
+                                  location=event_json.get('location') if isinstance(
+                                      event_json.get('location'), (dict, list)) else None)
+                    db.session.add(event)
                 # Mobilizon puts the AP ID in request_json['object']['url'] and any attached website links in a request_json['object']['attachment'] list.
                 # None, not '': Post.url is nullable with no default, so None is
                 # what the column holds for a post that has no url, and it is
