@@ -19848,4 +19848,47 @@ treatment rounds 129 and 151 gave tests that had pinned unrepaired defects.
 Twelve mutants, all dead. 12,567 tests, 0 failures, 0 warnings. `app/utils.py`
 90.78%.
 
-**Next free number: D1346.**
+## Round 154 — two sweeps of the same mistake, eleven sites and five columns
+
+Both findings are the campaign's most common defect shape: a key a peer MAY send,
+read as if it must be there.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1346** | eleven sites in `app/models.py`, `app/activitypub/util.py` and `app/community/util.py` | Preferring the markdown in an object's `source` over the HTML in its `content` was hand-written eleven times in three spellings, and every one subscripted `content` outright. Six were spelled `x['source'].get('mediaType')`, so a `source` that is a string was an AttributeError as well. | **fixed** | measured against `Post.new`, table below |
+| **D1347** | `actor_json_to_model` in `app/activitypub/util.py` | `User.created`, `Community.created_at`, `Community.last_active`, `Feed.created_at` and `Feed.last_edit` took a peer's `published`/`updated` string directly. `DataError` at the commit below the constructor, which also poisons the transaction: an actor whose document says `published: "whenever"` could never be created here, and so nothing they ever posted could land. | **fixed** | the third time this shape has been found — D1330 (a poll's endTime), D1340 (a resolved post's published), now three actor types |
+
+Measured for D1346, with `content` present on the object as normal:
+
+    source={}                                     KeyError: 'mediaType'
+    source={'content': 'x'}                       KeyError: 'mediaType'
+    source={'mediaType': 'text/markdown'}         KeyError: 'content'
+    source={'mediaType': 'text/markdown',
+            'content': 5}                         TypeError: expected string or
+                                                  bytes-like object, got 'int'
+
+The last comes out of `markdown_to_html`, which hands the value to a regex.
+
+`markdown_source(document)` is the single reading now. Returning None means the
+peer offered no usable markdown, which every one of the eleven callers already
+had an arm for: fall back to the HTML in `content`, exactly as an object with no
+`source` has always done. An empty string is markdown the peer really sent, so it
+comes back rather than being treated as absent.
+
+**One caller needed the strictness relaxed, and saying so out loud was the
+point.** `Feed(description=...)` has no HTML to fall back to — its html comes
+from `summary` — and it accepted a `source` with no `mediaType` before this
+helper existed, which `tests/test_ap_actor_json_feed.py` pins. That is
+`require_media_type=False`, a named argument rather than a second reading of the
+same field; it still refuses a *stated* other type, and it still refuses a
+`content` that is not a string.
+
+Both sweeps now have a property test that scans every file under `app/`. The
+scanner excludes string literals by walking the AST **and comments by
+tokenising**: `app/utils.py:2633` is a `#` comment quoting the pattern it
+forbids, which the AST walk alone did not cover — the same lesson as fact 706, one
+token type further.
+
+Fifteen mutants, all dead. 12,649 tests, 0 failures, 0 warnings. All 92 floors met.
+
+**Next free number: D1348.**
