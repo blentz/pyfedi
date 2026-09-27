@@ -19954,4 +19954,42 @@ time).
 Seventeen mutants, all dead. 12,684 tests, 0 failures, 0 warnings. All 92 floors
 met; `app/models.py` 84.86%.
 
-**Next free number: D1352.**
+## Round 157 — the `image` key, and the Event edit round 150 did not reach
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1352** | four sites: `Post.new` twice in `app/models.py`, `update_post_from_activity` and `create_post`'s thumbnail fallback in `app/activitypub/util.py` | Two read `request_json['object']['image']['url']` with no guard at all. The other two were guarded by `'url' in request_json['object']['image']`, which is a guard that subscripts what it guards: on a bare-string `image` that is a SUBSTRING test, so a url containing the letters "url" passed it and raised one line later. | **fixed** | table below |
+| **D1353** | `update_post_from_activity`'s Event branch | D1339 on the UPDATE side. Round 150 repaired the same thirteen reads in `Post.new`'s Event branch and left this copy: every field was `request_json['object'][...]`, so an Event edit missing ANY key was a KeyError, and nine of the thirteen are optional in the vocabulary. Both timestamps went into `datetime.fromisoformat` directly. | **fixed** | an Update carrying only `name` and `content` lost the whole edit |
+
+Measured for D1352, through `Post.new`:
+
+    image='https://peer.test/pic.png'   TypeError: string indices must be integers
+    image='https://peer.test/url.png'   the same, PAST the 'url' in ... guard
+    image={}                            KeyError: 'url'
+    image=[]                            TypeError: list indices must be integers
+    image=[{'url': '...'}]              the same
+    image=5                             TypeError: 'int' object is not subscriptable
+    image=None                          TypeError: 'NoneType' object is not subscriptable
+    image={'url': 5}                    stored, source_url='5'
+
+Only `{'url': '<a string>'}` worked, and `create_post`'s `except Exception` then
+dropped the peer's whole post. A bare-string `image` is valid ActivityPub and the
+commonest spelling outside Lemmy, so this was most of the fediverse's link posts.
+All four go through `image_url_from` now — D1325's helper, which D1341 extended to
+`Post.new`'s Video branch; this is the third copy of the same key it had not
+covered.
+
+D1353's repair differs from D1339's in one way worth stating: an Update carries the
+whole object, so each field is applied only when the peer actually sent that key.
+A key this instance cannot read is not the same as the peer clearing the field, and
+guessing in that direction silently erases an event's details.
+
+**How the Event branch was found.** A test written for the `image` read failed
+because the site is inside `if request_json['object']['type'] == 'Event'`, which the
+Page-shaped Update never enters. Reading the branch to fix the test is what
+surfaced the thirteen reads beside it.
+
+Thirteen mutants, all dead. 12,747 tests, 0 failures, 0 warnings. Floors ratcheted:
+`app/models.py` 84 → 85 (85.01%), `app/activitypub/util.py` 91 → 92 (92.02%).
+
+**Next free number: D1354.**
