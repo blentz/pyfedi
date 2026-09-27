@@ -1278,7 +1278,21 @@ def index_rss(feed_type=None):
     current_user_is_authenticated = False
     user = None
     if rss_token := request.args.get('token'):
-        user = User.query.filter(User.rss_token == rss_token.strip()).first()
+        # D1356. The token used to be matched on its own, so an account that had
+        # been BANNED or DELETED kept a working feed -- and `feed_type=subscribed`
+        # reads `community_membership_private`, so the token went on delivering
+        # posts from the PRIVATE communities that account belonged to. Measured:
+        # `deleted = True` and `banned = True` both still authenticated.
+        #
+        # These are three of the four conditions `authorise_api_user`
+        # (app/utils.py) already applies to a JWT, which is the same class of
+        # pre-issued credential. `verified` is deliberately not among them: an
+        # instance with email verification turned off has legitimate accounts with
+        # `verified = False`, and requiring it here would silently stop their feeds.
+        user = User.query.filter(User.rss_token == rss_token.strip(),
+                                 User.ap_id == None,  # noqa: E711 -- a local account
+                                 User.banned == False,  # noqa: E712
+                                 User.deleted == False).first()  # noqa: E712
         if user:
             current_user_is_authenticated = True
 
