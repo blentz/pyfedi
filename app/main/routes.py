@@ -43,7 +43,8 @@ from app.utils import render_template, get_setting, request_etag_matches, return
     retrieve_image_hash, possible_communities, remove_tracking_from_link, reported_posts, \
     moderating_communities_ids, user_notes, login_required, safe_order_by, filtered_out_communities, \
     num_topics, referrer, block_honey_pot, user_pronouns, get_instance_stickies, \
-    community_membership_private, favorite_communities, mimetype_from_url, check_anoobis
+    community_membership_private, favorite_communities, mimetype_from_url, check_anoobis, \
+    is_safe_redirect_target
 from app.models import Community, CommunityMember, Post, Site, User, utcnow, Topic, Instance, \
     Notification, Language, community_language, ModLog, Feed, FeedItem, CmsPage, BannedInstances, BotChallenge
 from app.ldap_utils import test_ldap_connection, sync_user_to_ldap, login_with_ldap
@@ -1454,8 +1455,26 @@ def anoobis():
     next = request.args.get('next')
     if next is None:
         return ''
-    f = furl(next)
-    if next and (f.host is None or f.host == current_app.config['SERVER_NAME']) and (f.scheme is None or f.scheme.startswith('http')):
+    # D1359. This was a second implementation of the origin check, and a weaker
+    # one: `f.host is None` accepts everything furl reads as having no authority,
+    # and a browser does not agree with furl about what that means. The template
+    # puts this value in `location.href`, so each of these was an open redirect on
+    # a page whose whole job is to bounce an anonymous visitor onward -- measured
+    # against furl:
+    #
+    #   \\evil.test/x      host=None          browsers fold \ to /, so this is
+    #                                          //evil.test/x -- protocol-relative
+    #   /\evil.test        host=None          the same, as /\ -> //
+    #   https:/\evil.test  host=None, https   -> https://evil.test
+    #   http:evil.test     host=None, http    scheme-relative; Chrome resolves it
+    #                                          as http://evil.test/
+    #
+    # `is_safe_redirect_target` is THE origin check -- `back()` and all three of
+    # `referrer()`'s sources already go through it, and its own docstring names the
+    # back()/referrer() divergence that having two implementations produced. It
+    # rejects all four, accepts a relative path and this server's own host, and
+    # honours the admin's `redirect_policy` as every other redirect does.
+    if next and is_safe_redirect_target(next):
         return render_template('anoobis.html', next=next, diff_desktop=current_app.config['ANOOBIS_DIFFICULTY_DESKTOP'],
                                diff_mobile=current_app.config['ANOOBIS_DIFFICULTY_MOBILE'])
     else:
