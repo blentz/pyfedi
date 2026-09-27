@@ -185,7 +185,6 @@ Task 1 recorded.
 from datetime import datetime
 
 import pytest
-from sqlalchemy.exc import DataError
 
 from app import db
 from app.activitypub.util import create_resolved_object
@@ -715,70 +714,87 @@ class TestThePostedAtEnrichment:
         assert result.posted_at != PUBLISHED_AS_DATETIME
 
 
-class TestAPublishedOffsetIsDiscardedNotConverted:
-    """**A finding, observed not inferred.** `posted_at` is a timestamp WITHOUT
-    time zone, and the value assigned to it is the peer's raw string. Postgres
-    casts an offset-bearing ISO string to that column by DROPPING the offset,
-    not by converting to UTC.
+class TestAPublishedOffsetIsConvertedNotDiscarded:
+    """This round's repair, and the test that asked for it.
 
-    So a peer publishing at 00:00+05:00 -- 19:00 the previous day in UTC --
-    gets a row reading 00:00. Every timestamp from a peer that states a
-    non-zero offset is wrong by that offset, silently, and `last_active` is
-    wrong with it, which is what orders the community's listings.
+    It used to read `TestAPublishedOffsetIsDiscardedNotConverted` and assert the
+    defect: `posted_at` is a timestamp WITHOUT time zone, the peer's raw string
+    went straight into it, and Postgres cast an offset-bearing ISO string by
+    DROPPING the offset rather than converting. A peer publishing at 00:00+05:00 --
+    19:00 the previous day in UTC -- got a row reading 00:00, so every timestamp
+    from a peer in a non-zero offset was wrong by that offset, and `last_active`
+    with it, which is what orders a community's listings.
 
-    Nothing in the register covers this: D22's family is about the domain
-    comparison, and the registered posted_at defect is about values the column
-    cannot store at all. This one stores fine and is simply wrong. Task 7
-    should file it.
-
-    Production change that fails this: parsing `published` before assigning it
-    -- which is the fix, and this test then records what changed.
+    Its own docstring named the fix: "parsing `published` before assigning it --
+    which is the fix, and this test then records what changed." D1340 did that.
+    `parse_ap_timestamp` reads the string, converts an aware value to UTC and drops
+    the tzinfo, so the stored instant no longer depends on the database session's
+    TimeZone either.
     """
 
-    def test_a_five_hour_offset_is_dropped_rather_than_normalised(self, app, peer_author):
+    def test_a_five_hour_offset_is_converted_to_utc(self, app, peer_author):
         community = make_community('news', host=PEER_OBJECT_HOST)
 
         result = resolved(public_note() | {'published': '2024-01-01T00:00:00+05:00'}, community)
 
+        assert result.posted_at == datetime(2023, 12, 31, 19, 0)
+        assert result.posted_at != datetime(2024, 1, 1, 0, 0)
+
+    def test_a_utc_offset_is_unchanged(self, app, peer_author):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+
+        result = resolved(public_note() | {'published': '2024-01-01T00:00:00+00:00'}, community)
+
         assert result.posted_at == datetime(2024, 1, 1, 0, 0)
-        assert result.posted_at != datetime(2023, 12, 31, 19, 0)
+
+    def test_the_last_active_it_orders_listings_by_moves_with_it(self, app, peer_author):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+
+        result = resolved(public_note() | {'published': '2024-01-01T00:00:00+05:00'}, community)
+
+        assert result.last_active == datetime(2023, 12, 31, 19, 0)
 
 
 class TestAPublishedValueTheColumnCannotStore:
-    """The registered `posted_at` defect, and the register's account of it was
-    INFERRED. Observed here: the assignment survives, and the `db.session.commit()`
-    two lines later raises sqlalchemy.exc.DataError, wrapping psycopg2's
-    InvalidDatetimeFormat. It is not caught anywhere in create_resolved_object,
-    so it leaves the function.
+    """The other half of what this file recorded and D1340 repaired.
 
-    **And the Post row survives it.** create_post committed the row before the
-    enrichment ran, so after the caller rolls back, the post is in the database
-    with a posted_at of its creation time rather than the peer's -- while the
-    activity that produced it has failed with a traceback. That is
-    partially-applied ingest, the shape this campaign has now found six times
-    in this file, reached here through a type error rather than a missing key.
-    Task 7 should file it as a seventh.
+    It used to assert that a junk `published` reached `db.session.commit()` and
+    raised `sqlalchemy.exc.DataError` (wrapping psycopg2's InvalidDatetimeFormat)
+    out of the function, uncaught -- and that the Post row SURVIVED it, because
+    `create_post` had committed before the enrichment ran. That is
+    partially-applied ingest: a post in the database and a traceback for the
+    activity that made it.
 
-    Production change that fails this: parsing or validating `published` before
-    the assignment, or moving the enrichment in front of the commit that
-    creates the row.
+    Its docstring named both possible fixes: "parsing or validating `published`
+    before the assignment, or moving the enrichment in front of the commit". D1340
+    took the first. A value that does not read as a timestamp is now ignored, so
+    the post keeps the time its creation gave it and nothing raises -- no
+    exception, and therefore no partial ingest to describe.
     """
 
-    def test_a_junk_published_raises_dataerror_out_of_the_function(self, app, peer_author):
+    @pytest.mark.parametrize('published', ['not a timestamp', '', 5, [], {},
+                                           '2024-13-45T99:99:99Z', None])
+    def test_a_junk_published_is_ignored_rather_than_raising(self, app, peer_author,
+                                                            published):
         community = make_community('news', host=PEER_OBJECT_HOST)
 
-        with pytest.raises(DataError):
-            resolved(public_note() | {'published': 'not a timestamp'}, community)
+        result = resolved(public_note() | {'published': published}, community)
 
-    def test_the_post_is_left_behind_by_the_crash(self, app, peer_author):
+        assert result is not None
+        assert result.posted_at is not None
+        assert result.posted_at != PUBLISHED_AS_DATETIME
+
+    def test_the_post_is_created_once_and_completely(self, app, peer_author):
+        """What replaces `test_the_post_is_left_behind_by_the_crash`: there is no
+        crash to leave anything behind, so the assertion is that the row is
+        whole."""
         community = make_community('news', host=PEER_OBJECT_HOST)
 
-        with pytest.raises(DataError):
-            resolved(public_note() | {'published': 'not a timestamp'}, community)
-        db.session.rollback()
+        result = resolved(public_note() | {'published': 'not a timestamp'}, community)
 
-        survivor = Post.query.filter_by(ap_id=URI).one()
-        assert survivor.posted_at != PUBLISHED_AS_DATETIME
+        assert Post.query.filter_by(ap_id=URI).count() == 1
+        assert Post.query.filter_by(ap_id=URI).one().id == result.id
+        assert result.last_active is not None
 
 
 class TestTheHelpersReturningFalsy:

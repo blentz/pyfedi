@@ -787,3 +787,53 @@ class TestAnEventFromAPeer:
         post = new(env, type='Event', startTime='2026-06-01T18:00:00Z',
                    timezone={'a': 1})
         assert Event.query.filter_by(post_id=post.id).one().timezone is None
+
+
+class TestAVideoFromAPeer:
+    """D1341. `Post.new`'s Video branch read
+    `request_json['object']['icon'][-1]['url']` behind a bare
+    `isinstance(..., list)`, which says nothing about the list being non-empty or
+    its entries being objects.
+
+    The seventh copy of D1325's shape, and it survived that round because the
+    property test which found the other six read `app/activitypub/util.py` alone.
+    It reads every file under `app/` now.
+    """
+
+    def test_a_video_with_an_icon(self, env):
+        from app.constants import POST_TYPE_VIDEO
+
+        post = new(env, type='Video', icon=[{'url': 'https://peer.test/thumb.png'}])
+        assert post.type == POST_TYPE_VIDEO
+        assert post.image.source_url == 'https://peer.test/thumb.png'
+
+    def test_the_largest_icon_is_taken(self, env):
+        """The LAST entry, which is where the largest is conventionally offered."""
+        post = new(env, type='Video',
+                   icon=[{'url': 'https://peer.test/small.png'},
+                         {'url': 'https://peer.test/large.png'}])
+        assert post.image.source_url == 'https://peer.test/large.png'
+
+    @pytest.mark.parametrize('icon', [[], [5], [{}], [{'url': None}], [None],
+                                      'https://peer.test/thumb.png', 5, None,
+                                      {'url': 'https://peer.test/thumb.png'}])
+    def test_an_icon_shape_that_used_to_lose_the_post(self, env, icon):
+        """`icon: []` was an IndexError, `icon: [5]` a TypeError. A bare string and
+        a dict are accepted now, as they are everywhere else `image_url_from`
+        reads."""
+        from app.constants import POST_TYPE_VIDEO
+
+        post = new(env, type='Video', icon=icon)
+        assert post is not None
+        assert post.type == POST_TYPE_VIDEO
+
+    def test_a_video_with_no_icon_at_all(self, env):
+        from app.constants import POST_TYPE_VIDEO
+
+        post = new(env, type='Video')
+        assert post.type == POST_TYPE_VIDEO
+        assert post.image_id is None
+
+    def test_the_url_is_the_objects_own_id(self, env):
+        post = new(env, type='Video', icon=[])
+        assert post.url == 'https://remote.test/p/' + post.ap_id.rsplit('/', 1)[1]

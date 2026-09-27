@@ -327,20 +327,40 @@ class TestRefreshingAFeed:
 
 
 class TestTheHandReadingIsGone:
-    def test_no_task_indexes_into_an_icon_or_image_by_hand(self):
-        """The property. Six copies of this read existed; the next one is caught
-        when it is written."""
+    def test_no_code_indexes_into_an_icon_or_image_by_hand(self):
+        """The property. Six copies of this read existed in
+        `app/activitypub/util.py`; a seventh sat in `app/models.py`'s Video branch
+        and survived this test for seven rounds, because the test read one file
+        (D1341). It reads all of them now -- fact 687 is about exactly this, and
+        the scan was still narrower than the defect.
+        """
+        import ast
         from pathlib import Path
 
+        def prose_lines(tree):
+            """Every line held by a string literal -- docstrings included.
+
+            Skipping lines that merely START with `#` is not enough: this test
+            found its own docstring, which quotes the pattern it forbids, and the
+            production fix quotes it too in the comment that explains itself.
+            """
+            held = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    held.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+            return held
+
         offenders = []
-        source = Path('app/activitypub/util.py').read_text(encoding='utf8')
-        for number, line in enumerate(source.splitlines(), start=1):
-            stripped = line.strip()
-            if stripped.startswith('#'):
-                continue
-            for key in ("['icon']", "['image']"):
-                if f"{key}[-1]" in stripped or f"{key}[0]" in stripped:
-                    offenders.append(f'{number}: {stripped}')
+        for path in sorted(Path('app').rglob('*.py')):
+            source = path.read_text(encoding='utf8')
+            prose = prose_lines(ast.parse(source))
+            for number, line in enumerate(source.splitlines(), start=1):
+                stripped = line.strip()
+                if stripped.startswith('#') or number in prose:
+                    continue
+                for key in ("['icon']", "['image']"):
+                    if f"{key}[-1]" in stripped or f"{key}[0]" in stripped:
+                        offenders.append(f'{path}:{number}: {stripped}')
         assert offenders == []
 
 
