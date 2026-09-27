@@ -19749,4 +19749,66 @@ post branch was covered, its reply branch only for a well-formed value.
 Thirteen mutants, all dead. 12,463 tests, 0 failures, 0 warnings. All 92 floors met.
 `app/activitypub/util.py` 91.95%.
 
-**Next free number: D1343.**
+## Round 152 — the S3 half of D1324, unrepaired for nine rounds
+
+D1324 (round 116) found that `File.delete_from_disk` turned `source_url` into a
+local path by string replacement and unlinked it, so a remote instance could
+delete any file the application user could. It repaired the on-disk branch with
+`File.local_path_for_url` — host equality, unquoting, and confinement to `app/`.
+
+The S3 branch of the same method, four lines above it, kept the original shape:
+
+    if self.source_url.startswith(f'https://{S3_PUBLIC_URL}') and _store_files_in_s3():
+        s3_path = self.source_url.replace(f'https://{S3_PUBLIC_URL}/', '')
+
+`source_url` is the same peer-written string in both branches. Measured, with
+`S3_PUBLIC_URL = cdn.example.com`, as the key handed to `delete_objects`:
+
+| `source_url` | key sent |
+|---|---|
+| `https://cdn.example.com/users/victim/avatar.webp` | `users/victim/avatar.webp` |
+| `https://cdn.example.com.evil.test/x/y.png` | the whole URL |
+| `https://cdn.example.com/../../secret.png` | `../../secret.png` |
+| `https://cdn.example.com/%2e%2e/secret.png` | `%2e%2e/secret.png` |
+| `https://cdn.example.com/` | `''` |
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1343** | `app/models.py`, `File.delete_from_disk`, `Post.delete_dependencies`, and `app/utils.py`'s `archive_post` | Six sites turned a URL into an S3 object key with `url.replace(f'https://{S3_PUBLIC_URL}/', '')` or `.split(S3_PUBLIC_URL)[-1]` behind a prefix test with no boundary. On `File.source_url`, which a peer writes, that is a remote instance deleting any object in this instance's bucket — another user's avatar, a community's icon — by naming it as its post's image and waiting for the post to be deleted. | **fixed** | the table above; the delete now goes through `s3_key_from_url` and, for the peer-written fields, `s3_object_is_referenced_elsewhere` |
+| **D1344** | `app/models.py`, `Post.delete_dependencies`'s video branch | `delete_from_s3([self.url])` passed the whole `https://...` where an object KEY belongs, so `delete_objects` was asked for an object that cannot exist and every video this instance mirrors stayed in the bucket for good. | **fixed** | `['https://cdn.example.com/posts/ab/cd/vid.mp4']` measured reaching the task as a key; it is now `['posts/ab/cd/vid.mp4']` |
+
+Fixing D1344's key without D1343's ownership test would have replaced a storage
+leak with data loss: `Post.url` is shared BY DESIGN — `Post.cross_posts` is built
+from url equality — so up to ten Post rows name one mirrored video, and two posts
+sharing a url were measured before the change. Deleting one of them would have
+taken the file the other nine play.
+
+`s3_key_from_url` requires the host to EQUAL the host of `S3_PUBLIC_URL`, matches
+any path prefix in `S3_PUBLIC_URL` as a whole segment, unquotes the path before
+reading it, and refuses a key with an empty, `.` or `..` segment. Refusing is
+safe: nothing this instance writes has such a key.
+
+`s3_object_is_referenced_elsewhere` answers the question a URL cannot — whether
+this row owned the object it names — by looking for any other `File.file_path`,
+`File.thumbnail_path`, `File.source_url`, `Post.url` or `Post.archived` still
+pointing at it. It guards the two peer-written fields (`File.source_url` and
+`Post.url`) and not the four this instance writes itself.
+
+**Not in this round, recorded:** `app/cli.py:1880` has the sixth copy of the
+replacement idiom. `app/cli.py` is lowest priority by standing instruction and
+the value there is a path this instance wrote, not a peer's.
+
+**Also in this round: the whole suite had been running serially.**
+
+`run_tests.sh` only passes `-n <workers> --dist loadgroup` when its arguments name
+the whole suite, and `names_a_subset` decided that. It listed `-p` beside `-n` and
+`--dist` as if it conflicted with them, so `./run_tests.sh tests/ -q -p
+no:randomly` -- a whole-suite run -- took the serial path: 23 minutes against 8,
+with nothing printed to say why. Options that take a separate value now consume
+it, `-k`/`-m` still mean a subset, and `-n`/`--dist` still mean the caller has
+said how to distribute. `TestWhichRunsGetWorkers` in
+`tests/test_parallel_workers.py` extracts the function from the script and asserts
+the decision for eleven whole-suite and ten subset argument lists, because losing
+parallelism is silent and looks exactly like a slow test suite.
+
+**Next free number: D1345.**
