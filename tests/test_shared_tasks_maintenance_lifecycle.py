@@ -952,6 +952,50 @@ class TestArchiveUser:
         db.session.expire_all()
         assert db.session.get(User, user.id).avatar_id is None
 
+    def test_a_user_with_neither_image_flushes_nothing(self, db_session,
+                                                      monkeypatch):
+        """The empty arm of the CDN flush D1350 added here. A user with no avatar
+        and no cover collects no URLs, and an empty list must not become a
+        Cloudflare request for nothing."""
+        from flask import current_app
+
+        instance, user, _, _ = _seed()
+        monkeypatch.setitem(current_app.config, 'CLOUDFLARE_ZONE_ID', 'zone')
+        monkeypatch.setitem(current_app.config, 'CLOUDFLARE_API_TOKEN', 'token')
+        flushed = []
+        monkeypatch.setattr('app.models.flush_cdn_cache',
+                            lambda urls: flushed.append(urls))
+
+        archive_user(user.id, db.session)
+
+        assert flushed == []
+
+    def test_the_images_are_purged_from_the_cdn(self, db_session, monkeypatch):
+        """D1350's `archive_user` half: both files were deleted with
+        `purge_cdn=False`, so an archived user's avatar and cover went from disk
+        and stayed at the edge. One flush for the two of them."""
+        from flask import current_app
+
+        instance, user, _, _ = _seed()
+        avatar = make_file(file_path='app/static/media/users/aa/bb/avatar.png')
+        cover = make_file(file_path='app/static/media/users/aa/bb/cover.png')
+        user.avatar_id = avatar.id
+        user.cover_id = cover.id
+        db.session.commit()
+        monkeypatch.setitem(current_app.config, 'CLOUDFLARE_ZONE_ID', 'zone')
+        monkeypatch.setitem(current_app.config, 'CLOUDFLARE_API_TOKEN', 'token')
+        flushed = []
+        monkeypatch.setattr('app.models.flush_cdn_cache',
+                            lambda urls: flushed.append(urls))
+        server = current_app.config['SERVER_URL']
+
+        archive_user(user.id, db.session)
+
+        assert len(flushed) == 1
+        assert sorted(flushed[0]) == sorted([
+            f'{server}/static/media/users/aa/bb/avatar.png',
+            f'{server}/static/media/users/aa/bb/cover.png'])
+
     def test_a_user_with_only_a_cover_is_handled(self, db_session):
         """`:960` false, `:965` true."""
         instance, user, _, _ = _seed()
