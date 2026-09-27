@@ -3130,6 +3130,23 @@ def url_to_thumbnail_file(filename) -> File:
                 directory = 'app/static/media/posts/' + new_filename[0:2] + '/' + new_filename[2:4]
             ensure_directory_exists(directory)
             temp_file_path = os.path.join(directory, new_filename + file_extension)
+            # D1345. Keep the name the peer's bytes were written under. When the
+            # configured medium format differs from the fetched one, the resize
+            # below moves `temp_file_path` to a new extension, and the original
+            # was then orphaned AT WRITE TIME: no column names it, so nothing
+            # later can find it. Measured, for one remote PNG with
+            # MEDIA_IMAGE_MEDIUM_FORMAT=WEBP (the default):
+            #
+            #   posts/Rq/Mk/RqMkzFBw22MVyW1.png       <- left for ever
+            #   posts/Rq/Mk/RqMkzFBw22MVyW1.webp      <- thumbnail_path
+            #   posts/Rq/Mk/RqMkzFBw22MVyW1_512.webp  <- file_path
+            #
+            # On the S3 arm the leftover lands in `app/static/tmp`, where
+            # `clean_up_tmp` sweeps only eight extensions after a day, so `.img`
+            # -- D1327's fallback for a content type PieFed does not accept --
+            # and `.avif`, `.bmp`, `.tiff`, `.mpo` were never swept at all. Both
+            # directories are under `app/static`, which this instance serves.
+            original_file_path = temp_file_path
 
             with open(temp_file_path, 'wb') as f:
                 f.write(response_content)
@@ -3190,11 +3207,19 @@ def url_to_thumbnail_file(filename) -> File:
                 except Exception as e:
                     current_app.logger.info(
                         f'Discarding remote thumbnail {filename}: {e}')
-                    for path in (temp_file_path,
+                    for path in (original_file_path, temp_file_path,
                                  os.path.splitext(temp_file_path)[0] + '_512' + final_ext):
                         if os.path.isfile(path):
                             os.unlink(path)
                     return None
+
+                # The resize wrote its own files, so the peer's original bytes are
+                # no longer wanted (D1345). `os.path.isfile` rather than a plain
+                # unlink because a format that matched the fetched extension leaves
+                # the two paths equal, and that one file IS the thumbnail.
+                if original_file_path != temp_file_path and \
+                        os.path.isfile(original_file_path):
+                    os.unlink(original_file_path)
             else:
                 thumbnail_width = thumbnail_height = None
                 thumbnail_512_width = thumbnail_512_height = None
