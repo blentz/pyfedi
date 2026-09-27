@@ -11705,3 +11705,25 @@ DIFFERENT and load-bearing clause in `get_request`, which retries with a longer
 timeout. `inspect.getsource(target)` narrows it to the function the round is
 about. A whole-file grep in a test is a claim about code the round never looked
 at.
+
+**699. GUARDING THE HEAD OF A BRANCH IS NOT GUARDING THE BRANCH.**
+Both halves of `post_to_page` read a row with `.first()`, checked it, and then read
+thirteen more fields off it BELOW the check's indentation -- `votersCount` in the
+poll branch, every `event.*` assignment in the event branch (D1337, D1338). A
+missing row still raised. After adding a `if row is not None:` guard, grep the rest
+of the function for that variable: the mutants found both of these, and reading did
+not.
+
+**700. A SUBSCRIPT COUNT IS A DEFECT COUNT.**
+`Post.new`'s Event branch had fourteen `request_json['object'][...]` reads in one
+constructor call, nine of them for keys the vocabulary marks optional (D1339). The
+number of unguarded subscripts is the number of ways a peer can lose the post, so
+count them before reading for logic: `grep -c "request_json\['object'\]\["` on a
+branch is a size estimate for the round.
+
+**701. A COLUMN WIDTH IS AN INPUT VALIDATION RULE.**
+Guarding the fourteen keys by type was not enough: `timezone` is `String(30)`, and
+a peer's 4,000-character value is a DataError at commit, which loses the post like
+any other. `String(4)` for a currency is the sharpest one. When a value from
+outside lands in a sized column, trim it to that size, and read the model for the
+sizes rather than guessing.

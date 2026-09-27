@@ -19570,4 +19570,61 @@ rather than around them.
 
 ---
 
-**Next free number: D1337.**
+## Round 149 — sub-project 123: polls and events, going out and coming in
+
+**The round in one line: a peer's Event was lost unless it carried all fourteen
+optional fields, and an event or poll of ours never federated at all if it was
+missing a time nothing required it to have.**
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1337** | `app/activitypub/util.py`, `post_to_page`'s Question branch | `poll.mode` read off `.first()` and `ap_datetime(poll.end_poll)` with neither checked. A post typed POLL with no `poll` row was `AttributeError: 'NoneType' object has no attribute 'mode'`; `Poll.end_poll` is nullable and `app/shared/post.py` sets it only `if 'end_poll' in poll_data and poll_data['end_poll']` — while the API schema marks `mode` and `choices` required and `end_poll` NOT — so an API client can make a poll that then fails `ap_datetime(None)`. This function builds what peers receive, so either one meant the post silently never federated while looking correct locally. | **fixed** | `PROBE pa a poll-typed post with no Poll row: AttributeError: 'NoneType' object has no attribute 'mode'`; `PROBE pd a poll whose end time is null: AttributeError: 'NoneType' object has no attribute 'isoformat'` |
+| **D1338** | same function, Event branch | The identical shape one branch down, reachable the same two ways, and `Event.end` is set only `if 'end' in event_data and event_data['end']`. Thirteen more `event.*` reads sat OUTSIDE the branch's guard, as `votersCount` did in the poll branch. | **fixed** | `AttributeError: 'NoneType' object has no attribute 'start'`, then `... no attribute 'max_attendees'` from the fields below it |
+| **D1339** | `app/models.py`, `Post.new`'s Event branch | **Fourteen** keys read out of the peer's document with `[...]`: `startTime`, `endTime`, `timezone`, `maximumAttendeeCapacity`, `participantCount`, `onlineLink`, `joinMode`, `externalParticipationUrl`, `anonymousParticipation`, `isOnline`, `buyTicketsLink`, `feeCurrency`, `feeAmount`, `location`. Nine of those are optional in the vocabulary, so this was not an edge case — it was most federated events. Each absence was a KeyError that lost the whole post. | **fixed** | 13 parametrised cases, one per optional key, each of which used to raise |
+
+**What the repair chooses.** Only `startTime` makes something an event, so without
+one the post stays an ordinary post — the same choice D1330 made for a Question
+with no usable choices. Outbound, a poll or event this instance cannot describe
+goes out as the Page it can, because `Post.new` itself refuses a Question with no
+endTime, so sending one would ask the other end to drop the poll anyway.
+
+**Found while writing the tests rather than while reading the code.** `timezone`
+went into a `String(30)` unguarded in my own first fix: a dict there is
+`psycopg2.ProgrammingError: can't adapt type 'dict'`, and a 4,000-character string
+is a DataError. Every string from the peer is now trimmed to the width its column
+declares, which is a second failure mode the original fourteen subscripts hid.
+
+**The same mistake twice in one function, and the mutants caught it both times.**
+`votersCount` in the poll branch and thirteen `event.*` assignments in the event
+branch were left outside their guards, so a missing row still raised. Both were
+found by mutants, not by reading — the first by a test that exercised the
+no-row case, the second by three survivors that pointed at a branch I had guarded
+but never tested at all.
+
+**Recorded, not repaired.** `post_to_page` attributes a post with
+`post.author.ap_public_url` (the column) while `comment_model_to_json` calls
+`public_url()` (which falls back to `SERVER_URL/u/<name>`). `finalize_user_setup`
+fills the column for every local user, so they agree in practice; they disagree for
+a user who never went through it, whose posts would go out with
+`attributedTo: null` while their comments federate normally. A test pins both
+readings.
+
+### What the slice pins
+
+38 tests in the outbound file and 135 in the inbound one: a poll as a Question
+with its mode, title-in-content, end time, vote counts and choice order; a poll
+with no end time and a post typed POLL with no row, both degrading to a Page that
+still carries everything else; an event with both times, with no end time, with no
+start, with no row and with no timezone; a link post's attachment and an image
+post's; an ordinary comment, an edited one, one deleted by its author, one deleted
+by a moderator, and one deleted with no deleter recorded; thirteen votes and
+non-votes through `is_vote` plus the property that it never raises; an event with
+only a start time; a full event with all fourteen fields; thirteen events each
+missing one optional key; an event with no start time; six start times that are not
+dates; an end time that is not a date; capacities and fees that are not numbers;
+links that are not text; a join mode that is not text; locations that are not
+objects; and six values longer than the column that holds them.
+
+---
+
+**Next free number: D1340.**
