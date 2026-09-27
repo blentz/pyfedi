@@ -189,6 +189,97 @@ def parse_ap_timestamp(value):
     return parsed
 
 
+def s3_key_from_url(url):
+    """The object key this URL names in OUR bucket, or None if it names none.
+
+    D1343, and the S3 half of D1324. Six places turned a URL into a key by
+    `url.replace(f'https://{S3_PUBLIC_URL}/', '')` behind
+    `url.startswith(f'https://{S3_PUBLIC_URL}')`, and both halves are wrong for a
+    value that ARRIVES FROM A PEER. `File.source_url` does arrive from a peer --
+    it is set from `request_json['object']['image']['url']` and
+    `['icon'][-1]['url']`, which is what D1324 repaired for the on-disk branch of
+    the same method while leaving this one alone. Measured, with
+    `S3_PUBLIC_URL = cdn.example.com`:
+
+        source_url                                     key sent to delete_objects
+        https://cdn.example.com/users/victim/avatar.webp  users/victim/avatar.webp
+        https://cdn.example.com.evil.test/x/y.png         the whole URL
+        https://cdn.example.com/../../secret.png          ../../secret.png
+        https://cdn.example.com/%2e%2e/secret.png         %2e%2e/secret.png
+        https://cdn.example.com/                          '' (the empty key)
+
+    The first line is a remote instance deleting any object in this instance's
+    bucket -- another user's avatar, another community's icon -- by naming it as
+    its post's image and waiting for the post to be deleted. The second is the
+    prefix test having no boundary, so a host that merely STARTS with ours passed
+    it.
+
+    So: the host must EQUAL the host of `S3_PUBLIC_URL`, any path prefix in
+    `S3_PUBLIC_URL` must be matched as a whole segment, the path is unquoted
+    before it is read (`%2e%2e` is `..`), and a key with an empty, `.` or `..`
+    segment is refused. Refusing is safe: nothing this instance wrote has such a
+    key, so no legitimate delete is lost.
+
+    Naming an object is not the same as owning it, which no URL can settle;
+    `s3_object_is_referenced_elsewhere` is what answers that.
+    """
+    if not isinstance(url, str) or not url:
+        return None
+    public = current_app.config.get('S3_PUBLIC_URL') or ''
+    if not public:
+        return None
+    base = urlparse(f'https://{public}')
+    parsed = urlparse(url)
+    # Hosts are case-insensitive, so a peer echoing the same object back in a
+    # different case names the same object. Keys are NOT, so the path is left
+    # exactly as it reads.
+    if parsed.scheme not in ('http', 'https') or \
+            parsed.netloc.lower() != base.netloc.lower():
+        return None
+    key = unquote(parsed.path).lstrip('/')
+    prefix = unquote(base.path).strip('/')
+    if prefix:
+        if not key.startswith(prefix + '/'):
+            return None
+        key = key[len(prefix) + 1:]
+    # An empty key needs no test of its own: `''.split('/')` is `['']`, and an
+    # empty SEGMENT is already refused below. A separate `if not key` was here
+    # and no mutant could kill it (fact 708).
+    if any(segment in ('', '.', '..') for segment in key.split('/')):
+        return None
+    return key
+
+
+def s3_object_is_referenced_elsewhere(url, file_id=None, post_id=None):
+    """Whether any row other than this one still points at `url`.
+
+    D1343. Two separate reasons the caller needs this, both measured:
+
+    * a peer can put this instance's own S3 URL in a post's image, so the row
+      being deleted may never have owned the object it names; and
+    * `Post.url` is shared BY DESIGN. Cross-posts are found by url equality
+      (`Post.cross_posts`), so a federated video mirrored into the bucket is
+      named by up to ten Post rows, and deleting one of them must not take the
+      file the other nine still play.
+
+    Matching is by the URL as stored. Two spellings of one key (a different
+    escaping, say) read as two objects here, which errs towards keeping a file
+    that could have been removed rather than removing one that is still in use.
+    """
+    files = db.session.query(File.id).filter(or_(File.file_path == url,
+                                                 File.thumbnail_path == url,
+                                                 File.source_url == url))
+    if file_id is not None:
+        files = files.filter(File.id != file_id)
+    if db.session.query(files.exists()).scalar():
+        return True
+    posts = db.session.query(Post.id).filter(or_(Post.url == url,
+                                                 Post.archived == url))
+    if post_id is not None:
+        posts = posts.filter(Post.id != post_id)
+    return db.session.query(posts.exists()).scalar()
+
+
 def reputation_delta(old_effect: float, new_effect: float, low_quality: bool) -> float:
     """What a change of vote does to the author's reputation.
 
@@ -615,9 +706,9 @@ class File(db.Model):
         purge_from_cache = []
         s3_files_to_delete = []
         if self.file_path:
-            if self.file_path.startswith(f'https://{current_app.config["S3_PUBLIC_URL"]}') and _store_files_in_s3():
-                s3_path = self.file_path.replace(f'https://{current_app.config["S3_PUBLIC_URL"]}/', '')
-                s3_files_to_delete.append(s3_path)
+            s3_key = s3_key_from_url(self.file_path) if _store_files_in_s3() else None
+            if s3_key:
+                s3_files_to_delete.append(s3_key)
                 purge_from_cache.append(self.file_path)
             elif os.path.isfile(self.file_path):
                 try:
@@ -627,10 +718,9 @@ class File(db.Model):
                 purge_from_cache.append(self.file_path.replace('app/', f"{current_app.config['SERVER_URL']}/"))
 
         if self.thumbnail_path:
-            if self.thumbnail_path.startswith(
-                    f'https://{current_app.config["S3_PUBLIC_URL"]}') and _store_files_in_s3():
-                s3_path = self.thumbnail_path.replace(f'https://{current_app.config["S3_PUBLIC_URL"]}/', '')
-                s3_files_to_delete.append(s3_path)
+            s3_key = s3_key_from_url(self.thumbnail_path) if _store_files_in_s3() else None
+            if s3_key:
+                s3_files_to_delete.append(s3_key)
                 purge_from_cache.append(self.thumbnail_path)
             elif os.path.isfile(self.thumbnail_path):
                 try:
@@ -640,10 +730,17 @@ class File(db.Model):
                 purge_from_cache.append(
                     self.thumbnail_path.replace('app/', f"{current_app.config['SERVER_URL']}/"))
         if self.source_url:
-            if self.source_url.startswith(f'https://{current_app.config["S3_PUBLIC_URL"]}') and _store_files_in_s3():
-                s3_path = self.source_url.replace(f'https://{current_app.config["S3_PUBLIC_URL"]}/', '')
-                s3_files_to_delete.append(s3_path)
-                purge_from_cache.append(self.source_url)
+            # `source_url` is the one of these three that a PEER writes, so naming
+            # an object in this instance's bucket is not enough to have it deleted:
+            # something else still pointing at it means this row did not own it
+            # (D1343). The on-disk branch below is D1324's repair of the same
+            # field.
+            s3_key = s3_key_from_url(self.source_url) if _store_files_in_s3() else None
+            if s3_key:
+                if not s3_object_is_referenced_elsewhere(self.source_url,
+                                                         file_id=self.id):
+                    s3_files_to_delete.append(s3_key)
+                    purge_from_cache.append(self.source_url)
             elif self.source_url.startswith('http'):
                 # `local_path_for_url` answers None for anything that is not a
                 # file of ours, which is what stops a peer naming someone else's
@@ -2746,12 +2843,23 @@ class Post(db.Model):
         # Handle file deletions from disk before cascade deletes the File records
         if self.image_id and self.image:
             self.image.delete_from_disk(purge_cdn=False)
-        if self.type == POST_TYPE_VIDEO and _store_files_in_s3() and self.url and self.url.startswith(f'https://{current_app.config["S3_PUBLIC_URL"]}'):
-            from app.shared.tasks.maintenance import delete_from_s3
-            if current_app.debug:
-                delete_from_s3([self.url])
-            else:
-                delete_from_s3.delay([self.url])
+        if self.type == POST_TYPE_VIDEO and _store_files_in_s3() and self.url:
+            # D1343. This passed `self.url` -- the whole `https://...` -- as an S3
+            # KEY, so `delete_objects` was asked for an object that cannot exist
+            # and every mirrored video stayed in the bucket for good. The key it
+            # meant is what the sibling branches strip out.
+            #
+            # And `url` is both peer-written AND shared: cross-posts are found by
+            # url equality, so up to ten Post rows name one video and deleting one
+            # of them must not take the file the others play.
+            s3_key = s3_key_from_url(self.url)
+            if s3_key and not s3_object_is_referenced_elsewhere(self.url,
+                                                                post_id=self.id):
+                from app.shared.tasks.maintenance import delete_from_s3
+                if current_app.debug:
+                    delete_from_s3([s3_key])
+                else:
+                    delete_from_s3.delay([s3_key])
 
         for reply in self.replies:
             if reply.image_id and reply.image:
@@ -2763,11 +2871,10 @@ class Post(db.Model):
 
         if self.archived:
             db.session.query(ArchivedPostReply).filter(ArchivedPostReply.post_id == self.id).delete()
-            if self.archived.startswith(f'https://{current_app.config["S3_PUBLIC_URL"]}') and _store_files_in_s3():
+            s3_key = s3_key_from_url(self.archived) if _store_files_in_s3() else None
+            if s3_key:
                 from app.shared.tasks.maintenance import delete_from_s3
-                s3_path = self.archived.replace(f'https://{current_app.config["S3_PUBLIC_URL"]}/', '')
-                s3_files_to_delete = []
-                s3_files_to_delete.append(s3_path)
+                s3_files_to_delete = [s3_key]
                 if current_app.debug:
                     delete_from_s3(s3_files_to_delete)
                 else:

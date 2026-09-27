@@ -66,7 +66,7 @@ from app.models import CronJobLog, Settings, Domain, Instance, BannedInstances, 
     Site, Post, utcnow, Filter, CommunityMember, InstanceBlock, CommunityBan, Topic, UserBlock, Language, \
     File, ModLog, CommunityBlock, Feed, FeedMember, CommunityFlair, CommunityJoinRequest, Notification, UserNote, \
     PostReply, PostReplyBookmark, AllowedInstances, InstanceBan, Tag, Emoji, UserExtraField, ArchivedPostReply, \
-    RevokedToken, CommunityFavorite, UserFollower, CommunityFlairBlock, Role, RolePermission
+    RevokedToken, CommunityFavorite, UserFollower, CommunityFlairBlock, s3_key_from_url, Role, RolePermission
 
 logger = logging.getLogger(__name__)
 
@@ -5159,12 +5159,16 @@ def archive_post(post_id: int, s3_connection):
                                 os.unlink(image_file.thumbnail_path)
                             except (OSError, FileNotFoundError):
                                 pass
-                        elif store_files_in_s3() and image_file.thumbnail_path.startswith(
-                                f'https://{current_app.config["S3_PUBLIC_URL"]}'):
-                            # S3 file deletion
+                        elif store_files_in_s3() and s3_key_from_url(image_file.thumbnail_path):
+                            # S3 file deletion. `s3_key_from_url` is the one
+                            # reading of what an S3 URL of ours is and which key
+                            # it names; this used to be
+                            # `.split(S3_PUBLIC_URL)[-1].lstrip('/')` behind a
+                            # prefix test with no boundary (D1343).
                             try:
-                                s3_key = image_file.thumbnail_path.split(current_app.config['S3_PUBLIC_URL'])[-1].lstrip('/')
-                                s3_connection.delete_object(Bucket=current_app.config['S3_BUCKET'], Key=s3_key)
+                                s3_connection.delete_object(
+                                    Bucket=current_app.config['S3_BUCKET'],
+                                    Key=s3_key_from_url(image_file.thumbnail_path))
                             except Exception:
                                 pass
                         image_file.thumbnail_path = None
@@ -5177,12 +5181,16 @@ def archive_post(post_id: int, s3_connection):
                                 os.unlink(image_file.file_path)
                             except (OSError, FileNotFoundError):
                                 pass
-                        elif store_files_in_s3() and image_file.file_path.startswith(
-                                f'https://{current_app.config["S3_PUBLIC_URL"]}'):
-                            # S3 file deletion
+                        elif store_files_in_s3() and s3_key_from_url(image_file.file_path):
+                            # S3 file deletion. `s3_key_from_url` is the one
+                            # reading of what an S3 URL of ours is and which key
+                            # it names; this used to be
+                            # `.split(S3_PUBLIC_URL)[-1].lstrip('/')` behind a
+                            # prefix test with no boundary (D1343).
                             try:
-                                s3_key = image_file.file_path.split(current_app.config['S3_PUBLIC_URL'])[-1].lstrip('/')
-                                s3_connection.delete_object(Bucket=current_app.config['S3_BUCKET'], Key=s3_key)
+                                s3_connection.delete_object(
+                                    Bucket=current_app.config['S3_BUCKET'],
+                                    Key=s3_key_from_url(image_file.file_path))
                             except Exception:
                                 pass
                         image_file.file_path = None
