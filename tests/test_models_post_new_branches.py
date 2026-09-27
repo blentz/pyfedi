@@ -837,3 +837,47 @@ class TestAVideoFromAPeer:
     def test_the_url_is_the_objects_own_id(self, env):
         post = new(env, type='Video', icon=[])
         assert post.url == 'https://remote.test/p/' + post.ap_id.rsplit('/', 1)[1]
+
+
+class TestAPostsLanguage:
+    """D1355's `Post.new` site. The guard here tested that `identifier` and `name`
+    were PRESENT and said nothing about their types, so `identifier: 5` reached a
+    String(5) column as `ProgrammingError: operator does not exist: character
+    varying = integer` and a long one was a DataError -- both at the commit, which
+    loses the post and not just its language.
+    """
+
+    @pytest.mark.parametrize('language', [
+        {'identifier': 5, 'name': 'English'},
+        {'identifier': 'e' * 50, 'name': 'English'},
+        {'identifier': None, 'name': 'English'},
+        {'identifier': 'en', 'name': 5},
+        {},
+        {'name': 'English'},
+        'en',
+        5,
+        None,
+        [],
+    ])
+    def test_the_post_arrives_whatever_the_language_is(self, env, language):
+        post = new(env, language=language)
+
+        assert post is not None
+        assert post.title == 'a post'
+
+    def test_a_usable_language_is_applied(self, env):
+        post = new(env, language={'identifier': 'de', 'name': 'Deutsch'})
+
+        assert post.language is not None
+        assert post.language.code == 'de'
+
+    def test_an_over_long_identifier_is_truncated_rather_than_dropped(self, env):
+        post = new(env, language={'identifier': 'abcdefgh', 'name': 'x'})
+
+        assert post.language.code == 'abcde'
+
+    def test_a_language_with_no_name_takes_its_code(self, env):
+        post = new(env, language={'identifier': 'nl'})
+
+        assert post.language.code == 'nl'
+        assert post.language.name == 'nl'
