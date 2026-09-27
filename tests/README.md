@@ -12028,3 +12028,23 @@ six rounds and then, in a full-suite run with more work ahead of it, returned a
 different row -- and the next line dereferenced None. PostgreSQL promises no order
 without `ORDER BY`. A test that needs a specific row names it (`db.session.get`), and
 one that needs any N rows orders them.
+
+**744. A URL PARSER AND A BROWSER DISAGREE ABOUT WHAT HAS NO HOST.**
+`furl('\\\\evil.test/x').host` is None, `furl('http:evil.test').host` is None, and a
+browser navigates both off-origin -- backslashes fold to slashes, and a bare
+`scheme:host` is scheme-relative. Any guard shaped `host is None or host == ours` is
+therefore an open redirect. Decide with the project's own origin check, and if there
+is not one yet, write it once.
+
+**745. THE WARNING WAS ALREADY IN THE CODEBASE.**
+`is_safe_redirect_target`'s docstring says it exists because `back()` and
+`referrer()` had drifted apart, and `is_unsafe_scheme`'s says there is deliberately
+one implementation of the normalisation. The anoobis route was a third copy of the
+same control written from scratch. When a helper's docstring explains why it is the
+only implementation, grep for the others before trusting that it is.
+
+**746. PIN AGREEMENT, NOT JUST OUTCOMES.**
+The strongest assertion in this round is not the four bad strings; it is that for
+every one of twenty-five values, the ROUTE and the canonical function answer the
+same. A list of rejections passes again the moment someone writes a fourth guard
+that happens to reject those four. Agreement fails.
