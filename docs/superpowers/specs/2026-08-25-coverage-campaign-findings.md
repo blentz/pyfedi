@@ -19891,4 +19891,39 @@ token type further.
 
 Fifteen mutants, all dead. 12,649 tests, 0 failures, 0 warnings. All 92 floors met.
 
-**Next free number: D1348.**
+## Round 155 — a takedown that left the files in the CDN
+
+Deleting a file from disk is half of a takedown on an instance behind a CDN: until
+the edge is purged, the URL still answers. Both of this round's defects are about
+the purge not happening.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1348** | `app/models.py`, `User.delete_dependencies` and `User.purge_content` | The `user_file` uploads -- every image the user attached through the uploader -- were deleted with `purge_cdn=False` and their File rows left behind with no association. `purge_content` had its own `user_file` block that would have purged them with `purge_cdn=flush` and deleted the rows, and it could never run: `purge_content` calls `delete_dependencies` first, and both callers call it before that as well, so every association the block looked for was already gone. So banning and deleting a user removed their uploads from disk and left the CDN serving them. | **fixed** | measured below |
+| **D1349** | `app/models.py`, `File.delete_from_disk` | `purge_from_cache.append(...)` sat INSIDE `if os.path.isfile(...)` for both local paths, so a file already gone from disk was never purged from the CDN -- the one case where purging is the only thing left to do. | **fixed** | with the same four files absent from disk, nothing was purged at all |
+
+Measured for D1348, with the CDN configured and a user holding an avatar, a cover,
+one upload and one post image, running what the ban path runs:
+
+    after delete_dependencies():      cover, avatar
+    after purge_content(flush=True):  cover, avatar, post image
+
+The upload is in neither list, and its File row survived the deletion of its only
+association.
+
+`delete_dependencies` takes `purge_cdn=True` now and hands it to those files;
+`purge_content` passes `flush` down; `app/shared/user.py` and `app/user/utils.py`,
+which both call `delete_dependencies()` on their own line before `purge_content`,
+pass it too, so `flush=False` means what it says for the first time. The dead
+block in `purge_content` is gone, with a comment saying where its intent went.
+
+The loop also stopped taking other people's files with it. `DELETE FROM user_file
+WHERE file_id = :file_id` removed EVERY user's association with that file, not
+only this user's; it is scoped by `user_id` now, and a file another user also
+uploaded keeps its bytes, its row and its cache entry. That is round 152's policy
+in a second place: losing one association is not the same as owning the file.
+
+Eleven mutants, all dead. 12,666 tests, 0 failures, 0 warnings. `app/models.py`
+84.02%, floor ratcheted 83 → 84.
+
+**Next free number: D1350.**
