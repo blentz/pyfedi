@@ -11915,3 +11915,24 @@ exceeding Cloudflare's 30-file cap looked exactly like success. The two defects
 compound: the callers that batch are the ones that exceed the cap, so fixing the
 purge without chunking would have replaced "never purges" with "silently fails to
 purge". Read the status, and chunk to the documented limit.
+
+**728. A MEMBERSHIP TEST ON A STRING IS A SUBSTRING TEST.**
+`'url' in request_json['object']['image']` reads as "the image object has a url",
+and on a bare-string `image` it asks whether the letters `url` appear in the URL.
+`https://peer.test/url.png` passed it and the subscript below raised anyway, while
+`image: 5` failed the guard itself with `argument of type 'int' is not iterable`.
+A guard over a peer's value must establish the TYPE before it asks about keys.
+
+**729. AN UPDATE IS THE WHOLE OBJECT, SO A KEY YOU CANNOT READ IS NOT A DELETION.**
+Repairing an Update path is not the same as repairing a Create path with the same
+reads. On create, an unreadable field takes its default; on update, taking the
+default ERASES what the peer sent last time. Each field in
+`update_post_from_activity`'s Event branch is applied only when its key is present
+and readable, and the tests assert the untouched fields keep their values.
+
+**730. A TEST THAT CANNOT REACH ITS TARGET IS TELLING YOU WHERE THE TARGET IS.**
+A test for the `image` read failed because that site sits inside the Event branch of
+`update_post_from_activity`, which a Page-shaped Update never enters. Reading the
+branch to work out why is what found the thirteen unguarded reads beside it (D1353).
+When a test cannot reach the line, find out what the line is nested in before
+adjusting the test.
