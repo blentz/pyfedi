@@ -21,7 +21,7 @@ from flask import current_app, g
 from app import db
 from app.constants import POST_TYPE_ARTICLE, POST_TYPE_POLL
 from app.models import (Notification, Poll, PollChoice, Post, Site, User,
-                        UserBlock, parse_poll_end_time)
+                        UserBlock, parse_ap_timestamp)
 from tests.factories import (make_community, make_community_member, make_user)
 
 AUTHOR = 'https://remote.test/u/someone'
@@ -248,17 +248,17 @@ class TestTheEndTimeParser:
         '2026-02-01',
     ])
     def test_a_shape_it_reads(self, value):
-        assert parse_poll_end_time(value) is not None
+        assert parse_ap_timestamp(value) is not None
 
     @pytest.mark.parametrize('value', [
         'not a date', '', None, 5, [], {}, '2026-13-45T99:99:99Z', 'Z',
     ])
     def test_a_shape_it_refuses(self, value):
-        assert parse_poll_end_time(value) is None
+        assert parse_ap_timestamp(value) is None
 
     def test_it_never_raises(self):
         for value in (object(), b'2026-02-01', ['2026-02-01'], {'a': 1}, 0, -1):
-            assert parse_poll_end_time(value) is None
+            assert parse_ap_timestamp(value) is None
 
     def test_an_offset_is_converted_to_utc_and_dropped(self):
         """Asserted on the RETURN VALUE, not through the database.
@@ -272,7 +272,7 @@ class TestTheEndTimeParser:
         """
         from datetime import datetime as real_datetime
 
-        converted = parse_poll_end_time('2027-01-01T12:00:00+05:00')
+        converted = parse_ap_timestamp('2027-01-01T12:00:00+05:00')
         assert converted == real_datetime(2027, 1, 1, 7, 0)
         assert converted.tzinfo is None
 
@@ -281,14 +281,14 @@ class TestTheEndTimeParser:
 
         for value in ('2027-01-01T12:00:00+00:00', '2027-01-01T12:00:00Z',
                       '2027-01-01T12:00:00'):
-            parsed = parse_poll_end_time(value)
+            parsed = parse_ap_timestamp(value)
             assert parsed == real_datetime(2027, 1, 1, 12, 0), value
             assert parsed.tzinfo is None, value
 
     def test_a_negative_offset_moves_the_other_way(self):
         from datetime import datetime as real_datetime
 
-        assert parse_poll_end_time('2027-01-01T12:00:00-05:00') == \
+        assert parse_ap_timestamp('2027-01-01T12:00:00-05:00') == \
             real_datetime(2027, 1, 1, 17, 0)
 
 
@@ -603,3 +603,187 @@ class TestTheAuthorTheNotificationNames:
 
         assert post is not None
         assert Notification.query.filter_by(user_id=env.local.id).count() == 0
+
+
+class TestAnEventFromAPeer:
+    """D1339. `Post.new`'s Event branch read FOURTEEN keys out of the peer's
+    document with `[...]`, so an Event missing any one of them was a KeyError that
+    lost the whole post.
+
+    `maximumAttendeeCapacity`, `onlineLink`, `joinMode`,
+    `externalParticipationUrl`, `anonymousParticipation`, `buyTicketsLink`,
+    `feeCurrency`, `feeAmount` and `location` are all optional in the vocabulary,
+    so this was not an edge case -- it was most federated events.
+    """
+
+    MINIMAL = {'type': 'Event', 'startTime': '2026-06-01T18:00:00Z'}
+
+    def test_an_event_with_only_a_start_time(self, env):
+        from app.constants import POST_TYPE_EVENT
+        from app.models import Event
+
+        post = new(env, **self.MINIMAL)
+        assert post is not None
+        assert post.type == POST_TYPE_EVENT
+        event = Event.query.filter_by(post_id=post.id).one()
+        assert event.start.year == 2026
+        assert event.end is None
+
+    def test_a_full_event(self, env):
+        from app.models import Event
+
+        post = new(env, type='Event', startTime='2026-06-01T18:00:00Z',
+                   endTime='2026-06-01T20:00:00Z', timezone='Europe/London',
+                   maximumAttendeeCapacity=50, participantCount=3,
+                   onlineLink='https://meet.example/x', joinMode='free',
+                   externalParticipationUrl='https://rsvp.example/x',
+                   anonymousParticipation=True, isOnline=True,
+                   buyTicketsLink='https://tickets.example/x',
+                   feeCurrency='GBP', feeAmount=12.5,
+                   location={'type': 'Place', 'name': 'a hall'})
+        event = Event.query.filter_by(post_id=post.id).one()
+        assert event.end.hour == 20
+        assert event.timezone == 'Europe/London'
+        assert event.max_attendees == 50
+        assert event.participant_count == 3
+        assert event.online_link == 'https://meet.example/x'
+        assert event.join_mode == 'free'
+        assert event.anonymous_participation is True
+        assert event.online is True
+        assert event.event_fee_currency == 'GBP'
+        assert event.event_fee_amount == 12.5
+        assert event.location == {'type': 'Place', 'name': 'a hall'}
+
+    @pytest.mark.parametrize('key', [
+        'endTime', 'timezone', 'maximumAttendeeCapacity', 'participantCount',
+        'onlineLink', 'joinMode', 'externalParticipationUrl',
+        'anonymousParticipation', 'isOnline', 'buyTicketsLink', 'feeCurrency',
+        'feeAmount', 'location',
+    ])
+    def test_an_event_missing_one_optional_key(self, env, key):
+        """Thirteen of the fourteen. Each of these was a KeyError of its own."""
+        from app.constants import POST_TYPE_EVENT
+
+        full = {'type': 'Event', 'startTime': '2026-06-01T18:00:00Z',
+                'endTime': '2026-06-01T20:00:00Z', 'timezone': 'UTC',
+                'maximumAttendeeCapacity': 10, 'participantCount': 1,
+                'onlineLink': 'https://meet.example/x', 'joinMode': 'free',
+                'externalParticipationUrl': 'https://rsvp.example/x',
+                'anonymousParticipation': False, 'isOnline': False,
+                'buyTicketsLink': 'https://tickets.example/x',
+                'feeCurrency': 'GBP', 'feeAmount': 1,
+                'location': {'type': 'Place'}}
+        del full[key]
+        post = new(env, **full)
+        assert post is not None
+        assert post.type == POST_TYPE_EVENT
+
+    def test_an_event_with_no_start_time_stays_an_ordinary_post(self, env):
+        """The fourteenth. Without a start there is no event to record, and the
+        post is worth more than the field -- the same choice D1330 made for a
+        Question with no usable choices."""
+        from app.constants import POST_TYPE_ARTICLE
+        from app.models import Event
+
+        post = new(env, type='Event', endTime='2026-06-01T20:00:00Z')
+        assert post is not None
+        assert post.type == POST_TYPE_ARTICLE
+        assert Event.query.filter_by(post_id=post.id).count() == 0
+
+    @pytest.mark.parametrize('start', ['not a date', '', None, 5, [],
+                                       '2026-13-45T99:99:99Z'])
+    def test_a_start_time_that_is_not_a_date(self, env, start):
+        """A string straight into a DateTime column is a DataError at commit,
+        which poisons the transaction and takes the post with it."""
+        from app.constants import POST_TYPE_ARTICLE
+
+        post = new(env, type='Event', startTime=start)
+        assert post is not None
+        assert post.type == POST_TYPE_ARTICLE
+
+    def test_an_end_time_that_is_not_a_date_is_simply_absent(self, env):
+        from app.models import Event
+
+        post = new(env, type='Event', startTime='2026-06-01T18:00:00Z',
+                   endTime='whenever')
+        assert Event.query.filter_by(post_id=post.id).one().end is None
+
+    @pytest.mark.parametrize('value', ['ten', None, [], {}, True])
+    def test_a_capacity_that_is_not_a_number(self, env, value):
+        """These columns are Integer and Float, so a list where a number belongs
+        is a DataError at commit."""
+        from app.models import Event
+
+        post = new(env, type='Event', startTime='2026-06-01T18:00:00Z',
+                   maximumAttendeeCapacity=value, feeAmount=value)
+        event = Event.query.filter_by(post_id=post.id).one()
+        assert event.max_attendees == 0
+        assert event.event_fee_amount == 0
+
+    @pytest.mark.parametrize('value', [5, [], {}, True, ''])
+    def test_a_link_that_is_not_text(self, env, value):
+        from app.models import Event
+
+        post = new(env, type='Event', startTime='2026-06-01T18:00:00Z',
+                   onlineLink=value, buyTicketsLink=value, timezone=value)
+        event = Event.query.filter_by(post_id=post.id).one()
+        assert event.online_link is None
+        assert event.buy_tickets_link is None
+
+    def test_a_join_mode_that_is_not_text_falls_back_to_free(self, env):
+        from app.models import Event
+
+        post = new(env, type='Event', startTime='2026-06-01T18:00:00Z',
+                   joinMode=5)
+        assert Event.query.filter_by(post_id=post.id).one().join_mode == 'free'
+
+    @pytest.mark.parametrize('value', ['a hall', 5, True])
+    def test_a_location_that_is_not_an_object(self, env, value):
+        """The column is JSON, which would take a bare string -- but every reader
+        of it expects the Place object the vocabulary describes."""
+        from app.models import Event
+
+        post = new(env, type='Event', startTime='2026-06-01T18:00:00Z',
+                   location=value)
+        assert Event.query.filter_by(post_id=post.id).one().location is None
+
+    def test_a_location_given_as_a_list_is_kept(self, env):
+        from app.models import Event
+
+        post = new(env, type='Event', startTime='2026-06-01T18:00:00Z',
+                   location=[{'type': 'Place'}])
+        assert Event.query.filter_by(post_id=post.id).one().location == \
+            [{'type': 'Place'}]
+
+    @pytest.mark.parametrize('key,limit', [('timezone', 30),
+                                           ('onlineLink', 1024),
+                                           ('externalParticipationUrl', 1024),
+                                           ('buyTicketsLink', 1024),
+                                           ('feeCurrency', 4),
+                                           ('joinMode', 10)])
+    def test_a_value_longer_than_its_column(self, env, key, limit):
+        """Found while writing these tests, not while reading the code: a peer
+        choosing a 200-character timezone for a `String(30)` is a DataError at
+        commit, which loses the post. Every string here is trimmed to the width
+        the column declares."""
+        from app.models import Event
+
+        post = new(env, type='Event', startTime='2026-06-01T18:00:00Z',
+                   **{key: 'z' * 4000})
+        assert post is not None
+        event = Event.query.filter_by(post_id=post.id).one()
+        for value in (event.timezone, event.online_link,
+                      event.external_participation_url, event.buy_tickets_link,
+                      event.event_fee_currency, event.join_mode):
+            if value is not None:
+                assert len(value) <= 1024
+
+    def test_a_timezone_that_is_not_text(self, env):
+        """`timezone` was the one string this round's first fix left unguarded,
+        and a dict there is `psycopg2.ProgrammingError: can't adapt type 'dict'`
+        rather than a DataError -- a different error, the same lost post."""
+        from app.models import Event
+
+        post = new(env, type='Event', startTime='2026-06-01T18:00:00Z',
+                   timezone={'a': 1})
+        assert Event.query.filter_by(post_id=post.id).one().timezone is None

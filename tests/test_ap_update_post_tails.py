@@ -441,7 +441,7 @@ END_TIME = '2027-01-01T12:00:00+00:00'
 # a DIFFERENT instant, five hours earlier. It USED to store as the same value as
 # END_TIME, because the peer's string was assigned raw and PostgreSQL discarded
 # the offset, so a peer outside UTC recorded its deadline wrong by its offset.
-# D1330 sent both through `parse_poll_end_time`, which converts to UTC and drops
+# D1330 sent both through `parse_ap_timestamp`, which converts to UTC and drops
 # the tzinfo, so they now store as the two different instants they name.
 # END_TIME alone could not show any of this, because `+00:00` cannot distinguish
 # "offset discarded" from "converted to UTC".
@@ -980,7 +980,7 @@ class TestQuestionEditPath:
         deadline wrong by its own offset. This test asserted that, and said of it
         and of the DataError below that neither was repaired.
 
-        Both are repaired now (D1330). `parse_poll_end_time` reads the string with
+        Both are repaired now (D1330). `parse_ap_timestamp` reads the string with
         `datetime.fromisoformat`, converts an aware result to UTC and drops the
         tzinfo -- so the two offsets store as the two different instants they
         name, and the conversion does not depend on the database session's own
@@ -1026,7 +1026,7 @@ class TestQuestionEditPath:
         raised out of `update_post_from_activity` AT COMMIT, which also poisons
         the transaction, so the whole edit was lost rather than the end time.
 
-        `parse_poll_end_time` answers None for it, and the function returns
+        `parse_ap_timestamp` answers None for it, and the function returns
         without touching the poll -- the same answer it already gave for an
         Update carrying no `endTime` at all.
         """
