@@ -189,7 +189,7 @@ class TestWhatPurgeContentPurges:
         user.avatar_id = avatar.id
         db.session.execute(user_file.insert().values(user_id=user.id,
                                                      file_id=upload.id))
-        post = Post.query.filter_by(user_id=user.id).first()
+        post = db.session.get(Post, env.baseline.post1.id)  # named, not .first()
         post.image_id = post_image.id
         db.session.commit()
         return user
@@ -339,7 +339,14 @@ class TestAPostsImageAtTheEdge:
     """
 
     def a_post_with_an_image(self, env, path=POSTIMG):
-        post = Post.query.filter_by(user_id=env.baseline.user2.id).first()
+        """`api_baseline`'s post1, named explicitly.
+
+        This read `Post.query.filter_by(user_id=...).first()`, and an unordered
+        `.first()` is whatever PostgreSQL hands back: run after enough other tests
+        it returned post2, which has no reply, and the test below then did
+        `None.image_id`. A test that needs a SPECIFIC row has to name it.
+        """
+        post = db.session.get(Post, env.baseline.post1.id)
         post.image_id = a_file(path).id
         db.session.commit()
         return post
@@ -370,7 +377,8 @@ class TestAPostsImageAtTheEdge:
         from app.models import PostReply
 
         post = self.a_post_with_an_image(env)
-        reply = PostReply.query.filter_by(post_id=post.id).first()
+        reply = db.session.get(PostReply, env.baseline.reply1.id)
+        assert reply.post_id == post.id
         reply_image = 'app/static/media/posts/zz/zz/replyimg.webp'
         reply.image_id = a_file(reply_image).id
         db.session.commit()
@@ -385,7 +393,7 @@ class TestAPostsImageAtTheEdge:
     def test_deleting_a_reply_on_its_own_purges_its_image(self, env):
         from app.models import PostReply
 
-        reply = PostReply.query.filter_by(user_id=env.baseline.user2.id).first()
+        reply = db.session.get(PostReply, env.baseline.reply1.id)
         reply_image = 'app/static/media/posts/zz/zz/replyimg.webp'
         reply.image_id = a_file(reply_image).id
         db.session.commit()
@@ -397,7 +405,7 @@ class TestAPostsImageAtTheEdge:
             cleanup(reply_image)
 
     def test_a_post_with_no_image_flushes_nothing(self, env):
-        post = Post.query.filter_by(user_id=env.baseline.user2.id).first()
+        post = db.session.get(Post, env.baseline.post1.id)
 
         post.delete_dependencies()
 
@@ -409,7 +417,8 @@ class TestAPostsImageAtTheEdge:
         """Two, deliberately. A caller that batches and a caller that lets each
         post flush for itself both end up purging the same URLs, so only the
         NUMBER of requests tells them apart -- and one post cannot show it."""
-        posts = Post.query.filter_by(user_id=env.baseline.user2.id).limit(2).all()
+        posts = Post.query.filter_by(user_id=env.baseline.user2.id).order_by(
+            Post.id).limit(2).all()
         assert len(posts) == 2
         posts[0].image_id = a_file(POSTIMG).id
         posts[1].image_id = a_file(self.SECOND_IMAGE).id
