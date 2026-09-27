@@ -11976,3 +11976,18 @@ already reached: `actor_json_to_model`'s language loop, the user task's summary,
 `Post.new`'s language. The helper was tested and so was one caller. Every call site
 of a shared guard needs at least one test that goes through IT, or a future edit can
 drop the call and nothing notices.
+
+**737. A PRE-ISSUED TOKEN NEEDS THE SAME REFUSALS AS A LOGIN.**
+`index_rss` matched an RSS token against the column and nothing else, so a banned or
+deleted account kept a working private feed. `authorise_api_user` had the answer
+twenty lines away in another file: remote, unverified, banned, deleted. When a
+second credential path appears for the same accounts, copy the refusals, and write
+down any one you deliberately leave out and why.
+
+**738. IF BOTH ANSWERS ARE 200, THE STATUS CODE IS NOT THE ASSERTION.**
+Three mutants survived a route's first mutation pass because the tests asserted
+`status_code == 200` for a feed whose unauthenticated answer is also a 200. The
+assertion has to be a piece of CONTENT that differs -- here a post in a community
+the caller joined. For "did this arm read the memberships", that is still not
+enough: an arm that ignores them falls through to the All feed, so a second post in
+a community they did NOT join is what separates the two.
