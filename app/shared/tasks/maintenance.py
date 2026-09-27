@@ -994,16 +994,22 @@ def archive_old_users():
 
 def archive_user(user_id, session):
     user = session.get(User, user_id)
+    # D1350. Both of these passed `purge_cdn=False`, so an archived user's avatar
+    # and cover went from disk and stayed at the edge. One flush for the two.
+    cache_urls = []
     if user.avatar_id:
         avatar_file = user.avatar
         user.avatar_id = None
-        avatar_file.delete_from_disk(purge_cdn=False)
+        avatar_file.delete_from_disk(cache_urls=cache_urls)
         session.delete(avatar_file)
     if user.cover_id:
         cover_file = user.cover
         user.cover_id = None
-        cover_file.delete_from_disk(purge_cdn=False)
+        cover_file.delete_from_disk(cache_urls=cache_urls)
         session.delete(cover_file)
+    if cache_urls:
+        from app.models import flush_cdn_cache
+        flush_cdn_cache(cache_urls)
 
     session.commit()
 

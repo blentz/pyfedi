@@ -751,7 +751,16 @@ class File(db.Model):
             return None
         return candidate
 
-    def delete_from_disk(self, purge_cdn=True):
+    def delete_from_disk(self, purge_cdn=True, cache_urls=None):
+        """`cache_urls`, when given, receives the URLs this delete invalidates
+        instead of them being flushed here.
+
+        D1350. Deleting a post's image with `purge_cdn=False` was how every caller
+        avoided one Cloudflare request per file, and the cost was that no post
+        image was ever purged at all. A list lets the caller deleting a hundred
+        posts flush once for all of them, so there is no reason left to turn the
+        purge off.
+        """
         purge_from_cache = []
         s3_files_to_delete = []
         if self.file_path:
@@ -817,7 +826,11 @@ class File(db.Model):
             else:
                 delete_from_s3.delay(s3_files_to_delete)
 
-        if purge_cdn and purge_from_cache:
+        if not purge_cdn:
+            return
+        if cache_urls is not None:
+            cache_urls.extend(purge_from_cache)
+        elif purge_from_cache:
             flush_cdn_cache(purge_from_cache)
 
     def filesize(self):
@@ -866,13 +879,27 @@ def flush_cdn_cache_task(to_purge: Union[str, List[str]]):
                     }
 
             if body:
-                httpx_client.request(
-                    'POST',
-                    f'https://api.cloudflare.com/client/v4/zones/{zone_id}/purge_cache',
-                    headers=headers,
-                    json=body,
-                    timeout=5,
-                )
+                # D1351. Cloudflare's purge_cache endpoint takes at most 30 files
+                # per request and answers 400 for a longer list. This sent whatever
+                # it was given in one request and never read the response, so a
+                # purge of 31 files failed silently -- and the callers that batch
+                # (a community, a domain, a user's whole history) are exactly the
+                # ones that exceed it.
+                batches = [{'purge_everything': True}] if 'purge_everything' in body \
+                    else [{'files': body['files'][index:index + 30]}
+                          for index in range(0, len(body['files']), 30)]
+                for batch in batches:
+                    response = httpx_client.request(
+                        'POST',
+                        f'https://api.cloudflare.com/client/v4/zones/{zone_id}/purge_cache',
+                        headers=headers,
+                        json=batch,
+                        timeout=5,
+                    )
+                    if response.status_code != 200:
+                        current_app.logger.warning(
+                            'CDN purge refused: %s %s', response.status_code,
+                            response.text[:200])
 
 
 class Topic(db.Model):
@@ -1268,15 +1295,20 @@ class Community(db.Model):
 
     def delete_dependencies(self):
         from app import redis_client
+        # One flush for every post in the community rather than one per file, which
+        # is what `purge_cdn=False` was standing in for (D1350).
+        cache_urls = []
         for rss_feed in self.rss_feeds:
             rss_feed.delete_dependencies()
             db.session.delete(rss_feed)
             db.session.commit()
         for post in db.session.query(Post).filter_by(community_id=self.id):
             with redis_client.lock(f"lock:post:{post.id}", timeout=30, blocking_timeout=30):
-                post.delete_dependencies()
+                post.delete_dependencies(cache_urls=cache_urls)
                 db.session.delete(post)
                 db.session.commit()
+        if cache_urls:
+            flush_cdn_cache(cache_urls)
         db.session.query(FeedItem).filter(FeedItem.community_id == self.id).delete()
         db.session.query(CommunityBan).filter(CommunityBan.community_id == self.id).delete()
         db.session.query(CommunityBlock).filter(CommunityBlock.community_id == self.id).delete()
@@ -1980,9 +2012,10 @@ class User(UserMixin, db.Model):
         db.session.commit()
         self.delete_dependencies(purge_cdn=flush)
         db.session.commit()
+        cache_urls = [] if flush else None
         posts = Post.query.filter_by(user_id=self.id).all()
         for post in posts:
-            post.delete_dependencies()
+            post.delete_dependencies(cache_urls=cache_urls)
             if soft:
                 post.deleted = True
             else:
@@ -1991,7 +2024,7 @@ class User(UserMixin, db.Model):
 
         post_replies = PostReply.query.filter_by(user_id=self.id).all()
         for reply in post_replies:
-            reply.delete_dependencies()
+            reply.delete_dependencies(cache_urls=cache_urls)
             if soft:
                 reply.deleted = True
             else:
@@ -2003,6 +2036,8 @@ class User(UserMixin, db.Model):
         # could never run. Its intent -- purge the CDN and delete the row -- moved
         # into that method instead, where it does happen (D1348).
         db.session.commit()
+        if cache_urls:
+            flush_cdn_cache(cache_urls)
 
     def mention_tag(self):
         if self.ap_domain is None:
@@ -2899,8 +2934,17 @@ class Post(db.Model):
             self.cross_posts = [ncp.id for ncp in new_cross_posts]
         db.session.commit()
 
-    def delete_dependencies(self):
+    def delete_dependencies(self, cache_urls=None):
         # Handle non-cascading deletes and special cleanup
+        #
+        # D1350. The two image deletes below passed `purge_cdn=False`, so a post
+        # deleted by a moderator kept its image at the edge -- the CDN is what the
+        # public reads. `cache_urls` collects instead, so a caller deleting many
+        # posts still makes one request; when nobody passes one, this method flushes
+        # its own at the end.
+        owns_cache_urls = cache_urls is None
+        if owns_cache_urls:
+            cache_urls = []
 
         # ModLog entries should be preserved with NULL post_id
         db.session.query(ModLog).filter(ModLog.post_id == self.id).update({ModLog.post_id: None})
@@ -2920,7 +2964,7 @@ class Post(db.Model):
 
         # Handle file deletions from disk before cascade deletes the File records
         if self.image_id and self.image:
-            self.image.delete_from_disk(purge_cdn=False)
+            self.image.delete_from_disk(cache_urls=cache_urls)
         if self.type == POST_TYPE_VIDEO and _store_files_in_s3() and self.url:
             # D1343. This passed `self.url` -- the whole `https://...` -- as an S3
             # KEY, so `delete_objects` was asked for an object that cannot exist
@@ -2941,7 +2985,7 @@ class Post(db.Model):
 
         for reply in self.replies:
             if reply.image_id and reply.image:
-                reply.image.delete_from_disk(purge_cdn=False)
+                reply.image.delete_from_disk(cache_urls=cache_urls)
             # Update ModLog entries to remove references to deleted replies
             db.session.query(ModLog).filter(ModLog.reply_id == reply.id).update({ModLog.reply_id: None})
             # Delete reports for this reply
@@ -2962,6 +3006,9 @@ class Post(db.Model):
                     os.unlink(self.archived)
                 except FileNotFoundError:
                     ...
+
+        if owns_cache_urls and cache_urls:
+            flush_cdn_cache(cache_urls)
 
     def has_been_reported(self):
         return self.reports > 0 and current_user.is_authenticated and self.community.is_moderator()
@@ -3804,11 +3851,18 @@ class PostReply(db.Model):
 
         return return_value
 
-    def delete_dependencies(self):
+    def delete_dependencies(self, cache_urls=None):
         """
         Handle non-cascading deletes and special cleanup.
         Note: PostReplyBookmark and PostReplyVote are now handled by cascade='all, delete-orphan'
+
+        `cache_urls` as in `Post.delete_dependencies`: collect the URLs this
+        invalidates rather than flushing them here, so a caller deleting many
+        replies makes one request (D1350).
         """
+        owns_cache_urls = cache_urls is None
+        if owns_cache_urls:
+            cache_urls = []
 
         # Reminders should be deleted (no relationship defined, small table)
         db.session.query(Reminder).filter(Reminder.reminder_destination == self.id, Reminder.reminder_type == 2).delete()
@@ -3821,7 +3875,9 @@ class PostReply(db.Model):
 
         # Handle file deletion from disk before cascade deletes the File record
         if self.image_id and self.image:
-            self.image.delete_from_disk(purge_cdn=False)
+            self.image.delete_from_disk(cache_urls=cache_urls)  # D1350
+        if owns_cache_urls and cache_urls:
+            flush_cdn_cache(cache_urls)
 
     def child_replies(self):
         return db.session(PostReply).filter_by(parent_id=self.id).all()
@@ -4048,14 +4104,24 @@ class Domain(db.Model):
         return block is not None
 
     def purge_content(self):
-        files = File.query.join(Post).filter(Post.domain_id == self.id).all()
-        for file in files:
-            file.delete_from_disk(purge_cdn=False)
+        # D1350. Banning a domain removed its posts' images from disk and left the
+        # CDN serving them, because both deletes passed `purge_cdn=False`. One
+        # flush for the whole domain now.
+        #
+        # The `File.query.join(Post).filter(Post.domain_id == self.id)` loop that
+        # used to run first is gone: that join is on `post.image_id == file.id`, so
+        # it selected exactly the images `post.delete_dependencies` deletes a few
+        # lines below, and deleting each of them twice was the only thing it added.
+        # No mutant of it could die, which is what said it was redundant rather
+        # than untested (fact 708).
+        cache_urls = []
         posts = Post.query.filter_by(domain_id=self.id).all()
         for post in posts:
-            post.delete_dependencies()
+            post.delete_dependencies(cache_urls=cache_urls)
             db.session.delete(post)
         db.session.commit()
+        if cache_urls:
+            flush_cdn_cache(cache_urls)
 
     def type_to_class(self):
         if self.warning_type is None or self.warning_type == 0:
