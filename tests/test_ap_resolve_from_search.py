@@ -233,7 +233,8 @@ from datetime import datetime
 
 import pytest
 
-from app.activitypub.util import resolve_remote_post_from_search
+from app.activitypub.util import (create_resolved_object,
+                                  resolve_remote_post_from_search)
 from app.models import ActivityPubLog, Post, PostReply
 from tests.factories import (AS_PUBLIC_URI, PEER_OBJECT_HOST, PEER_OBJECT_URI, make_community,
                              make_post, make_site, note_document, resolvable_remote_author,
@@ -837,10 +838,11 @@ class TestTheEnrichment:
     unreachable for the same reason Task 3's reply enrichment was. It is the
     last arc in this function, and the third test below closes it.
 
-    Note what the guard does NOT do: nothing here writes `last_active` to the
-    reply's PARENT, which is what `create_resolved_object`'s reply branch does.
-    The two resolvers differ on this, and the difference is asserted rather
-    than assumed.
+    That difference used to go further: nothing here wrote `last_active` to the
+    reply's PARENT, which is what `create_resolved_object`'s reply branch has
+    always done. This class asserted the divergence rather than assuming it, and
+    that assertion is what showed it was a defect rather than a choice -- D1342.
+    The else arm now matches the sibling resolver.
 
     Production change that fails these: deleting the `'published' in post_data`
     guard, setting either column to utcnow() instead of the peer's value, or
@@ -866,16 +868,22 @@ class TestTheEnrichment:
         assert result.posted_at is not None
         assert result.posted_at != datetime(2024, 1, 1, 0, 0)
 
-    def test_a_replys_published_reaches_posted_at_but_not_any_last_active(self, app, peer_author, http_mock):
-        """The False side of `if not in_reply_to:`, and the only arc this file
-        was missing.
+    def test_a_replys_published_reaches_posted_at_and_its_parents_last_active(
+            self, app, peer_author, http_mock):
+        """The False side of `if not in_reply_to:`, and D1342.
 
-        The guard stops the PEER's timestamp from reaching `last_active`; it
-        does not stop the column moving. `PostReply.new` bumps the parent's
-        `last_active` to local now as part of creating the reply, which is why
-        this asserts the peer's value is absent rather than that the column is
-        unchanged -- the first version of this test asserted the latter and
-        failed by 35ms, which is how the bump was found.
+        A reply has no `last_active` column of its own -- only Post does -- so
+        the True arm's assignment would have been a stray Python attribute on a
+        PostReply if it ran, which is exactly why the guard survived mutation
+        while the reply arm did nothing: neither branch was observable.
+
+        What this asserts now is the repair. `PostReply.new` bumps the parent's
+        `last_active` to local NOW while creating the reply, so before D1342 a
+        reply published in 2024 and resolved from search today left its thread
+        ordered as if it had just been active. The earlier version of this test
+        asserted that absence (`post.last_active != datetime(2024, 1, 1)`) as
+        the two resolvers' documented difference; measuring the difference is
+        what identified it as a defect.
         """
         community = make_community('news', host=PEER_OBJECT_HOST)
         post = make_post(community, peer_author, ap_id=PARENT_URI)
@@ -887,8 +895,29 @@ class TestTheEnrichment:
 
         reply = PostReply.query.filter_by(ap_id=URI).one()
         assert reply.posted_at == datetime(2024, 1, 1, 0, 0)
-        assert post.last_active != datetime(2024, 1, 1, 0, 0)
+        assert post.last_active == datetime(2024, 1, 1, 0, 0)
         assert reply.post_id == post.id
+
+    def test_the_two_resolvers_now_agree_about_a_replys_parent(
+            self, app, peer_author, http_mock):
+        """The point of D1342: the same document, reaching this instance by
+        search or by an inbox, must leave the parent's ordering in the same
+        state. `create_resolved_object` is the inbox side."""
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        searched = make_post(community, peer_author, ap_id=PARENT_URI)
+        document = resolvable(public_note(), community, inReplyTo=PARENT_URI,
+                              published='2024-01-01T00:00:00Z')
+        serve_remote_object(http_mock, URI, document)
+
+        resolve_remote_post_from_search(URI)
+
+        inbox_parent = make_post(community, peer_author,
+                                 ap_id=PARENT_URI + '/other')
+        other = dict(document, id=URI + '/other', inReplyTo=inbox_parent.ap_id)
+        create_resolved_object(other['id'], other, PEER_OBJECT_HOST, community,
+                               None, False)
+
+        assert inbox_parent.last_active == searched.last_active
 
 
 class TestTheReturnShape:
@@ -1017,3 +1046,160 @@ class TestTheNodebbBackgroundDispatch:
         resolve_remote_post_from_search(URI)
 
         assert recorder.inline == [] and recorder.delayed == []
+
+
+class TestTheTopicsTotalItemsIsAPeersClaim:
+    """D1340. Which entries of a nodebb topic are replies was decided twice: once
+    by a careful read near the top of this function, and once, seventy lines
+    later, by `topic_post_data['totalItems'] > 1` with no guard at all.
+
+    A topic without `totalItems` was a KeyError there; one whose `totalItems` was
+    a string was `TypeError: '>' not supported between instances of 'str' and
+    'int'`. The repair carries the vetted values down from the gate, so this
+    class tests the one read that remains -- the gate itself.
+
+    These are the tests round 150 said belonged here and could not write: it
+    built its harness against `resolve_remote_post`, and these reads are in
+    `resolve_remote_post_from_search`.
+    """
+
+    def resolve(self, http_mock, monkeypatch, community, collection):
+        recorder = Recorder()
+        monkeypatch.setattr('app.activitypub.util.get_nodebb_replies_in_background',
+                            recorder)
+        collection['audience'] = community.ap_profile_id
+        serve_remote_object(http_mock, URI, collection)
+        return recorder
+
+    @pytest.mark.parametrize('total', ['2', 2.5, [], {}, None])
+    def test_a_total_that_is_not_a_number_is_not_a_topic(
+            self, app, peer_author, http_mock, monkeypatch, total):
+        """`'2' > 1` raises, so the gate has to test the type and not merely the
+        key's presence. A collection this instance cannot read the size of is
+        simply not recognised as a topic -- and, having no `attributedTo` of its
+        own, resolves to nothing rather than raising.
+        """
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        collection = ordered_collection(items=[ITEM_URI, REPLY_URI], total=2)
+        collection['totalItems'] = total
+
+        recorder = self.resolve(http_mock, monkeypatch, community, collection)
+
+        assert resolve_remote_post_from_search(URI) is None
+        assert recorder.inline == [] and recorder.delayed == []
+
+    def test_a_total_of_true_is_an_int_and_dispatches_nothing(
+            self, app, peer_author, http_mock, monkeypatch):
+        """`isinstance(True, bool)` and `isinstance(True, int)` are both true, so
+        a peer sending `totalItems: true` DOES pass the gate -- and then `True >
+        1` is false, so no replies are dispatched. Asserted because it is the one
+        non-integer this gate lets through, and the post must still arrive."""
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        collection = ordered_collection(items=[ITEM_URI, REPLY_URI], total=2)
+        collection['totalItems'] = True
+        recorder = self.resolve(http_mock, monkeypatch, community, collection)
+        serve_remote_object(http_mock, ITEM_URI, public_note(uri=ITEM_URI))
+
+        result = resolve_remote_post_from_search(URI)
+
+        assert isinstance(result, Post)
+        assert result.ap_id == ITEM_URI
+        assert recorder.inline == [] and recorder.delayed == []
+
+    def test_items_that_are_not_a_list_are_not_a_topic(
+            self, app, peer_author, http_mock, monkeypatch):
+        """Without the isinstance test, `'not a list'[0]` is the single character
+        `'n'`, which this instance would then go and fetch."""
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        collection = ordered_collection(total=2)
+        collection['orderedItems'] = 'not a list'
+
+        recorder = self.resolve(http_mock, monkeypatch, community, collection)
+
+        assert resolve_remote_post_from_search(URI) is None
+        assert recorder.inline == [] and recorder.delayed == []
+
+    def test_an_empty_list_of_items_is_not_a_topic(
+            self, app, peer_author, http_mock, monkeypatch):
+        """`orderedItems[0]` on an empty list is an IndexError, so the gate needs
+        the list to be non-empty and not merely a list. A peer can send
+        `totalItems: 2` beside no items at all; nothing checks it is honest."""
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        collection = ordered_collection(items=[], total=2)
+
+        recorder = self.resolve(http_mock, monkeypatch, community, collection)
+
+        assert resolve_remote_post_from_search(URI) is None
+        assert recorder.inline == [] and recorder.delayed == []
+
+    def test_the_dispatch_reads_the_topic_and_not_the_post_it_resolved(
+            self, app, peer_author, http_mock, monkeypatch):
+        """`post_data` is reassigned to the first entry, so by the time the
+        dispatch runs, the topic's entry list survives only in `topic_post_data`.
+        The note served here carries its own contradicting `totalItems` and
+        `orderedItems`: if the dispatch read the post, it would send those."""
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        collection = ordered_collection(items=[ITEM_URI, REPLY_URI], total=2)
+        recorder = self.resolve(http_mock, monkeypatch, community, collection)
+        note = public_note(uri=ITEM_URI)
+        note['totalItems'] = 9
+        note['orderedItems'] = ['https://remote.example/objects/decoy']
+        serve_remote_object(http_mock, ITEM_URI, note)
+
+        resolve_remote_post_from_search(URI)
+
+        assert recorder.delayed == [([REPLY_URI], community.id)]
+
+
+class TestThePublishedTimeThisResolverWrites:
+    """D1340's other half in this function: `object.posted_at =
+    post_data['published']`, a peer's string straight into a `timestamp without
+    time zone` column -- and into `last_active`, which has been NOT NULL since
+    round 141.
+    """
+
+    def resolved_with(self, http_mock, community, published):
+        document = resolvable(public_note(), community, published=published)
+        serve_remote_object(http_mock, URI, document)
+        return resolve_remote_post_from_search(URI)
+
+    @pytest.mark.parametrize('published', ['not a timestamp', '', 5, [], {},
+                                           '2024-13-45T99:99:99Z', None, True])
+    def test_a_published_that_is_not_a_timestamp_is_ignored(
+            self, app, peer_author, http_mock, published):
+        """It used to be `DataError`/`DatatypeMismatch` at the commit two lines
+        later, uncaught, with the Post row already written -- partially-applied
+        ingest."""
+        community = make_community('news', host=PEER_OBJECT_HOST)
+
+        result = self.resolved_with(http_mock, community, published)
+
+        assert isinstance(result, Post)
+        assert result.posted_at is not None
+        assert result.last_active is not None
+
+    def test_the_post_is_stored_once_and_whole(self, app, peer_author, http_mock):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+
+        result = self.resolved_with(http_mock, community, 'not a timestamp')
+
+        assert Post.query.filter_by(ap_id=URI).count() == 1
+        assert Post.query.filter_by(ap_id=URI).one().id == result.id
+
+    def test_an_offset_is_converted_to_utc(self, app, peer_author, http_mock):
+        """Stored with the offset DISCARDED before D1340, so a peer publishing at
+        00:00+05:00 got a row reading 00:00 -- and `last_active`, which orders a
+        community's listings, was wrong with it."""
+        community = make_community('news', host=PEER_OBJECT_HOST)
+
+        result = self.resolved_with(http_mock, community, '2024-01-01T00:00:00+05:00')
+
+        assert result.posted_at == datetime(2023, 12, 31, 19, 0)
+        assert result.last_active == datetime(2023, 12, 31, 19, 0)
+
+    def test_a_negative_offset_moves_the_other_way(self, app, peer_author, http_mock):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+
+        result = self.resolved_with(http_mock, community, '2024-01-01T00:00:00-05:00')
+
+        assert result.posted_at == datetime(2024, 1, 1, 5, 0)
