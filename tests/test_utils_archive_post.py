@@ -364,3 +364,90 @@ class TestWhatTheArchiveSaysAboutEachReply:
         assert entries[0]['replies'][0]['body'] == 'child'
         assert entries[0]['replies'][0]['parent_id'] == parent_id
         assert entries[0]['replies'][0]['depth'] == 1
+
+
+class TestTheImagesKeptInS3:
+    """The other arm of the image cleanup, which nothing reached before: the
+    post's generated images live in the bucket rather than on disk.
+
+    D1343. The key was `path.split(S3_PUBLIC_URL)[-1].lstrip('/')` behind
+    `path.startswith(f'https://{S3_PUBLIC_URL}')` -- a prefix test with no
+    boundary and a split that takes the LAST occurrence. Both readings are
+    `s3_key_from_url` now, which is the same one `File.delete_from_disk` and
+    `Post.delete_dependencies` use.
+    """
+
+    @pytest.fixture
+    def bucket(self, monkeypatch):
+        monkeypatch.setitem(current_app.config, 'S3_PUBLIC_URL', 'cdn.example')
+        monkeypatch.setitem(current_app.config, 'S3_BUCKET', 'pyfedi-test')
+        monkeypatch.setattr('app.utils.store_files_in_s3', lambda: True)
+
+        class Connection:
+            """`archive_post` also PUTS the gzipped archive when S3 is on, so the
+            double has to answer that too or the delete assertions never run."""
+
+            def __init__(self):
+                self.deleted = []
+                self.put = []
+
+            def delete_object(self, Bucket, Key):
+                self.deleted.append((Bucket, Key))
+
+            def put_object(self, Bucket, Key, Body, ContentType=None,
+                           ContentEncoding=None):
+                self.put.append((Bucket, Key))
+
+        return Connection()
+
+    def an_s3_image(self, post, file_path, thumbnail_path):
+        image = File(file_path=file_path, thumbnail_path=thumbnail_path,
+                     source_url='https://peer.test/probe.png')
+        db.session.add(image)
+        db.session.commit()
+        post.image_id = image.id
+        db.session.commit()
+        return image
+
+    def test_both_generated_images_are_deleted_by_key(self, env, bucket):
+        post = a_post(env, body='x' * 300, suffix='s3image')
+        self.an_s3_image(post, 'https://cdn.example/posts/ab/cd/probe.png',
+                         'https://cdn.example/posts/ab/cd/probe_t.png')
+
+        archive_post(post.id, bucket)
+
+        assert bucket.deleted == [('pyfedi-test', 'posts/ab/cd/probe_t.png'),
+                                  ('pyfedi-test', 'posts/ab/cd/probe.png')]
+
+    def test_the_columns_are_cleared_either_way(self, env, bucket):
+        post = a_post(env, body='x' * 300, suffix='s3cols')
+        image = self.an_s3_image(post, 'https://cdn.example/posts/ab/cd/a.png',
+                                 'https://cdn.example/posts/ab/cd/t.png')
+
+        archive_post(post.id, bucket)
+
+        db.session.expire_all()
+        fresh = db.session.get(File, image.id)
+        assert fresh.file_path is None and fresh.thumbnail_path is None
+
+    @pytest.mark.parametrize('path', ['https://cdn.example/../../secret.png',
+                                      'https://cdn.example.evil.test/a.png',
+                                      'https://cdn.example/',
+                                      'https://peer.test/a.png'])
+    def test_a_path_that_names_no_object_of_ours(self, env, bucket, path):
+        post = a_post(env, body='x' * 300, suffix='s3junk')
+        self.an_s3_image(post, path, path)
+
+        archive_post(post.id, bucket)
+
+        assert bucket.deleted == []
+
+    def test_an_instance_not_using_s3(self, env, bucket, monkeypatch):
+        monkeypatch.setattr('app.utils.store_files_in_s3', lambda: False)
+        post = a_post(env, body='x' * 300, suffix='s3off')
+        self.an_s3_image(post, 'https://cdn.example/posts/ab/cd/a.png',
+                         'https://cdn.example/posts/ab/cd/t.png')
+
+        archive_post(post.id, bucket)
+
+        assert bucket.deleted == []

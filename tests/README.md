@@ -11792,3 +11792,32 @@ is either redundant (fact 708) or hiding missing work.
 document, by search and by inbox. Asserting each one's timestamp separately let them
 drift for as long as both assertions passed. Feeding one document to both and
 asserting the two results equal is what makes the agreement itself the subject.
+
+**711. A REPAIR THAT NAMES ONE BRANCH LEAVES THE OTHER ONE OPEN.**
+D1324 repaired the on-disk branch of `File.delete_from_disk` with a whole new
+helper and a docstring explaining why a peer's string cannot be trusted. Four
+lines above it, the S3 branch of the same `if` kept the original replace-and-go
+shape and stayed exploitable for nine rounds. When a fix is about a FIELD rather
+than a line, fix every branch that reads that field in the same commit, and say
+in the test file which branches were checked.
+
+**712. "IT DELETES NOTHING" CAN BE A BUG IN BOTH DIRECTIONS.**
+`delete_from_s3([self.url])` passed a URL where a key belongs, so the delete
+silently matched nothing and the bucket grew for ever. The obvious repair --
+strip the prefix like the sibling branches -- would have turned a storage leak
+into data loss, because `Post.url` is shared by cross-posts. Before fixing a
+no-op delete, find out what the delete would hit once it starts working.
+
+**713. NAMING AN OBJECT IS NOT OWNING IT.**
+No amount of parsing a peer-supplied URL can tell you whether the row you are
+deleting owned the object it points at, because a legitimate value and a hostile
+one are the same string. What settles it is whether anything else still points
+there. For shared object storage that check is the semantics, not a safety net.
+
+**714. A SPEED KNOB WITH NO TEST TURNS ITSELF OFF.**
+`run_tests.sh` fell back to one worker whenever an argument it did not recognise
+looked like a path, and `-p no:randomly` is two arguments. The suite ran serially
+for a whole round and the only symptom was that it took 23 minutes rather than 8.
+Anything that silently degrades rather than failing needs its decision asserted:
+`TestWhichRunsGetWorkers` runs the shell function itself against twenty-one
+argument lists.
