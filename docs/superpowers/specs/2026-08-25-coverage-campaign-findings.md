@@ -20091,4 +20091,43 @@ testing it in one place leaves the rest pinned by nothing.
 Fifteen mutants, all dead. 12,890 tests, 0 failures, 0 warnings. All 92 floors met;
 `app/activitypub/util.py` 92.57%.
 
-**Next free number: D1356.**
+## Round 160 — an RSS token that outlived the account
+
+`index_rss` in `app/main/routes.py` had never been requested by a test. It answers
+anonymous callers, it authenticates with a pre-issued token in the query string,
+and `feed_type=subscribed` reads the caller's community memberships — three access
+checks in one public route.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1356** | `app/main/routes.py`, `index_rss` | The feed token was matched on its own: `User.query.filter(User.rss_token == rss_token.strip()).first()`. An account that had been BANNED or DELETED kept a working feed, and `feed_type=subscribed` goes on delivering the posts of the communities that account belonged to — including private ones, via `community_membership_private`. | **fixed** | measured: with `deleted = True`, and again with `banned = True`, the feed was still built as that user |
+
+`authorise_api_user` in `app/utils.py` already refuses a JWT when
+`user.ap_id is not None or user.verified is False or user.banned is True or
+user.deleted is True`. Three of those four now apply to the RSS token, which is
+the same class of pre-issued credential. `verified` is deliberately left out and
+the reason is in the code: an instance with email verification turned off has
+legitimate accounts with `verified = False`, and requiring it here would silently
+stop their feeds.
+
+A revoked token falls back to the anonymous feed rather than erroring, which is
+what a feed reader should see: no more private posts, not a 500.
+
+**Three of eleven mutants survived the first pass because the assertions were on
+the STATUS.** An unauthenticated request for this feed is also a 200, so "a remote
+account does not authenticate", "the token is stripped" and "the subscribed arm
+reads the memberships" were all invisible. Each needed a post whose presence
+differs between the two answers: one in a community the user joined, and — for the
+third — one in a community they did not, since an arm that ignores the memberships
+falls through to the All feed rather than to nothing.
+
+Pinned along the way, as behaviour rather than defects: the private-instance 404
+coming BEFORE the 304 (an earlier round's repair, now asserted from a caller);
+an unknown `feed_type` being answered as All; and an ANONYMOUS request for `all`
+being answered from local communities only, because the local arm's condition is
+`feed_type == 'local' or not current_user_is_authenticated`.
+
+Eleven mutants, all dead. 12,919 tests, 0 failures, 0 warnings. `app/main/routes.py`
+82.37%, floor ratcheted 81 → 82.
+
+**Next free number: D1357.**
