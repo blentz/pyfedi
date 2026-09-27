@@ -20163,4 +20163,59 @@ somebody's decision rather than a side effect.
 Eleven mutants, all dead. 12,938 tests, 0 failures, 0 warnings. All 92 floors met;
 `app/shared/reply.py` reached 100%.
 
-**Next free number: D1358.**
+## Round 162 — the SSRF guard let every IPv6 literal through
+
+`is_invalid_get_request_uri` in `app/utils.py` decides what this instance will
+fetch on a peer's behalf: `get_request`, `url_to_thumbnail_file`, the actor
+refreshes, the object resolvers. It had no tests of its own — other files
+monkeypatch it or switch DEBUG on to get past it.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1358** | `app/utils.py`, `is_invalid_get_request_uri` | Two holes. `furl(...).host` keeps the BRACKETS of an IPv6 literal, so for `https://[::1]/x` the host is the string `'[::1]'`: `ipaddress.ip_address` raised ValueError, `getaddrinfo('[::1]', None)` raised `gaierror`, and the DNS handler FAILS OPEN — so every IPv6 literal was allowed. And the address test was `not ip.is_global` alone, which is not the same as "routable on the public internet". | **fixed** | measured, below |
+
+The first half needs nothing an attacker does not already have — no hostname, no
+DNS control, no timing. `https://[::1]/`, `https://[fd00::1]/` and
+`https://[::ffff:127.0.0.1]/` all passed the guard, and `https://[::1]:5432/`
+is how it reaches something worth reaching. Measured for all three.
+
+The second half, with Python 3.13.15's own `ipaddress`:
+
+    ::7f00:1             is_global=True   IPv4-compatible IPv6 (RFC 4291), with
+                                          127.0.0.1 in the low 32 bits
+    ::ffff:0:127.0.0.1   is_global=True   the same address, other spelling
+    64:ff9b::7f00:1      is_global=True   NAT64 well-known prefix (RFC 6052)
+                                          embedding 127.0.0.1 -- behind a NAT64
+                                          gateway that is a route to loopback
+    64:ff9b::a00:1       is_global=True   the same, embedding 10.0.0.1
+    ff02::1              is_global=True   IPv6 all-nodes multicast
+    224.0.0.1            is_global=True   IPv4 all-hosts multicast
+
+`is_reserved` covers the first four and `is_multicast` the last two, so the test is
+`not ip.is_global or ip.is_reserved or ip.is_multicast` and there is no prefix list
+to maintain. Checked against 8.8.8.8, 1.1.1.1, 93.184.216.34,
+2606:4700:4700::1111, 2001:4860:4860::8888 and 2a00:1450:4001:827::200e, all still
+accepted.
+
+**Not fixed, and written into the code and the tests so neither reads as a
+promise:** the address is resolved here and resolved AGAIN by whoever performs the
+request, so a name that answers differently the second time — DNS rebinding — still
+gets through. Closing it means pinning the request to the address checked here,
+which is a change to the HTTP client rather than to this predicate.
+
+**A test of mine was wrong, in a way worth recording.**
+`test_the_replies_images_go_in_the_same_list` (round 156) read
+`Post.query.filter_by(user_id=...).first()` with no `order_by`. It passed for six
+rounds and failed in this one's full run: with enough other tests ahead of it,
+PostgreSQL returned post2, which has no reply, and the next line did
+`None.image_id`. Four reads in that file now name the row they mean.
+
+Also of note: two of this round's mutants survived as no-ops rather than as test
+gaps — `host.strip('[]')` in place of the explicit `startswith`/`endswith` pair, and
+`getaddrinfo(f.host)` in place of `getaddrinfo(host)`, which cannot differ because a
+bracketed host never reaches the resolver. Both were removed from the runner rather
+than chased.
+
+Twelve mutants, all dead. 12,995 tests, 0 failures, 0 warnings. All 92 floors met.
+
+**Next free number: D1359.**
