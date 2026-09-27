@@ -1645,6 +1645,38 @@ def digits(input: int) -> int:
     return len(shorten_number(input))
 
 
+def decrement_unread_counts(user_ids) -> None:
+    """Take one off `User.unread_notifications` for each id in `user_ids`.
+
+    D1360. Three places did this as
+
+        update(User).where(User.id.in_(user_ids))
+                    .values({User.unread_notifications: User.unread_notifications - 1})
+
+    and an `IN` list is a SET: the arithmetic runs ONCE per matching user however
+    many times their id appears, so an admin with two unread notifications from one
+    registration lost one of them and kept a badge for a notification that had been
+    marked read. There was no floor either, so a list naming somebody with nothing
+    unread drove the count NEGATIVE. Measured through `finalize_user_setup` with an
+    admin holding notifications from one registration:
+
+        2 unread  -> 1   (expected 0)
+        1 unread  -> 0   (expected 0)
+        0 unread  -> -1  (expected 0)
+
+    `user_ids` may hold duplicates and is counted, not de-duplicated. `GREATEST(...,
+    0)` is the floor, which is what `app/api/alpha/utils/reply.py`'s single-row
+    decrement already had as `AND unread_notifications > 0`.
+    """
+    from collections import Counter
+
+    for user_id, how_many in Counter(user_ids).items():
+        db.session.execute(
+            text('UPDATE "user" SET unread_notifications = '
+                 'GREATEST(unread_notifications - :how_many, 0) WHERE id = :user_id'),
+            {'how_many': how_many, 'user_id': user_id})
+
+
 @cache.memoize(timeout=50)
 def user_access(permission: str, user_id: int) -> bool:
     if user_id == 0:
@@ -2953,17 +2985,21 @@ def finalize_user_setup(user):
         user.ap_inbox_url = f"{current_app.config['SERVER_URL']}/u/{user.user_name.lower()}/inbox"
 
     # find all notifications from this registration and mark them as read
+    #
+    # D1360. `Notification.read == False` is part of the WHERE now: without it the
+    # update returned every notification of this type from this author, READ ONES
+    # INCLUDED, and each of those took another one off the admin's count -- so
+    # approving a registration whose notification had already been read left the
+    # count at -1. And the decrement itself is `decrement_unread_counts`, which
+    # counts the ids rather than treating them as a set.
     unread_notification_users = db.session.scalars(
         update(Notification)
-            .where(Notification.notif_type == NOTIF_REGISTRATION, Notification.author_id == user.id)
+            .where(Notification.notif_type == NOTIF_REGISTRATION, Notification.author_id == user.id,
+                   Notification.read == False)  # noqa: E712
             .values({Notification.read: True})
             .returning(Notification.user_id)
     ).all()
-    db.session.execute(
-        update(User)
-            .where(User.id.in_(unread_notification_users))
-            .values({User.unread_notifications: User.unread_notifications - 1})
-    )
+    decrement_unread_counts(unread_notification_users)
 
     db.session.commit()
 

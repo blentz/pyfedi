@@ -48,6 +48,7 @@ from app.utils import render_template, permission_required, set_setting, get_set
     topic_tree, languages_for_form, menu_topics, ensure_directory_exists, add_to_modlog, get_request, file_get_contents, \
     download_defeds, instance_banned, login_required, referrer, \
     community_membership, retrieve_image_hash, posts_with_blocked_images, user_access, reported_posts, user_notes, \
+    decrement_unread_counts, \
     safe_order_by, get_task_session, patch_db_session, low_value_reposters, moderating_communities_ids, \
     instance_allowed, trusted_instance_ids, get_emoji_replacements, get_site_as_dict, sanitize_svg, \
     REDIRECT_POLICY_SETTING, REDIRECT_POLICY_SAME_ORIGIN, roles_with
@@ -1978,12 +1979,10 @@ def admin_approve_registrations_denied(user_id):
             .where(Notification.author_id == user.id)
             .returning(Notification.user_id, Notification.read)
         ).all()
-        unread_notification_users = [n.user_id for n in notifications if not n.read]
-        db.session.execute(
-            update(User)
-            .where(User.id.in_(unread_notification_users))
-            .values({User.unread_notifications: User.unread_notifications - 1})
-        )
+        # D1360. This list holds one entry per unread notification, so an admin
+        # with two of them appears twice -- and `User.id.in_(...)` took only one
+        # off. `decrement_unread_counts` counts the ids and floors the result at 0.
+        decrement_unread_counts([n.user_id for n in notifications if not n.read])
 
         # remove the user from the db so the username is available again
         user.deleted = True

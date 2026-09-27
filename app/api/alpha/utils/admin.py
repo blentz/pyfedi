@@ -2,7 +2,8 @@ from sqlalchemy import desc, asc, delete, update
 
 from app import db
 from app.api.alpha.views import registration_view
-from app.utils import authorise_api_user, user_access, finalize_user_setup
+from app.utils import authorise_api_user, user_access, finalize_user_setup, \
+    decrement_unread_counts
 from app.email import send_registration_approved_email
 from app.models import utcnow, UserRegistration, User, Notification
 
@@ -71,12 +72,8 @@ def put_registration_approve(auth, data):
             .where(Notification.author_id == new_user.id)
             .returning(Notification.user_id, Notification.read)
         ).all()
-        unread_notification_users = [n.user_id for n in notifications if not n.read]
-        db.session.execute(
-            update(User)
-            .where(User.id.in_(unread_notification_users))
-            .values({User.unread_notifications: User.unread_notifications - 1})
-        )
+        # D1360, the API's copy of the same decrement.
+        decrement_unread_counts([n.user_id for n in notifications if not n.read])
 
         # remove the user from the db so the username is available again
         new_user.deleted = True
