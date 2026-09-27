@@ -1811,3 +1811,67 @@ class TestConcurrentInsert:
         assert result.ap_profile_id == document['id'].lower()
         assert db.session.query(Feed).count() == 1
         assert db.session.query(FeedMember).count() == 0
+
+
+class TestWhenThePeerSaysTheFeedWasCreated:
+    """D1347's Feed half. `Feed(created_at=..., last_edit=...)` took the peer's
+    `published` and `updated` strings straight into two DateTime columns, so a
+    document carrying `published: "whenever"` was
+
+        DataError: (psycopg2.errors.InvalidDatetimeFormat) invalid input syntax
+        for type timestamp: "whenever"
+
+    at the commit below the constructor -- the feed was never created, and the
+    transaction was poisoned with it. Same shape as D1330 (a poll's endTime) and
+    D1340 (a resolved post's published).
+
+    Two columns, asserted separately: a readable `published` must not mask an
+    unreadable `updated`.
+    """
+
+    @pytest.mark.parametrize('published, updated', [
+        ('whenever', '2024-01-01T00:00:00Z'),
+        ('2024-01-01T00:00:00Z', 'whenever'),
+        ('whenever', 'whenever'),
+        ('', ''),
+        (5, []),
+        ('2024-13-45T99:99:99Z', '2024-13-45T99:99:99Z'),
+    ])
+    def test_the_feed_is_created_whichever_timestamp_is_unreadable(
+            self, app, db_session, http_mock, published, updated):
+        _peer_with_one_owner(http_mock)
+        document = _owned_feed(fields={'published': published, 'updated': updated})
+
+        feed = actor_json_to_model(document, '~news', PEER)
+
+        assert feed is not None
+        assert feed.created_at is not None
+        assert feed.last_edit is not None
+
+    def test_readable_timestamps_are_converted_to_utc(self, app, db_session,
+                                                      http_mock):
+        """Not merely accepted: stored as a raw string, PostgreSQL cast an
+        offset-bearing value by DISCARDING the offset, so a peer five hours ahead
+        got a row five hours wrong."""
+        from datetime import datetime
+
+        _peer_with_one_owner(http_mock)
+        document = _owned_feed(fields={'published': '2024-01-01T00:00:00+05:00',
+                                       'updated': '2024-06-01T12:00:00+02:00'})
+
+        feed = actor_json_to_model(document, '~news', PEER)
+
+        assert feed.created_at == datetime(2023, 12, 31, 19, 0)
+        assert feed.last_edit == datetime(2024, 6, 1, 10, 0)
+
+    def test_a_document_with_neither_timestamp_gets_now(self, app, db_session,
+                                                        http_mock):
+        from app.models import utcnow
+
+        _peer_with_one_owner(http_mock)
+        before = utcnow()
+
+        feed = actor_json_to_model(_owned_feed(), '~news', PEER)
+
+        assert feed.created_at >= before
+        assert feed.last_edit >= before

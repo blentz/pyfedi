@@ -11850,3 +11850,27 @@ Build the bytes first, then patch.
 placeholder (`https://s3.example`) is really dialled: twelve tests spent 100
 seconds each failing to connect. Use an AWS endpoint moto recognises
 (`https://s3.us-east-1.amazonaws.com`).
+
+**719. A SOURCE SCAN MUST SKIP COMMENTS AS WELL AS STRINGS.**
+Fact 706 said to exclude string literals by walking the AST. That is not enough:
+a `#` comment explaining a repair quotes the pattern the repair forbids, and the
+AST holds no node for it. Collect `tokenize.COMMENT` line numbers too. The two
+scans in `tests/test_ap_peer_source_and_timestamps.py` share one `code_lines`
+helper that does both.
+
+**720. WHEN ONE CALLER NEEDS THE OLD LOOSER READING, GIVE IT A NAME.**
+Consolidating eleven hand-written reads into one helper broke exactly one of
+them: `Feed(description=...)` accepted a `source` with no `mediaType`, because it
+has no HTML to fall back to. The choice was to loosen the helper for everyone, to
+drop the data at that site, or to pass `require_media_type=False` there. The
+argument is longer to read and it is the only version where the difference is
+visible at the call site -- and the test that caught it was pinning deliberate
+behaviour, not an accident.
+
+**721. THE SAME DEFECT FOUND A THIRD TIME MEANS THE SWEEP WAS TOO NARROW.**
+A peer's timestamp reaching a DateTime column unparsed was D1330 (a poll), then
+D1340 (a resolved post), then D1347 (three actor types, five columns). Each round
+fixed the site in front of it. The property test that would have found all three
+at once greps every file under `app/` for a peer document's timestamp key on a
+line with no `parse_ap_timestamp`, and it exists now -- which is the point: write
+the scan when the shape repeats, not when the round ends.
