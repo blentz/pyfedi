@@ -11821,3 +11821,32 @@ for a whole round and the only symptom was that it took 23 minutes rather than 8
 Anything that silently degrades rather than failing needs its decision asserted:
 `TestWhichRunsGetWorkers` runs the shell function itself against twenty-one
 argument lists.
+
+**715. A FILE NO COLUMN NAMES IS NOT A LEFTOVER, IT IS A LEAK.**
+`url_to_thumbnail_file` wrote the peer's body to one path and the thumbnails to
+another, keeping only the second pair. The first file was orphaned the moment it
+was written: `delete_from_disk` reads columns, so it could never remove it, and no
+sweep could tell it from a file in use. When a function writes more paths than it
+stores, assert the set of files it leaves equals the set its row names -- that one
+assertion catches the whole class.
+
+**716. TO TEST A DISCARD PATH, FAIL WHERE THE STATE IS INTERESTING.**
+Feeding Pillow a non-image exercises the discard, but it fails at `Image.open` --
+before the resize renames the file -- so it cannot tell whether the cleanup
+removes the ORIGINAL or merely a name that happens to still equal it. Two mutants
+survived on exactly that. Patching `Image.Image.save` to raise on the first and
+then the second call puts the failure after the rename and after the first output
+exists. Pick the failure point by which variables have diverged, not by which
+input is easiest to build.
+
+**717. BUILD A PAYLOAD BEFORE PATCHING WHAT BUILDS IT.**
+The first version of those tests counted `Image.Image.save` calls, and the helper
+that makes the test PNG calls `save` too -- so the injected failure landed on the
+fixture instead of the code under test, and the OSError came out of the test body.
+Build the bytes first, then patch.
+
+**718. moto ONLY INTERCEPTS AN ENDPOINT IT ANSWERS.**
+`S3_ENDPOINT` has to be set for `store_files_in_s3()` to be true, and the obvious
+placeholder (`https://s3.example`) is really dialled: twelve tests spent 100
+seconds each failing to connect. Use an AWS endpoint moto recognises
+(`https://s3.us-east-1.amazonaws.com`).

@@ -1455,3 +1455,174 @@ class TestARemoteServerDoesNotChooseTheFileExtension:
                 for path in left:
                     if os.path.isfile(path):
                         os.remove(path)
+
+
+class TestTheOriginalDownloadIsNotLeftBehind:
+    """D1345. `url_to_thumbnail_file` writes the peer's body under one extension
+    and then, when the configured medium format differs, resizes it into another:
+
+        posts/Rq/Mk/RqMkzFBw22MVyW1.png       <- nothing names this
+        posts/Rq/Mk/RqMkzFBw22MVyW1.webp      <- File.thumbnail_path
+        posts/Rq/Mk/RqMkzFBw22MVyW1_512.webp  <- File.file_path
+
+    Measured, with the default MEDIA_IMAGE_MEDIUM_FORMAT=WEBP: the first file was
+    orphaned AT WRITE TIME. No column names it, so `File.delete_from_disk` cannot
+    remove it when the post goes, and no sweep can find it either -- it is not a
+    leftover that outlives its row, it is a file no row ever mentioned. Every
+    remote thumbnail this instance fetched left one, for ever, under a directory
+    it serves.
+
+    `tests/test_utils_thumbnail_s3.py` asserts the same thing for the S3 arm,
+    where the leftovers land in `app/static/tmp` and `clean_up_tmp` sweeps only
+    eight extensions after a day: `.img` -- D1327's fallback -- and `.avif`,
+    `.bmp`, `.tiff` and `.mpo` were never swept at all.
+    """
+
+    URL = 'https://thumbnails.example/original.png'
+
+    @staticmethod
+    def a_png(size=(600, 400)):
+        import io
+
+        from PIL import Image
+
+        buffer = io.BytesIO()
+        Image.new('RGB', size, (10, 120, 200)).save(buffer, format='PNG')
+        return buffer.getvalue()
+
+    def fetch(self, app, http_mock, content_type='image/png', content=None):
+        http_mock.get(self.URL).mock(return_value=httpx.Response(
+            200, content=content if content is not None else self.a_png(),
+            headers={'content-type': content_type}))
+        before = files_under(MEDIA_ROOT)
+        with app.app_context():
+            result = url_to_thumbnail_file(self.URL)
+        written = sorted(set(files_under(MEDIA_ROOT)) - set(before))
+        return result, written
+
+    def test_only_the_two_files_the_row_names_are_left(self, app, http_mock):
+        result, written = self.fetch(app, http_mock)
+        try:
+            assert written == sorted([result.thumbnail_path, result.file_path])
+        finally:
+            for path in written:
+                if os.path.isfile(path):
+                    os.remove(path)
+
+    def test_no_file_keeps_the_fetched_extension(self, app, http_mock):
+        """The .png was the whole of the leak, and it is the file nothing could
+        ever have deleted."""
+        result, written = self.fetch(app, http_mock)
+        try:
+            assert [path for path in written if path.endswith('.png')] == []
+        finally:
+            for path in written:
+                if os.path.isfile(path):
+                    os.remove(path)
+
+    def test_a_format_that_matches_the_fetch_keeps_its_one_file(self, app, http_mock,
+                                                               monkeypatch):
+        """The other side: when the medium format IS the fetched format, the
+        resize writes back over the same path, and that one file is the
+        thumbnail. Deleting 'the original' there would delete the thumbnail."""
+        monkeypatch.setitem(app.config, 'MEDIA_IMAGE_MEDIUM_FORMAT', 'PNG')
+
+        result, written = self.fetch(app, http_mock)
+        try:
+            assert result is not None
+            assert os.path.isfile(result.thumbnail_path)
+            assert os.path.isfile(result.file_path)
+            assert written == sorted([result.thumbnail_path, result.file_path])
+        finally:
+            for path in written:
+                if os.path.isfile(path):
+                    os.remove(path)
+
+    def test_a_body_pillow_refuses_leaves_neither_name(self, app, http_mock):
+        """D1328's drop has to take the original with it. Before this round the
+        cleanup listed `temp_file_path`, which by then is the RESIZED name, so a
+        failure after the format swap left the peer's bytes behind."""
+        result, written = self.fetch(app, http_mock, content=b'<html>not an image')
+        try:
+            assert result is None
+            assert written == []
+        finally:
+            for path in written:
+                if os.path.isfile(path):
+                    os.remove(path)
+
+    def failing_save(self, monkeypatch, fail_on):
+        """Make Pillow's save raise on the Nth call, so the discard path runs at a
+        point the fetched-vs-resized names have already diverged.
+
+        A body Pillow refuses fails at `Image.open`, which is BEFORE the format
+        swap moves `temp_file_path`, so a test using one cannot tell whether the
+        discard removes the original or merely the name that happens to equal it.
+        """
+        from PIL import Image
+
+        calls = []
+        real_save = Image.Image.save
+
+        def save(self, fp, *arguments, **keywords):
+            calls.append(fp)
+            if len(calls) == fail_on:
+                raise OSError('encoder blew up')
+            return real_save(self, fp, *arguments, **keywords)
+
+        monkeypatch.setattr(Image.Image, 'save', save)
+        return calls
+
+    def test_the_170_save_failing_still_removes_the_fetched_file(self, app, http_mock,
+                                                                monkeypatch):
+        """The first save is the one that runs after `temp_file_path` has moved to
+        the medium format's extension. The `.png` the peer's bytes went into has
+        to go with the discard."""
+        payload = self.a_png()  # built BEFORE the patch: a_png saves too
+        self.failing_save(monkeypatch, fail_on=1)
+
+        result, written = self.fetch(app, http_mock, content=payload)
+        try:
+            assert result is None
+            assert written == []
+        finally:
+            for path in written:
+                if os.path.isfile(path):
+                    os.remove(path)
+
+    def test_the_512_save_failing_removes_the_170_it_had_already_written(
+            self, app, http_mock, monkeypatch):
+        """By the second save the 170px thumbnail is on disk under the new
+        extension, so the discard has three names to clear, not one."""
+        payload = self.a_png()
+        self.failing_save(monkeypatch, fail_on=2)
+
+        result, written = self.fetch(app, http_mock, content=payload)
+        try:
+            assert result is None
+            assert written == []
+        finally:
+            for path in written:
+                if os.path.isfile(path):
+                    os.remove(path)
+
+    def test_an_svg_has_no_original_to_remove(self, app, http_mock):
+        """An SVG skips Pillow, so its one file is both the download and the
+        thumbnail; the removal must not touch it."""
+        http_mock.get(self.URL).mock(return_value=httpx.Response(
+            200, content=b'<svg xmlns="http://www.w3.org/2000/svg">'
+                        b'<rect width="1" height="1"/></svg>',
+            headers={'content-type': 'image/svg+xml'}))
+        before = files_under(MEDIA_ROOT)
+        with app.app_context():
+            result = url_to_thumbnail_file(self.URL)
+        written = sorted(set(files_under(MEDIA_ROOT)) - set(before))
+
+        try:
+            assert result is not None
+            assert written == [result.thumbnail_path]
+            assert os.path.isfile(result.thumbnail_path)
+        finally:
+            for path in written:
+                if os.path.isfile(path):
+                    os.remove(path)
