@@ -11955,3 +11955,24 @@ column that something later trusts, the type check is the point, not the key che
 others. Refusing the whole list on one bad entry would have turned a cosmetic
 problem in one profile field into the loss of every field -- and the test that says
 so puts a usable entry between two unusable ones.
+
+**734. A PRESENT KEY IS NOT A USABLE VALUE, SO `in` IS THE WRONG FALLBACK TEST.**
+`if 'summary' in activity_json: description_html = activity_json['summary']` gave
+`summary` priority over `content` by being present, whatever it held -- so a
+`summary` of `5` shadowed a perfectly good `content` and then crashed on
+`.startswith`. Choosing between two optional keys means taking the first one that
+reads as the type you need: `_as_text(a) or _as_text(b) or ''`.
+
+**735. A COLUMN COMPARISON WITH THE WRONG TYPE IS A DATABASE ERROR, NOT A MISS.**
+`find_language_or_create(5, ...)` did not simply fail to match: it was
+`ProgrammingError: operator does not exist: character varying = integer` out of the
+query itself. A peer's value that reaches a WHERE clause needs its type checked as
+much as one that reaches an INSERT, and the failure is louder -- it takes the whole
+transaction.
+
+**736. REPAIRING A SHAPE EVERYWHERE AND TESTING IT ONCE LEAVES THE REST UNPINNED.**
+Three of this round's mutants survived the first pass at sites the repair had
+already reached: `actor_json_to_model`'s language loop, the user task's summary, and
+`Post.new`'s language. The helper was tested and so was one caller. Every call site
+of a shared guard needs at least one test that goes through IT, or a future edit can
+drop the call and nothing notices.
