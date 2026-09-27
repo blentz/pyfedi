@@ -20254,4 +20254,46 @@ no `next` at all gives an empty 200.
 
 Eight mutants, all dead. 13,044 tests, 0 failures, 0 warnings. All 92 floors met.
 
-**Next free number: D1360.**
+## Round 164 — an unread count that drifted in both directions
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1360** | `finalize_user_setup` in `app/utils.py`, `admin_approve_registrations_denied` in `app/admin/routes.py`, `put_registration_approve` in `app/api/alpha/utils/admin.py` | All three took one off `User.unread_notifications` with `update(User).where(User.id.in_(user_ids)).values({... - 1})`. An `IN` list is a SET, so the arithmetic runs once per matching USER however many times their id appears — and there was no floor. The approve path also matched notifications that were ALREADY READ, and took one off for each of those too. | **fixed** | measured through `finalize_user_setup`, one admin |
+
+    2 unread from this registration  ->  1   (expected 0)
+    1 unread                         ->  0   (expected 0)
+    0 unread, 1 already read         -> -1   (expected 0)
+
+The last line is what a user would notice: approving a registration whose
+notification an admin had already read left that admin's badge showing a NEGATIVE
+number. The first line is the quieter one — a badge that never clears, for a
+notification that has been marked read.
+
+`decrement_unread_counts(user_ids)` counts the ids rather than de-duplicating them
+and floors the result with `GREATEST(..., 0)`, which is the floor
+`app/api/alpha/utils/reply.py`'s single-row decrement already had as `AND
+unread_notifications > 0`. `finalize_user_setup`'s update also gained
+`Notification.read == False`, so it returns exactly the rows it changed.
+
+**Five of thirteen mutants survived the first pass because `GREATEST(..., 0)` hid
+them.** Every test had the admin holding only the notifications being cleared, so
+the count reached 0 whether the arithmetic counted one notification or five. The
+tests that kill those mutants leave the admin an unrelated unread notification, so
+the remainder is a number rather than a floor.
+
+**Two tests passed before they worked.** The deny route is a POST behind CSRF, and
+without a token it answers 400 — which changes nothing, so the two tests asserting
+"nothing changed" passed on a request the route never saw. They carry a real token
+now, and the helper that makes one says why.
+
+And one self-inflicted scare: inserting the new helper immediately above `def
+user_access` put it between that function and its `@cache.memoize(timeout=50)`
+decorator. Sixteen tests failed with `AttributeError: 'function' object has no
+attribute 'make_cache_key'` — `cache.delete_memoized(user_access)` on a function
+that was no longer memoized, while the WRITE helper had become cached.
+
+Thirteen mutants, all dead. 13,075 tests, 0 failures, 0 warnings.
+`app/api/alpha/utils/admin.py` reached 100%; `app/admin/routes.py` 86.93%, floor
+85 → 86.
+
+**Next free number: D1361.**
