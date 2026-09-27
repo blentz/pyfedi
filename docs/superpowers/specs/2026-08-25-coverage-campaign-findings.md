@@ -19811,4 +19811,41 @@ said how to distribute. `TestWhichRunsGetWorkers` in
 the decision for eleven whole-suite and ten subset argument lists, because losing
 parallelism is silent and looks exactly like a slow test suite.
 
-**Next free number: D1345.**
+## Round 153 — the storage arm no test had entered, and the file nothing named
+
+`url_to_thumbnail_file` has two storage arms. The local one — write the resized
+images under `app/static/media/posts/xx/yy/` and keep those paths — is covered by
+`tests/test_utils_security.py`. The S3 one, which stages in `app/static/tmp`,
+uploads, unlinks, and keeps `https://{S3_PUBLIC_URL}/...` URLs instead, had never
+been executed. It is the ingest twin of round 152: the keys written here are the
+keys `s3_key_from_url` has to be able to name again, which one test now asserts as
+a round trip rather than leaving the two readings to agree by luck.
+
+Entering it found a defect that turned out to be in both arms.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1345** | `app/utils.py`, `url_to_thumbnail_file` | The peer's body is written under the extension its `Content-Type` implies, and the resize then writes the thumbnails under `MEDIA_IMAGE_MEDIUM_FORMAT`'s extension — moving `temp_file_path` to the new name. The fetched file was left behind, named by NO column, so it was orphaned at write time: `File.delete_from_disk` cannot remove it when the post goes, and no sweep can find it either. Every remote thumbnail this instance has ever fetched left one, under a directory it serves. | **fixed** | measured for one remote PNG with the default WEBP: `posts/Rq/Mk/RqMkzFBw22MVyW1.png` beside the two `.webp` files the row names |
+
+On the S3 arm the leftover lands in `app/static/tmp`, where `clean_up_tmp` sweeps
+only `.jpg .jpeg .png .gif .webp .heic .mp3 .mp4` after a day — so `.img`, which
+is D1327's fallback for a content type PieFed does not accept, and `.avif`,
+`.bmp`, `.tiff` and `.mpo` were never swept at all.
+
+The discard path had the same blind spot from the other side: it removed
+`temp_file_path` and its `_512` sibling, and by the time it runs `temp_file_path`
+is the RESIZED name, so a failure after the format swap left the peer's bytes
+behind. Both were invisible to a test that feeds Pillow something it refuses,
+because that fails at `Image.open`, before the swap. The two tests that kill those
+mutants make `Image.Image.save` raise on its first and second call instead.
+
+**An existing test had pinned the leak as expected behaviour**:
+`tests/test_shared_post_url.py` asserted `len(_written_media(...)) == 3  # png +
+170 webp + 512 webp`. It now asserts two files and that they are exactly
+`thumbnail_path` and `file_path`, with the history in a comment — the same
+treatment rounds 129 and 151 gave tests that had pinned unrepaired defects.
+
+Twelve mutants, all dead. 12,567 tests, 0 failures, 0 warnings. `app/utils.py`
+90.78%.
+
+**Next free number: D1346.**
