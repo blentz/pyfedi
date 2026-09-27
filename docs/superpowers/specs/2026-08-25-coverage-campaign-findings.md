@@ -19926,4 +19926,32 @@ in a second place: losing one association is not the same as owning the file.
 Eleven mutants, all dead. 12,666 tests, 0 failures, 0 warnings. `app/models.py`
 84.02%, floor ratcheted 83 → 84.
 
-**Next free number: D1350.**
+## Round 156 — the rest of the CDN, and the request that was too big to send
+
+Round 155 fixed the `user_file` half of a takedown. The post images were still
+never purged, everywhere.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1350** | six sites: `Post.delete_dependencies`, `PostReply.delete_dependencies`, `Domain.purge_content`, `archive_user` | Every post and reply image was deleted from disk with `purge_cdn=False`, so a moderator deleting a post, an admin banning a domain, a community being deleted and a user being archived all left the image readable at the edge. `purge_cdn=False` was how each caller avoided one Cloudflare request per file; the cost was that the purge never happened at all. | **fixed** | `delete_from_disk(cache_urls=[...])` collects instead, so the batching callers make one request and there is no reason left to turn the purge off |
+| **D1351** | `flush_cdn_cache_task` | It sent whatever list it was given as one `files` array and never read the response. Cloudflare's purge_cache endpoint takes at most 30 files per request and answers 400 for a longer list, so a purge of 31 files failed silently — and the callers that batch (a community, a domain, a user's whole history) are exactly the ones that exceed it. | **fixed** | batched in 30s; a non-200 is logged rather than discarded |
+
+`cache_urls=None` means "flush your own"; a list means "add to mine". `Post`,
+`PostReply`, `Community`, `Domain` and `User.purge_content` all thread it, so one
+delete is one request and a community of a thousand posts is 34 rather than a
+thousand — or, as it stood, none.
+
+**Two survivors said the test could not see the difference, and one said the code
+was redundant.** A caller that batches and a caller that lets each post flush for
+itself purge the same URLs, so only the NUMBER of requests separates them: those
+tests use two posts now and assert one flush containing both. And
+`Domain.purge_content` opened with `File.query.join(Post).filter(Post.domain_id ==
+self.id)` — a join on `post.image_id == file.id`, which selects exactly the images
+`post.delete_dependencies` deletes ten lines below. Deleting each of them twice was
+all it added, no mutant of it could die, and it is gone (fact 708 for the third
+time).
+
+Seventeen mutants, all dead. 12,684 tests, 0 failures, 0 warnings. All 92 floors
+met; `app/models.py` 84.86%.
+
+**Next free number: D1352.**
