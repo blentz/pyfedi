@@ -11936,3 +11936,22 @@ A test for the `image` read failed because that site sits inside the Event branc
 branch to work out why is what found the thirteen unguarded reads beside it (D1353).
 When a test cannot reach the line, find out what the line is nested in before
 adjusting the test.
+
+**731. A BACKGROUND REFRESH THAT RAISES IS A PERMANENT FAILURE, NOT A RETRY.**
+Eleven shapes of a peer's `attachment` and four of its `publicKey` raised out of
+`refresh_user_profile_task`. Nothing downstream repairs that: the actor keeps the
+profile it had, and keeps it for ever -- including the key their signatures are
+checked against. When the code under test is a refresher, the assertion is that the
+REST of the document was applied, not merely that nothing raised.
+
+**732. STORING str(None) IS WORSE THAN RAISING.**
+`{'publicKeyPem': None}` did not raise: it wrote the string 'None' into
+`User.public_key`. A crash gets noticed and retried; a plausible-looking wrong
+value is read as fact by everything downstream. When a peer's value goes into a
+column that something later trusts, the type check is the point, not the key check.
+
+**733. SKIP THE ENTRY, NOT THE LIST.**
+`property_value_fields` drops an `attachment` entry it cannot read and keeps the
+others. Refusing the whole list on one bad entry would have turned a cosmetic
+problem in one profile field into the loss of every field -- and the test that says
+so puts a usable entry between two unusable ones.
