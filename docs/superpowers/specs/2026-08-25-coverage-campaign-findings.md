@@ -20044,4 +20044,51 @@ not to have flattened it.
 Seventeen mutants, all dead. 12,813 tests, 0 failures, 0 warnings. All 92 floors
 met.
 
-**Next free number: D1355.**
+## Round 159 — the other two actor types, and three reads instead of one
+
+D1354 repaired the user refresh. The community and feed refreshes have the same
+`publicKey` read, and two more the user task shares with them.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1355** | `refresh_community_profile_task`, `refresh_feed_profile_task`, `refresh_user_profile_task`, `actor_json_to_model` (twice), `Post.new`, `update_post_from_activity`, `create_post_reply`, `app/community/util.py` | Three reads, across fifteen sites: `activity_json['publicKey']['publicKeyPem']`; each entry of a `language` list as `['identifier']` and `['name']`; and `summary`/`content` handed to `.startswith('<')` without ever being a string. | **fixed** | table below |
+
+Measured through `refresh_community_profile_task`:
+
+    language=['en']                    TypeError: string indices must be integers
+    language=[{'identifier': 'en'}]    KeyError: 'name'
+    language=[{'name': 'English'}]     KeyError: 'identifier'
+    language=[{'identifier': 5, ...}]  ProgrammingError: operator does not exist:
+                                       character varying = integer
+    language=[None] / [5]              TypeError: not subscriptable
+    a 50-character identifier          DataError: value too long
+    publicKey absent / None / {}       KeyError / TypeError / KeyError
+    publicKey={'publicKeyPem': None}   stored the STRING 'None'
+    summary=5 / [] / {} / True         AttributeError: ... has no attribute
+                                       'startswith'
+
+`language: ['en']` is not a hypothetical: a list of plain language codes is a
+shape peers send, and it was a TypeError. So was a community whose `summary` is
+an object rather than a string — and a community that cannot refresh keeps its
+stale name, icon, description, moderator list AND key, for ever.
+
+`language_from_ap` caps the code at `Language.code`'s String(5) and the name at
+String(50), falls back to the code when the name is unusable, and answers None
+without an identifier, since there is nothing to key on. Callers skip the entry,
+so one bad language does not cost the others.
+
+The summary reads now take the first READABLE of `summary` and `content`. They
+used to take `summary` whenever the key was PRESENT, whatever it held, so an
+unusable `summary` shadowed a perfectly good `content`. One of the fifteen mutants
+is exactly that, and it needed its own test.
+
+**Two of the three survivors were sites I had repaired but not driven** —
+`actor_json_to_model`'s language loop and the user task's summary — and the third
+was `Post.new`'s language, whose guard tested that `identifier` and `name` were
+PRESENT and said nothing about their types. Repairing a shape everywhere and
+testing it in one place leaves the rest pinned by nothing.
+
+Fifteen mutants, all dead. 12,890 tests, 0 failures, 0 warnings. All 92 floors met;
+`app/activitypub/util.py` 92.57%.
+
+**Next free number: D1356.**
