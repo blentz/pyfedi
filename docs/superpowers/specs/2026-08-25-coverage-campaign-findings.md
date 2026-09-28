@@ -21213,4 +21213,41 @@ high score, and a low-scoring reply with no downvotes.
 Nine mutants, all dead, on a green baseline. 13,944 tests, 0 failures, 0 warnings. All 92
 floors met, and setting `body_html` in `make_post_reply` broke nothing across the suite.
 
-**Next free number: D1383.**
+## Round 188 — a peer's malformed body, wrapped in one backtick
+
+`admin_activities` and `activity_json` are the federation log an admin reads: 30 statements
+between them with no test at all, both `permission_required('change instance settings')`, and
+everything they display came from a peer.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1383** | `app/admin/routes.py`, `activity_json` | The fallback branch — reached precisely when the stored body did NOT parse, so the value is the peer's bytes verbatim — wrapped them in a **single** backtick and ran the result through `markdown_to_html`, rendered `{{ json_html \| safe }}`. One backtick in the body closes the span and the rest is markdown. | **fixed** | input `` `{"a": "` <img src=x> `"}` `` → output `<code>{"a": "</code> <img loading="lazy" src="x"/> <strong>bold</strong> <code>"}</code>` |
+
+`markdown_to_html` ends in `allowlist_html`, so this is markup injection rather than script: an
+attacker-chosen image, fetched from their server the moment an admin opens the page, and
+attacker-chosen links — on the page an admin uses to inspect suspicious federation, with the
+body they most want to read garbled. Escaped into a `<pre><code>` directly now, which is the arm
+`app/post/routes.py`'s source view already uses for a body it cannot safely fence.
+
+**The valid-JSON branch was checked and left alone.** It builds a three-backtick fence, which
+looked like the same hazard, but `json.dumps` escapes every control character: a backtick run
+inside a string value stays on that string's own line, behind the `"` and the `indent=2` prefix,
+and a fence has to start its line. That is what lets the branch keep its syntax highlighting,
+and two tests now pin it — one with ``` inside a value, one with ``` as a key — rather than
+leaving the reasoning in a comment.
+
+**Three test mistakes, each caught by running it:**
+
+* asserting `b'<h1' not in response.data` is meaningless, because `base.html` contributes an
+  `<h1>` and several `<img>` tags of its own. The assertions are scoped to the rendered JSON
+  block, found by whichever marker the branch emits;
+* `{"a": "` + a backtick + ` <img src=x> ` + a backtick + `"}` is **valid** JSON — its value is
+  the backtick-wrapped text — so it took the safe branch and proved nothing about the fallback.
+  The list of malformed bodies now asserts its own premise with `json.loads` before using it;
+* "the payload is absent" needed a companion assertion that the block is not empty, or a fix
+  that dropped the body entirely would have passed.
+
+Eleven mutants, all dead, on a green baseline. 13,983 tests, 0 failures, 0 warnings. All 92
+floors met.
+
+**Next free number: D1384.**
