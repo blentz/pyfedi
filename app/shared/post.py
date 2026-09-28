@@ -33,7 +33,7 @@ from app.utils import render_template, authorise_api_user, shorten_string, gibbe
 
 def vote_for_post(post_id: int, vote_direction, federate: bool, emoji: str, src, auth=None):
     if src == SRC_API:
-        post = db.session.get(Post, post_id)
+        post = db.session.get(Post, post_id) or abort(404)
         user = authorise_api_user(auth, return_type='model')
         if vote_direction == 'upvote' and not can_upvote(user, post.community):
             return user.id
@@ -984,7 +984,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
 # just for deletes by owner (mod deletes are classed as 'remove')
 def delete_post(post_id: int, federate_deletion, src, auth):
     if src == SRC_API:
-        post = db.session.get(Post, post_id)
+        post = db.session.get(Post, post_id) or abort(404)
         user_id = authorise_api_user(auth, id_match=post.user_id)
     else:
         if current_user:
@@ -994,7 +994,7 @@ def delete_post(post_id: int, federate_deletion, src, auth):
 
     from app import redis_client
     with redis_client.lock(f"lock:post:{post_id}", timeout=10, blocking_timeout=6):
-        post = db.session.get(Post, post_id)
+        post = db.session.get(Post, post_id) or abort(404)
         if post.url:
             post.calculate_cross_posts(delete_only=True)
 
@@ -1026,12 +1026,12 @@ def delete_post(post_id: int, federate_deletion, src, auth):
 
 def restore_post(post_id: int, src, auth):
     if src == SRC_API:
-        post = db.session.get(Post, post_id)
+        post = db.session.get(Post, post_id) or abort(404)
         user_id = authorise_api_user(auth, id_match=post.user_id)
     else:
         user_id = current_user.id
 
-    post = db.session.get(Post, post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     if post.url:
         post.calculate_cross_posts()
 
@@ -1167,7 +1167,7 @@ def lock_post(post_id: int, locked, src, auth=None):
     else:
         user = current_user
 
-    post = db.session.get(Post, post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     if locked:
         comments_enabled = False
         modlog_type = 'lock_post'
@@ -1203,7 +1203,7 @@ def move_post(post_id: int, target_id: int, src, auth=None):
     else:
         user = current_user
 
-    post = db.session.get(Post, post_id)
+    post = db.session.get(Post, post_id) or abort(404)
 
     if post.community.is_moderator(user) or post.community.is_instance_admin(user) or user.is_admin_or_staff():
         old_community_id = post.community_id
@@ -1256,7 +1256,7 @@ def sticky_post(post_id: int, featured: bool, src: int, auth=None):
     else:
         user = current_user
 
-    post = db.session.get(Post, post_id)
+    post = db.session.get(Post, post_id) or abort(404)
     community = post.community
 
     if post.community.is_moderator(user) or post.community.is_instance_admin(user) or user.is_admin_or_staff():
@@ -1288,7 +1288,7 @@ def hide_post(post_id: int, hidden: bool, src: int, auth=None):
     else:
         user = current_user
 
-    post = db.session.get(Post, post_id)
+    post = db.session.get(Post, post_id) or abort(404)
 
     if hidden:
         user.mark_post_as_hidden(post)
@@ -1309,7 +1309,7 @@ def mod_remove_post(post_id: int, reason, src, auth):
 
     from app import redis_client
     with redis_client.lock(f"lock:post:{post_id}", timeout=10, blocking_timeout=6):
-        post = db.session.get(Post, post_id)
+        post = db.session.get(Post, post_id) or abort(404)
 
         if not post.community.is_moderator(user) and not user.is_admin_or_staff():
             raise Exception('Does not have permission')
@@ -1354,7 +1354,7 @@ def mod_restore_post(post_id: int, reason, src, auth):
 
     from app import redis_client
     with redis_client.lock(f"lock:post:{post_id}", timeout=10, blocking_timeout=6):
-        post = db.session.get(Post, post_id)
+        post = db.session.get(Post, post_id) or abort(404)
         if not post.community.is_moderator(user) and not user.is_admin_or_staff():
             raise Exception('Does not have permission')
 
