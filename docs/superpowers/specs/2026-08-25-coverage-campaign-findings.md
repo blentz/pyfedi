@@ -20787,4 +20787,64 @@ restored backup or a changed `SERVER_NAME` leaves behind.
 Nineteen mutants, all dead. 13,433 tests, 0 failures, 0 warnings. All 92 floors met;
 `app/shared/feed.py` 99.68%, `app/api/alpha/utils/feed.py` 100%.
 
-**Next free number: D1372.**
+## Round 177 — the name a peer publishes for an actor
+
+Round 176's sweep asked where a name is written in more than one place. This one asks
+the neighbouring question: where is a name *read* from a peer's document by hand? Five
+sites, one key.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1372** | `app/activitypub/util.py`, `refresh_user_profile_task` and all three branches of `actor_json_to_model` | `activity_json['preferredUsername'].strip()`, five times. One untrusted value failed three ways — the key absent was `KeyError`, a number, list, dict, bool or null was `AttributeError: 'int' object has no attribute 'strip'`, and a value wider than the column was a `DataError` at commit — and the only guard, `except KeyError` around the constructors, catches exactly one of the three. `refresh_user_profile_task` has no handler at all and re-raises after rolling back, so any of the shapes makes an actor **permanently unrefreshable**: their avatar, bio, `indexable` flag and any rotated key all stop being picked up, and every later interaction queues a task that fails again. | **fixed** | seven of eight measured shapes aborted the refresh: `absent` → `KeyError: 'preferredUsername'`; `None`, `5`, `[]`, `{}`, `True`, `['wakko']` → `AttributeError: ... has no attribute 'strip'` |
+
+This is D1354 and D1355's family — a peer's document read by hand — for the one key those
+rounds did not reach. `actor_name_from_ap` joins `_as_text`, `public_key_pem`,
+`language_from_ap`, `parse_ap_timestamp`, `property_value_fields` and `markdown_source`,
+all of which came out of the same shape.
+
+**Refusing is right at creation and wrong at refresh.** A row being created has no name
+yet, and `name`/`machine_name`/`user_name` are what every lookup and every `/u/`, `/c/`
+and `/f/` route resolves on, so an actor publishing no usable name is one this instance
+cannot represent — which is the outcome `except KeyError` already chose for one of the
+three shapes. A row being refreshed already holds a name that worked, and a peer that
+stops publishing a usable one has not renamed itself to nothing.
+
+**Four neighbours fixed with it, all inside the same constructors:**
+
+* `publicKey` was still read by hand at all three creation branches. `public_key_pem` was
+  written for D1354 and applied only to the refresh tasks, so a `publicKey` that is a
+  string raised `TypeError` past the `except KeyError`, and `{'publicKeyPem': None}`
+  stored the **string** `'None'` — an actor that looks present and whose every signature
+  is rejected;
+* the Group and Feed branches read `activity_json['name'].strip()` with **no guard at
+  all**, so a document carrying no `name` — a shape the Person branch treats as ordinary
+  — could not create a community or a feed at all. It falls back to the actor's own name;
+* the Feed constructor assigned the peer's `summary` straight into `description_html`.
+  The block below overwrites that through `allowlist_html`, but only when `_as_text`
+  accepts the value, so for a non-string the block was skipped and the raw object stayed
+  in a Text column until the commit raised on something psycopg cannot adapt. Not an
+  XSS — every string that survives is sanitised — but a raw assignment that reads as the
+  value being kept, and for one family of values it was;
+* `Feed.machine_name` is `String(50)` where `Feed.name` is `String(256)`, and both are
+  written from the same value, so a peer publishing a 60-character name was a `DataError`
+  and no remote feed of that name could be created. The web form caps its own field at 50
+  (`app/feed/forms.py:68`) and nothing capped the API arm, so round 176's
+  `feed_machine_name` — one rule, one place — carries the width too.
+
+**Six tests pinned the old behaviour and were corrected**, each having said in its own
+docstring what it was doing: two asserted `ap_preferred_username == ' alice '` and
+`machine_name == ' news '` as "pinning present behaviour, not endorsing it", naming the
+`.strip()` that would one day change them; two listed `name` among the keys whose absence
+is refused; one required the `TypeError` from a string `publicKey` to escape, on the
+reasoning that swallowing it "would report a malformed document and a genuinely broken
+one identically" — a string `publicKey` is a malformed peer document, and nothing in that
+expression is this deployment's; and one asserted `description_html is None` for
+`summary: null` while an absent summary gave `''`, two spellings of the same nothing
+chosen by the peer.
+
+Twenty-one mutants, all dead. 13,546 tests, 0 failures, 0 warnings. All 92 floors met;
+`app/activitypub/util.py` 92.74% (174 lines uncovered, down from 322 at the start of this
+campaign's most recent stretch), `app/models.py` 89.76%. Both floors already sit at the
+integer below their figure, so neither rises.
+
+**Next free number: D1373.**

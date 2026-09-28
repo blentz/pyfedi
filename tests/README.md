@@ -12296,3 +12296,29 @@ consistency check with a parametrised statement of the value the rule should pro
 would let the write decide its own permission. Assert that `is_local()` still holds
 afterwards -- a rewrite that put a foreign host in there would quietly turn a local feed
 remote, and remote feeds are excluded from the rewrite, so the damage would stick.
+
+**785. A GUARD THAT CATCHES ONE OF THREE FAILURES READS AS A GUARD.**
+`try: User(user_name=activity_json['preferredUsername'].strip(), ...) except KeyError`
+handled the key being absent and nothing else, while the same untrusted value being a
+number raised AttributeError past it and one wider than the column raised DataError at a
+commit somewhere else. When a handler names an exception type, ask what else the guarded
+expression can raise -- the presence of a handler is not evidence that the value is
+validated.
+
+**786. THE WIDTH THAT FITS IS THE NARROWEST COLUMN THE VALUE IS WRITTEN TO.**
+`Feed.name` is String(256) and `Feed.machine_name` is String(50), and one value goes into
+both, so 255 is as wrong as 300. Before capping a value from outside, find every column
+it lands in.
+
+**787. AN ASSIGNMENT THAT IS USUALLY OVERWRITTEN IS STILL AN ASSIGNMENT.**
+The Feed constructor put the peer's raw `summary` in `description_html` and the block
+below re-derived it through `allowlist_html` -- but only for values `_as_text` accepts, so
+the raw object survived for exactly the values that should never have been stored. A
+"belt and braces" write that the later code skips on some inputs is the only write on
+those inputs.
+
+**788. A TEST THAT SAYS IT IS PINNING PRESENT BEHAVIOUR IS TELLING YOU WHERE TO LOOK.**
+Six tests were corrected this round and each had named its own conditions: two said a
+`.strip()` "later added" would change what the column holds, one said its handler must
+stay narrow and why. Those docstrings turned six potential arguments into six
+verifications. Write the reason a pinned assertion is a pin, not a requirement.
