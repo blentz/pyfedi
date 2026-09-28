@@ -10,6 +10,7 @@ from webauthn.helpers.structs import UserVerificationRequirement, PublicKeyCrede
 from app import db, cache
 from app.auth import bp
 from app.models import User, utcnow
+from app.utils import safe_redirect_target
 
 
 # ----------------------------------------------------------------------
@@ -17,9 +18,11 @@ from app.models import User, utcnow
 @bp.route('/passkeys/login_options', methods=['POST'])
 def passkey_options():
     request_json = request.get_json(force=True)
+    if not isinstance(request_json, dict):
+        abort(400)
+    username = request_json.get('username')
     user = User.query.filter(
-        (User.user_name == request_json["username"])
-        | (User.email == request_json["username"]),
+        (User.user_name == username) | (User.email == username),
         User.ap_id == None,
         User.banned == False,
     ).first()
@@ -36,7 +39,7 @@ def passkey_options():
         response.content_type = 'application/json'
         return response
     else:
-        return jsonify({"error": f"Could not find user {request_json['username']}"})
+        return jsonify({"error": f"Could not find user {username}"})
 
 
 # ----------------------------------------------------------------------
@@ -52,14 +55,18 @@ def allowed_credentials(user):
 @bp.route('/passkeys/login_verification', methods=['POST'])
 def passkey_verification():
     request_json = request.get_json(force=True)
-    username = request_json['username']
-    redirect = request_json['redirect']
+    if not isinstance(request_json, dict):
+        abort(400)
+    # `.get`, not `[...]`: this endpoint is unauthenticated and takes whatever
+    # body it is posted, so a missing key was a 500 rather than a refusal. The
+    # same three keys are read below.
+    username = request_json.get('username')
+    redirect = request_json.get('redirect')
     error_message = ''
 
-    auth_credential = parse_authentication_credential_json(request_json['response'])
+    auth_credential = parse_authentication_credential_json(request_json.get('response'))
     user = User.query.filter(
-        (User.user_name == request_json["username"])
-        | (User.email == request_json["username"]),
+        (User.user_name == username) | (User.email == username),
         User.ap_id == None,
         User.banned == False,
     ).first()
@@ -111,5 +118,16 @@ def passkey_verification():
         return jsonify({'verified': False, 'message': error_message})
     else:
         login_user(user, remember=True)
-        redirect_to = redirect or '/'
+        # D1373. `redirect_to = redirect or '/'`, where `redirect` is the posted
+        # body's value and app/static/js/scripts.js:1375 assigns it to
+        # `location.href`. scripts.js:1336 fills it from `?next=` on the login
+        # page, so `/auth/login?next=<anything>` chose where a visitor went the
+        # moment their passkey verified -- including
+        # `javascript:alert(1)`, which `location.href` EXECUTES, in this origin,
+        # on a page where the session has just been authenticated.
+        #
+        # The password arm of the same login form already runs the same `?next=`
+        # through this function (`redirect_next_page`, app/auth/util.py:447) and
+        # says why. One control, two paths, checked on one -- D1359's shape.
+        redirect_to = safe_redirect_target(redirect, '/')
         return jsonify({'verified': True, 'redirectTo': redirect_to})

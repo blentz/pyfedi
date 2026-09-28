@@ -86,8 +86,15 @@ def generate_user_handle() -> bytes:
 @login_required(csrf=False)
 def user_passkey_verification():
     request_json = request.get_json(force=True)
-    registration_credential = parse_registration_credential_json(request_json['response'])
-    registration_device = request_json['device']
+    if not isinstance(request_json, dict):
+        abort(400)
+    # D1373, the registration twin of the login endpoint's reads. The route is
+    # `login_required(csrf=False)` and takes whatever body it is posted, so a
+    # missing key was a 500. `Passkey.device` is String(50) and this value was
+    # written to it unbounded, which is a DataError at the commit below -- and the
+    # passkey is lost with the request.
+    registration_credential = parse_registration_credential_json(request_json.get('response'))
+    registration_device = (request_json.get('device') or '')[:50]
     try:
         registration_verification = verify_registration_response(
             credential = registration_credential,
