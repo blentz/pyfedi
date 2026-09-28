@@ -20622,4 +20622,40 @@ difference by accident.
 Seventeen mutants, all dead. 13,317 tests, 0 failures, 0 warnings. `app/shared/post.py`
 and `app/shared/reply.py` both reached 100%.
 
-**Next free number: D1369.**
+## Round 173 — a delete that never federated, because the worker ran after the delete
+
+The remaining candidates from round 172's AST sweep, checked for reachability. Most are
+safe (`db.session.get(Site, 1)` always answers; `bot_challenge_user`'s caller aborts
+404 first). One was not.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1369** | `app/shared/feed.py`, `delete_feed` and `announce_feed_delete_to_subscribers` | The announce was dispatched with `(user_id, feed.id)` and the task looked the Feed and its `FeedMember` rows up again. `delete_feed` deletes both and commits immediately afterwards, so a celery worker found nothing: `feed.ap_public_url` was `AttributeError: 'NoneType' object has no attribute 'ap_public_url'`, the task failed, and **no Delete was ever federated for a public feed**. | **fixed** | the code's own comment said "have to do it here before the feed members are cleared out", and `.delay()` is what defeated it |
+
+**Why it survived this long: it works in development.** Under `current_app.debug`
+celery is eager, so the same call runs INLINE — before the deletion — and delivers
+correctly. The `.delay()` arm is the one every production instance takes.
+
+The recipients are gathered in `delete_feed` now, while the rows exist, and passed to
+the task. The actor is still looked up inside the task rather than passed, so the
+private key stays out of the broker. The selection rules moved into
+`remote_subscriber_inboxes`: skip the owner, skip local members, require an inbox,
+require the instance online and not banned, and list each inbox once however many of
+its users subscribe.
+
+**Eleven existing tests had to be reworked**, and none of them was wrong. Six called the
+task with its old two-argument signature, and the assertions about WHO receives the
+Delete belonged to the loop that moved — they now exercise the same composition the
+caller performs, `announce_feed_delete_to_subscribers(user, feed.ap_public_url,
+remote_subscriber_inboxes(feed))`. A twelfth asserted the dispatch arguments and now
+asserts the new three.
+
+Two new tests state the defect directly: the argument handed to the task names a real
+inbox and is computed before the rows go, and the task still works when called with
+those arguments AFTER the feed has been deleted — which is the only case a real worker
+ever sees.
+
+Fifteen mutants, all dead. 13,333 tests, 0 failures, 0 warnings. `app/shared/feed.py`
+99.67%.
+
+**Next free number: D1370.**
