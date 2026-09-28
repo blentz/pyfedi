@@ -339,6 +339,13 @@ def user_view(user: User | int, variant, stub=False, user_id=None, flair_communi
 
     if isinstance(user, int):
         user = db.session.get(User, user)
+        if user is None:
+            # D1367. `db.session.get` answers None, and every line below reads an
+            # attribute off it, so an id nobody holds was `AttributeError: 'NoneType'
+            # object has no attribute '__table__'` -- a 500. `NoResultFound` is what
+            # `post_view` raises here and what `shared_error_handler` turns into the
+            # 400 'Not found' this is supposed to be.
+            raise NoResultFound
 
     # Variant 1 - models/person/person.dart
     if variant == 1:
@@ -715,6 +722,8 @@ def reply_view(reply: PostReply | int, variant: int, user_id=None,
                         read_comment_ids=None) -> dict:
     if isinstance(reply, int):
         reply = db.session.get(PostReply, reply)
+        if reply is None:  # D1367, as in post_view
+            raise NoResultFound
 
     if read_comment_ids is None:
         read_comment_ids = []
@@ -1003,6 +1012,8 @@ def feed_view(feed: Feed | int, variant: int, user_id, subscribed, include_commu
               banned_from, communities_joined, blocked_community_ids, blocked_instance_ids, ) -> dict:
     if isinstance(feed, int):
         feed = db.session.get(Feed, feed)
+        if feed is None:  # D1367
+            raise NoResultFound
 
     if variant == 1:
         include = ['id', 'user_id', 'title', 'name', 'machine_name', 'description', 'description_html', 'nsfw', 'nsfl',
@@ -1141,6 +1152,8 @@ def private_message_view(cm: ChatMessage, variant, report=None) -> dict:
 def conversation_information_view(conversation: int | Conversation, variant=1) -> dict:
     if isinstance(conversation, int):
         conversation = db.session.get(Conversation, conversation)
+        if conversation is None:  # D1367
+            raise NoResultFound
     
     conversation_id = conversation.id
     members = []
@@ -1164,6 +1177,8 @@ def conversation_information_view(conversation: int | Conversation, variant=1) -
 def conversation_report_view(report: int | Report, variant=1) -> dict:
     if isinstance(report, int):
         report = db.session.get(Report, report)
+        if report is None:  # D1367
+            raise NoResultFound
     
     if not report.suspect_conversation_id:
         raise Exception("report is not for a conversation")
@@ -1206,6 +1221,8 @@ def topic_view(topic: Topic | int, variant: int, communities_moderating, banned_
                include_communities) -> dict:
     if isinstance(topic, int):
         topic = db.session.get(Topic, topic)
+        if topic is None:  # D1367
+            raise NoResultFound
 
     if variant == 1:
         include = ['id', 'machine_name', 'name', 'num_communities', 'parent_id', 'show_posts_in_children']
