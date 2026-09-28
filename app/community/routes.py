@@ -59,7 +59,9 @@ from app.utils import back, get_setting, render_template, markdown_to_html, vali
     approval_required, permission_required, aged_account_required, communities_banned_from_all_users, \
     moderating_communities_ids_all_users, block_honey_pot, user_pronouns, community_membership_private, \
     show_reason_why_no_federation, can_upload_video, banned_instances, is_invalid_get_request_uri, user_ip_banned, \
-    check_anoobis
+    check_anoobis, \
+    community_link_markup
+
 from app.shared.post import make_post, sticky_post
 from app.shared.tasks import task_selector
 from app.shared.community import leave_community
@@ -965,7 +967,7 @@ def do_subscribe(actor, user_id, admin_preload=False, joined_via_feed=False):
                         if not admin_preload:
                             if current_user and current_user.is_authenticated and current_user.id == user_id:
                                 flash(Markup(_('You joined %(community_name)s',
-                                               community_name=f'<a href="/c/{community.link()}">{community.display_name()}</a>')))
+                                               community_name=community_link_markup(community))))
                         else:
                             pre_load_message['status'] = 'joined'
                     else:
@@ -1036,7 +1038,7 @@ def unsubscribe(actor):
 
                 if request.method == 'GET':
                     flash(Markup(_('You left %(community_name)s',
-                                   community_name=f'<a href="/c/{community.link()}">{community.display_name()}</a>')))
+                                   community_name=community_link_markup(community))))
                 cache.delete_memoized(community_membership, current_user, community)
                 cache.delete_memoized(joined_communities, current_user.id)
             else:
@@ -1086,7 +1088,7 @@ def join_then_add(actor):
             db.session.add(member)
             db.session.commit()
         flash(Markup(_('You joined %(community_name)s',
-                       community_name=f'<a href="/c/{community.link()}">{community.display_name()}</a>')))
+                       community_name=community_link_markup(community))))
     if not community.user_is_banned(current_user):
         return redirect(url_for('community.add_post', actor=community.link(), type='discussion'))
     else:

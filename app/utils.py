@@ -1607,6 +1607,31 @@ def domain_from_email(email: str) -> str:
             return ''
 
 
+def community_link_markup(community) -> Markup:
+    """A safe `<a>` for a community, for the flash messages that need markup.
+
+    D1376. Four places built this by hand as
+
+        community_name=f'<a href="/c/{community.link()}">{community.display_name()}</a>'
+
+    and handed the result to `Markup(_(...))`. `Markup` marks a string safe, and
+    Jinja renders a safe string verbatim -- so `{{ message }}` in base.html put
+    both interpolated values straight into the DOM. Neither is safe to put there:
+    `display_name()` is `title` (or `title@ap_domain`) and `link()` is `name` or
+    `ap_id`, and for a REMOTE community all of those come from the peer's actor
+    document, which restricts no characters (fact 797). Measured, the whole
+    rendered message for a community whose title a peer set:
+
+        You joined <a href="/c/memes@peer.example"></a><img src=x
+        onerror=alert(1)>@peer.example</a>
+
+    `Markup.format` escapes its arguments, which is the construction that cannot
+    be got wrong; the four call sites could each be fixed and one of them missed.
+    """
+    return Markup('<a href="/c/{link}">{name}</a>').format(
+        link=community.link(), name=community.display_name())
+
+
 def shorten_string(input_str, max_length=50):
     if input_str:
         if len(input_str) <= max_length:
