@@ -20906,4 +20906,32 @@ instance holds, as `public_key_pem` does under D1354.
 Fourteen mutants, all dead. 13,689 tests, 0 failures, 0 warnings. All 92 floors met;
 `app/activitypub/util.py` 92.75%, floor 92.
 
-**Next free number: D1375.**
+## Round 180 — a username that was HTML, on an endpoint with no gate
+
+Round 179's leftovers pointed at the web routes that mutate state with no auth decorator.
+Most of the 114 the sweep found authenticate in the handler (`authorise_api_user`) or by
+HTTP signature (the inboxes). Three that do neither are typeahead endpoints that build
+HTML by hand.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1375** | `app/main/routes.py`, `modlog_search_suggestions` | `f"<option value='{m.ap_id or m.user_name}'>"` — a user name is not a safe HTML attribute value, and nothing restricts the characters in a **remote** actor's name: `actor_name_from_ap` strips the peer's `preferredUsername` and cuts it to the column and does not filter it. The response is swapped into the DOM by htmx, and this string never went through Jinja, which autoescapes everything else in the codebase. | **fixed** | the whole body came back as `<option value='x'><img src=x onerror=alert(1)>'>` — the `<img>` has left the attribute |
+| **D1375** | the same endpoint's gate | `modlog()` is `@login_required_if_private_instance`, and the comment above it records why: the modlog "was the exception: it answered 200 with its public entries where /communities and / redirect to the login". The endpoint its search box calls carried no decorator at all. | **fixed** | on a private instance, `/modlog` → 302 while `/modlog/search_suggestions` → 200 and named the user; five accounts per substring, to anybody |
+| **D1375** | `app/post/routes.py` `post_search_community_suggestions` and `app/community/routes.py` `_make_community_results_datalist_html` | The same unescaped f-string, one actor type over — through `Community.name` and `lemmy_link()`, and through the names in `app/static/tmp/all_communities.json`. | **fixed** | — |
+
+**This is the third time at this shape, and the second time at that exact line.** D998 and
+D1111 are the same finding at `post_search_community_suggestions`: "the fallback search
+matched on name and `ap_id` with only `banned == False`, so it named PRIVATE communities —
+to anyone, since the route carried no decorator either". That round fixed the query and
+added `@login_required`, and left the unescaped f-string one line below untouched. A page
+and the endpoint it feeds are two places one control has to be applied; a hand-built HTML
+string is a fourth thing to check while already looking at one.
+
+**Why `login_required_if_private_instance` and not `login_required`.** The modlog is public
+on a public instance and its search box has to keep working there. The endpoint gets the
+decorator the page has, which is the whole point of the finding — not a stricter one that
+would break the public case.
+
+Seven mutants, all dead. 13,716 tests, 0 failures, 0 warnings. All 92 floors met.
+
+**Next free number: D1376.**
