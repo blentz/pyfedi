@@ -8,6 +8,7 @@ import orjson
 import shutil
 
 from flask import request, flash, json, url_for, current_app, redirect, g, abort, send_file, make_response
+from markupsafe import Markup
 from flask_login import current_user, login_user
 from flask_babel import _, ngettext
 from slugify import slugify
@@ -1382,8 +1383,25 @@ def activity_json(activity_id):
     if is_valid_json:
         json_html = '<pre><code>\n' + pretty_json + '\n</code></pre>'
     else:
-        json_md = "`" + pretty_json + "`"
-        json_html = markdown_to_html(json_md)
+        # D1383. This arm is reached precisely when the body did NOT parse, so
+        # `pretty_json` is the peer's bytes verbatim, and it was wrapped in a
+        # SINGLE backtick -- the weakest delimiter markdown has. Measured, one
+        # backtick in the body closed the span and the rest was rendered as
+        # markdown:
+        #
+        #     <code>{"a": "</code> <img loading="lazy" src="x"/>
+        #     <strong>bold</strong> <code>"}</code>
+        #
+        # `markdown_to_html` ends in `allowlist_html`, so this is markup
+        # injection rather than script: an attacker-chosen image (which fetches
+        # from their server when an admin opens the page) and attacker-chosen
+        # links, on the page an admin uses to inspect suspicious federation --
+        # and the body they most want to read comes out garbled.
+        #
+        # Escaped into a `<pre><code>` directly instead of going through markdown
+        # at all, which is the arm app/post/routes.py's source view already uses
+        # for a body it cannot safely fence.
+        json_html = Markup('<pre><code>{}</code></pre>').format(pretty_json)
 
     return render_template('admin/activity_json.html', title=_('Activity JSON'), json_html=json_html,
         activity=activity, current_app=current_app, skip_protocol_replacement=True, roles_with=roles_with('change instance settings'))
