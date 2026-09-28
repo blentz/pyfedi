@@ -12091,3 +12091,22 @@ The test that had to be rewritten this round did not merely assert the wrong num
 its docstring said "its author and community counters still fall" as if that were the
 design. It read as a specification and it was a description of a bug. When a test
 explains behaviour it observed rather than behaviour someone chose, say which it is.
+
+**754. AN ETAG BUILT FROM A COUNTER INHERITS THE COUNTER'S BUGS.**
+The domain feed's ETag is `hash(domain.post_count)`. The count did not move when a
+post was deleted, so the ETag did not either, and a conditional request answered 304
+with the deleted post still in the cached body. A validator has to change whenever
+the CONTENT changes; deriving it from one column means every path that fails to
+update that column becomes a stale-content bug.
+
+**755. NOT EVERY COUNTER HAS A SAFETY NET, SO CHECK BEFORE ASSUMING DRIFT IS
+TEMPORARY.** `community.post_count` and `tag.post_count` are recounted from the rows
+by daily maintenance; `domain.post_count` is not. The same arithmetic error is a
+one-day annoyance in the first two and permanent in the third. Round 165's ledger
+entry claimed a permanent drift for a counter that self-heals nightly, and round 166
+had to correct it -- look for the recount before describing the blast radius.
+
+**756. `db.session.refresh` WITHOUT A COMMIT DISCARDS THE CHANGE YOU ARE TESTING.**
+The app factory sets `autoflush=False`. Three tests here asserted the OLD value
+because `refresh` expired the object and re-read the row while the write was still
+pending in the session. A helper that reads back a written value commits first.
