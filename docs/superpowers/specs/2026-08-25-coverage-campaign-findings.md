@@ -20314,6 +20314,13 @@ only a plain delete drifted — which is the normal case. An instance running br
 or feed bots deletes their replies routinely, so the displayed count walked
 downwards and through zero.
 
+**Correction, made in round 166:** the sentence above overstated how long that
+lasted. `update_community_stats`, in PieFed's DAILY maintenance, recounts
+`community.post_count` and `community.post_reply_count` from the rows. So the drift
+was bounded by one day rather than permanent — a community's reply count could be
+wrong, and visibly negative, until the next nightly run. The defect and the repair
+are unchanged; the blast radius was smaller than this entry first claimed.
+
 **An existing test had pinned the drift.**
 `test_deleting_a_bots_reply_leaves_the_posts_reply_count_alone` asserted
 `community.post_reply_count == 4` and its docstring said "its author and community
@@ -20333,4 +20340,40 @@ arithmetic.
 
 Nine mutants, all dead. 13,090 tests, 0 failures, 0 warnings. All 92 floors met.
 
-**Next free number: D1362.**
+## Round 166 — a counter with no recount, and a cached feed that kept a deleted post
+
+Round 165's sweep of one counter suggested sweeping the rest. `Domain.post_count`
+turned out to have no decrement on delete at all — and, unlike
+`Community.post_count` and `Tag.post_count`, no nightly recount to hide it.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1362** | `Domain.post_count`: incremented in `Post.new`, `update_post_from_activity` and `app/shared/post.py`'s create; decremented in exactly ONE place, an edit that moves a post between domains | Deleting a post never took it off, and nothing recounts domains — `update_community_stats` and `update_hashtag_counts` cover communities and tags only. So the number only ever grew. | **fixed** | a domain at 1 with one post stayed at 1 after that post was deleted |
+
+Two things read it, and the second is the one with teeth:
+
+  * `app/domain/routes.py` offers the domain's RSS feed only `if domain.post_count >
+    0`, so a domain whose only post was deleted keeps advertising an empty feed;
+  * that feed's ETag is `f"{domain.id}_{hash(domain.post_count)}"`. While the count
+    did not move, the ETag did not change, so a conditional request got **304 Not
+    Modified** and the reader KEPT ITS CACHED COPY — containing the deleted post —
+    until some other post happened to arrive on the same domain. Deleted content
+    stayed readable to anyone holding the ETag.
+
+`adjust_domain_post_count(post, delta)` is one implementation called from all eight
+places that move `Community.post_count`: the author's own delete and restore, a
+moderator's removal and restore, the federated delete and restore, and the two ban
+purges. It returns early for a post with no url, tolerates a domain row that has
+gone, and floors at 0 — rows written before this existed are already too high and a
+later delete must not push them negative.
+
+Two mutants survived the first pass: `mod_remove_post` and `mod_restore_post`, which
+no test drove, and the early `if not post.domain_id` return, which
+`db.session.get(Domain, None)` answering None makes unobservable. The first got
+tests; the second got a comment saying it exists to keep a SELECT out of every
+delete of a post that has no url, which is most of them.
+
+Eleven mutants, all dead. 13,106 tests, 0 failures, 0 warnings. `app/shared/post.py`
+reached 100%.
+
+**Next free number: D1363.**
