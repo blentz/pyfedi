@@ -326,6 +326,30 @@ def adjust_domain_post_count(post, delta):
     domain.post_count = max((domain.post_count or 0) + delta, 0)
 
 
+def served_path(value):
+    """The path `value` is served at, or `value` unchanged when it is not ours.
+
+    D1363. Two spellings of one normalisation lived in this file. `File.view_url`,
+    `medium_url` and `thumbnail_url` anchor it, taking `value[4:]` when the string
+    starts with the media root; seventeen places in the icon, header, avatar and
+    cover methods instead rewrote every occurrence of that prefix anywhere in the
+    string. Both are reached with `source_url`, which is a peer's string, so one
+    File could render two different URLs depending on which method a template
+    called.
+
+    Our own generated paths cannot contain a second copy of the prefix -- the shards
+    are two characters each and the filename is last -- so this is about what a peer
+    can put in `source_url`, and about there being one answer rather than two.
+
+    The seventeen sites were each an `if startswith(...) / else` pair returning the
+    rewritten value or the value itself, which is exactly this function; collapsing
+    them removed thirty-four lines that no test could reach separately.
+    """
+    if not isinstance(value, str):
+        return value
+    return f'/{value[4:]}' if value.startswith('app/') else value
+
+
 def markdown_source(document, require_media_type=True):
     """The markdown a peer offered in an object's `source`, or None if it offered
     none usable.
@@ -821,8 +845,7 @@ class File(db.Model):
         elif self.file_path:
             if self.file_path.startswith('http'):
                 return self.file_path
-            file_path = self.file_path[4:] if self.file_path.startswith('app/') else self.file_path
-            return f"{current_app.config['SERVER_URL']}/{file_path}"
+            return f"{current_app.config['SERVER_URL']}{served_path(self.file_path)}"
         else:
             return ''
 
@@ -831,8 +854,7 @@ class File(db.Model):
             return self.thumbnail_url()
         if self.file_path.startswith('http'):
             return self.file_path
-        file_path = self.file_path[4:] if self.file_path.startswith('app/') else self.file_path
-        return f"{current_app.config['SERVER_URL']}/{file_path}"
+        return f"{current_app.config['SERVER_URL']}{served_path(self.file_path)}"
 
     def thumbnail_url(self):
         if self.thumbnail_path is None:
@@ -842,8 +864,9 @@ class File(db.Model):
                 return ''
         if self.thumbnail_path.startswith('http'):
             return self.thumbnail_path
-        thumbnail_path = self.thumbnail_path[4:] if self.thumbnail_path.startswith('app/') else self.thumbnail_path
-        return f"{current_app.config['SERVER_URL']}/{thumbnail_path}"   # image paths must include fqdn (not just starting with /) because apps need to make a request from outside
+        # image paths must include fqdn (not just starting with /) because apps need
+        # to make a request from outside
+        return f"{current_app.config['SERVER_URL']}{served_path(self.thumbnail_path)}"
 
     def is_image(self):
         common_image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp', '.avif', '.svg+xml',
@@ -1184,41 +1207,23 @@ class Community(db.Model):
         if self.icon_id is not None:
             if size == 'default':
                 if self.icon.file_path is not None:
-                    if self.icon.file_path.startswith('app/'):
-                        return self.icon.file_path.replace('app/', '/')
-                    else:
-                        return self.icon.file_path
+                    return served_path(self.icon.file_path)
                 if self.icon.source_url is not None:
-                    if self.icon.source_url.startswith('app/'):
-                        return self.icon.source_url.replace('app/', '/')
-                    else:
-                        return self.icon.source_url
+                    return served_path(self.icon.source_url)
             elif size == 'tiny':
                 if self.icon.thumbnail_path is not None:
-                    if self.icon.thumbnail_path.startswith('app/'):
-                        return self.icon.thumbnail_path.replace('app/', '/')
-                    else:
-                        return self.icon.thumbnail_path
+                    return served_path(self.icon.thumbnail_path)
                 if self.icon.source_url is not None:
-                    if self.icon.source_url.startswith('app/'):
-                        return self.icon.source_url.replace('app/', '/')
-                    else:
-                        return self.icon.source_url
+                    return served_path(self.icon.source_url)
         return '/static/images/1px.gif'
 
     @cache.memoize(timeout=500)
     def header_image(self) -> str:
         if self.image_id is not None:
             if self.image.file_path is not None:
-                if self.image.file_path.startswith('app/'):
-                    return self.image.file_path.replace('app/', '/')
-                else:
-                    return self.image.file_path
+                return served_path(self.image.file_path)
             if self.image.source_url is not None:
-                if self.image.source_url.startswith('app/'):
-                    return self.image.source_url.replace('app/', '/')
-                else:
-                    return self.image.source_url
+                return served_path(self.image.source_url)
         return ''
 
     def display_name(self) -> str:
@@ -1715,10 +1720,7 @@ class User(UserMixin, db.Model):
     def avatar_thumbnail(self) -> str:
         if self.avatar_id is not None:
             if self.avatar.thumbnail_path is not None:
-                if self.avatar.thumbnail_path.startswith('app/'):
-                    return self.avatar.thumbnail_path.replace('app/', '/')
-                else:
-                    return self.avatar.thumbnail_path
+                return served_path(self.avatar.thumbnail_path)
             else:
                 return self.avatar_image()
         return ''
@@ -1726,30 +1728,18 @@ class User(UserMixin, db.Model):
     def avatar_image(self) -> str:
         if self.avatar_id is not None:
             if self.avatar.file_path is not None:
-                if self.avatar.file_path.startswith('app/'):
-                    return self.avatar.file_path.replace('app/', '/')
-                else:
-                    return self.avatar.file_path
+                return served_path(self.avatar.file_path)
             if self.avatar.source_url is not None:
-                if self.avatar.source_url.startswith('app/'):
-                    return self.avatar.source_url.replace('app/', '/')
-                else:
-                    return self.avatar.source_url
+                return served_path(self.avatar.source_url)
         return ''
 
     @cache.memoize(timeout=500)
     def cover_image(self) -> str:
         if self.cover_id is not None:
             if self.cover.thumbnail_path is not None:
-                if self.cover.thumbnail_path.startswith('app/'):
-                    return self.cover.thumbnail_path.replace('app/', '/')
-                else:
-                    return self.cover.thumbnail_path
+                return served_path(self.cover.thumbnail_path)
             if self.cover.source_url is not None:
-                if self.cover.source_url.startswith('app/'):
-                    return self.cover.source_url.replace('app/', '/')
-                else:
-                    return self.cover.source_url
+                return served_path(self.cover.source_url)
         return ''
 
     def community_theme_allowed(self,community_id:int) ->bool:
@@ -4943,41 +4933,23 @@ class Feed(db.Model):
         if self.icon_id is not None:
             if size == 'default':
                 if self.icon.file_path is not None:
-                    if self.icon.file_path.startswith('app/'):
-                        return self.icon.file_path.replace('app/', '/')
-                    else:
-                        return self.icon.file_path
+                    return served_path(self.icon.file_path)
                 if self.icon.source_url is not None:
-                    if self.icon.source_url.startswith('app/'):
-                        return self.icon.source_url.replace('app/', '/')
-                    else:
-                        return self.icon.source_url
+                    return served_path(self.icon.source_url)
             elif size == 'tiny':
                 if self.icon.thumbnail_path is not None:
-                    if self.icon.thumbnail_path.startswith('app/'):
-                        return self.icon.thumbnail_path.replace('app/', '/')
-                    else:
-                        return self.icon.thumbnail_path
+                    return served_path(self.icon.thumbnail_path)
                 if self.icon.source_url is not None:
-                    if self.icon.source_url.startswith('app/'):
-                        return self.icon.source_url.replace('app/', '/')
-                    else:
-                        return self.icon.source_url
+                    return served_path(self.icon.source_url)
         return '/static/images/1px.gif'
 
     @cache.memoize(timeout=500)
     def header_image(self) -> str:
         if self.image_id is not None:
             if self.image.file_path is not None:
-                if self.image.file_path.startswith('app/'):
-                    return self.image.file_path.replace('app/', '/')
-                else:
-                    return self.image.file_path
+                return served_path(self.image.file_path)
             if self.image.source_url is not None:
-                if self.image.source_url.startswith('app/'):
-                    return self.image.source_url.replace('app/', '/')
-                else:
-                    return self.image.source_url
+                return served_path(self.image.source_url)
         return ''
 
     def display_name(self) -> str:
