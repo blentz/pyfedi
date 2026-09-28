@@ -30,7 +30,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     Licence, UserExtraField, Feed, FeedMember, FeedItem, CommunityFlair, UserFlair, Topic, Event, InstanceBan, Emoji, \
     UserFollower, PostBoost, parse_ap_timestamp, image_url_from, markdown_source, \
     _as_text, _as_int, _as_float, property_value_fields, public_key_pem, \
-    language_from_ap
+    language_from_ap, adjust_domain_post_count
 from app.utils import get_request, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
     is_image_url, domain_from_url, gibberish, ensure_directory_exists, shorten_string, fixup_url, \
     microblog_content_to_title, is_video_url, \
@@ -2268,6 +2268,7 @@ def delete_post_or_comment(deletor, to_delete, store_ap_json, request_json, reas
                     to_delete.calculate_cross_posts(delete_only=True)
             with redis_client.lock(f"lock:community:{community.id}", timeout=10, blocking_timeout=6):
                 community.post_count -= 1
+                adjust_domain_post_count(to_delete, -1)  # D1362
             with redis_client.lock(f"lock:user:{to_delete.user_id}", timeout=10, blocking_timeout=6):
                 to_delete.author.post_count -= 1
                 db.session.commit()
@@ -2333,6 +2334,7 @@ def restore_post_or_comment(restorer, to_restore, store_ap_json, request_json, r
             to_restore.deleted = False
             to_restore.deleted_by = None
             community.post_count += 1
+            adjust_domain_post_count(to_restore, 1)  # D1362
             to_restore.author.post_count += 1
             if to_restore.url:
                 to_restore.calculate_cross_posts()
@@ -2383,6 +2385,7 @@ def site_ban_remove_data(blocker_id, blocked):
         post.deleted = True
         post.deleted_by = blocker_id
         post.community.post_count -= 1
+        adjust_domain_post_count(post, -1)  # D1362
         if post.url and post.cross_posts is not None:
             post.calculate_cross_posts(delete_only=True)
     blocked.post_count = 0
@@ -2423,6 +2426,7 @@ def community_ban_remove_data(blocker_id, community_id, blocked):
         post.deleted = True
         post.deleted_by = blocker_id
         post.community.post_count -= 1
+        adjust_domain_post_count(post, -1)  # D1362
         if post.url and post.cross_posts is not None:
             post.calculate_cross_posts(delete_only=True)
         blocked.post_count -= 1

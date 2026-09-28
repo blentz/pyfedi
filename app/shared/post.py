@@ -19,7 +19,8 @@ from app.activitypub.util import make_image_sizes, notify_about_post
 from app.community.util import tags_from_string_old, end_poll_date, flair_from_form, flairs_from_string
 from app.constants import *
 from app.models import File, Notification, NotificationSubscription, Poll, PollChoice, PollChoiceVote, Post, \
-    PostBookmark, PostVote, Report, Site, User, utcnow, Instance, Event, Community, CommunityFlair, votes_cast_today
+    PostBookmark, PostVote, Report, Site, User, utcnow, Instance, Event, Community, CommunityFlair, \
+    votes_cast_today, adjust_domain_post_count
 from app.shared.tasks import task_selector
 from app.utils import render_template, authorise_api_user, shorten_string, gibberish, ensure_directory_exists, \
     piefed_markdown_to_lemmy_markdown, markdown_to_html, fixup_url, domain_from_url, \
@@ -810,6 +811,7 @@ def delete_post(post_id: int, federate_deletion, src, auth):
         post.author.post_count -= 1
         post.author.last_seen = utcnow()
         post.community.post_count -= 1
+        adjust_domain_post_count(post, -1)  # D1362
         db.session.commit()
 
     if federate_deletion and post.status == POST_STATUS_PUBLISHED:
@@ -845,6 +847,7 @@ def restore_post(post_id: int, src, auth):
     post.deleted_by = None
     post.author.post_count += 1
     post.community.post_count += 1
+    adjust_domain_post_count(post, 1)  # D1362
     db.session.commit()
 
     task_selector('restore_post', user_id=user_id, post_id=post.id)
@@ -1121,6 +1124,7 @@ def mod_remove_post(post_id: int, reason, src, auth):
         post.deleted_by = user.id
         post.author.post_count -= 1
         post.community.post_count -= 1
+        adjust_domain_post_count(post, -1)  # D1362
         db.session.commit()
 
     add_to_modlog('delete_post', actor=user, target_user=post.author, reason=reason,
@@ -1163,6 +1167,7 @@ def mod_restore_post(post_id: int, reason, src, auth):
         post.deleted_by = None
         post.author.post_count += 1
         post.community.post_count += 1
+        adjust_domain_post_count(post, 1)  # D1362
         db.session.commit()
 
     add_to_modlog('restore_post', actor=user, target_user=post.author, reason=reason,

@@ -292,6 +292,40 @@ def language_from_ap(value):
     return code, _as_text(value.get('name'), 50) or code
 
 
+def adjust_domain_post_count(post, delta):
+    """Move `Domain.post_count` by `delta` for the domain this post's url belongs to.
+
+    D1362. `Domain.post_count` was incremented when a post was created and
+    decremented in exactly one place -- an EDIT that moved a post from one domain to
+    another. Deleting a post left it alone, and unlike `Community.post_count` and
+    `Tag.post_count` there is no nightly recount for domains
+    (`update_community_stats` and `update_hashtag_counts` cover those two), so the
+    number only ever grew.
+
+    Two things read it, and both are wrong once it has drifted:
+
+      * `app/domain/routes.py` offers the domain's RSS feed only `if
+        domain.post_count > 0`, so a domain whose only post was deleted keeps
+        advertising a feed with nothing in it;
+      * that feed's ETag is `f"{domain.id}_{hash(domain.post_count)}"`, and a
+        conditional request matching it gets a 304 -- so a reader holding the ETag
+        KEEPS THE DELETED POST until some other post arrives on the same domain.
+
+    A post with no url has no domain and is nothing to do with this. The floor at 0
+    is here because rows written before this existed are already too high, and a
+    later delete must not push them negative.
+    """
+    # `db.session.get(Domain, None)` would answer None and the next guard would
+    # catch it, so this early return is unobservable -- it is here to keep a SELECT
+    # out of every delete of a post that has no url, which is most of them.
+    if not post.domain_id:
+        return
+    domain = db.session.get(Domain, post.domain_id)
+    if domain is None:
+        return
+    domain.post_count = max((domain.post_count or 0) + delta, 0)
+
+
 def markdown_source(document, require_media_type=True):
     """The markdown a peer offered in an object's `source`, or None if it offered
     none usable.
