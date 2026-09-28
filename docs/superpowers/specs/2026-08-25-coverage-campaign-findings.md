@@ -20580,4 +20580,46 @@ the error mapping are asserted too: `NoResultFound` becomes a 400, and an
 Eleven mutants, all dead. 13,299 tests, 0 failures, 0 warnings. All 92 floors met;
 `app/api/alpha/__init__.py` reached 100%.
 
-**Next free number: D1368.**
+## Round 172 — fifteen resolved ids, four idioms, one outcome missing
+
+D1367's shape, swept across `app/`: every `x = db.session.get(...)` whose result is
+dereferenced without a guard. An AST pass over every file outside `cli.py` and `nntp`
+found thirty candidates. Most are safe — `db.session.get(Site, 1)` always answers a
+row — and the cluster worth repairing was the one in `app/shared/post.py` and
+`app/shared/reply.py`, where every function begins by resolving the post or reply it is
+about.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1368** | fifteen sites in `app/shared/post.py` and `app/shared/reply.py` | The same question answered four ways in two files, one of which reports nothing. | **fixed** | below |
+
+    reply.py:21   db.session.query(PostReply).filter_by(id=reply_id).one()  NoResultFound
+    reply.py:42   db.session.get(PostReply, reply_id) or abort(404)          404
+    post.py:101   if db.session.get(Post, post_id) is None: ...              explicit
+    fifteen more  db.session.get(Post, post_id)   then post.<attribute>      AttributeError
+
+`vote_for_post` had the bare form on its API branch while `vote_for_reply` — its twin,
+in the other file — used `.one()`. All fifteen now read `db.session.get(...) or
+abort(404)`, which two of the three guarded sites in the same files already used.
+
+**Reachability, stated plainly:** most of the fifteen are not reachable today. The API
+callers resolve the id first with `a_post()` or `a_reply()`, which raise, and two of the
+web routes carry `or abort(404)` themselves. They were a 500 waiting for the first
+caller that did not — `post_vote` in `app/post/routes.py` passes its URL id straight
+through, and the only reason that is not a 500 today is the guard `vote_for_post`'s web
+branch already had.
+
+**The mutation pass needed a new tool.** Fifteen identical lines cannot be addressed by
+text, so the runner for this round mutates BY LINE NUMBER: it finds every line matching
+the guard, strips `or abort(404)` from exactly one of them, and runs the tests.
+Seventeen guards, seventeen dead — including the two that were already there, which the
+same pass now covers.
+
+`vote_for_reply`'s `.one()` is deliberately left alone, and a test asserts it still
+raises `NoResultFound` rather than `NotFound`, so a later sweep cannot flatten the
+difference by accident.
+
+Seventeen mutants, all dead. 13,317 tests, 0 failures, 0 warnings. `app/shared/post.py`
+and `app/shared/reply.py` both reached 100%.
+
+**Next free number: D1369.**
