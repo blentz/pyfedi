@@ -922,9 +922,17 @@ def test_a_signed_get_is_the_same_request_without_a_body(app):
     assert signed.call_args.args[5] == 'get'
 
 
-def test_an_ld_signature_round_trips(app):
+def test_an_ld_signature_round_trips(app, no_network_ld_signing):
     """create_signature and verify_signature against each other, which is the
     only way to cover the creation side without a recorded peer document.
+
+    `no_network_ld_signing` because `jsonld.normalize` resolves this document's
+    `@context` through pyld's default loader, which reaches the real internet via
+    `requests` -- respx does not touch it, and conftest's docstring names this as
+    a gap each test must close for itself. Without the fixture these two tests
+    fetched `https://www.w3.org/ns/activitystreams` live on every run and failed
+    intermittently under full-suite load; they were the only two calling
+    `jsonld.normalize` without it.
     """
     from app.activitypub.signature import LDSignature, RsaKeys
 
@@ -939,9 +947,14 @@ def test_an_ld_signature_round_trips(app):
 
     assert signature['type'] == 'RsaSignature2017'
     assert LDSignature.verify_signature(signed_document, public_key) is None
+    # The fixture yields the URLs it served, so "no network" is asserted rather
+    # than assumed -- an empty list would mean the loader was bypassed.
+    assert no_network_ld_signing
 
 
-def test_an_ld_signature_made_with_another_key_is_a_mismatch(app):
+def test_an_ld_signature_made_with_another_key_is_a_mismatch(app,
+                                                             no_network_ld_signing):
+    """`no_network_ld_signing` for the same reason as the test above."""
     from app.activitypub.signature import LDSignature, RsaKeys, VerificationError
 
     private_key, _ = RsaKeys.generate_keypair()
