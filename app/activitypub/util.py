@@ -32,6 +32,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     _as_text, _as_int, _as_float, property_value_fields, public_key_pem, \
     language_from_ap, adjust_domain_post_count, actor_name_from_ap
 from app.utils import get_request, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
+    sanitise_posting_warning, \
     is_image_url, domain_from_url, gibberish, ensure_directory_exists, shorten_string, fixup_url, \
     microblog_content_to_title, is_video_url, \
     notification_subscribers, communities_banned_from, html_to_text, add_to_modlog, joined_communities, \
@@ -818,6 +819,36 @@ def refresh_user_profile_task(user_id):
         session.close()
 
 
+def posting_warning_from_ap(activity_json):
+    """The posting warning a peer publishes, sanitised, or None.
+
+    D1377. `activity_json['postingWarning']` went into `Community.posting_warning`
+    verbatim at both the refresh and the creation site, and
+    `app/templates/post/post.html:91` renders it
+
+        {{ post.community.posting_warning|safe }}
+
+    on every post page in that community. `|safe` is deliberate -- a local
+    moderator may format the warning -- but it means a REMOTE community's warning
+    was peer-supplied HTML rendered unescaped. Measured: a Group document
+    publishing `<img src=x onerror=alert(1)><script>alert(2)</script>` had exactly
+    that stored, from both the refresh and the creation path.
+
+    `allowlist_html` is what every other peer-sourced HTML field in this module
+    goes through, so the affordance survives and the script does not. The value is
+    also typed and bounded: `{}` was `ProgrammingError: can't adapt type 'dict'`
+    and a 700-character warning was `DataError` on a String(512), either of which
+    aborts the refresh task and leaves the community unrefreshable for ever
+    (D1372's family). Sanitised before the final cut, and cut again after, because
+    escaping can lengthen the string; a tag the cut splits is dropped by the
+    browser, and nothing that survives the allowlist can execute.
+    """
+    warning = _as_text(activity_json.get('postingWarning'), 512)
+    if warning is None:
+        return None
+    return sanitise_posting_warning(warning) or None
+
+
 def refresh_community_profile(community_id, activity_json=None):
     if current_app.debug:
         refresh_community_profile_task(community_id, activity_json)
@@ -873,7 +904,7 @@ def refresh_community_profile_task(community_id, activity_json):
                     refreshed_title = actor_name_from_ap(activity_json, 'name', limit=256)
                     if refreshed_title:
                         community.title = refreshed_title
-                    community.posting_warning = activity_json['postingWarning'] if 'postingWarning' in activity_json else None
+                    community.posting_warning = posting_warning_from_ap(activity_json)  # D1377
                     community.restricted_to_mods = activity_json['postingRestrictedToMods'] if 'postingRestrictedToMods' in activity_json else False
                     community.new_mods_wanted = activity_json['newModsWanted'] if 'newModsWanted' in activity_json else False
                     community.private_mods = activity_json['privateMods'] if 'privateMods' in activity_json else False
@@ -1452,7 +1483,8 @@ def actor_json_to_model(activity_json, address, server):
                                   # D1347, on a community rather than an actor.
                                   created_at=parse_ap_timestamp(activity_json.get('published')) or utcnow(),
                                   last_active=parse_ap_timestamp(activity_json.get('updated')) or utcnow(),
-                                  posting_warning=activity_json['postingWarning'] if 'postingWarning' in activity_json else None,
+                                  # D1377, as on the refresh path above.
+                                  posting_warning=posting_warning_from_ap(activity_json),
                                   ap_id=f"{address[1:].lower()}@{server.lower()}" if address.startswith('!') else f"{address.lower()}@{server.lower()}",
                                   ap_public_url=activity_json['id'],
                                   ap_profile_id=activity_json['id'].lower(),

@@ -1607,6 +1607,25 @@ def domain_from_email(email: str) -> str:
             return ''
 
 
+def sanitise_posting_warning(html: str) -> str:
+    """A posting warning that is safe to render, cut to its column.
+
+    D1377. `Community.posting_warning` and `Instance.posting_warning` are rendered
+    `{{ ...|safe }}` (app/templates/post/post.html:91, :94). That is deliberate --
+    a moderator may format the warning -- so the value has to be sanitised where it
+    is WRITTEN, which is what every other `|safe` field in this codebase relies on
+    (`description_html`, `about_html`, `rules_html` all come out of
+    `allowlist_html`). Four writers had no sanitiser at all: the community create
+    and edit forms, the admin community form, and the two ActivityPub paths, where
+    the warning is whatever a peer published.
+
+    Cut after sanitising because escaping can lengthen the string, and the column
+    is `String(512)`. A tag the cut splits is dropped by the browser, and nothing
+    that survives `allowlist_html` can execute.
+    """
+    return allowlist_html(html)[:512]
+
+
 def community_link_markup(community) -> Markup:
     """A safe `<a>` for a community, for the flash messages that need markup.
 
