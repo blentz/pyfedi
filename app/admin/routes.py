@@ -1499,6 +1499,24 @@ def admin_community_edit(community_id):
     form.topic.choices = topics_for_form(0)
     form.languages.choices = languages_for_form(all_languages=True)
     if form.validate_on_submit():
+        # D1370. `community.name` is half of a local community's ActivityPub identity:
+        # `admin_community_move`, which the template links to from this very page,
+        # rewrites six URLs and `ap_domain` when it changes the name. This route wrote
+        # the name alone, so renaming a local community here left `ap_profile_id` and
+        # the rest pointing at `/c/<oldname>` -- a URL that no longer resolves, while
+        # every outbound activity went on citing it.
+        #
+        # Only a LOCAL community's URLs are ours to rewrite: a remote one's belong to
+        # the server that publishes it, and the template already warns that its
+        # settings are overwritten from there.
+        if community.is_local() and form.url.data != community.name:
+            base = f"https://{current_app.config['SERVER_NAME']}/c/{form.url.data}"
+            community.ap_profile_id = base
+            community.ap_public_url = base
+            community.ap_followers_url = f'{base}/followers'
+            community.ap_featured_url = f'{base}/featured'
+            community.ap_moderators_url = f'{base}/moderators'
+            community.ap_domain = current_app.config['SERVER_NAME']
         community.name = form.url.data
         community.title = form.title.data
         community.description = form.description.data
