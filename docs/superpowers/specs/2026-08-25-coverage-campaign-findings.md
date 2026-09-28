@@ -20847,4 +20847,36 @@ Twenty-one mutants, all dead. 13,546 tests, 0 failures, 0 warnings. All 92 floor
 campaign's most recent stretch), `app/models.py` 89.76%. Both floors already sit at the
 integer below their figure, so neither rises.
 
-**Next free number: D1373.**
+## Round 178 — a crafted login link ran script as the visitor
+
+Round 177's sweep produced 181 hand-read keys out of untrusted JSON; narrowing it to keys
+never membership-tested in the same function left 25, and the ones on an
+**unauthenticated** endpoint came first.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1373** | `app/auth/passkeys.py`, `passkey_verification` | The route ended `redirect_to = redirect or '/'` with `redirect` taken straight from the posted body, and `app/static/js/scripts.js:1375` does `location.href = verificationJSON.redirectTo` with `redirect` filled from `?next=` on the login page (`scripts.js:1336`). So `/auth/login?next=<anything>` chose where a visitor went the moment their passkey verified — and `javascript:alert(1)` is not a redirect at all: `location.href` **executes** it, in this site's origin, on a page whose session `login_user(..., remember=True)` has just authenticated. A crafted login link ran script as the victim, with their cookie. | **fixed** | all twelve hostile values came back verbatim, including `javascript:alert(1)`, `https:/\evil.test`, `\\evil.test/x` and `////evil.test`; each is `/` now |
+
+**Why it survived.** The password arm of the same login form sends the same `?next=`
+through `safe_redirect_target`, and its comment says why — "`?next=` is attacker-supplied
+and this is the login flow, so it gets the same origin check as every other
+user-influenced redirect target" (`app/auth/util.py:447`). The passkey arm was added later
+and checked nothing. One control, two paths, implemented on one: D1359's shape, on the
+login flow rather than the bot interstitial. `is_safe_redirect_target` remains the only
+implementation, and the new file asserts the route's answer AGAINST it for every value, so
+a third implementation appearing is the thing caught.
+
+**The rest of the same reads, on three endpoints anyone can POST to.**
+`passkey_verification` read `username` three times, plus `redirect` and `response`, as
+`request_json[...]`; `passkey_options` read `username` three times; and
+`user_passkey_verification` read `response` and `device`. A body missing any key was a 500
+rather than a refusal, and a body that is a JSON list or string was an `AttributeError` on
+the `.get` that followed. All three now test the body's shape and read through `.get`.
+`Passkey.device` is `String(50)` and that value was written to it unbounded, so a long
+device name was a `DataError` at the commit — losing the passkey the user had just
+registered.
+
+Eleven mutants, all dead. 13,627 tests, 0 failures, 0 warnings. All 92 floors met;
+`app/auth/passkeys.py` and `app/user/passkeys.py` are both at 100%.
+
+**Next free number: D1374.**
