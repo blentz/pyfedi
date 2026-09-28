@@ -20296,4 +20296,41 @@ Thirteen mutants, all dead. 13,075 tests, 0 failures, 0 warnings.
 `app/api/alpha/utils/admin.py` reached 100%; `app/admin/routes.py` 86.93%, floor
 85 → 86.
 
-**Next free number: D1361.**
+## Round 165 — a community's reply count went negative on bot replies
+
+`PostReply.new` increments `post.reply_count`, `post.reply_count_cross_posted` and
+`community.post_reply_count` only `if not user.bot`, and `author.post_reply_count`
+always. Whatever creates a count has to be what removes it, and a reply can be
+deleted three ways: by its author (`delete_reply`), by a moderator
+(`mod_remove_reply`) and by a Delete arriving from the peer that hosts the author
+(`delete_post_or_comment`).
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1361** | `app/activitypub/util.py`, `delete_post_or_comment` and `restore_post_or_comment` | `community.post_reply_count` was maintained OUTSIDE the `if not ... .bot` gate, while `PostReply.new` only ever adds a bot's reply to `author.post_reply_count`. So every bot reply deleted through federation took one off a count it had never been in. All four sites in `app/shared/reply.py` keep it inside the gate, which is how this was identified. | **fixed** | a community at `post_reply_count = 0` went to **-1** on one federated delete |
+
+The restore had the mirror error, so a delete-then-restore pair was lossless and
+only a plain delete drifted — which is the normal case. An instance running bridges
+or feed bots deletes their replies routinely, so the displayed count walked
+downwards and through zero.
+
+**An existing test had pinned the drift.**
+`test_deleting_a_bots_reply_leaves_the_posts_reply_count_alone` asserted
+`community.post_reply_count == 4` and its docstring said "its author and community
+counters still fall" as though that were the intent — without ever comparing against
+the create path. Both it and its restore twin now assert the counter unchanged, with
+the history in their docstrings; the restore test's long note about placement
+witnesses was rewritten rather than deleted, because the note is still true and only
+the arrangement it describes has changed.
+
+**Three of nine mutants survived the first pass at the code this round did not
+touch**: the create gate in `app/models.py`, the local delete's gate in
+`app/shared/reply.py`, and the cross-posted floor. Nothing had pinned any of them —
+the defect was an asymmetry, and only one side of it was tested. The new file
+`tests/test_reply_counter_symmetry.py` drives the create and all three deletes from
+one scene, so the agreement between paths is the subject rather than any one path's
+arithmetic.
+
+Nine mutants, all dead. 13,090 tests, 0 failures, 0 warnings. All 92 floors met.
+
+**Next free number: D1362.**
