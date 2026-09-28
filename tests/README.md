@@ -12199,3 +12199,17 @@ pairs were consistent. The defect was one level down: `build_removed_comments` p
 IDS where its twin passes models, which is legal for those helpers and led to the ten
 that disagreed about a missing row. The sweep was still what found it -- reading a pair
 side by side is what makes an argument of the wrong kind visible.
+
+**770. MUTATE BY LINE NUMBER WHEN THE LINES ARE IDENTICAL.**
+Fifteen copies of `db.session.get(Post, post_id) or abort(404)` cannot be told apart by
+a text anchor, and the runner refused every one of them as "not unique". A sweep that
+adds the same guard in many places needs a runner that finds the matching LINES and
+edits one by index. That pass is also the only way to know each individual guard is
+covered rather than one of them standing in for the rest.
+
+**771. SAY WHICH SITES ARE REACHABLE.**
+Most of this round's fifteen cannot be reached today: the API resolves the id upstream
+and two web routes guard for themselves. Writing "a 500 waiting for the first caller
+that does not guard" is honest; writing it as a live 500 would not have been. A latent
+defect is still worth fixing when the fix is one uniform line, but the ledger has to
+distinguish the two.
