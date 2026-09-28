@@ -310,12 +310,27 @@ class TestRequiredFieldsMissing:
     AttributeError to keep escaping.
     """
 
-    @pytest.mark.parametrize('missing', ['preferredUsername', 'name', 'outbox'])
+    @pytest.mark.parametrize('missing', ['preferredUsername', 'outbox'])
     def test_a_missing_constructor_key_is_refused(self, app, db_session, missing):
         peer_instance(PEER)
         document = _group('memes', omit=(missing,))
         assert actor_json_to_model(document, '!memes', PEER) is None
         assert db.session.query(Community).count() == 0
+
+    def test_a_group_with_no_name_is_titled_after_its_actor_name(self, app, db_session):
+        """D1372. `name` used to be in the list above: `title=activity_json['name']
+        .strip()` was read with no guard at all, so a Group document carrying no
+        `name` -- a shape the Person branch treats as ordinary, and one several
+        implementations send -- could not be created here. A community that is
+        refused is one whose posts can never land."""
+        peer_instance(PEER)
+        document = _group('memes', omit=('name',))
+
+        community = actor_json_to_model(document, '!memes', PEER)
+
+        assert community is not None
+        assert community.title == 'memes'
+        assert community.name == 'memes'
 
     def test_a_missing_public_key_is_refused(self, app, db_session):
         peer_instance(PEER)

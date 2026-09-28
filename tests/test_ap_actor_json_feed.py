@@ -984,7 +984,7 @@ class TestRequiredFieldsMissing:
     non-KeyError inside each `try` and asserting it propagates.
     """
 
-    @pytest.mark.parametrize('missing', ['preferredUsername', 'name', 'outbox',
+    @pytest.mark.parametrize('missing', ['preferredUsername', 'outbox',
                                          'publicKey'])
     def test_a_missing_constructor_key_is_refused(
             self, app, db_session, http_mock, missing):
@@ -992,6 +992,20 @@ class TestRequiredFieldsMissing:
         document = _owned_feed(omit=(missing,))
         assert actor_json_to_model(document, '~news', PEER) is None
         assert db.session.query(Feed).count() == 0
+
+    def test_a_feed_with_no_name_is_titled_after_its_actor_name(
+            self, app, db_session, http_mock):
+        """D1372. `name` used to be in the list above, read as
+        `activity_json['name'].strip()` with no guard, so a Feed document
+        carrying no `name` was refused outright."""
+        _peer_with_one_owner(http_mock)
+        document = _owned_feed(omit=('name',))
+
+        feed = actor_json_to_model(document, '~news', PEER)
+
+        assert feed is not None
+        assert feed.title == 'news'
+        assert feed.name == 'news'
 
     def test_a_missing_following_is_refused_before_the_following_fetch(
             self, app, db_session, http_mock):
@@ -1006,31 +1020,30 @@ class TestRequiredFieldsMissing:
         assert actor_json_to_model(document, '~news', PEER) is None
         assert db.session.query(Feed).count() == 0
 
-    def test_a_non_key_error_from_the_constructor_is_not_swallowed(
+    def test_a_public_key_that_is_not_an_object_is_refused(
             self, app, db_session, http_mock):
-        """The constructor handler is narrow, and this is what says so.
+        """CORRECTED BY D1372. This test used to require the TypeError from
+        `activity_json['publicKey']['publicKeyPem']` to travel out of
+        actor_json_to_model, on the reasoning that a handler swallowing it
+        "would report a malformed document and a genuinely broken one
+        identically". A `publicKey` that is a string IS a malformed peer
+        document, and the document is what it came from -- there is nothing of
+        this deployment's in that expression. It is read through
+        `public_key_pem` now, which refuses all three of the absent, non-object
+        and null-PEM shapes the same way, so this asserts the refusal.
 
-        A `publicKey` whose value is a string rather than an object makes
-        `activity_json['publicKey']['publicKeyPem']` raise TypeError inside
-        the same `try` the KeyError tests above use. TypeError is not a
-        KeyError, so it must travel out of actor_json_to_model rather than be
-        turned into a None -- a handler that swallowed it would report a
-        malformed document and a genuinely broken one identically.
+        The Feed row count is asserted for the reason it always was: the
+        constructor is the last statement before anything is written, so a
+        refusal must leave nothing behind.
 
-        The Feed row count is asserted for the same reason as in the tests
-        above: the constructor is the last statement before anything is
-        written, so an escaping exception must leave nothing behind.
-
-        This test exists because the branch has nothing else policing that
-        breadth. Broadening the handler to `except Exception` failed three
-        tests before D15 was fixed; after the fix it failed none, because the
-        IndexError and AttributeError those three relied on can no longer
-        arise. The evidence went with the defect.
+        The breadth this test used to police is still policed -- the
+        owners-collection tests below require IndexError and AttributeError to
+        keep escaping the narrow handler.
         """
         _peer_with_one_owner(http_mock)
         document = _owned_feed(fields={'publicKey': 'not an object'})
-        with pytest.raises(TypeError):
-            actor_json_to_model(document, '~news', PEER)
+
+        assert actor_json_to_model(document, '~news', PEER) is None
         assert db.session.query(Feed).count() == 0
 
     def test_a_non_key_error_from_the_following_fetch_is_not_swallowed(
@@ -1230,19 +1243,20 @@ class TestWhitespaceInThePeersNames:
         `activity_json['preferredUsername'].strip()`'s `.strip()`, after
         which the Feed's name column holds ' news ' and the equality fails.
 
-        `machine_name` is asserted here too, unstripped, because it reads
-        the SAME key without a `.strip()` of its own -- a fact this test
-        would otherwise silently straddle. That assertion is pinning
-        present behaviour, not endorsing it; without it, a future `.strip()`
-        added to machine_name would leave this test green while changing
-        what the column holds.
+        CORRECTED BY D1372. This test used to assert
+        `machine_name == ' news '` and called it "pinning present behaviour, not
+        endorsing it". `/f/<name>` and `/f/<name>.rss` both look a feed up by
+        `machine_name`, so a peer publishing ` news ` gave this instance a feed it
+        could not serve at its own address (fact 781). Both columns come from one
+        validated name now.
         """
         _peer_with_one_owner(http_mock)
         document = _owned_feed(fields={'preferredUsername': ' news '})
         feed = actor_json_to_model(document, '~news', PEER)
         assert feed.name == 'news'
         assert db.session.query(Feed).one().name == 'news'
-        assert feed.machine_name == ' news ', 'machine_name reads the same key without stripping'
+        assert feed.machine_name == 'news', \
+            'both columns come from one validated name (D1372)'
 
     def test_a_padded_name_is_stripped_into_the_title_column(
             self, app, db_session, http_mock):
@@ -1323,13 +1337,25 @@ class TestDescription:
         feed = actor_json_to_model(document, '~news', PEER)
         assert feed.description_html == ''
 
-    def test_a_null_summary_leaves_the_description_none(self, app, db_session, http_mock):
-        """The `description_html is not None` operand. Without it the block
-        would call .startswith on None and raise AttributeError."""
+    def test_a_null_summary_leaves_the_description_empty(self, app, db_session, http_mock):
+        """CORRECTED BY D1372: `is None` before, `== ''` now.
+
+        The constructor used to pass the peer's `summary` straight into
+        `description_html`, so `summary: None` put a NULL in the column while an
+        ABSENT summary put '' there -- two spellings of the same nothing,
+        decided by the peer. The constructor passes '' and the value is derived
+        below, so both shapes now give ''.
+
+        The `description_html is not None` operand this test was written for is
+        still the thing being exercised: `_as_text(None)` is None, so the block
+        below is skipped and the constructor's value is what remains.
+        """
         _peer_with_one_owner(http_mock)
         document = _owned_feed(fields={'summary': None})
+
         feed = actor_json_to_model(document, '~news', PEER)
-        assert feed.description_html is None
+
+        assert feed.description_html == ''
 
     def test_bare_text_summary_is_wrapped_in_a_paragraph(
             self, app, db_session, http_mock):
@@ -1875,3 +1901,63 @@ class TestWhenThePeerSaysTheFeedWasCreated:
 
         assert feed.created_at >= before
         assert feed.last_edit >= before
+
+
+class TestTheActorNameD1372:
+    """D1372, the Feed branch. `name`, `machine_name` and `title` all came from
+    `preferredUsername`/`name` read by hand, and `machine_name` took the raw
+    value while `name` was stripped -- see TestWhitespaceInThePeersNames above.
+    tests/test_ap_actor_names.py holds the helper and the other two branches.
+    """
+
+    @pytest.mark.parametrize('value', [None, 5, [], {}, True, ['news'], '', '   '])
+    def test_an_unusable_preferred_username_is_refused_cleanly(
+            self, app, db_session, http_mock, value):
+        """Only the absent case reached the `except KeyError`; each of these
+        raised AttributeError past it."""
+        _peer_with_one_owner(http_mock)
+        document = _owned_feed(fields={'preferredUsername': value})
+
+        assert actor_json_to_model(document, '~news', PEER) is None
+        assert db.session.query(Feed).count() == 0
+
+    def test_a_name_wider_than_the_columns_is_cut(self, app, db_session, http_mock):
+        """`Feed.machine_name` is String(50) where `Feed.name` is String(256), and
+        both are written from this one value -- so 50 is the width that fits, and
+        a peer publishing a 60-character name was a DataError at the commit
+        below. Asserted at 50 rather than 255 because that is the narrower
+        column, and the two must agree: `/f/<name>` routes on `machine_name`
+        (fact 781)."""
+        _peer_with_one_owner(http_mock)
+        document = _owned_feed(fields={'preferredUsername': 'n' * 300})
+
+        feed = actor_json_to_model(document, '~news', PEER)
+
+        assert feed.name == 'n' * 50
+        assert feed.machine_name == 'n' * 50
+        db.session.commit()      # the commit that used to raise DataError
+
+    @pytest.mark.parametrize('value', [5, [], {}, True, ['News'], '   '])
+    def test_an_unusable_title_falls_back_to_the_actor_name(
+            self, app, db_session, http_mock, value):
+        _peer_with_one_owner(http_mock)
+        document = _owned_feed(fields={'name': value})
+
+        assert actor_json_to_model(document, '~news', PEER).title == 'news'
+
+    @pytest.mark.parametrize('value', [5, [], {}, True, {'value': 'hi'}])
+    def test_an_unusable_summary_never_reaches_the_column(
+            self, app, db_session, http_mock, value):
+        """D1372's second half. The constructor assigned `activity_json['summary']`
+        straight into `description_html`, and the block below only overwrites it
+        when `_as_text` accepts the value -- so for each of these the raw object
+        stayed on the instance and the caller's commit raised on a value psycopg
+        cannot adapt. The constructor passes '' now and the block owns the value.
+        """
+        _peer_with_one_owner(http_mock)
+        document = _owned_feed(fields={'summary': value})
+
+        feed = actor_json_to_model(document, '~news', PEER)
+
+        assert feed.description_html == ''
+        db.session.commit()      # the commit that used to raise
