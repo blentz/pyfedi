@@ -21126,4 +21126,48 @@ the formula is — so a fixed 60-second wait satisfied it. It now asserts the ex
 
 Twelve mutants, all dead. 13,882 tests, 0 failures, 0 warnings. All 92 floors met.
 
-**Next free number: D1381.**
+## Round 186 — the sweep that was truncated, and the stored XSS behind it
+
+Round 180 established the rule that a string a route returns never met Jinja's autoescaping,
+so it must be escaped where it is built. It found that rule's violations with
+`grep -rn 'f"<\|f'"'"'<' app/ | head -20` — **and `head -20` cut the output**. Four more sites
+were never looked at. This round redid it as an AST sweep for every f-string HTML `return`
+under `app/`: ten sites, of which two interpolate only an `<int:>` URL parameter and four were
+already sanitised.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1381** | `app/utils.py`, `first_paragraph` | Two branches build `<p>` + text one line apart, and only the second sanitised it. The result is rendered `{{ first_paragraph(post.body_html) \| safe }}` in four post-teaser macros — the feed listing. `.text` **decodes entities**, so a body carrying `&lt;img src=x onerror=alert(1)&gt;` — exactly what `allowlist_html` produces from an author who typed a literal `<img ...>` — came back out as live markup. | **fixed** | `second.text = '<img src=x onerror=alert(1)>'`, returned as `'<p><img src=x onerror=alert(1)></p>'` |
+| **D1381** | `app/post/routes.py`, `post_teaser_translate` and `post_translate` | Whatever the configured `TRANSLATE_ENDPOINT` answered was interpolated verbatim, and `post.slug` went inside `href="..."` — a slug is built from `community.name`, which for a remote community comes from the peer's actor document and restricts no characters (fact 797). | **fixed** | — |
+| **D1381** | `app/post/routes.py`, `post_check_ai` | The `DETECT_AI_ENDPOINT`'s `detection_result` string, interpolated raw at two sites. | **fixed** | — |
+
+**The first one is a stored XSS reachable by any author.** The branch needs a first paragraph
+of `Summary`, `*Summary*`, `Comments`, or one starting `cross-posted from:` — all of which the
+author writes — and then every viewer of the feed listing renders the second paragraph's
+decoded text as markup. The guard that stops it was already present on the line below.
+
+**Escaped or sanitised, decided per value.** A title, a slug and a detector's verdict are
+text, so they are escaped. A translated post *body* is meant to be HTML — it is the
+translation of `body_html` — so it goes through `allowlist_html`, the sanitiser every other
+reader of that column relies on. A mutant that escapes the body instead is dead, because
+readers would see raw tags.
+
+**`.upper()` hid the payload from two of my own assertions.** The detector's verdict is
+interpolated as `detection_result.upper()`, so reverting the fix produced
+`<IMG SRC=X ONERROR=ALERT(1)>` — which a lowercase `onerror` check does not find and every
+browser still executes, HTML names being case-insensitive. Both mutants survived until the
+assertions lowered the response first.
+
+**The first mutation pass of this round was worthless, and the full suite said so.** It
+reported 10/10 killed while one of the round's own tests was failing *unmutated* -- so every
+mutant "failed the suite" for a reason unrelated to the mutation. The failing assertion was
+`b'onerror' not in data`, which is the substring mistake this round's own fact 823 warns about,
+made one class over: escaping leaves `onerror` inside `&lt;img src=x onerror=alert(1)&gt;`, and
+the live tag `<img` is what must be absent. The runner now runs the unmutated suite first and
+refuses to judge anything unless it is green; the template every later round copies carries that
+check.
+
+Ten mutants, all dead, on a green baseline. 13,910 tests, 0 failures, 0 warnings. All 92
+floors met.
+
+**Next free number: D1382.**

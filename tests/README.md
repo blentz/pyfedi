@@ -12515,3 +12515,38 @@ worse than the first.
 produces the later timestamp -- a fixed 60-second wait satisfied it, and two mutants survived
 on that. Assert the DURATION the formula produces (`failures ** 4` seconds, at several counts,
 in a window wide enough for execution time and narrow enough to exclude another exponent).
+
+**820. NEVER PIPE A SECURITY SWEEP THROUGH `head`.**
+Round 180's sweep for f-string HTML returns ended in `| head -20` and printed exactly twenty
+lines, so four sites -- including a stored XSS in the feed listing -- were never examined, and
+the round reported the class closed. Count the matches first (`| wc -l`), or write the sweep as
+an AST pass that prints everything it finds.
+
+**821. `.text` ON A PARSED NODE DECODES ENTITIES, SO IT IS NOT SAFE TO INTERPOLATE.**
+BeautifulSoup's `.text` turns `&lt;img src=x onerror=alert(1)&gt;` back into
+`<img src=x onerror=alert(1)>`. Stripping tags is not escaping: the text between them may be
+the escaped form of a tag, and `allowlist_html` produces exactly that from an author who typed
+one literally.
+
+**822. TWO BRANCHES OF ONE FUNCTION THAT BUILD THE SAME STRING MUST TREAT IT THE SAME WAY.**
+`first_paragraph` sanitised one return and not the other, one line apart. Where a function has
+several returns of the same shape, assert that they AGREE (the same input through either branch
+gives the same output) rather than testing each in isolation.
+
+**823. `.upper()` OR `.lower()` ON AN INTERPOLATED VALUE DEFEATS A CASE-SENSITIVE ASSERTION.**
+Reverting the escape of a detector's verdict produced `<IMG SRC=X ONERROR=ALERT(1)>`, which a
+`b'onerror' not in data` check passes and a browser still executes. Lower the response before
+asserting on tag or attribute names, because HTML is case-insensitive and the code under test
+may change the case.
+
+**824. A MUTATION RUN IS WORTHLESS IF THE BASELINE IS RED.**
+Round 186 reported 10/10 mutants killed while one of its own tests failed unmutated -- every
+mutant "failed the suite" for a reason that had nothing to do with the mutation. The runner now
+runs the unmutated suite first and refuses to judge anything unless it is green. Any mutation
+result quoted without that check is unproven.
+
+**825. THE SUBSTRING/LIVE-TAG DISTINCTION HAS TO BE MADE EVERY TIME, NOT ONCE.**
+Having written fact 823 about `onerror` surviving as a substring of escaped text, the same
+mistake went into the next assertion one class over and failed against a correct fix. Assert on
+`<img` (a live tag opening) and on the escaped form being present; never on an attribute name,
+which escaping does not remove.
