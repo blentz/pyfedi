@@ -22,6 +22,7 @@ from app.models import Community, CommunityJoinRequest, CommunityMember, Feed, F
 from app.shared.feed import (_feed_add_community, _feed_remove_community,
                              announce_feed_add_remove_to_subscribers,
                              announce_feed_delete_to_subscribers,
+                             remote_subscriber_inboxes,
                              existing_communities, form_communities_to_ids)
 from tests.factories import (make_community, make_community_join_request,
                              make_community_member, make_feed_item,
@@ -561,7 +562,8 @@ def test_announce_delete_builds_a_delete_naming_the_feed_and_actor(app, db_sessi
 
     with patch('app.shared.feed.send_post_request') as send:
         with patch('app.shared.feed.instance_banned', return_value=False):
-            announce_feed_delete_to_subscribers(s.owner.id, s.feed.id)
+            announce_feed_delete_to_subscribers(s.owner.id, s.feed.ap_public_url,
+                                                remote_subscriber_inboxes(s.feed))
 
     activity = send.call_args.args[1]
     assert activity['type'] == 'Delete'
@@ -603,7 +605,8 @@ def test_announce_delete_skips_the_feed_owner(app, db_session):
 
     with patch('app.shared.feed.send_post_request') as send:
         with patch('app.shared.feed.instance_banned', return_value=False):
-            announce_feed_delete_to_subscribers(s.owner.id, s.feed.id)
+            announce_feed_delete_to_subscribers(s.owner.id, s.feed.ap_public_url,
+                                                remote_subscriber_inboxes(s.feed))
 
     assert send.call_count == 1
     assert send.call_args.args[0] == other_instance.inbox
@@ -641,7 +644,8 @@ def test_announce_delete_skips_local_members_without_subscribing_them(app, db_se
     with patch('app.shared.feed.send_post_request') as send:
         with patch('app.community.routes.do_subscribe') as subscribe:
             with patch('app.shared.feed.instance_banned', return_value=False):
-                announce_feed_delete_to_subscribers(s.owner.id, s.feed.id)
+                announce_feed_delete_to_subscribers(s.owner.id, s.feed.ap_public_url,
+                                                remote_subscriber_inboxes(s.feed))
 
     assert send.call_count == 1
     assert send.call_args.args[0] == remote_instance.inbox
@@ -672,7 +676,8 @@ def test_announce_delete_delivery_guard_isolates_each_operand(
     with patch('app.shared.feed.send_post_request') as send:
         with patch('app.shared.feed.instance_banned', return_value=banned):
             with patch.object(type(s.instance), 'online', return_value=online):
-                announce_feed_delete_to_subscribers(s.owner.id, s.feed.id)
+                announce_feed_delete_to_subscribers(s.owner.id, s.feed.ap_public_url,
+                                                remote_subscriber_inboxes(s.feed))
 
     assert send.call_count == expect_send
 
@@ -735,7 +740,8 @@ def test_announce_delete_rolls_back_and_re_raises_on_failure(app, db_session):
         with patch('app.shared.feed.instance_banned', return_value=False):
             with patch('app.shared.feed.send_post_request', side_effect=RuntimeError('boom')):
                 with pytest.raises(RuntimeError):
-                    announce_feed_delete_to_subscribers(s.owner.id, s.feed.id)
+                    announce_feed_delete_to_subscribers(s.owner.id, s.feed.ap_public_url,
+                                                remote_subscriber_inboxes(s.feed))
     finally:
         _task_session_patcher.stop()
 
@@ -1507,7 +1513,8 @@ def test_announce_delete_delivers_only_to_this_feeds_members(app, db_session):
 
     with patch('app.shared.feed.send_post_request') as send:
         with patch('app.shared.feed.instance_banned', return_value=False):
-            announce_feed_delete_to_subscribers(s.owner.id, s.feed.id)
+            announce_feed_delete_to_subscribers(s.owner.id, s.feed.ap_public_url,
+                                                remote_subscriber_inboxes(s.feed))
 
     assert send.call_count == 1
 

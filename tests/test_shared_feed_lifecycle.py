@@ -483,9 +483,14 @@ def test_delete_feed_announces_only_for_a_public_feed(app, db_session, public, d
     DISPATCHED, not executed -- a test that let it run would be testing the
     broker.
 
-    The announce is dispatched with (user_id, feed.id), and owner.id != feed.id
-    is asserted in _seed, so an implementation that passed the feed id twice
-    would be caught.
+    The announce is dispatched with (user_id, feed.ap_public_url, inboxes) since
+    D1369: it used to be (user_id, feed.id), and the task looked the feed and its
+    members up again -- by which time `delete_feed` had deleted both, so no Delete
+    was ever federated from a non-debug instance. The recipients are gathered here,
+    while the rows exist, which is why the third argument is a list.
+
+    `s.owner.id != s.feed.id` is asserted in _seed, so an implementation passing the
+    feed id twice would still be caught by the first argument.
     """
     s = _seed()
     s.feed.public = public
@@ -501,9 +506,9 @@ def test_delete_feed_announces_only_for_a_public_feed(app, db_session, public, d
     assert announce.call_count == expect_inline
     assert announce.delay.call_count == expect_delayed
     if expect_inline:
-        assert announce.call_args.args == (s.owner.id, s.feed.id)
+        assert announce.call_args.args == (s.owner.id, s.feed.ap_public_url, [])
     if expect_delayed:
-        assert announce.delay.call_args.args == (s.owner.id, s.feed.id)
+        assert announce.delay.call_args.args == (s.owner.id, s.feed.ap_public_url, [])
 
 
 @pytest.mark.parametrize('num_communities', [1, 0])
@@ -1383,3 +1388,94 @@ def test_leave_feed_flashes_only_on_an_ordinary_web_unsubscribe(app, db_session,
             leave_feed(s.feed, src, auth='Bearer x', bulk_leave=bulk_leave)
 
     assert flash_stub.call_count == expect_flash
+
+
+def test_delete_feed_gathers_its_recipients_before_deleting_the_rows(app, db_session):
+    """D1369. The announce used to be dispatched with `(user_id, feed.id)`, and the
+    task looked the Feed and its FeedMember rows up again. `delete_feed` deletes both
+    and commits immediately afterwards, so a celery worker found nothing:
+    `feed.ap_public_url` was `AttributeError: 'NoneType' object has no attribute
+    'ap_public_url'`, the task failed, and no Delete was federated for a public feed.
+
+    Under `current_app.debug` celery is eager and the call ran INLINE, before the
+    deletion, which is why it worked in development and nowhere else.
+
+    This asserts the fix where it matters: the argument handed to the task names a
+    real inbox, and it is computed while the rows still exist. The feed is gone
+    afterwards, which is exactly why the task can no longer look anything up.
+    """
+    s = _seed()
+    s.feed.public = True
+    remote = make_user(s.instance, 'remotesubscriber', local=False)
+    s.instance.inbox = 'https://remote.example/inbox'
+    db.session.commit()
+    make_feed_member(remote, s.feed)
+    feed_id, feed_url = s.feed.id, s.feed.ap_public_url
+
+    announce = MagicMock()
+    with web_ctx(app, s.owner):
+        with patch('app.shared.feed.announce_feed_delete_to_subscribers', announce), \
+                patch('app.shared.feed.instance_banned', return_value=False), \
+                patch('app.shared.feed.current_app', new_callable=MagicMock) as stub:
+            stub.debug = False
+            delete_feed(feed_id, SRC_WEB)
+
+    assert announce.delay.call_args.args == (s.owner.id, feed_url,
+                                             ['https://remote.example/inbox'])
+    assert db.session.get(Feed, feed_id) is None
+    assert FeedMember.query.filter_by(feed_id=feed_id).count() == 0
+
+
+def test_the_task_still_works_once_the_feed_is_gone(app, db_session):
+    """The other half: run the task with the arguments `delete_feed` produced, AFTER
+    the rows have been deleted. Before D1369 this was the failing case -- and it is
+    the only case a real worker ever sees."""
+    from app.shared.feed import announce_feed_delete_to_subscribers
+
+    s = _seed()
+    s.owner.ap_public_url = 'https://test.piefed.local/u/feedowner'
+    s.owner.private_key = 'ownerprivatekeymaterial'
+    s.feed.public = True
+    db.session.commit()
+    owner_id, feed_url = s.owner.id, s.feed.ap_public_url
+    db.session.query(FeedMember).filter_by(feed_id=s.feed.id).delete()
+    db.session.delete(s.feed)
+    db.session.commit()
+
+    with patch('app.shared.feed.send_post_request') as send:
+        announce_feed_delete_to_subscribers(owner_id, feed_url,
+                                            ['https://remote.example/inbox'])
+
+    activity = send.call_args.args[1]
+    assert activity['type'] == 'Delete'
+    assert activity['object']['id'] == feed_url
+    assert send.call_args.args[0] == 'https://remote.example/inbox'
+
+
+def test_the_task_does_nothing_without_recipients(app, db_session):
+    """`if not inbox_urls: return` -- a feed nobody remote subscribed to needs no
+    requests, and the task must not load a session to discover that."""
+    from app.shared.feed import announce_feed_delete_to_subscribers
+
+    s = _seed()
+
+    with patch('app.shared.feed.send_post_request') as send:
+        with patch('app.shared.feed.get_task_session') as session:
+            announce_feed_delete_to_subscribers(s.owner.id, s.feed.ap_public_url, [])
+
+    assert send.call_count == 0
+    assert session.call_count == 0
+
+
+def test_the_task_does_nothing_if_the_actor_has_gone(app, db_session):
+    """The user is still looked up -- the private key stays out of the broker -- so a
+    deleted actor has to be tolerated rather than dereferenced."""
+    from app.shared.feed import announce_feed_delete_to_subscribers
+
+    s = _seed()
+
+    with patch('app.shared.feed.send_post_request') as send:
+        announce_feed_delete_to_subscribers(999999, s.feed.ap_public_url,
+                                            ['https://remote.example/inbox'])
+
+    assert send.call_count == 0
