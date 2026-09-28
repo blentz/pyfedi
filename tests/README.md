@@ -12339,3 +12339,23 @@ this codebase -- D1359, D1370, D1371 and D1373 are all this.
 `request.get_json(force=True)` returns whatever parses -- a list, a string, a number --
 so `request_json['username']` is a KeyError and `request_json.get('username')` is an
 AttributeError. Test the shape before reading keys, and answer rather than 500.
+
+**792. A GUARD AND ITS READ CAN NAME DIFFERENT KEYS, AND NOTHING WILL SAY SO.**
+`activity_json['defaultPostType'] if 'default_post_type' in activity_json else 'link'` --
+camelCase read, snake_case guard. The expression is syntactically fine, the tests passed,
+and the effect was that the guarded arm was dead and the value always took its default.
+When a conditional read spells a key twice, compare the two spellings character by
+character.
+
+**793. WHEN CREATION AND REFRESH WRITE THE SAME COLUMN, DIFF THE TWO EXPRESSIONS.**
+Creation read `defaultPostType` with a matching guard and refresh did not, so a remote
+community arrived correct and lost the setting on its first refresh -- the kind of defect
+that looks like a peer's fault. D1371, D1372 and D1374 are all this shape: two writers of
+one column, agreeing on the column and not on the value.
+
+**794. AN IDENTITY FIELD AND A SETTING WANT OPPOSITE FALLBACKS.**
+On a refresh, a title with no usable value should keep what the instance holds -- a peer
+that stops publishing a name has not renamed itself to nothing -- while a setting with no
+usable value should take its default, because the peer not publishing it IS the setting
+being absent. Decide which kind of field you have before choosing the fallback, and say
+which in the comment.

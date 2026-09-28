@@ -20879,4 +20879,31 @@ registered.
 Eleven mutants, all dead. 13,627 tests, 0 failures, 0 warnings. All 92 floors met;
 `app/auth/passkeys.py` and `app/user/passkeys.py` are both at 100%.
 
-**Next free number: D1374.**
+## Round 179 — a setting whose guard named a different key than its read
+
+D1372 fixed the actor name at five sites. The same question asked of the two refresh tasks
+it did not reach found the name again, and beside it something worse than a crash.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1374** | `app/activitypub/util.py`, `refresh_community_profile_task` and `refresh_feed_profile_task` | Both held `community.title = activity_json['name'].strip()` read by hand, while the user task's equivalent was already guarded. Both end `except Exception: session.rollback(); raise`, so a peer publishing no usable `name` left the actor stale for ever — its name, icon, description, moderator list and rotated key all stopped being picked up. | **fixed** | `name` absent → `KeyError: 'name'`; `None`/`5`/`[]`/`{}`/`True` → `AttributeError: ... has no attribute 'strip'`; 300 characters → `DataError: value too long for type character varying(256)` |
+| **D1374** | the same task, `default_post_type` | `activity_json['defaultPostType'] if 'default_post_type' in activity_json else 'link'` — the guard tests one key and the read fetches another, so the guard could never be true for the key being fetched. This instance **publishes** `defaultPostType` (`app/activitypub/routes.py:546`), so between two PieFed instances every community refresh silently reset a remote community's setting to `'link'`, and a peer sending only the snake_case spelling aborted the task. | **fixed** | `{'defaultPostType': 'image'}` → `ok` with `default_post_type='link'`; `{'default_post_type': 'image'}` → `KeyError: 'defaultPostType'` |
+
+**Why the second half survived.** The creation branch reads the same key with a *matching*
+guard, so a remote community arrived carrying the correct setting and lost it on its first
+refresh. Creation and refresh disagreeing about one column, again — D1371's shape on a
+setting rather than an identity field. Creation had the same type and width holes on that
+key (`String(15)`) and is fixed with it.
+
+**What is deliberately unchanged.** `else 'link'` still resets the setting when the peer
+publishes no usable value, matching the five settings written around it — `sensitive`,
+`postingRestrictedToMods`, `newModsWanted`, `privateMods`, `questionAnswer` all take their
+default on a refresh — and a remote community on software with no such setting genuinely
+has no default post type. The title is the opposite case and is treated as the opposite:
+an identity field with no meaningful default, so an unusable value leaves what the
+instance holds, as `public_key_pem` does under D1354.
+
+Fourteen mutants, all dead. 13,689 tests, 0 failures, 0 warnings. All 92 floors met;
+`app/activitypub/util.py` 92.75%, floor 92.
+
+**Next free number: D1375.**
