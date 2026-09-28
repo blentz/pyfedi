@@ -12322,3 +12322,20 @@ Six tests were corrected this round and each had named its own conditions: two s
 `.strip()` "later added" would change what the column holds, one said its handler must
 stay narrow and why. Those docstrings turned six potential arguments into six
 verifications. Write the reason a pinned assertion is a pin, not a requirement.
+
+**789. A REDIRECT TARGET THAT REACHES `location.href` CAN BE A SCRIPT, NOT A DESTINATION.**
+`javascript:alert(1)` assigned to `location.href` executes in the page's origin. An
+open-redirect check that only asks "is this host ours" and lets a scheme through is an XSS
+sink wherever the client assigns the value rather than the server issuing a 302. Ask where
+the value lands, not only what it names.
+
+**790. WHEN A FLOW HAS TWO ARMS, READ THE OLDER ARM'S COMMENT AND CHECK THE NEWER ONE HAS
+IT TOO.** The password login ran `?next=` through `safe_redirect_target` with a comment
+naming the exact attack; the passkey login, added later, used the value raw. A control
+that is documented on one path and absent on its twin is the most findable defect shape in
+this codebase -- D1359, D1370, D1371 and D1373 are all this.
+
+**791. AN UNAUTHENTICATED ENDPOINT'S JSON BODY IS AN ATTACKER'S CHOICE OF SHAPE.**
+`request.get_json(force=True)` returns whatever parses -- a list, a string, a number --
+so `request_json['username']` is a KeyError and `request_json.get('username')` is an
+AttributeError. Test the shape before reading keys, and answer rather than 500.
