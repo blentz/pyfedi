@@ -12410,3 +12410,21 @@ single line; the tests still have to reach each caller to prove none was missed.
 rendering an unrelated page. Two earlier attempts at that test failed on the wrong URL
 prefix (`/c/` rather than `/community/`) and on `@approval_required`, each of which answered
 200 with a page that simply did not contain the flash.
+
+**803. EVERY `|safe` IS A CLAIM ABOUT WHERE THE VALUE WAS WRITTEN.**
+52 `|safe` filters in these templates; all but one render a `*_html` column that
+`allowlist_html` produced. `posting_warning` is a plain `String(512)` with five writers and
+no sanitiser, two of which take the value from a peer. When auditing `|safe`, the question is
+not whether the template is careful but whether every writer of that column is.
+
+**804. A STRUCTURAL TEST BEATS ONE TEST PER CALL SITE.**
+Round 181 lost three mutants to call sites its tests did not reach. This round asserts at the
+source level that every assignment to a `posting_warning` column goes through the sanitiser,
+and that one test killed all five writer-reverting mutants. Where a rule must hold at N sites
+and N may grow, assert the rule over the source rather than exercising each site.
+
+**805. SANITISE THEN CUT, NEVER CUT THEN SANITISE.**
+Escaping lengthens a string (`&` becomes `&amp;`), so a value cut to the column width before
+sanitising can still overflow it afterwards. Cutting after can split a tag, which a browser
+drops -- harmless, because nothing that survives the allowlist can execute. The mutant that
+swapped the order is killed by a warning of 400 ampersands.

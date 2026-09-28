@@ -20966,4 +20966,38 @@ the community they just joined. Escaping the whole message would show them raw
 
 Seven mutants, all dead. 13,736 tests, 0 failures, 0 warnings. All 92 floors met.
 
-**Next free number: D1377.**
+## Round 182 — the one `|safe` field with no sanitiser behind it
+
+D1375 closed the routes returning raw HTML and D1376 the `Markup(...)` flashes. `|safe` in a
+template is the third sink, and there are 52 of them. Almost all are `*_html` columns, which
+come out of `allowlist_html`, or literals. One is neither.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1377** | `app/activitypub/util.py` (the community refresh and creation), `app/community/routes.py` (the create and edit forms), `app/admin/routes.py` (the community and instance forms) | `posting_warning` is rendered `{{ ...|safe }}` on every post page in the community (`app/templates/post/post.html:91`, `:94`), and none of its five writers sanitised it. Two of those writers take the value from a peer's Group document, and this instance publishes the same key (`app/activitypub/routes.py:535`), so PieFed instances exchange it — a remote community's warning was peer-supplied HTML rendered unescaped to every local member who opened a post there. | **fixed** | `REFRESH stored='<img src=x onerror=alert(1)><script>alert(2)</script>'` and `CREATE stored=` the same |
+
+**Two further shapes from the same read**, D1372's family at a key it did not cover. The
+refresh task re-raises after rolling back, so either left the community unrefreshable for
+ever:
+
+    postingWarning={}     ProgrammingError: can't adapt type 'dict'
+    700 characters        DataError: value too long for character varying(512)
+
+**Sanitise at the write, not escape at the render.** Dropping `|safe` would take the
+formatting away from local moderators, which is the reason it is there. `allowlist_html` is
+what every other `|safe` field in the codebase is paid for with — `description_html`,
+`about_html`, `rules_html` — so this puts `posting_warning` on the same footing. The cut to
+`String(512)` comes after sanitising, because escaping can lengthen the string; a tag the
+cut splits is dropped by the browser, and nothing surviving the allowlist can execute.
+
+**All five writers, including the instance one.** A site admin can already put HTML in
+`g.site.description`, which is also `|safe`, so the instance warning is not the boundary
+that matters — but one helper for one column means the four community writers cannot drift,
+and the fifth costs one line. Round 181 lost three mutants to call sites its tests did not
+reach; this round's test instead asserts at the source level that **every** assignment to a
+`posting_warning` column goes through the helper, which is what killed all five
+writer-reverting mutants.
+
+Twelve mutants, all dead. 13,784 tests, 0 failures, 0 warnings. All 92 floors met.
+
+**Next free number: D1378.**
