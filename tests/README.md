@@ -12359,3 +12359,27 @@ that stops publishing a name has not renamed itself to nothing -- while a settin
 usable value should take its default, because the peer not publishing it IS the setting
 being absent. Decide which kind of field you have before choosing the fallback, and say
 which in the comment.
+
+**795. A PAGE AND THE ENDPOINT ITS WIDGETS CALL ARE TWO PLACES ONE GATE MUST BE APPLIED.**
+`modlog()` carried `@login_required_if_private_instance`; the `hx-post` endpoint its search
+box calls carried nothing, so a private instance answered 302 for the page and 200 with
+usernames for the endpoint. When a decorator is added to a page, grep the template for
+`hx-post`/`hx-get` and check every target.
+
+**796. A STRING BUILT WITH AN F-STRING NEVER MET JINJA'S AUTOESCAPING.**
+`f"<option value='{m.user_name}'>"` returned straight from a route is raw HTML. Autoescaping
+made every template in this codebase safe and made these three lines invisible. Search for
+`f"<` and `f'<` in routes, and escape at the point of construction -- the value's origin
+may be a peer's actor document.
+
+**797. A REMOTE ACTOR'S NAME IS ATTACKER-CHOSEN TEXT, NOT AN IDENTIFIER.**
+`actor_name_from_ap` strips a peer's `preferredUsername` and cuts it to the column; it does
+not restrict the character set, because an actor name is not a slug. So `User.user_name` and
+`Community.name` may contain quotes, angle brackets and whitespace for any remote row. Treat
+them as untrusted text wherever they leave the database.
+
+**798. AN ASSERTION THAT SOMETHING IS ABSENT PASSES ON AN EMPTY RESPONSE.**
+The first version of this round's community tests asserted `b'<img' not in response.data`
+against a 400 from a missing CSRF token, and passed. Pair every "payload is not here" with a
+"the row IS here, escaped" so a broken harness cannot look like a fixed defect. Fact 749,
+for the fourth time.
