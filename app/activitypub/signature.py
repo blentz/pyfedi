@@ -123,8 +123,19 @@ def post_request(uri: str, body: dict | None, private_key: str, key_id: str,
                     elif 'community_has_no_followers' in result.text:
                         fix_local_community_membership(uri, private_key, session)
                     elif result.status_code == 400 and 'person_is_banned_from_site' in result.text:
+                        # D1379. The trigger is a SUBSTRING of the peer's body, so
+                        # the body need not be JSON at all -- an HTML error page
+                        # carrying that phrase reached `.json()` and raised. The
+                        # raise was caught below, but `result.close()` is after this
+                        # branch, so the response leaked each time a peer chose to
+                        # answer this way.
                         from app.activitypub.util import process_banned_message
-                        process_banned_message(result.json(), furl(uri).host, session)
+                        try:
+                            banned_json = result.json()
+                        except Exception:
+                            banned_json = None
+                        if banned_json is not None:
+                            process_banned_message(banned_json, furl(uri).host, session)
                     elif result.status_code == 410 or result.status_code == 418:    # When an instance returns 410, never send to it again.
                         existing_instance = session.query(Instance).filter_by(domain=furl(uri).host).first()
                         if existing_instance:
