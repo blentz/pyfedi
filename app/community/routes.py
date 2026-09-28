@@ -259,7 +259,12 @@ def community_name_search():
 
 # returns a string with html in it for the add_remote search function above
 def _make_community_results_datalist_html(community_name):
-    return f'<option value="{community_name}"></option>'
+    # D1375, the sibling of `modlog_search_suggestions`. The names come from
+    # `app/static/tmp/all_communities.json`, which is fetched rather than written
+    # here, and this string never goes through Jinja -- so it is escaped where it is
+    # built. htmx swaps the result into add_remote.html as HTML.
+    from markupsafe import escape
+    return f'<option value="{escape(community_name)}"></option>'
 
 
 # @bp.route('/c/<actor>', methods=['GET']) - defined in activitypub/routes.py, which calls this function for user requests. A bit weird.

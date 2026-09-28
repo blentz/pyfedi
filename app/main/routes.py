@@ -7,7 +7,7 @@ from random import randint
 import flask
 from feedgen.feed import FeedGenerator
 from furl import furl
-from markupsafe import Markup
+from markupsafe import Markup, escape
 from pyld import jsonld
 from sqlalchemy import or_, and_, func
 from ua_parser import parse as uaparse
@@ -566,6 +566,13 @@ def modlog():
 
 
 @bp.route("/modlog/search_suggestions", methods=['POST'])
+# D1375. The page this serves is `@login_required_if_private_instance` -- the comment
+# above `modlog()` records why: the modlog was the one page that answered 200 to an
+# anonymous visitor where `/communities` and `/` redirect to the login. Its typeahead
+# endpoint had no gate at all, so on a private instance `/modlog` answered 302 while
+# this answered 200 and named users, five accounts per substring, to anybody. One
+# control, a page and the endpoint it feeds, applied to the page.
+@login_required_if_private_instance
 def modlog_search_suggestions():
     q = request.form.get("suspect_user_name", "").lower()
     if q == '':
@@ -574,8 +581,16 @@ def modlog_search_suggestions():
                                     User.user_name.ilike(f"%{q}%"),
                                     User.ap_profile_id.ilike(f"%{q}%"))
                                 ).limit(5).all()
-    html = "".join(f"<option value='{m.ap_id or m.user_name}'>" for m in results)
-    return html
+    # D1375. `f"<option value='{m.ap_id or m.user_name}'>"`. A user name is not a safe
+    # HTML attribute value: nothing restricts the characters in a REMOTE actor's name
+    # -- `actor_name_from_ap` strips it and cuts it to the column and does not filter
+    # it -- so a peer publishing `preferredUsername: "x'><img src=x onerror=alert(1)>"`
+    # had that stored verbatim, and this endpoint echoed it into a response
+    # modlog.html swaps into the DOM with htmx. Measured: the body came back as
+    # `<option value='x'><img src=x onerror=alert(1)>'>`, the tag having left the
+    # attribute. Jinja autoescapes; this string never went through Jinja.
+    return "".join(f"<option value='{escape(m.ap_id or m.user_name)}'>"
+                   for m in results)
 
 
 @bp.route('/about')

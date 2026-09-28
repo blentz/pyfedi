@@ -2013,8 +2013,14 @@ def post_search_community_suggestions():
         for c in db_comms:
             comms.append(c.lemmy_link().replace('!', ''))
 
-    html = "".join(f"<option value='{c}'>" for c in comms)
-    return html
+    # D1375. `c` is `community.lemmy_link()`, which is built from the community's
+    # `name` and `ap_domain` -- neither restricted for a REMOTE community, because
+    # `actor_name_from_ap` strips the peer's `preferredUsername` and cuts it to the
+    # column and does not filter it. This string never goes through Jinja, so a name
+    # carrying `'><img src=x onerror=alert(1)>` left the attribute and landed in the
+    # DOM that htmx swaps this response into. The sibling endpoints in
+    # app/main/routes.py and app/community/routes.py had the same hole.
+    return "".join(f"<option value='{escape(c)}'>" for c in comms)
 
 
 @bp.route('/post/<int:post_id>/comment/<int:comment_id>/report', methods=['GET', 'POST'])
