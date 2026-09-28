@@ -12170,3 +12170,17 @@ A scan for attributes a model does not have has to use runtime `hasattr`: a
 relationship can be created by `backref` from the other side of the association, and
 an attribute can come from a mixin. An AST-only version of the same test reported
 `Conversation.members` and `User.is_authenticated` as missing, both wrongly.
+
+**766. A GUARD THAT RETURNS EMPTY IS UNTESTABLE WITHOUT DATA.**
+Removing `if user_id is None: return []` from a function whose other branch also
+answers `[]` when the table is empty changes nothing observable. The mutant survived
+until the test created a reported post and a reported reply first. Any test of a
+refusal whose value is an empty collection has to make the non-empty case possible,
+or it is asserting the absence of data rather than the presence of the guard.
+
+**767. A DECORATOR IS THE ONLY REFERENCE SOME FUNCTIONS NEED.**
+The caller-count sweep flagged `on_unread_notifications_set` as uncalled. It is
+registered with `@event.listens_for(User.unread_notifications, 'set')` and is called
+by SQLAlchemy, not by name. Before treating "no references" as dead, check the line
+above the `def`: event listeners, celery tasks, Flask routes, cache key functions and
+CLI commands are all referenced exactly once, by their decorator.
