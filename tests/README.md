@@ -12150,3 +12150,23 @@ minus 'app/'" and its body read only the part after `/static/`. It encoded the s
 it was asserting around, so the URL those two functions build was never checked and a
 mutant restoring the media root survived. When a helper normalises away part of a
 value, something else has to assert that part.
+
+**763. COUNT THE CALLERS OF EVERY PUBLIC METHOD; THE ONES WITH NONE ARE UNTESTED BY
+DEFINITION.** Twelve methods in `app/models.py` had no reference anywhere under
+`app/`, and six of them could not have run: a scoped session called instead of
+queried, three attributes on a model that has no such column, two queries filtering a
+column from the class they were copied from. None of it could fail until somebody
+wired it up. `grep -c` on the method name is the whole technique.
+
+**764. ASSIGNING AN ATTRIBUTE A MODEL DOES NOT HAVE IS SILENT.**
+`self.post_reply_count = ...` on a Post raises nothing -- it sets a stray Python
+attribute. The recount went nowhere and a caller would have seen a plausible number on
+the object with no change in the database. A test asserting the same attribute back
+passes against it, which is exactly what this round's first attempt did. For anything
+that writes a column, assert after `commit()` and `refresh()`.
+
+**765. ASK THE CLASS, NOT THE CLASS BODY.**
+A scan for attributes a model does not have has to use runtime `hasattr`: a
+relationship can be created by `backref` from the other side of the association, and
+an attribute can come from a mixin. An AST-only version of the same test reported
+`Conversation.members` and `User.is_authenticated` as missing, both wrongly.
