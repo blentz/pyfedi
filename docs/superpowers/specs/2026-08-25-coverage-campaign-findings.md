@@ -20508,4 +20508,38 @@ body, because a relationship can arrive by `backref` from the other side
 Fourteen mutants, all dead. 13,265 tests, 0 failures, 0 warnings. `app/models.py`
 89.73%, floor 88 → 89.
 
-**Next free number: D1366.**
+## Round 170 — the same sweep, one file over
+
+Round 169's technique applied to `app/utils.py`, `app/activitypub/util.py`,
+`app/community/util.py` and the six `app/shared` and `app/*/util.py` modules: count
+the references to every module-level function's name anywhere under `app/` and
+`tests/`. Five had none, and four of those five are harmless — three work
+(`make_cache_key` for a caching decorator that is commented out,
+`allowed_instance_domains` whose allowlist is read directly elsewhere,
+`banned_user_agents`, an explicit `todo` stub) and one was a FALSE POSITIVE:
+`on_unread_notifications_set` is registered with `@event.listens_for` and referenced
+only by that decorator.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1366** | `app/utils.py`, `reported_post_replies` | The reply twin of `reported_posts`, which nine templates and route contexts call. It passed a LIST to an `IN :community_ids` parameter, which `text()` renders as a Postgres array literal rather than expanding, and it had no guard for a moderator who moderates nothing — so it could not run either way. It also took `admin_ids` and did the membership test itself while its twin takes `is_admin`. | **fixed** | below |
+
+Measured for a moderator of no communities:
+
+    reported_posts         -> []
+    reported_post_replies  -> ProgrammingError: (psycopg2.errors.SyntaxError)
+                              syntax error at or near "'{}'"
+
+Both are the live one's shape now — signature included, since nothing called it and
+there was no compatibility to keep.
+
+**A mutant survived because the test had no data.** Removing `if user_id is None:
+return []` changed nothing while no reported content existed: the admin branch
+answers `[]` too. The test creates a reported post and a reported reply first now,
+so "an anonymous caller cannot reach the unscoped query by claiming to be an admin"
+is actually asserted. The post twin got the same test and the same mutant.
+
+Eleven mutants, all dead. 13,282 tests, 0 failures, 0 warnings. `app/utils.py`
+91.23%, floor 90 → 91.
+
+**Next free number: D1367.**
