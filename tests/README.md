@@ -12233,3 +12233,23 @@ Extracting the recipient loop out of the task invalidated six tests whose assert
 all still correct. They kept every assertion and changed only what they call -- the
 composition the caller now performs. A test failing because code moved is not a test to
 delete.
+
+**775. A REFUSED PARAMETER THAT STILL RENDERS NEEDS AN ORDERING ASSERTION.**
+`safe_order_by` falls back instead of raising, so removing a field from its allowlist
+changes no status code and no set of rows. A test that asks for `last_active ASC` and
+asserts a 200 cannot see it, and that mutant survived. Ten allowed fields are now
+asserted to SORT: two rows, one low and one high in every sortable column, with ASC and
+DESC required to disagree.
+
+**776. MEASURE THE FALLBACK BEFORE ASSERTING IT.**
+Two assumptions in this round's tests were wrong: the else arm of `safe_order_by` is
+`desc()` of the ALPHABETICALLY FIRST allowed field, not ascending; and `title SIDEWAYS`
+is not a refused sort at all, since the field is allowed and only the direction is
+unrecognised. Both were written from the shape of the code rather than from a
+measurement, and both failed.
+
+**777. TEST FIXTURE NAMES MUST NOT BE SUBSTRINGS OF ONE ANOTHER.**
+`assert 'moderatedone' not in body` can never fail when the page also holds
+`unmoderatedone`, and `'topiced'` is inside `'untopiced'`. Two of this round's
+"only these rows are listed" tests were unfalsifiable until the fixtures were renamed.
+When an assertion is `not in` over rendered output, choose names that share no substring.
