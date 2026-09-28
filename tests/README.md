@@ -12573,3 +12573,21 @@ Two `filter(False)` mutants survived because the template enforces `posts_replie
 route's filter only saves executing a query. Applying the mutant by hand and watching the suite
 stay green is what established that, and it is a better outcome than inventing an assertion for
 a line that decides nothing.
+
+**830. "TAG X IS ABSENT FROM THE PAGE" IS ALMOST ALWAYS FALSE.**
+`base.html` contributes an `<h1>`, several `<img>` tags and a `<script>` of its own, so
+asserting `b'<h1' not in response.data` fails against a perfectly safe page. Extract the block
+the route actually rendered -- by the marker its own branch emits -- and assert inside that.
+
+**831. A PAYLOAD LIST MUST ASSERT ITS OWN PREMISE.**
+`{"a": "` + backtick + `<img src=x>` + backtick + `"}` is valid JSON: the value is the
+backtick-wrapped text. It sat in a list of "bodies that do not parse" and quietly took the other
+branch. Where a test's meaning depends on an input being malformed, assert that it is malformed
+(`with pytest.raises: json.loads(body)`) in the same file.
+
+**832. `json.dumps` IS A FENCE-BREAKOUT DEFENCE, AND WORTH PINNING AS ONE.**
+A three-backtick fence around `json.dumps(..., indent=2)` output cannot be closed from inside:
+control characters are escaped, so a backtick run stays on its string's own line behind the `"`
+and the indent, and a fence must start its line. That is why one branch of `activity_json` may
+keep markdown while the branch handling unparsed bytes may not -- and it is asserted, not left
+as a comment.
