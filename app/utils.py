@@ -1374,7 +1374,23 @@ def first_paragraph(html):
                 first_para.text.lower().startswith('cross-posted from:'):
             second_paragraph = first_para.find_next('p')
             if second_paragraph:
-                return f'<p>{second_paragraph.text}</p>'
+                # D1381. This branch returned the same construction as the line
+                # below WITHOUT allowlist_html, and the result is rendered
+                # `{{ first_paragraph(post.body_html) | safe }}` in four post
+                # teaser macros -- the feed listing.
+                #
+                # `.text` DECODES entities, so a body carrying
+                # `&lt;img src=x onerror=alert(1)&gt;` -- which is exactly what
+                # allowlist_html produces from an author who typed a literal
+                # `<img ...>` -- came back out as live markup:
+                #
+                #     second.text = '<img src=x onerror=alert(1)>'
+                #     returned    = '<p><img src=x onerror=alert(1)></p>'
+                #
+                # Reached by any author: the branch needs a first paragraph of
+                # `Summary`, `*Summary*`, `Comments`, or one starting
+                # `cross-posted from:`, all of which they write.
+                return allowlist_html(f'<p>{second_paragraph.text}</p>')
         return allowlist_html(f'<p>{first_para.text}</p>')
     else:
         return ''

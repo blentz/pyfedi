@@ -65,8 +65,8 @@ from app.utils import render_template, markdown_to_html, validation_required, \
     total_comments_on_post_and_cross_posts, approval_required, libretranslate_string, user_in_restricted_country, \
     site_language_code, block_honey_pot, joined_communities, moderating_communities, user_pronouns, \
     instance_sticky_posts, instance_sticky_post_ids, user_access, show_reason_why_no_federation, \
-    community_membership_private, user_ip_banned, check_anoobis, safe_redirect_target, roles_with
-
+    community_membership_private, user_ip_banned, check_anoobis, safe_redirect_target, \
+    allowlist_html, roles_with
 
 def can_view_private(community):
     """The membership test `refuse_private_community` aborts on, as a
@@ -1427,7 +1427,15 @@ def post_teaser_translate(post_id: int):
                                              source=source,
                                              target=recipient_language)
         post_url = post.slug if post.slug else f"/post/{post.id}"
-        return f'<h3><a href="{post_url}" class="post_teaser_title_a">{result_title}</a></h3>'
+        # D1381. Both values are interpolated into HTML this route returns and
+        # htmx swaps into the page, and neither is ours: `result_title` is
+        # whatever the configured TRANSLATE_ENDPOINT answered, and `post.slug`
+        # is built from `community.name`, which for a remote community comes
+        # from the peer's actor document and restricts no characters (fact 797).
+        # A title is text, so it is escaped; the slug sits inside an attribute,
+        # so it is escaped too.
+        return (f'<h3><a href="{escape(post_url)}" class="post_teaser_title_a">'
+                f'{escape(result_title)}</a></h3>')
     return _('Translation is not configured on this instance.')  # D1126
 
 
@@ -1454,7 +1462,14 @@ def post_translate(post_id: int):
         result_title = libretranslate_string(post.title,
                                              source=source,
                                              target=recipient_language)
-        return f'<div class="post_body">{result}</div><h1 class="mt-2 post_title" hx-swap-oob="outerHTML:h1.post_title">{result_title}</h1>'
+        # D1381, as above. The body is meant to be HTML -- it is the translation
+        # of `body_html` -- so it goes through the sanitiser every other
+        # `body_html` reader relies on rather than being escaped; the title is
+        # text and is escaped. A translation endpoint is a network service whose
+        # answer had been trusted verbatim.
+        return (f'<div class="post_body">{allowlist_html(result)}</div>'
+                f'<h1 class="mt-2 post_title" hx-swap-oob="outerHTML:h1.post_title">'
+                f'{escape(result_title)}</h1>')
     # D1126. D1113's shape on three more routes: the whole body is inside
     # `if current_app.config['TRANSLATE_ENDPOINT']:` with no else, so an
     # instance that has not configured a translator answered `TypeError: The
@@ -2779,7 +2794,10 @@ def post_check_ai(post_id):
             if is_ai_result['detection_result'] == 'none':
                 return f'<div class="w-100 alert {result_type}">Detection blocked</div>'
             output = f'<div class="w-100 alert {result_type}">'
-            output += 'Post: ' + is_ai_result['detection_result'].upper()
+            # D1381. `detection_result` is a string the configured
+            # DETECT_AI_ENDPOINT chose, interpolated into HTML this route returns.
+            # `result_type` beside it is one of two literals and needs nothing.
+            output += 'Post: ' + str(escape(is_ai_result['detection_result'])).upper()
             if result_type == 'alert-warning':
                 output += f' <a href="#" hx-post="/post/{post.id}/set_ai">' + _('Set AI flag on this post') + '</a>'
             output += '<br>'
@@ -2791,7 +2809,8 @@ def post_check_ai(post_id):
                 else:
                     result_type = 'alert-success'
                 output += f'<div class="w-100 alert {result_type}">'
-                output += 'Link: ' + is_ai_result['attachment']['detection_result'].upper()
+                output += 'Link: ' + str(
+                    escape(is_ai_result['attachment']['detection_result'])).upper()
                 output += '<br>'
                 output += f"{int(is_ai_result['attachment']['confidence'] * 100)}% confident"
                 output += '</div>'
