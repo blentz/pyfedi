@@ -12253,3 +12253,21 @@ measurement, and both failed.
 `unmoderatedone`, and `'topiced'` is inside `'untopiced'`. Two of this round's
 "only these rows are listed" tests were unfalsifiable until the fixtures were renamed.
 When an assertion is `not in` over rendered output, choose names that share no substring.
+
+**778. A NAME THAT APPEARS IN A URL IS AN IDENTITY, NOT A LABEL.**
+`admin_community_edit` wrote `community.name` from a form field while a sibling route --
+linked from the same page -- rewrote six ActivityPub URLs and `ap_domain` for the same
+change. Two routes may not disagree about what renaming means. When a column is
+interpolated into an actor URL anywhere, every write to it has to say what happens to
+those URLs.
+
+**779. READ `form.errors`; A FAILED VALIDATION LOOKS LIKE A REFUSAL.**
+Two probes in this round died on a 302 to `permission_denied` and a re-rendered page,
+and neither said why. `EditCommunityForm` refuses `topic: 0` -- its "None" choice is
+`-1` -- and `default_layout: 'list'`, which is not among its three choices. Building the
+form inside a `test_request_context` and printing `.errors` answered both in one run.
+
+**780. A SEED INVARIANT IS NOT A DEFECT, AND PATCHING ONE OF FOUR SITES IS WORSE.**
+Four places append the `und` Language when saving a community and none guards it; two
+dereference `.id` on it. The row comes from the database seed. The honest response was to
+seed it in the test, not to add a guard that would make one site disagree with three.

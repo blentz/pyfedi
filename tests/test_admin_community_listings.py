@@ -45,6 +45,24 @@ def env(app, api_baseline):
     return SimpleNamespace(baseline=api_baseline, client=client, app=app)
 
 
+def csrf(app, client):
+    """A real CSRF token in the session and in the form.
+
+    The GET tests above need none; every POST does, and without it the answer is a
+    400 -- which is what six of the rename tests below first asserted their way
+    around.
+    """
+    from flask import session as flask_session
+    from flask_wtf.csrf import generate_csrf
+
+    with app.test_request_context():
+        token = generate_csrf()
+        raw = flask_session['csrf_token']
+    with client.session_transaction() as session:
+        session['csrf_token'] = raw
+    return token
+
+
 def a_community(name, **columns):
     community = make_community(name)
     for key, value in columns.items():
@@ -358,3 +376,147 @@ class TestPaging:
 
         assert response.status_code == 200
         assert 'beyond' not in response.text
+
+
+class TestRenamingALocalCommunity:
+    """D1370. `admin_community_edit` writes `community.name` from the form's `url`
+    field, which is an editable input on the page.
+
+    `community.name` is half of a local community's ActivityPub identity, and
+    `admin_community_move` -- linked from this very page as "Convert to local
+    community" -- rewrites six URLs and `ap_domain` when it changes the name. This
+    route wrote the name alone, so a rename here left `ap_profile_id`,
+    `ap_public_url`, `ap_followers_url`, `ap_featured_url` and `ap_moderators_url`
+    pointing at `/c/<oldname>`, while `community.link()` and every page in the UI moved
+    to the new one. Outbound activities kept citing a URL that no longer resolved.
+
+    `-1` is the form's "no topic" choice, not 0, and `default_layout` accepts only
+    '', 'masonry' or 'masonry_wide' -- both learned by reading `form.errors`, since a
+    failed validation re-renders the page and looks like a refusal.
+    """
+
+    def edit(self, env, community, **overrides):
+        data = {'csrf_token': csrf(env.app, env.client),
+                'url': community.name, 'title': community.title or 'A Title',
+                'description': '', 'rules': '', 'content_retention': -1,
+                'topic': -1, 'default_layout': '', 'posting_warning': '',
+                'downvote_accept_mode': 0}
+        data.update(overrides)
+        return env.client.post(f'/admin/community/{community.id}/edit', data=data)
+
+    @pytest.fixture(autouse=True)
+    def undetermined_language(self, env):
+        """Every path that saves a community appends the `und` Language so that posts
+        with no language are accepted, and all four sites in the codebase assume the
+        row exists -- two of them dereference `.id` on it. It is created by the
+        database seed, so a test that saves a community has to have it too; without
+        it the append is `FlushError: Can't flush None value found in collection
+        Community.languages`.
+        """
+        from app.models import Language
+
+        existing = Language.query.filter(Language.code == 'und').first()
+        if existing is None:
+            existing = Language(code='und', name='Undetermined')
+            db.session.add(existing)
+            db.session.commit()
+        return existing
+
+    def a_local_community(self, env, name='beforerename'):
+        community = a_community(name)
+        community.ap_id = None
+        community.instance_id = 1
+        community.ap_featured_url = f'https://test.piefed.local/c/{name}/featured'
+        community.ap_moderators_url = f'https://test.piefed.local/c/{name}/moderators'
+        db.session.commit()
+        assert community.is_local()
+        return community
+
+    def test_the_name_changes(self, env):
+        community = self.a_local_community(env)
+
+        response = self.edit(env, community, url='afterrename')
+
+        assert response.status_code == 302
+        db.session.refresh(community)
+        assert community.name == 'afterrename'
+
+    def test_every_activitypub_url_follows_the_name(self, env):
+        community = self.a_local_community(env)
+
+        self.edit(env, community, url='afterrename')
+
+        db.session.refresh(community)
+        base = 'https://test.piefed.local/c/afterrename'
+        assert community.ap_profile_id == base
+        assert community.ap_public_url == base
+        assert community.ap_followers_url == f'{base}/followers'
+        assert community.ap_featured_url == f'{base}/featured'
+        assert community.ap_moderators_url == f'{base}/moderators'
+
+    def test_the_old_name_is_not_left_anywhere(self, env):
+        """The defect in one assertion: no column may still name the old URL."""
+        community = self.a_local_community(env)
+
+        self.edit(env, community, url='afterrename')
+
+        db.session.refresh(community)
+        for column in ('ap_profile_id', 'ap_public_url', 'ap_followers_url',
+                       'ap_featured_url', 'ap_moderators_url'):
+            assert 'beforerename' not in (getattr(community, column) or ''), column
+
+    def test_the_new_name_resolves_and_the_old_one_does_not(self, env):
+        community = self.a_local_community(env)
+
+        self.edit(env, community, url='afterrename')
+
+        assert env.client.get('/c/afterrename').status_code == 200
+        # 302, not 404: `/c/<actor>` redirects when it cannot resolve the name rather
+        # than refusing outright. What matters is that the old name no longer RENDERS
+        # the community -- measured, not assumed.
+        assert env.client.get('/c/beforerename').status_code != 200
+
+    def test_saving_without_changing_the_name_leaves_the_urls_alone(self, env):
+        """The guard is `form.url.data != community.name`, so an ordinary save must not
+        rewrite anything -- including for a community whose stored URLs do not follow
+        the scheme this route would generate."""
+        community = self.a_local_community(env)
+        community.ap_profile_id = 'https://test.piefed.local/c/beforerename?legacy=1'
+        db.session.commit()
+
+        self.edit(env, community, title='A New Title')
+
+        db.session.refresh(community)
+        assert community.title == 'A New Title'
+        assert community.ap_profile_id == \
+            'https://test.piefed.local/c/beforerename?legacy=1'
+
+    def test_a_remote_communitys_urls_are_never_rewritten(self, env):
+        """A remote community's URLs belong to the server that publishes it, and the
+        template already warns its settings are overwritten from there. Renaming it
+        locally must not claim its identity for this instance."""
+        community = a_community('remoteone')
+        community.ap_id = 'remoteone@peer.example'
+        community.ap_profile_id = 'https://peer.example/c/remoteone'
+        community.ap_public_url = 'https://peer.example/c/remoteone'
+        community.ap_domain = 'peer.example'
+        community.instance_id = env.baseline.instance_remote.id
+        db.session.commit()
+        assert not community.is_local()
+
+        self.edit(env, community, url='renamedremote')
+
+        db.session.refresh(community)
+        assert community.ap_profile_id == 'https://peer.example/c/remoteone'
+        assert community.ap_public_url == 'https://peer.example/c/remoteone'
+        assert community.ap_domain == 'peer.example'
+
+    def test_the_domain_is_set_for_a_local_rename(self, env):
+        community = self.a_local_community(env)
+        community.ap_domain = 'stale.example'
+        db.session.commit()
+
+        self.edit(env, community, url='afterrename')
+
+        db.session.refresh(community)
+        assert community.ap_domain == 'test.piefed.local'
