@@ -53,7 +53,7 @@ from app.utils import render_template, permission_required, set_setting, get_set
     community_membership, retrieve_image_hash, posts_with_blocked_images, user_access, reported_posts, user_notes, \
     decrement_unread_counts, \
     safe_order_by, get_task_session, patch_db_session, low_value_reposters, moderating_communities_ids, \
-    instance_allowed, trusted_instance_ids, get_emoji_replacements, get_site_as_dict, roles_with, sql_file, sanitize_svg, REDIRECT_POLICY_SETTING, REDIRECT_POLICY_SAME_ORIGIN
+    instance_allowed, trusted_instance_ids, get_emoji_replacements, get_site_as_dict, roles_with, sql_file, sanitize_svg, REDIRECT_POLICY_SETTING, REDIRECT_POLICY_SAME_ORIGIN, sanitise_posting_warning
 from app.admin import bp
 
 
@@ -1541,7 +1541,7 @@ def admin_community_edit(community_id):
         community.content_retention = form.content_retention.data
         community.topic_id = form.topic.data if form.topic.data > 0 else None
         community.default_layout = form.default_layout.data
-        community.posting_warning = form.posting_warning.data
+        community.posting_warning = sanitise_posting_warning(form.posting_warning.data)  # D1377
         community.posting_warning_override = form.posting_warning_override.data
         community.ignore_remote_language = form.ignore_remote_language.data
         community.ignore_remote_gen_ai = form.ignore_remote_gen_ai.data
@@ -2435,7 +2435,7 @@ def admin_instance_edit(instance_id):
         instance.gone_forever = form.gone_forever.data
         instance.trusted = form.trusted.data
         instance.silenced = form.silenced.data
-        instance.posting_warning = form.posting_warning.data
+        instance.posting_warning = sanitise_posting_warning(form.posting_warning.data)  # D1377
         instance.popular = form.popular.data
         instance.admin_note = form.admin_note.data
         instance.inbox = form.inbox.data

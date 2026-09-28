@@ -61,7 +61,7 @@ from app.utils import back, get_setting, render_template, markdown_to_html, vali
     approval_required, permission_required, aged_account_required, communities_banned_from_all_users, \
     moderating_communities_ids_all_users, block_honey_pot, user_pronouns, community_membership_private, \
     show_reason_why_no_federation, can_upload_video, banned_instances, is_invalid_get_request_uri, user_ip_banned, \
-    check_anoobis, calculate_rss_cache_timeout, opengraph_parse, community_link_markup
+    check_anoobis, calculate_rss_cache_timeout, opengraph_parse, community_link_markup, sanitise_posting_warning
 from app.shared.post import make_post, sticky_post
 from app.shared.tasks import task_selector
 from app.shared.community import leave_community
@@ -125,7 +125,7 @@ def add_local():
                               theme=form.theme.data,
                               nsfw=form.nsfw.data, private_key=private_key,
                               public_key=public_key, description_html=markdown_to_html(form.description.data),
-                              local_only=form.local_only.data, posting_warning=form.posting_warning.data,
+                              local_only=form.local_only.data, posting_warning=sanitise_posting_warning(form.posting_warning.data),
                               private=private, invitations=form.invitations.data,
                               show_popular=show_popular, show_all=show_all,
                               ap_profile_id='https://' + current_app.config['SERVER_NAME'] + '/c/' + form.url.data.lower(),
@@ -1441,7 +1441,7 @@ def community_edit(community_id: int):
             community.description = piefed_markdown_to_lemmy_markdown(form.description.data)
             community.description_html = markdown_to_html(form.description.data, anchors_new_tab=False)
             community.theme = form.theme.data
-            community.posting_warning = form.posting_warning.data
+            community.posting_warning = sanitise_posting_warning(form.posting_warning.data)  # D1377
             community.nsfw = form.nsfw.data
             community.ai_generated = form.ai_generated.data
             community.local_only = form.local_only.data
