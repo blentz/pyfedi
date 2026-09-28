@@ -20376,4 +20376,35 @@ delete of a post that has no url, which is most of them.
 Eleven mutants, all dead. 13,106 tests, 0 failures, 0 warnings. `app/shared/post.py`
 reached 100%.
 
-**Next free number: D1363.**
+## Round 167 — two spellings of one rewrite, and two hypotheses that were wrong
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1363** | `app/models.py`: `File.view_url`, `medium_url`, `thumbnail_url` against `User.avatar_image`, `avatar_thumbnail`, `cover_image` and `icon_image`/`header_image` on both Community and Feed | Turning a stored path into a URL had two implementations. The three `File` methods anchored the rewrite (`value[4:] if value.startswith('app/')`); seventeen places in the other seven used `value.replace('app/', '/')`, which rewrites that prefix ANYWHERE in the string. All ten are reached with `source_url`, which is a peer's string for anything federated in, so one File could render two different URLs depending on which method a template called. | **fixed** | `app/static/media/app/x.png` came back as `/static/media//x.png` from one and `/static/media/app/x.png` from the other |
+
+Each of the seventeen was an `if startswith(...) / else` pair returning the rewritten
+value or the value itself, which is exactly `served_path`. Collapsing them removed
+thirty-four lines that no test could reach separately — which is why this round's
+test file covers ten methods rather than one, and why `app/models.py` moved from
+85.17% to 88.43% (floor 85 → 88).
+
+**Two hypotheses this round checked and abandoned, recorded because the checking is
+the work.**
+
+*The ETag/identity question.* A probe appeared to show a logged-in request receiving
+the anonymous ETag and a `public, max-age=30` directive, which would be a
+cross-viewer cache problem. It was wrong twice over: the session in that probe was
+anonymous, and the code is right — `show_community` gates both the 304 and the ETag
+on `current_user.is_anonymous`, serving authenticated callers `private, max-age=15,
+must-revalidate` with `Vary: Cookie` and no ETag. `tests/test_community_show.py`
+already pins all of it, including that an anonymous ETag does not short-circuit a
+logged-in request. No defect, no gap.
+
+*The `view_url` question.* `'/pictrs/' in self.source_url` is a substring test on a
+peer's string, and `view_url` prefers `source_url` over the local copy. Both are
+deliberate: the first only appends a `?thumbnail=` query, and the second is what
+"view the original" means. No defect.
+
+Fourteen mutants, all dead. 13,158 tests, 0 failures, 0 warnings. All 92 floors met.
+
+**Next free number: D1364.**
