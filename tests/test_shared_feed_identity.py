@@ -339,3 +339,35 @@ class TestAgainstAFeedMadeTheOtherWay:
         db.session.commit()
 
         assert_identity_is_consistent(feed)
+
+
+class TestTheWidthOfTheName:
+    """`Feed.machine_name` is String(50) and `Feed.name` is String(256), and
+    `make_feed` writes both from one value. The web form caps its own field at 50
+    (app/feed/forms.py:68) and nothing capped the API arm, so a longer name
+    reached the commit and raised DataError -- D1372's measurement on the remote
+    side of the same two columns.
+    """
+
+    def test_a_long_name_is_cut_to_the_narrower_column(self, env):
+        feed = created(env, 'n' * 300)
+
+        assert feed.name == 'n' * 50
+        assert_identity_is_consistent(feed)
+
+    def test_renaming_to_a_long_name_is_cut_too(self, env):
+        feed = created(env, 'MyFeed')
+
+        edit_feed(payload('r' * 300), feed, SRC_API, auth=token(env))
+
+        assert feed.name == 'r' * 50
+        assert_identity_is_consistent(feed)
+
+    def test_a_private_feeds_owner_suffix_counts_towards_the_width(self, env):
+        """The suffix is appended before the cut, so `name` and `machine_name`
+        still agree -- which is the invariant that matters, since one of them is
+        what the feed is served at."""
+        feed = created(env, 'n' * 60, public=False)
+
+        assert feed.name == feed.machine_name
+        assert len(feed.name) == 50

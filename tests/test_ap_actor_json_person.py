@@ -595,20 +595,22 @@ class TestWhitespaceInThePeersNames:
         `activity_json['preferredUsername'].strip()`'s `.strip()`, after
         which user_name holds ' alice ' and the equality fails.
 
-        ap_preferred_username is asserted too, unstripped, because it reads
-        the SAME key without a `.strip()` of its own. That assertion pins
-        present behaviour rather than endorsing it: without it, a `.strip()`
-        later added to ap_preferred_username would change what the column
-        holds while leaving this test green. The Feed branch has the same
-        split, between `name` and `machine_name`.
+        CORRECTED BY D1372. This test used to assert
+        `ap_preferred_username == ' alice '`, and said so as pinning present
+        behaviour rather than endorsing it -- "a `.strip()` later added to
+        ap_preferred_username would change what the column holds while leaving
+        this test green". Both columns are filled from one validated name now, so
+        the split is gone. The column is `String(255)` and the raw value was
+        written to it unbounded, which was a DataError at commit for a peer
+        publishing a longer one.
         """
         peer_instance(PEER)
         document = peer_actor_json(name='alice', fields={'preferredUsername': ' alice '})
         user = actor_json_to_model(document, 'alice', PEER)
         assert user.user_name == 'alice'
         assert db.session.query(User).one().user_name == 'alice'
-        assert user.ap_preferred_username == ' alice ', \
-            'ap_preferred_username reads the same key without stripping'
+        assert user.ap_preferred_username == 'alice', \
+            'both columns come from one validated name (D1372)'
 
     def test_present_but_empty_name_falls_back_to_no_title(self, app, db_session):
         """`'name' in activity_json and activity_json['name']` -- the second
