@@ -12271,3 +12271,28 @@ form inside a `test_request_context` and printing `.errors` answered both in one
 Four places append the `und` Language when saving a community and none guards it; two
 dereference `.id` on it. The row comes from the database seed. The honest response was to
 seed it in the test, not to add a guard that would make one site disagree with three.
+
+**781. A FIXTURE ROW THE PRODUCT CANNOT PRODUCE IS A STATE TO ASSERT NOTHING AGAINST.**
+`make_local_feed` set `name` but not `machine_name`, and both `/f/<name>` and
+`/f/<name>.rss` look a feed up by `machine_name` -- so every local feed the suite built
+was unreachable at its own address, which no `make_feed` call can bring about. When a
+factory omits a column, check whether anything routes on it before deciding it is
+decoration.
+
+**782. A MUTANT THAT CANNOT BE KILLED MAY BE POINTING AT DEAD CODE, NOT A MISSING TEST.**
+Removing `.lower()` from `slugify(url, separator='_').lower()` survived because
+`slugify()` lowercases by default. The answer was to delete the call in all three copies,
+not to write a test for it. Ask what the mutated line contributes before writing the test
+that would kill it.
+
+**783. AN INVARIANT SAYS THE FIELDS AGREE; IT DOES NOT SAY WHAT THEY AGREE ON.**
+A check that a feed's name and its five ActivityPub URLs all matched was satisfied
+perfectly by a rule that slugified `a/b` to `a_b` and minted a two-segment actor. Pair a
+consistency check with a parametrised statement of the value the rule should produce.
+
+**784. A GUARD READ FROM A FIELD THE GUARDED CODE OVERWRITES MUST BE READ FIRST.**
+`edit_feed` rewrites `ap_profile_id`, and `Feed.is_local()` is computed FROM
+`ap_profile_id`. Reading it before the write asks "was this feed ours"; reading it after
+would let the write decide its own permission. Assert that `is_local()` still holds
+afterwards -- a rewrite that put a foreign host in there would quietly turn a local feed
+remote, and remote feeds are excluded from the rewrite, so the damage would stick.
