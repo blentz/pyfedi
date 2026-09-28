@@ -2786,6 +2786,30 @@ def inbox_domain(inbox: str) -> str:
 
 
 def awaken_dormant_instance(instance):
+    """Decide whether a dormant instance is due another try, called from the
+    inbox when something arrives from it.
+
+    `start_trying_again` is meaningful only while the instance is dormant: it is
+    the time the wait ends. D1380 -- waking the instance left the timestamp
+    behind, so the value outlived the dormancy that produced it, and two
+    different readers then believed it:
+
+    * this function. `Instance.update_dormant_gone` sets `dormant = True` without
+      setting the timestamp, so on the SECOND dormancy the `else` arm ran against
+      a value already in the past and woke the instance immediately. The backoff
+      applied once per instance, ever. Measured -- `dormant=False` straight out of
+      a fresh dormancy, with `sta` still holding the previous one's time;
+    * `app/shared/tasks/maintenance.py:435`, which gives up on
+      `dormant == True, start_trying_again < five_days_ago`. A stale value is
+      older than five days by definition, so an instance that was dormant once
+      months ago and has a brief failure spell now is marked `gone_forever` on the
+      next maintenance pass -- never delivered to again -- without having waited
+      five days for anything. Measured: the query matches.
+
+    Clearing it on wake restores the invariant, and both readers then behave: the
+    next dormancy recomputes the backoff from `failures`, and `NULL < x` is NULL,
+    so the give-up query cannot match an instance that is not actually waiting.
+    """
     if instance and not instance.gone_forever:
         if instance.dormant:
             if instance.start_trying_again is None:
@@ -2794,6 +2818,7 @@ def awaken_dormant_instance(instance):
             else:
                 if instance.start_trying_again < utcnow():
                     instance.dormant = False
+                    instance.start_trying_again = None
                     db.session.commit()
         # give up after ~5 days of trying
         if instance.start_trying_again and utcnow() + timedelta(days=5) < instance.start_trying_again:
