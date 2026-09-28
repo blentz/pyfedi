@@ -228,8 +228,15 @@ class TestVideoVoteCollections:
         # score + reply_count, not score: 4 + 4.
         assert post.ranking == post.post_ranking(8, posted_at)
         # community.subscriptions_count is 0 from make_community, and
-        # Community.scale_by() returns 3 for subscriptions_count <= 1.
-        assert post.ranking_scaled == int(post.ranking + 3)
+        # Community.scale_by() returns 4 for subscriptions_count <= 1.
+        #
+        # CORRECTED BY D1378: this read 3, which is what that fast path returned
+        # while the computation it skips returned 4 for the same community. The
+        # two agreed until 0aa6993d7 added the `influence < 0.05` band; the guard
+        # kept the old maximum. This assertion is why the change showed up here --
+        # `ranking_scaled` is `ranking + scale_by()`, so the stale constant was
+        # pinned at one of the four call sites.
+        assert post.ranking_scaled == int(post.ranking + 4)
 
     def test_only_likes_present_counts_only_upvotes(self, app, db_session, http_mock,
                                                     redis_lock_only_double):
