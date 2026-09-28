@@ -20457,4 +20457,55 @@ written.
 Eleven mutants, all dead. 13,239 tests, 0 failures, 0 warnings. All 92 floors met;
 `app/models.py` 88.7%.
 
-**Next free number: D1365.**
+## Round 169 — six model methods that could not run, found by asking who calls them
+
+Fact 761 said dead code contradicting live code is worse than no code. This round
+turned that into a sweep: for every public method in `app/models.py`, count the
+references to its name anywhere under `app/` (python and templates). Twelve had none.
+Six of those twelve could not have worked.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1365** | `app/models.py` | Six uncalled methods, each broken in a way only a caller would have discovered. | **fixed** | below |
+
+    PostReply.child_replies        db.session(PostReply) -- calling the scoped
+                                   session instead of db.session.query(...), which
+                                   is what has_replies two lines below does with the
+                                   same filter.                      -> repaired
+    User.expires_soon              each reads self.expires. User has no such column;
+    User.is_expired                the only `expires` in the file belongs to the
+    User.expired_ages_ago          commented-out IngressQueue model. All three date
+                                   from the initial commit.          -> deleted
+    Feed.following_instances       both filter FeedMember.community_id, a column that
+    Feed.has_followers_from_domain does not exist -- the Community versions copied
+                                   with the model swapped and the column left behind.
+                                   Only the Community ones have callers. -> repaired
+    Post.post_reply_count_recalculate  assigns self.post_reply_count, which is a
+                                   column on Community and User and NOT on Post
+                                   (Post's is reply_count).           -> repaired
+
+The last one is the worst of the six and the only one that raised nothing. Assigning
+an attribute a model does not have is legal Python: it set a stray attribute, the
+recount went nowhere, and a caller would have seen a plausible number on the object
+and no change in the database. **The first version of this round's test for it passed
+against the defect**, because it asserted `post.post_reply_count` — reading back the
+same stray attribute the method had just written. It asserts the column now, after a
+commit and a refresh.
+
+The three `User` methods were deleted rather than repaired: with no caller there was
+no behaviour to preserve, and no column to point them at, so repairing would have
+meant inventing semantics. The other two categories had an obvious meaning and a
+correct sibling to copy.
+
+**The sweep is now a test.** `TestAPropertyForTheWholeSweep` reads every `self.<name>`
+inside a model class and every `<ModelClass>.<name>` in the file, and asks the REAL
+class whether it has that attribute — runtime `hasattr`, not a parse of the class
+body, because a relationship can arrive by `backref` from the other side
+(`Conversation.members`) and an attribute can be inherited from a mixin
+(`User.is_authenticated`). It found the second `FeedMember.community_id` and
+`Post.post_reply_count` on its own, after the first three were already in hand.
+
+Fourteen mutants, all dead. 13,265 tests, 0 failures, 0 warnings. `app/models.py`
+89.73%, floor 88 → 89.
+
+**Next free number: D1366.**
