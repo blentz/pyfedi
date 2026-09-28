@@ -20407,4 +20407,54 @@ deliberate: the first only appends a `?thumbnail=` query, and the second is what
 
 Fourteen mutants, all dead. 13,158 tests, 0 failures, 0 warnings. All 92 floors met.
 
-**Next free number: D1364.**
+## Round 168 — one feature, two implementations, four disagreements
+
+A user's keyword content filters exist twice in `app/models.py`.
+`Post.blocked_by_content_filter` is the live one: `app/api/alpha/views.py` and three
+post-teaser templates call it. `PostReply.blocked_by_content_filter` has **no callers
+at all**, and it disagreed with the live one four ways.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1364** | `app/models.py`, `PostReply.blocked_by_content_filter` | Four divergences from the live `Post` implementation of the same feature, one of them a crash. | **fixed** | measured, below |
+
+With the filter `{'spoilers': ['ass']}`:
+
+    content 'a classic passage'   post False        reply 'spoilers'
+        Post tokenizes on `\w+` and matches whole WORDS; this matched any
+        substring, so one filter hid every reply containing "class" or "passage".
+    keyword 'Ass'                 post 'spoilers'   reply False
+        Post lowercases each keyword; this did not, so a filter typed with a
+        capital letter silently did nothing on replies.
+    the viewer is the author      post False        reply n/a
+        Post exempts your own content; this took no `user_id` at all, so your own
+        reply could be hidden from you.
+    body is NULL                  --                reply AttributeError:
+                                                    'NoneType' object has no
+                                                    attribute 'lower'
+        `PostReply.body` is nullable and a peer's `source.content` of null lands
+        there (D1333), so wiring reply filtering up would have crashed the page for
+        every filtering user who met one such reply.
+
+**Having no callers is what let the substring-versus-word question be settled here.**
+Changing a live filter from substring to whole-word would alter what users see, and
+that is a product decision, not a coverage round's. Changing an implementation nothing
+calls is free, so it now matches the live one exactly — and if reply filtering is ever
+wired up, a filter means the same thing in both places. The alternative, deleting it,
+would have removed what looks like unfinished work.
+
+The test file ends with the property that makes this durable: for fifty-four
+combinations of content and filters, the post's verdict and the reply's must be EQUAL.
+
+Also folded in: the last two copies of D1363's unanchored rewrite, in
+`process_upload` and `edit_post`'s image branch, which built a URL with
+`final_place.replace('app/', '')`. Nothing asserted the URL either returns — the
+helper `_stored_path` in `tests/test_shared_upload.py` even documents the old shape
+and reads only the part after `/static/`, so it could not have noticed a prefix left
+in front. Two tests now compare the returned URL against the file that was actually
+written.
+
+Eleven mutants, all dead. 13,239 tests, 0 failures, 0 warnings. All 92 floors met;
+`app/models.py` 88.7%.
+
+**Next free number: D1365.**
