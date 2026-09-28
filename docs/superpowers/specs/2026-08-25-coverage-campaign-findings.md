@@ -20734,4 +20734,57 @@ re-renders the page and looks like a refusal. Two of those cost a probe apiece.
 Eleven mutants, all dead. 13,404 tests, 0 failures, 0 warnings. All 92 floors met;
 `app/admin/routes.py` 89.03%.
 
-**Next free number: D1371.**
+## Round 176 — a feed's name and its ActivityPub identity, at both ends
+
+D1370's shape asked for one thing: where else is a name interpolated into actor URLs and
+written in more than one place? A sweep found feeds, and a probe that created a feed as
+`MyFeed` and renamed it to `RenamedFeed` measured two faults rather than one.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1371** | `app/shared/feed.py`, `make_feed` and `edit_feed` | `make_feed` built five ActivityPub URLs from the submitted `url`, lowercasing `ap_profile_id` alone and leaving the other four at the raw spelling, so a feed created as `MyFeed` had an `id` of `/f/myfeed` and a `url` of `/f/MyFeed` — two URLs for one actor, from birth. `edit_feed` then slugified and lowercased the name, wrote `name` and `machine_name`, and touched none of the five URLs, so after any edit a local feed's name and its whole identity were unrelated: it answered at `/f/renamedfeed` while telling every peer it was `/f/myfeed`, a path the rename had just made 404. | **fixed** | `profile_id = https://test.piefed.local/f/myfeed` and `public_url = .../f/MyFeed` after creation; both still `myfeed` after the feed had been renamed to `renamedfeed` |
+
+The second half is reachable by a wider caller than D1370's: an admin renames a
+community, but **any feed owner** may rename their own feed through
+`PUT /api/alpha/feed`, whose only gate is ownership.
+
+`make_feed` normalises the name itself now and all five URLs are built from one `base`,
+and `edit_feed` rewrites the five URLs and `ap_domain` when the slug changes — **only for
+a feed that is local and public**. A remote feed's URLs belong to the server that
+publishes it, and `is_local()` is read before the rewrite so it answers "was this ours"
+rather than being decided by the write it guards. A private feed is not federated and
+`edit_feed` gives it a name of `<url>/<owner>`, which cannot appear in a single-segment
+`/f/<actor>` path; rewriting would mint `/f/a/b`, a URL for an actor nothing serves.
+
+**One rule in three places is what let the two ends disagree.** `post_feed`
+(`app/api/alpha/utils/feed.py`) held a third copy of the slugify/lower/owner-suffix rule
+and applied it before calling, then re-derived the same name to look up the row it had
+just created. `make_feed` owns the rule now and returns the feed, so `post_feed` does
+neither. That re-derivation is also how the consolidation announced itself: the moment
+`make_feed` started normalising, `post_feed`'s query found nothing and dereferenced
+`None`.
+
+**A test that pinned the defect as intended behaviour.** `test_make_feed_api_arm_writes_
+every_derived_field` asserted all three treatments of `url` and called the divergence
+"latent today only because both callers slugify and `.lower()` before calling". It was
+not latent — the web arm passes `form.url.data` straight through. Its docstring now
+records the correction alongside sub-project 51's.
+
+**A fixture that could not be routed to.** `make_local_feed` set `name` but not
+`machine_name`, and `/f/<name>` and `/f/<name>.rss` both look a feed up by
+`machine_name` — so every local feed the suite built was unreachable at its own address,
+a state `make_feed` never produces. It sets `machine_name`, all five URLs and `ap_domain`
+now.
+
+**Three mutants survived the first pass and each was worth its run:** `slugify()`
+lowercases by default, so the trailing `.lower()` all three copies carried was dead text
+that no test could kill — removed rather than asserted; the `a/b` case was covered by
+the invariant but not by what the name should BE, so slugifying the whole string to `a_b`
+went unnoticed; and `ap_domain`'s write is invisible on a feed whose domain is already
+this server, so it is asserted against a local row carrying a stale domain — what a
+restored backup or a changed `SERVER_NAME` leaves behind.
+
+Nineteen mutants, all dead. 13,433 tests, 0 failures, 0 warnings. All 92 floors met;
+`app/shared/feed.py` 99.68%, `app/api/alpha/utils/feed.py` 100%.
+
+**Next free number: D1372.**
