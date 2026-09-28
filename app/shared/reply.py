@@ -523,7 +523,7 @@ def lock_post_reply(post_reply_id, locked, src, auth=None):
         post_reply = db.session.query(PostReply).filter_by(id=post_reply_id).one()
     else:
         user = current_user
-        post_reply = db.session.get(PostReply, post_reply_id)
+        post_reply = db.session.get(PostReply, post_reply_id) or abort(404)
 
     if locked:
         replies_enabled = False
@@ -562,7 +562,7 @@ def set_collapse_post_reply(post_reply_id, collapsible, src, auth=None):
         post_reply = db.session.query(PostReply).filter_by(id=post_reply_id).one()
     else:
         user = current_user
-        post_reply = db.session.get(PostReply, post_reply_id)
+        post_reply = db.session.get(PostReply, post_reply_id) or abort(404)
 
     if post_reply.community.is_moderator(user) or post_reply.community.is_instance_admin(user) or user.is_admin_or_staff():
         post_reply.collapsible = collapsible
@@ -589,7 +589,7 @@ def choose_answer(post_reply_id, src, auth=None):
     else:
         user = current_user
 
-    post_reply = db.session.get(PostReply, post_reply_id)
+    post_reply = db.session.get(PostReply, post_reply_id) or abort(404)
     post_reply.answer = True
     with force_locale(get_recipient_language(post_reply.user_id)):
         title = _('Your answer was chosen as an answer to %(post_title)s',
@@ -620,7 +620,7 @@ def unchoose_answer(post_reply_id, src, auth=None):
     else:
         user = current_user
 
-    post_reply = db.session.get(PostReply, post_reply_id)
+    post_reply = db.session.get(PostReply, post_reply_id) or abort(404)
     post_reply.answer = False
     db.session.commit()
 
