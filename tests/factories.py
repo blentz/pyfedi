@@ -22,6 +22,7 @@ from flask_login import login_user
 from app import db
 from app.activitypub.signature import RsaKeys
 from app.constants import NOTIF_POST, NOTIF_REPORT
+from app.utils import markdown_to_html
 from app.models import (ActivityPubLog, BannedInstances, ChatMessage, Community, CommunityBan, CommunityBlock,
                         CommunityFlair, CommunityFlairBlock, CommunityJoinRequest, CommunityMember, Conversation,
                         Domain, DomainBlock, Feed, FeedItem, FeedJoinRequest, FeedMember, File, Instance, InstanceBan,
@@ -497,12 +498,21 @@ def make_post_reply(post: Post, user: User, body: str = 'a reply') -> PostReply:
     the columns downstream queries (bookmarks, votes, subscriptions) actually
     join against.
     """
+    # `body_html` is set for the same reason make_post's docstring gives for its
+    # own: leaving it None manufactures a crash production cannot reach. Every
+    # path that creates a reply passes a string -- `markdown_to_html` and
+    # `allowlist_html` both return '' for empty or None input -- while the reply
+    # teaser renders `post_reply.body_html | community_links | ... | safe`, and
+    # `community_link_to_href(None)` is
+    # `TypeError: expected string or bytes-like object, got 'NoneType'` (fact 781's
+    # shape: a fixture row the product does not produce).
     reply = PostReply(
         user_id=user.id,
         post_id=post.id,
         community_id=post.community_id,
         instance_id=user.instance_id,
         body=body,
+        body_html=markdown_to_html(body),
         posted_at=utcnow(),
         deleted=False,
     )
