@@ -12110,3 +12110,24 @@ had to correct it -- look for the recount before describing the blast radius.
 The app factory sets `autoflush=False`. Three tests here asserted the OLD value
 because `refresh` expired the object and re-read the row while the write was still
 pending in the session. A helper that reads back a written value commits first.
+
+**757. VERIFY A TEST CLIENT IS LOGGED IN BEFORE BELIEVING WHAT IT MEASURES.**
+A probe in this round "showed" a logged-in request getting an anonymous cache
+directive. The session was anonymous. `/bookmarks` answered 302 in one probe and 200
+in another, so it is not an authentication oracle either; the only reliable check is
+`current_user.is_authenticated` observed INSIDE a request. Any probe whose conclusion
+depends on identity must assert the identity first.
+
+**758. A REFUTED HYPOTHESIS IS A RESULT, NOT A WASTED ROUND.**
+Two of this round's three leads were wrong, and both are in the ledger with the
+evidence. Writing "no defect, and here is why" is what stops the next round from
+re-opening the same question -- and in one case the answer was that the behaviour was
+already correct AND already pinned, which is worth knowing about a security-adjacent
+cache contract.
+
+**759. COLLAPSING AN `if X / else` PAIR THAT RETURNS THE SAME SHAPE REMOVES UNTESTABLE
+LINES.** Seventeen sites read `if p.startswith(root): return p.replace(root, '/')`
+else `return p`. That is one function of `p`, and while it was written out the two
+arms had to be reached separately through ten different methods. After the collapse
+the branch is tested once, in the helper, and the ten methods only need their own
+fallback order asserting.
