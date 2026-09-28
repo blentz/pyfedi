@@ -21170,4 +21170,47 @@ check.
 Ten mutants, all dead, on a green baseline. 13,910 tests, 0 failures, 0 warnings. All 92
 floors met.
 
-**Next free number: D1382.**
+## Round 187 — a listing that crashed on its own query parameter
+
+The template-facing surface came back clean this round: no registered global or filter reaches
+`|safe` except the `*_html` columns and the four chains through `community_links`/`feed_links`/
+`person_links`, and both view-source swaps (`post_body`, `reply_body`) carry the same
+three-step ladder against markdown fence breakout -- `'````' in body` escapes outright,
+`'```'` uses a four-backtick fence, otherwise three. So the round went to
+`app/admin/routes.py`'s largest uncovered route, 48 statements with no test at all.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1382** | `app/admin/routes.py`, `admin_content` | `title` was assigned only inside the three `show` branches and then passed to the template, so any other value was `UnboundLocalError: cannot access local variable 'title'` -- a 500. The chain compares exact strings, so `?show=TRASH` was enough, and `show` is reflected into all four pagination `url_for` calls, propagating an unrecognised value into every link on the page. | **fixed** | `trash`/`spammy`/`deleted` → 200; `bogus`, `''` and `TRASH` → `UnboundLocalError` |
+
+Normalised to the default the code already names, and the last branch made an `else` so the
+chain is total: a value added to the tuple without a branch of its own now shows the deleted
+view instead of crashing.
+
+**A fixture that manufactured a crash production cannot reach.** The first run of these tests
+failed with `TypeError: expected string or bytes-like object, got 'NoneType'` out of
+`community_link_to_href`, because `make_post_reply` set `body` and not `body_html` while the
+reply teaser renders `post_reply.body_html | community_links | ... | safe`. Checked before
+blaming the product: `markdown_to_html` and `allowlist_html` both return `''` for empty or None
+input, and every path that creates a reply passes one of them, so a live reply's `body_html` is
+always a string. The factory sets it now -- which is the reasoning `make_post`'s own docstring
+already gives for its own `body_html`.
+
+**Substring collisions cost three assertions, twice.** `DOWNVOTED` is a substring of
+`DOWNVOTEDREPLY` (fact 777), and a reply teaser renders its PARENT post's title -- so "this
+post is hidden" assertions were satisfied by a title the replies listing had leaked. The
+fixture now uses names sharing no prefix, hangs both replies off a post no view lists, and
+keeps a separate popular post that no reply points at to witness the hidden cases.
+
+**Two mutants were dropped rather than killed, because the control is not where they are.**
+`posts_replies` is enforced by the template (`{% if posts_replies != 'replies' %}` and its
+pair), so the route's `post_replies.filter(False)` is an optimisation that saves executing a
+query, not the filter itself. Removing either `filter(False)` changes nothing observable --
+verified by applying the mutant by hand -- so they are equivalent by design, like round 184's.
+The two operand mutants that *were* survivors got the rows they needed: a downvoted post with a
+high score, and a low-scoring reply with no downvotes.
+
+Nine mutants, all dead, on a green baseline. 13,944 tests, 0 failures, 0 warnings. All 92
+floors met, and setting `body_html` in `make_post_reply` broke nothing across the suite.
+
+**Next free number: D1383.**
