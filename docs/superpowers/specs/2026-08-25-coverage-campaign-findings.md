@@ -20934,4 +20934,36 @@ would break the public case.
 
 Seven mutants, all dead. 13,716 tests, 0 failures, 0 warnings. All 92 floors met.
 
-**Next free number: D1376.**
+## Round 181 — a flash message that was marked safe
+
+D1375 closed the routes that return raw HTML. `Markup(...)` is the other way a string
+reaches the DOM unescaped, and the sweep for it found four copies of one construction.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1376** | `app/community/routes.py` (three sites) and `app/shared/tasks/follows.py` | `flash(Markup(_('You joined %(community_name)s', community_name=f'<a href="/c/{community.link()}">{community.display_name()}</a>')))`. `Markup` marks a string safe and Jinja renders a safe string verbatim, so `{{ message }}` in base.html put both interpolated values straight into the DOM. Neither is safe there: `display_name()` is `title` or `title@ap_domain` and `link()` is `name` or `ap_id`, and for a **remote** community all of those come from the peer's actor document, which restricts no characters (fact 797). | **fixed** | for a community whose peer set `"name": "</a><img src=x onerror=alert(1)>"`, the rendered flash was `You joined <a href="/c/memes@peer.example"></a><img src=x onerror=alert(1)>@peer.example</a>` — `RAW_IMG_IN_DOM=True` |
+
+**Reachable with one link.** `/community/<actor>/subscribe`, `/unsubscribe` and
+`/join_then_add` are all `GET` routes ("POST is used by htmx, GET when JS is disabled"), so
+following a link joins or leaves the community and renders the message. No form and no
+token.
+
+**The end-to-end half was measured by the mutation pass, not assumed.** A flash crosses a
+redirect through the session, and a `Markup` that came back as a plain string would be
+escaped by Jinja on the way out — which would have made this a helper-level finding only.
+The mutant that restores the hand-built link at the *leave* site survived until the
+route-level test existed and died once it did, so the raw tag does reach the rendered page.
+
+**The fix is a helper, not four edits.** `Markup.format` escapes its arguments, and one
+function is why the four sites cannot be half-fixed — which is exactly what happened to
+D1375's third instance across two earlier rounds at the same shape. Three of the four
+mutants that restore a hand-built link survived the first pass, each at a call site the
+first tests did not reach.
+
+**The markup stays.** The message is meant to contain a link: it is how the user reaches
+the community they just joined. Escaping the whole message would show them raw
+`<a href=...>` text. The values are escaped; the structure is not.
+
+Seven mutants, all dead. 13,736 tests, 0 failures, 0 warnings. All 92 floors met.
+
+**Next free number: D1377.**
