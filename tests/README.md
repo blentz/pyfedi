@@ -12550,3 +12550,26 @@ Having written fact 823 about `onerror` surviving as a substring of escaped text
 mistake went into the next assertion one class over and failed against a correct fix. Assert on
 `<img` (a live tag opening) and on the escaped form being present; never on an attribute name,
 which escaping does not remove.
+
+**826. A VARIABLE ASSIGNED ONLY INSIDE BRANCHES OVER A REQUEST PARAMETER IS A 500 WAITING.**
+`admin_content` set `title` in three `show` branches with no `else` and then passed it to the
+template, so `?show=TRASH` -- the right word in the wrong case -- was an `UnboundLocalError`.
+Normalise such a parameter into its allowed set where it is read, and make the branch chain
+total, so adding a value to the set later cannot reintroduce the hole.
+
+**827. A REPLY TEASER RENDERS ITS PARENT POST'S TITLE, SO "THE POST IS HIDDEN" CAN LEAK.**
+Three assertions in this round passed because a shown reply put its parent's title on the page.
+When asserting that a listing excludes something, use a witness row that nothing else on the
+page can mention -- here, a post no reply hangs off.
+
+**828. BEFORE BLAMING THE PRODUCT FOR A None, CHECK WHETHER ANY PRODUCTION PATH WRITES ONE.**
+`community_link_to_href(None)` raising looked like a missing guard until `markdown_to_html('')`
+and `allowlist_html(None)` both turned out to return `''`, and every reply-creating path to pass
+one of them. The null existed only in the factory. The reverse conclusion -- adding a guard for
+a value the product cannot produce -- would have hidden the fixture gap instead of fixing it.
+
+**829. WHEN A MUTANT SURVIVES, FIND OUT WHERE THE CONTROL ACTUALLY LIVES.**
+Two `filter(False)` mutants survived because the template enforces `posts_replies` itself; the
+route's filter only saves executing a query. Applying the mutant by hand and watching the suite
+stay green is what established that, and it is a better outcome than inventing an assertion for
+a line that decides nothing.
