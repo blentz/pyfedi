@@ -12428,3 +12428,33 @@ Escaping lengthens a string (`&` becomes `&amp;`), so a value cut to the column 
 sanitising can still overflow it afterwards. Cutting after can split a tag, which a browser
 drops -- harmless, because nothing that survives the allowlist can execute. The mutant that
 swapped the order is killed by a warning of 400 ampersands.
+
+**806. A FAST PATH MUST RETURN WHAT THE COMPUTATION IT SKIPS WOULD RETURN.**
+`if subscriptions_count <= 1: return 3` skipped a cached query whose bands would have said 4.
+The guard was correct when written -- 3 was the maximum then -- and went stale when a higher
+band was added above it. When a guard clause short-circuits with a literal, check that literal
+against the code it bypasses, and check it again whenever that code's range changes.
+
+**807. `git log -L` ON THE SUSPECT LINES TELLS YOU WHETHER A CONSTANT IS A CHOICE OR A
+LEFTOVER.** The commit that added the `return 4` band did not touch the guard, and the
+pre-image showed the guard and the old top band were both 3. That turned "this constant looks
+odd" into "these two were equal by construction and one was updated", which is the difference
+between a tuning opinion and a defect.
+
+**808. ASSERT THE PROPERTY A SET OF THRESHOLDS EXISTS TO EXPRESS, NOT ONLY THE THRESHOLDS.**
+Five bands, each asserted at its boundary, still allow a non-monotonic step between two of
+them. One test over a sweep of sizes -- the boost never increases with size -- is what makes
+the discontinuity a failure rather than a value to be updated.
+
+**809. A BOUNDARY TEST MUST STRADDLE A BOUNDARY.**
+The mutant dropping `int(largest_community)` survived a test comparing `20.9` with `20`,
+because both land in the same band. Pick the input where the two implementations disagree
+(`40.9` with two subscribers: 0.05 versus 0.0489), and assert the disagreement in the test so
+the choice of value is not mistaken for an arbitrary one.
+
+**810. A CONSTANT COPIED INTO A TEST IS A SECOND PLACE THE STALE VALUE LIVES.**
+`assert post.ranking_scaled == int(post.ranking + 3)` carried a comment naming the behaviour
+it copied, so fixing `scale_by` failed it immediately and pointed at the reach of the change.
+A test that recomputes from the function under test would have tracked the fix silently and
+proved nothing; a test that hardcodes the number needs the reason written beside it, so the
+next person knows whether to update the number or the code.

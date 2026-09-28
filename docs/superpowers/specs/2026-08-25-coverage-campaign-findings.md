@@ -21000,4 +21000,42 @@ writer-reverting mutants.
 
 Twelve mutants, all dead. 13,784 tests, 0 failures, 0 warnings. All 92 floors met.
 
-**Next free number: D1378.**
+## Round 183 — a fast path that answered less than the computation it skipped
+
+The `|safe`, `Markup` and raw-HTML sinks are all swept, and the alpha API's authorisation
+came back clean: every mutating handler either calls `authorise_api_user` or forwards `auth`
+to a shared function that does, and the one that does neither — `post_user_logout` — verifies
+the JWT signature itself before revoking a jti. So this round went to the largest uncovered
+region instead, and found a defect there.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1378** | `app/models.py`, `Community.scale_by` | The `subscriptions_count <= 1` fast path returned 3 where the computation below it returns 4 for the same community. The two agreed by construction until `0aa6993d7` ("smarter large community calculation #495") added an `influence < 0.05` band returning 4 — before that commit the top band and this guard were **both 3** — and left the guard at the old maximum. A brand-new community has exactly one subscriber, because its creator joined it, so it got less of the small-community boost than one with two. Four call sites add this to `ranking_scaled`, so it orders feeds. | **fixed** | top-15% average 100: `1:3  2:4  5:3`; average 1000: `1:3  2:4  25:4  50:3` |
+
+**Invisible on a small instance.** At a top-15% average of 20 or below, `1/largest` is not
+under 0.05, so the stale 3 was what the computation would have said anyway. The defect
+appears only once an instance has real communities — which is also why a test instance would
+never show it, and it is pinned as such.
+
+**The function had no tests at all**: measured over the whole suite, the only executed line
+in it was its `def`. The file now covers every band at its boundaries, both early returns,
+and the property the bands exist to express — that the boost never increases with size. That
+property is what makes this a defect rather than a tuning choice, and it is asserted over a
+sweep of sizes rather than at one point.
+
+**The `int()` needed a value that straddles a band.** The first version of the truncation
+test compared `largest=20.9` against `largest=20` and agreed either way, leaving the mutant
+that drops `int()` alive. `largest=40.9` with two subscribers is the case that separates
+them: `2/40 == 0.05` is not under 0.05 and lands in the second band, while `2/40.9 == 0.0489`
+is and lands in the first.
+
+**One existing test pinned the stale value**, and it is how the change announced its reach:
+`test_both_vote_collections_are_counted` asserted `ranking_scaled == int(ranking + 3)` under
+the comment "Community.scale_by() returns 3 for subscriptions_count <= 1". Its seeded
+community has no subscribers, so the fast path really was what ranked the post. Corrected to
+4 with the reason recorded beside it. The only other assertion on `ranking_scaled` calls
+`scale_by()` live and tracks the fix.
+
+Thirteen mutants, all dead. 13,829 tests, 0 failures, 0 warnings. All 92 floors met.
+
+**Next free number: D1379.**
