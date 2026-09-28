@@ -12213,3 +12213,23 @@ and two web routes guard for themselves. Writing "a 500 waiting for the first ca
 that does not guard" is honest; writing it as a live 500 would not have been. A latent
 defect is still worth fixing when the fix is one uniform line, but the ledger has to
 distinguish the two.
+
+**772. A TASK THAT RE-READS WHAT ITS CALLER IS ABOUT TO DELETE CANNOT WORK IN
+PRODUCTION.** `delete_feed` dispatched an announce with an id, then deleted the feed and
+its members and committed. Eager celery runs the task inline, before the deletion, so it
+passed every test and every developer's instance; a real worker found nothing and the
+Delete was never federated. When a task is queued from a function that deletes rows, ask
+what the worker will find, and pass the data rather than the id.
+
+**773. `current_app.debug` MAKES CELERY EAGER, WHICH HIDES ORDERING BUGS.**
+The two arms of `if current_app.debug: task(...) else: task.delay(...)` are not
+equivalent: one runs before the next statement, the other after the transaction commits.
+A test that exercises only the inline arm cannot see an ordering defect in the other. Any
+test of a dispatch should assert what was DISPATCHED, and a separate test should run the
+task with those arguments in the state a worker would find.
+
+**774. MOVING LOGIC MOVES ITS TESTS, AND THAT IS NOT A REWRITE.**
+Extracting the recipient loop out of the task invalidated six tests whose assertions were
+all still correct. They kept every assertion and changed only what they call -- the
+composition the caller now performs. A test failing because code moved is not a test to
+delete.
