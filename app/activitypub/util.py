@@ -861,13 +861,36 @@ def refresh_community_profile_task(community_id, activity_json):
                     community.nsfw = activity_json['sensitive'] if 'sensitive' in activity_json else False
                     if 'nsfl' in activity_json and activity_json['nsfl']:
                         community.nsfl = activity_json['nsfl']
-                    community.title = activity_json['name'].strip()
+                    # D1374. `activity_json['name'].strip()`. Absent was KeyError,
+                    # a non-string was AttributeError and a value wider than
+                    # String(256) was DataError -- and this task re-raises after
+                    # rolling back, so any of them left the community stale for
+                    # ever: its name, icon, description, moderator list AND key all
+                    # stopped being picked up. D1372's finding at the two refresh
+                    # sites it did not reach. A peer that stops publishing a usable
+                    # display name has not renamed itself to nothing, so the title
+                    # this instance holds stays.
+                    refreshed_title = actor_name_from_ap(activity_json, 'name', limit=256)
+                    if refreshed_title:
+                        community.title = refreshed_title
                     community.posting_warning = activity_json['postingWarning'] if 'postingWarning' in activity_json else None
                     community.restricted_to_mods = activity_json['postingRestrictedToMods'] if 'postingRestrictedToMods' in activity_json else False
                     community.new_mods_wanted = activity_json['newModsWanted'] if 'newModsWanted' in activity_json else False
                     community.private_mods = activity_json['privateMods'] if 'privateMods' in activity_json else False
                     community.question_answer = activity_json['questionAnswer'] if 'questionAnswer' in activity_json else False
-                    community.default_post_type = activity_json['defaultPostType'] if 'default_post_type' in activity_json else 'link'
+                    # D1374. The guard read `'default_post_type'` and the value
+                    # read `'defaultPostType'`: two different keys, so the guard
+                    # could never be true for the key being fetched. This instance
+                    # PUBLISHES `defaultPostType` (app/activitypub/routes.py:546),
+                    # so between two PieFed instances the guard was always false and
+                    # every refresh silently reset a remote community's setting to
+                    # 'link' -- while a peer sending only the snake_case spelling
+                    # was `KeyError: 'defaultPostType'` and aborted the task.
+                    # `_as_text` carries the String(15) width with it; the
+                    # else-'link' arm is unchanged, and matches the five settings
+                    # around it that also take their default on a refresh.
+                    community.default_post_type = _as_text(
+                        activity_json.get('defaultPostType'), 15) or 'link'
                     community.ap_moderators_url = mods_url
                     if 'followers' in activity_json:
                         community.ap_followers_url = activity_json['followers']
@@ -1098,7 +1121,10 @@ def refresh_feed_profile_task(feed_id):
                     feed.nsfw = activity_json['sensitive'] if 'sensitive' in activity_json else False
                     if 'nsfl' in activity_json and activity_json['nsfl']:
                         feed.nsfl = activity_json['nsfl']
-                    feed.title = activity_json['name'].strip()
+                    # D1374, as for the community refresh above.
+                    refreshed_title = actor_name_from_ap(activity_json, 'name', limit=256)
+                    if refreshed_title:
+                        feed.title = refreshed_title
                     feed.ap_moderators_url = owners_url
                     feed.ap_fetched_at = utcnow()
                     refreshed_pem = public_key_pem(activity_json)  # D1355
@@ -1419,7 +1445,10 @@ def actor_json_to_model(activity_json, address, server):
                                   new_mods_wanted=activity_json['newModsWanted'] if 'newModsWanted' in activity_json else False,
                                   private_mods=activity_json['privateMods'] if 'privateMods' in activity_json else False,
                                   question_answer=activity_json['questionAnswer'] if 'questionAnswer' in activity_json else False,
-                                  default_post_type=activity_json['defaultPostType'] if 'defaultPostType' in activity_json else 'link',
+                                  # D1374. The key is right here; the type and the
+                                  # width were not. String(15).
+                                  default_post_type=_as_text(
+                                      activity_json.get('defaultPostType'), 15) or 'link',
                                   # D1347, on a community rather than an actor.
                                   created_at=parse_ap_timestamp(activity_json.get('published')) or utcnow(),
                                   last_active=parse_ap_timestamp(activity_json.get('updated')) or utcnow(),
