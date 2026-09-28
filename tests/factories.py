@@ -227,10 +227,23 @@ def make_local_feed(name: str = 'localfeed', public: bool = False) -> Feed:
     `public` defaults to False to match Feed.public's own column default
     (app/models.py:4098); callers pass it explicitly either way, because an
     assertion resting on a declared default proves nothing.
+
+    `machine_name` and all five URLs are set because they are not decoration:
+    `/f/<name>` and `/f/<name>.rss` both look the feed up by `machine_name`
+    (app/feed/routes.py:618, :778), so a row without one is a feed that cannot
+    be reached at its own address, and `make_feed` never builds such a row. A
+    fixture row the product cannot produce is a state to assert nothing against
+    (fact 781).
     """
-    feed = Feed(name=name, title=name, instance_id=1, public=public,
-                ap_profile_id=f"https://test.piefed.local/f/{name}",
-                ap_public_url=f"https://test.piefed.local/f/{name}")
+    base = f"https://test.piefed.local/f/{name}"
+    feed = Feed(name=name, machine_name=name, title=name, instance_id=1,
+                public=public,
+                ap_profile_id=base,
+                ap_public_url=base,
+                ap_followers_url=f"{base}/followers",
+                ap_following_url=f"{base}/following",
+                ap_outbox_url=f"{base}/outbox",
+                ap_domain='test.piefed.local')
     db.session.add(feed)
     db.session.commit()
     return feed
