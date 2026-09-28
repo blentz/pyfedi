@@ -3,7 +3,8 @@ from app.constants import *
 from app.activitypub.signature import default_context, post_request, send_post_request
 from app.models import Community, CommunityBan, CommunityJoinRequest, User, Feed, FeedJoinRequest, UserFollowRequest
 from app.utils import community_membership, gibberish, joined_communities, instance_banned, get_task_session, \
-    feed_membership, menu_subscribed_feeds, patch_db_session
+    feed_membership, menu_subscribed_feeds, patch_db_session, \
+    community_link_markup
 
 from flask import current_app, flash
 from markupsafe import Markup
@@ -94,7 +95,7 @@ def join_community(send_async, user_id, community_id, src):
 
             if src == SRC_WEB:
                 flash(Markup(_('You joined %(community_name)s',
-                               community_name=f'<a href="/c/{community.link()}">{community.display_name()}</a>')))
+                               community_name=community_link_markup(community))))
                 return
             elif src == SRC_PLD:
                 pre_load_message['status'] = 'joined'
