@@ -4987,7 +4987,24 @@ def normalise_actor_string(actor: str) -> Tuple[str, str]:
 
 
 def process_banned_message(banned_json, instance_domain: str, session):
-    if banned_person := find_actor_or_create(banned_json['message'], create_if_not_found=False):
+    """Record that a peer has told us one of our users is banned from it.
+
+    Reached from app/activitypub/signature.py when a delivery of ours comes back
+    `400` with `person_is_banned_from_site` in the body. Both the status and the
+    body are the peer's choice, so everything here is untrusted input.
+
+    D1379. `banned_json['message']` was read by hand: absent was `KeyError` and a
+    non-string was `AttributeError: ... has no attribute 'strip'` from inside
+    `find_actor_or_create`. The caller catches both -- into a logged failure --
+    but its `result.close()` sits after this branch, so a raise here leaked the
+    HTTP response, on every delivery to a peer that chose to answer this way.
+    D1372's family at a fifth site.
+    """
+    actor = _as_text(banned_json.get('message') if isinstance(banned_json, dict)
+                     else None)
+    if actor is None:
+        return
+    if banned_person := find_actor_or_create(actor, create_if_not_found=False):
         instance = session.query(Instance).filter(Instance.domain == instance_domain.lower()).first()
         if instance:
             session.execute(text(
