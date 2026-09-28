@@ -2300,9 +2300,16 @@ def delete_post_or_comment(deletor, to_delete, store_ap_json, request_json, reas
                         if to_delete.post.reply_count_cross_posted:
                             to_delete.post.reply_count_cross_posted -= 1
                         db.session.commit()
-            with redis_client.lock(f"lock:community:{community.id}", timeout=10, blocking_timeout=6):
-                community.post_reply_count -= 1
-                db.session.commit()
+            # D1361. `community.post_reply_count` used to be decremented out here,
+            # outside the `if not ... .bot` gate -- but `PostReply.new` only
+            # INCREMENTS it for a non-bot (app/models.py, `if not user.bot:`), and
+            # `app/shared/reply.py`'s local delete keeps it inside the gate. So
+            # every bot reply deleted through federation took one off a count it had
+            # never been added to. Measured: a community at 0 went to -1.
+            if not to_delete.author.bot:
+                with redis_client.lock(f"lock:community:{community.id}", timeout=10, blocking_timeout=6):
+                    community.post_reply_count -= 1
+                    db.session.commit()
 
             if to_delete.author.id != deletor.id:
                 add_to_modlog('delete_post_reply', actor=deletor, target_user=to_delete.author, reason=reason,
@@ -2341,8 +2348,8 @@ def restore_post_or_comment(restorer, to_restore, store_ap_json, request_json, r
             if not to_restore.author.bot:
                 to_restore.post.reply_count += 1
                 to_restore.post.reply_count_cross_posted += 1
+                community.post_reply_count += 1  # D1361, as in the delete above
             to_restore.author.post_reply_count += 1
-            community.post_reply_count += 1
             if to_restore.path and len(to_restore.path) > 1:
                 db.session.execute(text('update post_reply set child_count = child_count + 1 where id in :parents'),
                                    {'parents': tuple(to_restore.path[:-1])})
