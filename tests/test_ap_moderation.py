@@ -379,9 +379,17 @@ def test_deleting_a_reply_decrements_every_counter_it_maintains(
 
 def test_deleting_a_bots_reply_leaves_the_posts_reply_count_alone(
         app, db_session, monkeypatch, redis_lock_only_double):
-    """`if not to_delete.author.bot:` guards BOTH `post.reply_count` and
-    `post.reply_count_cross_posted`. A bot's reply is deleted and its author
-    and community counters still fall, but the post's do not.
+    """`if not to_delete.author.bot:` guards `post.reply_count`,
+    `post.reply_count_cross_posted` AND `community.post_reply_count`. A bot's
+    reply is deleted and only its AUTHOR's counter falls.
+
+    This asserted `community.post_reply_count == 4` -- the community counter
+    falling for a bot's reply -- and that was D1361. `PostReply.new` only
+    increments it `if not user.bot` (app/models.py), and
+    `app/shared/reply.py`'s local delete keeps the decrement inside the same
+    gate, so the federated path was taking one off a count the reply had never
+    been added to. Measured before the repair: a community at 0 went to -1.
+    Every bot reply deleted through federation drifted it down by one, for good.
 
     `bot` is set to True explicitly; `make_user` leaves it at the column
     default, so a test resting on that default would be asserting the wrong
@@ -402,7 +410,7 @@ def test_deleting_a_bots_reply_leaves_the_posts_reply_count_alone(
     assert reply.deleted is True
     assert post.reply_count == 5
     assert author.post_reply_count == 4
-    assert community.post_reply_count == 4
+    assert community.post_reply_count == 5  # D1361: unchanged, as on create
 
 
 def test_deleting_a_nested_reply_decrements_its_ancestors_child_count(
@@ -600,15 +608,20 @@ def test_restoring_a_bots_reply_leaves_the_posts_counters_alone(
     """The false arm of `if not to_restore.author.bot:`, and the mirror of
     `test_deleting_a_bots_reply_leaves_the_posts_reply_count_alone`.
 
-    WITHOUT THIS TEST THE TWO STATEMENTS ADDED BY THE FIX HAVE NO PLACEMENT
-    WITNESS. The guard now holds `post.reply_count` and
-    `post.reply_count_cross_posted`, while `author.post_reply_count` and
-    `community.post_reply_count` sit outside it -- the exact arrangement
+    WITHOUT THIS TEST THE STATEMENTS INSIDE THE GUARD HAVE NO PLACEMENT
+    WITNESS. The guard holds `post.reply_count`,
+    `post.reply_count_cross_posted` and `community.post_reply_count`, while
+    `author.post_reply_count` sits outside it -- the exact arrangement
     `delete_post_or_comment` uses, so that a bot's round trip is lossless on
-    all four columns. A mutant moving the community increment INSIDE the guard
+    all four columns. A mutant moving the community increment OUTSIDE the guard
     passes every other test in this file, because every other one that reaches
     this branch has a non-bot author and so runs both legs together. Here the
     legs disagree, which is the only condition that can tell them apart.
+
+    This class of arrangement was itself wrong until D1361: the community
+    counter sat outside the guard on BOTH sides, so a bot's round trip was
+    lossless only because the two errors cancelled. A delete without a restore
+    -- the normal case -- drifted the count down by one.
 
     `post.reply_count_cross_posted` IS SEEDED NON-ZERO ON PURPOSE, at a value
     distinct from the other three. The delete side guards its decrement with
@@ -638,7 +651,7 @@ def test_restoring_a_bots_reply_leaves_the_posts_counters_alone(
     assert post.reply_count == 4
     assert post.reply_count_cross_posted == 7
     assert author.post_reply_count == 4
-    assert community.post_reply_count == 7
+    assert community.post_reply_count == 6  # D1361: unchanged, as on create
 
 
 def test_an_unrelated_user_cannot_restore_a_post(app, db_session, monkeypatch, redis_lock_only_double):
@@ -1234,3 +1247,82 @@ def test_a_community_unban_notifies_only_a_user_who_has_posted_there(
     not_notified = db.session.query(Notification).filter_by(user_id=lurker.id).count()
     assert notified == 1
     assert not_notified == 0
+
+
+def test_a_bots_reply_round_trip_leaves_every_counter_where_it_started(
+        app, db_session, monkeypatch, redis_lock_only_double):
+    """D1361's property, and the one assertion the two tests above cannot make
+    between them: delete then restore, and nothing has moved.
+
+    Before the repair this passed too -- `community.post_reply_count` sat outside
+    the guard on both sides, so the two errors cancelled. It is here because it is
+    what a reader expects to be true, and because it fails for any repair that
+    fixes only one of the two functions.
+    """
+    site, instance, community, author, moderator = seed_moderation_scene()
+    post = make_post(community, author, None, title='a post')
+    reply = make_post_reply(post, author)
+    post.reply_count = 5
+    post.reply_count_cross_posted = 9
+    author.post_reply_count = 5
+    community.post_reply_count = 5
+    author.bot = True
+    db.session.commit()
+
+    ap_util.delete_post_or_comment(moderator, reply, False,
+                                   {'id': 'https://peer.example/activities/delete/2'}, '')
+    ap_util.restore_post_or_comment(moderator, reply, False,
+                                    {'id': 'https://peer.example/activities/undo/2'}, '')
+
+    assert (post.reply_count, post.reply_count_cross_posted) == (5, 9)
+    assert (author.post_reply_count, community.post_reply_count) == (5, 5)
+
+
+def test_a_bots_reply_deleted_twice_over_cannot_drive_the_count_negative(
+        app, db_session, monkeypatch, redis_lock_only_double):
+    """The consequence D1361 had in the wild: an instance running bridges or feed
+    bots deletes their replies routinely, and each one took the community's count
+    down. Two deletions of two different bot replies are enough to show it, and
+    the inbox refuses a repeat of the SAME delete, which is why these are two
+    replies rather than one twice.
+    """
+    site, instance, community, author, moderator = seed_moderation_scene()
+    post = make_post(community, author, None, title='a post')
+    first = make_post_reply(post, author)
+    second = make_post_reply(post, author)
+    community.post_reply_count = 0
+    author.bot = True
+    db.session.commit()
+
+    for number, reply in enumerate((first, second), start=1):
+        ap_util.delete_post_or_comment(
+            moderator, reply, False,
+            {'id': f'https://peer.example/activities/delete/neg{number}'}, '')
+
+    assert community.post_reply_count == 0
+
+
+def test_a_non_bots_reply_still_moves_the_community_counter(
+        app, db_session, monkeypatch, redis_lock_only_double):
+    """The true arm, so the repair is known to have narrowed the gate rather than
+    removed the decrement."""
+    site, instance, community, author, moderator = seed_moderation_scene()
+    post = make_post(community, author, None, title='a post')
+    reply = make_post_reply(post, author)
+    post.reply_count = 5
+    author.post_reply_count = 5
+    community.post_reply_count = 5
+    author.bot = False
+    db.session.commit()
+
+    ap_util.delete_post_or_comment(moderator, reply, False,
+                                   {'id': 'https://peer.example/activities/delete/3'}, '')
+
+    assert community.post_reply_count == 4
+    assert post.reply_count == 4
+
+    ap_util.restore_post_or_comment(moderator, reply, False,
+                                    {'id': 'https://peer.example/activities/undo/3'}, '')
+
+    assert community.post_reply_count == 5
+    assert post.reply_count == 5

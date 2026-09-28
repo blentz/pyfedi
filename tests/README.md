@@ -12073,3 +12073,21 @@ and its `@cache.memoize` decorator: the decorator silently moved onto the new
 function, `user_access` lost its cache, and `cache.delete_memoized(user_access)`
 raised `AttributeError: 'function' object has no attribute 'make_cache_key'` in
 sixteen tests. When inserting before a function, anchor above its decorators.
+
+**751. A COUNTER IS A CLAIM MADE BY TWO FUNCTIONS, SO TEST THEM TOGETHER.**
+`community.post_reply_count` was incremented behind `if not user.bot` and
+decremented outside it, in different files. Each side had tests and each side looked
+right. What was missing was a test that CREATES and then DELETES in one scene and
+asserts the counter is back where it started -- and with several deletion paths, one
+per path. `tests/test_reply_counter_symmetry.py` is that shape.
+
+**752. WHEN TWO ERRORS CANCEL, THE ROUND TRIP PASSES AND THE COMMON CASE DRIFTS.**
+The federated delete and its restore had the SAME misplacement, so
+delete-then-restore was lossless and a plain delete lost one. A round-trip assertion
+alone would have found nothing. Assert each leg's effect as well as the pair's.
+
+**753. A DOCSTRING CAN PIN A DEFECT AS CONFIDENTLY AS AN ASSERTION.**
+The test that had to be rewritten this round did not merely assert the wrong number:
+its docstring said "its author and community counters still fall" as if that were the
+design. It read as a specification and it was a description of a bug. When a test
+explains behaviour it observed rather than behaviour someone chose, say which it is.
