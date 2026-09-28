@@ -12607,3 +12607,21 @@ the row you expect back, so the assertion can only pass if the row was really li
 invisible until a row has nothing in the searched columns. That row is also the one with no text
 to assert on, so witness it structurally -- the unfiltered listing has one more row than a
 listing filtered to nothing.
+
+**836. A COOKIE IS REQUEST INPUT, NOT STATE YOU WROTE.**
+`add_post` read `cross_post_community_id` and did `int(...)` on it, then dereferenced
+`db.session.get(...)` without a guard. A cookie survives the community it names, can be edited by
+hand, and can be left behind by an older version of the site -- so it needs the same treatment as
+a query parameter: parse defensively, look the row up, and fall back rather than 500.
+
+**837. `client.set_cookie` DEFAULTS TO `localhost`, SO THE COOKIE IS NEVER SENT.**
+With `SERVER_NAME = test.piefed.local`, a cookie set without `domain=` does not reach the route,
+and every "this cookie value is handled" test passes by taking the no-cookie path. The first
+probe of this round reported 302 for `'abc'` and looked like a clean result. Pass `domain=`, and
+assert first that the cookie is honoured AT ALL, so the harness cannot silently stop testing.
+
+**838. WRITE THE GUARD TO ACCEPT EXACTLY WHAT THE PARSE ACCEPTS.**
+`int('  2  ')` is 2, so a guard of `.isdigit()` rejects a value the parse would have taken, and
+`.strip().isdigit()` matches it. Where a validity test and a conversion sit next to each other,
+the test for "would this parse" has to agree with the parser -- and the case that distinguishes
+them belongs in the tests, or a mutant swapping them survives.

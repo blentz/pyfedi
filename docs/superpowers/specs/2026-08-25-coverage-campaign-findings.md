@@ -21290,4 +21290,38 @@ and the runner added in round 186 refused to judge the mutants instead of report
 Twelve mutants, all dead, on a green baseline. 14,014 tests, 0 failures, 0 warnings. All 92
 floors met.
 
-**Next free number: D1385.**
+## Round 190 — a cookie trusted three ways
+
+`app/admin/routes.py` is down from 177 uncovered lines to 83 over the last four rounds, so this
+one went to `app/main/routes.py`. Two candidates there turned out clean and are recorded as
+such: `find_voters` compares users by `str(recently_downvoted_posts(user_id))`, which looks
+order-dependent but is not — that helper ends in `return sorted(post_ids)`, so the string is
+canonical; and `receive_webhook` is unauthenticated by design, with nothing to verify a sender
+against. `main.add_post`, 14 statements with no test, was not clean.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1385** | `app/main/routes.py`, `add_post` | `cross_post_community_id` is a cookie, written when the user last cross-posted, and the route trusted it three ways at once: `int(cookie)` with no check, `db.session.get(...)` dereferenced without a guard, and `-1` reaching the `== -1` test that means "nowhere to post". | **fixed** | `'abc'`, `'null'`, `'1.5'` → `ValueError: invalid literal for int() with base 10`; `'0'`, `'2'`, `'999999'` → `AttributeError: 'NoneType' object has no attribute 'link'`; `'-1'` → 204 with the fallback skipped |
+
+So a cookie naming a community that had since been deleted — or edited by hand, or left by an
+older version — broke the "add post" button with a 500 until it expired, and `-1` made it
+silently do nothing. The cookie is a hint about where the user probably wants to post, so an
+unusable one now falls through to the choice the route would have made without it, and 204 is
+left for the case it means.
+
+**The first probe reported 302 for every value, including `'abc'`.** That looked like the route
+being robust; it was `client.set_cookie(key, value)` defaulting the cookie's domain to
+`localhost` while `SERVER_NAME` is `test.piefed.local`, so nothing was ever sent. Every test
+passes `domain=` now, and the first class asserts the cookie is honoured at all — so a
+regression to "cookie never read" fails instead of passing everything.
+
+**`.strip().isdigit()` and not `.isdigit()`**, because `int('  2  ')` is 2: the guard is written
+to accept exactly what the parse accepts, and a padded cookie naming a real community is the row
+that shows it. One mutant survived until that row existed. A second was dropped as equivalent by
+design — `possible_communities()` only creates a section when it is non-empty, so the
+`poss_communities[section]` truthiness test guards a state the helper cannot produce.
+
+Eight mutants, all dead, on a green baseline. 14,039 tests, 0 failures, 0 warnings. All 92
+floors met.
+
+**Next free number: D1386.**
