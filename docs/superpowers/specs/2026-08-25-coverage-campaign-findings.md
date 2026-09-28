@@ -20658,4 +20658,50 @@ ever sees.
 Fifteen mutants, all dead. 13,333 tests, 0 failures, 0 warnings. `app/shared/feed.py`
 99.67%.
 
+## Round 174 — two ordering sweeps that found nothing, and the four admin listings
+
+D1369's shape, swept twice with AST passes over every file outside `cli.py` and `nntp`:
+
+  * **a task dispatched before the caller deletes the rows it needs.** Twenty-six hits,
+    all false: twenty-two are one enormous `register()` in `app/cli.py` holding every
+    CLI command, `Post.delete_dependencies` passes `delete_from_s3` a list of KEYS
+    rather than ids, `import_settings_task`'s "delete" is `redis_client.delete`, and the
+    remaining one is D1369 itself, already repaired.
+  * **a task dispatched before the commit that makes its rows visible.** Five hits, all
+    false: `join_feed` commits the membership BEFORE dispatching and the later commit is
+    an unrelated `FeedJoinRequest`; `_feed_add_community`'s announce reads `Feed` and
+    `Community` rows, neither of which it deletes; `edit_post` passes S3 keys.
+
+Both are recorded because the sweeps are cheap to re-run and knowing they are clean is
+worth as much as a finding.
+
+The round's deliverable is coverage of the four admin community listings --
+`/admin/communities` and its `no-topic`, `low-quality` and `un-moderated` siblings --
+which no test had requested. Thirty-nine uncovered lines, and two differences between
+the four asserted as behaviour rather than claimed as defects:
+
+  * the main listing searches `title OR ap_id`; the three filtered ones search `title`
+    alone, so a domain finds nothing on those three;
+  * all four compute `prev_url` with `communities.has_prev and page != 1`, and
+    `has_prev` is already False on page 1, so the second test cannot change the answer.
+    No mutant is written for it, and the test file says why.
+
+**A mutant survived because a rejected sort still renders.** Removing `'last_active'`
+from `safe_order_by`'s allowlist changed no status code and no row -- the function falls
+back rather than raising -- so the test that asked for `last_active ASC` and asserted a
+200 could not see it. Each of the ten allowed fields is now asserted to SORT: two
+communities, one low and one high in every sortable column, and ASC and DESC must put
+them the other way round.
+
+Two of my own test assumptions were wrong and the tests said so: the fallback is
+`desc()` of the alphabetically FIRST allowed field (`content_retention` here), not
+ascending; and `title SIDEWAYS` is not a refused sort at all -- the field is allowed and
+only the direction is unrecognised, which `safe_order_by` reads as ascending.
+
+Twelve mutants, all dead. 13,397 tests, 0 failures, 0 warnings. All 92
+floors met; `app/admin/routes.py` 88.98%, floor 86 → 88.
+
+**No defect number was issued this round.** Both sweeps came back clean and the two
+differences found in the listings are product choices, so there was nothing to repair.
+
 **Next free number: D1370.**
