@@ -2301,6 +2301,20 @@ def admin_reports():
         report_types = [-1]
     
     reports = Report.query.filter(or_(Report.status == REPORT_STATE_NEW, Report.status == REPORT_STATE_ESCALATED))
+    # D1384. `search` was read from the query string and passed to the template --
+    # which renders `<input type="search" name="search" value="{{ search }}">` --
+    # and never used in the query. An admin typed a term, the page reloaded with
+    # the box still filled, and nothing was filtered. Six sibling listings in this
+    # file implement the same parameter with `ilike` (communities four times,
+    # users, instances); this one only looked as though it did.
+    #
+    # `reasons` and `description` are the report's own text, which is what the box
+    # sits above. The suspect's name is not searched here: it lives on five
+    # different relationships depending on `Report.type`, and joining all of them
+    # is a different feature rather than this control's missing half.
+    if search:
+        reports = reports.filter(or_(Report.reasons.ilike(f"%{search}%"),
+                                     Report.description.ilike(f"%{search}%")))
     if local_remote == 'local':
         reports = reports.filter_by(source_instance_id=1)
     if local_remote == 'remote':
