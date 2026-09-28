@@ -583,3 +583,46 @@ class TestUrlCannotBeFalsy:
     it is kept here as well so a reader of `:120-121` meets the reasoning
     without having to know the register exists.
     """
+
+
+class TestTheUrlAnUploadReturns:
+    """D1363's last two call sites. `process_upload` and `edit_post`'s image branch
+    built the URL with `final_place.replace('app/', '')` -- the unanchored rewrite
+    this round replaced everywhere else with `served_path`.
+
+    No test asserted the URL those two return, which is why the mutant that put the
+    media root back survived. `_stored_path` above even documents the old shape in
+    its docstring, and it only ever read the part AFTER `/static/`, so it could not
+    notice a prefix left in front of it.
+    """
+
+    def test_the_media_root_is_not_in_the_url(self, app, db_session):
+        user = make_user(make_instance('uploader.test'), 'uploader', local=True)
+        db.session.commit()
+        before = files_under(MEDIA_ROOT)
+        try:
+            url = process_upload(_image(), 'posts', user)
+
+            assert url.startswith(f"{app.config['SERVER_URL']}/static/media/posts/")
+            assert 'app/' not in url
+        finally:
+            for path in sorted(set(files_under(MEDIA_ROOT)) - set(before)):
+                if os.path.isfile(path):
+                    os.remove(path)
+
+    def test_the_url_names_the_file_that_was_written(self, app, db_session):
+        """The URL and the path on disk are two renderings of one location, so the
+        test that pins the rewrite has to compare them."""
+        user = make_user(make_instance('uploader2.test'), 'uploader2', local=True)
+        db.session.commit()
+        before = files_under(MEDIA_ROOT)
+        try:
+            url = process_upload(_image(), 'posts', user)
+            written = sorted(set(files_under(MEDIA_ROOT)) - set(before))
+
+            assert len(written) == 1
+            assert url == f"{app.config['SERVER_URL']}/{written[0][len('app/'):]}"
+        finally:
+            for path in sorted(set(files_under(MEDIA_ROOT)) - set(before)):
+                if os.path.isfile(path):
+                    os.remove(path)

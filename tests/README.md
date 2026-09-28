@@ -12131,3 +12131,22 @@ else `return p`. That is one function of `p`, and while it was written out the t
 arms had to be reached separately through ten different methods. After the collapse
 the branch is tested once, in the helper, and the ten methods only need their own
 fallback order asserting.
+
+**760. A `\w` IN A PLAIN DOCSTRING IS A SyntaxWarning.**
+Quoting the regex `\w+` in a docstring while explaining a fix produced seven
+`SyntaxWarning: invalid escape sequence '\w'` and broke the zero-warnings rule. A
+docstring that quotes a pattern needs the `r` prefix, exactly like the pattern itself.
+
+**761. DEAD CODE THAT CONTRADICTS LIVE CODE IS WORSE THAN NO CODE.**
+`PostReply.blocked_by_content_filter` had no callers and four disagreements with the
+`Post` method that does the same job, including a crash on a nullable column. Whoever
+wired it up next would have inherited all four. Either delete such a method or make it
+agree with the live one -- and having no callers is what makes the second option free,
+because there is no behaviour to preserve.
+
+**762. A TEST HELPER CAN DOCUMENT THE BUG IT PREVENTS YOU SEEING.**
+`_stored_path`'s docstring said "process_upload returns SERVER_URL + '/' + final_place
+minus 'app/'" and its body read only the part after `/static/`. It encoded the shape
+it was asserting around, so the URL those two functions build was never checked and a
+mutant restoring the media root survived. When a helper normalises away part of a
+value, something else has to assert that part.
