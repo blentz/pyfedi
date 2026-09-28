@@ -4776,16 +4776,33 @@ def reported_posts(user_id: int, is_admin: bool) -> List[int]:
     return post_ids
 
 
-def reported_post_replies(user_id, admin_ids) -> List[int]:
+def reported_post_replies(user_id: int, is_admin: bool) -> List[int]:
+    """The reply twin of `reported_posts`, which is called from nine templates.
+
+    D1366. This one had no callers and could not have run either way. It passed a
+    LIST to an `IN :community_ids` parameter, which `text()` renders as a Postgres
+    array literal rather than expanding, and it had no guard for the empty case.
+    Measured for a moderator of no communities:
+
+        reported_posts         -> []
+        reported_post_replies  -> ProgrammingError: (psycopg2.errors.SyntaxError)
+                                  syntax error at or near "'{}'"
+
+    It also took `admin_ids` and tested membership itself while its twin takes
+    `is_admin`, so the same question had two shapes. Both are the live one's now:
+    nothing called this, so there was no signature to keep compatible.
+    """
     if user_id is None:
         return []
-    if user_id in admin_ids:
-        post_reply_ids = list(db.session.execute(text('SELECT id FROM "post_reply" WHERE reports > 0')).scalars())
-    else:
-        community_ids = [community.id for community in moderating_communities(user_id)]
-        post_reply_ids = list(db.session.execute(text('SELECT id FROM "post_reply" WHERE reports > 0 AND community_id IN :community_ids'),
-                                                 {'community_ids': community_ids}).scalars())
-    return post_reply_ids
+    if is_admin:
+        return list(db.session.execute(
+            text('SELECT id FROM "post_reply" WHERE reports > 0')).scalars())
+    community_ids = moderating_communities_ids(user_id)
+    if len(community_ids) == 0:
+        return []
+    return list(db.session.execute(
+        text('SELECT id FROM "post_reply" WHERE reports > 0 AND community_id IN :community_ids'),
+        {'community_ids': tuple(community_ids)}).scalars())
 
 
 def possible_communities():
