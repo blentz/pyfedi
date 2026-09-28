@@ -12591,3 +12591,19 @@ control characters are escaped, so a backtick run stays on its string's own line
 and the indent, and a fence must start its line. That is why one branch of `activity_json` may
 keep markdown while the branch handling unparsed bytes may not -- and it is asserted, not left
 as a comment.
+
+**833. A FILTER PARAMETER THAT IS READ, PASSED TO THE TEMPLATE AND ECHOED BACK CAN STILL DO
+NOTHING.** `admin_reports` plumbed `search` all the way to `value="{{ search }}"` and never put
+it in the query, so the box looked functional. When several listings share a parameter name,
+diff the one under test against the siblings that implement it -- six did here, one did not.
+
+**834. NEVER WITNESS A SEARCH BY LOOKING FOR THE SEARCH TERM.**
+The term is echoed into the form's `value`, so `b'TERM' in response.data` holds whether or not a
+row matched -- two mutants survived on it. Search one field and assert on a DIFFERENT field of
+the row you expect back, so the assertion can only pass if the row was really listed.
+
+**835. TO TEST `if x:` AROUND A LIKE FILTER, USE A ROW WITH NULLS.**
+`ilike('%%')` matches every string but not NULL, so running the filter unconditionally is
+invisible until a row has nothing in the searched columns. That row is also the one with no text
+to assert on, so witness it structurally -- the unfiltered listing has one more row than a
+listing filtered to nothing.
