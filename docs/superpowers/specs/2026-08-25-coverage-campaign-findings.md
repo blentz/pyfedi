@@ -20704,4 +20704,34 @@ floors met; `app/admin/routes.py` 88.98%, floor 86 → 88.
 **No defect number was issued this round.** Both sweeps came back clean and the two
 differences found in the listings are product choices, so there was nothing to repair.
 
-**Next free number: D1370.**
+## Round 175 — renaming a community through the edit form broke its identity
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1370** | `app/admin/routes.py`, `admin_community_edit` | The form's `url` field is an editable input, and the route wrote `community.name = form.url.data` and nothing else. `community.name` is half of a local community's ActivityPub identity: `admin_community_move` — linked from this very page as "Convert to local community" — rewrites six URLs and `ap_domain` when it changes the name. A rename here left `ap_profile_id`, `ap_public_url`, `ap_followers_url`, `ap_featured_url` and `ap_moderators_url` pointing at `/c/<oldname>` while the UI moved to the new one, so every outbound activity kept citing a URL that no longer resolved. | **fixed** | `/c/afterrename` answers 200 and `/c/beforerename` does not, while `ap_profile_id` still read `.../c/beforerename` |
+
+The five URLs and `ap_domain` now follow the name, **only for a local community**: a
+remote one's URLs belong to the server that publishes it, and the template already
+warns its settings are overwritten from there. The keypair and the ownership change
+stay where they were, in `admin_community_move` — those belong to converting a remote
+community to local, not to a rename.
+
+**Not a defect, recorded because it cost time:** every path that saves a community
+appends the `und` Language so posts with no language are accepted, and all four sites
+assume that row exists — two of them dereference `.id` on it. It is created by the
+database seed. A test that saves a community has to seed it too, or the append is
+`FlushError: Can't flush None value found in collection Community.languages`. Guarding
+one of the four sites would have been worse than leaving the invariant alone.
+
+**The harness cost most of this round**, and each step was a measurement rather than a
+guess: a POST to an admin route answers 400 without a CSRF token; `permission_required`
+runs before `login_required` and reads `user_access`, which is memoized, so a test
+wanting a privileged POST wants either user 1 or a fresh user id; the form's "no topic"
+choice is `-1` rather than `0`, and `default_layout` accepts only `''`, `'masonry'` or
+`'masonry_wide'` — both learned from `form.errors`, because a failed validation
+re-renders the page and looks like a refusal. Two of those cost a probe apiece.
+
+Eleven mutants, all dead. 13,404 tests, 0 failures, 0 warnings. All 92 floors met;
+`app/admin/routes.py` 89.03%.
+
+**Next free number: D1371.**
