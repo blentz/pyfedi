@@ -728,12 +728,11 @@ def test_make_feed_api_arm_writes_every_derived_field(app, db_session):
     """The API arm end to end, asserting the fields that are NOT straight
     copies of the input.
 
-    url appears in six columns with three different treatments: name and
-    machine_name verbatim, ap_profile_id LOWERCASED (:222), and the other four
-    ap_* urls verbatim (:223-226). That divergence is registered as R6 in this
-    round's design and is latent today only because both callers slugify and
-    .lower() before calling; it is asserted here as CURRENT behaviour so Group
-    C inherits a statement of what they are rather than an assumption.
+    url appeared in six columns with three different treatments: name and
+    machine_name verbatim, ap_profile_id LOWERCASED, and the other four ap_*
+    urls verbatim. This test recorded that divergence as CURRENT behaviour and
+    called it "latent today only because both callers slugify and .lower()
+    before calling".
 
     CORRECTED BY SUB-PROJECT 51 (D695): this docstring used to say Group C
     "rebuilds these fields in edit_feed(from_scratch=True)". It does not
@@ -741,6 +740,14 @@ def test_make_feed_api_arm_writes_every_derived_field(app, db_session):
     from_scratch=True. What Group C actually found is the opposite -- renaming
     a feed rewrites name and machine_name and leaves every ap_* url pointing at
     the old name.
+
+    CORRECTED AGAIN BY D1371: the divergence was not latent. `make_feed` is the
+    public entry point for both arms, and the web arm passed `form.url.data`
+    straight through, so a feed created as "MixedCase" really did carry an
+    `ap_profile_id` of `/f/mixedcase` and an `ap_public_url` of `/f/MixedCase`
+    -- one actor with two ids. `make_feed` normalises the name itself now, and
+    the assertions below are the corrected ones. tests/test_shared_feed_
+    identity.py is the round that covers this properly.
 
     The keypair is patched: RsaKeys.generate_keypair() is seconds of entropy
     this test would otherwise pay for and never assert.
@@ -759,9 +766,9 @@ def test_make_feed_api_arm_writes_every_derived_field(app, db_session):
                       return_value=('the-private-key', 'the-public-key')):
             make_feed(payload, SRC_API, auth='Bearer x')
 
-    made = Feed.query.filter_by(name='MixedCase').one()
+    made = Feed.query.filter_by(name='mixedcase').one()
     server = app.config['SERVER_NAME']
-    assert made.machine_name == 'MixedCase'
+    assert made.machine_name == 'mixedcase'
     assert made.title == 'Mixed'
     assert made.user_id == s.member.id
     assert made.private_key == 'the-private-key'
@@ -779,10 +786,10 @@ def test_make_feed_api_arm_writes_every_derived_field(app, db_session):
     assert made.instance_id == 1
     assert made.ap_domain == server
     assert made.ap_profile_id == f'https://{server}/f/mixedcase'
-    assert made.ap_public_url == f'https://{server}/f/MixedCase'
-    assert made.ap_followers_url == f'https://{server}/f/MixedCase/followers'
-    assert made.ap_following_url == f'https://{server}/f/MixedCase/following'
-    assert made.ap_outbox_url == f'https://{server}/f/MixedCase/outbox'
+    assert made.ap_public_url == f'https://{server}/f/mixedcase'
+    assert made.ap_followers_url == f'https://{server}/f/mixedcase/followers'
+    assert made.ap_following_url == f'https://{server}/f/mixedcase/following'
+    assert made.ap_outbox_url == f'https://{server}/f/mixedcase/outbox'
 
 
 def test_make_feed_gives_the_creator_an_owner_membership(app, db_session):

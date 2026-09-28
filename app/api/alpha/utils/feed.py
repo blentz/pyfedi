@@ -165,13 +165,12 @@ def post_feed_follow(auth, data):
 
 
 def post_feed(auth, data):
-    from slugify import slugify
-
     user = authorise_api_user(auth, return_type='model')
     public = data['public'] if 'public' in data else True
-    url = slugify(data['name'].strip().split('/')[0], separator='_').lower()
-    if not public:
-        url = url + '/' + user.user_name.lower()
+    # D1371. The slugify/lower/owner-suffix rule used to be applied here as well
+    # as in `make_feed` and `edit_feed`. `make_feed` owns it now, so the name a
+    # feed is created under cannot depend on which caller made it.
+    url = data['name']
     title = data['title']
     description = data['description'] if 'description' in data else ''
     icon_url = data['icon_url'] if 'icon_url' in data else None
@@ -188,9 +187,8 @@ def post_feed(auth, data):
                   'communities': communities, 'is_instance_feed': is_instance_feed,
                   'show_child_posts': show_child_posts, 'parent_feed_id': parent_feed_id}
 
-    make_feed(input_data, SRC_API, auth)
+    feed = make_feed(input_data, SRC_API, auth)
 
-    feed = Feed.query.filter_by(name=url, user_id=user.id).first()
     return get_feed(auth, {'id': feed.id})
 
 

@@ -210,6 +210,25 @@ def make_feed(input, src, auth=None, uploaded_icon_file=None, uploaded_banner_fi
             raise Exception('is_instance_feed requires an admin account')
         is_instance_feed = False
 
+    # D1371. `url` was used verbatim for `name` and for four of the five ActivityPub
+    # URLs, while `ap_profile_id` alone was lowercased -- so a feed created as
+    # "MyFeed" had `ap_profile_id` of `/f/myfeed` and an `ap_public_url` of
+    # `/f/MyFeed`, two URLs for one actor, from birth. `edit_feed` slugifies and
+    # lowercases the same field, so this is the normalisation the rest of the
+    # codebase already applies; doing it once here makes creation and editing agree.
+    #
+    # The private-feed suffix is applied here too, in the same two expressions
+    # `edit_feed` uses. `post_feed` (app/api/alpha/utils/feed.py) used to hold a
+    # third copy of this rule and append the suffix before calling -- one rule in
+    # three places, which is how creation and editing came to disagree in the
+    # first place. `slugify()` lowercases by default, so the trailing `.lower()`
+    # these three copies all carried was dead text; a mutant that removed it could
+    # not be killed, which is how it was found.
+    url = slugify(url.strip().split('/')[0], separator='_')
+    if not public:
+        url = url + '/' + user.user_name.lower()
+    base = f"https://{current_app.config['SERVER_NAME']}/f/{url}"
+
     private_key, public_key = RsaKeys.generate_keypair()
     feed = Feed(user_id=user.id, title=title, name=url, machine_name=url,
                 description=piefed_markdown_to_lemmy_markdown(description),
@@ -219,11 +238,11 @@ def make_feed(input, src, auth=None, uploaded_icon_file=None, uploaded_banner_fi
                 private_key=private_key,
                 public_key=public_key,
                 public=public, is_instance_feed=is_instance_feed,
-                ap_profile_id='https://' + current_app.config['SERVER_NAME'] + '/f/' + url.lower(),
-                ap_public_url='https://' + current_app.config['SERVER_NAME'] + '/f/' + url,
-                ap_followers_url='https://' + current_app.config['SERVER_NAME'] + '/f/' + url + '/followers',
-                ap_following_url='https://' + current_app.config['SERVER_NAME'] + '/f/' + url + '/following',
-                ap_outbox_url='https://' + current_app.config['SERVER_NAME'] + '/f/' + url + '/outbox',
+                ap_profile_id=base,
+                ap_public_url=base,
+                ap_followers_url=f'{base}/followers',
+                ap_following_url=f'{base}/following',
+                ap_outbox_url=f'{base}/outbox',
                 ap_domain=current_app.config['SERVER_NAME'],
                 subscriptions_count=1, instance_id=1)
     if parent_feed_id:
@@ -255,6 +274,11 @@ def make_feed(input, src, auth=None, uploaded_icon_file=None, uploaded_banner_fi
 
     for added_community in new_communities:
         _feed_add_community(added_community, 0, feed.id, user.id)
+
+    # Returned so a caller does not have to re-derive the name to find the row it
+    # just created. `post_feed` did exactly that, and its query broke the moment
+    # this function started normalising the name itself.
+    return feed
 
 
 def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_banner_file=None, from_scratch=False):
@@ -301,9 +325,27 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
             raise Exception('incorrect_login')
 
     if url:
-        url = slugify(url.strip().split('/')[0], separator='_').lower()
+        url = slugify(url.strip().split('/')[0], separator='_')
         if not public:
-            url = slugify(url.strip(), separator='_').lower() + '/' + user.user_name.lower()
+            url = url + '/' + user.user_name.lower()
+        # D1371. `feed.name` is half of a local feed's ActivityPub identity -- every
+        # one of these five URLs is built from it at creation -- and renaming used to
+        # change the name alone, so after any edit the feed's name and its identity
+        # were unrelated: a feed created as "MyFeed" and renamed to "RenamedFeed"
+        # kept `/f/myfeed` and `/f/MyFeed` while answering to `renamedfeed`.
+        #
+        # Only a LOCAL, PUBLIC feed's URLs are rewritten: a remote feed's belong to
+        # the server that publishes it, and a private feed is not federated -- its
+        # name carries a `/<owner>` suffix, which is not a path `/f/<actor>` can
+        # serve.
+        if feed.name != url and feed.is_local() and public:
+            base = f"https://{current_app.config['SERVER_NAME']}/f/{url}"
+            feed.ap_profile_id = base
+            feed.ap_public_url = base
+            feed.ap_followers_url = f'{base}/followers'
+            feed.ap_following_url = f'{base}/following'
+            feed.ap_outbox_url = f'{base}/outbox'
+            feed.ap_domain = current_app.config['SERVER_NAME']
         feed.name = url
         feed.machine_name = url
     feed.title = title
