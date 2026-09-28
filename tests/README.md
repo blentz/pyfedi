@@ -12458,3 +12458,41 @@ it copied, so fixing `scale_by` failed it immediately and pointed at the reach o
 A test that recomputes from the function under test would have tracked the fix silently and
 proved nothing; a test that hardcodes the number needs the reason written beside it, so the
 next person knows whether to update the number or the code.
+
+**811. A BRANCH TAKEN ON A SUBSTRING OF A RESPONSE MUST NOT ASSUME THE FORMAT.**
+`elif result.status_code == 400 and 'person_is_banned_from_site' in result.text:` then
+`result.json()`. The phrase can appear in an HTML error page, so the parse raised on a body
+the branch had already accepted. Match on the substring if you must, but parse defensively.
+
+**812. A RAISE BEFORE `close()` IS A LEAK, AND ONLY A COUNTING DOUBLE WILL SHOW IT.**
+The exception was caught and logged, so every behavioural assertion passed while the httpx
+response was never closed -- once per delivery to a peer that chose to answer that way. The
+`_Response` double in tests/test_activitypub_signature.py counts `close()` for exactly this
+reason; use it whenever a new branch is added ahead of that call.
+
+**813. AN EQUIVALENT MUTANT CAN BE DEFENCE IN DEPTH RATHER THAN A MISSING TEST.**
+Two caller-side guards survived mutation because the function they call guards its own input:
+either one alone suffices for every measured shape. Before writing a test to kill a survivor,
+ask whether the mutated line is redundant BY DESIGN -- and if it is, say so in the round's
+notes rather than contriving an assertion.
+
+**814. A LINE-ADDRESSED MUTANT THAT STAYS INSIDE THE `try` TESTS NOTHING.**
+`banned_json = result.json()` mutated to `result.json() if True else None` is still wrapped by
+the same `except`, so the mutant was a no-op and its survival meant nothing. When the guard is
+the `try` itself, mutate the handler -- `except Exception:` to `except KeyError:` -- not the
+guarded statement.
+
+**815. A TEST THAT PASSES ALONE AND FAILS IN THE SUITE MAY BE REACHING THE NETWORK.**
+Two LD-signature tests fetched `https://w3id.org/security/v1` and
+`https://www.w3.org/ns/activitystreams` on every run, because pyld's default document loader
+uses `requests` and respx does not intercept it. They failed only when the fetch was slow
+under full-suite load. Before suspecting cross-test state, put a spy on `requests.get` and
+look -- conftest's own docstring already listed this as a gap each test must close with
+`no_network_ld_signing`.
+
+**816. WHEN A FIXTURE EXISTS FOR AN ISOLATION GAP, SWEEP FOR EVERY TEST THAT NEEDS IT.**
+An AST sweep for tests calling `LDSignature.create_signature`/`verify_signature` or
+`jsonld.normalize` without `no_network_ld_signing` found exactly the two that were failing.
+The other two it listed raise on the signature-section and signature-type checks before the
+normalisation, so they never reach the loader -- worth confirming rather than papering over
+with a fixture they do not use.

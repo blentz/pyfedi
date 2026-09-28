@@ -21038,4 +21038,57 @@ community has no subscribers, so the fast path really was what ranked the post. 
 
 Thirteen mutants, all dead. 13,829 tests, 0 failures, 0 warnings. All 92 floors met.
 
-**Next free number: D1379.**
+## Round 184 — a peer's refusal, read by hand
+
+`Community.scale_by` was the largest uncovered region in `app/models.py`; the rest of that
+file's wholly-uncovered methods turned out to be reached only from `app/cli.py` (lowest
+priority) or from a template with no logic to speak of, and `Instance.votes_are_public` has
+no callers at all. So this round went to the peer-facing module instead, where
+`process_banned_message` had no tests: measured over the whole suite, the only executed line
+in it was its `def`.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1379** | `app/activitypub/util.py`, `process_banned_message`, and its caller in `app/activitypub/signature.py` | The function read `banned_json['message']` by hand, where `banned_json` is the body of a peer's `400` response to a delivery of ours. The caller reaches it on a **substring** of `result.text`, so the body need not be JSON at all, and called `result.json()` on it unguarded. The raise is caught below — but `result.close()` sits **after** this branch, so the HTTP response leaked every time a peer chose to answer that way. | **fixed** | `{}` and `{'msg': 'x'}` → `KeyError: 'message'`; `None`, `5`, `[]` → `AttributeError: ... has no attribute 'strip'` |
+
+D1372's family at a fifth site, this time on a response body rather than an actor document.
+
+**What this round looked for and did not find.** The insert names `(banned_person, that
+peer)`, and the peer is the host we chose to deliver to — so a peer can only record a ban
+about itself, which is its own business. There is no cross-instance escalation here. The
+finding is the input handling and the leaked response, and the entry says so rather than
+dressing it up.
+
+**Two mutants were equivalent, for a good reason.** With the function guarding its own input,
+the caller's "treat a parse failure as no body" and "check for None before calling" can each
+be removed without changing behaviour — the other guard absorbs it. That is defence in depth
+working, not a gap, and the mutant that *does* matter (narrowing the caller's `except
+Exception` so a decode error escapes) is dead. A third mutant was simply broken: it left the
+mutated line inside the `try`, so it never tested anything.
+
+**The leak is asserted, not argued.** `tests/test_activitypub_signature.py` already had a
+`_Response` double that counts `close()` — "a leak there is invisible to every other
+assertion" — so the new tests drive `post_request` through it and assert `response.closed is
+True` on each of the shapes that used to raise.
+
+**A harness defect the full suite surfaced, and its proof.** The first full run after this
+round failed `test_an_ld_signature_round_trips` and
+`test_an_ld_signature_made_with_another_key_is_a_mismatch`, both of which pass in isolation.
+`tests/conftest.py` already names the cause in its own docstring: pyld's default JSON-LD
+document loader reaches the real internet through `requests`, which respx never touches, and
+"anything that calls jsonld.normalize ... must arrange your own isolation". Measured directly,
+with a spy on `requests.get`:
+
+    NETWORK FETCHES: ['https://w3id.org/security/v1',
+                      'https://www.w3.org/ns/activitystreams']
+
+So those two tests made two live HTTP requests each, on every run, and failed when the fetch
+was slow under full-suite load. They were the only two calling `jsonld.normalize` without the
+`no_network_ld_signing` fixture that exists for exactly this; a sweep found two others that
+mention `LDSignature.verify_signature` and never reach the normalisation, because they raise
+on the signature-section and signature-type checks first. Both now take the fixture, and the
+round-trip test asserts the loader was genuinely used rather than assuming it.
+
+Eight mutants, all dead. 13,865 tests, 0 failures, 0 warnings. All 92 floors met.
+
+**Next free number: D1380.**
