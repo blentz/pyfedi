@@ -1876,6 +1876,21 @@ def admin_content():
     show = request.args.get('show', 'trash')
     days = request.args.get('days', 3, type=int)
 
+    # D1382. `title` was assigned only inside the three `show` branches and then
+    # passed to the template, so any other value was
+    # `UnboundLocalError: cannot access local variable 'title'` -- a 500. The
+    # chain is case-sensitive, so `?show=TRASH` was enough; measured, along with
+    # `?show=bogus` and `?show=`. `show` is also reflected into the four
+    # pagination `url_for` calls below, so an unrecognised value propagated into
+    # every link on the page.
+    #
+    # Normalised to the default this line already names rather than guarded at
+    # the template, and the last branch is an `else` so the chain is total: a
+    # value added to this tuple without a branch of its own shows the deleted
+    # view instead of crashing.
+    if show not in ('trash', 'spammy', 'deleted'):
+        show = 'trash'
+
     posts = Post.query.join(User, User.id == Post.user_id).filter(Post.deleted == False,
                                                                   Post.status > POST_STATUS_REVIEWING)
     post_replies = PostReply.query.join(User, User.id == PostReply.user_id).filter(PostReply.deleted == False)
@@ -1901,7 +1916,7 @@ def admin_content():
             post_replies = post_replies.filter(PostReply.posted_at > utcnow() - timedelta(days=days),
                                                User.created > utcnow() - timedelta(days=days))
         post_replies = post_replies.order_by(PostReply.score)
-    elif show == 'deleted':
+    else:                                   # 'deleted'
         title = _('Deleted content')
         posts = Post.query.filter(Post.deleted == True)
         if days > 0:
