@@ -421,19 +421,33 @@ def delete_feed(feed_id: int, src, auth=None):
     else:
         user_id = current_user.id
 
-    feed = db.session.get(Feed, feed_id)
+    feed = db.session.get(Feed, feed_id) or abort(404)
 
     # does the user own the feed
     if feed.user_id != user_id:
         abort(404)
 
     # announce the change to any potential subscribers
-    # have to do it here before the feed members are cleared out
+    #
+    # D1369. The comment here used to read "have to do it here before the feed
+    # members are cleared out", and `.delay()` defeated that: the task looked the
+    # Feed and its FeedMember rows up again, and by the time a worker ran them both
+    # were deleted and committed, so `feed.ap_public_url` was `AttributeError:
+    # 'NoneType' object has no attribute 'ap_public_url'`. The task failed and no
+    # Delete was ever federated for a public feed. Under `current_app.debug` celery
+    # is eager and the call ran INLINE, before the deletion, which is why it worked
+    # in development and nowhere else.
+    #
+    # The recipients are gathered here, while the rows still exist, and passed to
+    # the task. The actor's key is not passed -- the task loads the User, which
+    # survives -- so it stays out of the broker.
     if feed.public:
+        inboxes = remote_subscriber_inboxes(feed)
         if current_app.debug:
-            announce_feed_delete_to_subscribers(user_id, feed.id)
+            announce_feed_delete_to_subscribers(user_id, feed.ap_public_url, inboxes)
         else:
-            announce_feed_delete_to_subscribers.delay(user_id, feed.id)
+            announce_feed_delete_to_subscribers.delay(user_id, feed.ap_public_url,
+                                                      inboxes)
 
     # strip out any feedmembers before deleting
     db.session.query(FeedMember).filter(FeedMember.feed_id == feed.id).delete()
@@ -643,43 +657,62 @@ def announce_feed_add_remove_to_subscribers(action: str, feed_id: int, community
         session.close()
 
 
+def remote_subscriber_inboxes(feed) -> List[str]:
+    """The inboxes a change to `feed` has to be announced to.
+
+    D1369. This was inside `announce_feed_delete_to_subscribers`, which ran as a
+    celery task AFTER the feed and its `FeedMember` rows had been deleted and
+    committed -- so it found none of them. It is a function of its own now, called
+    while the rows still exist.
+
+    The rules are the ones that loop had: skip the feed's owner, skip local members,
+    and keep a remote member's instance only if it has an inbox, is online and is not
+    banned. Each inbox appears once however many of its users subscribe.
+    """
+    inboxes = []
+    for member in FeedMember.query.filter_by(feed_id=feed.id).all():
+        member_user = db.session.get(User, member.user_id)
+        if member_user is None or member_user.id == feed.user_id or member_user.is_local():
+            continue
+        instance = member_user.instance
+        if instance is None or not instance.inbox:
+            continue
+        if not instance.online() or instance_banned(instance.domain):
+            continue
+        if instance.inbox not in inboxes:
+            inboxes.append(instance.inbox)
+    return inboxes
+
+
 @celery.task
-def announce_feed_delete_to_subscribers(user_id, feed_id):
-    # get the user
-    user = db.session.get(User, user_id)
-    # get the feed
-    feed = db.session.get(Feed, feed_id)
-    # create the delete json
-    delete_json = {
-        "@context": default_context(),
-        "type": "Delete",
-        "actor": user.ap_public_url,
-        "id": f"{current_app.config['SERVER_URL']}/delete/{gibberish(15)}",
-        "object": {
-            "type": "Feed",
-            "id": feed.ap_public_url
-        }
-    }
+def announce_feed_delete_to_subscribers(user_id, feed_ap_public_url, inbox_urls):
+    """Tell each subscriber's instance that a public feed is gone.
 
-    # find the feed members
-    feed_members = FeedMember.query.filter_by(feed_id=feed.id).all()
-
-    # for each member
-    #  - if its the owner, skip
-    #  - if its a local server user, skip
-    #  - if its a remote user
+    D1369. `feed_ap_public_url` and `inbox_urls` are passed in because neither can be
+    looked up any more: `delete_feed` gathers them before it deletes the rows. The
+    actor is still loaded here rather than passed, so the private key stays out of the
+    broker.
+    """
+    if not inbox_urls:
+        return
     session = get_task_session()
     try:
-        for fm in feed_members:
-            fm_user = session.get(User, fm.user_id)
-            if fm_user.id == feed.user_id:
-                continue
-            if fm_user.is_local():
-                continue
-            # if we get here the feedmember is a remote user
-            instance: Instance = session.get(Instance, fm_user.instance.id)
-            if instance.inbox and instance.online() and not instance_banned(instance.domain):
-                send_post_request(instance.inbox, delete_json, user.private_key, user.ap_profile_id + '#main-key', timeout=10)
+        user = session.get(User, user_id)
+        if user is None:
+            return
+        delete_json = {
+            "@context": default_context(),
+            "type": "Delete",
+            "actor": user.ap_public_url,
+            "id": f"{current_app.config['SERVER_URL']}/delete/{gibberish(15)}",
+            "object": {
+                "type": "Feed",
+                "id": feed_ap_public_url
+            }
+        }
+        for inbox in inbox_urls:
+            send_post_request(inbox, delete_json, user.private_key,
+                              user.ap_profile_id + '#main-key', timeout=10)
     except Exception:
         session.rollback()
         raise
