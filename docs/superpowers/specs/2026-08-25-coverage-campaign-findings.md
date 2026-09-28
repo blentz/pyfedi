@@ -20542,4 +20542,42 @@ is actually asserted. The post twin got the same test and the same mutant.
 Eleven mutants, all dead. 13,282 tests, 0 failures, 0 warnings. `app/utils.py`
 91.23%, floor 90 → 91.
 
-**Next free number: D1367.**
+## Round 171 — six API view helpers answered 500 for something that does not exist
+
+Rounds 169 and 170 counted callers. This round compared TWINS: for every function
+whose name contains `post`, `community` or `post`, look for the `reply`, `feed` or
+`comment` version and diff them. Thirty pairs. The pairs themselves were consistent,
+but reading `build_removed_comments` -- which passes `entry.reply.user_id` and
+`entry.reply.post_id`, ids rather than models -- led to the ten helpers in
+`app/api/alpha/views.py` annotated `Model | int`, and those were not consistent at all.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1367** | `app/api/alpha/views.py`: `user_view`, `reply_view`, `feed_view`, `topic_view`, `conversation_information_view`, `conversation_report_view` | Each resolves an id with `db.session.get` and then reads attributes off the result, so an id nobody holds was an `AttributeError`. `shared_error_handler` maps `NoResultFound` to a 400 `{"status": "Not found"}` and does not recognise `AttributeError`, so those six answered a **500** for a request that is simply about something that does not exist. | **fixed** | measured, below |
+
+    post_view                      NoResultFound            -> 400
+    community_view                 NoResultFound            -> 400
+    flair_view                     NoResultFound            -> 400
+    instance_view                  NoResultFound            -> 400
+    user_view                      AttributeError: 'NoneType' object has no
+                                   attribute '__table__'    -> 500
+    reply_view                     the same                 -> 500
+    conversation_information_view  AttributeError: ... 'id'
+    conversation_report_view       AttributeError: ... 'suspect_conversation_id'
+    feed_view, topic_view          the same `get` with no guard
+
+Four siblings already got it right, two different ways: `post_view` with
+`db.session.get` plus an explicit `raise NoResultFound`, and `community_view`,
+`flair_view` and `instance_view` with `.filter_by(id=...).one()`, which raises the
+same thing. The six now match `post_view`.
+
+The test file asserts the rule for all ten rather than for the six, so it reads as
+"this file answers `NoResultFound` for an id nobody holds" — and it ends with a scan
+that fails if a seventh helper resolves an id with `get` and no guard. Both halves of
+the error mapping are asserted too: `NoResultFound` becomes a 400, and an
+`AttributeError` is not recognised, which is how these became 500s.
+
+Eleven mutants, all dead. 13,299 tests, 0 failures, 0 warnings. All 92 floors met;
+`app/api/alpha/__init__.py` reached 100%.
+
+**Next free number: D1368.**
