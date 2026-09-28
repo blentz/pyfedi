@@ -1871,20 +1871,13 @@ class User(UserMixin, db.Model):
         another_account = User.query.filter(User.email == email, User.id != self.id).first()
         return another_account is not None
 
-    def expires_soon(self):
-        if self.expires is None:
-            return False
-        return self.expires < utcnow() + timedelta(weeks=1)
-
-    def is_expired(self):
-        if self.expires is None:
-            return True
-        return self.expires < utcnow()
-
-    def expired_ages_ago(self):
-        if self.expires is None:
-            return True
-        return self.expires < datetime(2019, 9, 1)
+    # D1365. `expires_soon`, `is_expired` and `expired_ages_ago` were here, each
+    # reading `self.expires`. `User` has no such column -- the only `expires` in this
+    # file is in the commented-out `IngressQueue` model -- so all three raised
+    # `AttributeError` on any call, and all three date from the initial commit.
+    # Nothing called them, so there was no behaviour to keep and nothing to point
+    # them at: three methods that could not be called, referencing a column that does
+    # not exist.
 
     def recalculate_attitude(self):
         # Use direct SQL queries to avoid potential ORM-related deadlocks
@@ -3407,7 +3400,16 @@ class Post(db.Model):
         return False
 
     def post_reply_count_recalculate(self):
-        self.post_reply_count = db.session.execute(
+        """Recount this post's live replies.
+
+        D1365. This assigned to `self.post_reply_count`, which is a column on
+        Community and on User and NOT on Post -- Post's is `reply_count`. Assigning
+        an attribute a model does not have raises nothing: it set a stray Python
+        attribute and the recount went nowhere, which is worse than the
+        AttributeErrors found beside it because a caller would have seen a plausible
+        number on the object and no change in the database.
+        """
+        self.reply_count = db.session.execute(
             text('SELECT COUNT(*) as c FROM "post_reply" WHERE post_id = :post_id AND deleted is false'),
             {'post_id': self.id}).scalar()
 
@@ -4016,7 +4018,14 @@ class PostReply(db.Model):
             flush_cdn_cache(cache_urls)
 
     def child_replies(self):
-        return db.session(PostReply).filter_by(parent_id=self.id).all()
+        """The replies directly under this one.
+
+        D1365. This read `db.session(PostReply)` -- calling the scoped session
+        rather than `db.session.query(...)`, which is what `has_replies` two lines
+        below does with the same filter. Nothing called it, so the TypeError had
+        never been seen; the next caller would have been the first.
+        """
+        return db.session.query(PostReply).filter_by(parent_id=self.id).all()
 
     def has_replies(self, include_deleted=False):
         if include_deleted:
@@ -5069,19 +5078,27 @@ class Feed(db.Model):
             text('SELECT user_id FROM "notification_subscription" WHERE entity_id = :feed_id AND type = :type '),
             {'feed_id': self.id, 'type': NOTIF_FEED}).scalars())
 
-    # instances that have users which are members of this community. (excluding the current instance)
+    # instances that have users which are members of this feed. (excluding the current instance)
     def following_instances(self, include_dormant=False) -> List[Instance]:
+        # D1365, the same copy-paste as `has_followers_from_domain` below: this
+        # filtered `FeedMember.community_id`, which does not exist. Only
+        # `Community.following_instances` has callers, so the AttributeError had
+        # never been raised.
         instances = Instance.query.join(User, User.instance_id == Instance.id).join(FeedMember,
                                                                                     FeedMember.user_id == User.id)
-        instances = instances.filter(FeedMember.community_id == self.id, FeedMember.is_banned == False)
+        instances = instances.filter(FeedMember.feed_id == self.id, FeedMember.is_banned == False)
         if not include_dormant:
             instances = instances.filter(Instance.dormant == False)
         instances = instances.filter(Instance.id != 1, Instance.gone_forever == False)
         return instances.all()
 
     def has_followers_from_domain(self, domain: str) -> bool:
+        # D1365. This filtered `FeedMember.community_id`, which does not exist --
+        # the Community method above was copied with the model swapped and the
+        # column left behind, so every call was `AttributeError: type object
+        # 'FeedMember' has no attribute 'community_id'`. Nothing called it.
         instances = Instance.query.join(User, User.instance_id == Instance.id).join(FeedMember, FeedMember.user_id == User.id)
-        instances = instances.filter(FeedMember.community_id == self.id, FeedMember.is_banned == False)
+        instances = instances.filter(FeedMember.feed_id == self.id, FeedMember.is_banned == False)
         for instance in instances:
             if instance.domain == domain:
                 return True
