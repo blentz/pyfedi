@@ -20,7 +20,7 @@ from app.community.util import tags_from_string_old, end_poll_date, flair_from_f
 from app.constants import *
 from app.models import File, Notification, NotificationSubscription, Poll, PollChoice, PollChoiceVote, Post, \
     PostBookmark, PostVote, Report, Site, User, utcnow, Instance, Event, Community, CommunityFlair, \
-    votes_cast_today, adjust_domain_post_count
+    votes_cast_today, adjust_domain_post_count, served_path
 from app.shared.tasks import task_selector
 from app.utils import render_template, authorise_api_user, shorten_string, gibberish, ensure_directory_exists, \
     piefed_markdown_to_lemmy_markdown, markdown_to_html, fixup_url, domain_from_url, \
@@ -563,7 +563,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
             else:
                 raise Exception('filetype not allowed')
 
-        url = f"{current_app.config['SERVER_URL']}/{final_place.replace('app/', '')}"
+        url = f"{current_app.config['SERVER_URL']}{served_path(final_place)}"  # D1363
 
         if current_app.config['IMAGE_HASHING_ENDPOINT'] and not is_video_url(final_place):
             hash = retrieve_image_hash(url)

@@ -4028,11 +4028,44 @@ class PostReply(db.Model):
     def has_been_reported(self):
         return self.reports > 0 and current_user.is_authenticated and self.community.is_moderator()
 
-    def blocked_by_content_filter(self, content_filters):
-        lowercase_body = self.body.lower()
-        for name, keywords in content_filters.items() if content_filters else {}:
+    def blocked_by_content_filter(self, content_filters, user_id):
+        r"""The reply half of the user's keyword filters, matching `Post`'s exactly.
+
+        D1364. This had NO CALLERS -- `Post.blocked_by_content_filter` is the one the
+        API and the three post-teaser templates use -- and it disagreed with that one
+        four ways. Measured, with the filter `{'spoilers': ['ass']}`:
+
+            'a classic passage'   post: False      reply: 'spoilers'
+                                  Post tokenizes on `\w+` and matches whole words;
+                                  this matched any substring, so one filter hid
+                                  every reply containing "class" or "passage".
+            keyword 'Ass'         post: 'spoilers' reply: False
+                                  Post lowercases each keyword; this did not, so a
+                                  filter typed with a capital silently did nothing.
+            viewer is the author  post: False      reply: n/a
+                                  Post exempts your own content; this took no
+                                  user_id at all, so your own reply could be hidden
+                                  from you.
+            body is NULL          -- reply: AttributeError: 'NoneType' object has no
+                                  attribute 'lower'. `PostReply.body` is nullable and
+                                  a peer's `source.content` of null lands there
+                                  (D1333), so wiring this up would have crashed the
+                                  page for every filtering user who met one.
+
+        Because nothing calls it, aligning it with `Post`'s had no user-visible
+        consequence -- which is the only reason the substring-versus-word difference
+        could be settled here rather than left as a product question. If reply
+        filtering is ever wired up, a filter now means the same thing in both places.
+        """
+        if self.user_id == user_id:
+            return False
+
+        # tokenize body into words (lowercase), as Post does with its title
+        tokens = re.findall(r"\w+", (self.body or '').lower())
+
+        for name, keywords in (content_filters or {}).items():
             for keyword in keywords:
-                if keyword in lowercase_body:
+                if keyword.lower() in tokens:
                     return name
         return False
 

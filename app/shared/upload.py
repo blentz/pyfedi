@@ -9,7 +9,7 @@ from pillow_heif import register_heif_opener
 from sqlalchemy import text
 
 from app import db
-from app.models import File, User, user_file
+from app.models import File, User, user_file, served_path
 from app.utils import can_upload_video, gibberish, ensure_directory_exists, is_video_url, store_files_in_s3, guess_mime_type, sanitize_svg
 
 
@@ -83,7 +83,7 @@ def process_upload(image_file, destination='posts', user: User | None = None):
         else:
             raise Exception('filetype not allowed')
     file_size = os.path.getsize(final_place)
-    url = f"{current_app.config['SERVER_URL']}/{final_place.replace('app/', '')}"
+    url = f"{current_app.config['SERVER_URL']}{served_path(final_place)}"  # D1363
 
     # Move uploaded file to S3
     if store_files_in_s3():
