@@ -12496,3 +12496,22 @@ An AST sweep for tests calling `LDSignature.create_signature`/`verify_signature`
 The other two it listed raise on the signature-section and signature-type checks before the
 normalisation, so they never reach the loader -- worth confirming rather than papering over
 with a fixture they do not use.
+
+**817. A TIMESTAMP THAT DESCRIBES A STATE MUST BE CLEARED WITH THAT STATE.**
+`start_trying_again` said when a dormant instance's wait ends, and waking the instance left it
+set -- so the next dormancy read the previous one's answer, and a query looking for "waiting
+more than five days" matched an instance that was not waiting at all. When a field is only
+meaningful in one state, clear it on the transition out, and state the invariant ("non-null
+only while dormant") so both readers are covered by one line rather than a guard each.
+
+**818. TWO READERS OF ONE FIELD MEANS A STALE VALUE HAS TWO CONSEQUENCES.**
+The same leftover timestamp cost the backoff in `awaken_dormant_instance` and caused
+`maintenance.py`'s give-up query to mark a working instance `gone_forever`. After finding the
+first, grep for every other reader of the field before deciding the severity -- the second was
+worse than the first.
+
+**819. COMPARING TWO ABSOLUTE TIMESTAMPS PROVES NOTHING ABOUT THE FORMULA THAT SET THEM.**
+`assert other.start_trying_again > short` passes for any formula at all, because the later call
+produces the later timestamp -- a fixed 60-second wait satisfied it, and two mutants survived
+on that. Assert the DURATION the formula produces (`failures ** 4` seconds, at several counts,
+in a window wide enough for execution time and narrow enough to exclude another exponent).

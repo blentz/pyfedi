@@ -21091,4 +21091,39 @@ round-trip test asserts the loader was genuinely used rather than assuming it.
 
 Eight mutants, all dead. 13,865 tests, 0 failures, 0 warnings. All 92 floors met.
 
-**Next free number: D1380.**
+## Round 185 — a timestamp that outlived the state it described
+
+`app/utils.py` was the second-largest gap. `awaken_dormant_instance` is its largest wholly
+uncovered function, is called from the inbox when something arrives from an instance we had
+stopped talking to, and had no tests at all — the only executed line in it was its `def`.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1380** | `app/utils.py`, `awaken_dormant_instance` | `start_trying_again` is meaningful only while the instance is dormant — it is the time the wait ends — and waking the instance left the value behind, so it outlived the dormancy that produced it. Two readers then believed it: this function's own `else` arm, and the maintenance task's give-up query. | **fixed** | the lifecycle, measured: `after awaken (wakes) dormant=False sta=2026-09-28 21:39:05` — then a second dormancy, and `after awaken dormant=False` with the same stale `sta`, no wait at all |
+
+**First consequence: the backoff applied once per instance, ever.**
+`Instance.update_dormant_gone` sets `dormant = True` without setting the timestamp — it is
+reached from `get_request_instance` on any failed fetch — so on the second dormancy the `else`
+arm ran against a value already in the past and woke the instance on the first activity that
+arrived.
+
+**Second consequence, and the worse one: a working instance marked dead.**
+`app/shared/tasks/maintenance.py:435` gives up on
+`dormant == True, start_trying_again < five_days_ago` and sets `gone_forever`, which stops
+delivery for good. A stale value is older than five days by definition, so an instance that
+was dormant once months ago and has a brief failure spell now was given up on at the next
+maintenance pass, without having waited five days for anything. Measured: the query matches.
+
+Clearing the timestamp on wake restores the invariant — **`start_trying_again` is non-null
+only while dormant** — and both readers then behave, because `NULL < x` is NULL. One line,
+rather than a guard at each reader; the tests walk the invariant over a whole lifecycle rather
+than asserting it at one point.
+
+**Two mutants exposed a worthless assertion.** The first version of the backoff test compared
+two instances' absolute `start_trying_again` values, which the later call always wins whatever
+the formula is — so a fixed 60-second wait satisfied it. It now asserts the exact duration
+`failures ** 4` produces, at four counts.
+
+Twelve mutants, all dead. 13,882 tests, 0 failures, 0 warnings. All 92 floors met.
+
+**Next free number: D1381.**
