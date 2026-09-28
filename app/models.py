@@ -1420,8 +1420,28 @@ class Community(db.Model):
         return 'gifs' in self.name
 
     def scale_by(self) -> int:
+        """The boost this community's posts get in `ranking_scaled`: bigger for a
+        smaller community, so a large one does not drown the feed.
+
+        D1378. The fast path returned 3 where the computation below returns 4 for
+        the same community. The two agreed by construction until 0aa6993d7
+        ("smarter large community calculation #495") added the `influence < 0.05`
+        band returning 4 -- before it, the top band and this guard were both 3 --
+        and left this line at the old maximum. Measured, with the top-15% average
+        at 100 subscribers:
+
+            subscribers  1 -> 3     2 -> 4     5 -> 3
+
+        so a brand-new community, which has exactly one subscriber because its
+        creator joined it, got LESS of the small-community boost than one with two.
+        The guard is a fast path around a cached query, not a policy: it returns
+        what the computation would, which is the largest boost.
+
+        Invisible on a small instance -- at a top-15% average of 20 or below,
+        `1/largest` is not under 0.05 and the old value was right by coincidence.
+        """
         if self.subscriptions_count <= 1:
-            return 3
+            return 4
         largest_community = _large_community_subscribers()
         if largest_community is None or largest_community == 0:
             return 0
