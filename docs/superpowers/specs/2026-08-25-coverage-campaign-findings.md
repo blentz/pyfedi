@@ -21250,4 +21250,44 @@ leaving the reasoning in a comment.
 Eleven mutants, all dead, on a green baseline. 13,983 tests, 0 failures, 0 warnings. All 92
 floors met.
 
-**Next free number: D1384.**
+## Round 189 — a search box that was never wired up
+
+`admin_reports` is 17 statements behind `permission_required('administer all users')`, with no
+test at all.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1384** | `app/admin/routes.py`, `admin_reports` | `search` was read from the query string and passed to the template — which renders `<input type="search" name="search" value="{{ search }}">` — and no filter ever used it. An admin typed a term, the page reloaded with the box still filled, and the list was unchanged. Six sibling listings in the same file implement the same parameter with `ilike` (`admin_communities` four times, `admin_users`, `admin_instances`), so this one looked as though it did too. | **fixed** | the query filters on status, `local_remote` and `report_types`, and never on `search` |
+
+It searches `reasons` and `description`, the report's own text, which is what the box sits
+above. The suspect's name is deliberately **not** searched — it hangs off one of five
+relationships depending on `Report.type`, and joining them all is a separate feature rather than
+this control's missing half — and a test pins that limit so a later round does not read it as an
+oversight.
+
+**The echoed term made two mutants survive.** The template puts the search string into
+`value="{{ search }}"`, so `b'TERM' in body` is true whether or not any row matched: "search only
+covers reasons" and "search becomes a prefix match" both passed. Every search row now searches
+one field and witnesses the match through the OTHER field of the same report.
+
+**`if search:` needed a row with no text to be worth anything.** `ilike('%%')` matches any
+string but not NULL, so running the filter unconditionally would drop a report whose `reasons`
+and `description` are both null — and that row is witnessed structurally, by the unfiltered queue
+having one more `<tr` than a queue filtered to nothing, because it has no text of its own to look
+for.
+
+**An unbounded index found and deliberately not claimed.** `Report.type_text` is
+`types[self.type]` with no bounds check, and `admin/reports.html` builds an `{% include %}` path
+from it, so one row with a `type` outside 0–4 would 500 the whole queue. A probe with `type=7`
+produced exactly that `IndexError` — but every writer passes a `REPORT_TYPE_*` constant, so
+nothing in the product can produce such a row, and the round records the robustness gap rather
+than dressing an artificial input up as a defect.
+
+**The baseline guard earned itself.** The first attempt at the null-text test failed unmutated,
+and the runner added in round 186 refused to judge the mutants instead of reporting a false
+12/12.
+
+Twelve mutants, all dead, on a green baseline. 14,014 tests, 0 failures, 0 warnings. All 92
+floors met.
+
+**Next free number: D1385.**
