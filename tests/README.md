@@ -12383,3 +12383,30 @@ The first version of this round's community tests asserted `b'<img' not in respo
 against a 400 from a missing CSRF token, and passed. Pair every "payload is not here" with a
 "the row IS here, escaped" so a broken harness cannot look like a fixed defect. Fact 749,
 for the fourth time.
+
+**799. `Markup(...)` IS A DECISION THAT EVERY VALUE INSIDE IT IS ALREADY SAFE.**
+Four flash messages wrapped an f-string in `Markup` to keep one `<a>` tag, and thereby
+marked a remote community's title safe as well. When markup really is wanted, build it with
+`Markup('<a href="{link}">{name}</a>').format(...)`, which escapes the arguments and cannot
+be got wrong, rather than escaping at each call site.
+
+**800. A FLASH CROSSES A REDIRECT, SO PROVE THE PAYLOAD SURVIVES THE SESSION.**
+A `Markup` that came back from the session as a plain string would be escaped by Jinja, and
+the finding would be helper-level only. The mutation pass settled it: the mutant restoring
+the hand-built link at the leave route survived until a route-level test existed. When a
+sink is one request away from the source, assert through the request rather than at the
+construction.
+
+**801. FOUR COPIES OF ONE EXPRESSION NEED FOUR TESTS, OR A HELPER AND ONE.**
+Three of the four "build the link by hand again" mutants survived the first pass, each at a
+call site the first tests did not reach -- a leave route, a second join route, and a Celery
+task in another module. Replacing the copies with one helper makes the remaining risk a
+single line; the tests still have to reach each caller to prove none was missed.
+
+**802. A ROUTE UNDER TEST MAY REDIRECT SOMEWHERE THE TEST CONFIG CANNOT RENDER.**
+`join_then_add` redirects to the compose form, which raises
+`UndefinedError: ... has no attribute 'csrf_token'` under the test config. Reading
+`session['_flashes']` without following the redirect asserts the same thing without
+rendering an unrelated page. Two earlier attempts at that test failed on the wrong URL
+prefix (`/c/` rather than `/community/`) and on `@approval_required`, each of which answered
+200 with a page that simply did not contain the flash.
