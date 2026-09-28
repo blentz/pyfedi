@@ -30,7 +30,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     Licence, UserExtraField, Feed, FeedMember, FeedItem, CommunityFlair, UserFlair, Topic, Event, InstanceBan, Emoji, \
     UserFollower, PostBoost, parse_ap_timestamp, image_url_from, markdown_source, \
     _as_text, _as_int, _as_float, property_value_fields, public_key_pem, \
-    language_from_ap, adjust_domain_post_count
+    language_from_ap, adjust_domain_post_count, actor_name_from_ap
 from app.utils import get_request, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
     is_image_url, domain_from_url, gibberish, ensure_directory_exists, shorten_string, fixup_url, \
     microblog_content_to_title, is_video_url, \
@@ -727,9 +727,20 @@ def refresh_user_profile_task(user_id):
                         server, address = extract_domain_and_actor(user.ap_profile_id)
                         user.ap_id = f"{address.lower()}@{server.lower()}"
 
-                    user.user_name = activity_json['preferredUsername'].strip()
+                    # D1372. `activity_json['preferredUsername'].strip()`. Absent
+                    # was KeyError and a non-string was AttributeError, and this
+                    # task re-raises, so an actor whose document carried
+                    # `preferredUsername: null` could never be refreshed again --
+                    # their avatar, bio, indexable flag and rotated key all stopped
+                    # being picked up. A peer that stops publishing a usable name
+                    # has not renamed itself to nothing, so the name this instance
+                    # already holds stays (public_key_pem's reasoning, D1354).
+                    refreshed_name = actor_name_from_ap(activity_json)
+                    if refreshed_name:
+                        user.user_name = refreshed_name
                     if 'name' in activity_json:
-                        user.title = activity_json['name'].strip() if activity_json['name'] else ''
+                        user.title = actor_name_from_ap(activity_json, 'name',
+                                                        limit=256) or ''
                     if 'summary' in activity_json:
                         # D1355. `summary` is whatever the peer sent: a number, a
                         # list or an object was `AttributeError: ... has no
@@ -1251,9 +1262,30 @@ def actor_json_to_model(activity_json, address, server):
         user = db.session.query(User).filter(User.ap_profile_id == activity_json['id'].lower()).first()
         if user:
             return user
+        # D1372. `except KeyError` below catches this value being absent and
+        # nothing else, while the same untrusted value being a number or a list
+        # raised AttributeError straight out of this function, and one wider than
+        # the column was a DataError at the caller's commit. Refusing here gives
+        # all three the outcome the guard already intended for one of them.
+        actor_name = actor_name_from_ap(activity_json)
+        if not actor_name:
+            current_app.logger.error(
+                f'No usable preferredUsername for {address}@{server} in ' + str(activity_json))
+            return None
+        # D1372. `activity_json['publicKey']['publicKeyPem']` by hand, guarded by
+        # the same `except KeyError`: a `publicKey` that is a string or a number
+        # raised TypeError past it, and `{'publicKeyPem': None}` stored the STRING
+        # 'None' as the actor's key, which no signature can ever verify against --
+        # D1354's finding, fixed then for the refresh tasks and not for creation.
+        # An actor with no verifiable key is not an actor this instance can accept.
+        actor_pem = public_key_pem(activity_json)
+        if not actor_pem:
+            current_app.logger.error(
+                f'No usable publicKey for {address}@{server} in ' + str(activity_json))
+            return None
         try:
-            user = User(user_name=activity_json['preferredUsername'].strip(),
-                        title=activity_json['name'].strip() if 'name' in activity_json and activity_json['name'] else None,
+            user = User(user_name=actor_name,
+                        title=actor_name_from_ap(activity_json, 'name', limit=256),
                         email=f"{address}@{server}",
                         matrix_user_id=activity_json['matrixUserId'] if 'matrixUserId' in activity_json else '',
                         indexable=activity_json['indexable'] if 'indexable' in activity_json else True,
@@ -1269,11 +1301,11 @@ def actor_json_to_model(activity_json, address, server):
                         ap_profile_id=activity_json['id'].lower(),
                         ap_inbox_url=activity_json['endpoints']['sharedInbox'] if 'endpoints' in activity_json else activity_json['inbox'] if 'inbox' in activity_json else '',
                         ap_followers_url=activity_json['followers'] if 'followers' in activity_json else None,
-                        ap_preferred_username=activity_json['preferredUsername'],
+                        ap_preferred_username=actor_name,
                         ap_manually_approves_followers=activity_json['manuallyApprovesFollowers'] if 'manuallyApprovesFollowers' in activity_json else False,
                         ap_fetched_at=utcnow(),
                         ap_domain=server,
-                        public_key=activity_json['publicKey']['publicKeyPem'],
+                        public_key=actor_pem,
                         bot=True if activity_json['type'] == 'Service' else False,
                         instance_id=find_instance_id(server),
                         accept_private_messages=activity_json['acceptPrivateMessages'] if 'acceptPrivateMessages' in activity_json else 3
@@ -1357,9 +1389,30 @@ def actor_json_to_model(activity_json, address, server):
         # Registered as D33.
         content_retention = current_app.config['DEFAULT_CONTENT_RETENTION']
 
+        # D1372, as for the Person branch above. `title` was read with no guard at
+        # all, so a Group document carrying no `name` -- which the Person branch
+        # treats as ordinary -- could not be created here either; it falls back to
+        # the actor's own name rather than refusing the community.
+        actor_name = actor_name_from_ap(activity_json)
+        if not actor_name:
+            current_app.logger.error(
+                f'No usable preferredUsername for {address}@{server} in ' + str(activity_json))
+            return None
+        # D1372. `activity_json['publicKey']['publicKeyPem']` by hand, guarded by
+        # the same `except KeyError`: a `publicKey` that is a string or a number
+        # raised TypeError past it, and `{'publicKeyPem': None}` stored the STRING
+        # 'None' as the actor's key, which no signature can ever verify against --
+        # D1354's finding, fixed then for the refresh tasks and not for creation.
+        # An actor with no verifiable key is not an actor this instance can accept.
+        actor_pem = public_key_pem(activity_json)
+        if not actor_pem:
+            current_app.logger.error(
+                f'No usable publicKey for {address}@{server} in ' + str(activity_json))
+            return None
         try:
-            community = Community(name=activity_json['preferredUsername'].strip(),
-                                  title=activity_json['name'].strip(),
+            community = Community(name=actor_name,
+                                  title=actor_name_from_ap(activity_json, 'name',
+                                                           limit=256) or actor_name,
                                   nsfw=activity_json['sensitive'] if 'sensitive' in activity_json else False,
                                   ai_generated=activity_json['genAI'] if 'genAI' in activity_json else False,
                                   restricted_to_mods=activity_json['postingRestrictedToMods'] if 'postingRestrictedToMods' in activity_json else False,
@@ -1381,7 +1434,7 @@ def actor_json_to_model(activity_json, address, server):
                                   ap_moderators_url=mods_url,
                                   ap_fetched_at=utcnow(),
                                   ap_domain=server.lower(),
-                                  public_key=activity_json['publicKey']['publicKeyPem'],
+                                  public_key=actor_pem,
                                   # language=community_json['language'][0]['identifier'] # todo: language
                                   content_retention=content_retention,
                                   first_federated_at=utcnow(),
@@ -1405,7 +1458,7 @@ def actor_json_to_model(activity_json, address, server):
         # D33.
         community.instance_id = find_instance_id(server)
         if get_setting('meme_comms_low_quality', False):
-            community.low_quality = 'memes' in activity_json['preferredUsername'] or 'shitpost' in activity_json['preferredUsername']
+            community.low_quality = 'memes' in actor_name or 'shitpost' in actor_name
         description_html = ''
         description_html = _as_text(activity_json.get('summary')) or \
             _as_text(activity_json.get('content')) or ''  # D1355
@@ -1600,13 +1653,45 @@ def actor_json_to_model(activity_json, address, server):
                     continue
                 feed_following.append(community)
 
+        # D1372, as for the Person and Group branches. `machine_name` was the raw
+        # value while `name` was stripped, and `/f/<name>` looks a feed up by
+        # `machine_name` -- so a peer publishing ` news ` gave this instance a feed
+        # it could not serve at its own address (fact 781).
+        # `Feed.machine_name` is String(50) where `Feed.name` is String(256), and
+        # both are written from this one value, so 50 is the width that fits. A peer
+        # publishing a 60-character preferredUsername was a DataError at the commit
+        # below -- no remote feed of that name could be created at all.
+        actor_name = actor_name_from_ap(activity_json, limit=50)
+        if not actor_name:
+            current_app.logger.error(
+                f'No usable preferredUsername for {address}@{server} in ' + str(activity_json))
+            return None
+        # D1372. `activity_json['publicKey']['publicKeyPem']` by hand, guarded by
+        # the same `except KeyError`: a `publicKey` that is a string or a number
+        # raised TypeError past it, and `{'publicKeyPem': None}` stored the STRING
+        # 'None' as the actor's key, which no signature can ever verify against --
+        # D1354's finding, fixed then for the refresh tasks and not for creation.
+        # An actor with no verifiable key is not an actor this instance can accept.
+        actor_pem = public_key_pem(activity_json)
+        if not actor_pem:
+            current_app.logger.error(
+                f'No usable publicKey for {address}@{server} in ' + str(activity_json))
+            return None
         try:
-            feed = Feed(name=activity_json['preferredUsername'].strip(),
+            feed = Feed(name=actor_name,
                         user_id=owner_users[0].id,
-                        title=activity_json['name'].strip(),
+                        title=actor_name_from_ap(activity_json, 'name',
+                                                 limit=256) or actor_name,
                         nsfw=activity_json['sensitive'] if 'sensitive' in activity_json else False,
-                        machine_name=activity_json['preferredUsername'],
-                        description_html=activity_json['summary'] if 'summary' in activity_json else '',
+                        machine_name=actor_name,
+                        # The real value is derived below, from `summary` or
+                        # `content`, and put through allowlist_html. Assigning the
+                        # peer's `summary` here as well read as the value being
+                        # kept: for a non-string it WAS kept, because the branch
+                        # below skips a value _as_text refuses, so a peer sending
+                        # `summary: {}` left a dict in a Text column and the commit
+                        # raised where no `except KeyError` could see it.
+                        description_html='',
                         description=piefed_markdown_to_lemmy_markdown(
                             markdown_source(activity_json, require_media_type=False) or ''),  # D1346
                         # D1347, on a feed.
@@ -1623,7 +1708,7 @@ def actor_json_to_model(activity_json, address, server):
                         ap_moderators_url=owners_url,
                         ap_fetched_at=utcnow(),
                         ap_domain=server.lower(),
-                        public_key=activity_json['publicKey']['publicKeyPem'],
+                        public_key=actor_pem,
                         instance_id=find_instance_id(server),
                         public=True
                         )

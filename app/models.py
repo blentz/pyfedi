@@ -145,6 +145,33 @@ def _as_text(value, limit=None):
     return value[:limit] if limit else value
 
 
+def actor_name_from_ap(activity_json, key='preferredUsername', limit=255):
+    """The name a peer publishes for an actor under `key`, or None if it published
+    nothing a name column can hold.
+
+    D1372. Four places read `preferredUsername` by hand as
+    `activity_json['preferredUsername'].strip()`, and one untrusted value failed
+    three different ways: the key absent was `KeyError`, a number or a list was
+    `AttributeError: 'int' object has no attribute 'strip'`, and a value wider than
+    the column was a `DataError` at commit. In `refresh_user_profile_task` any of
+    those aborts the task, so an actor whose document carries
+    `preferredUsername: null` can never be refreshed again -- and the guard that
+    was there, `except KeyError`, catches exactly one of the three.
+
+    Stripped before the width test, because the width that matters is the width of
+    what is stored. The mapping test is `public_key_pem`'s: what reaches these
+    readers is whatever a peer's `.json()` returned, which may be a list or a bare
+    string.
+    """
+    if not isinstance(activity_json, dict):
+        return None
+    value = _as_text(activity_json.get(key))
+    if value is None:
+        return None
+    value = value.strip()
+    return value[:limit] if value else None
+
+
 def parse_ap_timestamp(value):
     """A timestamp out of a peer's document, or None if it does not read as one.
 

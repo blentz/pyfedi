@@ -169,6 +169,24 @@ def leave_feed(feed: int | Feed, src, auth=None, bulk_leave=False):
         return user_id
 
 
+def feed_machine_name(url, public, user):
+    """The name a feed is stored and served under, from what the caller submitted.
+
+    D1371. One rule, applied here alone. `make_feed`, `edit_feed` and
+    `post_feed` each held their own copy, which is how a feed's name and its
+    ActivityPub URLs came to disagree.
+
+    `Feed.machine_name` is String(50) and `Feed.name` is String(256), and both
+    are written from this value, so 50 is the width that fits. The web form
+    caps its own field at 50 (app/feed/forms.py:68); nothing capped the API
+    arm, where a longer name was a DataError at commit.
+    """
+    url = slugify(url.strip().split('/')[0], separator='_')
+    if not public:
+        url = url + '/' + user.user_name.lower()
+    return url[:50]
+
+
 def make_feed(input, src, auth=None, uploaded_icon_file=None, uploaded_banner_file=None):
     if src == SRC_API:
         url = input['url']
@@ -224,9 +242,7 @@ def make_feed(input, src, auth=None, uploaded_icon_file=None, uploaded_banner_fi
     # first place. `slugify()` lowercases by default, so the trailing `.lower()`
     # these three copies all carried was dead text; a mutant that removed it could
     # not be killed, which is how it was found.
-    url = slugify(url.strip().split('/')[0], separator='_')
-    if not public:
-        url = url + '/' + user.user_name.lower()
+    url = feed_machine_name(url, public, user)
     base = f"https://{current_app.config['SERVER_NAME']}/f/{url}"
 
     private_key, public_key = RsaKeys.generate_keypair()
@@ -325,9 +341,7 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
             raise Exception('incorrect_login')
 
     if url:
-        url = slugify(url.strip().split('/')[0], separator='_')
-        if not public:
-            url = url + '/' + user.user_name.lower()
+        url = feed_machine_name(url, public, user)
         # D1371. `feed.name` is half of a local feed's ActivityPub identity -- every
         # one of these five URLs is built from it at creation -- and renaming used to
         # change the name alone, so after any edit the feed's name and its identity
