@@ -261,20 +261,43 @@ def list_topics():
 @bp.route('/add_post', methods=['GET'])
 @login_required
 def add_post():
+    """The "add post" button: pick a community for the user and send them to its
+    compose form.
+
+    D1385. `cross_post_community_id` is a cookie, written when the user last
+    cross-posted, and it was trusted three ways at once. Measured, every value
+    below reaching this route:
+
+        'abc', 'null', '1.5'   ValueError: invalid literal for int() with base 10
+        '0', '2', '999999'     AttributeError: 'NoneType' object has no attribute
+                               'link'   (no such community)
+        '-1'                   204, with the joined-community fallback skipped
+
+    So a cookie naming a community that has since been deleted -- or one edited by
+    hand, or left by an older version -- broke the button with a 500 until it
+    expired, and a `-1` made it silently do nothing. The cookie is a hint about
+    where the user probably wants to post, so an unusable one falls through to the
+    same choice the route would have made without it, and 204 is left for the case
+    it means: this user has nowhere to post.
+    """
     poss_communities = possible_communities()
-    if request.cookies.get('cross_post_community_id'):
-        default_community_id = int(request.cookies.get('cross_post_community_id'))
-    else:
-        default_community_id = -1
-        if "Joined communities" in poss_communities:
-            default_community_id = possible_communities()["Joined communities"][0][0]
-        elif "Moderating" in poss_communities:
-            default_community_id = possible_communities()["Moderating"][0][0]
-        elif "Others" in poss_communities:
-            default_community_id = possible_communities()["Others"][0][0]
-    if default_community_id == -1:
+
+    default_community = None
+    cross_post_community_id = request.cookies.get('cross_post_community_id')
+    if cross_post_community_id and cross_post_community_id.strip().isdigit():
+        default_community = db.session.get(Community,
+                                           int(cross_post_community_id))
+
+    if default_community is None:
+        for section in ("Joined communities", "Moderating", "Others"):
+            if section in poss_communities and poss_communities[section]:
+                default_community = db.session.get(
+                    Community, poss_communities[section][0][0])
+                if default_community is not None:
+                    break
+
+    if default_community is None:
         return ('', 204)
-    default_community = db.session.get(Community, default_community_id)
     return redirect(url_for('community.add_post', actor=default_community.link()))
 
 
