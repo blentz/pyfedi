@@ -12184,3 +12184,18 @@ registered with `@event.listens_for(User.unread_notifications, 'set')` and is ca
 by SQLAlchemy, not by name. Before treating "no references" as dead, check the line
 above the `def`: event listeners, celery tasks, Flask routes, cache key functions and
 CLI commands are all referenced exactly once, by their decorator.
+
+**768. `db.session.get` ANSWERS None; `.one()` RAISES. MIXING THEM MIXES STATUS CODES.**
+Ten helpers in `app/api/alpha/views.py` accept `Model | int`. Four resolved the id with
+`.filter_by(id=...).one()` or with `get` plus an explicit `raise NoResultFound`; six
+used `get` and read attributes off the result. The first four answered the API's 400
+"Not found", the six answered a 500, for the same kind of request. When a codebase has
+two idioms for "fetch or fail", pick the one whose exception the error handler knows,
+and assert that every site uses it.
+
+**769. COMPARE TWINS, THEN FOLLOW WHAT THE TWINS TOUCH.**
+Enumerating `post`/`reply` and `community`/`feed` function pairs found thirty, and the
+pairs were consistent. The defect was one level down: `build_removed_comments` passes
+IDS where its twin passes models, which is legal for those helpers and led to the ten
+that disagreed about a missing row. The sweep was still what found it -- reading a pair
+side by side is what makes an argument of the wrong kind visible.
