@@ -1508,7 +1508,14 @@ def post_alpha_user_follow(data):
 @user_bp.arguments(UserUnfollowRequest)
 @user_bp.response(200, UserUnfollowResponse)
 @user_bp.alt_response(400, schema=DefaultError)
-def post_alpha_user_follow(data):
+def post_alpha_user_unfollow(data):
+    # Was a second `post_alpha_user_follow`, three lines below the first.
+    # flask-smorest de-duplicated it rather than letting Flask refuse the
+    # registration, so both routes worked and each called the right function --
+    # but under the endpoints `User.post_alpha_user_follow` and
+    # `User.post_alpha_user_follow_20`, which is what `url_for` and the generated
+    # OpenAPI document had to name. Nothing referenced either name; the shadowing
+    # is gone and unfollow is called what it is.
     if not enable_api():
         return abort(400, message="alpha api is not enabled")
     auth = request.headers.get('Authorization')
