@@ -30,7 +30,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
     Licence, UserExtraField, Feed, FeedMember, FeedItem, CommunityFlair, UserFlair, Topic, Event, InstanceBan, Emoji, \
     UserFollower, PostBoost, parse_ap_timestamp, image_url_from, markdown_source, \
-    _as_text, _as_int, _as_float, property_value_fields, public_key_pem, \
+    _as_text, _as_int, _as_float, _as_dict, property_value_fields, public_key_pem, \
     language_from_ap, adjust_domain_post_count, actor_name_from_ap
 from app.utils import get_request, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
     sanitise_posting_warning, \
@@ -2869,6 +2869,10 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
             elif isinstance(request_json['object']['attachment'], list):
                 attachment_list = request_json['object']['attachment']
             for attachment in attachment_list:
+                # D1397. A peer's `attachment` array may hold a bare url string,
+                # and `'href' in <string>` is a substring test whose subscript is
+                # a TypeError.
+                attachment = _as_dict(attachment)
                 url = alt_text = ''
                 if 'href' in attachment:
                     url = attachment['href']
@@ -2886,6 +2890,10 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
         local_users_to_notify = []
         if 'tag' in request_json['object'] and isinstance(request_json['object']['tag'], list) and len(request_json['object']['tag']) > 1:
             for json_tag in request_json['object']['tag']:
+                # D1397. `'type' in json_tag` over a STRING element is a substring
+                # test, and `json_tag['type']` then raises -- one `tag` entry of
+                # `"#prototype"` stopped the whole activity.
+                json_tag = _as_dict(json_tag)
                 if 'type' in json_tag and json_tag['type'] == 'Mention':
                     profile_id = json_tag['href'] if 'href' in json_tag else None
                     if profile_id and isinstance(profile_id, str) and profile_id.startswith('https://' + current_app.config['SERVER_NAME']):
@@ -3249,6 +3257,10 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
             elif isinstance(request_json['object']['attachment'], list):
                 attachment_list = request_json['object']['attachment']
             for attachment in attachment_list:
+                # D1397. A peer's `attachment` array may hold a bare url string,
+                # and `'href' in <string>` is a substring test whose subscript is
+                # a TypeError.
+                attachment = _as_dict(attachment)
                 url = alt_text = ''
                 if 'href' in attachment:
                     url = attachment['href']
@@ -3269,6 +3281,10 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
         # Check for Mentions of local users (that weren't in the original)
         if 'tag' in request_json['object'] and isinstance(request_json['object']['tag'], list) and len(request_json['object']['tag']) > 1:
             for json_tag in request_json['object']['tag']:
+                # D1397. `'type' in json_tag` over a STRING element is a substring
+                # test, and `json_tag['type']` then raises -- one `tag` entry of
+                # `"#prototype"` stopped the whole activity.
+                json_tag = _as_dict(json_tag)
                 if 'type' in json_tag and json_tag['type'] == 'Mention':
                     profile_id = json_tag['href'] if 'href' in json_tag else None
                     if profile_id and isinstance(profile_id, str) and profile_id.startswith('https://' + current_app.config['SERVER_NAME']):
@@ -3417,6 +3433,8 @@ def update_post_from_activity(post: Post, request_json: dict):
                 # post.flair.clear()
                 flair_tags = []
                 for json_tag in request_json['object']['tag']:
+                    # D1397, as the two reply tag loops.
+                    json_tag = _as_dict(json_tag)
                     if 'type' in json_tag and json_tag['type'] == 'Hashtag':
                         if json_tag['name'][
                            1:].lower() != post.community.name.lower():  # Lemmy adds the community slug as a hashtag on every post in the community, which we want to ignore
@@ -4969,7 +4987,29 @@ def find_community(request_json):
                             if potential_community:
                                 return potential_community
 
-    rj = request_json['object'] if 'object' in request_json else request_json
+    # D1397. `request_json['object'] if 'object' in request_json` -- unguarded,
+    # although the `rjs` list eleven lines above takes the same value only
+    # `isinstance(..., dict)`. So a peer whose `object` is a string put a string in
+    # `rj`, and `rj.get('type')` below is
+    # `AttributeError: 'str' object has no attribute 'get'`. Measured:
+    #
+    #     find_community({'type': 'Create', 'object': 'https://peer.test/p/1'})
+    #         AttributeError: 'str' object has no attribute 'get'
+    #     ... 'object': 'https://peer.test/inReplyTo/1'
+    #         TypeError: string indices must be integers   (substring test above)
+    #     ... 'object': 42  /  None
+    #         TypeError: argument of type 'int' is not iterable
+    #     ... 'object': ['a']
+    #         AttributeError: 'list' object has no attribute 'get'
+    #
+    # A string `object` is not an edge case: Lemmy's `Add` and `Remove` name their
+    # object by url, and `app/activitypub/routes.py:1428` and `:1501` call this
+    # with the whole activity whenever one arrives unannounced.
+    #
+    # Falling back to the outer activity is what the `else` arm already did for an
+    # activity with no `object` at all, and the two checks below -- `inReplyTo` and
+    # `type == 'Video'` -- are as meaningful there.
+    rj = request_json['object'] if isinstance(request_json.get('object'), dict) else request_json
 
     # Create/Update Note from platform that didn't include the Community in 'audience', 'cc', or 'to' (e.g. Mastodon reply to Lemmy post)
     if 'inReplyTo' in rj and rj['inReplyTo'] is not None:
@@ -4989,7 +5029,10 @@ def find_community(request_json):
                     potential_community = Community.query.filter_by(ap_profile_id=a.lower()).first()
                     if potential_community:
                         return potential_community
-                elif a['type'] == 'Group':
+                # D1397. `a['type']` after the `isinstance(a, str)` arm above, so
+                # `a` is not a string -- but a dict without `type`, or a number, or
+                # a nested list, was a KeyError or a TypeError out of the inbox.
+                elif _as_dict(a).get('type') == 'Group' and isinstance(_as_dict(a).get('id'), str):
                     potential_community = db.session.query(Community).filter_by(ap_profile_id=a['id'].lower()).first()
                     if potential_community:
                         return potential_community

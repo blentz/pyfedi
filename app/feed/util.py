@@ -10,7 +10,7 @@ from sqlalchemy import func, text
 from app import db
 from app.activitypub.util import actor_json_to_model
 from app.community.util import search_for_community, retrieve_mods_and_backfill
-from app.models import BannedInstances, Feed, FeedItem, Community
+from app.models import BannedInstances, Feed, FeedItem, Community, _as_dict
 from app.utils import feed_tree, get_request
 
 
@@ -75,7 +75,11 @@ def search_for_feed(address: str, allow_fetch: bool = True):
 
         if webfinger_data.status_code == 200:
             webfinger_json = webfinger_data.json()
+            # D1397, as search_for_community:77.
+            if not isinstance(webfinger_json, dict) or not isinstance(webfinger_json.get('links'), list):
+                return None
             for links in webfinger_json['links']:
+                links = _as_dict(links)
                 if 'rel' in links and links['rel'] == 'self':  # this contains the URL of the activitypub profile
                     if 'href' not in links:  # a peer may advertise several, so keep walking
                         continue
