@@ -22333,4 +22333,38 @@ costs a reader's expectation and nothing else.
 Nineteen mutants, fifteen dead and four equivalent, on a green baseline. 14,804 tests, 0 failures,
 0 warnings. All 92 floors met.
 
+## Round 209 — no defect: the registration captcha's field
+
+**No defect.** `create_captcha` and `decode_captcha` were already covered
+(`tests/test_utils_redis.py`, `tests/test_fixture_proofs.py`). The **field** between them was not, and
+the field is what refuses a registration. Round 204 covered whether the captcha is REQUIRED — D1398 was
+the default disagreeing with the admin page — and nothing covered whether a wrong answer is REJECTED,
+which is the half an attacker cares about.
+
+**THREE PROPERTIES OF `post_validate` WORTH PINNING**, each measured rather than assumed:
+
+* **it runs even when validation has already stopped.** WTForms calls `post_validate` inside
+  `Field.validate()` regardless of the validator chain's outcome, and this override accepts
+  `validation_stopped` and ignores it — so a submission that fails `DataRequired` is refused for the
+  captcha as well, and the solved code is consumed either way. That is the safe direction: an override
+  returning early on `validation_stopped` would let a caller skip the captcha by deliberately failing
+  another field, and the mutant adding that early return is dead;
+* **the uuid comes from `request.form`, not from the field.** A submission naming no `captcha_uuid`
+  hands `decode_captcha` None and is refused through its own `except TypeError` rather than raising;
+* **it signals by raising `ValidationError`.** Asserted as the mechanism and not just the message,
+  because D1400 two rounds ago was the opposite mistake in this same codebase — appending to
+  `field.errors` and returning True, which leaves `validate()` True. The mutant that makes this hook do
+  that is dead.
+
+The widget rows pin that every render mints a **fresh** captcha — reuse would make one replayable for as
+long as the page stayed open — and that `self.data = ''` clears a previous answer, so a re-rendered form
+never shows an old answer beside a new image. `Markup` matters too: the template renders this with no
+`|safe`, so a plain `str` would arrive as visible angle brackets and no captcha at all.
+
+Driven on a bare `wtforms.Form` carrying only the field, rather than through `RegistrationForm` and its
+nine other validators, so a refusal can only come from the field under test.
+
+Ten mutants, all dead, on a green baseline. 14,825 tests, 0 failures, 0 warnings. All 92
+floors met.
+
 **Next free number: D1401.**

@@ -12948,3 +12948,14 @@ INVARIANT instead: the filter with no fragment gate reaches the same answer as t
 `/?view_filter=local` gives the DEFAULT filter and a 200, so ten rows failed against a list they had
 never asked for. Read the `@bp.route` lines before building the request, and assert something only the
 requested variant can produce.
+
+**892. WTFORMS RUNS `post_validate` EVEN AFTER THE VALIDATOR CHAIN HAS STOPPED.**
+`Field.validate()` calls it whatever happened before, and `CaptchaField` accepts `validation_stopped`
+and ignores it -- so a submission failing `DataRequired` is refused for the captcha too and the solved
+code is still consumed. An override that returned early on that argument would let a caller skip the
+check by deliberately failing another field. Assert the hook runs in both cases.
+
+**893. ASSERT THAT A VALIDATOR RAISES, NOT JUST THAT A MESSAGE APPEARS.**
+`field.errors` ends up holding the same string whether the hook raised `ValidationError` or appended and
+returned -- and the second leaves `validate()` True, which is D1400. Call the hook directly with
+`pytest.raises` alongside the row that reads the message.
