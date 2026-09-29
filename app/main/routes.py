@@ -1396,17 +1396,20 @@ def index_rss(feed_type=None):
     if feed_type is None:
         feed_type = 'local'
 
+    # D1419. The chain used to open `if feed_type == 'subscribed' and ...` followed by
+    # `elif feed_type == 'local' or not current_user_is_authenticated:`, so the second arm
+    # swallowed EVERY feed type a reader without a token asked for. `/index/feed/popular`
+    # and `/index/feed/all` both answered with the local feed while still titling
+    # themselves 'Popular' and 'All', and the anonymous branch of the popular query below
+    # was unreachable code that had never run.
+    #
+    # Ordering by `feed_type` first, and letting the authentication test decide only which
+    # SQL each type uses, gives a reader the feed they named. `subscribed` is the one type
+    # that genuinely requires a token, so it still falls through to `local` without one.
     if feed_type == 'subscribed' and current_user_is_authenticated:
         community_ids = db.session.execute(text(
             'SELECT id FROM community as c INNER JOIN community_member as cm ON cm.community_id = c.id WHERE cm.is_banned is false AND cm.user_id = :user_id'),
                                            {'user_id': user.id}).scalars()
-    elif feed_type == 'local' or not current_user_is_authenticated:
-        if not current_user_is_authenticated:
-            community_ids = db.session.execute(
-                text(f'SELECT id FROM community as c WHERE c.private is false and c.instance_id = 1 {low_quality_filter}')).scalars()
-        else:
-            community_ids = db.session.execute(
-                text(f'SELECT id FROM community as c WHERE (c.private is false OR c.id IN {private_communities}) AND c.instance_id = 1 {low_quality_filter}')).scalars()
     elif feed_type == 'popular':
         if not current_user_is_authenticated:
             community_ids = db.session.execute(
@@ -1416,6 +1419,13 @@ def index_rss(feed_type=None):
                 text(f'SELECT id FROM community as c WHERE (c.private is false OR c.id IN {private_communities}) AND c.show_popular is true {low_quality_filter}')).scalars()
     elif feed_type == 'all':
         community_ids = [-1]  # Special value to indicate 'All'
+    elif feed_type == 'local' or feed_type == 'subscribed':
+        if not current_user_is_authenticated:
+            community_ids = db.session.execute(
+                text(f'SELECT id FROM community as c WHERE c.private is false and c.instance_id = 1 {low_quality_filter}')).scalars()
+        else:
+            community_ids = db.session.execute(
+                text(f'SELECT id FROM community as c WHERE (c.private is false OR c.id IN {private_communities}) AND c.instance_id = 1 {low_quality_filter}')).scalars()
 
     community_ids = list(community_ids)
 
