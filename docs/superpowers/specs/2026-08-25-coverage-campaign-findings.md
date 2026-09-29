@@ -21456,4 +21456,43 @@ removing the logging exemption for `incorrect_login` and `No object found.`
 Seven mutants, all dead, on a green baseline. 14,158 tests, 0 failures, 0 warnings. All 92
 floors met.
 
-**Next free number: D1391.**
+## Round 195 — one notification, four writers, one template, three disagreements
+
+`Post.new` is the largest block of untested logic left in `app/models.py` (38 uncovered lines),
+and it is the federated create path. The uncovered lines led to the suspicious-domain
+notification, whose `targets` dict has four writers and one consumer that nobody had compared.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1391** | `app/templates/user/notifs/20.html:110` reads `targets.suspect_user_user_name`, and **no** producer wrote it | The Author line rendered `/u/` with no text, on every path, for every recipient. Jinja renders a missing key as empty rather than raising, which is why it was never noticed. `app/shared/post.py` wrote `author_user_name` — the right key for *other* subtypes' blocks, the wrong one here. | **fixed** | — |
+| **D1391** | `app/models.py`, `Post.new`'s admin branch | Reassigned `targets_data` to `{'gen', 'post_id'}`, so an admin's notification for a federated post lost the title and the body a **moderator's for the same post** carried. The other two writers give admins the moderators' dict. | **fixed** | — |
+| **D1391** | `orig_post_domain` at three sites | `post.domain` — the relationship, read *before* the new domain is assigned. `None` for a new post; for a post that already had one, a `Domain` object in a `db.JSON` column. | **fixed** | `StatementError (builtins.TypeError) Object of type Domain is not JSON serializable` |
+
+**The third part was a registered defect, and this round is the slice it was waiting for.**
+`tests/test_ap_update_post_tails.py` pinned the crash on purpose, with a banner saying the
+arbitration "is a pure behaviour decision spanning three files in two subsystems, which this
+slice does not own", and recording the three reasons sub-project 18 used when it fixed the
+fourth site to `post.domain.name`. This round owned all three remaining files and finished it on
+the same reasons; those pins now assert the repair, exactly as their own docstring asked ("a pin,
+not an endorsement … so that whoever repairs the defect has to come here and change it").
+
+Two things the register did not have, both found while completing it: the admin branch was
+dropping four keys and not one, and the dict had a consumer all along — the banner's "nothing
+reads `orig_post_domain`" was true, but "nothing reads this dict" was not.
+
+**The sweep found the same defect one subtype over.** Scoping the writer sweep by subtype
+exposed `post_with_suspicious_image`, whose single producer also omitted
+`suspect_user_user_name` while its template block reads it. Fixed in the same round rather than
+left as the next round's surprise — round 191's lesson applied without being prompted.
+
+**A new test file asserts the property rather than the instances**: every writer of this dict
+produces the same keys, and that set covers what the template reads. A fifth writer, or a
+template that starts reading a fourth key, fails there instead of rendering blank. Its first
+version was scoped by "a dict containing `orig_post_title`", which caught the
+`post_with_suspicious_image` dict and reported four failures that were the test's own fault --
+it is scoped by proximity to the subtype now.
+
+Five mutants, all dead, on a green baseline. 14,171 tests, 0 failures, 0 warnings. All 92
+floors met.
+
+**Next free number: D1392.**
