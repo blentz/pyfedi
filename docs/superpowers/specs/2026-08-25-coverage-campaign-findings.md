@@ -22220,4 +22220,61 @@ whether the state the guard prevents is reachable, not whether it currently prod
 Twenty-one mutants, all dead, on a green baseline. 14,750 tests, 0 failures, 0 warnings. All 92
 floors met.
 
-**Next free number: D1400.**
+## Round 207 — D1400: an event validator that complained and accepted anyway
+
+**D1400. Three checks in `CreateEventForm.validate` appended an error and then returned
+True.** Found by a test written expecting it to pass:
+
+```python
+if utc_start < utcnow(naive=False):
+    self.start_datetime.errors.append(_('This time is in the past.'))
+if utc_end < utcnow(naive=False):
+    self.end_datetime.errors.append(_('This time is in the past.'))
+if self.start_datetime.data > self.end_datetime.data:
+    self.start_datetime.errors.append(_('Start must be less than end.'))
+```
+
+None of the three refuses. WTForms computes `validate()`'s answer from field validation, and appending
+to `field.errors` afterwards does not change it — so `validate_on_submit()` was True, the route created
+the event, and the complaint sat on a form the route never renders again because it redirects on
+success. Measured: a start two days in the past validated True; so did an end in the past, and an end
+before its start. **Events in the past, and events ending before they begin, were accepted.**
+
+**This is D1001's shape, three more times, in the file that documents D1001** — "it appended the
+complaint and returned True". All three are still collected before refusing, rather than returning at
+the first, so a submitter with two problems is told about both.
+
+**THE SWEEP.** Every `errors.append(...)` inside a `validate*` method whose enclosing block does not
+refuse: nine sites. Eight are the AST tool picking the innermost `if` of an `if/else` whose
+`return False` is a sibling — `app/community/forms.py:100`, `:102`, `:417`, `app/feed/forms.py:48`,
+`:50`, and the three lines of this round's own fix. Each was read rather than counted. D1400 is the only
+instance.
+
+**ONE EQUIVALENT MUTANT, proved.** Removing the refusal from the `utc_end < utcnow()` branch alone
+changes no answer, and no input can make it: if the end is in the past then either the start is at or
+before it — so the start is in the past too and that branch refuses — or the start is after it and the
+ordering branch refuses. Both shapes are asserted. The end's own **message** is on a different line from
+the refusal and is what tells the submitter which field is wrong, so it stays.
+
+**TWO DIVERGENCES FOUND AND NOT REPAIRED, each with the history that settles it.**
+
+* **The 10 MB banner cap is general on the event form and `.gif`-only on the image form** — the
+  identical block, same constant, same message, same `isinstance(self.image_file.errors, list)` dance.
+  Nothing else limits an image post's size: `process_upload` records `file_size` for per-user accounting
+  (`app/shared/upload.py:117`) and enforces nothing, and no `MAX_CONTENT_LENGTH` is configured, so a
+  500 MB PNG passes the image form while a 12 MB one is refused by the event form. `git log -S` settles
+  which drifted: the GIF check arrived in `068c7047e`, "Animated gif support through webp conversion" —
+  written FOR gifs, because the conversion is what costs — and the event form's copy came later in
+  `1ff89088e`, "event posts, finish ui", without the condition. Widening the image form would start
+  refusing uploads that work today, which is a decision about a limit rather than a repair. Both
+  behaviours are now pinned so neither drifts further unnoticed.
+* **`if self.communities:` tests the FIELD OBJECT**, which is always truthy — fact 75 CAUSE 9, in both
+  copies of the block. Harmless: `communities` carries `DataRequired()` and `super().validate()` has
+  already returned, so `.data` is one of the route's choices by the time the line runs and
+  `db.session.get` cannot answer None. Writing `.data` would change nothing and deleting the line would
+  change nothing.
+
+Seventeen mutants, sixteen dead and one equivalent, on a green baseline. 14,778 tests, 0 failures,
+0 warnings. All 92 floors met.
+
+**Next free number: D1401.**

@@ -12921,3 +12921,17 @@ what happens to be visible downstream.
 `make_instance` sets no `inbox`, and the fan-out skips a host without one -- so a mutant dropping
 `admin_instance_id != 1`, which would make a community Announce to its own inbox, produced no send and
 survived. When a row asserts that something is NOT sent, check the recipient could have received it.
+
+**888. A CUSTOM `validate()` THAT APPENDS TO `field.errors` HAS NOT REFUSED ANYTHING.**
+WTForms computes `validate()`'s answer from field validation; appending afterwards does not change it.
+So `validate_on_submit()` stays True, the route proceeds, and the message is rendered on a form the
+route never shows again because it redirects on success. D1001 was this once and D1400 three more times
+in the same file. A `validate_<field>` HOOK is different -- it signals by raising -- so sweep the
+overrides, and read each hit: an `if/else` whose `return False` is a sibling looks identical to an AST
+tool.
+
+**889. WRITE THE TEST THAT SHOULD PASS, TOO.**
+D1400 was found by a row asserting that a start date in the past is refused -- written as a control for
+the round's coverage, expected to pass, and returning `valid is True`. A file of rows that only pin
+known behaviour finds nothing; the ones that state what the code obviously ought to do are where the
+defects are.
