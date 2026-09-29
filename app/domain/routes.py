@@ -174,6 +174,7 @@ def show_domain_rss(domain_id):
 
 
 @bp.route('/domains', methods=['GET'])
+@login_required_if_private_instance
 def domains():
     page = request.args.get('page', 1, type=int)
     search = request.args.get('search', '')

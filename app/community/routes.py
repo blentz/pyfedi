@@ -2362,6 +2362,7 @@ def community_wiki_add(actor):
 
 
 @bp.route('/<actor>/wiki/<slug>', methods=['GET', 'POST'])
+@login_required_if_private_instance
 def community_wiki_view(actor, slug):
     community = actor_to_community(actor)
 

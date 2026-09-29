@@ -422,6 +422,7 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
 
 
 @bp.route('/post/<int:post_id>/lazy_replies/<nonce>', methods=['GET', 'OPTIONS'])
+@login_required_if_private_instance
 def post_lazy_replies(post_id, nonce):
     # D1115. This function used to begin `if request.method == 'OPTIONS':
     # return ''`, which could never run: the app-wide `before_request`
