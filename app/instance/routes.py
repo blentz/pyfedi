@@ -19,10 +19,11 @@ from app.utils import render_template, blocked_domains, \
     blocked_or_banned_instances, blocked_communities, blocked_users, user_filters_home, recently_upvoted_posts, \
     recently_downvoted_posts, reported_posts, login_required, moderating_communities_ids, following_user_ids, \
     validation_required, approval_required, user_ip_banned, show_ban_message, referrer, safe_redirect_target, \
-    silenced_instances
+    silenced_instances, login_required_if_private_instance
 
 
 @bp.route('/instances', methods=['GET'])
+@login_required_if_private_instance
 def list_instances():
     page = request.args.get('page', 1, type=int)
     search = request.args.get('search', '')
@@ -115,6 +116,7 @@ def list_instances():
 
 
 @bp.route('/instance/<instance_domain>', methods=['GET'])
+@login_required_if_private_instance
 def instance_overview(instance_domain):
     instance = Instance.query.filter(Instance.domain == instance_domain).first()
     if instance is None:
@@ -126,6 +128,7 @@ def instance_overview(instance_domain):
 
 
 @bp.route('/instance/<instance_domain>/people', methods=['GET'])
+@login_required_if_private_instance
 def instance_people(instance_domain):
     page = request.args.get('page', 1, type=int)
     low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
@@ -173,6 +176,7 @@ def instance_people(instance_domain):
 
 
 @bp.route('/instance/people/interesting', methods=['GET'])
+@login_required_if_private_instance
 def instance_people_top():
     page = request.args.get('page', 1, type=int)
     low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
@@ -238,6 +242,7 @@ def instance_add_people():
 
 
 @bp.route('/instance/<instance_domain>/posts', methods=['GET'])
+@login_required_if_private_instance
 def instance_posts(instance_domain):
     page = request.args.get('page', 1, type=int)
     low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
