@@ -22629,4 +22629,82 @@ asserting it says so.
 Thirteen mutants, all dead, on a green baseline. 15,012 tests, 0 failures, 0 warnings.
 All 92 floors met.
 
-**Next free number: D1405.**
+## Round 214 — D1405: the third field of the same shape, and the one an authenticated user controls
+
+**Two rounds in, the sweep had a method: find a value a peer supplies, find where it becomes an `href`, and
+check which end holds the guard.** D1403 was an Event's three links, D1404 was `Post.url`. The third is
+`File.source_url`, and it is reached through more producers than either.
+
+**D1405.** `image_url_from` (`app/models.py:84`) is the single reader of a peer's `icon` and `image` — D1325
+and D1341 made it single deliberately, after five hand-written copies crashed on `icon: []` and `icon: [5]` —
+and it returned whatever string it found. That string becomes `File.source_url`, and nothing between there
+and the page looks at it:
+
+* `File.view_url()` returns `source_url` unchanged when there is no local copy, and twelve templates put
+  `view_url()` in a bare `href`.
+* `User.avatar_image()` and `cover_image()` return it through `served_path`, which rewrites only this
+  instance's own `app/` paths and hands anything else straight back. Eight templates put those in an `href`,
+  including `user/show_profile.html:40` — the profile page of the actor that sent the icon.
+
+```
+PROBE actor icon      source_url='javascript:alert(document.domain)' view_url='javascript:alert(document.domain)'
+PROBE actor image     source_url='javascript:alert(2)'
+PROBE avatar_image()  'javascript:alert(document.domain)'
+PROBE cover_image()   'javascript:alert(2)'
+```
+
+18 call sites read icon/image through that one function — `actor_json_to_model`, the three profile-refresh
+tasks, `Post.new`'s image and icon branches, `update_post_from_activity` — which is why the rule goes in the
+reader. One line, every caller.
+
+**AN ALLOWLIST HERE, WHERE `Post.url` GOT A BLOCKLIST ONE ROUND EARLIER, AND THE DIFFERENCE IS NOT TASTE.**
+`Post.url` is a link a person clicks, chosen by remote software, so `magnet:`, `matrix:` and the long tail
+have to keep working — the argument recorded at `UNSAFE_URL_SCHEMES`. An image url is one **this instance
+fetches**, with httpx, in `make_image_sizes`. A scheme httpx cannot fetch is not a picture this instance
+could ever display, so there is nothing legitimate to weigh and nothing to audit: `magnet:` in an `icon` is
+not a lost feature, it is a value that never worked. The allowlist carries `File.source_url`'s own 1024
+width with it, so a very long url is no longer a `DataError` at commit either.
+
+**TWO MORE PRODUCERS OF THE SAME COLUMN, FIXED WITH IT.**
+
+`og:image`, read out of a page this instance fetched, at four sites whose guard was
+`not filename.startswith('/')` — a relative-path test that admitted every scheme. Three are in `Post.new`
+(the ordinary link post, the pixelfed branch, the loops.video branch, which rewrites `.jpg` to `.720p.mp4`
+**after** the guard) and one is in `update_post_from_activity`'s image fallback. Each now reads through
+`_as_url`, which refuses the relative path for the same reason it refuses the rest: no http scheme.
+
+The API's `avatar` and `cover`. The schema field is `fields.String(allow_none=True,
+metadata={"format": "url"})` and **marshmallow does not validate `metadata`**, so the format was
+documentation. The code's own comment read `# valid url passed, set avatar image`, and nothing had checked.
+Any authenticated user could set their own avatar to `javascript:...` and have it clicked by every visitor
+to their profile — a stored XSS needing nothing but an account, which makes it the most reachable of the
+three rounds. That one is **refused** rather than dropped: a caller is waiting for an answer and can fix the
+value, where a peer's document is ingested as far as it can be.
+
+**THE CONTROLS ARE THE POINT OF THIS FILE.** Three of the four `og:image` sites are behind narrow
+conditions (`post.url.startswith('https://pixelfed.social')`, `'https://loops.video'`, and an Update with no
+usable `image`), so a row asserting `image_id is None` passes whenever the branch simply did not run — the
+vacuous row this campaign has met five times. Each branch therefore has a partner row with a witness only
+that branch produces: POST_TYPE_IMAGE and the stored thumbnail for pixelfed, POST_TYPE_VIDEO and the
+`.720p.mp4` rewrite for loops, the stored fallback image for the Update.
+
+**AND THE MUTATION PASS CAUGHT ONE ANYWAY, IN THE ROWS WRITTEN TO PREVENT EXACTLY THAT.** The Update
+site's mutant survived while both of its rows passed, for two independent reasons stacked on each other:
+
+1. **The witness was satisfied by the wrong producer.** The post was created by `Post.new` with the SAME
+   patched `og:image`, so it already had an image before the Update ran — `post.image_id` was not None
+   whether the Update path executed or not. The fix is to create the post with **no** `og:image` (`''`
+   fails the `!= ''` test both branches open with) and assert that before updating, so the image can only
+   have come from the Update.
+2. **The patch did not reach the call site.** `Post.new` imports `opengraph_parse` from `app.utils`
+   *inside the method*, so patching `app.utils.opengraph_parse` works there; `app/activitypub/util.py`
+   imports it at module level, so the Update path kept calling the real one. Two bindings of one name, and
+   only one of them was patched — fact 322's shape at a different layer.
+
+Each of those alone makes a row prove nothing, and together they made a row that looked like a witness. A
+surviving mutant on a passing test is the only thing that distinguishes them from a real assertion.
+
+Fifteen mutants, all dead on a green baseline -- fourteen on the first pass and M11 once its two
+rows measured something. 15,109 tests, 0 failures, 0 warnings. All 92 floors met.
+
+**Next free number: D1406.**
