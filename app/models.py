@@ -2844,7 +2844,15 @@ class Post(db.Model):
                                 'suspect_user_user_name': user.ap_id if user.ap_id else user.user_name,
                                 }
                 if domain.notify_mods:
-                    for community_member in post.community.moderators():
+                    # D1423. `post.community`, not `community`. The Post is built a few
+                    # lines above and has not been added to the session yet, so the
+                    # RELATIONSHIP is None however good `community_id` is -- and
+                    # `None.moderators()` is an AttributeError that `create_post` catches,
+                    # logs as a failure and turns into a dropped post. So flagging a domain
+                    # `notify_mods` did not notify the moderators of anything: it silently
+                    # discarded every incoming post linking to that domain. The community
+                    # is already an argument to this function; it is the same object.
+                    for community_member in community.moderators():
                         notify = Notification(title='Suspicious content', url=post.ap_id,
                                               user_id=community_member.user_id,
                                               author_id=user.id, notif_type=NOTIF_REPORT,
