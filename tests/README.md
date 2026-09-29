@@ -12701,3 +12701,21 @@ schema is where the answer is, not the handler.
 `page_cursor=abc` answered 400 and the hypothesis looked wrong. The conversion was a catch-all
 error handler -- which was itself the defect, and a worse one. A guard you did not know existed is
 worth reading before moving on.
+
+**852. A DICT WITH SEVERAL WRITERS AND ONE TEMPLATE NEEDS THE TWO LISTS COMPARED.**
+Four places built `post_from_suspicious_domain`'s `targets`, and the template read a key none of
+them wrote -- so an Author link rendered `/u/` with no text everywhere, because Jinja renders a
+missing key as empty rather than raising. Assert the PROPERTY (every writer's key set covers what
+the consumer reads), not each writer in isolation.
+
+**853. A REGISTERED DEFECT IS AN INSTRUCTION TO WHOEVER OWNS THE RIGHT SLICE.**
+The unserialisable-`Domain` crash was pinned with a banner naming the condition for repairing it:
+a slice owning all three remaining files. When your round meets that condition, read the banner's
+reasoning, finish the arbitration on it, and rewrite the pins -- their docstring asked for exactly
+that. Do not treat a deliberate pin as a passing test to leave alone.
+
+**854. SCOPE A SOURCE SWEEP BY WHAT IDENTIFIES THE THING, NOT BY WHAT IT HAPPENS TO CONTAIN.**
+A sweep for "dicts containing `orig_post_title`" caught a sibling notification's dict, which
+legitimately has different keys, and reported four failures that were the test's fault. Anchoring
+on `subtype='post_from_suspicious_domain'` and taking the nearest dict above it says what was
+meant -- and finding the sibling that way is what exposed the same defect one subtype over.
