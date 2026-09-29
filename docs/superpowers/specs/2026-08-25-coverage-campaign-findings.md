@@ -23412,4 +23412,42 @@ untested *because* it was broken, and the coverage line was the only thing point
 Six mutants, all dead, on a green baseline. 15,375 tests, 0 failures, 0 warnings.
 All 92 floors met.
 
+## Round 226 — `app/api/alpha/views.py`: seventeen lines that were one `if` each (no D number)
+
+**The tail's next entry, 94.09% with 21 missing lines, and seventeen of them are two blocks of the same
+shape**: `if X: v[...] = X`, one line per optional field, each covered only by a row that supplies the
+value. No defect -- the round is tests, and the write-up is about why the shape hides.
+
+    post_view          246, 248, 250, 252, 254, 256   an Event's six optional fields
+    registration_view  1500, 1503, 1506, 1511, 1513   a registration's five
+
+**THE EVENT HALF IS THIS SESSION'S OWN SUBJECT FROM THE OTHER END.** Rounds 212 and 216 rewrote what may be
+STORED in `online_link`, `external_participation_url` and `buy_tickets_link`; these six lines are what the
+API SERVES out of those columns, and not one of them had ever run. The storage rules were being argued over
+while the reader was untested.
+
+Each field is asserted BY VALUE rather than by presence, because `'online_link' in view` is equally
+satisfied by a view that copies the wrong column into it. The negative row matters as much: an event with
+none of the six must carry none of the keys, and without it a change that always assigned them would pass
+every positive row.
+
+**ONE THING THE ROWS RECORD RATHER THAN CHANGE.** `if event.event_fee_amount:` is a truthiness test, so a
+fee of **0** is indistinguishable from no fee at all in the API. Both mean "free" to a client, and changing
+it is a schema decision, so a row pins today's behaviour and says so.
+
+**WHY THE REGISTRATION HALF WAS UNREACHABLE BY ACCIDENT.** `throwaway_email` needs
+`FLAG_THROWAWAY_EMAILS` on AND `app/static/tmp/disposable_domains.txt` to exist -- a file this repository
+does not ship -- so `disposable_domains` is always `[]` and no address can match it. The row writes the file
+into the hardcoded relative path the view opens, and removes it afterwards only if it created it. The four
+fields beside it were never reached for the ordinary reason: nothing built a registration with a country, a
+referrer, or an approver.
+
+**FOUR LINES ARE LEFT FOR A LATER ROUND** (`150`, `381-382`, `916`, `1204`, `1370`, `1387`, `1418`,
+`1480-1481`): each needs a fixture of its own -- a `read_posts` row carrying an `interacted_at`, a federated
+instances listing, a modlog cache -- rather than a value on an object these rows already build. Naming them
+here so the next session starts from the list rather than from the report.
+
+Nine mutants, all dead, on a green baseline. 15,384 tests, 0 failures, 0 warnings.
+All 92 floors met. No code changed, so **D1416 is still free**.
+
 **Next free number: D1416.**

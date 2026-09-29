@@ -13277,3 +13277,19 @@ E.__mro__]`) rather than the name when deciding whether an except arm covers a l
 `enable_chan_image_filter` gates a block that 500'd every image upload. Nothing saw it because nothing turned
 it on -- including the suite. When a coverage gap sits behind an admin toggle, turn the toggle on in a test
 before assuming the code behind it works.
+
+**944. AN API VIEW BUILT FROM `if X: v[k] = X` HAS ONE UNCOVERED LINE PER FIELD NOBODY SET.**
+`post_view`'s Event block and `registration_view` between them held seventeen such lines. The shape is
+invisible in a diff and obvious in a coverage report, and the fix is one fixture that sets EVERY optional
+field plus one row asserting that an object with none of them carries none of the keys -- without the second,
+a change that always assigns passes everything.
+
+**945. ASSERT AN OPTIONAL FIELD BY VALUE, NOT BY PRESENCE.**
+`'online_link' in view` is satisfied by a view that copied `buy_tickets_link` into it. Six adjacent fields
+built by six adjacent lines is exactly where that mistake lives, so each row names the value it expects.
+
+**946. A FEATURE GATED ON A FILE THE REPOSITORY DOES NOT SHIP IS UNREACHABLE, NOT MERELY UNTESTED.**
+`throwaway_email` needs `FLAG_THROWAWAY_EMAILS` on and `app/static/tmp/disposable_domains.txt` present; with
+the file absent the domain list is empty and the flag can never be set. The view opens a hardcoded relative
+path, so a test has to write the file there and clean up after itself -- and should only remove it if it was
+the one that created it.
