@@ -12799,3 +12799,15 @@ Fact 865's shape a second time, in `tests/test_api_post_list*.py`, where the sub
 **communities** inside a feed listing and the feed's own visibility was incidental. Targeted runs of
 the files a change obviously touches did not reach them; the full suite did. A guard added to a
 parameter that many fixtures pass needs the whole suite before the round is called green.
+
+**869. A DOCSTRING CLAIMING A REPAIR IS NOT EVIDENCE THE REPAIR WAS MADE.**
+P4 of an earlier round named `?topic_id=abc` as a 500 and then fixed the wrong half: the id naming no
+row got its `or abort(404)`, and the id that is not an id still reached the driver. Two failures with
+one symptom. When a sweep finds a site the notes say is already handled, re-measure the site rather
+than the note -- and correct the note, because the next sweep trusts it.
+
+**870. `type=int` REJECTS WHAT IS NOT A NUMBER, NOT WHAT IS TOO BIG FOR THE COLUMN.**
+`?id=999999999999999999999999` passes the conversion and becomes a well-formed id naming no row, so
+it belongs with `?id=999999` and gets the same 404, not with `abc`. Measured: SQLAlchemy binds the
+Python int and Postgres matches nothing -- no `NumericValueOutOfRange`, so `<int:...>` converters need
+no bound either. Grouping it with the unparsable values is what made three rows of a new file wrong.
