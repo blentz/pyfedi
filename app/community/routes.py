@@ -1309,7 +1309,19 @@ def community_report(community_id: int):
     community = db.session.get(Community, community_id) or abort(404)
     form = ReportCommunityForm()
     if form.validate_on_submit():
-        targets_data = {'gen': '0', 'suspect_community_id': community.id, 'reporter_id': current_user.id}
+        # D1393. `admin/reports.html` renders each row with
+        # `{% include "admin/reports/" + type_text().lower() + "_report.html" %}`,
+        # and `type_text()` for REPORT_TYPE_COMMUNITY is 'Community' -- a template
+        # that did not exist, so one community report made the WHOLE queue
+        # `TemplateNotFound: admin/reports/community_report.html`. The template is
+        # added with this round; these two display names are what it reads, the
+        # same way its four siblings read theirs, because `Report` has FK columns
+        # and no relationships for a template to follow.
+        targets_data = {'gen': '0',
+                        'suspect_community_id': community.id,
+                        'suspect_community_name': community.link(),
+                        'reporter_id': current_user.id,
+                        'reporter_user_name': current_user.user_name}
         report = Report(reasons=form.reasons_to_string(form.reasons.data),
                         description=form.description.data,
                         type=REPORT_TYPE_COMMUNITY,
