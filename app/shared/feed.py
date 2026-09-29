@@ -13,7 +13,7 @@ from app.activitypub.signature import send_post_request, default_context, RsaKey
 from app.activitypub.util import find_actor_or_create, make_image_sizes
 from app.constants import *
 from app.models import User, Feed, FeedMember, FeedItem, Community, FeedJoinRequest, CommunityMember, \
-    CommunityJoinRequest, Instance, File
+    CommunityJoinRequest, Instance, File, _as_url
 from app.shared.tasks import task_selector
 from app.shared.community import leave_community
 from app.shared.upload import process_upload
@@ -202,6 +202,20 @@ def make_feed(input, src, auth=None, uploaded_icon_file=None, uploaded_banner_fi
         show_child_posts = input['show_child_posts']
         parent_feed_id = input['parent_feed_id']
         user = authorise_api_user(auth, return_type='model')
+        # D1408. `fields.String(metadata={"format": "url"})` again (fact 904):
+        # marshmallow does not validate `metadata`, so these two arrive unchecked
+        # and become `File.source_url`, which `icon_image()`/`header_image()`
+        # return unchanged -- and a feed's own icon methods do the same. `is_image_url` below is not the guard
+        # it looks like: it sniffs the extension off `urlparse(url).path`, so
+        # `javascript:alert(1)/x.png` passed it. That predicate now refuses unsafe
+        # schemes too, and this is the allowlist half: an icon url from an API
+        # client is one this instance FETCHES, so http(s) is the whole of what is
+        # useful. Refused rather than dropped, as the API's other urls are -- the
+        # caller is waiting and can fix the value.
+        for field, value in (('icon_url', icon_url), ('banner_url', banner_url)):
+            if value and _as_url(value) is None:
+                raise Exception(f'{field} must be an http:// or https:// url')
+
     else:
         url = input.url.data
         title = input.title.data
@@ -312,6 +326,20 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
         show_child_posts = input['show_child_posts']
         parent_feed_id = input['parent_feed_id']
         user = authorise_api_user(auth, return_type='model')
+        # D1408. `fields.String(metadata={"format": "url"})` again (fact 904):
+        # marshmallow does not validate `metadata`, so these two arrive unchecked
+        # and become `File.source_url`, which `icon_image()`/`header_image()`
+        # return unchanged -- and a feed's own icon methods do the same. `is_image_url` below is not the guard
+        # it looks like: it sniffs the extension off `urlparse(url).path`, so
+        # `javascript:alert(1)/x.png` passed it. That predicate now refuses unsafe
+        # schemes too, and this is the allowlist half: an icon url from an API
+        # client is one this instance FETCHES, so http(s) is the whole of what is
+        # useful. Refused rather than dropped, as the API's other urls are -- the
+        # caller is waiting and can fix the value.
+        for field, value in (('icon_url', icon_url), ('banner_url', banner_url)):
+            if value and _as_url(value) is None:
+                raise Exception(f'{field} must be an http:// or https:// url')
+
     else:
         url = input.url.data
         title = input.title.data

@@ -267,6 +267,34 @@ def is_image_url(url):
         # extension, and it also skips the mime_type_using_head HEAD request,
         # which has nothing to fetch.
         return False
+    # D1408. This predicate decided whether a user's or peer's url was safe to
+    # store as `File.source_url` at six sites in app/shared, and it sniffed the
+    # extension off `urlparse(url).path` -- which for a `javascript:` url is
+    # everything after the colon. Measured:
+    #
+    #     is_image_url('javascript:alert(1)')            False
+    #     is_image_url('javascript:alert(1)/x.png')      True
+    #     is_image_url('javascript:x//y.png')            True
+    #     is_image_url('data:image/svg+xml,<svg/>.png')  True
+    #
+    # So `javascript:alert(1)/x.png` was an image url, and in an href the script
+    # evaluated is `alert(1)/x.png`: the alert runs and the division is nonsense
+    # nobody sees. `admin/edit_community.html:35` puts `header_image()` in a bare
+    # href, and `icon_image()`/`header_image()` return `source_url` unchanged.
+    #
+    # A BLOCKLIST here rather than the http(s) allowlist the ingest paths use,
+    # because the callers legitimately pass values that are not http urls at all:
+    # `process_upload` returns `app/static/media/...` for a web upload when S3 is
+    # off, and an allowlist would refuse every uploaded community icon. A path
+    # with no scheme has no scheme to block, so it still passes. The API's own
+    # icon and banner fields get the allowlist separately, at their boundary.
+    # UNSAFE_URL_SCHEMES, the href set, which is UNSAFE_SRC_SCHEMES plus `data:`.
+    # `data:` belongs here even though an <img src="data:image/png;..."> is
+    # harmless: what this predicate gates is storing the string as
+    # `File.source_url`, and `make_image_sizes` cannot fetch a data: url, so one
+    # was never a working image for this codebase.
+    if has_unsafe_url_scheme(url):
+        return False
     mime_type = mime_type_using_head(url)
     if mime_type:
         mime_type_parts = mime_type.split('/')
