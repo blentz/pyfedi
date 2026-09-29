@@ -23523,4 +23523,64 @@ Eight mutants, all dead, on a green baseline. 15,398 tests, 0 failures, 0 warnin
 All 92 floors met. No code changed -- the one source edit this round made was reverted as
 behaviour-neutral -- so **D1416 is still free**.
 
-**Next free number: D1416.**
+---
+
+## Round 228 -- `app/api/alpha/routes.py`, and the debug switch that did not switch (D1416, D1417)
+
+`app/api/alpha/routes.py` stood at 98.42% with eighteen missing lines. `tests/test_api_routes_gate_sweep.py`
+already drives every route on the module with the API turned off, so the surprise was that any
+`if not enable_api()` line was still red at all. Five were, for two reasons the sweep's own docstring
+predicts: the three `/upload/...` routes take their argument with `location="files"`, so the sweep's JSON
+body never survives argument parsing, and `GetUserRequest` and `GetPrivateMessageConversationRequest`
+declare *no required fields* while carrying a `@validates_schema` that demands one of two -- so the sweep,
+which builds required fields only, sends an empty request that validation refuses before the gate.
+Sixteen of the eighteen are now covered.
+
+**D1416 -- the `debug` switch was undeclared, and that broke it in two different ways.**
+`/post/list`, `/post/list2` and `/comment/list` each end:
+
+```python
+    if data.get('debug'):
+        validated = list_posts_response.load(resp)
+        return orjson_response(validated)
+    else:
+        return orjson_response(resp)
+```
+
+That branch is worth more than its six lines: it validates the endpoint's response against the schema the
+endpoint publishes. `debug` was declared on no request schema at all.
+
+* The two post endpoints saw it only because their `@arguments` pass `unknown=INCLUDE`, so it arrived as a
+  raw **string**. `?debug=false` is a non-empty string, therefore truthy, therefore a client that explicitly
+  turned the feature *off* got it anyway.
+* `/comment/list` has no `unknown=INCLUDE`, and its `DefaultSchema` sets `unknown = EXCLUDE`, so `debug` was
+  dropped before the view ran. `data.get('debug')` was always `None` there and lines 844-845 could not
+  execute at all -- dead code in a shipped endpoint.
+
+Fixed by declaring `debug = fields.Boolean()` on `ListCommentsRequest` and `ListPostsRequest`
+(`ListPostsRequest2` inherits it). The value is now coerced, so `false` means false, and it now reaches the
+comment endpoint. The cost is stated in a row of its own: `?debug=perhaps` is now a 400 rather than being
+silently treated as true. `debug` is documented "For testing only", so refusing a value nobody can read is
+the right trade.
+
+Telling the two arms apart needed a response the schema **refuses** -- on a well-formed response they are
+indistinguishable, and a row that cannot tell them apart is a row that would pass against a `load()` that
+checked nothing. Each list helper is replaced with one returning `next_page: 17` against a declared String;
+the debug request then answers 400 naming `next_page`, and the plain request serves the malformed body with
+a 200. The message is asserted, not just the status: a closed gate is also a 400.
+
+**D1417 -- `/user/register` would have refused every successful registration.** Its last line was
+`return UserRegistrationRequest().load(resp)` -- the **request** schema, which requires `username`,
+`password` and `password_verify`. No `UserRegistrationResponse`-shaped payload (`jwt`,
+`registration_created`, `verify_email_sent`) can satisfy it. Latent rather than live: `post_user_register`
+still raises `not implemented` (D1181), so the line has never run, which is also why no test could catch it
+and why it is fixed here rather than left for whoever finishes the endpoint.
+
+**Two lines left red on purpose.** `:1574` and `:1585` are the success returns of `/user/register` and
+`/user/get_captcha`; both helpers raise `not implemented`, so no request reaches either. Reading them is
+what turned up D1417.
+
+Ten mutants, all dead, on a green baseline -- including one that removes each newly declared `debug` field,
+which is the only way to show the fix is what makes those rows pass.
+
+**Next free number: D1418.**
