@@ -13551,3 +13551,18 @@ so `get_setting` returns the default and the row fails with no error anywhere. U
 **997. `user2_cache` IS A MODULE-LEVEL DICT, NOT FLASK-CACHING.**
 `jaccard_similarity` memoizes the second account's upvotes in a plain dict that lives as long as the process,
 so it leaks between tests. Clear it in the fixture, before and after.
+
+**998. THE BANNED-BROWSER COOKIE IS SPELT `sesion`.**
+`user_cookie_banned` reads `request.cookies.get('sesion')` -- one `s` -- so it cannot collide with Flask's
+`session` cookie. A row about it must use the misspelling, and a row asserting the negative case should use
+the correctly spelt name, which every logged-in browser carries.
+
+**999. `mimetypes.guess_type` NEVER RETURNS None.**
+It returns a 2-tuple, `(None, None)` when it cannot tell. So `guess_mime_type`'s `if content_type is None:`
+fallback is unreachable and the `content_type[0] is None` branch below it is what runs. Assert the library's
+contract rather than trying to reach the dead arm.
+
+**1000. TO REACH AN `except Exception: rollback(); raise` ARM, PATCH `get_task_session`.**
+Hand back an object whose `query()` raises. Assert the exception propagates AND that rollback and close were
+called -- a mutant that swallows the failure turns a ban check into a gate that fails open, and only the
+propagation assertion catches it.
