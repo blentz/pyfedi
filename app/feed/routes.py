@@ -635,8 +635,22 @@ def feed_create_post(feed_name):
 
     sub_communities = Community.query.filter_by(banned=False).filter(Community.id.in_(sub_feed_community_ids)).\
         order_by(Community.title).all()
-    if request.form.get('community_id', '') != '':
-        community = db.session.get(Community, int(request.form.get('community_id'))) or abort(404)
+    # D1389. `int(request.form.get('community_id'))` behind a `!= ''` test, which
+    # only rules out absent and empty -- a form field is whatever the caller sends.
+    # Measured: `'abc'`, `'1.5'` and `'null'` were
+    # `ValueError: invalid literal for int() with base 10` and a 500, while
+    # `'999999'` and `'0'` already answered 404 through the `or abort(404)` beside
+    # it. An id that does not parse names no community either, so it gets the same
+    # 404 rather than a traceback.
+    #
+    # The two sibling sites both carry this guard already, each with a comment
+    # naming the same failure: app/post/routes.py:750 (D1093's shape on a poll
+    # vote) and :1062 (D1093 itself, on a reply's language). This was the third.
+    posted_community_id = request.form.get('community_id', '')
+    if posted_community_id != '':
+        if not posted_community_id.strip().isdigit():
+            abort(404)
+        community = db.session.get(Community, int(posted_community_id)) or abort(404)
         return redirect(url_for('community.join_then_add', actor=community.link()))
     return render_template('feed/feed_create_post.html', communities=communities, sub_communities=sub_communities,
                            feed=feed,
