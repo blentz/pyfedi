@@ -12959,3 +12959,20 @@ check by deliberately failing another field. Assert the hook runs in both cases.
 `field.errors` ends up holding the same string whether the hook raised `ValidationError` or appended and
 returned -- and the second leaves `validate()` True, which is D1400. Call the hook directly with
 `pytest.raises` alongside the row that reads the message.
+
+**894. A RESOLVER'S RETURN ANNOTATION CAN BE NARROWER THAN WHAT IT RETURNS.**
+`find_reported_object` is annotated `Union[User, Post, PostReply, None]` and delegates to
+`find_actor_or_create`, annotated `Union[User, Community, Feed, None]` -- so it hands its caller a
+Community, and the caller dereferenced `.community` and `.author` on it. Follow the delegate's signature,
+not the wrapper's, and enumerate every type before assuming the attributes exist.
+
+**895. `Site.admins()` NEEDS A `user_role` ROW, NOT JUST `g.admin_ids`.**
+It reads `g.admin_ids` when set, and code running under its own app context -- the inbox dispatcher --
+does not see a `g` the test set. The fallback query JOINS `user_role`, so a user with no role row is
+excluded even by its `User.id == 1` arm. A fixture asserting "an admin was notified" has to grant the
+role, or it measures a state a seeded instance never has.
+
+**896. A TEST DOUBLE MUST RETURN WHAT THE REAL FUNCTION RETURNS.**
+`process_report` gained a bool and a recorder doubling it returned None implicitly, so the row asserting
+`success` began failing -- correctly, since the caller had been told the report was dropped. When a
+function's contract grows, every double of it is part of the change.
