@@ -13500,3 +13500,17 @@ constraint before writing a row for the orphan case.
 `active_now` requires `ap_id is null AND verified is true AND banned is false AND deleted is false`; the four
 `all_active_*` counts keep only the last two. A row that assumes all five agree gets the wrong totals -- the
 remote and unverified accounts are in the `all_active_*` numbers.
+
+**987. TWO COUNTS OF ONE EACH CANNOT TELL TWO TABLES APART.**
+`known_users_count` and `known_communities_count` are separate SQL strings over separate tables. With one user
+and one community seeded on the peer, a query naming the wrong table gives the right answer and the mutant
+survives. Seed a different number of each.
+
+**988. `Conversation.members` IS A BACKREF OVER AN ASSOCIATION TABLE, NOT A MODEL.**
+`conversation_member` is a `db.Table`, so there is no `ConversationMember` to import. Insert with
+`db.session.execute(conversation_member.insert().values(conversation_id=..., user_id=...))`.
+
+**989. `self.trusted is True` IS NOT `if self.trusted`, AND THE COLUMN IS NULLABLE.**
+`Instance.votes_are_public` opens with the identity test so that a peer whose trust has never been set is not
+treated as trusted. A row for it sets the column to None explicitly -- the default from `make_instance` may
+already be False, which passes either way.

@@ -24105,4 +24105,41 @@ to `''`. The `is None` half is load-bearing; the other is not.
 
 Sixteen mutants dead, one provably equivalent, on a green baseline.
 
+---
+
+## Round 241 -- what an instance reveals, and the helpers that count things
+
+More of `app/models.py`. No defect.
+
+**`Instance.votes_are_public` decides whether a peer is told who voted**, and it had no
+rows. The rule is "only vote privately with untrusted instances": a TRUSTED peer gets
+private votes, and an untrusted one gets public votes only if its software is one of four
+(`lemmy`, `mbin`, `kbin`, `guppe groups`) -- the implementations that expose voter
+identities anyway. Each part is now asserted: the comparison is lower-cased, because a
+peer's nodeinfo is whatever it chose to send; anything off the list defaults to privacy,
+including another PieFed; and `self.trusted is True` is an identity test, so a peer whose
+trust has never been set is not treated as trusted.
+
+**`update_dormant_gone` is a two-step state machine** -- more than 2 failures makes a live
+peer dormant, more than 7 makes a dormant one `gone_forever` -- and both thresholds are
+asserted from either side. A live peer with a hundred failures still only goes dormant,
+which is what stops one long outage from permanently discarding a peer.
+
+**The counters and sizers.** `Instance`'s four per-instance counts, `User.num_content`,
+`User.filesize`, `File.filesize`, `User.community_flair` and `Conversation.instances`.
+`File.filesize` guards both paths with `os.path.exists`, because a File row whose bytes have
+been deleted is a normal state and `getsize` on a missing path raises;
+`Conversation.instances` excludes instance 1 and de-duplicates, since that list is where a
+private message gets delivered.
+
+**A row that needed a second account.** With one user and one community on the peer, a
+`known_users_count` that queried the `community` table gives the same answer -- the mutant
+survived until the fixture seeded a second account.
+
+**A fixture note:** `Conversation.members` is a backref over the `conversation_member`
+association TABLE; there is no model, so rows go in through
+`conversation_member.insert().values(...)`.
+
+Nineteen mutants, all dead, on a green baseline.
+
 **Next free number: D1423.**
