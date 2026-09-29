@@ -21495,4 +21495,37 @@ it is scoped by proximity to the subtype now.
 Five mutants, all dead, on a green baseline. 14,171 tests, 0 failures, 0 warnings. All 92
 floors met.
 
-**Next free number: D1392.**
+## Round 196 — a moderator and an admin told different things about one report
+
+Round 195's method, generalised: for every subtype block in every notification template collect
+the `targets.X` keys it reads, and for every `Notification(subtype=...)` in `app/` collect the keys
+of the nearest `targets_data` above it. Seven subtypes read keys. The comparison flagged three
+producers of `user_reported`, and all three were defects.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1392** | `app/activitypub/util.py`, `process_report`'s `Post` branch (3932–3987) | The moderators were told `post_reported`; the **site admin** was told `user_reported`. | **fixed** | the subtype selects the template block, so the admin was rendered the layout for a reported USER — wrong heading, and no post title or body although `targets_data` carries both |
+| **D1392** | the same function's `PostReply` branch (3989–4052) | The same mislabelling: moderators `comment_reported`, admin `user_reported`. | **fixed** | — |
+| **D1392** | `app/user/routes.py`, the local user report | Its `targets_data` omitted `reasons` and `description`, which its federated twin (`util.py:3904`) supplies and the `user_reported` block renders in a "More details" panel. | **fixed** | the panel is guarded by `{% if notification.targets.reasons or notification.targets.description %}`, so it silently stayed closed |
+
+**The admin path is the un-moderated-community one** — `if reported.community.is_local() and
+reported.community.un_moderated` — which is exactly when the site admin is the only person who
+will look at the report. They got the least useful rendering of it.
+
+**The third one is a divergence inside one subtype**: an admin could see *why* a user was reported
+from a peer and not why one of their own members reported somebody, with the report's own columns
+set two lines below from the same form.
+
+**The titles were wrong with the subtypes** — a bare, untranslated `'Reported user'` beside the
+moderators' `_('A post has been reported')` — and are fixed with them. An earlier version of the
+test forbade that string everywhere and failed on the `User` branch, where it is correct; it is
+scoped to the two branches now.
+
+The new tests assert the properties rather than the three instances: within one
+`isinstance(reported, X)` branch every notification carries the same subtype, that subtype is the
+one for what was reported, and every producer of `user_reported` supplies the keys its panel needs.
+
+Five mutants, all dead, on a green baseline. 14,181 tests, 0 failures, 0 warnings. All 92
+floors met.
+
+**Next free number: D1393.**

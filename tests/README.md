@@ -12719,3 +12719,20 @@ A sweep for "dicts containing `orig_post_title`" caught a sibling notification's
 legitimately has different keys, and reported four failures that were the test's fault. Anchoring
 on `subtype='post_from_suspicious_domain'` and taking the nearest dict above it says what was
 meant -- and finding the sibling that way is what exposed the same defect one subtype over.
+
+**855. A NOTIFICATION'S SUBTYPE IS NOT A LABEL, IT CHOOSES THE TEMPLATE BLOCK.**
+`process_report` told moderators `post_reported` and the site admin `user_reported` for the same
+report, so the admin was rendered the layout for a reported user: wrong heading, and none of the
+post context the dict was carrying. Assert that every notification raised inside one branch shares
+one subtype, and that the subtype matches what the branch is about -- consistency alone would be
+satisfied by every branch agreeing on the wrong value.
+
+**856. A GUARDED TEMPLATE PANEL HIDES A MISSING PRODUCER KEY COMPLETELY.**
+`{% if notification.targets.reasons or notification.targets.description %}` means a producer that
+omits both is invisible: no crash, no blank, just a panel that never opens. The federated user
+report supplied them and the local one did not, so the same notification showed its reasons or not
+depending on where the report came from.
+
+**857. SCOPE A "THIS STRING MUST NOT APPEAR" TEST TO THE BRANCH THAT MUST NOT CONTAIN IT.**
+A test forbidding `title='Reported user'` anywhere in the file failed on the `User` branch, where
+it is the correct title. Take the branch's line range from the AST and assert within it.
