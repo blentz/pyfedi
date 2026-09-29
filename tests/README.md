@@ -12895,3 +12895,17 @@ covers, not just that the hit was dismissed.
 `delattr(self, 'x')` pops `x` from the instance's `_fields`, and the class keeps its `UnboundField`, so
 `hasattr(form, 'x')` stays True. A test asserting the field is present passes either way and its
 negative twin cannot pass at all. Assert `'x' in form._fields`.
+
+**884. AN ENDPOINT THAT EXISTS TO BE CHECKED MUST RE-ASK WHAT THE PRODUCER DECIDED.**
+`/quote_boost_auth` is dereferenced by a peer to verify a quote was authorised, and it echoed whatever
+stamp it was handed -- so this instance vouched for posts it does not host. The decision
+`process_quote_boost` made (object exists here, author is local) was neither carried in the stamp nor
+re-asked. When a URL's whole job is to confirm a fact, the code behind it has to establish that fact,
+not restate the caller's claim.
+
+**885. A SURVIVING MUTANT IS EITHER A MISSING TEST, A REDUNDANT LINE, OR AN EQUIVALENT PROGRAM.**
+Three survivors in one run, one of each. Two were missing rows -- every unusable stamp had a left half
+that named no post, so the lookup refused them and the guard under test was never the reason. One was a
+redundant condition, removed. One is genuinely equivalent: `not stamp` versus `stamp is None` differ
+only for `''`, which the next line refuses identically. Decide which of the three before recording a
+survivor, and write the reason down.
