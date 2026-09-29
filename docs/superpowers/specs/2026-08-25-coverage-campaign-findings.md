@@ -23179,4 +23179,46 @@ cover" ends with sixteen that did not.
 Six mutants, all dead, on a green baseline. 15,319 tests, 0 failures, 0 warnings.
 All 92 floors met.
 
-**Next free number: D1413.**
+## Round 222 — D1413: the sweep said it was exhausted and it was not
+
+**D1412's entry ended "the sweep is now exhausted".** It was wrong, and the way it was wrong is worth more
+than the defect. The listing that drove D1410, D1411 and D1412 was printed through `| head -45` and
+`| tail -45`, and the first pass filtered out every route declaring `methods=['GET', 'POST']`. **Fact 820 --
+never `| head` a sweep -- broken by the sweep that was checking for missing guards.** Behind the cut:
+
+```
+/instances                      200  the domains this instance federates with
+/instance/peer.example          200  that peer's overview
+/instance/peer.example/people   200  its users, by name
+/instance/peer.example/posts    200  THE POST TITLE, its author, its community
+/community/general/wiki/rules   200  THE WIKI PAGE BODY
+/domains                        200  the domains posts here link to
+```
+
+`/instance/<domain>/posts` is D1410's leak through a door nobody had opened: a listing of this instance's
+posts filtered by the remote instance they came from, ungated. `/community/<name>/wiki/<slug>` serves a
+community's wiki -- prose written by members for members -- and declares `methods=['GET', 'POST']`, which
+is exactly why the hand-run pass never printed it. The whole `instance` blueprint had **zero** gates across
+eight routes, a number round 219 printed in its own survey ("instance: gate=0 routes=8") and then did not
+act on.
+
+**THE SWEEP IS NOW A TEST, AND IT FOUND AN EIGHTH ROUTE ON ITS FIRST RUN.** Every GET-capable route in
+`app/*/routes.py` that renders a template or returns JSON must carry a gate or appear in an exemption list
+**with a reason** -- and routes that also accept POST are included, which is the correction that mattered.
+Its first execution failed with `post/post_lazy_replies`, which serves a post's whole comment thread past a
+hundred comments. D1106 had already given that route `refuse_private_community` and `refuse_unpublished_post`
+-- per-COMMUNITY checks that say nothing about whether the INSTANCE is private. A rule I ran by hand four
+times missed it; the rule as a test caught it immediately.
+
+**`/sitemap.xml` IS LEFT PUBLIC ON PURPOSE**, and a row says so rather than leaving the omission to look
+like an oversight: a sitemap exists to be fetched by a crawler that cannot log in, and `Community.private`
+already filters what it lists. Whether a private instance should publish one at all is the argument
+`index_rss` settles for feeds and deserves its own round.
+
+**Four rounds, twenty-four routes.** Six RSS endpoints, five embeds and calendars, five metadata routes,
+and eight directories and listings -- every one of them ignoring a setting whose name is `private_instance`.
+
+Eight mutants, all dead, on a green baseline. 15,340 tests, 0 failures, 0 warnings.
+All 92 floors met.
+
+**Next free number: D1414.**
