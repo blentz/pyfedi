@@ -23136,4 +23136,47 @@ fact worth knowing before reading any of their results.
 Thirteen mutants, all dead, on a green baseline. 15,303 tests, 0 failures, 0 warnings.
 All 92 floors met.
 
-**Next free number: D1412.**
+## Round 221 — D1412: the last five, and the argument D1411 deferred
+
+**D1411's commit message listed four routes that answered 200 on a private instance and said they needed
+"a round of its own with its own argument about what an anonymous visitor to a private instance may
+learn".** This is that round. The measurement first:
+
+```
+/post/1/options_menu                 200  the post's ap_id            988 bytes
+/post/1/markdown_source/options_menu 200  the post's ap_id            988 bytes
+/post/1/share_mastodon               200  nothing identifying      12,934 bytes
+/user/1/preview                      200  the user's BIO and name   1,146 bytes
+/u/author/feeds                      200  the user's name          12,163 bytes
+/u/author/myfeeds                    302  -> /auth/login
+/feeds                               302  -> /auth/login
+```
+
+**`/user/<id>/preview` settles it.** It renders `about_html` -- a user's own prose, written for the members
+of a private instance -- to anyone who tried a small integer. That is content by any reading, and once one
+of the five is gated the argument for the rest is cheaper than the argument for leaving them.
+
+The options menus disclose a post's `ap_id`, which is where the post lives on its home instance: an
+anonymous visitor learning that post 1 exists here and is `https://.../p/1` there is close to the whole of
+what "only members may read this instance" is for. `/u/<actor>/feeds` and `/post/<id>/share_mastodon`
+disclose least -- a name that was already in the url, and a share form -- and are gated with the others
+rather than left as the only ungated members of their blueprints, which is precisely how this class kept
+reappearing across three rounds.
+
+`login_required_if_private_instance`, as D1411 used: all five are pages a person opens in a browser.
+
+**THE TWO THAT NEEDED NOTHING ARE THE USEFUL CONTRAST.** `/u/<actor>/myfeeds` and `/feeds` were already 302
+because they carry `@login_required` -- stricter than this round's rule, since they require a session on a
+public instance too. A row asserts that, so a later edit swapping the stronger decorator for the weaker one
+reads as a loss rather than as consistency.
+
+**THE SWEEP IS NOW EXHAUSTED.** Across D1410, D1411 and D1412 the GET routes carrying neither privacy
+decorator nor `login_required` have all been read: six RSS endpoints, five embeds and calendars, five
+metadata routes, and the remainder serve nothing about this instance's content (`/health`, the service
+worker, the menus, the static manifest, the test endpoints). What began as "which routes does the gate
+cover" ends with sixteen that did not.
+
+Six mutants, all dead, on a green baseline. 15,319 tests, 0 failures, 0 warnings.
+All 92 floors met.
+
+**Next free number: D1413.**
