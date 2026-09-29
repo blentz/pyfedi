@@ -67,7 +67,11 @@ class AddCommunityForm(FlaskForm):
                 return False
 
             # Allow alphanumeric characters and underscores (a-z, A-Z, 0-9, _)
-            if not re.match(r'^[a-zA-Z0-9_]+$', self.url.data):
+            # D1402, the third site of the same one character: `$` matches before a
+            # trailing newline, so 'books\n' satisfied this. The normalisation below
+            # slugifies it away before storage, so nothing was stored wrong -- but the
+            # guard is what the message claims it is only with `fullmatch`.
+            if not re.fullmatch(r'^[a-zA-Z0-9_]+$', self.url.data):
                 self.url.errors.append(_l('Community urls can only contain letters, numbers, and underscores.'))
                 return False
 

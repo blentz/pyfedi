@@ -4841,7 +4841,12 @@ def retrieve_image_hash(image_url):
                     return None
                 if quality >= 70:
                     pdq_hash = result.get('pdq_hash_binary', '')
-                    return pdq_hash if isinstance(pdq_hash, str) else None
+                    # D1402. Stripped, so surrounding whitespace from the endpoint does
+                    # not turn an otherwise good hash into no hash at all once
+                    # `hash_matches_blocked_image` compares it exactly. Without this
+                    # the blocklist would silently stop checking such an image rather
+                    # than raising, which is the quieter of the two failures.
+                    return pdq_hash.strip() if isinstance(pdq_hash, str) else None
             elif response.status_code == 429 and retries_left > 0:
                 sleep(random.uniform(1, 3))
                 return fetch_hash(retries_left - 1)
@@ -4869,7 +4874,23 @@ def hash_matches_blocked_image(hash: str) -> bool:
     # 15 is the number of different bits we will accept. Anything less than that and we consider the images to be the same.
 
     # only accept a string with 0 and 1 in it. This makes it safe to use sql injection-prone code below, which greatly simplifies the conversion of binary strings
-    if not BINARY_RE.match(hash):
+    #
+    # D1402. `fullmatch`, not `match`. `$` also matches immediately BEFORE a trailing
+    # newline, so `'0' * 256 + '\n'` passed this guard and reached Postgres as
+    # `B'000...0\n'`:
+    #
+    #     BINARY_RE.match('0'*256 + '\n')   ->  True
+    #     hash_matches_blocked_image(...)   ->  DataError:
+    #         (psycopg2.errors.InvalidTextRepresentation)
+    #
+    # The newline stays inside the quoted literal, so it is not an injection -- it is a
+    # DataError that poisons the transaction. `Post.new` (app/models.py:2685) calls
+    # this, so a federated post was lost and the aborted transaction took the rest of
+    # the inbox request; `app/shared/post.py:570` calls it on a local upload, where it
+    # is a 500. Reachable because `retrieve_image_hash` returns the hashing endpoint's
+    # `pdq_hash_binary` verbatim, and a service emitting a trailing newline is
+    # ordinary.
+    if not BINARY_RE.fullmatch(hash):
         current_app.logger.warning(f"Invalid binary hash: {hash}")
         return False
 
@@ -5097,7 +5118,13 @@ def validate_user_name_charset(user_name):
     USER_NAME_CHARSET_RE. Called by both forms' validate_user_name hooks rather
     than copied into each, so the two cannot drift apart again.
     """
-    if not USER_NAME_CHARSET_RE.match(user_name.data):
+    # D1402, the same one character. `$` matches before a trailing newline, so
+    # `'alice\n'` satisfied a guard whose message says letters, numbers and
+    # underscores -- and `app/admin/routes.py:2125` stores `form.user_name.data`
+    # unstripped, so that newline reached the `user_name` column and every actor url
+    # built from it. Self-registration strips before calling this; the admin path did
+    # not, which is why the boundary itself has to be exact.
+    if not USER_NAME_CHARSET_RE.fullmatch(user_name.data):
         raise ValidationError(_l('User names can only contain letters, numbers, and underscores.'))
 
 

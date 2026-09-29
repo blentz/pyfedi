@@ -333,6 +333,11 @@ class AddUserForm(FlaskForm):
             raise ValidationError(_l('An account with this email address already exists.'))
 
     def validate_user_name(self, user_name):
+        # D1402. Stripped FIRST, as `RegistrationForm.validate_user_name` does: the
+        # route stores `form.user_name.data` verbatim (app/admin/routes.py:2125), so
+        # surrounding whitespace reached the column and every actor url built from it.
+        # The two paths create the same kind of row and now normalise the same way.
+        user_name.data = user_name.data.strip()
         if '@' in user_name.data:
             raise ValidationError(_l('User names cannot contain @.'))
         # The same charset self-registration enforces, not a more permissive
