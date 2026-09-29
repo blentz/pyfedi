@@ -13261,3 +13261,19 @@ Two modules swallow `search_for_user` failures for an unresolvable `@mention`. A
 notification appeared cannot tell a correctly skipped mention from a crash that was swallowed -- the module's
 own docstring says so. Make the doubled function RECORD its call and then raise: the record proves the arm
 was entered, and the work completing afterwards proves the exception went no further.
+
+**941. CODE CAN BE UNTESTED *BECAUSE* IT IS BROKEN.**
+The chan-image filter's OCR block raised `TesseractNotFoundError` on every image whenever the setting was on,
+and the test image has no tesseract -- so any attempt to cover the block met the bug, and the block stayed
+uncovered instead. A line that nothing reaches is sometimes a line nothing CAN reach without failing; chase
+the coverage entry before concluding the feature is merely unexercised.
+
+**942. AN `except FileNotFoundError` DOES NOT CATCH EVERY "NOT FOUND" ERROR.**
+`pytesseract.TesseractNotFoundError` is an `OSError` whose MRO skips `FileNotFoundError` entirely, so the
+arm that looks like it covers "the tool is missing" does not. Read the MRO (`[c.__name__ for c in
+E.__mro__]`) rather than the name when deciding whether an except arm covers a library's error.
+
+**943. A SETTING THAT IS OFF BY DEFAULT HIDES ITS OWN DEFECTS FROM EVERY INSTANCE AND EVERY TEST.**
+`enable_chan_image_filter` gates a block that 500'd every image upload. Nothing saw it because nothing turned
+it on -- including the suite. When a coverage gap sits behind an admin toggle, turn the toggle on in a test
+before assuming the code behind it works.
