@@ -22277,4 +22277,60 @@ the refusal and is what tells the submitter which field is wrong, so it stays.
 Seventeen mutants, sixteen dead and one equivalent, on a green baseline. 14,778 tests, 0 failures,
 0 warnings. All 92 floors met.
 
+## Round 208 — no defect: which communities each front-page filter selects
+
+**No defect.** The deliverable is `home_page`'s four view filters, on the busiest page the instance
+has. `tests/test_main_front_page.py` covered that the page answers for every filter; nothing covered
+**which** posts each one selects, and that choice is four hand-built SQL fragments whose anonymous and
+authenticated arms differ in exactly one place — whether the reader's own private communities are added
+back.
+
+**TWO MECHANISMS, and a reader of either alone would not know the other exists.** `local` and `popular`
+carry `c.private is false` in the fragment, widened to `(c.private is false OR c.id IN <theirs>)` when
+authenticated. `all` carries nothing: it hands `[-1]` to `get_deduped_post_ids`, which appends the
+private restriction unconditionally for every viewer (`app/utils.py:4405-4416`). Both are now asserted,
+for both kinds of reader, over five communities chosen so that every flag discriminates — a private one
+the reader belongs to, one with `show_popular` off, one with `show_all` off, and a remote one.
+
+**FOUR EQUIVALENT MUTANTS, and they are the round's finding.** The private gates written into the
+`local` and `popular` fragments are redundant: the unconditional block afterwards appends the same two
+shapes for the same two readers, ANDed with whatever the fragment said. So
+
+```
+M6   the local arm drops its private gate
+M9   a member gets EVERY private community on local
+M12  the anonymous popular arm drops its private gate
+M14  a member gets EVERY private community on popular
+```
+
+all survive, and no behavioural test can kill them. **They are kept.** The comment at
+`app/utils.py:4405` says the unconditional block is deliberately outside the anonymous/authenticated
+split "so no branch can be added that lacks it"; the fragments' own gates are that same intent one
+layer up, and deleting them would leave the front page depending entirely on a block three hundred
+lines away in another module. What the tests assert instead is the invariant that makes them
+redundant: for the same community and the same reader, `all` — which has no fragment gate at all —
+reaches the same answer as `local`, which has one, in both the restricting and the widening direction.
+
+**A fifth survivor was a plain missing test**: `show_popular` was asserted only on the anonymous arm,
+so dropping `AND c.show_popular is true` for signed-in readers was invisible.
+
+**TWO ERRORS OF MY OWN, both worth recording.**
+
+* **`view_filter` is a PATH segment**, not a query argument — `/home/<sort>/<view_filter>`. The first
+  draft passed it as a query string, so all twenty-three rows got the default filter and ten failed
+  against a list they had never asked for. A route with several `@bp.route` lines takes its arguments
+  from the URL, and a query parameter of the same name is silently ignored.
+* **Fact 322 again.** The row comparing a member's page with a stranger's made two requests in one
+  test, and flask_login answered the second as the first one's user, so the difference came out empty
+  while both single-request rows passed. Dropped; the pair IS the comparison.
+
+**One behaviour corrected rather than assumed.** An anonymous reader who NAMES `subscribed` in the path
+gets `all`, not `popular`. The downgrade in `index` sits inside `if view_filter is None:`, so it
+rewrites only the default — the same word means `popular` as a default and `all` as a request. Pinned
+rather than repaired: both are public listings with the private restriction applied, so the asymmetry
+costs a reader's expectation and nothing else.
+
+Nineteen mutants, fifteen dead and four equivalent, on a green baseline. 14,804 tests, 0 failures,
+0 warnings. All 92 floors met.
+
 **Next free number: D1401.**

@@ -12935,3 +12935,16 @@ D1400 was found by a row asserting that a start date in the past is refused -- w
 the round's coverage, expected to pass, and returning `valid is True`. A file of rows that only pin
 known behaviour finds nothing; the ones that state what the code obviously ought to do are where the
 defects are.
+
+**890. A GUARD REPEATED IN A LATER UNCONDITIONAL BLOCK IS EQUIVALENT, NOT WEAK TESTING.**
+Four mutants removing the private restriction from the front page's `local` and `popular` SQL fragments
+all survived, because `get_deduped_post_ids` appends the same restriction unconditionally afterwards.
+No test can kill them. Keep both -- the campaign's own comment says the unconditional one exists so no
+branch can be added lacking it, and the fragments' gates are that intent one layer up -- and assert the
+INVARIANT instead: the filter with no fragment gate reaches the same answer as the one with it.
+
+**891. A ROUTE WITH PATH ARGUMENTS IGNORES A QUERY PARAMETER OF THE SAME NAME.**
+`index` is registered four times, the last as `/home/<sort>/<view_filter>`. Requesting
+`/?view_filter=local` gives the DEFAULT filter and a 200, so ten rows failed against a list they had
+never asked for. Read the `@bp.route` lines before building the request, and assert something only the
+requested variant can produce.
