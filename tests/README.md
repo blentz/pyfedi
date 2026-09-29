@@ -13593,3 +13593,13 @@ rewriting one of those files -- the mutation runner restoring after a mutant is 
 a worker can read it truncated, and the symptom is `SyntaxError` inside `code_lines`, not a coverage or
 assertion failure. Confirm the runner has printed "all files restored" before starting a suite, and re-run
 before believing the failure.
+
+**1006. THREE NEAR-IDENTICAL BLOCKS NEED THE ASSERTION IN ALL THREE.**
+`move_file_to_s3` handles `thumbnail_path`, `file_path` and `source_url` with copies of the same block, each
+reading `S3_STORAGE_CLASS` and `S3_PUBLIC_ACL`. Rows driving one block leave the other two's config reads
+uncovered and their mutants alive. Parametrize over the field.
+
+**1007. A GUARD FURTHER IN CAN ANSWER FOR THE ONE UNDER TEST.**
+The row for "nothing happens when S3 is unconfigured" passed with the file absent -- but so would a mutant that
+ignored the config, because `os.path.isfile` refused it instead. Make every later guard PASS so the one being
+tested is the only thing that can refuse.
