@@ -13576,3 +13576,20 @@ what gives the anonymous rows meaning.
 **1002. A TEXTAREA SETTING ARRIVES WITH CRLF FROM A WINDOWS BROWSER.**
 `blocked_phrases` strips a trailing `\r` per line. Without it every phrase but the last matches nothing. A row
 for a newline-separated admin setting should drive the `\r\n` form as well as `\n`.
+
+**1003. PATCH `app.utils.get_request`, NOT `httpx_client`, TO FAKE A PAGE FETCH.**
+`parse_page` goes through `get_request`, which is memoized. Replacing the http client underneath it makes
+flask-caching raise `AttributeError: 'Cache' object has no attribute 'app'` from inside its own exception
+handler, which looks nothing like the thing being tested.
+
+**1004. `inspect_image_c2pa` IMPORTS `c2pa` INSIDE ITSELF.**
+So the way to fake a manifest is `patch.dict('sys.modules', {'c2pa': <namespace with Context and Reader>})`.
+Both must be context managers. The whole body is inside `except Exception: pass`, so a fake that raises the
+wrong way looks exactly like an image with no provenance.
+
+**1005. A TORN READ OF AN `app/*.py` FILE FAILS THE SOURCE-SCANNING GUARD TESTS WITH A SyntaxError.**
+`tests/test_ap_peer_source_and_timestamps.py`'s scans `ast.parse` every file under `app/`. If anything is
+rewriting one of those files -- the mutation runner restoring after a mutant is the only thing that does --
+a worker can read it truncated, and the symptom is `SyntaxError` inside `code_lines`, not a coverage or
+assertion failure. Confirm the runner has printed "all files restored" before starting a suite, and re-run
+before believing the failure.
