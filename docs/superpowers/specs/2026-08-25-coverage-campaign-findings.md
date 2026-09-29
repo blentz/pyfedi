@@ -22367,4 +22367,69 @@ nine other validators, so a refusal can only come from the field under test.
 Ten mutants, all dead, on a green baseline. 14,825 tests, 0 failures, 0 warnings. All 92
 floors met.
 
-**Next free number: D1401.**
+## Round 210 — D1401: a federated report about a user, and about a community
+
+**D1401. Two defects in the inbox's Flag branch, both from one assumption: that a flagged object is a
+Post.** `find_reported_object` tries a Post, then a PostReply, then `find_actor_or_create` — whose own
+signature is `Union[User, Community, Feed, None]`. So the branch can be handed five kinds of thing, and
+it treated all five alike.
+
+**ONE: a report nobody recorded was logged as a success.**
+
+```
+PROBE  find_reported_object(<a community actor url>)  ->  Community
+       process_report(reporter, community, ...)       ->  0 Report rows
+                                                          0 Notifications
+```
+
+`process_report`'s `isinstance(reported, Community)` arm is a bare `...`, its `Conversation` arm
+likewise, and a Feed matches no arm at all — while the caller logged `APLOG_REPORT, APLOG_SUCCESS`
+regardless and fanned the Flag out to the moderators' instances. A report about one of our communities
+reached no admin's queue, produced no notification, and appeared in the activity log as having worked.
+An operator reading that log has no reason to look. `process_report` returns a bool now, and the caller
+logs `APLOG_IGNORED` naming the type it could not record — a distinct message from
+`Report ignored due to missing content`, which would send a reader looking for a deleted post.
+
+**TWO, and sharper: a report about a USER crashed after recording itself.** The fan-out read
+`reported.community` and `reported.author`:
+
+```
+PROBE  User.community       AttributeError: 'User' object has no attribute 'community'
+       User.author          AttributeError
+       Community.community  AttributeError
+```
+
+`process_report`'s User arm works — it creates the Report, notifies the admins and commits — and then
+the next line raised out of the inbox. There is no `try` between it and the request, so the peer saw a
+500 and **retried, and every retry recorded the report again.** A Flag is announced to a community's
+followers, so it is announceable only when it names content IN a community; a report about a user or a
+community has no such community, and the local record is the whole of what this instance does with it.
+
+**WHAT IS NOT FIXED, and why it is a feature rather than a repair.** The Community and Conversation arms
+remain unimplemented. A community report needs the `targets` dict D1393 defined for
+`admin/reports/community_report.html` — `suspect_community_name`, `reporter_user_name` — and a
+notification subtype; a conversation report needs the same for `conversation_report.html`. Building
+those changes what admins see and how it federates. This round fixed the two things that were wrong
+about the code as it stands: the claim, and the crash.
+
+**THE THREE OPT-OUT EXITS were changed too.** `if reported.reports == -1: return` on each implemented
+arm meant "this target is exempt"; they returned None, which was falsy by accident. They return False by
+statement now, so the caller logs a report it did not record as not recorded.
+
+**A TEST DOUBLE HAD TO FOLLOW THE CONTRACT.** `tests/test_inbox_dispatch_misc.py` doubles
+`process_report` and its recorder returned None implicitly. Once the caller's log result depended on the
+answer, that double said "not recorded" and the row asserting `success` failed — correctly. The double
+returns True now, and its docstring says which case it is.
+
+**THREE FIXTURE TRAPS, all the same family as fact 781.** `make_user(local=True)` leaves
+`ap_profile_id` None, so `find_actor_or_create(None)` is an `AttributeError` on `.strip()` rather than a
+lookup. And `Site.admins()` consults `g.admin_ids` when set, but the dispatcher runs under its own app
+context where it is not — so it falls back to a query that **joins `user_role`**, and a user with no role
+row is excluded even by that query's `or_(..., User.id == 1)` arm. A seeded instance always gives id 1
+the admin role; a fixture that does not is a state production never has, and the report was recorded
+while nobody was notified.
+
+Fifteen mutants, all dead, on a green baseline. 14,846 tests, 0 failures, 0 warnings. All 92
+floors met.
+
+**Next free number: D1402.**
