@@ -753,6 +753,23 @@ def show_community(community: Community):
 @bp.route('/<actor>/feed', methods=['GET'])
 @cache.cached(timeout=600, query_string=True)
 def show_community_rss(actor):
+    # D1410. `index_rss` (app/main/routes.py) refuses outright on a private
+    # instance; this feed and four siblings did not, so anyone could read a
+    # private instance's posts by asking for its RSS. Measured, anonymous,
+    # with `private_instance` on:
+    #
+    #     /community/general/feed  200  post title in body
+    #     /u/author/feed           200  post title in body
+    #     /tag/thetag/feed         200  post title in body
+    #     /d/example.com/feed      200  post title in body
+    #     /topic/thetopic.rss      200  post title in body
+    #     /index/feed              404
+    #
+    # Unconditional, exactly as `index_rss` writes it: an RSS reader cannot log
+    # in, so a private instance has no RSS rather than RSS for members. The
+    # check is FIRST so no lookup, rate limit or cached body precedes it.
+    if g.site.private_instance:
+        abort(404)
     actor = actor.strip()
     if '@' in actor:
         community: Community = Community.query.filter_by(ap_id=actor, banned=False).first()
