@@ -44,14 +44,29 @@ from app.utils import orjson_response, get_setting
 from app.api.alpha.schema import *
 
 
+from config import ip_list
+
+
 def enable_api():
     return True if current_app.debug or current_app.config['ENABLE_ALPHA_API'] == 'true' else False
 
 
 def is_trusted_request():
+    """Whether this caller is exempt from the rate limits below.
+
+    `debug` exempts everything, which is what a development instance wants and
+    is why the two limits it lifts -- /user/login and /user/verify_credentials --
+    are never metered in tests.
+
+    D1396: `ip_list` rather than a bare `in`. The configured value is a list when
+    nothing set it and a STRING when the environment did, and over a string `in`
+    is a substring test -- `'2.168.1.1' in '192.168.1.10'` is true. Normalised at
+    both ends by the one function so a config set any other way cannot bring the
+    substring test back.
+    """
     if current_app.debug:
         return True
-    if request.remote_addr in current_app.config['SKIP_RATE_LIMIT_IPS']:
+    if request.remote_addr in ip_list(current_app.config['SKIP_RATE_LIMIT_IPS']):
         return True
     return False
 

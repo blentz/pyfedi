@@ -10,6 +10,27 @@ logger = logging.getLogger(__name__)
 basedir = os.path.abspath(os.path.dirname(__file__))
 load_dotenv(os.path.join(basedir, '.env'))
 
+
+def ip_list(value, default: str = '') -> list:
+    """One or more IP addresses from configuration, as a list of strings.
+
+    D1396. Accepts the comma-separated string an environment variable carries
+    AND the list a Python config sets, because `x in y` means two different
+    things depending on which one arrived: membership over a list, and a
+    SUBSTRING test over a string. `SKIP_RATE_LIMIT_IPS` was
+    `os.environ.get(...) or ['127.0.0.1']`, so it was a list only while the
+    variable was unset, and the one caller compares `request.remote_addr`
+    against it to exempt two rate limits.
+
+    Used at both ends -- here to parse the environment, and by the caller to
+    normalise whatever it was handed -- so the two cannot disagree.
+    """
+    if value is None or value == '':
+        value = default
+    if isinstance(value, str):
+        value = value.split(',')
+    return [str(entry).strip() for entry in value if str(entry).strip()]
+
 def safe_int_env(var_name: str, default: int = 0) -> int:
     raw = os.getenv(var_name, default)
     try:
@@ -121,7 +142,13 @@ class Config(object):
 
     # enable the aplha api
     ENABLE_ALPHA_API = os.environ.get('ENABLE_ALPHA_API') or False
-    SKIP_RATE_LIMIT_IPS = os.environ.get('SKIP_RATE_LIMIT_IPS') or ['127.0.0.1']
+    # D1396. A list, always. Set from the environment this was a string, and
+    # `request.remote_addr in '192.168.1.10'` is true for the callers
+    # '92.168.1.1' and '2.168.1.1' as well -- both routable addresses. What that
+    # bought is unmetered password guessing: the two limits this exemption
+    # reaches are /api/alpha/user/login (20/hour) and
+    # /api/alpha/user/verify_credentials (6/hour).
+    SKIP_RATE_LIMIT_IPS = ip_list(os.environ.get('SKIP_RATE_LIMIT_IPS'), '127.0.0.1')
     SERVE_API_DOCS = os.environ.get('SERVE_API_DOCS') or False
     RATELIMIT_ENABLED = os.environ.get('RATELIMIT_ENABLED', 'True') in ('True', 'true', '1')
 
