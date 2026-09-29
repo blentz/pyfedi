@@ -12771,3 +12771,31 @@ One of ~40 `instance_banned` calls is passed an inbox URL rather than a domain, 
 path -- which reads as a defederation bypass until you read `inbox_domain`, whose docstring says it
 accepts both. Four such answers this round; writing each down is what stops the next round
 re-deriving them, and a round with no defect is still worth its notes.
+
+**864. `Query.all()` UNIQUIFIES A SINGLE FULL ENTITY; `db.session.execute()` DOES NOT.**
+A join with no predicate between its two tables (`FeedItem.query.join(Feed, FeedItem.feed_id == 7)`)
+crossed every match with every row of the other table: four feeds and two items gave 8 rows from the
+database and 2 from `.all()`. Ten sites looked like a duplicate-row defect, three of them with no
+`IN` to hide it, and none of them was wrong. Probe the multiplicity before filing; then still fix
+the idiom, because the next rewrite to `execute()` inherits the duplicates.
+
+**865. A FIXTURE DEFAULT THAT MATCHES THE COLUMN CAN MAKE A TEST ASSERT ON A LEAK.**
+`make_local_feed`'s `public` defaults to False, which is right. Eight tests took the default and then
+made an **anonymous** request, so what they pinned was whatever the route did with a private feed --
+and when the route learned to refuse one, they failed. If a test is not about visibility, say which
+visibility it wants.
+
+**866. `SUBSCRIPTION_PENDING` IS -1 AND `SUBSCRIPTION_BANNED` IS -2, SO BOTH ARE TRUTHY.**
+`if feed.subscribed(user_id):` admits an unapproved join request and a member the owner banned.
+`>= SUBSCRIPTION_MEMBER` is what the rest of the codebase compares. Any membership helper returning
+a signed rank needs the comparison, never the truth test.
+
+**867. THE ALPHA API'S ERROR BODY KEY IS `message`, NOT `error`.**
+`response.get_json()['error']` is a `KeyError` on a 400 the API meant to send, which reads as the
+refusal not happening. `assert response.status_code == 400` then `response.json['message']`.
+
+**868. NINE MORE TESTS TOOK `make_local_feed`'s PRIVATE DEFAULT, AND ONLY THE FULL SUITE SAID SO.**
+Fact 865's shape a second time, in `tests/test_api_post_list*.py`, where the subject was private
+**communities** inside a feed listing and the feed's own visibility was incidental. Targeted runs of
+the files a change obviously touches did not reach them; the full suite did. A guard added to a
+parameter that many fixtures pass needs the whole suite before the round is called green.

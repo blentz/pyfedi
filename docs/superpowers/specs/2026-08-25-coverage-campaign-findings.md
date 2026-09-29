@@ -21616,4 +21616,107 @@ floors met.
 **No defect number was issued this round.** All four sweeps came back clean and the coverage is
 recorded above.
 
-**Next free number: D1394.**
+## Round 199 — D1394: a feed id from the request, read without asking who is asking
+
+**Ten readers of a caller-supplied feed id, none of them asking whether the caller may see that
+feed, and an eleventh asking too loosely.** A private feed's membership is something this codebase
+protects: `show_feed` refuses one to anybody but its owner and its members,
+`/f/<name>/following` and `/f/<name>/outbox` answer 403,
+the API's `get_feed` raises `access_denied`, D1173 repaired `post_feed_follow` for taking an id and
+joining, and an earlier round repaired `feed_list` for leaking private feeds' **titles**. Ten other
+places took the id and answered.
+
+The plainest is the community browser, which answers exactly:
+
+```
+PROBE  (anonymous; feed 'secretfeed' public=False, holding community 'hiddencomm')
+  GET /f/secretfeed                302 -> /feeds   'Could not find that feed or it is not public'
+  GET /communities?feed_id=1       200    hiddencomm present: True
+                                          publiccomm present: False
+```
+
+A visitor with no account gets the private feed's membership, filtered to it and nothing else. The
+dropdown the parameter comes from offers `Feed.query.filter_by(public=True)` only — the contract was
+there in the template and nowhere in the route. All ten:
+
+| site | what it reported |
+| --- | --- |
+| `main.list_communities` | the feed's communities, listed |
+| `main.health2` | the same body; discards its rows, so nothing leaves |
+| `tag.show_tag` `?category=feed&category_id=` | the feed's posts, no login |
+| `tag.tag_cloud` `/tags/cloud/feed/<id>` | the feed's tag cloud, no login |
+| `tag.tag_posts` `?feed_id=` | the feed's posts again, no login |
+| `feed.show_feed_rss` `/f/<name>.rss` | `show_feed`'s twin, with no gate at all |
+| `feed.feed_create_post` `/f/<name>/submit` | the feed's communities, in a picker |
+| `feed.feed_copy` `/feed/<id>/copy` | a **copy** of the feed, in the caller's own account |
+| `get_post_list` `?feed_id=` | D1173's shape, one file over |
+| `get_post_list2` `?feed_id=` | the same, duplicated |
+
+**And two of the five ActivityPub feed endpoints did not ask either.** `feed_profile`,
+`/f/<name>/outbox` and `/f/<name>/following` all answer 403 for a private feed.
+`/f/<name>/moderators` answered 200 with the owner's `ap_profile_id`, and
+`/f/<name>/followers` 200 with `totalItems` — the number of accounts subscribed to it. Sibling
+divergence inside one group of five, peer-facing and unauthenticated. Both take the siblings'
+`if not feed.public: abort(403)` verbatim rather than `feed_readable_by`, because there is no session
+in an AP request and the three that already worked test exactly that.
+
+`/f/<name>/followers` was **already pinned as a defect** and left unfixed:
+`test_a_non_public_feed_still_has_a_followers_collection` says "`feed_followers` never reads
+`feed.public` at all" and proves the asymmetry on both sides. That test is inverted here, and
+`/f/<name>/moderators` — the fourth of the five, which that round did not name — gets a row of its
+own. A pinned asymmetry is a defect somebody decided not to act on; this round acted on it.
+
+All eleven web and API readers now ask `feed_readable_by(feed, user_id)` (`app/utils.py:3129`) —
+the ten above and `show_feed` itself — so no reader of a feed id can be more permissive than the
+page the feed has. Each refuses the way it already refused an id that
+names nothing — 404 where there is an `or abort(404)`, an empty list where the id merely filters, a
+redirect on `show_feed` — which keeps "private" and "absent" indistinguishable, as `show_feed`'s own
+wording has always claimed.
+
+**The rule tightened while being moved.** `show_feed`'s member arm read
+`elif current_user.is_authenticated and feed.subscribed(current_user.id):`. That call answers
+`SUBSCRIPTION_PENDING` (-1) for an unapproved join request and `SUBSCRIPTION_BANNED` (-2) for a
+member the owner threw out, and **both are truthy** — so asking to join a private feed was enough to
+read it, which is the whole of the approval gate, and being banned from one did not stop you. The
+helper compares `>= SUBSCRIPTION_MEMBER`, as `app/feed/routes.py:134`, `:781` and
+`app/community/routes.py:229` already did. Ownership is asked first, so a stray banned `FeedMember`
+row cannot lock an owner out of their own feed.
+
+**One sweep came back clean, and its premise was false.** Ten copies of
+`FeedItem.query.join(Feed, FeedItem.feed_id == <id>)` name no predicate *between* the two tables, so
+the join crosses every matching `FeedItem` with every row of `feed`. `app/api/alpha/utils/post.py`
+had already been repaired alone, with a comment saying the duplicates "survived the trip through
+`IN`" — which read like a correctness defect wherever there was no `IN`, and there were three such
+places: `/f/<name>/outbox`, `/f/<name>/following` and `feed_copy`, the last of them **inserting** a
+`FeedItem` per row returned. Measured before filing anything:
+
+```
+PROBE  four feeds, two items in the one being asked for
+  db.session.execute(q.statement)   8 rows
+  q.all()                           2
+  filter_by(feed_id=...).all()      2
+```
+
+`Query.all()` over a single full entity uniquifies by primary key, so every one of the ten answers
+was right and none of the work needed doing. No defect — but `db.session.execute()` does **not**
+uniquify, so a rewrite of any of them would have inherited the duplicates. All ten are `filter_by`
+now, and the multiplicity is pinned by a test so it cannot come back unnoticed.
+
+**Eight existing tests were asserting on the leak.** `make_local_feed`'s `public` defaults to False,
+matching the column, and three tag-route files took that default and then made an anonymous request.
+They pass `public=True` now, because feed-tree traversal is what they are about.
+`test_show_feeds_final_abort_is_unreachable` also changed its proof: the claim is unchanged, but
+`show_feed(None)` now takes the redirect instead of raising `AttributeError` on `feed.public`, so a
+name resolving to nothing is no longer a 500.
+
+**One of the twenty-six mutants cannot be killed through a response, and is pinned by its call
+instead.** `/health2` returns `''` by design, so dropping its guard changes nothing an observer can
+see, and the first run left `M10 the health probe drops the guard` alive. What that route owes is
+that it *asks*, because it is meant to be the same body as `list_communities` and a later edit that
+reads its rows would inherit the leak — so the test asserts the call, and its docstring says why it
+is the one test here that does.
+
+Twenty-six mutants, all dead, on a green baseline. 14,299 tests, 0 failures, 0 warnings. All 92
+floors met.
+
+**Next free number: D1395.**
