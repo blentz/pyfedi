@@ -13458,3 +13458,16 @@ row is gone -- otherwise the test session's identity map answers from what it lo
 `finally: session.close()` rolls back an uncommitted session anyway, so removing the explicit rollback changes
 nothing observable. The `raise` beside it is NOT equivalent -- removing that swallows the failure -- so assert
 the exception and record the rollback as intent.
+
+**978. `User.newsletter` DEFAULTS TO TRUE, SO EVERY FIXTURE ACCOUNT IS A SUBSCRIBER.**
+A row asserting the newsletter's recipient list cannot compare it to the addresses it seeded -- every local
+account `api_baseline` made is in it too. Count appearances of the seeded addresses and assert the excluded
+one is absent.
+
+**979. PATCH THE NAME WHERE IT IS IMPORTED, AND AN IMPORT INSIDE A FUNCTION IS NOT THE MODULE.**
+`send_newsletter` does `from app.email import send_email` INSIDE the function, so
+`patch('app.admin.util.send_email')` raises "does not have the attribute". Patch `app.email.send_email`.
+
+**980. `assert 'checked' in body` IS TRUE OF ANY PAGE WITH A TICKED BOX.**
+A form with several checkboxes satisfies it whatever the field under test is set to, so the mutant that stops
+reading the stored value survives. Pull out the `<input name="...">` tag with a regex and assert both states.
