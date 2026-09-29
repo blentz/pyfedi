@@ -217,6 +217,11 @@ def test_a_flag_of_a_found_object_reports_it_and_announces(app, db_session, monk
     this arm's own scope), APLOG_REPORT/APLOG_SUCCESS is logged, and
     announce_activity_to_followers is called with is_flag=True and
     admin_instance_id=reported.author.instance_id.
+
+    D1401 gave `process_report` a return value and made both the log result and the
+    fan-out depend on it, so the double below returns True and this row is the Post
+    case -- the one type for which all three of those things happen.
+    tests/test_ap_federated_reports.py holds the types for which they do not.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     reporter, post = _seed_flag_scenario()
@@ -236,6 +241,12 @@ def test_a_flag_of_a_found_object_reports_it_and_announces(app, db_session, monk
     def record_process_report(user, reported, core_activity, session):
         report_calls.append({'user_id': user.id, 'reported_id': reported.id,
                              'core_activity': core_activity, 'session': session})
+        # D1401. `process_report` returns whether it RECORDED the report, and the
+        # caller now logs success or `ignored` on that answer. A double returning None
+        # implicitly says "not recorded", so this one has to return what the real
+        # function returns for a Post -- otherwise the row below asserts `success`
+        # against a path that has been told the report was dropped.
+        return True
 
     monkeypatch.setattr(activitypub_routes, 'process_report', record_process_report)
 
