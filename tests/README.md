@@ -12976,3 +12976,16 @@ role, or it measures a state a seeded instance never has.
 `process_report` gained a bool and a recorder doubling it returned None implicitly, so the row asserting
 `success` began failing -- correctly, since the caller had been told the report was dropped. When a
 function's contract grows, every double of it is part of the change.
+
+**897. `$` MATCHES BEFORE A TRAILING NEWLINE, SO `match` AND `fullmatch` DIFFER BY ONE CHARACTER.**
+`re.match(r'^[01]+$', '0101\n')` is True and `fullmatch` is False. Three validators in this codebase
+were written the first way, including the one whose comment says it exists to make an f-string SQL
+interpolation safe -- a trailing newline reached Postgres and was a `DataError` that poisoned the
+transaction. Sweep `.match()` calls whose pattern ends in `$` by reading compiled patterns out of the
+AST, and pin the rule so a fourth site cannot appear.
+
+**898. A CUSTOM `validate()` GUARDED ON `super().validate()` MAKES EVERY REFUSAL AMBIGUOUS.**
+`AddCommunityForm.validate` returns False before its own checks if any other field is invalid, so a form
+built by assigning `.data` afterwards is refused for `community_name` and the rows asserting the url
+message pass on `accepted is False` while `form.url.errors` is empty. Bind complete formdata, and assert
+the MESSAGE rather than only the refusal.
