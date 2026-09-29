@@ -23867,4 +23867,49 @@ the write and returns nothing on the read.
 
 Eleven mutants, all dead, on a green baseline.
 
-**Next free number: D1421.**
+---
+
+## Round 235 -- the downvote's own happy path, and two debug stubs (D1421)
+
+**D1421 -- two breakpoint stubs were shipped.** `app/activitypub/routes.py` held
+
+```python
+                if actor_id and actor_id.startswith('https://s.rimu.geek.nz'):
+                    pass    # just here to set breakpoints on, during testing. remove before commit
+```
+
+in the inbox preamble, and
+
+```python
+def process_new_content(user, community, store_ap_json, request_json, announced):
+    if user.user_name == 'rimu':
+        pass
+```
+
+at the top of the content handler. Both are places to hang a debugger, both name one
+developer, and the first says in its own comment that it should not have been committed.
+Each runs a string comparison on every incoming activity. Removed.
+
+**The downvote had no happy path.** `tests/test_inbox_dispatch_votes.py` drives
+`process_upvote` end to end and `process_downvote` only where the two differ -- the `else`
+that logs 'Cannot downvote this', which the upvote arm lacks. So a downvote arriving from
+a peer had no row saying it is recorded, logged and announced. The rows assert
+`effect == -1`, because a delegate that called `vote(user, 'upvote', ...)` would look
+identical in the log; that mutant is killed. The unfound-object refusal, the dict
+unwrapping, and the announced/not-announced split now have rows too, as does
+`process_question_answer`'s separate copy of the same unwrapping.
+
+**A HEAD's body is stripped before a test client sees it.** Both reply collections build
+their list only for a GET and answer a HEAD with an empty collection, and asserting a 200
+on a HEAD cannot tell the two arms apart -- the mutant that builds the list anyway survived
+twice. The rows call the view directly inside a request context and read the collection it
+returned, which still has its body: `totalItems` is present for a GET and absent for a
+HEAD.
+
+Also covered: `/post/<id>/`'s redirect, and the feed actor's inbox (which is the shared
+inbox verbatim) and its two collections, both of which refuse a handle containing `@` --
+a remote feed's ActivityPub data belongs to the instance hosting it.
+
+Eleven mutants, all dead, on a green baseline.
+
+**Next free number: D1422.**
