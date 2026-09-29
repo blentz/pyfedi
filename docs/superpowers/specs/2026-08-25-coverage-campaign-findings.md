@@ -22988,4 +22988,83 @@ refactor with its own argument, not a finding.
 Nine mutants, all dead, on a green baseline. 15,260 tests, 0 failures, 0 warnings.
 All 92 floors met.
 
-**Next free number: D1410.**
+## Round 219 — D1410: a private instance published its posts as RSS
+
+**The sweep: which routes the private-instance gate actually covers.** `login_required_if_private_instance`
+is a decorator, and there is no `before_request` doing the same job, so every route either carries it,
+carries `login_required`, or is open. An AST pass over `app/*/routes.py` listed the GET routes carrying
+neither. Most are harmless (`/health`, the service worker, the menus). Seven serve content, and six of them
+are RSS.
+
+**D1410.** `index_rss` (`app/main/routes.py:1348`) refuses on a private instance, and says so first:
+
+```python
+if g.site.private_instance:
+    abort(404)
+```
+
+Five siblings did not. Measured, anonymous, with `private_instance` on and one post titled SECRET TITLE:
+
+```
+/community/general/feed  200  post title in body
+/u/author/feed           200  post title in body
+/tag/thetag/feed         200  post title in body
+/d/example.com/feed      200  post title in body
+/topic/thetopic.rss      200  post title in body
+/index/feed              404
+```
+
+So the setting that means "only members may read this instance" was enforced on one of six RSS endpoints,
+and the other five published the titles, bodies and author names of every non-private post to anyone who
+could guess a community, user, tag, domain or topic name -- none of which is secret, and all of which appear
+in the instance's own outbound federation. **This is the D1394 shape at a different door**: one gate, many
+readers, and the gate on only one of them.
+
+**THE GUARD IS COPIED, NOT INVENTED.** Unconditional, exactly as `index_rss` writes it: an RSS reader
+presents no session and follows no redirect to a login form, so a private instance has **no** RSS rather
+than RSS-for-members. Whether that is the right product decision is a separate argument; five endpoints
+disagreeing with the one that already encoded it was the defect.
+
+**POSITION IS PART OF THE FIX, and a test reads it out of the AST.** Each guard is the first statement of
+its function, ahead of the actor lookup (which would otherwise answer "does this community exist"), ahead of
+`@cache.cached` (whose stored body is returned before any of the function runs), and ahead of
+`show_domain_rss`'s `with limiter.limit('60/minute'):` (where a refusal would spend the caller's rate-limit
+budget to tell them nothing).
+
+`show_feed_rss` is fixed with the five although no probe row names it: D1394 already gave it
+`feed_readable_by` for per-feed visibility, and instance-wide privacy is a different question.
+
+**THE SIXTH GUARD WAS UNOBSERVABLE UNTIL ITS CONTROL ROW WORKED**, and the mutation pass is what said so:
+17 of 18 mutants died and `show_feed_rss`'s `abort(404)` → `pass` survived. Two fixture facts were behind it,
+both of them "a row the product cannot produce" (fact 781) in a new guise:
+
+* the route looks its feed up by **`machine_name`**, and `make_feed` sets `name` and `title` only, so the
+  url resolved to no feed at all;
+* `show_feed_rss` renders the posts of the communities **in** the feed, and the fixture's feed had no
+  `FeedItem`, so even a resolvable feed would have served nothing.
+
+The feed was therefore 404ing for its own reasons in every row, privacy or no privacy, and a guard that
+never decided anything cannot be killed. With a machine name and a member community it serves 200 when
+public, and the mutant dies. The other five guards were observable from the start because their controls
+already served.
+
+**AND `Site.private_instance` DEFAULTS TO TRUE** (`app/models.py:5017`), which makes the finding worse
+rather than better: a freshly created instance is private, and was publishing RSS. The full suite said so
+in the most direct way available -- three existing tests started failing, all of them built on
+`make_site()`, which sets no `private_instance` and therefore gets `True`:
+
+* two in `tests/test_feed_cache.py`, about whether the feed and topic RSS routes leave a wasted redis key
+  behind;
+* one in `tests/test_community_shows_microblogs.py`, about which posts appear in a community's feed, whose
+  fixture docstring ALREADY said "Site.private_instance defaults to True ... so an anonymous GET is bounced
+  to /auth/login" and worked around it by logging the viewer in.
+
+None of the three is about privacy, and all three were passing only because the routes ignored the setting.
+Each now asks for the ordinary public instance it always meant, and says why in a comment. That the
+microblog fixture had already written the default down, and still could not have caught this, is the
+clearest statement of the defect: the codebase knew the default and the RSS routes did not consult it.
+
+Eighteen mutants, all dead on a green baseline -- seventeen on the first pass, and the feed
+site's two once its control row served. 15,282 tests, 0 failures, 0 warnings. All 92 floors met.
+
+**Next free number: D1411.**
