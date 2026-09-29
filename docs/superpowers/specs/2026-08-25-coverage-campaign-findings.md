@@ -21359,4 +21359,40 @@ witness is the page's own phrase — share.html renders the community name, neve
 Nine mutants, all dead, on a green baseline. 14,065 tests, 0 failures, 0 warnings. All 92
 floors met.
 
-**Next free number: D1388.**
+## Round 192 — one blank line switched off federation and signups
+
+Round 191's lesson applied first: the template sweep for D1387's shape
+(`dict[key].attribute`, which Jinja raises on for a missing key) came back clean. `share.html`
+was the only instance; `upcoming_event[0]` is a loop row and `plugin_hooks[plugin_name]` sits
+under `{% if plugin_hooks.get(plugin_name) %}`, the codebase's own correct idiom. Then a sweep of
+`split('\n')` settings lists found fourteen sites, and two of them share a defect.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1388** | `app/utils.py`, `actor_contains_blocked_words` and `actor_profile_contains_blocked_words` | Both split the admin's blocked-word setting on newlines, strip each entry, and test it with `in` — and neither skipped an **empty** entry. `'' in anything` is True, so one blank line matched every actor. | **fixed** | against an actor named `innocent` with an ordinary bio: `'spam'` correctly not blocked, while `'spam\n'`, `'spam\r\n'`, `'\nspam'`, `'spam\n\nscam'` and `'  \n spam'` all **blocked** it |
+
+**A textarea produces the broken value.** One word and an Enter submits `'spam\r\n'`, and
+`'\r'.strip()` is `''`. So the most ordinary way to fill either setting was enough.
+
+**Four callers made it a silent outage**, none of which logs a reason:
+`find_actor_or_create` (`app/activitypub/actor.py:72`) resolves **no** remote actor, so federation
+stops; `:80` refuses any user with a bio; `app/auth/util.py:219` refuses **every** registration;
+and `app/auth/oauth_util.py:277` every OAuth signup. The symptom is "federation and signups
+quietly stopped" after an admin typed a word into a settings box.
+
+**The correct idiom was one screen away.** `blocked_phrases()` in the same module already skips
+empty entries with `if phrase != ''`. Of the other twelve `split('\n')` sites, the two country
+checks use `==` rather than `in` and guard on a truthy input, `auto_decline_referrers` and
+`Filter.keywords_string` filter empties already, and the admin-form sites build rows rather than
+making a match decision — recorded in the test file so a later round need not re-derive it.
+
+**The fix subsumed two older guards.** Two mutants survived and both are equivalent *because of*
+the fix: with empty entries skipped, an all-whitespace setting yields nothing to match (so the
+outer `blocked_words.strip() != ''` is now defence in depth) and no remaining word can be found in
+`''` (so `user.about_html and` is too). One of my own test docstrings claimed the opposite — that
+the outer guard was carrying the case — and is corrected rather than left to mislead.
+
+Nine mutants, all dead, on a green baseline. 14,109 tests, 0 failures, 0 warnings. All 92
+floors met.
+
+**Next free number: D1389.**

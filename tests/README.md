@@ -12648,3 +12648,22 @@ echoes the url was vacuous twice over, and the mutant that deleted the call surv
 `assert b'ALREADYPOSTED' in data or b'general' in data` passed because `general` is in the page's
 dropdown on every render -- while the fixture had set no `Post.url` at all, so the feature under
 test never fired. If an assertion needs an `or` to pass, find out which half is carrying it.
+
+**843. `'' in anything` IS TRUE, SO AN EMPTY ENTRY IN A BLOCKLIST BLOCKS EVERYTHING.**
+Two functions split an admin setting on newlines and tested each entry with `in` without skipping
+blanks, so `'spam\r\n'` -- one word and an Enter in a textarea -- blocked every actor, every
+registration and every OAuth signup, with nothing logged. Whenever a list comes from a multi-line
+text field and its entries are used with `in`, skip the empties; `==` comparisons are safe and
+substring tests are not.
+
+**844. SWEEP THE IDIOM, THEN SAY WHY EACH OTHER SITE IS SAFE.**
+Fourteen `split('\n')` sites; two were broken. Writing down why the other twelve are fine -- `==`
+instead of `in`, an existing empty filter, or building rows rather than deciding a match -- is what
+stops the next round re-deriving the same triage, and it is short enough to belong in the test
+file.
+
+**845. A FIX CAN MAKE AN OLDER GUARD REDUNDANT, AND THE MUTATION PASS WILL SAY SO.**
+After empty entries were skipped, both `blocked_words.strip() != ''` and `user.about_html and`
+became unreachable-effect: their mutants survive because the new guard answers first. That is
+defence in depth, not a gap -- but a test docstring claiming the OLD guard carries the case is then
+wrong, and has to be corrected rather than left as a plausible-sounding explanation.
