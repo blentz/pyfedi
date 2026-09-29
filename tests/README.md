@@ -13293,3 +13293,22 @@ built by six adjacent lines is exactly where that mistake lives, so each row nam
 the file absent the domain list is empty and the flag can never be set. The view opens a hardcoded relative
 path, so a test has to write the file there and clean up after itself -- and should only remove it if it was
 the one that created it.
+
+**947. A `lazy='dynamic'` RELATIONSHIP NEVER RAISES ON ATTRIBUTE ACCESS, AND RETURNS `[]` WHEN DETACHED.**
+`user.extra_fields` answers an AppenderQuery without touching the database, so a `try` wrapping only the
+assignment can never catch anything -- and iterating it on a detached instance yields nothing rather than
+raising. Measured: `bool` True, `list` `[]`, `count()` 0, plus an SAWarning saying this becomes a
+`DetachedInstanceError` in a future release. A handler around such an assignment is dead code TODAY and live
+code later, which is worth a row asserting the warning.
+
+**948. READ WHICH FRAME RAISED BEFORE CONCLUDING WHAT RAISED.**
+Chasing that handler, a `DetachedInstanceError` did appear -- from `flask_caching.make_cache_key` calling
+`User.__repr__`, because the test had EXPIRED the instance and a repr reads columns. It looked like proof
+that the handler was reachable and mispositioned, and a source change was made on that reading before the
+traceback was read properly. The frame list is the evidence; the exception type is not.
+
+**949. `user_view(None)` IS A 500, BECAUSE ITS GUARD ONLY COVERS AN INT.**
+`if isinstance(user, int): ... if user is None: raise NoResultFound` -- a None passed as the OBJECT skips the
+guard entirely and dies on `user.__table__`. Reached here by a `Report` with no `suspect_user_id`; every
+report the product writes sets one, so this is a fixture note rather than a defect, but the asymmetry is
+worth knowing before passing a nullable column straight into that function.
