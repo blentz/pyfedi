@@ -527,9 +527,15 @@ def test_a_hostless_url_skips_the_domain_check(db_session):
     parses WITHOUT error but whose `.hostname` comes back None, which takes
     the `else: return None` arm at `:1595-1596`.
 
-    `'not-a-url'` is such a url: it has no `://` and no netloc, so
-    `urlparse('not-a-url'.lower())` succeeds (no exception) and yields
-    `hostname=None`. It is truthy going into `:190`, and `.strip()` at `:191`
+    `'https:///not-a-url'` is such a url: it carries a scheme and `//`, but the
+    authority between `//` and the next `/` is empty, so
+    `urlparse('https:///not-a-url')` succeeds (no exception) and yields
+    `hostname=None`. It used to be the schemeless `'not-a-url'`; D1407 added an
+    http(s) check on the API's `url` ABOVE this line, so a schemeless string is
+    now refused before the domain block is reached and no longer exercises it.
+    The hostless-but-parseable shape is the one that still gets there -- the same
+    shape `update_post_from_activity`'s comment names ('https:///x' parses,
+    .hostname is None). It is truthy going into `:190`, and `.strip()` at `:191`
     leaves it unchanged (no surrounding whitespace to strip), so it reaches
     `:192`'s `domain_from_url` call exactly as written -- domain comes back
     None, `:193` is false, and control falls straight to `:197` with no raise.
@@ -570,7 +576,7 @@ def test_a_hostless_url_skips_the_domain_check(db_session):
     original_edit_post = post_module.edit_post
     post_module.edit_post = lambda *args, **kwargs: args[1]
     try:
-        result = make_post(_api_input(url='not-a-url'), s.community,
+        result = make_post(_api_input(url='https:///not-a-url'), s.community,
                             POST_TYPE_LINK, SRC_API, auth=bearer(s.author))
     finally:
         post_module.edit_post = original_edit_post
