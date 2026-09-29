@@ -12625,3 +12625,26 @@ assert first that the cookie is honoured AT ALL, so the harness cannot silently 
 `.strip().isdigit()` matches it. Where a validity test and a conversion sit next to each other,
 the test for "would this parse" has to agree with the parser -- and the case that distinguishes
 them belongs in the tests, or a mutant swapping them survives.
+
+**839. FIXING ONE READER OF A VALUE IS NOT FIXING THE SHAPE -- GREP FOR THE OTHERS.**
+D1385 guarded `cross_post_community_id` in `main.add_post` and stopped there. Three routes read
+that cookie: one had already been fixed independently, with a comment naming both failure modes,
+and the third -- on a public route -- was still raising. Before writing the round up, grep for
+every reader of the field and list what each one does.
+
+**840. `value="N"` IN A SELECT IS NOT EVIDENCE THAT N IS SELECTED.**
+Every option carries its own `value`, so `b'value="2"' in response.data` is true whichever option
+is chosen, and three mutants survived on it. Assert on `<option selected value="N">`, and check
+what the form actually emits -- measured here as `selected count=0` with no cookie and
+`<option selected value="2">` with one.
+
+**841. READ THE HELPER BEFORE NAMING THE TEST AFTER WHAT YOU ASSUME IT DOES.**
+`remove_tracking_from_link` does not strip `utm_*`; it rewrites **youtu.be** links to
+`https://youtube.com/watch?v=...`, with no `www.`. A test called
+"tracking parameters are stripped" asserting `utm_source` was absent from a page that never
+echoes the url was vacuous twice over, and the mutant that deleted the call survived it.
+
+**842. AN `or` IN AN ASSERTION IS USUALLY AN ESCAPE HATCH FOR A BROKEN FIXTURE.**
+`assert b'ALREADYPOSTED' in data or b'general' in data` passed because `general` is in the page's
+dropdown on every render -- while the fixture had set no `Post.url` at all, so the feature under
+test never fired. If an assertion needs an `or` to pass, find out which half is carrying it.
