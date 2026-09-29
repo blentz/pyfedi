@@ -21569,4 +21569,51 @@ producer that renamed the key still passed.
 Five mutants, all dead, on a green baseline. 14,199 tests, 0 failures, 0 warnings. All 92
 floors met.
 
+## Round 198 — four clean sweeps, and coverage of a destructive federated path
+
+**No defect this round.** Four sweeps came back clean, and each is recorded with its reason so
+nobody repeats them:
+
+* **data-driven template paths**, D1393's shape. Every `{% extends 'themes/' + theme() +
+  '/base.html' %}` builds a path from data, but `User.theme` and `Site.default_theme` are
+  `SelectField`s whose choices come from `theme_list()`, and WTForms' `pre_validate` refuses
+  anything else. The peer-controlled `Community.theme` (`app/activitypub/util.py:961`, `:1542`) is
+  written unvalidated, and both of its use sites guard with
+  `file_exists('app/templates/themes/' + community.theme + '/styles.css')`;
+* **`instance_banned(instance.inbox)`** at `app/activitypub/routes.py:1992` — the only one of ~40
+  call sites not handed a domain, on the main Announce fan-out, which looked like a moderation
+  control silently not applying. It is correct: `instance_banned` normalises through
+  `inbox_domain`, whose docstring says it "accepts both forms because callers hold values from
+  either source";
+* **the missing `log_incoming_ap` for an unknown actor** in `process_delete_request`, which has one
+  log call where its siblings have three and four. `shared_inbox` refuses an unknown self-delete at
+  `:697-703` and logs `APLOG_DELETE, APLOG_IGNORED, 'Does not exist here'` before dispatching, so
+  the case never arrives;
+* **the account-deletion twins**. The local path (`app/admin/util.py:26`) sets `banned = true` as
+  well as `deleted` and this one does not — a remote user cannot log in here, so banning them is
+  meaningless — and it sets `deleted_by` at its route (`app/admin/routes.py:2166`) rather than in
+  the task, so both fields end up set on both paths.
+
+The round's deliverable is coverage of `process_delete_request` instead: twenty statements, no
+previous test, and destructive — it marks a user deleted, runs `delete_dependencies()`, and for some
+activities calls `purge_content()`, which deletes files from disk and the CDN.
+
+The purge condition is what most wanted pinning. `request_json['removeData'] is True` is an identity
+test, not a truthiness test, so `"true"`, `1` and `['yes']` do **not** purge — the conservative
+direction for an irreversible operation, and one that reads like a mistake until you ask which way
+it should fail. `created_very_recently()` purges a brand-new account's content whether the peer
+asked or not, which is the spam case: the account deleting itself is usually the one that made the
+mess. Both arms, and the eight combinations around them, are asserted.
+
+**One harness note**: `log_incoming_ap` writes nothing unless `LOG_ACTIVITYPUB_TO_DB` is on, and
+the test config leaves it off — the same switch `admin_activities` warns about on its own page. The
+three log assertions take a fixture that turns it on; without it they would have passed for the
+wrong reason.
+
+Eight mutants, all dead, on a green baseline. 14,220 tests, 0 failures, 0 warnings. All 92
+floors met.
+
+**No defect number was issued this round.** All four sweeps came back clean and the coverage is
+recorded above.
+
 **Next free number: D1394.**

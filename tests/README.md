@@ -12754,3 +12754,20 @@ by a filter before rendering.
 Rows that construct `targets={...}` inline exercise the template only; the mutant renaming the
 producer's key survived all of them. One test that goes through the real route is what ties the two
 halves together.
+
+**861. A LOG ASSERTION NEEDS `LOG_ACTIVITYPUB_TO_DB` TURNED ON.**
+`log_incoming_ap` writes nothing unless that config is set, and the test config leaves it off -- so
+"the activity was logged" and "the activity was not logged" both pass by default. Turn it on in the
+test that asserts either, which is also what `admin_activities` warns an operator about.
+
+**862. `is True` ON A PEER'S FIELD IS USUALLY DELIBERATE -- ASK WHICH WAY IT SHOULD FAIL.**
+`request_json['removeData'] is True` refuses the string `"true"` and the integer `1`, which looks
+like a bug until you notice the branch deletes files from disk and the CDN. Failing closed on an
+irreversible operation is the right direction; pin it with the near-miss values so the next reader
+does not "fix" it into truthiness.
+
+**863. RECORD THE SWEEP THAT FOUND NOTHING, INCLUDING WHY THE SUSPICIOUS THING IS FINE.**
+One of ~40 `instance_banned` calls is passed an inbox URL rather than a domain, on the main fan-out
+path -- which reads as a defederation bypass until you read `inbox_domain`, whose docstring says it
+accepts both. Four such answers this round; writing each down is what stops the next round
+re-deriving them, and a round with no defect is still worth its notes.
