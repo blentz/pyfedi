@@ -13032,3 +13032,36 @@ attachment shapes plus the Update path, and a much wider render surface -- found
 one field further rather than closing the round. Round 211 found three copies of one validator bug for the
 same reason. After fixing a class of defect, re-run the sweep that found it against every field of the same
 KIND, not only the one that failed.
+
+**904. `fields.String(metadata={"format": "url"})` VALIDATES NOTHING -- MARSHMALLOW DOES NOT READ `metadata`.**
+The API's `avatar` and `cover` were declared that way, the code's own comment read "valid url passed", and any
+authenticated user could store `javascript:alert(1)` as their avatar -- which eight templates render inside an
+`href`. `metadata` is OpenAPI documentation. A field that must be a url needs `validate=` or a check at the
+handler; treat a `format` in `metadata` as a claim about the docs, never about the data.
+
+**905. WHETHER A SCHEME GUARD SHOULD BE AN ALLOWLIST DEPENDS ON WHO CONSUMES THE URL, NOT ON HOW DANGEROUS IT IS.**
+Three fields got three answers in three rounds. An Event's links: allowlist, because the local form already
+required `^https?://`. `Post.url`: blocklist, because remote software chooses it and `magnet:`, `matrix:` and
+the long tail are real links someone clicks. An image url: allowlist, because THIS INSTANCE fetches it with
+httpx -- a scheme httpx cannot fetch was never a working picture, so there is no legitimate use to audit.
+Ask what the value is for, and the answer follows.
+
+**906. A NARROW `elif` BRANCH NEEDS A WITNESS ROW, OR ITS "NOTHING WAS STORED" ASSERTION IS VACUOUS.**
+Three of the four `og:image` sites sit behind `post.url.startswith('https://pixelfed.social')` and similar, so
+`assert post.image_id is None` passes when the branch never ran at all. Each row asserting a refusal in a
+narrow branch is paired with one asserting the branch's OWN output for a good value -- POST_TYPE_VIDEO and a
+`.jpg` rewritten to `.720p.mp4` name exactly one of the four copies.
+
+**907. PATCH THE BINDING THE CALL SITE RESOLVES, NOT THE ONE THE FUNCTION CAME FROM.**
+`opengraph_parse` is imported inside `Post.new` (so `app.utils.opengraph_parse` is what it looks up) and at
+module level in `app/activitypub/util.py` (so `app.activitypub.util.opengraph_parse` is what THAT looks up).
+A test patching only the first watched the Update path call the real function and reach the network. Same for
+`is_image_url`, `make_image_sizes` and `mime_type_using_head`: `monkeypatch.setattr('app.models.X', ...)` is
+an AttributeError when X is imported inside a method, which at least fails loudly -- patching the wrong one of
+two real bindings does not.
+
+**908. A WITNESS ROW MUST BE SATISFIABLE BY ONE PRODUCER ONLY.**
+"The Update stored an image" was asserted on a post that `Post.new` had already given an image, under the same
+patch -- so it passed whether or not the code under test ran, and a mutant of that line survived while both
+rows were green. Set the state up so the field is empty BEFORE the call, and assert it empty as part of the
+setup.
