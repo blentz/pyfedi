@@ -21395,4 +21395,33 @@ the outer guard was carrying the case — and is corrected rather than left to m
 Nine mutants, all dead, on a green baseline. 14,109 tests, 0 failures, 0 warnings. All 92
 floors met.
 
-**Next free number: D1389.**
+## Round 193 — the third site of a shape documented twice
+
+Two sweeps came back clean first, and both are recorded so they are not repeated. Unguarded
+`[0]` indexing: ten hits, all `parse_qs` results, and every one sits under its own
+`'key' in query_params` test -- `parse_qs` never yields an empty list for a present key, so the
+only risk was the KeyError and it is guarded. Then `int()`/`float()` on request-derived values:
+58 hits, of which 55 are alpha-API `data` from a marshmallow schema, and **two of the three web
+form sites already carry the guard**, each with a comment naming the same failure.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1389** | `app/feed/routes.py`, `feed_create_post` | `int(request.form.get('community_id'))` behind a `!= ''` test, which only rules out absent and empty. A form field is whatever the caller sends. | **fixed** | `'abc'`, `'1.5'`, `'null'` → `ValueError: invalid literal for int() with base 10`; `'999999'` and `'0'` already answered 404 through the `or abort(404)` beside it |
+
+The two siblings are `app/post/routes.py:750` (a poll vote, D1093's shape) and `:1062` (D1093
+itself, a reply's language). An id that does not parse names no community either, so it now gets
+the same 404 as one that resolves to nothing, rather than a traceback.
+
+**The first probe reported 400 for every value, including `'abc'`.** That looked like the route
+rejecting bad input; it was CSRF rejecting the POST before the route ran (fact 749, third time
+this session that a missing token has disguised a result). Every test carries a token.
+
+**One behaviour pinned rather than changed:** the posted id is not checked against the feed's own
+communities, so the picker's contents are a suggestion and not a restriction -- `join_then_add`
+is what decides whether the user may post there. Recorded so a later round does not read the
+absence of a check as this round's oversight.
+
+Seven mutants, all dead, on a green baseline. 14,129 tests, 0 failures, 0 warnings. All 92
+floors met.
+
+**Next free number: D1390.**
