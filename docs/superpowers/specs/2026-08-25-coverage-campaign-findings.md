@@ -23642,4 +23642,50 @@ current_user.is_authenticated`, not about that gate, so the fixture turns it off
 
 Thirteen mutants, all dead, on a green baseline.
 
+---
+
+## Round 230 -- the public endpoints in `app/main/routes.py`, and the ban one of them writes
+
+Four surfaces in `app/main/routes.py` that anybody can drive without an account, none of
+which had a row on its consequential line: `/honey/<whatever>`, `/bot_challenge/<uuid>`,
+`/webhook` and `/share`. No defect this round; every arm behaved as written. What was
+missing was any statement of what they do.
+
+**The honeypot's ban was the part worth the round.** `/honey` records each anonymous visit
+in `honeypot:{ip}` and, on the third within 24 hours, writes `ban:{ip}` with a four-week
+expiry. `block_honey_pot()` -- called at the top of the community, feed, domain and inbox
+views -- turns that key into a 403. Only the counting was covered. The ban itself, its
+expiry, and the 403 it causes on an unrelated page now are, end to end: three requests to
+`/honey`, then a community page that answers 403 where it answered 200 before. Mutants
+confirm both directions: banning on the FIRST visit is killed, and so is a four-HOUR
+expiry, which no assertion about the key merely existing would have caught.
+
+Both of the trap's early returns matter in the expensive direction. A signed-in visitor is
+never recorded, and neither is a request whose `Sec-Fetch-Dest` is `image`, `audio` or
+`video` or whose `Accept` starts with `image/` -- a browser prefetching or rendering the
+trap URL. Banning on either would lock out ordinary readers for four weeks, so each has a
+row, and `g.site.honeypot` being switched off after a ban is written has one too: the key
+outlives the setting by up to four weeks.
+
+`/webhook` takes JSON from anyone with no signature, secret or token and hands it straight
+to `plugins.fire_hook("webhook", payload)`. The rows pin what it does today, with the hook
+intercepted so they assert WHAT was passed on rather than just the 202. **The missing
+authentication stays recorded rather than fixed**: what should authenticate it depends on
+which plugins an instance runs, so it is a maintainer decision, and it was already on the
+deferred list before this round.
+
+`/bot_challenge/<uuid>` clears an account's bot flag from a URL alone -- the uuid is the
+credential. The rows say which uuid works, that a challenge already marked `is_a_bot` is
+NOT cleared by following the link afterwards, and that an unknown uuid is a 404. The flag
+is read back from the database, because the page is the same generic template either way.
+
+**One arm is recorded as unreachable.** `/share`'s `db.session.get(Community, ...) or
+abort(404)` cannot be reached: `possible_communities()` builds the form's choices, and
+WTForms refuses an id outside them before `validate_on_submit()` returns True. A community
+the viewer has never joined IS a valid choice, so the row that shows this uses a BANNED
+community, which is not. Reaching the abort would need a community to vanish between the
+choices being built and the same request reading it back.
+
+Fourteen mutants, all dead, on a green baseline.
+
 **Next free number: D1419.**

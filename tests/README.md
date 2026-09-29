@@ -13347,3 +13347,19 @@ and the empty listing it asserts would survive deleting every filter under test.
 no result, so a mutant that deletes it survives every row that only reads the listing. Look for where the
 value goes AFTERWARDS: here it is spread into the next/previous page links, so the assertion is on the
 pagination URLs, which needs more rows than fit on one page.
+
+**956. READ THE REDIS KEY BACK; DO NOT REBUILD IT FROM `ip_address()`.**
+`ip_address()` answers from the live request, so calling it inside a `test_request_context` gives `''` and the
+row then looks for `ban:` rather than `ban:127.0.0.1`. `redis_client.keys('ban:*')` is both shorter and the
+right assertion: the row is about the threshold and the expiry, not about what address a test client has.
+
+**957. A THRESHOLD NEEDS THE VISIT BELOW IT AS WELL AS THE ONE THAT TRIPS IT.**
+`/honey` bans on the third visit in 24 hours. Asserting only that three visits ban is satisfied by a mutant
+that bans on the first, so the row asserts no ban after two and a ban after three. Assert the EXPIRY too: a
+four-hour ban and a four-week ban are indistinguishable to `exists()`.
+
+**958. WTFORMS REFUSES A `SelectField` VALUE OUTSIDE ITS CHOICES, SO THE LINE AFTER IT CAN BE UNREACHABLE.**
+`/share` ends `db.session.get(Community, form.which_community.data) or abort(404)`. The choices come from
+`possible_communities()`, which offers every non-banned, non-private community -- so posting some other
+viewer's community id validates fine, and only a BANNED id fails validation. The `abort(404)` needs a
+community to vanish mid-request; it is recorded as unreachable rather than left looking untested.
