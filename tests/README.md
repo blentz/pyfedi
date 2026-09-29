@@ -13137,3 +13137,35 @@ row would have caught that.
 `'videos/watch' in url`, so `javascript:videos/watch` was a video hosting site. When a predicate mixes
 anchored and unanchored tests over the same value, the unanchored one is the defect -- the same reading that
 found D1402's `match` beside five `fullmatch`es.
+
+**921. A SETTING ENFORCED BY A DECORATOR IS ENFORCED ONLY WHERE SOMEONE REMEMBERED THE DECORATOR.**
+`login_required_if_private_instance` is opt-in and there is no `before_request` doing the same work, so
+"private instance" was true of one RSS endpoint and false of five. List the GET routes carrying neither that
+decorator nor `login_required` -- an AST pass over `app/*/routes.py` -- and read what each one serves. The
+answer for this codebase was seven content routes, six of them RSS.
+
+**922. AN RSS READER CANNOT LOG IN, SO "PRIVATE" MEANS NO FEED, NOT A MEMBERS-ONLY FEED.**
+`index_rss` had encoded that since D1356 with an unconditional `abort(404)`. A fix that admitted
+authenticated sessions would look more permissive and be useless: the clients that fetch these urls present
+no session. Copy the decision the codebase already made rather than inventing a second one, and pin BOTH
+halves -- anonymous and logged-in -- so a later "improvement" has to change the test on purpose.
+
+**923. WHERE A GUARD SITS IS PART OF WHAT IT GUARDS.**
+After the actor lookup it still answers "does this exist"; after `@cache.cached` it never runs for a url
+someone already fetched; inside `with limiter.limit(...)` it spends the caller's budget to refuse them. All
+six of this round's guards are the first statement of their function, and a test asserts that by reading
+`fn.body[0]` out of the AST rather than trusting the diff.
+
+**924. A ROUTE THAT 404s FOR ITS OWN REASONS CANNOT TEST A GUARD THAT ALSO 404s.**
+`show_feed_rss` looks a feed up by `machine_name` (which `make_feed` does not set) and renders the posts of
+the communities IN the feed (which the fixture had not added), so every row about it passed on a 404 that had
+nothing to do with privacy -- and the mutation of its guard survived while its five siblings' died. When a
+refusal and a miss produce the same status, the control row that serves 200 is the only thing that makes the
+refusal mean anything.
+
+**925. `Site.private_instance` DEFAULTS TO TRUE, SO `make_site()` BUILDS A PRIVATE INSTANCE.**
+`app/models.py:5017`. Every test that renders a page through the app is therefore on a private instance
+unless it says otherwise -- which is why three existing tests began failing the moment six RSS routes
+started honouring the setting. A test about caching, or about which posts appear in a feed, should set
+`private_instance = False` and say so; one about access control should set the value it means explicitly
+rather than inheriting a default that reads like an oversight.
