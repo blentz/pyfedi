@@ -29,7 +29,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
     Licence, UserExtraField, Feed, FeedMember, FeedItem, CommunityFlair, UserFlair, Topic, Event, InstanceBan, Emoji, \
     UserFollower, PostBoost, parse_ap_timestamp, image_url_from, markdown_source, \
-    _as_text, _as_int, _as_float, _as_dict, property_value_fields, public_key_pem, \
+    _as_text, _as_int, _as_float, _as_dict, _as_url, property_value_fields, public_key_pem, \
     language_from_ap, adjust_domain_post_count, actor_name_from_ap
 from app.utils import get_request, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
     sanitise_posting_warning, \
@@ -3639,18 +3639,20 @@ def update_post_from_activity(post: Post, request_json: dict):
                     event.participant_count = _as_int(event_json.get('participantCount'),
                                                       event.participant_count or 0)
                 if 'onlineLink' in event_json:
-                    event.online_link = _as_text(event_json.get('onlineLink'), 1024)
+                    # D1403, as Post.new: a peer's url needs its scheme checked
+                    # before a template makes it an href.
+                    event.online_link = _as_url(event_json.get('onlineLink'), 1024)
                 if 'joinMode' in event_json:
                     event.join_mode = _as_text(event_json.get('joinMode'), 10) or 'free'
                 if 'externalParticipationUrl' in event_json:
-                    event.external_participation_url = _as_text(
+                    event.external_participation_url = _as_url(
                         event_json.get('externalParticipationUrl'), 1024)
                 if 'anonymousParticipation' in event_json:
                     event.anonymous_participation = bool(event_json.get('anonymousParticipation'))
                 if 'isOnline' in event_json:
                     event.online = bool(event_json.get('isOnline'))
                 if 'buyTicketsLink' in event_json:
-                    event.buy_tickets_link = _as_text(event_json.get('buyTicketsLink'), 1024)
+                    event.buy_tickets_link = _as_url(event_json.get('buyTicketsLink'), 1024)
                 if 'feeCurrency' in event_json:
                     event.event_fee_currency = _as_text(event_json.get('feeCurrency'), 4)
                 if 'feeAmount' in event_json:

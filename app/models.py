@@ -145,6 +145,38 @@ def _as_text(value, limit=None):
     return value[:limit] if limit else value
 
 
+def _as_url(value, limit=None):
+    """An http(s) URL out of a peer's document, or None.
+
+    D1403. Three of an Event's fields are URLs a peer supplies, and all three were read
+    with `_as_text` -- which checks that the value is a string and trims it to the
+    column's width, and says nothing about its scheme. `post/_post_full.html:219`
+    renders one of them as a link:
+
+        <a href="{{ event.online_link }}" target="_blank" rel="nofollow ugc">
+
+    so a peer sending `onlineLink: "javascript:alert(document.domain)"` got a clickable
+    `javascript:` href on the post page. Measured, straight out of `Post.new`:
+
+        stored online_link:                'javascript:alert(document.domain)'
+        stored external_participation_url: 'javascript:alert(2)'
+        stored buy_tickets_link:           'javascript:alert(3)'
+
+    `rel="nofollow ugc"` does not stop a scheme from executing, and the other two are
+    stored unrendered today -- a template linking them later would inherit the hole.
+
+    `http://` and `https://` are exactly what the local form requires of the same
+    fields (`CreateEventForm.online_link`, `Regexp(r'^https?://')`), so the two
+    producers of an Event now agree on what a link is. A value that is not one is
+    dropped rather than refused: the rest of the event is still worth ingesting, and
+    None is what these columns hold for an event that named no link at all.
+    """
+    text = _as_text(value, limit)
+    if text is None:
+        return None
+    return text if text.lower().startswith(('http://', 'https://')) else None
+
+
 def _as_dict(value):
     """A mapping out of a peer's document, or an empty one.
 
@@ -2984,12 +3016,12 @@ class Post(db.Model):
                                   timezone=_as_text(event_json.get('timezone'), 30),
                                   max_attendees=_as_int(event_json.get('maximumAttendeeCapacity'), 0),
                                   participant_count=_as_int(event_json.get('participantCount'), 0),
-                                  online_link=_as_text(event_json.get('onlineLink'), 1024),
+                                  online_link=_as_url(event_json.get('onlineLink'), 1024),
                                   join_mode=_as_text(event_json.get('joinMode'), 10) or 'free',
-                                  external_participation_url=_as_text(event_json.get('externalParticipationUrl'), 1024),
+                                  external_participation_url=_as_url(event_json.get('externalParticipationUrl'), 1024),
                                   anonymous_participation=bool(event_json.get('anonymousParticipation')),
                                   online=bool(event_json.get('isOnline')),
-                                  buy_tickets_link=_as_text(event_json.get('buyTicketsLink'), 1024),
+                                  buy_tickets_link=_as_url(event_json.get('buyTicketsLink'), 1024),
                                   event_fee_currency=_as_text(event_json.get('feeCurrency'), 4),
                                   event_fee_amount=_as_float(event_json.get('feeAmount'), 0),
                                   location=event_json.get('location') if isinstance(
