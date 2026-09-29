@@ -13396,3 +13396,18 @@ directions differ in three posts instead of a hundred.
 Removing the `view_filter = 'popular'` coercion for anonymous visitors does not error: the request falls to
 `elif view_filter == 'all' or current_user.is_anonymous:` and becomes the All feed. Popular and All differ
 only in communities with `show_popular` false, so that is the community the row has to create.
+
+**965. A ROW NAMED AFTER A BRANCH IS NOT PROOF THE BRANCH RAN.**
+`test_a_name_written_with_this_instances_domain` built its handle from `Site.name`; the route compares against
+`current_app.config['SERVER_NAME']`. The branch never ran, and the row passed anyway because an unmatched name
+leaves the modlog query unfiltered. Check the constant the SOURCE reads, and add the row that says what an
+unmatched value does -- otherwise a filter that matches nobody is indistinguishable from one that works.
+
+**966. `ua_parser` REPORTS `ios` FOR AN iPHONE AND `mac os x` ONLY FOR A MAC.**
+`app/main/routes.py`'s `if os_family == 'mac os x': path = .../ios/...` is a DESKTOP mapping: `ios/` already
+matches an iPhone by name. A mutant deleting the branch survives every iPhone user agent. The manifests are
+told apart by `piefed_manifest_version`, which names the file -- `ios` and `default` agree on `display`.
+
+**967. GREP THE WHOLE REPOSITORY BEFORE WRITING A ROW FOR A HELPER NOBODY CALLS.**
+`app/main/routes.py:list_files` was a stray module-level copy of a nested helper in `app/cli.py`, referenced
+from nowhere. The right answer to three uncovered lines was to delete them (D1420), not to test `os.walk`.
