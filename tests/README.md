@@ -13363,3 +13363,20 @@ four-hour ban and a four-week ban are indistinguishable to `exists()`.
 `possible_communities()`, which offers every non-banned, non-private community -- so posting some other
 viewer's community id validates fine, and only a BANNED id fails validation. The `abort(404)` needs a
 community to vanish mid-request; it is recorded as unreachable rather than left looking untested.
+
+**959. A CATCH-ALL ARM EARLY IN AN if/elif CHAIN MAKES EVERY LATER ARM UNREACHABLE FOR THAT CASE.**
+`index_rss` had `elif feed_type == 'local' or not current_user_is_authenticated:` before its `popular` and
+`all` arms, so an anonymous reader got the local feed whatever they asked for and the anonymous popular query
+below was dead code. A permanently-red line INSIDE a well-covered function is worth reading as "an earlier
+branch already caught this" before it is read as "no test asks for it". See D1419.
+
+**960. ASSERT THE CONTENT A FEED TYPE SELECTS, NOT THE TITLE IT PRINTS.**
+Every row that existed for `/index/feed/<type>` asserted `<title>Test Site - Popular</title>`, which is built
+from the path and is identical whatever the query returns. The defect above survived them all. The assertion
+that finds it names a community only that feed type includes.
+
+**961. A TOKEN REQUEST IS NOT A SESSION, SO `current_user` IS ANONYMOUS INSIDE THE HELPERS IT CALLS.**
+`index_rss` authenticates an `rss_token` into a local `user` variable and widens its own SQL with it, but
+`get_deduped_post_ids` reads `current_user` -- still anonymous -- and applies its own unconditional
+`c.private is false`. The stricter restriction wins, so the widening is inert. When a route authenticates into
+a local variable, check what the functions BELOW it read before asserting the widening has any effect.
