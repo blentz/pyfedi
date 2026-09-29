@@ -23745,4 +23745,44 @@ chain knows about, and noted in the test file so the survivor is not read as a g
 
 Ten mutants dead, one provably equivalent, on a green baseline.
 
+---
+
+## Round 232 -- the vote-ring finder, and what the front page defaults to
+
+Two clusters, no defect: everything behaved as written, and nothing said so.
+
+**`/find_voters` is a moderation tool nothing exercised.** It walks the 5000 most recently
+seen accounts, keeps the ones with more than ten recent downvotes, and reports the
+accounts whose downvote lists are IDENTICAL -- coordinated downvoting. An answer that
+named the wrong people would be acted on, so the rows assert which accounts are grouped:
+two accounts sharing eleven downvotes are reported together, two accounts over the
+threshold with different lists are not reported at all, and a third account sharing the
+list is what reaches `find_duplicate_values`'s `append` arm, since the first key creates
+the list and the second replaces the `if`.
+
+Two rows guard the direction that costs somebody their account. `recently_downvoted_posts`
+filters `effect < 0`, so a pair who UPVOTE the same eleven posts is a pair of people who
+like the same things, and they must not appear; and the `> 10` threshold is asserted from
+both sides in one row, ten identical downvotes giving nothing and eleven giving the pair.
+The permission gate redirects to `auth.permission_denied` rather than aborting 403, and
+the row checks the report is absent from that answer rather than just reading the status.
+
+**Three front-page defaults, and three mutants that survived the first attempt.** All
+three first rows were vacuous, each for a different reason, and the mutation pass is what
+said so:
+
+* The anonymous `subscribed` coercion (`:70`) does not fail without the coercion -- the
+  request falls through to `elif view_filter == 'all' or current_user.is_anonymous:` at the
+  END of the chain and quietly becomes the All feed. The same catch-all shape as D1419,
+  but last rather than first, so it is a fallback rather than a swallow. The row now uses a
+  community with `show_popular` false, which is in All and not in Popular.
+* The page-length preference (`:94`) was asserted with `<= 5` on a page that showed nothing
+  at all: an account's default filter is `subscribed`, and a reader who has joined nothing
+  sees no posts. The rows now ask for `/home/hot/all` and assert an exact count.
+* `page_length < page_length` is a ceiling the reader LOWERS, never raises. Showing that
+  needs the instance's `PAGE_LENGTH` set below the account's preference, which is a
+  `monkeypatch.setitem` rather than eight more posts.
+
+Eleven mutants, all dead, on a green baseline.
+
 **Next free number: D1420.**
