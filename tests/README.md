@@ -12831,3 +12831,36 @@ routes return 200 proves nothing about which function each ran, so assert the ef
 process holds was fixed before the test ran -- and a value the environment never set is the one case a
 broken expression gets right. The mutant reverting the line survived until the file executed config.py
 again by path, under another module name, with the variable set. Assert the type AND re-execute.
+
+**874. `'k' in X` OVER A PEER'S ARRAY ELEMENT IS A SUBSTRING TEST WHENEVER X IS A STRING.**
+`isinstance(the_list, list)` is not a check on the ELEMENTS, and 41 sites had the list checked and the
+elements not. `'type' in 'https://host/u/prototype'` is True and the subscript is
+`TypeError: string indices must be integers` -- from ordinary urls, not crafted ones. Sweep this shape
+with an AST pass over `'k' in X` followed by `X['k']` where X is a loop variable, and coerce once
+(`_as_dict`) rather than adding a second guard at each read.
+
+**875. AN OLD TEST THAT SAYS A GAP IS UNTESTABLE IS A POINTER TO A DEFECT.**
+tests/test_ap_find_community.py recorded that one operand could not be isolated, because any input
+that falsified it crashed at a separate unguarded access further down. That note was correct, and the
+separate access was the real defect (D1397). Read those paragraphs as a backlog: 'no clean input
+exists' usually means something else needs fixing first.
+
+**876. A ROW THAT SENDS THE WRONG JUNK NEVER ENTERS THE LOOP IT IS ABOUT.**
+Eleven mutants survived a 29-mutant run on tests that all passed, for five distinct reasons, every one
+of them "the loop never ran": the junk value carried the wrong KEY for that loop's reads
+(`'href' in 'https://x/u/prototype'` is False); an element-0 pre-check skipped the body; a string
+answers `in` with False where only a non-iterable raises; the function was never called; and the
+fixture had switched the arm off to reach a different one. Derive the junk from the keys the site
+reads, and put a valid element in front when a pre-check gates the loop.
+
+**877. A MUTATION RUNNER RESTORES FROM ITS OWN SNAPSHOT, SO EDITS MADE WHILE IT RUNS ARE LOST.**
+It captures each file's text and sha256 at start and writes that back after every mutant. A comment
+fixed mid-run was silently reverted, and the digest assert did not notice because it compares against
+the snapshot. Edit nothing under mutation; re-apply afterwards.
+
+**878. A FIX CAN ADD A LINE NO TEST REACHES, AND ONLY THE FLOORS WILL SAY SO.**
+D1397's new guard in `search_for_feed` carried a `return None` that nothing exercised: 29 mutants dead,
+14,652 tests passing, and `app/feed/util.py` down from 100% to 98.69%. A line no test reaches is also a
+line no mutant can be built against, so a mutation run cannot notice it. Run the floors on the round
+that ADDS code, not only on the round that adds tests -- and treat a drop as the round's own doing
+before looking anywhere else.
