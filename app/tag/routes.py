@@ -18,7 +18,7 @@ from app.utils import render_template, permission_required, user_filters_posts, 
     blocked_users, \
     blocked_domains, \
     blocked_communities, login_required, moderating_communities_ids, community_membership_private, \
-    login_required_if_private_instance
+    login_required_if_private_instance, feed_readable_by
 from app.rss_extras import RSSFeed
 
 
@@ -81,6 +81,12 @@ def show_tag(tag):
 
         elif category and category == 'feed' and category_id:
             feed = db.session.get(Feed, category_id) or abort(404)
+            # D1394. The id comes from the query string and this route takes no
+            # login, so a private feed answered here with the posts of the
+            # communities inside it -- a readout of its membership, which
+            # `/f/<its name>` refuses. Unreadable gets the same 404 as absent.
+            if not feed_readable_by(feed, current_user.id if current_user.is_authenticated else None):
+                abort(404)
             # get the feed_ids
             if feed.show_posts_in_children:  # include posts from child feeds
                 feed_ids = get_all_child_feed_ids(feed)
@@ -90,8 +96,7 @@ def show_tag(tag):
             # for each feed get the community ids (FeedItem) in the feed
             # used for the posts searching
             for fid in feed_ids:
-                feed_items = FeedItem.query.join(Feed, FeedItem.feed_id == fid).all()
-                for item in feed_items:
+                for item in FeedItem.query.filter_by(feed_id=fid).all():
                     community_ids.append(item.community_id)
 
             posts = posts.filter(Post.community_id.in_(community_ids))
@@ -272,6 +277,10 @@ def tag_cloud(type, category_id: int):
             {'topic_ids': tuple(topic_ids)}).scalars())
     elif type == 'feed':
         feed = db.session.get(Feed, category_id) or abort(404)
+        # D1394, as show_tag:78. The id is in the path here rather than the
+        # query string, which changes nothing about who may send it.
+        if not feed_readable_by(feed, current_user.id if current_user.is_authenticated else None):
+            abort(404)
         # get the feed_ids
         if feed.show_posts_in_children:  # include posts from child feeds
             feed_ids = get_all_child_feed_ids(feed)
@@ -281,8 +290,7 @@ def tag_cloud(type, category_id: int):
         # for each feed get the community ids (FeedItem) in the feed
         # used for the posts searching
         for fid in feed_ids:
-            feed_items = FeedItem.query.join(Feed, FeedItem.feed_id == fid).all()
-            for item in feed_items:
+            for item in FeedItem.query.filter_by(feed_id=fid).all():
                 community_ids.append(item.community_id)
     else:
         # A category this route does not understand used to fall through the
@@ -429,6 +437,9 @@ def tag_posts(tag_id):
 
     if feed_id := request.args.get('feed_id'):
         feed = db.session.get(Feed, feed_id) or abort(404)
+        # D1394, as show_tag:78.
+        if not feed_readable_by(feed, current_user.id if current_user.is_authenticated else None):
+            abort(404)
         # get the feed_ids
         if feed.show_posts_in_children:  # include posts from child feeds
             feed_ids = get_all_child_feed_ids(feed)
@@ -439,8 +450,7 @@ def tag_posts(tag_id):
         # used for the posts searching
         feed_community_ids = []
         for fid in feed_ids:
-            feed_items = FeedItem.query.join(Feed, FeedItem.feed_id == fid).all()
-            for item in feed_items:
+            for item in FeedItem.query.filter_by(feed_id=fid).all():
                 feed_community_ids.append(item.community_id)
         posts = posts.filter(Post.community_id.in_(feed_community_ids))
 
