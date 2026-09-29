@@ -233,16 +233,25 @@ class TestTheTokenInTheQueryString:
 
         assert self.TITLE in body and self.OTHER_TITLE in body
 
-    def test_an_anonymous_all_feed_is_the_local_one(self, env):
-        """`not current_user_is_authenticated` is the second half of the `local`
-        arm's condition, so every feed_type an anonymous caller asks for that is
-        not `popular` is answered from local communities only."""
+    def test_an_anonymous_all_feed_is_the_all_feed(self, env):
+        """D1419 changed this row. It used to pin the opposite, on the reading that
+        `not current_user_is_authenticated` was the second half of the `local` arm's
+        condition and that "every feed_type an anonymous caller asks for that is not
+        `popular` is answered from local communities only".
+
+        That reading was wrong about `popular` as well: the arm came BEFORE the popular
+        one, so it caught every type, and the anonymous branch of the popular query was
+        unreachable. The chain is ordered by `feed_type` now, so a reader gets the feed
+        they named -- and `all` from an anonymous reader is the same surface the web UI's
+        All gives a logged-out visitor, since `get_deduped_post_ids` applies
+        `c.private is false` and the anonymous nsfw/nsfl/bot filters either way.
+        """
         self.a_post_in_a_community_they_joined(env)
         self.a_post_in_a_community_they_did_not_join(env)
 
         body = env.client.get('/index/feed/all').text
 
-        assert self.TITLE not in body and self.OTHER_TITLE not in body
+        assert self.TITLE in body and self.OTHER_TITLE in body
 
     def test_the_token_is_what_reaches_their_communities(self, env):
         """The control for the two tests below: without it they could not tell a
