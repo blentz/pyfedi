@@ -23950,4 +23950,41 @@ so a row about language preferences has to create the languages first.
 
 Twelve mutants, all dead, on a green baseline.
 
+---
+
+## Round 237 -- the admin's two irreversible federation actions
+
+`/admin/activity_json/<id>/replay` feeds a STORED inbox activity back through the inbox as
+though it had just arrived; `/admin/community/<id>/delete` bans a community immediately and
+then queues a task that unsubscribes every member and deletes it. Neither had rows.
+
+Replay matters because the activity it re-runs was written by a peer and has already been
+processed once -- clicking it re-applies whatever that activity did, a Delete or a ban or a
+vote. The rows assert the PARSED json reaches `replay_inbox_request`, not the string: a
+route that handed over `activity.activity_json` unparsed would still 'work' as far as any
+call-count assertion goes.
+
+Delete matters because the ban and the deletion are separate steps. The ban is committed
+first so the community disappears from the UI while the slow half runs, and the row that
+says so reads `banned` through a SEPARATE database connection -- the route's own session
+reports the attribute whether or not it has been committed, so an in-session read leaves
+the mutant that drops `db.session.commit()` alive.
+
+The task's two arms do different work: a remote community's members each get an Undo/Follow
+sent to the community's own server, and a local one's do not (the `else` holds a `...` and
+a todo about federating the delete OUT, which the rows pin as sending nothing today). One
+call per member is asserted, so a mutant unsubscribing only the first is killed.
+
+**One equivalent mutant, recorded.** Removing `session.rollback()` from the task's `except`
+changes nothing: `finally: session.close()` rolls the session back anyway. It is kept
+because it states the intent where the decision is made, and because the `raise` beside it
+-- which is not equivalent, and is killed -- depends on the session being clean.
+
+**Recorded, not fixed: `/admin/perf_test`.** A POST route, admin-only, whose body is a
+100-million-iteration arithmetic loop. It pins one worker for tens of seconds with no way
+to stop it, and there is no parameter to make it smaller -- which is also why it has no
+row. A maintainer decision: either bound the work or drop the endpoint.
+
+Nine mutants dead, one provably equivalent, on a green baseline.
+
 **Next free number: D1422.**

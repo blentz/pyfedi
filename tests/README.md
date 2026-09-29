@@ -13444,3 +13444,17 @@ setting either to an arbitrary integer is `ForeignKeyViolation`. A row about lan
 `publicize_community(community)` reassigns `community` to the remote announcement community before calling
 `make_post`, so "it posted something" is true of both the right and the wrong target. Assert the id of the
 community the post was made IN, not just that a post was made.
+
+**975. TO ASSERT THAT SOMETHING WAS COMMITTED, READ IT THROUGH ANOTHER CONNECTION.**
+`db.session.get(Community, id).banned` reports the in-session attribute whether or not `db.session.commit()`
+ran, so a mutant deleting the commit survives. `db.engine.connect()` with a raw `SELECT` sees only committed
+state, which is what "the ban is durable before the slow half starts" actually means.
+
+**976. A CELERY TASK COMMITS IN ITS OWN SESSION, SO THE TEST SESSION STILL HOLDS THE OLD ROW.**
+Tasks use `get_task_session()`. After calling one inline, `db.session.expire_all()` before asserting that a
+row is gone -- otherwise the test session's identity map answers from what it loaded earlier.
+
+**977. `session.rollback()` IN AN `except` IS USUALLY AN EQUIVALENT MUTANT.**
+`finally: session.close()` rolls back an uncommitted session anyway, so removing the explicit rollback changes
+nothing observable. The `raise` beside it is NOT equivalent -- removing that swallows the failure -- so assert
+the exception and record the rollback as intent.
