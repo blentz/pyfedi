@@ -2887,21 +2887,77 @@ def feed_followers(actor):
 
 @bp.route('/activitypub/externalInteraction', methods=['GET'])
 def activitypub_external_interaction():
+    """The "subscribe from your own instance" hand-off: a caller names a community by
+    uri and is redirected to its subscribe page.
+
+    D1399. Both arms fell off the end of the function and returned None, which Flask
+    answers with
+    `TypeError: The view function for 'activitypub.activitypub_external_interaction'
+    did not return a valid response` -- a 500 for a missing `uri` and a 500 for a uri
+    that names no community, on an endpoint that takes no login. The same shape as the
+    `else: abort(404)` that `feed_moderators_route` and `feed_followers` were given.
+
+    404 for both: the parameter names something this instance can resolve, or it names
+    nothing.
+    """
     uri = request.args.get('uri')
-    if uri:
-        community = find_actor_or_create_cached(uri, community_only=True)
-        if community:
-            return redirect(f'/community/{community.link()}/subscribe')
+    if not uri:
+        abort(404)
+    community = find_actor_or_create_cached(uri, community_only=True)
+    if not community or not isinstance(community, Community):
+        abort(404)
+    return redirect(f'/community/{community.link()}/subscribe')
 
 
 @bp.route('/quote_boost_auth')
 def quote_boost_auth():
+    """The `result` URL of a FEP-044f Accept: a peer dereferences it to check that a
+    quote really was authorised here.
+
+    D1399. It checked nothing it asserts. Two failures, both measured:
+
+        GET /quote_boost_auth?stamp=abc
+            ValueError: substring not found          -- `stamp.index(';')`, and the
+            guard above rules out only an ABSENT stamp, so `?stamp=` raised too
+        GET /quote_boost_auth?stamp=https://evil.test/p/1;https://evil.test/p/2
+            200  {"type": "QuoteAuthorization",
+                  "interactionTarget": "https://evil.test/p/1",
+                  "attributedTo": "https://test.piefed.local"}
+
+    That second one is this instance telling a peer it authorised a quote of a post it
+    does not host, for a caller who invented both halves of the stamp. The condition
+    `process_quote_boost` (app/activitypub/util.py:4100) checks before it ever issues
+    one of these URLs -- the quoted object exists here AND its author is local -- was
+    not carried in the stamp and not re-checked, so the authorisation asserted a fact
+    nobody had established.
+
+    THE RESIDUAL, which needs a table and not a guard: nothing records WHICH
+    QuoteRequests were accepted. So this endpoint can confirm that the target is a
+    local post whose author is local, and it still cannot distinguish "this author
+    approved this quote" from "this post exists". A caller may still name any local
+    post together with any remote one. Closing that means persisting the accepted
+    requests in `process_quote_boost` and looking them up here.
+    """
     import urllib.parse
-    if request.args.get('stamp') is None:
-        return abort(404)
     stamp = request.args.get('stamp')
-    local_post_id = stamp[:stamp.index(';')]
-    remote_post_id = stamp[stamp.index(';')+1:]
+    # `not stamp`, not `stamp is None`: an empty parameter passed the old test and
+    # reached `stamp.index(';')`.
+    if not stamp:
+        return abort(404)
+    # `partition`, which cannot raise, and then BOTH halves are required -- which is
+    # also what refuses a stamp with no separator at all, since `partition` gives it
+    # an empty right half. A separate `';' not in stamp` test above this one would be
+    # unkillable: every input it rejects, this rejects one line later.
+    local_post_id, _, remote_post_id = stamp.partition(';')
+    if not local_post_id or not remote_post_id:
+        return abort(404)
+    # The same question `process_quote_boost` asked before issuing this URL. Without
+    # it the endpoint signed off on posts this instance has never seen.
+    quoted = Post.get_by_ap_id(local_post_id)
+    if quoted is None:
+        quoted = PostReply.get_by_ap_id(local_post_id)
+    if quoted is None or quoted.author is None or not quoted.author.is_local():
+        return abort(404)
     response_payload = {
         '@context': [
             'https://www.w3.org/ns/activitystreams',
