@@ -23987,4 +23987,35 @@ row. A maintainer decision: either bound the work or drop the endpoint.
 
 Nine mutants dead, one provably equivalent, on a green baseline.
 
+---
+
+## Round 238 -- the newsletter, and the instance chooser's hide flag
+
+Two admin surfaces with no rows, and no defect in either.
+
+**The newsletter mails up to 40,000 strangers.** Its recipient query is
+`newsletter == True AND banned == False AND ap_id IS NULL`, and each conjunct now has a
+row: a banned account is one this instance has decided not to deal with, `newsletter` IS
+the consent, and a remote account's email column holds whatever its own instance supplied.
+`send_newsletter` already breaks after the first message in test mode -- without that, a
+test send is one message per SUBSCRIBER, all to the admin's own inbox -- and two
+subscribers are seeded so that "one email" is a claim about the break rather than about a
+short list.
+
+`User.newsletter` DEFAULTS to True, so every local account any fixture makes is already a
+subscriber. The rows count appearances of the addresses they seeded instead of comparing
+the whole recipient list, which would otherwise be a list of every account in the database.
+
+**`instance_chooser` is a table with no model.** The admin's instance form reads and writes
+its `hide` column through raw SQL, both guarded by `instance.software == 'piefed'`, and the
+route goes further: it `del form.hide` for a non-PieFed instance, so the field does not
+exist to submit. The UPDATE names the row by DOMAIN rather than by instance id, which is
+what the write row asserts.
+
+**A vacuous row the mutation pass caught.** `assert 'checked' in body` is true of a page
+with any ticked checkbox on it, so the mutant that stops reading the stored flag survived.
+The assertion now pulls out the `<input name="hide">` tag itself and checks both states.
+
+Nine mutants, all dead, on a green baseline.
+
 **Next free number: D1422.**
