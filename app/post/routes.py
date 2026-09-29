@@ -499,6 +499,7 @@ def post_lazy_replies(post_id, nonce):
 
 @bp.route('/post/<int:post_id>/embed', methods=['GET', 'HEAD'])
 @block_bots
+@login_required_if_private_instance
 def post_embed(post_id):
     with limiter.limit('30/minute'):
         post = db.session.get(Post, post_id) or abort(404)
@@ -539,6 +540,7 @@ def post_embed(post_id):
 
 @bp.route('/post/<int:post_id>/embed_code', methods=['GET', 'HEAD'])
 @block_bots
+@login_required_if_private_instance
 def post_embed_code(post_id):
     post = db.session.get(Post, post_id) or abort(404)
     community = post.community
@@ -605,6 +607,7 @@ def post_embed_code(post_id):
 
 
 @bp.route('/post/<int:post_id>/oembed', methods=['GET', 'HEAD'])
+@login_required_if_private_instance
 def post_oembed(post_id):
     with limiter.limit('10/minute'):
         post = db.session.get(Post, post_id) or abort(404)
@@ -2733,6 +2736,7 @@ def preview():
 
 
 @bp.route('/post/<int:post_id>/ical', methods=['GET'])
+@login_required_if_private_instance
 def show_post_ical(post_id: int):
     with limiter.limit('30/minute'):
         post = db.session.get(Post, post_id) or abort(404)
