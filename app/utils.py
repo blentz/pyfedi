@@ -2116,6 +2116,39 @@ def login_required_if_private_instance(func):
     return decorated_view
 
 
+def refuse_if_private_instance(func):
+    """404 every request to this view while the instance is private.
+
+    D1410 put this rule inline at the top of six RSS views. D1411's commit review found
+    the hole that leaves: `show_community_rss`, `show_profile_rss` and `show_topic_rss`
+    carry `@cache.cached`, which is ABOVE the function body, so a response cached while
+    the instance was public is replayed for up to 600 seconds after an admin makes it
+    private -- and an inline check inside the function never runs at all. The same
+    arithmetic in reverse leaves a cached 404 answering for ten minutes after an instance
+    is made public again.
+
+    As a decorator listed directly under `@bp.route` it is the OUTERMOST wrapper, so it
+    runs before `cache.cached` consults its store and the cached body is never reached.
+    That is the same "refuse first, then answer conditionally" ordering `index_rss`'s
+    comment argues for against its own 304 -- whose `@cache.cached` line is commented out,
+    which is why its inline check was enough.
+
+    Unconditional, as `index_rss` writes it: an RSS reader presents no session and follows
+    no redirect to a login form, so a private instance has no feeds rather than
+    members-only feeds. `login_required_if_private_instance` is the right decorator for a
+    route a person opens in a browser (D1411 uses it on the embeds); this one is for the
+    machine-readable views.
+    """
+
+    @wraps(func)
+    def decorated_view(*args, **kwargs):
+        if g.site.private_instance:
+            abort(404)
+        return func(*args, **kwargs)
+
+    return decorated_view
+
+
 def check_anoobis(func):
     @wraps(func)
     def decorated_view(*args, **kwargs):

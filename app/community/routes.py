@@ -61,7 +61,8 @@ from app.utils import back, get_setting, render_template, markdown_to_html, vali
     show_reason_why_no_federation, can_upload_video, banned_instances, is_invalid_get_request_uri, user_ip_banned, \
     check_anoobis, \
     community_link_markup, \
-    sanitise_posting_warning
+    sanitise_posting_warning, \
+    refuse_if_private_instance
 
 from app.shared.post import make_post, sticky_post
 from app.shared.tasks import task_selector
@@ -751,25 +752,9 @@ def show_community(community: Community):
 
 # RSS feed of the community
 @bp.route('/<actor>/feed', methods=['GET'])
+@refuse_if_private_instance
 @cache.cached(timeout=600, query_string=True)
 def show_community_rss(actor):
-    # D1410. `index_rss` (app/main/routes.py) refuses outright on a private
-    # instance; this feed and four siblings did not, so anyone could read a
-    # private instance's posts by asking for its RSS. Measured, anonymous,
-    # with `private_instance` on:
-    #
-    #     /community/general/feed  200  post title in body
-    #     /u/author/feed           200  post title in body
-    #     /tag/thetag/feed         200  post title in body
-    #     /d/example.com/feed      200  post title in body
-    #     /topic/thetopic.rss      200  post title in body
-    #     /index/feed              404
-    #
-    # Unconditional, exactly as `index_rss` writes it: an RSS reader cannot log
-    # in, so a private instance has no RSS rather than RSS for members. The
-    # check is FIRST so no lookup, rate limit or cached body precedes it.
-    if g.site.private_instance:
-        abort(404)
     actor = actor.strip()
     if '@' in actor:
         community: Community = Community.query.filter_by(ap_id=actor, banned=False).first()
@@ -835,6 +820,7 @@ def show_community_rss(actor):
 
 # iCal feed of the community
 @bp.route('/<actor>/ical', methods=['GET'])
+@login_required_if_private_instance
 def show_community_ical(actor):
     actor = actor.strip()
     if '@' in actor:

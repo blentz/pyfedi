@@ -23,7 +23,8 @@ from app.utils import render_template, user_filters_posts, validation_required, 
     recently_upvoted_posts, recently_downvoted_posts, blocked_or_banned_instances, blocked_users, \
     joined_or_modding_communities, \
     login_required_if_private_instance, communities_banned_from, reported_posts, user_notes, moderating_communities_ids, \
-    approval_required, block_honey_pot, user_pronouns, community_membership_private, check_anoobis
+    approval_required, block_honey_pot, user_pronouns, community_membership_private, check_anoobis, \
+    refuse_if_private_instance
 
 
 @bp.route('/topic/<path:topic_path>', methods=['GET'])
@@ -212,25 +213,9 @@ def show_topic(topic_path):
 
 
 @bp.route('/topic/<path:topic_path>.rss', methods=['GET'])
+@refuse_if_private_instance
 @cache.cached(timeout=600)
 def show_topic_rss(topic_path):
-    # D1410. `index_rss` (app/main/routes.py) refuses outright on a private
-    # instance; this feed and four siblings did not, so anyone could read a
-    # private instance's posts by asking for its RSS. Measured, anonymous,
-    # with `private_instance` on:
-    #
-    #     /community/general/feed  200  post title in body
-    #     /u/author/feed           200  post title in body
-    #     /tag/thetag/feed         200  post title in body
-    #     /d/example.com/feed      200  post title in body
-    #     /topic/thetopic.rss      200  post title in body
-    #     /index/feed              404
-    #
-    # Unconditional, exactly as `index_rss` writes it: an RSS reader cannot log
-    # in, so a private instance has no RSS rather than RSS for members. The
-    # check is FIRST so no lookup, rate limit or cached body precedes it.
-    if g.site.private_instance:
-        abort(404)
     topic_url_parts = topic_path.split('/')
     last_topic_machine_name = topic_url_parts[-1]
     topic = Topic.query.filter(Topic.machine_name == last_topic_machine_name.strip().lower()).first()

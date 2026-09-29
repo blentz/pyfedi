@@ -19,7 +19,8 @@ from app.utils import render_template, permission_required, user_filters_posts, 
     blocked_users, \
     blocked_domains, mimetype_from_url, \
     blocked_communities, login_required, moderating_communities_ids, community_membership_private, \
-    login_required_if_private_instance, feed_readable_by
+    login_required_if_private_instance, feed_readable_by, \
+    refuse_if_private_instance
 
 
 @bp.route('/tag/<tag>', methods=['GET'])
@@ -126,24 +127,8 @@ def show_tag(tag):
 
 
 @bp.route('/tag/<tag>/feed', methods=['GET'])
+@refuse_if_private_instance
 def show_tag_rss(tag):
-    # D1410. `index_rss` (app/main/routes.py) refuses outright on a private
-    # instance; this feed and four siblings did not, so anyone could read a
-    # private instance's posts by asking for its RSS. Measured, anonymous,
-    # with `private_instance` on:
-    #
-    #     /community/general/feed  200  post title in body
-    #     /u/author/feed           200  post title in body
-    #     /tag/thetag/feed         200  post title in body
-    #     /d/example.com/feed      200  post title in body
-    #     /topic/thetopic.rss      200  post title in body
-    #     /index/feed              404
-    #
-    # Unconditional, exactly as `index_rss` writes it: an RSS reader cannot log
-    # in, so a private instance has no RSS rather than RSS for members. The
-    # check is FIRST so no lookup, rate limit or cached body precedes it.
-    if g.site.private_instance:
-        abort(404)
     tag = Tag.query.filter(Tag.name == tag.lower()).first()
     if tag:
         posts = Post.query.join(Community, Community.id == Post.community_id). \
