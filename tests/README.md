@@ -13330,3 +13330,20 @@ valid response both answer 200 with the same body, so a row that asks for `debug
 `load()` having checked anything. Patch the list helper to return a value the schema refuses -- an integer
 in a declared `String` -- and the two arms answer 400 and 200. Assert the 400's MESSAGE too: a closed API
 gate is also a 400.
+
+**953. `User.hide_nsfw` AND `hide_nsfl` DEFAULT TO 1, SO A FRESH USER HAS ALREADY OPTED OUT.**
+Any row about the NSFW selector on `/communities` has to clear them first: `hide_nsfw == 1` forces
+`nsfw = 'no'` before the selector is read, so `?nsfw=yes` from a factory-made user produces a listing with
+no NSFW communities in it and the row passes for the wrong reason.
+
+**954. THE FIXTURE SITE IS A PRIVATE INSTANCE, SO AN ANONYMOUS CLIENT NEVER REACHES THE VIEW.**
+`Site.private_instance` defaults to True, and the routes carrying `@login_required_if_private_instance` or
+`@refuse_if_private_instance` answer a redirect or a 404 before their body runs. A row about what an
+anonymous viewer is SHOWN has to set `g.site.private_instance = False`; otherwise it is a row about the gate,
+and the empty listing it asserts would survive deleting every filter under test.
+
+**955. AN ASSIGNMENT WHOSE FILTER IS APPLIED ON THE NEXT LINE IS INVISIBLE TO THE LISTING.**
+`nsfw = 'no'; communities = communities.filter(Community.nsfw == False)` -- removing the first line changes
+no result, so a mutant that deletes it survives every row that only reads the listing. Look for where the
+value goes AFTERWARDS: here it is spread into the next/previous page links, so the assertion is on the
+pagination URLs, which needs more rows than fit on one page.

@@ -23583,4 +23583,63 @@ what turned up D1417.
 Ten mutants, all dead, on a green baseline -- including one that removes each newly declared `debug` field,
 which is the only way to show the fix is what makes those rows pass.
 
-**Next free number: D1418.**
+---
+
+## Round 229 -- what `/communities` and `/health2` actually filter (D1418)
+
+`app/main/routes.py` was the lowest-covered module left outside the deprioritised
+`app/cli.py` and `app/nntp/*`: 86.36%, 83 missing lines. The largest coherent block of red
+was the filter stack both listing endpoints run over `Community.query` -- community bans,
+community blocks, instance blocks, keyword filters, the low-quality, NSFW and NSFL
+switches, and the subscribed/not-subscribed and local/remote selectors. Not one of them
+had a row, in either endpoint.
+
+They are worth more than their line count. Three of them -- the ban list, the block list
+and the instance block list -- are decisions about a viewer that someone else made, and
+all of them are the difference between a listing the viewer asked for and one that shows
+them what they have said they do not want. A filter that stops filtering is invisible to
+any test that does not check WHICH communities came back, so every row names a community
+that must appear and one that must not.
+
+**D1418 -- `list_communities` threw away its own site-level NSFW decision.** The top of
+the function reads:
+
+```python
+    if not g.site.enable_nsfw:
+        nsfw = 'no'
+        hide_nsfw = True
+    else:
+        hide_nsfw = False
+```
+
+and then, a hundred lines down, immediately before the per-viewer block:
+
+```python
+    hide_nsfw = False
+```
+
+The template renders the NSFW All/Yes/No selector when `hide_nsfw` is falsy, so an
+instance that had disabled NSFW still offered the control. Choosing `Yes` on it did
+nothing, because `nsfw` is forced to `'no'` above and the query filter follows `nsfw` --
+so this is an inert control, not communities that should have been hidden. That
+distinction is asserted in a row of its own rather than assumed. The reset line is
+removed; both branches above assign the name, so nothing is left unbound.
+
+**A survivor worth the row it cost.** `nsfw = 'no'` inside the `hide_nsfw == 1` arm
+survived, because the line below it already filters `Community.nsfw == False` -- deleting
+the assignment changes no listing. Its one observable effect is `args_dict["nsfw"]`, which
+is spread into the next- and previous-page links: without it, a viewer who has asked never
+to see NSFW gets pagination links repeating the `nsfw=yes` the server has already
+overruled. Killing it needed more communities than fit on a page, hence the one row with a
+bulk insert of 101.
+
+**Two fixture facts cost a cycle each.** `User.hide_nsfw` and `hide_nsfl` both default to
+`1`, so a freshly made user forces `nsfw` to 'no' before any selector is read -- every row
+about the selector has to clear them first. And the fixture `Site` is a PRIVATE instance,
+so `@login_required_if_private_instance` redirects the anonymous client before a single
+filter runs; the anonymous rows are about the `else` arm of `if
+current_user.is_authenticated`, not about that gate, so the fixture turns it off.
+
+Thirteen mutants, all dead, on a green baseline.
+
+**Next free number: D1419.**
