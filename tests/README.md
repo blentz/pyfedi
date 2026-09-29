@@ -13205,3 +13205,22 @@ of gating a harmless route is one decorator; the cost of leaving it is another s
 `/u/<actor>/myfeeds` and `/feeds` were already refusing anonymous visitors on a PUBLIC instance, which is
 stricter than "refuse when private". Pin that, so a later edit that swaps the stronger decorator for the
 weaker one in the name of consistency fails instead of looking tidy.
+
+**932. A SWEEP RUN BY HAND IS A SWEEP YOU WILL TRUNCATE; MAKE IT A TEST.**
+Four rounds of "which routes lack the privacy gate" were driven by a listing printed through `| head -45`
+and `| tail -45`, so an entire blueprint fell off the end and D1412 declared the sweep exhausted while eight
+routes were still open. The same rule written as a test -- every GET-capable view that renders content
+carries a gate or is named in an exemption list WITH ITS REASON -- found a ninth route on its first
+execution. Fact 820 said never `| head`; this is what it costs when the sweep itself breaks the rule.
+
+**933. `methods=['GET', 'POST']` HIDES A ROUTE FROM A SWEEP THAT FILTERS ON METHOD.**
+`community_wiki_view` renders a community's wiki page and declares both verbs, so a pass looking for
+"GET routes" with a naive filter never printed it. Include a route if GET is among its methods, not if GET
+is its only method -- the mixed ones are views that also accept a form post, which is most of the interesting
+pages in a Flask app.
+
+**934. A PER-OBJECT CHECK IS NOT AN INSTANCE-WIDE CHECK, AND HAVING ONE MAKES THE OTHER LOOK PRESENT.**
+`post_lazy_replies` carried `refuse_private_community` and `refuse_unpublished_post` from D1106 -- so it
+LOOKED guarded, and was, against a private community and an unpublished post. Neither says anything about
+whether the whole instance is private. When a route already refuses something, read what it refuses before
+concluding it refuses what you are checking for.
