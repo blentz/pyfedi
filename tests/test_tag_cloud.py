@@ -144,7 +144,7 @@ def test_each_category_the_route_does_understand_still_renders(app, db_session, 
         db.session.commit()
         category_id = topic.id
     else:
-        feed = make_local_feed('localfeed')
+        feed = make_local_feed('localfeed', public=True)
         make_feed_item(feed, community)
         category_id = feed.id
     tag = _tag()
@@ -454,9 +454,9 @@ def test_a_feeds_cloud_follows_the_tree_only_when_asked(app, db_session,
                                                         show_posts_in_children, expected):
     from tests.factories import make_feed_item, make_local_feed
     instance, alice, bob = _seed()
-    parent_feed = make_local_feed('parentfeed')
+    parent_feed = make_local_feed('parentfeed', public=True)
     parent_feed.show_posts_in_children = show_posts_in_children
-    child_feed = make_local_feed('childfeed')
+    child_feed = make_local_feed('childfeed', public=True)
     child_feed.parent_feed_id = parent_feed.id
     db.session.commit()
     parent_community = make_community('parentcomm')
@@ -570,7 +570,7 @@ def test_the_subject_of_the_cloud_is_named_for_the_template(app, db_session, cat
         db.session.commit()
         subject_ids['topic'] = lambda: topic.id
     elif category == 'feed':
-        feed = make_local_feed('localfeed')
+        feed = make_local_feed('localfeed', public=True)
         make_feed_item(feed, community)
         subject_ids['feed'] = lambda: feed.id
     _tagged(_tag(), community, alice, 'a post')

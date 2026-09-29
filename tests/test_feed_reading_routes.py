@@ -501,16 +501,21 @@ def test_a_feed_includes_its_childrens_posts_only_when_asked(app, db_session,
 
 
 def test_show_feeds_final_abort_is_unreachable(app, db_session):
-    """THE ROUND'S RESIDUAL IN show_feed: `:583-584`'s `else: abort(404)` can
-    never run, and this test is the proof rather than an assertion about the
-    route.
+    """THE ROUND'S RESIDUAL IN show_feed: the `else: abort(404)` at the end of
+    the function can never run, and this test is the proof rather than an
+    assertion about the route.
 
-    `current_feed` is assigned `feed` at `:502` and never reassigned, so the
-    `if current_feed:` at `:504` is false only when `feed` is falsy -- and a
-    falsy `feed` has already raised at `:438`, `if not feed.public`, a hundred
-    and fifty lines earlier. Demonstrated here by calling the function with
-    None and watching it raise AttributeError at the FIRST access, not the
-    last.
+    `current_feed` is assigned `feed` and never reassigned, so the
+    `if current_feed:` below it is false only when `feed` is falsy -- and a
+    falsy `feed` has already left the function at the visibility gate a hundred
+    and fifty lines earlier.
+
+    UPDATED BY D1394, which changed how. The gate used to read `feed.public`
+    directly, so `show_feed(None)` raised `AttributeError` there; it now asks
+    `feed_readable_by`, which answers False for None, so the same call takes the
+    'could not find that feed' redirect. The claim is unchanged and the manner
+    of leaving is better: a name that resolves to nothing is a redirect rather
+    than a 500.
 
     Fact 75 CAUSE 9's shape -- a guard that cannot discriminate -- with the
     discrimination removed by an earlier statement rather than by a constant.
@@ -521,8 +526,10 @@ def test_show_feeds_final_abort_is_unreachable(app, db_session):
     with app.test_request_context('/f/nothing'):
         from flask import g
         g.site = db.session.get(Site, 1)
-        with pytest.raises(AttributeError, match='public'):
-            show_feed(None)
+        response = show_feed(None)
+
+    assert response.status_code == 302
+    assert '/feeds' in response.headers['Location']
 
 
 # --------------------------------------------------------------------------

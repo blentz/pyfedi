@@ -232,16 +232,16 @@ class TestNarrowing:
             ['first', 'second', 'third']
 
     def test_one_feed(self, env):
-        feed = make_local_feed('newsfeed')
+        feed = make_local_feed('newsfeed', public=True)
         make_feed_item(feed, env.community)
         db.session.commit()
         assert names(get_post_list(None, {'feed_id': feed.id})) == \
             ['first', 'second', 'third']
 
     def test_a_feed_that_carries_its_children(self, env):
-        parent = make_local_feed('parent')
+        parent = make_local_feed('parent', public=True)
         parent.show_posts_in_children = True
-        child = make_local_feed('child')
+        child = make_local_feed('child', public=True)
         child.parent_feed_id = parent.id
         make_feed_item(child, env.community)
         db.session.commit()
@@ -249,9 +249,9 @@ class TestNarrowing:
             ['first', 'second', 'third']
 
     def test_a_feed_that_does_not_carry_its_children(self, env):
-        parent = make_local_feed('parent')
+        parent = make_local_feed('parent', public=True)
         parent.show_posts_in_children = False
-        child = make_local_feed('child')
+        child = make_local_feed('child', public=True)
         child.parent_feed_id = parent.id
         make_feed_item(child, env.community)
         db.session.commit()
@@ -338,13 +338,13 @@ class TestPrivateCommunities:
                                                                private):
         """The other query path: narrowing by feed turns the raw SQL off, and
         the sqlalchemy filter is what has to keep the private community out."""
-        feed = make_local_feed('newsfeed')
+        feed = make_local_feed('newsfeed', public=True)
         make_feed_item(feed, private)
         db.session.commit()
         assert get_post_list(None, {'feed_id': feed.id})['posts'] == []
 
     def test_a_member_sees_it_in_a_feed_listing(self, env, private):
-        feed = make_local_feed('newsfeed')
+        feed = make_local_feed('newsfeed', public=True)
         make_feed_item(feed, private)
         make_community_member(env.reader, private)
         db.session.commit()
