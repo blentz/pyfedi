@@ -5513,7 +5513,13 @@ class RssFeedItem(db.Model):
 
     def delete_dependencies(self):
         from app import redis_client
-        post = db.session.get(Post, self.post_id)
+        # D1422. `db.session.get(Post, None)` is a real state here -- the RSS importer
+        # records an item with `post_id=None` when it decides not to create a post
+        # (app/cli.py) -- and SQLAlchemy answers it with
+        # "SAWarning: fully NULL primary key identity cannot load any object. This
+        # condition may raise an error in a future release." The `if post:` below already
+        # treats it as nothing to delete; asking the question at all is what warns.
+        post = db.session.get(Post, self.post_id) if self.post_id else None
         if post:
             with redis_client.lock(f"lock:post:{post.id}", timeout=30, blocking_timeout=30):
                 post.delete_dependencies()
