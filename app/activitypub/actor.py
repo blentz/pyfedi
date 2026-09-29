@@ -96,12 +96,26 @@ def find_remote_actor(actor_url):
         # URL contains /c/ - likely a community
         actor = db.session.query(Community).filter(Community.ap_profile_id == actor_url).first()
         if actor and actor.banned:
-            # Try to find a non-banned copy of the community
-            unbanned_actor = db.session.query(Community).filter(Community.ap_profile_id == actor_url,
-                                                                Community.banned == False).first()
-            if unbanned_actor is None:
-                return None
-            actor = unbanned_actor
+            # D1414. This used to look for "a non-banned copy of the community" and
+            # fall back to it:
+            #
+            #     unbanned_actor = db.session.query(Community).filter(
+            #         Community.ap_profile_id == actor_url, Community.banned == False).first()
+            #     if unbanned_actor is None:
+            #         return None
+            #     actor = unbanned_actor
+            #
+            # `Community.ap_profile_id` is `unique=True` (app/models.py:1256), so a second
+            # row with this id cannot exist: the only row the second query could match is
+            # the banned one it filters out. `unbanned_actor` was therefore always None,
+            # `return None` always fired, and `actor = unbanned_actor` was unreachable --
+            # which is how it stayed uncovered while every line around it was tested.
+            #
+            # Collapsed to the refusal the constraint already guarantees. The fallback is
+            # only meaningful if that uniqueness is dropped, and
+            # tests/test_coverage_tail_224.py asserts the constraint so a migration doing
+            # that fails there rather than silently reviving dead code.
+            return None
         if actor:
             return actor
     elif '/f/' in actor_url:
@@ -117,12 +131,26 @@ def find_remote_actor(actor_url):
     if actor is None:
         actor = db.session.query(Community).filter(Community.ap_profile_id == actor_url).first()
         if actor and actor.banned:
-            # Try to find a non-banned copy of the community
-            unbanned_actor = db.session.query(Community).filter(Community.ap_profile_id == actor_url,
-                                                                Community.banned == False).first()
-            if unbanned_actor is None:
-                return None
-            actor = unbanned_actor
+            # D1414. This used to look for "a non-banned copy of the community" and
+            # fall back to it:
+            #
+            #     unbanned_actor = db.session.query(Community).filter(
+            #         Community.ap_profile_id == actor_url, Community.banned == False).first()
+            #     if unbanned_actor is None:
+            #         return None
+            #     actor = unbanned_actor
+            #
+            # `Community.ap_profile_id` is `unique=True` (app/models.py:1256), so a second
+            # row with this id cannot exist: the only row the second query could match is
+            # the banned one it filters out. `unbanned_actor` was therefore always None,
+            # `return None` always fired, and `actor = unbanned_actor` was unreachable --
+            # which is how it stayed uncovered while every line around it was tested.
+            #
+            # Collapsed to the refusal the constraint already guarantees. The fallback is
+            # only meaningful if that uniqueness is dropped, and
+            # tests/test_coverage_tail_224.py asserts the constraint so a migration doing
+            # that fails there rather than silently reviving dead code.
+            return None
 
     # Look for a remote feed if not found as user or community
     if actor is None:
