@@ -1571,7 +1571,14 @@ def post_alpha_user_register(data):
     if not enable_api():
         return abort(400, message="alpha api is not enabled")
     resp = post_user_register(data)
-    return UserRegistrationRequest().load(resp)
+    # D1417. This was `UserRegistrationRequest().load(resp)` -- the REQUEST schema, whose
+    # required fields are `username`, `password` and `password_verify`. A response shaped
+    # like `UserRegistrationResponse` (jwt / registration_created / verify_email_sent)
+    # could never satisfy it, so the endpoint would have answered 400 to every successful
+    # registration. Latent rather than live: `post_user_register` still raises
+    # `not implemented` (D1181), so this line has never run. Corrected now, while the two
+    # schemas are in front of us, rather than left for whoever finishes the endpoint.
+    return UserRegistrationResponse().load(resp)
 
 
 @user_bp.route('/user/get_captcha', methods=['GET'])  # D1180

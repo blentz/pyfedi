@@ -1193,6 +1193,7 @@ class ListCommentsRequest(DefaultSchema):
     parent_id = fields.Integer()
     max_depth = fields.Integer()
     depth_first = fields.Boolean(metadata={"description": "guarantee parent comments are on the same page as any fetched comments"})
+    debug = fields.Boolean(metadata={"default": False, "description": "validate the response against this endpoint's own schema before sending it. For testing only."})
 
 
 class ListCommentsResponse(DefaultSchema):
@@ -1533,6 +1534,7 @@ class ListPostsRequest(Schema):
     feed_id = fields.Integer()
     topic_id = fields.Integer()
     ignore_sticky = fields.Boolean(metadata={"default": False, "description": "Ignores a post's sticky state when sorting"})
+    debug = fields.Boolean(metadata={"default": False, "description": "validate the response against this endpoint's own schema before sending it. For testing only."})
 
 
 class ListPostsRequest2(ListPostsRequest):
