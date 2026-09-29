@@ -22567,4 +22567,66 @@ thinking of bad things, and "bad thing that quotes a good thing" is the entry th
 Fifteen mutants, all dead, on a green baseline -- fourteen on the first pass and M4 after the two
 rows above were added. 14,965 tests, 0 failures, 0 warnings. All 92 floors met.
 
-**Next free number: D1404.**
+## Round 213 — D1404: the same hole at the field every link post has
+
+**Round 212 fixed an Event's three link fields and the sweep that found them did not stop there.**
+`{{ post.url }}` is rendered as a bare `href` in ten places — `post/_post_full.html:8`, five sites in
+`post/post_teaser/_macros.html`, four in `post/_post_teaser_masonry.html`, two of which also make it an
+`img src` — and `post_to_page` (`app/activitypub/util.py:174`) federates it back out again as a Link
+attachment. Between a peer's attachment and all of that stood one guard, `url_is_parseable`, whose own
+docstring says what it does not do:
+
+> Deliberately narrow: it answers only "does urlparse accept this", not "is this a good URL".
+> **No scheme check**, no host check, no length check
+
+**D1404. `urlparse('javascript:alert(1)')` does not raise, so it passed.** Measured for every attachment
+shape this codebase reads, and for the Update path:
+
+```
+PROBE Post.new   Link/href (Lemmy < 0.19.4)  post.url='javascript:alert(document.domain)' type=1
+PROBE Post.new   Link/url (NodeBB)           post.url='javascript:alert(document.domain)' type=1
+PROBE Post.new   Document/url (Mastodon)     post.url='javascript:alert(document.domain)' type=1
+PROBE Post.new   Audio/url (WordPress)       post.url='javascript:alert(document.domain)' type=1
+PROBE Post.new   Image/url (PixelFed)        post.url='javascript:alert(document.domain)' type=1
+PROBE Post.new   dict (a.gup.pe)             post.url='javascript:alert(document.domain)' type=1
+PROBE update     before='https://ok.example/x' after='javascript:alert(document.domain)'
+```
+
+`type=1` is POST_TYPE_LINK, whose templates render the url most prominently — a link post's whole body is
+the link — and the Update row means a peer could replace an already-stored `https://` url on an existing
+post. Worse than D1403 in reach: `post_to_page` relays the hostile href to every peer following the
+community, so this instance was a **republisher** and not only a victim.
+
+**A SIDE EFFECT OF THE UNFIXED PATH, MEASURED BY ACCIDENT.** The first probe run failed with
+`respx.models.AllMockedAssertionError: RESPX: <Request('HEAD', '/alert(document.domain)')> not mocked!` —
+`is_image_url` hands the peer's url to `httpx_client.head` (`app/utils.py:270, 333`), so the unvalidated
+value reached an outbound request builder before it reached the database. httpx refuses the scheme, so it
+is not a live SSRF, but it shows how far an unchecked url travelled.
+
+**THE FIX IS A BLOCKLIST, WHERE D1403's WAS AN ALLOWLIST, AND THAT IS DELIBERATE.** `url_is_storable`
+(`app/utils.py:487`) is `url_is_parseable(url) and not has_unsafe_url_scheme(url)` — one predicate at all
+four boundaries: `Post.new`'s Page path, `Post.new`'s Event path (which has its own url write and its own
+guard), `update_post_from_activity`'s attachment guard, and its microblog-link write, where the scheme
+half is defence in depth because `allowlist_html` has already blanked an unsafe href.
+
+An http(s) allowlist would be strictly stronger, and all four LOCAL producers of `Post.url` do require
+`^https?://` (`CreateLinkForm.link_url`, `CreateVideoForm.video_url`, `CreateEventForm.online_link` and
+`.more_info_url`), so the argument that carried D1403 is available here too. It was not taken, for the
+reason recorded at `UNSAFE_URL_SCHEMES` (`app/utils.py:404`): a link post's url is chosen by REMOTE
+software, and allowlisting means auditing `magnet:`, `matrix:`, `xmpp:`, `gemini:`, `ipfs:`, `tel:` and a
+long tail, where being wrong silently drops real links from every remote instance. The blocklist closes
+the hole with no such risk, and the test file pins BOTH halves — nine unsafe spellings refused, ten other
+schemes kept — so an upgrade to an allowlist has to change those rows on purpose.
+
+**ONE COST IS RECORDED RATHER THAN FIXED.** The Update guard sets `new_url` to the same None an
+unparseable url gets, so the url-change arm below it runs: a peer can **clear** a post's link by sending
+an Update naming a scheme this instance will not store, and the post becomes a discussion. That is the
+behaviour already chosen for unparseable urls, and the comment there gives the reason — rejecting the
+Update outright would hand peers a way to make us drop content. Storing the hostile url is not an option,
+so the alternative is keeping the OLD url, which is a different change with its own argument. The row
+asserting it says so.
+
+Thirteen mutants, all dead, on a green baseline. 15,012 tests, 0 failures, 0 warnings.
+All 92 floors met.
+
+**Next free number: D1405.**

