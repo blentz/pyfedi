@@ -606,7 +606,19 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
                             'orig_post_title': post.title,
                             'orig_post_body': post.body,
                             'orig_post_domain': post.domain.name,
-                            'author_user_name': user.ap_id if user.ap_id else user.user_name
+                            # D1391. Renamed from `author_user_name`, which no
+                            # consumer of THIS subtype read:
+                            # app/templates/user/notifs/20.html:110 reads
+                            # `suspect_user_user_name`, the same name the report
+                            # templates use. `author_user_name` remains the right
+                            # key in the dicts for other subtypes, whose own blocks
+                            # do read it -- it was simply the wrong one here.
+                            #
+                            # Renamed rather than added, so all four writers of
+                            # this dict now have the SAME shape, which is reason (2)
+                            # of the arbitration recorded in
+                            # tests/test_ap_update_post_tails.py's banner.
+                            'suspect_user_user_name': user.ap_id if user.ap_id else user.user_name,
                             }
             if domain.notify_mods:
                 for community_member in post.community.moderators():

@@ -2711,11 +2711,29 @@ class Post(db.Model):
             if domain:
                 # notify about links to banned websites.
                 already_notified = set()  # often admins and mods are the same people - avoid notifying them twice
+                # D1391. Three things this dict has to get right, because
+                # app/templates/user/notifs/20.html's
+                # `post_from_suspicious_domain` block reads `orig_post_title`
+                # (:92), `orig_post_body` (:106) and `suspect_user_user_name`
+                # (:110), and a key no producer writes renders as empty rather
+                # than raising.
+                #
+                # `domain.name`, not `post.domain`: `post.domain` is assigned
+                # BELOW (:2737), so it was None here for every new post -- and in
+                # `update_post_from_activity`, which builds the same dict, it is
+                # the OLD Domain object, which a db.JSON column cannot take.
+                # Measured there: `StatementError (builtins.TypeError) Object of
+                # type Domain is not JSON serializable`.
+                #
+                # `suspect_user_user_name` was written by none of the three
+                # producers, so the Author line rendered `/u/` with no text on
+                # every path. The name is the one the report templates use.
                 targets_data = {'gen': '0',
                                 'post_id': post.id,
                                 'orig_post_title': post.title,
                                 'orig_post_body': post.body,
-                                'orig_post_domain': post.domain,
+                                'orig_post_domain': domain.name,
+                                'suspect_user_user_name': user.ap_id if user.ap_id else user.user_name,
                                 }
                 if domain.notify_mods:
                     for community_member in post.community.moderators():
@@ -2727,7 +2745,13 @@ class Post(db.Model):
                         db.session.add(notify)
                         already_notified.add(community_member.user_id)
                 if domain.notify_admins:
-                    targets_data = {'gen': '0', 'post_id': post.id}
+                    # D1391. This reassigned `targets_data` to two keys, so an
+                    # admin's notification lost the title, the body and the
+                    # author that a moderator's for the SAME post carried -- and
+                    # this is the federated path, where the post came from a peer
+                    # and the context matters most. The other two producers
+                    # (app/shared/post.py, app/activitypub/util.py) both give
+                    # admins the same dict as moderators.
                     for admin in Site.admins():
                         if admin.id not in already_notified:
                             notify = Notification(title='Suspicious content',

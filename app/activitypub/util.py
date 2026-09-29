@@ -2119,10 +2119,24 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
                                                 image_text = ''
                                             if 'Anonymous' in image_text and ('No.' in image_text or ' N0' in image_text):  # chan posts usually contain the text 'Anonymous' and ' No.12345'
                                                 post = session.query(Post).filter_by(image_id=file.id).first()
+                                                # D1391, the same producer/consumer
+                                                # mismatch one subtype over: the
+                                                # `post_with_suspicious_image` block
+                                                # (app/templates/user/notifs/20.html:
+                                                # 115-140) reads
+                                                # `targets.suspect_user_user_name`
+                                                # too, and this -- its only producer
+                                                # -- did not write it, so its Author
+                                                # line was blank as well. Found by
+                                                # the sweep for the domain subtype's
+                                                # writers, which caught this dict.
                                                 targets_data = {'gen': '0',
                                                                 'post_id': post.id,
                                                                 'orig_post_title': post.title,
-                                                                'orig_post_body': post.body
+                                                                'orig_post_body': post.body,
+                                                                'suspect_user_user_name': (
+                                                                    post.author.ap_id if post.author and post.author.ap_id
+                                                                    else post.author.user_name if post.author else ''),
                                                                 }
                                                 notification = Notification(title='Review this',
                                                                             user_id=1,
@@ -3742,11 +3756,25 @@ def update_post_from_activity(post: Post, request_json: dict):
                 if new_domain and old_domain != new_domain:
                     # notify about links to banned websites.
                     already_notified = set()  # often admins and mods are the same people - avoid notifying them twice
+                    # D1391. `post.domain` here is the OLD Domain object -- the
+                    # new one is assigned below -- and `Notification.targets` is a
+                    # db.JSON column, so this could not be stored at all.
+                    # Measured: `StatementError (builtins.TypeError) Object of
+                    # type Domain is not JSON serializable`, which a peer reaches
+                    # by editing a post's link to a domain whose `notify_mods` or
+                    # `notify_admins` an admin has set.
+                    #
+                    # `suspect_user_user_name` is what
+                    # app/templates/user/notifs/20.html:110 reads for this
+                    # subtype; no producer wrote it.
                     targets_data = {'gen': '0',
                                     'post_id': post.id,
                                     'orig_post_title': post.title,
                                     'orig_post_body': post.body,
-                                    'orig_post_domain': post.domain,
+                                    'orig_post_domain': new_domain.name,
+                                    'suspect_user_user_name': (
+                                        post.author.ap_id if post.author and post.author.ap_id
+                                        else post.author.user_name if post.author else ''),
                                     }
                     if new_domain.notify_mods:
                         for community_member in post.community.moderators():
@@ -3760,12 +3788,10 @@ def update_post_from_activity(post: Post, request_json: dict):
                     if new_domain.notify_admins:
                         for admin in Site.admins():
                             if admin.id not in already_notified:
-                                targets_data = {'gen': '0',
-                                                'post_id': post.id,
-                                                'orig_post_title': post.title,
-                                                'orig_post_body': post.body,
-                                                'orig_post_domain': post.domain,
-                                                }
+                                # D1391. Rebuilt per admin with `post.domain`, the
+                                # same unserialisable object as above; the dict
+                                # built once before the loop already holds
+                                # everything this needs.
                                 notify = Notification(title='Suspicious content',
                                                       url=post.ap_id, user_id=admin.id,
                                                       author_id=1, notif_type=NOTIF_REPORT,
