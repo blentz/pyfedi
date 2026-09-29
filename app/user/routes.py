@@ -44,7 +44,7 @@ from app.utils import render_template, markdown_to_html, user_access, markdown_t
     recently_downvoted_post_replies, reported_posts, user_notes, login_required, get_setting, filtered_out_communities, \
     moderating_communities_ids, blocked_or_banned_instances, blocked_domains, get_task_session, \
     patch_db_session, user_in_restricted_country, referrer, user_pronouns, \
-    permission_required, check_anoobis, sql_file, calculate_rss_cache_timeout, safe_redirect_target, show_ban_message
+    permission_required, check_anoobis, sql_file, calculate_rss_cache_timeout, safe_redirect_target, show_ban_message, refuse_if_private_instance
 from app.rss_extras import RSSFeed
 
 # D1042. A settings export is a few kilobytes; this is two orders of magnitude
@@ -2515,25 +2515,9 @@ def user_feeds(actor):
 
 # RSS feed of the community
 @bp.route('/u/<actor>/feed', methods=['GET'])
+@refuse_if_private_instance
 @cache.cached(timeout=600)
 def show_profile_rss(actor):
-    # D1410. `index_rss` (app/main/routes.py) refuses outright on a private
-    # instance; this feed and four siblings did not, so anyone could read a
-    # private instance's posts by asking for its RSS. Measured, anonymous,
-    # with `private_instance` on:
-    #
-    #     /community/general/feed  200  post title in body
-    #     /u/author/feed           200  post title in body
-    #     /tag/thetag/feed         200  post title in body
-    #     /d/example.com/feed      200  post title in body
-    #     /topic/thetopic.rss      200  post title in body
-    #     /index/feed              404
-    #
-    # Unconditional, exactly as `index_rss` writes it: an RSS reader cannot log
-    # in, so a private instance has no RSS rather than RSS for members. The
-    # check is FIRST so no lookup, rate limit or cached body precedes it.
-    if g.site.private_instance:
-        abort(404)
     actor = actor.strip()
     if '@' in actor:
         user = find_actor_or_create(actor, create_if_not_found=False)
