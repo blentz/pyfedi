@@ -19,7 +19,7 @@ from app.activitypub.util import find_actor_or_create, actor_json_to_model, \
     find_hashtag_or_create, create_post, remote_object_to_json, find_flair, activitypub_visibility
 from app.community.forms import CreateLinkForm
 from app.constants import SRC_WEB, POST_TYPE_LINK
-from app.models import Community, File, PostReply, Post, utcnow, CommunityMember, Site, \
+from app.models import Community, File, PostReply, Post, utcnow, CommunityMember, Site, _as_dict, \
     Instance, User, Tag, CommunityFlair, CommunityThemeAllowed, markdown_source, \
     language_from_ap
 from app.utils import get_request, gibberish, ensure_directory_exists, ap_datetime, instance_banned, get_task_session, \
@@ -74,8 +74,17 @@ def search_for_community(address: str, allow_fetch: bool = True) -> Community | 
 
         if webfinger_data.status_code == 200:
             webfinger_json = webfinger_data.json()
+            # D1397. Both of these are a REMOTE host's webfinger document, which
+            # this function fetches from a hostname a caller supplied. `links` not
+            # being a list was a TypeError, and a string element made
+            # `'rel' in links` a substring test whose subscript raises.
+            if not isinstance(webfinger_json, dict) or not isinstance(webfinger_json.get('links'), list):
+                return None
             for links in webfinger_json['links']:
+                links = _as_dict(links)
                 if 'rel' in links and links['rel'] == 'self':  # this contains the URL of the activitypub profile
+                    if 'href' not in links:  # as search_for_feed:80 already does
+                        continue
                     type = links['type'] if 'type' in links else 'application/activity+json'
                     # retrieve the activitypub profile
                     community_data = get_request(links['href'], headers={'Accept': type})
@@ -119,12 +128,17 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                 # get mods
                 if community.ap_moderators_url:
                     mods_data = remote_object_to_json(community.ap_moderators_url)
-                    # `'type' in mods_data and`, as the next clause already does
-                    # for orderedItems: this is whatever the remote instance
-                    # sent, and a moderators collection without a `type` was a
-                    # KeyError that killed the backfill task -- the community
-                    # was created and then never filled in.
-                    if mods_data and 'type' in mods_data and mods_data['type'] == 'OrderedCollection' and 'orderedItems' in mods_data:
+                    # This is whatever the remote instance sent. A collection
+                    # without a `type` was a KeyError that killed the backfill task
+                    # -- the community was created and then never filled in -- and
+                    # an earlier round added a membership test for it.
+                    #
+                    # D1397 took both keys further, because a membership test is
+                    # not a type check: `mods_data` itself may be a string or a
+                    # list, and `orderedItems` being a string iterated its
+                    # CHARACTERS into find_actor_or_create one at a time.
+                    if (mods_data and isinstance(mods_data, dict) and mods_data.get('type') == 'OrderedCollection'
+                            and isinstance(mods_data.get('orderedItems'), list)):
                         for actor in mods_data['orderedItems']:
                             sleep(0.5)
                             mod = find_actor_or_create(actor)
@@ -144,19 +158,36 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                     mods = community_json['attributedTo']
                     if isinstance(mods, list):
                         for m in mods:
-                            if 'type' in m and m['type'] == 'Person' and 'id' in m:
-                                mod = find_actor_or_create(m['id'])
-                                if mod:
-                                    existing_membership = session.query(CommunityMember).filter_by(community_id=community.id, user_id=mod.id).first()
-                                    if existing_membership:
-                                        existing_membership.is_moderator = True
-                                    else:
-                                        new_membership = CommunityMember(community_id=community.id, user_id=mod.id, is_moderator=True)
-                                        session.add(new_membership)
-                                    try:
-                                        session.commit()
-                                    except IntegrityError:
-                                        session.rollback()
+                            # D1397. `'type' in m` with no isinstance first, so a
+                            # string element -- which is what `attributedTo` holds
+                            # when a peer lists its moderators by url -- made this a
+                            # substring test, and any url containing 'type'
+                            # ('prototype', 'stereotype', '/type/1') then raised
+                            # `TypeError: string indices must be integers` and ended
+                            # the backfill. A url WITHOUT 'type' in it was silently
+                            # skipped instead, though the two sibling readers of a
+                            # list `attributedTo` (app/activitypub/util.py:4472,
+                            # :4556) both accept one. Same shape as those two now.
+                            if isinstance(m, str):
+                                actor = m
+                            elif isinstance(m, dict) and m.get('type') == 'Person':
+                                actor = m.get('id')
+                            else:
+                                continue
+                            if not isinstance(actor, str) or not actor:
+                                continue
+                            mod = find_actor_or_create(actor)
+                            if mod:
+                                existing_membership = session.query(CommunityMember).filter_by(community_id=community.id, user_id=mod.id).first()
+                                if existing_membership:
+                                    existing_membership.is_moderator = True
+                                else:
+                                    new_membership = CommunityMember(community_id=community.id, user_id=mod.id, is_moderator=True)
+                                    session.add(new_membership)
+                                try:
+                                    session.commit()
+                                except IntegrityError:
+                                    session.rollback()
                 if is_peertube:
                     community.restricted_to_mods = True
                 session.commit()
@@ -182,6 +213,11 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                     if 'type' in outbox_data and (outbox_data['type'] == 'OrderedCollection' or outbox_data['type'] == 'OrderedCollectionPage') and 'orderedItems' in outbox_data:
                         activities_processed = 0
                         for announce in outbox_data['orderedItems']:
+                            # D1397. Every read below treats this entry as an
+                            # object. A string element made `'object' in announce` a
+                            # substring test and the subscript a TypeError, which
+                            # ended the backfill for the whole community.
+                            announce = _as_dict(announce)
                             activity = None
                             if is_peertube or is_guppe:
                                 # `.get`, as the branch below tests for: an
@@ -191,7 +227,7 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                                 if 'object' not in announce:
                                     continue
                                 activity = remote_object_to_json(announce['object'])
-                            elif 'object' in announce and 'object' in announce['object']:
+                            elif 'object' in announce and 'object' in _as_dict(announce['object']):
                                 activity = announce['object']['object']
                             elif 'type' in announce and announce['type'] == 'Create':
                                 activity = announce['object']

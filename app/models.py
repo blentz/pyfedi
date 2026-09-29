@@ -145,6 +145,30 @@ def _as_text(value, limit=None):
     return value[:limit] if limit else value
 
 
+def _as_dict(value):
+    """A mapping out of a peer's document, or an empty one.
+
+    D1397. `'type' in x and x['type'] == 'Mention'` is how this codebase reads an
+    element of a peer's array, and over a STRING element `in` is a substring test
+    while the subscript is `TypeError: string indices must be integers`. Every
+    actor URL that happens to contain the key reaches it -- `prototype`,
+    `typewriter`, `stereotype`, `.../type/1` -- and the exception leaves the inbox
+    request through the handler, so one crafted `tag` entry stops the activity
+    being processed at all. The arrays themselves are `isinstance(..., list)`
+    checked at every site; their ELEMENTS were not.
+
+    An empty dict rather than None, so the reads that follow need no second guard:
+    `'type' in {}` is False and `{}.get('type')` is None, which is what a peer
+    sending something that is not an object should amount to.
+
+    Where a bare string IS meaningful -- an `attributedTo` entry naming an actor by
+    url -- the caller keeps its own `isinstance(..., str)` arm, as
+    app/activitypub/util.py:4472 and :4556 already do. This helper is for the
+    elements that only ever make sense as objects.
+    """
+    return value if isinstance(value, dict) else {}
+
+
 def actor_name_from_ap(activity_json, key='preferredUsername', limit=255):
     """The name a peer publishes for an actor under `key`, or None if it published
     nothing a name column can hold.
@@ -2587,10 +2611,15 @@ class Post(db.Model):
 
         file_path = None
         alt_text = None
+        # D1397 on the last operand. The loop below already refuses an element
+        # that is not a dict; this pre-check, which decides whether the loop runs
+        # at all, was a membership test over whatever element 0 happens to be --
+        # `TypeError: argument of type 'int' is not iterable` for a number, and
+        # true for any string containing 'type'.
         if ('attachment' in request_json['object'] and
                 isinstance(request_json['object']['attachment'], list) and
                 len(request_json['object']['attachment']) > 0 and
-                'type' in request_json['object']['attachment'][0]):
+                'type' in _as_dict(request_json['object']['attachment'][0])):
             for attachment in request_json['object']['attachment']:
                 alt_text = None
                 # Only the FIRST attachment's `type` is checked in the
@@ -2855,6 +2884,10 @@ class Post(db.Model):
             # Mentions also need a post_id
             if 'tag' in request_json['object'] and isinstance(request_json['object']['tag'], list):
                 for json_tag in request_json['object']['tag']:
+                    # D1397. A string element makes `'type' in json_tag` a
+                    # substring test and `json_tag['type']` a TypeError, and this
+                    # one runs while the Post is already in the session.
+                    json_tag = _as_dict(json_tag)
                     if 'type' in json_tag and json_tag['type'] == 'Mention':
                         profile_id = json_tag['href'] if 'href' in json_tag else None
                         if profile_id and isinstance(profile_id, str) and profile_id.startswith(current_app.config['SERVER_URL']):
@@ -2980,7 +3013,12 @@ class Post(db.Model):
                         isinstance(request_json['object']['attachment'], list) and
                         len(request_json['object']['attachment']) > 0):
                     for attachment_item in request_json['object']['attachment']:
-                        if attachment_item['type'] == 'Link':
+                        # D1397. `attachment_item['type']` with no membership test
+                        # at all: a dict without `type` was a KeyError and a string
+                        # element a TypeError. `.get` answers None for both, which
+                        # is not 'Link'.
+                        attachment_item = _as_dict(attachment_item)
+                        if attachment_item.get('type') == 'Link':
                             if 'href' in attachment_item:
                                 post.url = attachment_item['href']
                                 break

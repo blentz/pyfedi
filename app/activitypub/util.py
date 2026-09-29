@@ -29,7 +29,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
     Licence, UserExtraField, Feed, FeedMember, FeedItem, CommunityFlair, UserFlair, Topic, Event, InstanceBan, Emoji, \
     UserFollower, PostBoost, parse_ap_timestamp, image_url_from, markdown_source, \
-    _as_text, _as_int, _as_float, property_value_fields, public_key_pem, \
+    _as_text, _as_int, _as_float, _as_dict, property_value_fields, public_key_pem, \
     language_from_ap, adjust_domain_post_count, actor_name_from_ap
 from app.utils import get_request, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
     sanitise_posting_warning, \
@@ -2864,6 +2864,10 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
             elif isinstance(request_json['object']['attachment'], list):
                 attachment_list = request_json['object']['attachment']
             for attachment in attachment_list:
+                # D1397. A peer's `attachment` array may hold a bare url string,
+                # and `'href' in <string>` is a substring test whose subscript is
+                # a TypeError.
+                attachment = _as_dict(attachment)
                 url = alt_text = ''
                 if 'href' in attachment:
                     url = attachment['href']
@@ -2881,6 +2885,10 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
         local_users_to_notify = []
         if 'tag' in request_json['object'] and isinstance(request_json['object']['tag'], list) and len(request_json['object']['tag']) > 1:
             for json_tag in request_json['object']['tag']:
+                # D1397. `'type' in json_tag` over a STRING element is a substring
+                # test, and `json_tag['type']` then raises -- one `tag` entry of
+                # `"#prototype"` stopped the whole activity.
+                json_tag = _as_dict(json_tag)
                 if 'type' in json_tag and json_tag['type'] == 'Mention':
                     profile_id = json_tag['href'] if 'href' in json_tag else None
                     if profile_id and isinstance(profile_id, str) and profile_id.startswith('https://' + current_app.config['SERVER_NAME']):
@@ -3246,6 +3254,10 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
             elif isinstance(request_json['object']['attachment'], list):
                 attachment_list = request_json['object']['attachment']
             for attachment in attachment_list:
+                # D1397. A peer's `attachment` array may hold a bare url string,
+                # and `'href' in <string>` is a substring test whose subscript is
+                # a TypeError.
+                attachment = _as_dict(attachment)
                 url = alt_text = ''
                 if 'href' in attachment:
                     url = attachment['href']
@@ -3266,6 +3278,10 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
         # Check for Mentions of local users (that weren't in the original)
         if 'tag' in request_json['object'] and isinstance(request_json['object']['tag'], list) and len(request_json['object']['tag']) > 1:
             for json_tag in request_json['object']['tag']:
+                # D1397. `'type' in json_tag` over a STRING element is a substring
+                # test, and `json_tag['type']` then raises -- one `tag` entry of
+                # `"#prototype"` stopped the whole activity.
+                json_tag = _as_dict(json_tag)
                 if 'type' in json_tag and json_tag['type'] == 'Mention':
                     profile_id = json_tag['href'] if 'href' in json_tag else None
                     if profile_id and isinstance(profile_id, str) and profile_id.startswith('https://' + current_app.config['SERVER_NAME']):
@@ -3415,6 +3431,8 @@ def update_post_from_activity(post: Post, request_json: dict):
             # post.flair.clear()
             flair_tags = []
             for json_tag in request_json['object']['tag']:
+                # D1397, as the two reply tag loops.
+                json_tag = _as_dict(json_tag)
                 if 'type' in json_tag and json_tag['type'] == 'Hashtag':
                     if json_tag['name'][
                        1:].lower() != post.community.name.lower():  # Lemmy adds the community slug as a hashtag on every post in the community, which we want to ignore
@@ -3469,7 +3487,12 @@ def update_post_from_activity(post: Post, request_json: dict):
             post.ap_updated = utcnow()
         post.edited_at = utcnow()
 
-        if request_json['object']['type'] == 'Video':
+        # D1397. `request_json['object']['type']` -- a peer key read with no
+        # membership test, and the inbox's own `object_has_missing_fields` checks
+        # the ACTIVITY's keys, not the object's. An Update whose object carries no
+        # `type` was a KeyError here, after the function had already written the
+        # title, the tags and the flair.
+        if request_json['object'].get('type') == 'Video':
             # fetching individual user details to attach to votes is probably too convoluted, so take the instance's word for it
             upvotes = 1  # from OP
             downvotes = 0
@@ -3507,7 +3530,7 @@ def update_post_from_activity(post: Post, request_json: dict):
             db.session.commit()
             return
 
-        if request_json['object']['type'] == 'Question':
+        if request_json['object'].get('type') == 'Question':  # D1397, as :3495
             # an Update is probably just informing us of new totals, but it could be an Edit to the Poll itself (totalItems for all choices will be 0)
             mode = 'single'
             if 'oneOf' in request_json['object']:
@@ -3520,11 +3543,15 @@ def update_post_from_activity(post: Post, request_json: dict):
 
             total_vote_count = 0
             for vote in votes:
+                # D1397. `vote` and `vote['replies']` are both peer values and
+                # neither was checked: a string element made `'name' in vote` a
+                # substring test, and `vote['replies']` a TypeError.
+                vote = _as_dict(vote)
                 if not 'name' in vote:
                     continue
                 if not 'replies' in vote:
                     continue
-                if not 'totalItems' in vote['replies']:
+                if not 'totalItems' in _as_dict(vote['replies']):
                     continue
 
                 total_vote_count += vote['replies']['totalItems']
@@ -3548,6 +3575,8 @@ def update_post_from_activity(post: Post, request_json: dict):
 
                     i = 1
                     for vote in votes:
+                        # D1397, as the two totals loops around this one.
+                        vote = _as_dict(vote)
                         if not 'name' in vote:
                             continue
                         new_choice = PollChoice(post_id=post.id, choice_text=vote['name'], sort_order=i)
@@ -3558,11 +3587,15 @@ def update_post_from_activity(post: Post, request_json: dict):
 
             # totals Update
             for vote in votes:
+                # D1397. `vote` and `vote['replies']` are both peer values and
+                # neither was checked: a string element made `'name' in vote` a
+                # substring test, and `vote['replies']` a TypeError.
+                vote = _as_dict(vote)
                 if not 'name' in vote:
                     continue
                 if not 'replies' in vote:
                     continue
-                if not 'totalItems' in vote['replies']:
+                if not 'totalItems' in _as_dict(vote['replies']):
                     continue
                 choice = PollChoice.query.filter_by(post_id=post.id, choice_text=vote['name']).first()
                 if choice:
@@ -3573,7 +3606,7 @@ def update_post_from_activity(post: Post, request_json: dict):
 
         old_db_entry_to_delete = None
 
-        if request_json['object']['type'] == 'Event':
+        if request_json['object'].get('type') == 'Event':  # D1397, as :3495
             event = Event.query.filter_by(post_id=post.id).first()
             if event:
                 # D1353, which is D1339 on the UPDATE side. Round 150 repaired the
@@ -3661,24 +3694,31 @@ def update_post_from_activity(post: Post, request_json: dict):
         # makes it safe without a migration. An attachment in this Update still
         # overwrites new_url below, so a real url change is still detected.
         new_url = old_url if post.type == POST_TYPE_EVENT else None
+        # D1397. The `'type' in ...[0]` guard checked ONE element -- as a
+        # membership test over whatever that element is, so a string element
+        # containing 'type' passed it -- and then every element was subscripted
+        # unguarded: `attachment['type']` is a KeyError for a dict without it and a
+        # TypeError for a string. `_as_dict(...).get('type')` answers None for both,
+        # which matches none of the arms.
         if ('attachment' in request_json['object'] and
                 isinstance(request_json['object']['attachment'], list) and
                 len(request_json['object']['attachment']) > 0 and
-                'type' in request_json['object']['attachment'][0]):
+                'type' in _as_dict(request_json['object']['attachment'][0])):
 
             for attachment in request_json['object']['attachment']:
-                if attachment['type'] == 'Link':
+                attachment = _as_dict(attachment)
+                if attachment.get('type') == 'Link':
                     if 'href' in attachment:
                         new_url = attachment['href']  # Lemmy < 0.19.4
                     elif 'url' in attachment:
                         new_url = attachment['url']  # NodeBB
                     if new_url:
                         break
-                elif attachment['type'] == 'Document':
+                elif attachment.get('type') == 'Document':
                     new_url = attachment['url']  # Mastodon
                     if new_url:
                         break
-                elif attachment['type'] == 'Audio':  # WordPress podcast
+                elif attachment.get('type') == 'Audio':  # WordPress podcast
                     new_url = attachment['url']
                     if 'name' in attachment:
                         post.title = attachment['name']
@@ -3687,12 +3727,15 @@ def update_post_from_activity(post: Post, request_json: dict):
             # Lastly, check for image posts. Mbin sends link posts with both image and link and we want to ignore the image in that case.
             if not new_url:
                 for attachment in request_json['object']['attachment']:
-                    if attachment['type'] == 'Image':
+                    attachment = _as_dict(attachment)
+                    if attachment.get('type') == 'Image':
                         new_url = attachment['url']  # PixelFed, PieFed, Lemmy >= 0.19.4
 
         if 'attachment' in request_json['object'] and isinstance(request_json['object']['attachment'],
                                                                  dict):  # Mastodon / a.gup.pe
-            new_url = request_json['object']['attachment']['url']
+            # D1397. A dict `attachment` without `url` was a KeyError here, and
+            # the Update went with it; None falls through to the parse guard below.
+            new_url = request_json['object']['attachment'].get('url')
         if new_url and not url_is_parseable(new_url):
             # A peer-supplied attachment url urlparse refuses. Treat it as no
             # url at all -- the same None this block starts new_url at (above)
@@ -4956,7 +4999,29 @@ def find_community(request_json):
                             if potential_community:
                                 return potential_community
 
-    rj = request_json['object'] if 'object' in request_json else request_json
+    # D1397. `request_json['object'] if 'object' in request_json` -- unguarded,
+    # although the `rjs` list eleven lines above takes the same value only
+    # `isinstance(..., dict)`. So a peer whose `object` is a string put a string in
+    # `rj`, and `rj.get('type')` below is
+    # `AttributeError: 'str' object has no attribute 'get'`. Measured:
+    #
+    #     find_community({'type': 'Create', 'object': 'https://peer.test/p/1'})
+    #         AttributeError: 'str' object has no attribute 'get'
+    #     ... 'object': 'https://peer.test/inReplyTo/1'
+    #         TypeError: string indices must be integers   (substring test above)
+    #     ... 'object': 42  /  None
+    #         TypeError: argument of type 'int' is not iterable
+    #     ... 'object': ['a']
+    #         AttributeError: 'list' object has no attribute 'get'
+    #
+    # A string `object` is not an edge case: Lemmy's `Add` and `Remove` name their
+    # object by url, and `app/activitypub/routes.py:1428` and `:1501` call this
+    # with the whole activity whenever one arrives unannounced.
+    #
+    # Falling back to the outer activity is what the `else` arm already did for an
+    # activity with no `object` at all, and the two checks below -- `inReplyTo` and
+    # `type == 'Video'` -- are as meaningful there.
+    rj = request_json['object'] if isinstance(request_json.get('object'), dict) else request_json
 
     # Create/Update Note from platform that didn't include the Community in 'audience', 'cc', or 'to' (e.g. Mastodon reply to Lemmy post)
     if 'inReplyTo' in rj and rj['inReplyTo'] is not None:
@@ -4976,7 +5041,10 @@ def find_community(request_json):
                     potential_community = Community.query.filter_by(ap_profile_id=a.lower()).first()
                     if potential_community:
                         return potential_community
-                elif a['type'] == 'Group':
+                # D1397. `a['type']` after the `isinstance(a, str)` arm above, so
+                # `a` is not a string -- but a dict without `type`, or a number, or
+                # a nested list, was a KeyError or a TypeError out of the inbox.
+                elif _as_dict(a).get('type') == 'Group' and isinstance(_as_dict(a).get('id'), str):
                     potential_community = db.session.query(Community).filter_by(ap_profile_id=a['id'].lower()).first()
                     if potential_community:
                         return potential_community
