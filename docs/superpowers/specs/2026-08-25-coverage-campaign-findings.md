@@ -22169,4 +22169,55 @@ difference between that and a genuine equivalent mutant is whether removing it c
 Fourteen mutants, thirteen dead and one equivalent, on a green baseline. 14,724 tests, 0 failures,
 0 warnings. All 92 floors met.
 
+## Round 206 — no defect: who a report is fanned out to
+
+**No defect.** The deliverable is `announce_activity_to_followers`, the main fan-out — every activity a
+local community relays goes through it — and the fifteen statements of it that no test had executed,
+including the whole branch that makes a **report** reach fewer instances than everything else.
+
+```python
+if is_flag:
+    instances = community.following_instances(include_dormant=True, mod_hosts_only=True)
+    if admin_instance_id != 1 and not any(i.id == admin_instance_id for i in instances):
+        admin_instance = db.session.get(Instance, admin_instance_id)
+        if admin_instance:
+            instances.append(admin_instance)
+else:
+    instances = community.following_instances(include_dormant=True)
+```
+
+A `Flag` names a suspect and a reporter. `mod_hosts_only=True` adds
+`CommunityMember.is_moderator == True` to the join (`app/models.py:1426`); dropping that one keyword
+broadcasts every report to every subscribing instance, and nothing in the suite noticed. The caller side
+was already covered — `tests/test_inbox_dispatch_misc.py` asserts the dispatcher passes `is_flag=True`
+and `admin_instance_id=reported.author.instance_id` — so what was missing was the half that acts on
+them. The fixture gives the community four remote member instances, one hosting a moderator, one hosting
+only a plain subscriber, one hosting the reported author and one hosting the creator, so "who got it" is
+a distinction rather than a count.
+
+**Pinned rather than repaired: `admin_instance_id` receives the REPORTED AUTHOR's instance**, not the
+reporter's, because the dispatcher passes `reported.author.instance_id`. That reads oddly against the
+parameter's name and is the right behaviour — the suspect's own admins are the people who can act on a
+report about their user, and it is what Lemmy does. The name is the only thing wrong with it.
+
+**TWO SURVIVORS, each hidden by a different accident, and neither an equivalence.**
+
+* **`admin_instance_id != 1` dropped** produced no send at all, because `make_instance` leaves `inbox`
+  as None and the loop skips a host without one — so appending the local instance was invisible. The
+  operand only becomes observable once the local instance HAS an inbox. `following_instances` filters
+  `Instance.id != 1`, so the `not any(...)` half is always True for it and `!= 1` is the only thing
+  stopping the community from Announcing to its own inbox.
+* **`if admin_instance:` dropped** does not crash: `awaken_dormant_instance` opens
+  `if instance and not instance.gone_forever:` and the send loop opens `if instance and ...`, so a None
+  in the recipient list is silently skipped **twice**. It looked like a redundant line and it is not —
+  what the guard prevents is a None in a list, and two later guards happening to tolerate one is not the
+  same as the state being unreachable. The claim is now asserted directly: every value handed to
+  `awaken_dormant_instance` is recorded and required to be non-None, on every call in the file.
+
+That second one refines fact 885. The difference between a **redundant** line and a **masked** one is
+whether the state the guard prevents is reachable, not whether it currently produces a visible failure.
+
+Twenty-one mutants, all dead, on a green baseline. 14,750 tests, 0 failures, 0 warnings. All 92
+floors met.
+
 **Next free number: D1400.**
