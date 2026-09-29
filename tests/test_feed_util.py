@@ -166,6 +166,63 @@ def test_an_unknown_feed_is_fetched_through_webfinger(app, db_session):
     assert initialise.call_count == 1
 
 
+@pytest.mark.parametrize('document', [
+    'not a document',           # `webfinger_json['links']` is a TypeError
+    42,
+    None,
+    ['links'],                  # a list: `.get` is an AttributeError
+    {},                         # no `links` at all: a KeyError
+    {'links': 'https://remote.example/f/remotefeed'},   # iterated its CHARACTERS
+    {'links': 42},
+    {'links': None},
+])
+def test_a_webfinger_document_this_shape_cannot_walk(app, db_session, document):
+    """D1397. This document comes from a REMOTE host, at a hostname the caller
+    supplied, and every read of it assumed a mapping with a `links` list:
+    `webfinger_json['links']` was a KeyError for a document without one, a
+    TypeError for a string, and an AttributeError for a list -- and a string
+    `links` iterated its characters into the loop one at a time.
+
+    None of these can walk to an actor, so all of them answer None rather than
+    raising out of `search_for_feed` into its caller. `search_for_community`
+    carries the same guard for the same reason.
+    """
+    instance, owner = _seed()
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = document
+
+    with app.test_request_context('/'):
+        with patch('app.feed.util.get_request', side_effect=[response]) as get:
+            assert search_for_feed('~remotefeed@remote.example') is None
+
+    assert get.call_count == 1
+
+
+def test_a_links_entry_that_is_not_an_object_is_skipped(app, db_session):
+    """The element, as distinct from the list. `'rel' in <a string>` is a substring
+    test whose subscript raises, so one junk entry stopped the walk -- and a real
+    entry after it must still be found."""
+    instance, owner = _seed()
+    feed = _feed(owner, 'remotefeed')
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = {'links': [
+        'https://remote.example/rel/1',
+        42,
+        {'rel': 'self', 'type': 'application/activity+json',
+         'href': 'https://remote.example/f/remotefeed'}]}
+
+    with app.test_request_context('/'):
+        with patch('app.feed.util.get_request',
+                   side_effect=[response, _actor_response()]), \
+                patch('app.feed.util.actor_json_to_model', return_value=feed), \
+                patch('app.feed.util.initialise_new_communities'):
+            found = search_for_feed('~remotefeed@remote.example')
+
+    assert found.id == feed.id
+
+
 def test_a_webfinger_failure_is_retried_once_after_a_sleep(app, db_session):
     """:58-67. One HTTPError is retried after `sleep(randint(3, 10))`; a second
     gives up and returns None.
