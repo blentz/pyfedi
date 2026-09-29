@@ -2950,6 +2950,24 @@ class TestUrlChangeYoutubeFixup:
 # scoped file and STAY REGISTERED, with the argument above now travelling with
 # them.
 #
+# THE ARBITRATION IS NOW COMPLETE. D1391 owned all three remaining files at once
+# -- app/models.py, app/activitypub/util.py and app/shared/post.py -- which is the
+# condition this banner said was missing, and finished it on the same three
+# reasons: every writer now stores `<the new domain>.name`, a display string like
+# its siblings, and the dict's SHAPE is finally the same at all four sites.
+#
+# Two things the arbitration turned up that the register did not have:
+#
+#   - the admin loop in app/models.py `Post.new` REASSIGNED `targets_data` to
+#     `{'gen', 'post_id'}`, so an admin's notification for a federated post lost
+#     the title and the body that a moderator's for the same post carried. The
+#     precedent this banner cites for "dropping the key" was that reassignment --
+#     and it was dropping four keys, not one;
+#   - app/templates/user/notifs/20.html:110 reads
+#     `targets.suspect_user_user_name` for this subtype, and NO writer set it, so
+#     the Author line rendered `/u/` with no text on every path. "Nothing reads
+#     `orig_post_domain`" was true; "nothing reads this dict" was not.
+#
 # REACHABILITY IS NOT UNIFORM across the four writers, and the report's register
 # entry has the detail. In one line each:
 #
@@ -3262,11 +3280,18 @@ class TestSuspiciousDomainNotifications:
         assert rows[0].url == post.ap_id
         assert rows[0].notif_type == NOTIF_REPORT
         assert rows[0].subtype == 'post_from_suspicious_domain'
+        # CORRECTED BY D1391. `orig_post_domain` was `post.domain` -- the
+        # relationship, read before the new domain is assigned -- so it was None
+        # for a post that had no domain yet and an unserialisable `Domain` object
+        # for one that did. It is `new_domain.name` now. `suspect_user_user_name`
+        # is the key app/templates/user/notifs/20.html:110 reads for this subtype
+        # and no producer wrote it.
         assert rows[0].targets == {'gen': '0',
                                    'post_id': post.id,
                                    'orig_post_title': UPDATE_NAME,
                                    'orig_post_body': SEEDED_BODY,
-                                   'orig_post_domain': None}
+                                   'orig_post_domain': SUSPICIOUS_DOMAIN,
+                                   'suspect_user_user_name': post.author.ap_id}
 
     def test_an_admin_holding_the_admin_role_is_notified(
             self, app, db_session, http_mock, redis_lock_only_double):
@@ -3302,11 +3327,18 @@ class TestSuspiciousDomainNotifications:
         assert rows[0].url == post.ap_id
         assert rows[0].notif_type == NOTIF_REPORT
         assert rows[0].subtype == 'post_from_suspicious_domain'
+        # CORRECTED BY D1391. `orig_post_domain` was `post.domain` -- the
+        # relationship, read before the new domain is assigned -- so it was None
+        # for a post that had no domain yet and an unserialisable `Domain` object
+        # for one that did. It is `new_domain.name` now. `suspect_user_user_name`
+        # is the key app/templates/user/notifs/20.html:110 reads for this subtype
+        # and no producer wrote it.
         assert rows[0].targets == {'gen': '0',
                                    'post_id': post.id,
                                    'orig_post_title': UPDATE_NAME,
                                    'orig_post_body': SEEDED_BODY,
-                                   'orig_post_domain': None}
+                                   'orig_post_domain': SUSPICIOUS_DOMAIN,
+                                   'suspect_user_user_name': post.author.ap_id}
 
     def test_user_one_is_notified_as_an_admin_without_holding_the_admin_role(
             self, app, db_session, http_mock, redis_lock_only_double):
@@ -3459,24 +3491,29 @@ class TestSuspiciousDomainTargetsSerialisation:
         db.session.commit()
         _taken(http_mock, SUSPICIOUS_URL)
 
-        with pytest.raises(StatementError) as raised:
-            update_post_from_activity(post, _linked_update(SUSPICIOUS_URL))
+        update_post_from_activity(post, _linked_update(SUSPICIOUS_URL))
 
-        assert 'Object of type Domain is not JSON serializable' in str(raised.value)
-        db.session.rollback()
+        # REPAIRED BY D1391, which is what the class docstring above asked the
+        # repairer to come here and do. `orig_post_domain` is `new_domain.name`
+        # now -- a string a db.JSON column can hold -- so the Update applies
+        # whole instead of raising and half-rolling-back.
         assert len({old_domain.id, new_domain.id}) == 2
-        assert Notification.query.count() == 0
-        # committed by `:3502`, before the block that raises
+        assert Notification.query.count() == 1
         assert post.title == UPDATE_NAME
         assert post.url == SUSPICIOUS_URL
         assert post.type == POST_TYPE_IMAGE
-        # written after `:3502`, and lost with the rollback
-        assert post.domain_id == old_domain.id
-        assert new_domain.post_count == SEEDED_POST_COUNT
-        assert post.image_id is None
-        # the orphan `:3502` left behind
+        # no longer lost: these were written after the commit that used to flush
+        # early, and the rollback used to take them
+        assert post.domain_id == new_domain.id
+        assert new_domain.post_count == SEEDED_POST_COUNT + 1
+        assert post.image_id is not None
         assert File.query.count() == 1
         assert File.query.first().source_url == SUSPICIOUS_URL
+        # and the moderator's notification carries what the template renders
+        targets = Notification.query.one().targets
+        assert targets['orig_post_domain'] == new_domain.name
+        assert targets['orig_post_title'] == UPDATE_NAME
+        assert 'suspect_user_user_name' in targets
 
 
     def test_the_admin_row_cannot_be_serialised_for_a_post_with_a_domain(
@@ -3496,19 +3533,23 @@ class TestSuspiciousDomainTargetsSerialisation:
         post = _seed_suspicious_post()
         admin = make_user(post.author.instance, 'the_admin')
         _make_admin(admin)
-        _suspicious_domain(notify_admins=True)
+        new_domain = _suspicious_domain(notify_admins=True)
         old_domain = make_domain(PEER)
         post.domain_id = old_domain.id
         db.session.commit()
         _taken(http_mock, SUSPICIOUS_URL)
 
-        with pytest.raises(StatementError) as raised:
-            update_post_from_activity(post, _linked_update(SUSPICIOUS_URL))
+        update_post_from_activity(post, _linked_update(SUSPICIOUS_URL))
 
-        assert 'Object of type Domain is not JSON serializable' in str(raised.value)
-        db.session.rollback()
-        assert Notification.query.count() == 0
-        assert post.domain_id == old_domain.id
+        # REPAIRED BY D1391, as in the moderator test above. The admin loop no
+        # longer rebuilds the dict at all -- the one built before the loop already
+        # holds everything -- so there is no second copy of the expression to go
+        # wrong.
+        assert Notification.query.count() == 1
+        assert post.domain_id == new_domain.id
+        targets = Notification.query.one().targets
+        assert targets['orig_post_domain'] == new_domain.name
+        assert targets['orig_post_title'] == UPDATE_NAME
 
 
 class TestBannedNewDomain:
