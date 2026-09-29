@@ -12909,3 +12909,15 @@ that named no post, so the lookup refused them and the guard under test was neve
 redundant condition, removed. One is genuinely equivalent: `not stamp` versus `stamp is None` differ
 only for `''`, which the next line refuses identically. Decide which of the three before recording a
 survivor, and write the reason down.
+
+**886. A GUARD CAN BE MASKED RATHER THAN REDUNDANT, AND THE DIFFERENCE IS REACHABILITY.**
+Deleting `if admin_instance:` puts a None in the recipient list, and two later guards --
+`awaken_dormant_instance`'s own `if instance and ...` and the send loop's -- skip it silently, so the
+mutant survived every behavioural row. That is not the same as the round-205 case where the condition
+rejected nothing the next line did not. Assert what the guard is FOR (the list holds instances), not
+what happens to be visible downstream.
+
+**887. A FIXTURE'S OMITTED COLUMN CAN MAKE A SECURITY OPERAND UNOBSERVABLE.**
+`make_instance` sets no `inbox`, and the fan-out skips a host without one -- so a mutant dropping
+`admin_instance_id != 1`, which would make a community Announce to its own inbox, produced no send and
+survived. When a row asserts that something is NOT sent, check the recipient could have received it.
