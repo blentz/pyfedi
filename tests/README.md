@@ -13411,3 +13411,16 @@ told apart by `piefed_manifest_version`, which names the file -- `ios` and `defa
 **967. GREP THE WHOLE REPOSITORY BEFORE WRITING A ROW FOR A HELPER NOBODY CALLS.**
 `app/main/routes.py:list_files` was a stray module-level copy of a nested helper in `app/cli.py`, referenced
 from nowhere. The right answer to three uncovered lines was to delete them (D1420), not to test `os.walk`.
+
+**968. A BARE `test_request_context` LOOKS LIKE AN ACTIVITYPUB REQUEST.**
+With no `Accept` header, `is_activitypub_request()` answers True, so a row meant to be about some other
+refusal is answered by the ActivityPub one instead. Send `Accept: text/html,application/xhtml+xml` in any row
+about a browser-side guard in `app/activitypub/`.
+
+**969. THE FIRST GUARD IN A CHAIN IS MASKED BY THE SECOND UNLESS THE ROW SATISFIES THE SECOND.**
+`resolve_remote_handle` refuses a bare name, then an anonymous caller, then an ActivityPub request. A row for
+the FIRST that leaves the caller anonymous proves nothing -- the second answers it. Sign the caller in.
+
+**970. FLASK ADDS `Accept-Encoding` TO `Vary`, SO A SUBSTRING TEST FOR `Accept` ALWAYS PASSES.**
+`assert 'Accept' in response.headers['Vary']` survives deleting `resp.headers.set('Vary', 'Accept')`. Split
+the header on commas and look for the entry.

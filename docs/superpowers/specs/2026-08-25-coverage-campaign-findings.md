@@ -23824,4 +23824,47 @@ IRRELEVANT instance, so that a non-empty block list is not enough to satisfy the
 
 Five mutants, all dead, on a green baseline. `app/main/routes.py` is at 100%.
 
+---
+
+## Round 234 -- the ActivityPub actor endpoints, and three mutants that named vacuous rows
+
+`app/activitypub/routes.py` is the federation surface: every line answers a request from
+another server. Six clusters were uncovered, and no defect was found -- but three of the
+first rows written for them were vacuous, and the mutation pass is the only thing that
+said so.
+
+**`resolve_remote_handle` is the guard that stops a stranger choosing what this server
+connects to.** `/u/<actor>` for an unknown actor calls it, and it FETCHES the named
+account from whatever host the string names. Three refusals: the name must contain `@`,
+the caller must be signed in, and the request must not itself be ActivityPub -- a peer
+asking about `victim@third.example` would otherwise make this server connect there. Two
+had no row.
+
+**Vacuous row 1: a bare request context looks like a peer.** The anonymous row used
+`test_request_context('/u/...')` with no headers, and `is_activitypub_request()` answered
+True, so the refusal under test was never the one that fired. Every row in that class now
+sends an explicit `Accept: text/html`.
+
+**Vacuous row 2: the local-name guard was masked by the anonymous one.** `if '@' not in
+actor` is the FIRST refusal, and a row that leaves the caller anonymous is answered by the
+second one regardless -- so deleting the first changed nothing. The row signs the caller in.
+
+**Vacuous row 3: `Vary` is not just what the route sets.** Flask appends `Accept-Encoding`
+on its own, so `'Accept' in response.headers['Vary']` is true even with
+`resp.headers.set('Vary', 'Accept')` deleted. The assertion splits the header and looks
+for `Accept` as a whole entry.
+
+Also covered: `/u/<actor>/outbox`, a fixed empty collection every peer polls, including
+that it answers the same for an account nobody holds -- which means it cannot be used to
+test whether a username exists; `/c/<actor>` for a community this instance does not have,
+whose signed-in arm splits `name@host` into the two halves of the federated lookup (a
+mutant passing the whole handle to both parameters is killed by asserting the exact path);
+the shared inbox's `BlockingIOError` arm, for a peer that disconnects mid-body, which is
+not a `BadRequest` and so needs its own `except`; webfinger's `g.site` fallback, which
+exists because the allowlist check one line below is an access check and `AttributeError`
+is not a refusal; and `/testredis`, whose failure arm is reached by a redis that accepts
+the write and returns nothing on the read.
+
+Eleven mutants, all dead, on a green baseline.
+
 **Next free number: D1421.**
