@@ -945,11 +945,35 @@ def share():
         response.delete_cookie('post_tags')
         return response
 
-    if request.cookies.get('cross_post_community_id'):
-        form.which_community.data = int(request.cookies.get('cross_post_community_id'))
+    # D1386. `int(request.cookies.get(...))` -- the third reader of this cookie,
+    # and the last unguarded one. `/share` is a PUBLIC route that anything can
+    # follow, so a non-numeric cookie was `ValueError: invalid literal for int()
+    # with base 10: 'abc'` and a 500, measured. The other two readers already
+    # guard it: app/post/routes.py:2680 catches `(TypeError, ValueError)` and
+    # checks the row resolves -- its comment names both failures -- and
+    # `main.add_post` above was fixed as D1385. This is the same shape at the one
+    # site neither round reached.
+    #
+    # Pre-selecting the last community is a convenience, so an unusable cookie
+    # leaves the field empty rather than breaking the page.
+    remembered = request.cookies.get('cross_post_community_id')
+    if remembered and remembered.strip().isdigit():
+        last_community = db.session.get(Community, int(remembered))
+        if last_community is not None:
+            form.which_community.data = last_community.id
 
+    # D1387. These two queries feed `share.html`, which does
+    # `posts_keyed_by_community[community.id]` -- so every community the first one
+    # lists must have a post in the second one's dict. They did not agree: the
+    # post query excludes `Post.microblog == False` and this one only excluded the
+    # community NAMED 'microblogs'. A microblog post -- what a Mastodon Note with
+    # no title becomes, in any community -- put its community in the list with no
+    # entry in the dict, and the template raised
+    # `UndefinedError: dict object has no element 1`. Measured: a 500 on a PUBLIC
+    # route, for anyone sharing a link some microblog post already carries.
     communities = Community.query.filter_by(banned=False).join(Post).filter(Post.url == url, Post.deleted == False,
                                                                             Post.status > POST_STATUS_REVIEWING,
+                                                                            Post.microblog == False,
                                                                             Post.from_bot == False,
                                                                             Community.name != 'microblogs').all()
     posts_keyed_by_community = {}
