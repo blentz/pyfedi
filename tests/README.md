@@ -13065,3 +13065,20 @@ two real bindings does not.
 patch -- so it passed whether or not the code under test ran, and a mutant of that line survived while both
 rows were green. Set the state up so the field is empty BEFORE the call, and assert it empty as part of the
 setup.
+
+**909. A GUARD CALLED FROM ONE PLACE IS A GUARD ON ONE PATH; FIND THE OTHER PATHS BEFORE TRUSTING IT.**
+`ensure_domains_match` compares an object's id host against its actor's, and it is called once, inside
+`if not announced and not community:` -- so an Announce, which is how Lemmy relays every post, skipped it
+entirely and a `javascript:` object id was stored and logged as a success. grep the call sites of a check
+before concluding a field is validated, and note which branch each one is inside.
+
+**910. A NOTE WITH BOTH `inReplyTo` AND `name` IS A POLL VOTE, NOT A REPLY.**
+The dispatcher reads `name` as the choice voted for, so a test building a reply object with a title is
+refused as 'Poll vote for a post with no poll' and never reaches `create_post_reply`. Build reply objects
+without `name`, and read the refusal message rather than assuming the row under test ran.
+
+**911. `instance_banned(None)` IS TRUE ON PURPOSE, SO A FACTORY ACTOR WITH NO `ap_domain` CANNOT POST.**
+`make_user` leaves `ap_domain` None, and `can_create_post` asks `instance_banned(user.ap_domain)`, which
+refuses an absent domain rather than waving it through (app/utils.py:2486, changed 2026-08-29). A dispatcher
+test whose activity is silently refused as 'User cannot create post in Community' is usually this, not the
+behaviour under test -- set `ap_domain`, or double the gate and say why.

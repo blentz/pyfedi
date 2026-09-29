@@ -22707,4 +22707,57 @@ surviving mutant on a passing test is the only thing that distinguishes them fro
 Fifteen mutants, all dead on a green baseline -- fourteen on the first pass and M11 once its two
 rows measured something. 15,109 tests, 0 failures, 0 warnings. All 92 floors met.
 
-**Next free number: D1406.**
+## Round 215 — D1406: an ap id, on the path that skips the only check
+
+**The sweep's fourth field, and the first where the codebase already had the right guard and simply did not
+reach it.** `Post.ap_id` and `PostReply.ap_id` come from `request_json['object']['id']`, and three things
+read them back: `post/post_options.html:234` and `post/post_reply_options.html:194` render them as the
+"view on remote instance" `href`; `Post.get_by_ap_id` and `filter_by(ap_id=...)` use them as the key that
+makes a Create idempotent and lets a later Update or Delete find the row; and `resolve_remote_post`
+**fetches** them, with a signed request.
+
+**D1406. `ensure_domains_match` is called from exactly one place**, `app/activitypub/routes.py:1251`, and
+that call sits inside `if not announced and not community:`. An Announce skips the whole block — and an
+Announce is how a Lemmy community relays a post, so the checked path is the rarer one. Measured through
+the dispatcher:
+
+```
+PROBE announced posts:   [(1, 'javascript:alert(document.domain)', 'A post')]
+PROBE announced log:     [('success', None)]
+PROBE announced replies: [(1, 'javascript:alert(document.domain)')]
+PROBE announced log:     [('success', None)]
+PROBE direct log:        [('failure', 'Domains do not match')]
+```
+
+Both stored, both logged **success**, while the same activity sent directly to the inbox was refused. The
+refusal now lives in `create_post` and `create_post_reply`, beside the `local_only` and visibility
+refusals those functions already had, and a third time in `app/community/util.py`, where a fetched comment
+tree builds replies from `reply_data['id']` and never passes through an inbox at all.
+
+**FOUR FIELDS, FOUR ANSWERS, AND THE QUESTION IS ALWAYS THE SAME ONE.** An Event's links: allowlist,
+because the local form already required `^https?://`. `Post.url`: blocklist, because remote software picks
+a link a person clicks and `magnet:` is a real one. An image url: allowlist, because this instance fetches
+it. An ap id: allowlist, for the fetch reason and because the specification says an id is an https URI.
+Ask what the value is **for**, and which list to use follows; asking which list is "stronger" gets it
+wrong half the time.
+
+**AND THIS ONE IS REFUSED RATHER THAN DROPPED, WHICH THE OTHER THREE WERE NOT.** `ap_id` is not an optional
+field. A post stored without one cannot be deduplicated, updated or deleted by its author later, so
+ingesting the rest of it would leave a row this instance can never reconcile with its origin. The three
+link fields were droppable precisely because None was already a state those columns held.
+
+**THE PROBE NEEDED TWO CORRECTIONS BEFORE IT MEASURED ANYTHING**, both of them fixture states the product
+cannot produce or does not mean:
+
+* `can_create_post` refused the author, because `make_user` leaves `ap_domain` None and
+  `instance_banned(None)` is True **by design** (`app/utils.py:2486` — an absent domain is refused rather
+  than waved through). Fact 781's shape for the fourth time: the fixture's actor was in a state no real
+  remote author is in.
+* the reply half was refused as `'Poll vote for a post with no poll'`, because a Note carrying both
+  `inReplyTo` and `name` IS a poll vote to the dispatcher, and `name` is the choice. The reply rows build
+  their object without `name` and say so.
+
+Nine mutants, all dead on a green baseline. 15,152 tests, 0 failures, 0 warnings.
+All 92 floors met.
+
+**Next free number: D1407.**
