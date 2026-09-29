@@ -23221,4 +23221,66 @@ and eight directories and listings -- every one of them ignoring a setting whose
 Eight mutants, all dead, on a green baseline. 15,340 tests, 0 failures, 0 warnings.
 All 92 floors met.
 
+## Round 223 — two clean sweeps, one dead field, one product decision (no D number)
+
+After four rounds on `private_instance`, this round swept the mutating half and the script half. Both came
+back clean, which is worth recording so the next session does not re-derive it.
+
+### The POST sweep: every mutating route is guarded
+
+Every route in `app/*/routes.py` declaring POST, PUT, DELETE or PATCH, with no gating decorator, read one at
+a time. Twenty-six, and not one is an unguarded write:
+
+* `activitypub/*_inbox` — HTTP-signature verified, by design;
+* `auth/login`, `register`, `reset_password*`, `resend_email`, `mastodon_authorize` — the endpoints that
+  exist to be reached without a session;
+* `post/post_set_ai` — checks ownership INLINE (`is_admin_or_staff() or post.user_id == current_user.id or
+  post.community.is_moderator()`), which D1127 put there after finding it reported a refusal as 'Done';
+* `post/post_emoji_set`, `comment_emoji_set`, `post_reply_choose_answer`, `post_reply_unchoose_answer` — the
+  same shape, authenticated inline;
+* `user/user_newsletter_unsubscribe`, `user_email_notifs_unsubscribe` — capability urls, scoped by
+  `User.verification_token`, and both render the same page whether or not the token matched, so neither is
+  an enumeration oracle;
+* `main/share`, `post/cancel_inline`, `activitypub/api_is_ip_banned`, `api_is_email_banned` — write nothing.
+
+### The script sweep: no user value reaches JavaScript unescaped
+
+146 Jinja interpolations inside `<script>` blocks across `app/templates`, plus a search for `on*=` attributes
+carrying `{{ }}` (none exist). Every one is a translation call, a `|tojson` (Flask's is
+`htmlsafe_json_dumps`, so `<`, `>` and `&` are escaped), an integer id, or:
+
+* `instance_domain` in `protocol_handler.html`, five times raw — it is
+  `current_app.config['SERVER_NAME']` (`app/request_hooks.py:28`), deployment config;
+* `instance['domain']` in `auth/instance_chooser.html`, twice raw — rows of the local `InstanceChooser`
+  table, entered by an admin who can already set `g.site.additional_js`, which the base template renders
+  with `| safe` deliberately.
+
+### Recorded, not fixed: `CreateEventForm.more_info_url` is a dead field
+
+`app/community/forms.py:455` declares it with `Regexp(r'^https?://')`, an earlier round added
+`validate_more_info_url` to give it a banned-domain and parseability check, and
+`tests/test_form_validate_guards_super.py` pins both. But **`Event` has no `more_info_url` column**, nothing
+in `app/shared/post.py` reads `input.more_info_url`, and no template renders the field -- `post_edit.html`
+renders 33 form fields and not this one. So no user can submit it and nothing would store it if they did.
+
+That earlier round's comment reads "deleting it would have left an event's two user-submitted,
+stored-and-rendered URLs as the only ones on the site with no domain-ban check" -- half right: only
+`online_link` is stored and rendered.
+
+Two honest options, and the choice is a product decision rather than a defect fix: **delete** the field, its
+validator hook and the two tests that exercise it, or **finish** it -- a column, a write in the shared
+event block, and a line in the template. Left for the maintainer.
+
+### Recorded, not fixed: `/webhook` is unauthenticated
+
+`main/receive_webhook` accepts any JSON from anyone and calls `plugins.fire_hook("webhook", payload)`,
+rate-limited to 60/minute and nothing else. `config.py:122`'s `WEBHOOK_SIGNING_SECRET` is **not** for this
+endpoint -- it belongs to Stripe's `/stripe_webhook`, verified in `app/user/subscription.py:129`. Whether an
+open plugin trigger is intended, and which senders are legitimate, is a product decision; requiring a secret
+would break any deployment relying on it being open.
+
+No code changed, so no mutants and no suite run: the round is two negative sweeps and two
+recorded findings. **D1414 is still free** -- neither recorded finding takes a number until it is
+fixed.
+
 **Next free number: D1414.**

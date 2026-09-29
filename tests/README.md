@@ -13224,3 +13224,21 @@ pages in a Flask app.
 LOOKED guarded, and was, against a private community and an unpublished post. Neither says anything about
 whether the whole instance is private. When a route already refuses something, read what it refuses before
 concluding it refuses what you are checking for.
+
+**935. A FORM FIELD WITH VALIDATORS AND TESTS CAN STILL BE UNREACHABLE; CHECK THE COLUMN AND THE TEMPLATE.**
+`CreateEventForm.more_info_url` has a `Regexp`, a `validate_more_info_url` hook an earlier round added on
+purpose, and two tests pinning its refusals -- and `Event` has no such column, `app/shared/post.py` never
+reads it, and no template renders it. Validators and tests prove a field is DESCRIBED, not that anything can
+fill it or keep it. For each form field, grep the column, the writer and the template before crediting it.
+
+**936. `|tojson` IS SAFE INSIDE `<script>`; A BARE `{{ }}` IS THE ONE TO READ.**
+Flask's `tojson` is `htmlsafe_json_dumps`, which escapes `<`, `>` and `&`, so an interpolation through it
+cannot close the script element. Sweeping 146 script-block interpolations, the only raw ones were
+`SERVER_NAME` and admin-entered rows -- so the sweep is cheap: list every `{{ }}` inside `<script>`, discard
+the `_()` and `|tojson` ones, and read what is left.
+
+**937. A SWEEP THAT FINDS NOTHING IS A RESULT; WRITE IT DOWN WITH ITS METHOD.**
+The POST-route sweep and the script sweep both came back clean. Unrecorded, the next session re-derives them
+at the same cost; recorded with what was examined and why each exemption holds, they are evidence. Two of
+this campaign's sweeps have now returned negatives (the app/shared authorisation sweep, round 218, and both
+of these), and in each case the write-up names the idioms that made the false positives.
