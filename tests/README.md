@@ -13188,3 +13188,20 @@ from it. A test that toggles `Site.private_instance` and issues a request measur
 calls `cache.delete_memoized(get_site_as_dict)`. That staleness is a global caching decision, not a
 property of any one gate -- which is worth knowing before attributing a test's result to the gate under
 test.
+
+**929. "IT ONLY LEAKS METADATA" IS A CLAIM TO MEASURE, NOT A REASON TO SKIP A ROUTE.**
+Four routes were deferred out of D1411 because none carried a post's title. Measuring what they DID carry
+found `about_html` -- a user's own prose -- on `/user/<id>/preview`, and a post's `ap_id` on the options
+menus. Print the body and grep it for each field you would mind publishing, rather than reasoning about what
+a route is called.
+
+**930. GATE THE WEAK DISCLOSURES BESIDE THE STRONG ONES, OR THEY BECOME THE NEXT ROUND.**
+`/u/<actor>/feeds` discloses a name that was already in its own url, and `/post/<id>/share_mastodon` a form.
+Neither is worth a round; both were the only ungated routes left in their blueprints, and this class of
+defect -- one gate, many doors -- reappeared three times in three rounds for exactly that reason. The cost
+of gating a harmless route is one decorator; the cost of leaving it is another sweep.
+
+**931. A ROUTE THAT ALREADY CARRIES `@login_required` NEEDS NO PRIVACY DECORATOR, AND SAYING SO IS WORTH A ROW.**
+`/u/<actor>/myfeeds` and `/feeds` were already refusing anonymous visitors on a PUBLIC instance, which is
+stricter than "refuse when private". Pin that, so a later edit that swaps the stronger decorator for the
+weaker one in the name of consistency fails instead of looking tidy.
