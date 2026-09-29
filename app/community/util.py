@@ -21,7 +21,7 @@ from app.community.forms import CreateLinkForm
 from app.constants import SRC_WEB, POST_TYPE_LINK
 from app.models import Community, File, PostReply, Post, utcnow, CommunityMember, Site, _as_dict, \
     Instance, User, Tag, CommunityFlair, CommunityThemeAllowed, markdown_source, \
-    language_from_ap
+    language_from_ap, _as_url
 from app.utils import get_request, gibberish, ensure_directory_exists, ap_datetime, instance_banned, get_task_session, \
     store_files_in_s3, guess_mime_type, patch_db_session, instance_allowed, get_setting, scale_gif, theme_list, \
     sanitize_svg
@@ -340,6 +340,14 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                                                 answer = reply_data.get('answer', False)
 
                                                 # Create the reply
+                                                # D1406, as create_post_reply: this id
+                                                # becomes PostReply.ap_id, which a
+                                                # template renders as an href. This
+                                                # tree came from a fetch, not an
+                                                # inbox, so the check is repeated
+                                                # here rather than inherited.
+                                                if _as_url(reply_data.get('id')) is None:
+                                                    continue
                                                 try:
                                                     reply_data['object'] = {'id': reply_data['id']}
                                                     post_reply = PostReply.new(reply_author, post, in_reply_to, body, body_html,

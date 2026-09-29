@@ -2803,6 +2803,17 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
         log_incoming_ap(id, APLOG_CREATE, APLOG_IGNORED, saved_json,
                         f'Non-public reply refused: {visibility}')
         return None
+    # D1406, as create_post below: the object's id becomes `PostReply.ap_id`, which
+    # app/templates/post/post_reply_options.html:194 renders as an `href`, and the
+    # announced path checked nothing. Measured:
+    #
+    #     PROBE announced replies: [(1, 'javascript:alert(document.domain)')]
+    #     PROBE announced log:     [('success', None)]
+    if _as_url(request_json.get('object', {}).get('id')
+               if isinstance(request_json.get('object'), dict) else None) is None:
+        log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json,
+                        'Object id is not an http(s) url')
+        return None
     post_id, parent_comment_id, root_id = find_reply_parent(in_reply_to)
 
     if post_id or parent_comment_id or root_id:
@@ -2992,6 +3003,28 @@ def create_post(store_ap_json, community: Community, request_json: dict, user: U
     if visibility in ('followers', 'direct'):
         log_incoming_ap(id, APLOG_CREATE, APLOG_IGNORED, saved_json,
                         f'Non-public post refused: {visibility}')
+        return None
+    # D1406. `request_json['object']['id']` becomes `Post.ap_id`, which is a LOOKUP
+    # KEY (`Post.get_by_ap_id`), a FETCH TARGET (`resolve_remote_post`) and an
+    # `href`: app/templates/post/post_options.html:234 renders it as "view on
+    # remote instance". Nothing on the ANNOUNCED path checked it --
+    # `ensure_domains_match` sits inside `if not announced and not community:`
+    # (app/activitypub/routes.py:1246), which an Announce skips, and an Announce is
+    # the ordinary way a Lemmy community relays a post. Measured, through the
+    # dispatcher:
+    #
+    #     PROBE announced posts: [(1, 'javascript:alert(document.domain)', 'A post')]
+    #     PROBE announced log:   [('success', None)]
+    #
+    # An ActivityPub id is an https URL by specification, and this instance signs
+    # requests to it, so http(s) is an allowlist with nothing to audit -- the same
+    # argument as an image url (D1405) rather than a link a person clicks (D1404).
+    # Refused rather than dropped, because ap_id is not an optional field: a post
+    # with no id cannot be deduplicated, updated or deleted by its author later.
+    if _as_url(request_json.get('object', {}).get('id')
+               if isinstance(request_json.get('object'), dict) else None) is None:
+        log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json,
+                        'Object id is not an http(s) url')
         return None
     try:
         post = Post.new(user, community, request_json, announce_id)
