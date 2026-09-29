@@ -13380,3 +13380,19 @@ that finds it names a community only that feed type includes.
 `get_deduped_post_ids` reads `current_user` -- still anonymous -- and applies its own unconditional
 `c.private is false`. The stricter restriction wins, so the widening is inert. When a route authenticates into
 a local variable, check what the functions BELOW it read before asserting the widening has any effect.
+
+**962. A ROW ABOUT THE FRONT PAGE MUST FIRST MAKE THE FRONT PAGE SHOW SOMETHING.**
+An account's default filter is `subscribed`, so a freshly made reader who has joined no community sees an
+empty feed -- and an empty feed satisfies every assertion of the form "at most N posts". Ask for
+`/home/<sort>/all` explicitly and assert an EXACT count.
+
+**963. A CEILING IS TESTED BY LOWERING THE OTHER SIDE, NOT BY RAISING THE PREFERENCE.**
+`page_length = current_user.page_length if ... < page_length` cannot be shown to be a ceiling by an account
+asking for more than `PAGE_LENGTH`, because the instance default (100) is larger than any plausible
+preference. `monkeypatch.setitem(app.config, 'PAGE_LENGTH', 3)` with a preference of 5 makes the two
+directions differ in three posts instead of a hundred.
+
+**964. A COERCION THAT FAILS SOFT NEEDS AN ASSERTION ABOUT WHICH FALLBACK RAN.**
+Removing the `view_filter = 'popular'` coercion for anonymous visitors does not error: the request falls to
+`elif view_filter == 'all' or current_user.is_anonymous:` and becomes the All feed. Popular and All differ
+only in communities with `show_popular` false, so that is the community the row has to create.
