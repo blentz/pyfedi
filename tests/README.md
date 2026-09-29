@@ -13169,3 +13169,22 @@ unless it says otherwise -- which is why three existing tests began failing the 
 started honouring the setting. A test about caching, or about which posts appear in a feed, should set
 `private_instance = False` and say so; one about access control should set the value it means explicitly
 rather than inheriting a default that reads like an oversight.
+
+**926. A GUARD INSIDE A `@cache.cached` VIEW DOES NOT RUN FOR A CACHED URL.**
+`cache.cached` returns the stored response without calling the function, so an authorisation check in the
+body is skipped for up to its timeout after the state it checks has changed -- 600 seconds for three of
+this codebase's RSS views. Make it a DECORATOR listed above `@cache.cached`, where it is the outermost
+wrapper, and assert the ordering out of `fn.decorator_list` rather than trusting the diff.
+
+**927. `CACHE_TYPE = 'NullCache'` IN THE TEST CONFIG, SO A TEST ABOUT CACHING MUST BUILD ITS OWN CACHE.**
+tests/conftest.py:215. Any row that warms a cache and asks again passes under NullCache whether the fix is
+right or wrong. Re-init the extension to SimpleCache for those rows and restore NullCache afterwards -- the
+cache object belongs to the app for the whole worker process, and one left behind lets other modules'
+requests answer each other.
+
+**928. `g.site` IS MEMOIZED FOR 60 SECONDS, SO EVERY PRIVACY GATE IN THIS APP IS UP TO A MINUTE STALE.**
+`get_site_as_dict` is `@cache.memoize(timeout=60)` (app/utils.py:5995) and `before_request` builds `g.site`
+from it. A test that toggles `Site.private_instance` and issues a request measures the OLD value unless it
+calls `cache.delete_memoized(get_site_as_dict)`. That staleness is a global caching decision, not a
+property of any one gate -- which is worth knowing before attributing a test's result to the gate under
+test.
