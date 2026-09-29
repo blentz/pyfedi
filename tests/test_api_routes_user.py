@@ -210,10 +210,38 @@ class TestRelationships:
                                    headers=auth(env.reader),
                                    json={'user_id': env.other.id})
         assert response.status_code == 200
+        assert UserFollower.query.filter_by(
+            local_user_id=env.reader.id, remote_user_id=env.other.id).count() == 1
         response = env.client.post('/api/alpha/user/unfollow',
                                    headers=auth(env.reader),
                                    json={'user_id': env.other.id})
         assert response.status_code == 200
+        assert UserFollower.query.filter_by(
+            local_user_id=env.reader.id, remote_user_id=env.other.id).count() == 0
+
+    def test_the_two_follow_routes_have_their_own_endpoint_names(self, app):
+        """Both handlers were called `post_alpha_user_follow`, three lines apart.
+
+        Flask derives an endpoint from the function's name and refuses two
+        different views under one endpoint, so this looked like it had to be
+        serving one of the routes with the other's body. It was not:
+        flask-smorest de-duplicated the collision instead, and the measurement
+        says so --
+
+            RULE /api/alpha/user/follow     endpoint=User.post_alpha_user_follow
+            RULE /api/alpha/user/unfollow   endpoint=User.post_alpha_user_follow_20
+
+        -- so each route ran its own function all along. What the shadowing cost
+        was the name: `url_for` and the generated OpenAPI document could only call
+        unfollow `post_alpha_user_follow_20`. The rows above are what proves the
+        two bodies differ; this one keeps the names from drifting back.
+        """
+        endpoints = {str(rule): rule.endpoint for rule in app.url_map.iter_rules()
+                     if str(rule) in ('/api/alpha/user/follow',
+                                      '/api/alpha/user/unfollow')}
+        assert endpoints == {
+            '/api/alpha/user/follow': 'User.post_alpha_user_follow',
+            '/api/alpha/user/unfollow': 'User.post_alpha_user_unfollow'}
 
     def test_a_note_about_someone(self, env):
         response = env.client.post('/api/alpha/user/note',
