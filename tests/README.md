@@ -13424,3 +13424,13 @@ the FIRST that leaves the caller anonymous proves nothing -- the second answers 
 **970. FLASK ADDS `Accept-Encoding` TO `Vary`, SO A SUBSTRING TEST FOR `Accept` ALWAYS PASSES.**
 `assert 'Accept' in response.headers['Vary']` survives deleting `resp.headers.set('Vary', 'Accept')`. Split
 the header on commas and look for the entry.
+
+**971. A HEAD RESPONSE HAS NO BODY BY THE TIME THE TEST CLIENT SEES IT.**
+`if request.method == 'GET': build the collection else: {}` cannot be told apart by `client.head(...)` --
+Flask strips the body, so both arms answer 200 with nothing. Call the view directly inside
+`test_request_context(..., method='HEAD')` and read the response it returned; the body is still there.
+
+**972. A MIRRORED HANDLER NEEDS ITS OWN HAPPY-PATH ROW, NOT JUST THE ARM THAT DIFFERS.**
+`process_downvote` was covered only where it differs from `process_upvote` (its extra `else`), so the vote it
+records, the log line it writes and the announce it sends had no row at all. Assert the SIGN
+(`effect == -1`): a delegate calling `vote(user, 'upvote', ...)` is identical in the ActivityPubLog.
