@@ -1283,13 +1283,17 @@ def test_the_notify_dict_carries_every_key_the_four_writers_share(db_session, ht
               s.post, POST_TYPE_LINK, SRC_API, user=s.user, from_scratch=False)
 
     targets = Notification.query.filter_by(user_id=admin.id).one().targets
+    # CORRECTED BY D1391: `author_user_name` -> `suspect_user_user_name`, the key
+    # app/templates/user/notifs/20.html:110 actually reads for this subtype. The
+    # rename is what makes all four writers of this dict share one shape, which is
+    # what this test is for.
     assert set(targets) == {'gen', 'post_id', 'orig_post_title', 'orig_post_body',
-                            'orig_post_domain', 'author_user_name'}
+                            'orig_post_domain', 'suspect_user_user_name'}
     assert targets['gen'] == '0'
     assert targets['post_id'] == s.post.id
     assert targets['orig_post_title'] == 'shaped'
     assert targets['orig_post_domain'] == 'suspicious.example'
-    assert targets['author_user_name'] == 'editor@peer.example'
+    assert targets['suspect_user_user_name'] == 'editor@peer.example'
 
 
 def test_the_notify_dict_falls_back_to_user_name_when_there_is_no_ap_id(
@@ -1313,7 +1317,10 @@ def test_the_notify_dict_falls_back_to_user_name_when_there_is_no_ap_id(
               POST_TYPE_LINK, SRC_API, user=s.user, from_scratch=False)
 
     targets = Notification.query.filter_by(user_id=admin.id).one().targets
-    assert targets['author_user_name'] == 'editor'
+    # CORRECTED BY D1391, as in the shape test above: the key is
+    # `suspect_user_user_name`. The `ap_id or user_name` fallback this test is
+    # about is unchanged.
+    assert targets['suspect_user_user_name'] == 'editor'
 
 
 # ---------------------------------------------------------------------------
