@@ -3127,6 +3127,39 @@ def topic_tree() -> List:
 
 
 # feeds, in a tree
+def feed_readable_by(feed: Feed, user_id) -> bool:
+    """Whether the holder of `user_id` may see what is inside `feed`.
+
+    D1394. One rule for every caller that takes a feed id from the request.
+    `show_feed` serves a private feed to its owner and its members only, and
+    `/f/<name>/following`, `/f/<name>/outbox` and the API's `get_feed` refuse one
+    outright -- but nine other readers of a caller-supplied feed id asked
+    nothing, and each of them reports the feed's community membership in one
+    form or another.
+
+    `user_id` is the id of the account making the request, or None for an
+    anonymous one; callers in the web app pass `current_user.id` and callers in
+    the API pass the id they authorised, because `user` is not bound there
+    unless a token was presented.
+
+    `>= SUBSCRIPTION_MEMBER`, not a bare truth test: `subscribed()` answers -1
+    for an unapproved join request and -2 for a member the owner banned, and
+    both of those are truthy. `show_feed` tested truth, so asking to join a
+    private feed was enough to read it and being thrown out of one did not stop
+    you -- which is the same reading the rest of the codebase avoids by
+    comparing (app/feed/routes.py:134, :781, app/community/routes.py:229).
+    """
+    if feed is None:
+        return False
+    if feed.public:
+        return True
+    if not user_id:
+        return False
+    if feed.user_id == user_id:
+        return True
+    return feed.subscribed(user_id) >= SUBSCRIPTION_MEMBER
+
+
 def feed_tree(user_id) -> List[dict]:
     feeds = Feed.query.filter(Feed.user_id == user_id).order_by(Feed.name)
 

@@ -34,7 +34,7 @@ from app.utils import back, show_ban_message, piefed_markdown_to_lemmy_markdown,
     recently_downvoted_posts, joined_or_modding_communities, login_required_if_private_instance, \
     communities_banned_from, reported_posts, user_notes, login_required, moderating_communities_ids, approval_required, \
     blocked_or_banned_instances, blocked_communities, block_honey_pot, user_pronouns, mimetype_from_url, \
-    community_membership_private, check_anoobis
+    community_membership_private, check_anoobis, feed_readable_by
 
 
 @bp.route('/feed/new', methods=['GET', 'POST'])
@@ -228,6 +228,12 @@ def feed_copy(feed_id: int):
         return show_ban_message()
     # load the feed
     feed_to_copy = db.session.get(Feed, feed_id) or abort(404)
+    # D1394. Copying is a read: the new feed is built from this one's title,
+    # description and every FeedItem in it. Only the id was needed, so any
+    # logged-in account could take a copy of a private feed it cannot open and
+    # then read the copy, which is its own.
+    if not feed_readable_by(feed_to_copy, current_user.id if current_user.is_authenticated else None):
+        abort(404)
     copy_feed_form = AddCopyFeedForm()
     copy_feed_form.parent_feed_id.choices = feeds_for_form(0, current_user.id)
 
@@ -301,7 +307,7 @@ def feed_copy(feed_id: int):
 
         # get the FeedItems from the feed being copied and 
         # make sure they all come over to the new Feed
-        old_feed_items = FeedItem.query.join(Feed, FeedItem.feed_id == feed_to_copy.id).all()
+        old_feed_items = FeedItem.query.filter_by(feed_id=feed_to_copy.id).all()
         for item in old_feed_items:
             fi = FeedItem(feed_id=feed.id, community_id=item.community_id)
             db.session.add(fi)
@@ -459,14 +465,17 @@ def feed_list():
 def show_feed(feed):
     block_honey_pot()
     # if the feed is private abort, unless the logged in user is the owner of the feed
-    if not feed.public:
-        if current_user.is_authenticated and current_user.id == feed.user_id:
-            ...
-        elif current_user.is_authenticated and feed.subscribed(current_user.id):
-            ...
-        else:
-            flash(_('Could not find that feed or it is not public. Try one of these instead...'))
-            return redirect(url_for('main.list_feeds'))
+    #
+    # D1394. This was the one gate of its kind; `feed_readable_by` is now the rule
+    # that all eleven readers of a caller-supplied feed id share, so no reader of
+    # one can be more permissive than this page again. The two empty arms it
+    # replaces tested `feed.subscribed(...)` for truth rather than for
+    # membership, and that call answers -1 for an unapproved join request and -2
+    # for a member the owner banned: asking to join a private feed was enough to
+    # read it, and being thrown out of one did not stop you.
+    if not feed_readable_by(feed, current_user.id if current_user.is_authenticated else None):
+        flash(_('Could not find that feed or it is not public. Try one of these instead...'))
+        return redirect(url_for('main.list_feeds'))
     
     if current_user.is_anonymous:
         if current_app.config['CONTENT_WARNING']:
@@ -530,7 +539,7 @@ def show_feed(feed):
         # used for the posts searching
         feed_community_ids = []
         for fid in feed_ids:
-            feed_items = FeedItem.query.join(Feed, FeedItem.feed_id == fid).\
+            feed_items = FeedItem.query.filter_by(feed_id=fid).\
                 join(Community, Community.id == FeedItem.community_id).\
                 filter(or_(Community.private == False, Community.id.in_(community_membership_private(current_user.get_id())))).all()
             for item in feed_items:
@@ -618,10 +627,14 @@ def feed_create_post(feed_name):
     feed = Feed.query.filter(Feed.machine_name == feed_name.strip().lower()).first()
     if not feed:
         abort(404)
+    # D1394. `show_feed` refuses a private feed to anybody but its owner and its
+    # members; this page, reached by name in the same way, listed the feed's
+    # communities in its community dropdown to any logged-in account.
+    if not feed_readable_by(feed, current_user.id if current_user.is_authenticated else None):
+        abort(404)
 
     feed_community_ids = []
-    feed_items = FeedItem.query.join(Feed, FeedItem.feed_id == feed.id).all()
-    for item in feed_items:
+    for item in FeedItem.query.filter_by(feed_id=feed.id).all():
         feed_community_ids.append(item.community_id)
 
     communities = Community.query.filter(Community.id.in_(feed_community_ids)).filter_by(banned=False).\
@@ -629,8 +642,7 @@ def feed_create_post(feed_name):
     sub_feed_community_ids = []
     child_feeds = [feed.id for feed in Feed.query.filter(Feed.parent_feed_id == feed.id).all()]
     for cf_id in child_feeds:
-        feed_items = FeedItem.query.join(Feed, FeedItem.feed_id == cf_id).all()
-        for item in feed_items:
+        for item in FeedItem.query.filter_by(feed_id=cf_id).all():
             sub_feed_community_ids.append(item.community_id)
 
     sub_communities = Community.query.filter_by(banned=False).filter(Community.id.in_(sub_feed_community_ids)).\
@@ -791,6 +803,13 @@ def show_feed_rss(feed_path):
     last_feed_machine_name = feed_url_parts[-1]
     feed = Feed.query.filter(Feed.machine_name == last_feed_machine_name.strip().lower()).first()
 
+    # D1394. The RSS twin of `show_feed`, which refuses a private feed. This one
+    # asked only that the name resolve, so a private feed was readable as RSS:
+    # the title, the description and one item per post with the community it is
+    # in, which is the membership `/f/<name>/following` returns 403 for.
+    if feed and not feed_readable_by(feed, current_user.id if current_user.is_authenticated else None):
+        feed = None
+
     if feed:
         # Get the feed_ids
         if feed.show_posts_in_children:  # include posts from child feeds
@@ -801,8 +820,7 @@ def show_feed_rss(feed_path):
         # For each feed get the community ids (FeedItem) in the feed
         feed_community_ids = []
         for fid in feed_ids:
-            feed_items = FeedItem.query.join(Feed, FeedItem.feed_id == fid).all()
-            for item in feed_items:
+            for item in FeedItem.query.filter_by(feed_id=fid).all():
                 feed_community_ids.append(item.community_id)
 
         post_ids = get_deduped_post_ids('', feed_community_ids, 'new')

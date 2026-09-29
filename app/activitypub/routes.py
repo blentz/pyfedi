@@ -2762,7 +2762,7 @@ def feed_outbox(actor):
         abort(403)
 
         # get the feed items
-    feed_items = db.session.query(FeedItem).join(Feed, FeedItem.feed_id == feed.id).order_by(desc(FeedItem.id)).all()
+    feed_items = db.session.query(FeedItem).filter_by(feed_id=feed.id).order_by(desc(FeedItem.id)).all()
     # make the ap data json
     items = []
     for fi in feed_items:
@@ -2800,7 +2800,7 @@ def feed_following(actor):
         abort(403)
 
         # get the feed items
-    feed_items = db.session.query(FeedItem).join(Feed, FeedItem.feed_id == feed.id).order_by(desc(FeedItem.id)).all()
+    feed_items = db.session.query(FeedItem).filter_by(feed_id=feed.id).order_by(desc(FeedItem.id)).all()
     # make the ap data json
     items = []
     for fi in feed_items:
@@ -2829,6 +2829,12 @@ def feed_moderators_route(actor):
         abort(400)
     else:
         feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None).first()
+    # D1394. Two of the five AP feed endpoints checked `public` and two did not.
+    # `feed_profile`, `/outbox` and `/following` all answer 403 for a private
+    # feed; this one named its owner and `/followers` counted its members. Same
+    # 403, so a private feed is private at all five.
+    if feed is not None and not feed.public:
+        abort(403)
     if feed is not None:
         # currently feeds only have the one owner, but lets make this a list in case we want to 
         # expand that in the future
@@ -2860,6 +2866,9 @@ def feed_followers(actor):
         abort(400)
     else:
         feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None).first()
+        # D1394, as feed_moderators_route above.
+        if feed is not None and not feed.public:
+            abort(403)
         if feed is not None:
             result = {
                 "@context": default_context(),

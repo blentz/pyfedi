@@ -23,7 +23,7 @@ from app.utils import authorise_api_user, blocked_users, blocked_communities, bl
     user_filters_home, user_filters_posts, in_sorted_list, instance_sticky_posts, instance_sticky_post_ids, \
     communities_banned_from_all_users, moderating_communities_ids_all_users, blocked_domains, SqlKeysetPagination, \
     community_membership_private, paginate_post_ids, post_ids_to_models, user_access, moderating_communities_ids, \
-    user_filters_languages
+    user_filters_languages, feed_readable_by
 from app.shared.tasks import task_selector
 
 
@@ -282,6 +282,13 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
             feed = db.session.get(Feed, feed_id)
             if not feed:
                 raise Exception('feed not found')
+            # D1394, and D1173's shape again in the same package: this asked
+            # nothing about whether the caller may see the feed, so naming a
+            # private one by id listed the posts of every community inside it.
+            # `get_feed` refuses one to anybody but its owner, and an id this
+            # caller may not read is not an id it may list by.
+            if not feed_readable_by(feed, user_id):
+                raise Exception('feed not found')
             if feed.show_posts_in_children:  # include posts from child feeds
                 feed_ids = get_all_child_feed_ids(feed)
             else:
@@ -293,10 +300,15 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
             for fid in feed_ids:
                 # filter_by, not `join(Feed, FeedItem.feed_id == fid)`: that
                 # join names no predicate BETWEEN the two tables, so it paired
-                # every matching FeedItem with every row of `feed` and returned
-                # the same community id once per feed on the instance. The
-                # answer survived the trip through `IN`; the work did not need
-                # doing.
+                # every matching FeedItem with every row of `feed` and fetched
+                # the same row once per feed on the instance. Measured on four
+                # feeds holding two items: eight rows from the database, two
+                # from `.all()`, because `Query.all()` over a single full entity
+                # uniquifies by primary key. So every caller's answer was right
+                # and none of the work needed doing -- but a rewrite of any of
+                # them to `db.session.execute(...)`, which does not uniquify,
+                # would have inherited the duplicates. D1394 removed the last
+                # ten copies of this idiom.
                 for item in FeedItem.query.filter_by(feed_id=fid).all():
                     feed_community_ids.append(item.community_id)
 
@@ -934,6 +946,13 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
             feed = db.session.get(Feed, feed_id)
             if not feed:
                 raise Exception('feed not found')
+            # D1394, and D1173's shape again in the same package: this asked
+            # nothing about whether the caller may see the feed, so naming a
+            # private one by id listed the posts of every community inside it.
+            # `get_feed` refuses one to anybody but its owner, and an id this
+            # caller may not read is not an id it may list by.
+            if not feed_readable_by(feed, user_id):
+                raise Exception('feed not found')
             if feed.show_posts_in_children:  # include posts from child feeds
                 feed_ids = get_all_child_feed_ids(feed)
             else:
@@ -945,10 +964,15 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
             for fid in feed_ids:
                 # filter_by, not `join(Feed, FeedItem.feed_id == fid)`: that
                 # join names no predicate BETWEEN the two tables, so it paired
-                # every matching FeedItem with every row of `feed` and returned
-                # the same community id once per feed on the instance. The
-                # answer survived the trip through `IN`; the work did not need
-                # doing.
+                # every matching FeedItem with every row of `feed` and fetched
+                # the same row once per feed on the instance. Measured on four
+                # feeds holding two items: eight rows from the database, two
+                # from `.all()`, because `Query.all()` over a single full entity
+                # uniquifies by primary key. So every caller's answer was right
+                # and none of the work needed doing -- but a rewrite of any of
+                # them to `db.session.execute(...)`, which does not uniquify,
+                # would have inherited the duplicates. D1394 removed the last
+                # ten copies of this idiom.
                 for item in FeedItem.query.filter_by(feed_id=fid).all():
                     feed_community_ids.append(item.community_id)
 

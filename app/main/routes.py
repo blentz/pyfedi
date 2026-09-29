@@ -44,7 +44,7 @@ from app.utils import render_template, get_setting, request_etag_matches, return
     moderating_communities_ids, user_notes, login_required, safe_order_by, filtered_out_communities, \
     num_topics, referrer, block_honey_pot, user_pronouns, get_instance_stickies, \
     community_membership_private, favorite_communities, mimetype_from_url, check_anoobis, \
-    is_safe_redirect_target
+    is_safe_redirect_target, feed_readable_by
 from app.models import Community, CommunityMember, Post, Site, User, utcnow, Topic, Instance, \
     Notification, Language, community_language, ModLog, Feed, FeedItem, CmsPage, BannedInstances, BotChallenge
 from app.ldap_utils import test_ldap_connection, sync_user_to_ldap, login_with_ldap
@@ -408,10 +408,21 @@ def list_communities():
     # get all the ids of the communities
     # then filter the communites to ones whose ids match the feed
     if feed_id != 0:
+        # D1394. Nothing here asked whether the caller may see this feed. The
+        # dropdown the parameter comes from offers public feeds only, but the
+        # parameter is a query string: `/communities?feed_id=<a private feed>`
+        # answered 200 with exactly the communities inside it, to anybody,
+        # while `/f/<that feed's name>` redirected the same visitor away with
+        # 'Could not find that feed or it is not public'.
+        #
+        # A feed the caller may not read is treated as one that names nothing,
+        # which is the answer this route already gives for an id that names
+        # nothing -- an empty list rather than a 404, so an unreadable feed and
+        # an absent one cannot be told apart.
         feed_community_ids = []
-        feed_items = FeedItem.query.join(Feed, FeedItem.feed_id == feed_id).all()
-        for item in feed_items:
-            feed_community_ids.append(item.community_id)
+        if feed_readable_by(db.session.get(Feed, feed_id), current_user.id if current_user.is_authenticated else None):
+            for item in FeedItem.query.filter_by(feed_id=feed_id).all():
+                feed_community_ids.append(item.community_id)
         communities = communities.filter(Community.id.in_(feed_community_ids))
     
     # if filtering by home instance
@@ -1632,10 +1643,14 @@ def health2():
     # get all the ids of the communities
     # then filter the communites to ones whose ids match the feed
     if feed_id != 0:
+        # D1394, as list_communities:411. This endpoint discards its rows, so
+        # there is nothing to read out of it -- but it takes the same parameter
+        # from the same untrusted place, and the two bodies are meant to be the
+        # same work.
         feed_community_ids = []
-        feed_items = FeedItem.query.join(Feed, FeedItem.feed_id == feed_id).all()
-        for item in feed_items:
-            feed_community_ids.append(item.community_id)
+        if feed_readable_by(db.session.get(Feed, feed_id), current_user.id if current_user.is_authenticated else None):
+            for item in FeedItem.query.filter_by(feed_id=feed_id).all():
+                feed_community_ids.append(item.community_id)
         communities = communities.filter(Community.id.in_(feed_community_ids))
 
     if current_user.is_authenticated:
