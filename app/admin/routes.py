@@ -404,7 +404,24 @@ def admin_misc():
         form.default_filter.data = site.default_filter if site.default_filter else 'popular'
         form.public_modlog.data = get_setting('public_modlog', False)
         form.email_verification.data = get_setting('email_verification', True)
-        form.captcha_enabled.data = get_setting('captcha_enabled', False)
+        # D1398. `False` here while both consumers read `True` --
+        # `RegistrationForm.__init__` (app/auth/forms.py:41), which is what actually
+        # requires the captcha, and the nodeinfo document
+        # (app/activitypub/util.py:4396), which advertises whether it is required.
+        # No migration or seed inserts a `captcha_enabled` row, so on any instance
+        # that has never saved this page the default IS the behaviour: the captcha
+        # was required and this box rendered UNTICKED. An admin saving the page for
+        # any other reason then posted that box back and turned the captcha off,
+        # having been shown it was already off. Measured:
+        #
+        #     rows for captcha_enabled:                0
+        #     RegistrationForm has captcha field:      True
+        #     GET /admin/misc rendered the box as:     False
+        #
+        # Round 203's failure mode -- a pre-fill disagreeing with reality resets the
+        # setting on the next save -- arriving through a mismatched DEFAULT rather
+        # than a missing line.
+        form.captcha_enabled.data = get_setting('captcha_enabled', True)
         form.choose_topics.data = get_setting('choose_topics', True)
         form.filter_selection.data = get_setting('filter_selection', True)
         form.private_instance.data = site.private_instance
