@@ -12667,3 +12667,19 @@ After empty entries were skipped, both `blocked_words.strip() != ''` and `user.a
 became unreachable-effect: their mutants survive because the new guard answers first. That is
 defence in depth, not a gap -- but a test docstring claiming the OLD guard carries the case is then
 wrong, and has to be corrected rather than left as a plausible-sounding explanation.
+
+**846. `!= ''` IS NOT A NUMBER CHECK.**
+`if request.form.get('community_id', '') != '': int(...)` rules out absent and empty and nothing
+else, so `'abc'` was still a 500. When a form field is about to be parsed, test that it parses --
+`.strip().isdigit()` -- not merely that it was filled in.
+
+**847. A 400 FROM CSRF LOOKS EXACTLY LIKE A ROUTE REJECTING BAD INPUT.**
+The first probe of this round reported 400 for every value including `'abc'`, and read as a clean
+result. It was Flask-WTF rejecting a POST with no token, before the route body ran. Third time this
+session (fact 749): when probing a POST, get a token first and assert a KNOWN-GOOD value succeeds
+before drawing conclusions from the bad ones.
+
+**848. RECORD THE SWEEPS THAT COME BACK CLEAN, WITH THE REASON.**
+Ten unguarded-looking `[0]` reads were all `parse_qs` results under their own `in` tests; 55 of 58
+`int()` calls on request data were schema-validated. Writing that down converts two dead ends into
+two questions nobody has to ask again -- and it is how the one real site in the batch was found.
