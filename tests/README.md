@@ -13566,3 +13566,13 @@ contract rather than trying to reach the dead arm.
 Hand back an object whose `query()` raises. Assert the exception propagates AND that rollback and close were
 called -- a mutant that swallows the failure turns a ban check into a gate that fails open, and only the
 propagation assertion catches it.
+
+**1001. `current_user.get_id()` IS `0` FOR AN ANONYMOUS VIEWER, NOT None.**
+Seven block-list helpers in `app/utils.py` open with `if user_id == 0: return []` because that is what their
+callers pass. Deleting one is an equivalent mutant -- no account has id 0, so the query matches nothing anyway
+-- but making it answer for every viewer is not, so the control row asserting a signed-in viewer's own lists is
+what gives the anonymous rows meaning.
+
+**1002. A TEXTAREA SETTING ARRIVES WITH CRLF FROM A WINDOWS BROWSER.**
+`blocked_phrases` strips a trailing `\r` per line. Without it every phrase but the last matches nothing. A row
+for a newline-separated admin setting should drive the `\r\n` form as well as `\n`.
