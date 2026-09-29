@@ -12877,3 +12877,21 @@ mutant M1, written to the file for the ten seconds that mutant's test run took. 
 the runner's snapshot means nothing is lost, but anything reading the tree meanwhile -- a scan, a linter,
 a second agent -- is reading a deliberate defect. Check the file before acting on a report that arrives
 mid-run.
+
+**881. `get_setting(name, default)` MAKES THE DEFAULT THE BEHAVIOUR WHEN NO ROW EXISTS.**
+Nothing seeds most of these rows, so two callers passing different defaults are two different
+behaviours for one setting -- and when one caller is an admin pre-fill, the next save of that page
+writes the pre-fill's answer over the consumer's. `captcha_enabled` read `True` at the two consumers and
+`False` at the pre-fill, so the registration captcha was required while the page said it was not. Sweep
+`get_setting` by name and compare the defaults.
+
+**882. DISMISSING A SWEEP HIT FOR ONE RULE DOES NOT CLEAR IT FOR ANOTHER.**
+Round 203's round-trip sweep flagged seventeen `admin_misc` settings and correctly dismissed all of them:
+they are written through `set_setting`, not an attribute assignment. One of them was D1398. The
+dismissal was right about the round-trip and said nothing about the defaults. Record what a dismissal
+covers, not just that the hit was dismissed.
+
+**883. `hasattr` CANNOT TELL WHETHER A WTFORMS FIELD WAS REMOVED.**
+`delattr(self, 'x')` pops `x` from the instance's `_fields`, and the class keeps its `UnboundField`, so
+`hasattr(form, 'x')` stays True. A test asserting the field is present passes either way and its
+negative twin cannot pass at all. Assert `'x' in form._fields`.
