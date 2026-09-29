@@ -2230,6 +2230,7 @@ def edit_user_note(actor):
 
 
 @bp.route('/user/<int:user_id>/preview')
+@login_required_if_private_instance
 def user_preview(user_id):
     user = db.session.get(User, user_id) or abort(404)
     return_to = request.args.get('return_to')
@@ -2390,6 +2391,7 @@ def user_myfeeds(actor):
 
 
 @bp.route('/u/<actor>/feeds', methods=['GET'])
+@login_required_if_private_instance
 def user_feeds(actor):
     # this will show a specific user's public feeds
     user_has_public_feeds = False
