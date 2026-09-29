@@ -22840,4 +22840,65 @@ being plausible, and all three were only reachable because nothing checked the s
 Eleven mutants, all dead on a green baseline -- nine on the first pass, and M1/M4 once the counter
 row existed. 15,192 tests, 0 failures, 0 warnings. All 92 floors met.
 
-**Next free number: D1408.**
+## Round 217 — D1408: the predicate that decided a url was an image by sniffing the part after `javascript:`
+
+**Six writes to `File.source_url` in `app/shared` are gated on one predicate**, and the predicate was wrong:
+
+```python
+if icon_url and (from_scratch or icon_url_changed) and is_image_url(icon_url):
+    file = File(source_url=icon_url)
+```
+
+`is_image_url` asks `mime_type_using_head` (which returns `''` for anything httpx will not
+fetch) and then sniffs an extension off `urlparse(url).path`. For a `javascript:` url the whole
+string after the colon **is** the path, so the attacker chooses the extension.
+
+```
+PROBE is_image_url('javascript:alert(1)')            False
+PROBE is_image_url('javascript:alert(1)/x.png')      True
+PROBE is_image_url('javascript:x//y.png')            True
+PROBE is_image_url('data:image/svg+xml,<svg/>.png')  True
+```
+
+**The bare `javascript:alert(1)` was refused, which is exactly why this looked guarded.** In an href the
+script evaluated from `javascript:alert(1)/x.png` is `alert(1)/x.png`: the alert runs, and the division by
+an undefined property is nonsense nobody sees. End to end, through the API's community edit:
+
+```
+PROBE community icon source_url = 'javascript:alert(1)/x.png'
+PROBE community icon_image()    = 'javascript:alert(1)/x.png'
+PROBE community header_image()  = 'javascript:alert(1)/x.png'
+```
+
+`admin/edit_community.html:35` puts `header_image()` in a bare `href`, and both methods return
+`source_url` unchanged through `served_path`.
+
+**TWO FIXES, TWO DIFFERENT LISTS, AND THE CALLERS DECIDE WHICH.**
+
+`is_image_url` now refuses `UNSAFE_URL_SCHEMES` — a **blocklist** — because its callers legitimately pass
+values that are not http urls at all: `process_upload` returns `app/static/media/...` for a web upload
+whenever S3 is off, so an allowlist there would refuse every uploaded community icon, feed icon and banner.
+A path with no scheme has no scheme to block. `data:` is in the set even though `<img
+src="data:image/png;...">` is harmless, because what this predicate gates is **storing** the string, and
+`make_image_sizes` cannot fetch a data: url — one was never a working image here.
+
+The API's `icon_url` and `banner_url` get the http(s) **allowlist** at their own boundary, in
+`edit_community`, `make_feed` and `edit_feed`, because a url an API client supplies is one this instance
+fetches. Refused rather than dropped, like the API's other urls.
+
+**FACT 904 FOR THE THIRD TIME IN FOUR ROUNDS.** Eight more `fields.String(metadata={"format": "url"})`
+declarations — `CreateCommunityRequest`, `EditCommunityRequest`, `CreateFeedRequest`, `EditFeedRequest`,
+icon and banner each — documenting a format marshmallow never checks. Three of the four schemas have a
+matching `make_*`/`edit_*` pair, and `make_feed` has its OWN copy of the SRC_API field extraction rather
+than sharing `edit_feed`'s, which is why the check is written three times and not once.
+
+**WHAT THE PREDICATE FIX IS WORTH BEYOND THIS ROUND.** Twelve call sites ask `is_image_url` whether
+a user's or a peer's url is an image, and none of them checked the scheme separately. This closes the class
+at the predicate rather than the instance at each caller — the opposite of D1403's approach, and right here
+for the same reason it was wrong there: `_as_url` could not go in `_as_text` because most of `_as_text`'s
+callers are not urls, while every caller of `is_image_url` is asking about a url.
+
+Twelve mutants, all dead, on a green baseline. 15,223 tests, 0 failures, 0 warnings.
+All 92 floors met.
+
+**Next free number: D1409.**

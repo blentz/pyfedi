@@ -13102,3 +13102,19 @@ first check changed no test: the call still raised and no Post row survived. Wha
 `community.post_count` and `user.post_count` had already been incremented -- the refusal left a counter
 claiming a post that does not exist. When a mutant of a defensive check survives, ask what the code does
 BETWEEN the two copies, and assert that.
+
+**915. A PREDICATE THAT SNIFFS AN EXTENSION OFF `urlparse(url).path` IS ASKING THE ATTACKER FOR THE ANSWER.**
+For `javascript:alert(1)/x.png`, `urlparse` puts everything after the colon in `.path`, so
+`path.endswith('.png')` is True and `is_image_url` said yes -- while the bare `javascript:alert(1)` said no,
+which is what made the hole look closed. Any predicate that classifies a url by its tail has to check the
+SCHEME first; the tail is free text.
+
+**916. CHOOSE THE PREDICATE OR THE CALL SITE BY ASKING WHETHER EVERY CALLER MEANS THE SAME THING.**
+`_as_url` could not go inside `_as_text` because most values `_as_text` reads are not urls -- so D1403 put it
+at six call sites. The scheme check DOES belong inside `is_image_url`, because all twelve of its callers are
+asking about a url. Same shape of defect, opposite answer, and the deciding question is the same one.
+
+**917. AN ALLOWLIST AT ONE BOUNDARY AND A BLOCKLIST AT ANOTHER CAN BOTH BE RIGHT FOR ONE COLUMN.**
+`File.source_url` is written from an API field (allowlist http(s): the client is supplying a url this
+instance will fetch) and from `process_upload` (blocklist: the value is a local `app/static/media/...` path
+with no scheme, and an allowlist would refuse every upload). The column does not decide; the producer does.
