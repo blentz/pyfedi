@@ -22111,4 +22111,62 @@ longer applies would hide a fresh disagreement on the same name.
 Nine mutants, all dead, on a green baseline. 14,698 tests, 0 failures, 0 warnings. All 92
 floors met.
 
-**Next free number: D1399.**
+## Round 205 — D1399: an authorisation endpoint that authorised anything
+
+**D1399, first half. `/quote_boost_auth` is the `result` URL of a FEP-044f `Accept`, and it verified
+nothing it asserts.** `process_quote_boost` (`app/activitypub/util.py:4095`) decides whether to accept a
+`QuoteRequest` — the quoted object must exist here **and** its author must be local — and then sends an
+`Accept` whose `result` points at this endpoint, which a peer dereferences to **check** the
+authorisation. That is the endpoint's entire purpose.
+
+```
+PROBE  GET /quote_boost_auth?stamp=abc                ValueError: substring not found
+       GET /quote_boost_auth?stamp=                   ValueError: substring not found
+       GET /quote_boost_auth?stamp=no-semicolon-here  ValueError: substring not found
+       GET /quote_boost_auth                          404
+       GET /quote_boost_auth?stamp=https://evil.test/p/1;https://evil.test/p/2
+           200  {"type": "QuoteAuthorization",
+                 "interactionTarget": "https://evil.test/p/1",
+                 "interactingObject": "https://evil.test/p/2",
+                 "attributedTo": "https://test.piefed.local"}
+```
+
+Two defects in six lines. `stamp.index(';')` raised for any stamp without one, and the guard above it
+was `if request.args.get('stamp') is None` — absent and nothing else — so `?stamp=` reached it too
+(D1389's shape, a fifth time). And the authorisation was **unconditional**: this instance told a peer it
+had authorised a quote of a post it does not host, for a caller who invented both halves of the stamp.
+The condition the producer had already checked was neither carried in the stamp nor re-asked. It is
+asked now, and a source-level test pins that the producer and the endpoint ask the same thing.
+
+**THE RESIDUAL NEEDS A TABLE, NOT A GUARD.** Nothing persists *which* `QuoteRequest`s were accepted, so
+the endpoint can confirm the target is a local post whose author is local and still cannot distinguish
+"this author approved this quote" from "this post exists" — a caller may name any local post beside any
+remote one. Closing that means storing accepted requests in `process_quote_boost` and looking them up
+here, which is a schema change. What the repair restores is exactly the decision that was made and then
+thrown away.
+
+**D1399, second half. `/activitypub/externalInteraction` returned `None` from both of its arms** — a
+missing `uri` and a `uri` naming no community — which Flask answers with
+`TypeError: The view function ... did not return a valid response`. The same family as the
+`else: abort(404)` that `feed_moderators_route` and `feed_followers` were given, on an endpoint that
+takes no login. Both arms 404 now, and the community lookup's result is type-checked because the
+redirect builds a `/community/<link>/subscribe` url from it.
+
+**A FIXTURE TRAP, fact 781 again.** The local post was built with `ap_id=None`. Every post this instance
+creates carries an `ap_id` — `Post.generate_ap_id` (`app/models.py:3356`) sets it to
+`<SERVER_URL>/c/<community>@<domain>/p/<id>/<slug>` — and `get_by_ap_id` matches that column and nothing
+else, so with None the lookup answered None for every local post and the **control** rows failed while
+looking exactly like the new guard correctly refusing them.
+
+**AND ONE EQUIVALENT MUTANT, named rather than left as a survivor.** `if not stamp:` mutated to
+`if stamp is None:` survives, and no test can kill it: the only input the two spellings disagree about
+is `''`, which passes the mutated guard, partitions to `('', '', '')`, and is refused by the
+both-halves check on the very next line — the same 404 for the same caller. The two programs are the
+same program. A first version of the fix also carried `';' not in stamp` in that guard, which was
+redundant in the same way and was removed: an unkillable line is a line doing nothing, and the
+difference between that and a genuine equivalent mutant is whether removing it changes anything.
+
+Fourteen mutants, thirteen dead and one equivalent, on a green baseline. 14,724 tests, 0 failures,
+0 warnings. All 92 floors met.
+
+**Next free number: D1400.**
