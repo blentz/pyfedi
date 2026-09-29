@@ -21528,4 +21528,45 @@ one for what was reported, and every producer of `user_reported` supplies the ke
 Five mutants, all dead, on a green baseline. 14,181 tests, 0 failures, 0 warnings. All 92
 floors met.
 
-**Next free number: D1393.**
+## Round 197 — one community report locked admins out of the whole queue
+
+The producer/consumer method again, this time on the four `admin/reports/*_report.html`
+templates, which read `report.targets.*`. Checking each `Report(type=...)` producer against the
+template its type selects turned up something the templates themselves could not: one of the five
+types had no template at all.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1393** | `app/templates/admin/reports/` had no `community_report.html` | `admin/reports.html` computes the include path from data -- `{% include "admin/reports/" + type_text().lower() + "_report.html" %}` -- and `REPORT_TYPE_COMMUNITY` is 3, whose `type_text()` is `'Community'`. The include is inside `{% for report in reports.items %}`, so this is not one broken row: the page an admin opens to triage reports could not be opened at all, and every other pending report went with it. Any user can report a community (`app/community/routes.py:1319`). | **fixed** | `type=0` 200, `type=1` 200, `type=2` 200, **`type=3` TemplateNotFound: admin/reports/community_report.html**, `type=4` 200 |
+
+**This corrects round 189.** That round noticed `type_text` is `types[self.type]` with no bounds
+check, reasoned correctly that every writer passes a `REPORT_TYPE_*` constant, and recorded the
+unbounded index as an unreachable robustness gap. The index was never the problem — the **name it
+returns** is, and it had no template. Round 189's own tests missed it because the only type-3
+report they created was excluded by a type filter, so its row was never rendered. A conclusion
+that narrow is worth revisiting when the same area comes round again.
+
+**Two smaller things fixed with it, both the sibling-divergence shape:**
+
+* the community producer stored only `suspect_community_id`, and a `Report` has FK columns and no
+  relationships, so a template cannot follow it to a name. It stores `suspect_community_name` and
+  `reporter_user_name` now, as its four siblings' producers do — with the template keeping a plain
+  text fallback for rows written before this round;
+* `conversation_report.html` showed a link and nothing else, while all four siblings show
+  `report.reasons` and `report.description`. An admin triaging a reported conversation could not
+  see **why** without opening the chat.
+
+**`REPORT_TYPE_MESSAGE` is 4 and `types[4]` is `'Conversation'`** — odd, and correct: both
+message-report producers store `suspect_conversation_id`, which that template reads. Pinned so the
+mismatch in names is not mistaken for one in behaviour.
+
+The mapping is now asserted against the filesystem: every `REPORT_TYPE_*` must have the template
+its `type_text()` names, so a sixth type added without one fails in the suite rather than on an
+admin's first visit. One mutant survived until a test went through the real
+`/community/community/<id>/report` route -- the hand-built `targets` dict in the other rows meant a
+producer that renamed the key still passed.
+
+Five mutants, all dead, on a green baseline. 14,199 tests, 0 failures, 0 warnings. All 92
+floors met.
+
+**Next free number: D1394.**
