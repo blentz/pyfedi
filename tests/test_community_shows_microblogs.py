@@ -9,6 +9,7 @@ posts turned up in the subscribed feed.
 
 import pytest
 
+from app import db
 from tests.factories import make_community, make_instance, make_post, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -19,8 +20,13 @@ def community_with_a_microblog(db_session):
     """A community holding one microblog post and one ordinary post.
 
     The viewer is a logged-in local user because Site.private_instance defaults to
-    True (app/models.py:3855), so an anonymous GET of either route is bounced to
+    True (app/models.py:5017), so an anonymous GET of the HTML route is bounced to
     /auth/login before the post query runs.
+
+    D1410. Logging in is no longer enough for the RSS half: the six RSS routes now
+    refuse on a private instance outright, as `index_rss` always did, because an RSS
+    reader cannot log in. This fixture is about which POSTS appear in a feed, so it
+    asks for the ordinary public instance it always meant.
     """
     make_instance('test.piefed.local', software='piefed')
     author = make_user(make_instance('m.example'), 'noteauthor')
@@ -28,6 +34,9 @@ def community_with_a_microblog(db_session):
     community = make_community('notes')
     microblog = make_post(community, author, 'https://m.example/notes/1', microblog=True)
     ordinary = make_post(community, author, 'https://m.example/notes/2', title='an ordinary post')
+    from app.models import Site
+    db.session.get(Site, 1).private_instance = False
+    db.session.commit()
     return viewer, community, microblog, ordinary
 
 

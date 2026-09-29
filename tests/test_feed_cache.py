@@ -413,6 +413,13 @@ class TestEveryCallSiteStillRenders:
         Neither route carries @login_required, so a logged-in browser opening the
         RSS URL used to leave a 24-hour key named '' behind on every request.
         """
+        # D1410. `Site.private_instance` DEFAULTS TO TRUE (app/models.py:5017), so
+        # `make_site()` builds a private instance, and the six RSS routes now refuse
+        # on one. This test is about caching, not privacy, so it asks for the
+        # ordinary public instance it always meant.
+        site.private_instance = False
+        db.session.commit()
+
         make_instance('feedrss.example')
         viewer = make_user(None, 'feedrssviewer', local=True)
         community = make_community('feedrsscomm')
@@ -432,6 +439,13 @@ class TestEveryCallSiteStillRenders:
         """show_topic_rss passes a literal '' result_id (app/topic/routes.py:230)
         -- the second of the two wasted-write call sites.
         """
+        # D1410. `Site.private_instance` DEFAULTS TO TRUE (app/models.py:5017), so
+        # `make_site()` builds a private instance, and the six RSS routes now refuse
+        # on one. This test is about caching, not privacy, so it asks for the
+        # ordinary public instance it always meant.
+        site.private_instance = False
+        db.session.commit()
+
         make_instance('topicrss.example')
         viewer = make_user(None, 'topicrssviewer', local=True)
         community = make_community('topicrsscomm')
