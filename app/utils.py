@@ -337,6 +337,19 @@ def is_video_url(url: str) -> bool:
         # not a video -- the same answer this gives for a path with no video
         # extension.
         return False
+    # D1409, the twin of D1408 one function up: an extension sniffed off
+    # `urlparse(url).path` is the attacker's to choose, because for a
+    # `javascript:` url the whole string after the colon IS the path.
+    # `is_video_url('javascript:x/y.mp4')` was True.
+    #
+    # Smaller reach than the image case and fixed for the same reason
+    # `livescript` and `mocha` are in UNSAFE_URL_SCHEMES: nothing currently
+    # stores a url on this answer -- callers use it to set POST_TYPE_VIDEO, and
+    # `Post.url` can no longer hold one of these schemes (D1404, D1407) -- so
+    # this closes the shape rather than a live hole, and it means the two
+    # predicates cannot drift apart again.
+    if has_unsafe_url_scheme(url):
+        return False
     path = parsed_url.path.lower()
     return any(path.endswith(extension) for extension in common_video_extensions)
 
@@ -351,7 +364,19 @@ def is_video_hosting_site(url: str) -> bool:
         if url.startswith(starts_with):
             return True
 
-    if 'videos/watch' in url:  # PeerTube
+    # D1409. Every other entry above is an anchored `https://` prefix; this one is
+    # an unbounded substring test, so ANY url carrying those eleven characters
+    # anywhere is "a video hosting site" -- `javascript:videos/watch` included.
+    # `_post_full.html:195` and `post_teaser/_macros.html:403` gate a PeerTube
+    # iframe on the same substring and feed it `Post.peertube_embed()`
+    # (`self.url.replace('watch', 'embed')`), so the template shares the shape.
+    #
+    # Requiring an http(s) scheme is the narrow fix: it leaves every real
+    # PeerTube url matching (they are all https) and stops the class, without
+    # guessing at a path-segment anchor that some peer's url shape might not
+    # match. Same argument as the D1402 validators: the check is a boundary, so
+    # it should be exact about what it admits.
+    if url.lower().startswith(('http://', 'https://')) and 'videos/watch' in url:  # PeerTube
         return True
 
     return False

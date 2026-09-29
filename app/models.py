@@ -974,9 +974,18 @@ class File(db.Model):
         return f"{current_app.config['SERVER_URL']}{served_path(self.thumbnail_path)}"
 
     def is_image(self):
+        # D1409, as `is_image_url` (app/utils.py) one round earlier: the value read here is
+        # `thumbnail_url()`, which falls back to `source_url` -- a string a peer or an API
+        # client supplied -- and an extension sniffed off `urlparse(url).path` is the
+        # sender's to choose, because for a `javascript:` url the whole string after the
+        # colon IS the path. `admin/media.html:34` gates a link on this method.
+        from app.utils import has_unsafe_url_scheme
         common_image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp', '.avif', '.svg+xml',
                                    '.svg+xml; charset=utf-8']
-        parsed_url = urlparse(self.thumbnail_url())
+        url = self.thumbnail_url()
+        if has_unsafe_url_scheme(url):
+            return False
+        parsed_url = urlparse(url)
         path = parsed_url.path.lower()
         return any(path.endswith(extension) for extension in common_image_extensions)
 
