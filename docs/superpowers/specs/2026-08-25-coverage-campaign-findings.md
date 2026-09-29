@@ -22039,4 +22039,76 @@ all. That is a missing control rather than a broken one, so it is a feature requ
 Fifteen mutants, all dead, on a green baseline. 14,687 tests, 0 failures, 0 warnings. All 92
 floors met.
 
-**Next free number: D1398.**
+## Round 204 — D1398: the registration captcha was on, and the admin page said it was off
+
+**D1398. `get_setting(name, default)` returns the CALLER's default when no row exists, and
+`captcha_enabled` had three callers and two answers.**
+
+```python
+def get_setting(name: str, default=None):
+    setting = db.session.query(Settings).filter_by(name=name).first()
+    if setting is None:
+        return default
+```
+
+No migration and no seed inserts a `captcha_enabled` row, so on any instance that has never saved the
+Misc page the default **is** the behaviour:
+
+| caller | default | what it decides |
+| --- | --- | --- |
+| `app/auth/forms.py:41` | `True` | whether `RegistrationForm` keeps its captcha field |
+| `app/activitypub/util.py:4396` | `True` | what nodeinfo advertises to other servers |
+| `app/admin/routes.py:407` | **`False`** | how the admin checkbox renders |
+
+```
+PROBE  rows for captcha_enabled:              0
+       RegistrationForm has captcha field:    True
+       GET /admin/misc rendered the box as:   False
+```
+
+A settings screen showing the opposite of the truth is bad on its own. What makes it a defect is the
+next save: `admin_misc` writes **every** one of its settings on submit, so an admin changing something
+unrelated posts that unticked box back, `set_setting('captcha_enabled', False)` runs, and the
+registration captcha is genuinely off — having been shown as off the whole time. **Round 203's failure
+mode arriving through a mismatched default rather than a missing line**, and the setting it silently
+clears is an anti-abuse control.
+
+**AND IT CAME OUT OF ROUND 203'S OWN SWEEP.** That round's round-trip sweep flagged `admin_misc` as
+"prefilled-not-written" for seventeen names including this one, and every one of those was correctly
+dismissed — they are written through `set_setting`, not through an attribute, so they were false
+positives *for the round-trip question*. They were not clear for the **defaults** question, which is a
+different rule over the same pair. Dismissing a sweep hit for the rule you were testing does not clear
+it for every rule.
+
+**THE SWEEP.** Every `get_setting` call in `app/` with a literal name: 31 names, 7 with callers whose
+defaults differ textually. Six are benign, and each was read rather than assumed:
+
+* `use_allowlist` — `False` at four sites, omitted at five; `None` is falsy and every consumer is a
+  boolean test;
+* `admin_ids` — omitted at `app/request_hooks.py:97`, which tests `if g.admin_ids is None:` on the next
+  line and computes the list itself;
+* `actor_blocked_words`, `actor_bio_blocked_words` — omitted at their consumers, which open
+  `if blocked_words and blocked_words.strip() != ''`;
+* `announcement`, `announcement_html` — omitted at the readers, which render the value only when truthy.
+
+`captcha_enabled` was the only name where the two defaults meant two different things, and the only one
+where one of the callers was an admin pre-fill. The rule is asserted over the AST with those six as a
+named allowlist, and a second test fails if an allowlisted name stops disagreeing — an entry that no
+longer applies would hide a fresh disagreement on the same name.
+
+**THREE TRAPS IN MY OWN TESTS, each caught only because a row that should have failed did not.**
+
+* **`hasattr(form, 'captcha')` cannot discriminate.** `RegistrationForm.__init__` does
+  `delattr(self, 'captcha')`, which pops the name from WTForms' `_fields` dict — but the **class** still
+  carries its `UnboundField`, so `hasattr` is True either way. The "captcha is on" row passed and the
+  "captcha is off" row could not. `'captcha' in form._fields` is the test.
+* **`admin_misc` returns 200 on success.** It flashes and falls through to its own `render_template`,
+  so a saved page and a refused one are the same status code, and `form.errors` is the only thing that
+  separates them.
+* **`generate_csrf` in a fresh `test_request_context` fails the second time a test calls it** —
+  `KeyError: 'csrf_token'`. Minted once per test and reused.
+
+Nine mutants, all dead, on a green baseline. 14,698 tests, 0 failures, 0 warnings. All 92
+floors met.
+
+**Next free number: D1399.**
