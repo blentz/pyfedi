@@ -23688,4 +23688,61 @@ choices being built and the same request reading it back.
 
 Fourteen mutants, all dead, on a green baseline.
 
-**Next free number: D1419.**
+---
+
+## Round 231 -- the site RSS feed gave an anonymous reader whichever feed it liked (D1419)
+
+`tests/test_main_index_rss.py` covers the token check (D1356). What it did not cover was
+the half of `index_rss` that decides WHICH communities a request may read.
+
+**D1419 -- `feed_type` was ignored for anybody without a token.** The chain read:
+
+```python
+    if feed_type == 'subscribed' and current_user_is_authenticated:
+        ...
+    elif feed_type == 'local' or not current_user_is_authenticated:
+        ...
+    elif feed_type == 'popular':
+        if not current_user_is_authenticated:
+            ...          # unreachable: the arm above already caught this request
+```
+
+The second arm caught EVERY request without a token, so `/index/feed/popular` and
+`/index/feed/all` both answered with the local feed -- while still titling themselves
+`Test Site - Popular` and `Test Site - All`, which is why the existing rows, which assert
+titles, did not notice. The anonymous branch of the popular query had never run.
+
+Ordering the chain by `feed_type` and letting the authentication test choose only which
+SQL each type uses fixes it. `subscribed` is the one type that genuinely needs a token, so
+it names the `local` arm explicitly rather than being caught by it. An unknown feed type
+now falls off the chain and is answered as All for both viewers, which is what
+`tests/test_main_index_rss.py` already said happened and was true only of token holders.
+
+**One existing row was pinning the defect.** `test_an_anonymous_all_feed_is_the_local_one`
+asserted the old behaviour, and its docstring said "every feed_type an anonymous caller
+asks for that is not `popular` is answered from local communities only" -- wrong about
+`popular` too, since that arm came first. It is now
+`test_an_anonymous_all_feed_is_the_all_feed`, with the reasoning written out.
+
+**A masked guard, found by a row that failed.** `index_rss` widens its `community_ids`
+query by the token holder's private memberships -- but the posts come from
+`get_deduped_post_ids`, which reads `current_user`, and a token request is not a session,
+so `current_user` is anonymous there and its unconditional `c.private is false` applies.
+The widening in `index_rss` is inert: two independent restrictions with the stricter one
+winning. Rows now assert that a member with a valid token does NOT get their private
+community's posts in the RSS feed, which is the opposite of what the D1356 comment above
+that code implies about the feed as a whole.
+
+**The `[0]` padding is load-bearing.** `private_communities` is interpolated into the SQL
+as a Python tuple, and a one-element tuple is `(5,)`, which PostgreSQL will not parse.
+Both pads have a row, because the symptom of a missing one is a 500 on the feed of exactly
+the accounts the padding exists for -- one private community is the common case.
+
+**One equivalent mutant, documented rather than chased.** Deleting the
+`elif feed_type == 'all': community_ids = [-1]` arm survives: `community_ids` is
+initialised to `[-1]`, so the arm restates it. It is kept because it says which types the
+chain knows about, and noted in the test file so the survivor is not read as a gap.
+
+Ten mutants dead, one provably equivalent, on a green baseline.
+
+**Next free number: D1420.**
