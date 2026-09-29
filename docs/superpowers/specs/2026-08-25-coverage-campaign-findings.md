@@ -23785,4 +23785,43 @@ said so:
 
 Eleven mutants, all dead, on a green baseline.
 
-**Next free number: D1420.**
+---
+
+## Round 233 -- the last lines of `app/main/routes.py` (D1420)
+
+Nine missing lines, in four clusters.
+
+**D1420 -- `list_files` had no caller.** A module-level generator wrapping `os.walk`,
+identical to the nested helper inside `app/cli.py`'s own function. `grep -rn list_files`
+across every `.py`, `.html` and `.md` in the repository finds the definition in
+`app/cli.py`, its one call there, and this one -- referenced by nothing. Deleted rather
+than covered: a test for it would have been a test of `os.walk`.
+
+**The modlog's name filters had never had their domain-stripping branch run.**
+`tests/test_main_modlog.py`'s `test_a_name_written_with_this_instances_domain` builds the
+handle from `Site.name`, which is not the value the route compares against -- it tests
+`f"@{current_app.config['SERVER_NAME']}"` -- so the branch the row is named for was never
+taken, and the row passed because an unmatched name leaves the query unfiltered. That
+last part is now a row of its own: `if user:` means a name nobody holds narrows nothing,
+which is what makes the positive rows meaningful. The remote fallback
+(`filter_by(ap_id=...)`) has one too, since the first lookup requires `ap_id IS NULL` and
+can never return a remote account.
+
+**The PWA manifest's hand-written mapping is for the DESKTOP, not for iPhones.** The first
+attempt at these rows assumed `if os_family == 'mac os x'` existed because an iPhone
+reports itself that way. It does not: `ua_parser` gives `ios` for an iPhone and an iPad,
+which already names a directory, and `mac os x` only for Safari on a Mac, which names
+none. Deleting the branch therefore changed nothing for an iPhone, and the mutant survived
+twice -- once on an assertion about `display`, which `ios` and `default` share, and once on
+the wrong user agent. Each manifest carries `piefed_manifest_version` naming its own file,
+which is the field that actually distinguishes them.
+
+**`/r/randomnsfw`'s two spellings of one query.** The second adds
+`i.id not in :blocked_instances`. A viewer with no blocks takes the shorter one, so both
+need a row -- and the row that tells them apart blocks the only NSFW community's instance
+and asserts the 'No communities found' page rather than a redirect. A third row blocks an
+IRRELEVANT instance, so that a non-empty block list is not enough to satisfy the pair.
+
+Five mutants, all dead, on a green baseline. `app/main/routes.py` is at 100%.
+
+**Next free number: D1421.**
