@@ -157,6 +157,114 @@ class TestAPublicInstance:
         assert response.status_code == 200
 
 
+class TestTheCachedRoutes:
+    """`show_community_rss`, `show_profile_rss` and `show_topic_rss` carry
+    `@cache.cached`, and the first version of this fix put the privacy check INSIDE the
+    function -- below the cache. The commit review named the hole: a body cached while the
+    instance was public is replayed for up to 600 seconds after an admin makes it private,
+    and an inline check cannot run at all, because `cache.cached` returns its stored
+    response without calling the function.
+
+    The rule is now `@refuse_if_private_instance`, listed directly under `@bp.route` and
+    therefore the OUTERMOST wrapper, so it runs before the cache is consulted.
+
+    TWO CACHES, AND ONLY ONE OF THEM IS THIS ROUND'S. Measuring the first needed a real
+    cache backend, and with one the rows still served 200 after the toggle -- because
+    `g.site` itself comes from `get_site_as_dict`, which is `@cache.memoize(timeout=60)`
+    (app/utils.py:5995). So a privacy change takes up to a minute to be seen by ANY gate in
+    this application, including `login_required_if_private_instance` and `index_rss`'s own
+    check, and that window predates this round and belongs to a global caching decision
+    rather than to these six views. The rows below drop that memo explicitly when they
+    toggle, which is what isolates the response cache -- the thing the decorator placement
+    actually fixes.
+    """
+
+    CACHED = {'a community': '/community/general/feed',
+              'a user': '/u/author/feed',
+              'a topic': '/topic/thetopic.rss'}
+
+    @pytest.fixture(autouse=True)
+    def a_real_cache(self, app):
+        """The suite runs with `CACHE_TYPE = 'NullCache'` (tests/conftest.py:215), under
+        which `@cache.cached` stores nothing and every row in this class would pass whether
+        the guard were above the cache or below it -- the vacuous shape this campaign keeps
+        meeting. These rows are ABOUT the cache, so they need one.
+
+        Restored afterwards, because the cache object is shared by the app for the whole
+        worker process and a SimpleCache left behind would let other modules' requests
+        answer each other."""
+        from app import cache
+
+        cache.init_app(app, config={'CACHE_TYPE': 'SimpleCache',
+                                    'CACHE_DEFAULT_TIMEOUT': 600})
+        cache.clear()
+        yield
+        cache.clear()
+        cache.init_app(app, config={'CACHE_TYPE': 'NullCache'})
+
+    @staticmethod
+    def _set_privacy(site, private):
+        """Toggle the flag AND drop the memoized Site, so the next request sees it."""
+        from app import cache
+        from app.utils import get_site_as_dict
+
+        site.private_instance = private
+        db.session.commit()
+        cache.delete_memoized(get_site_as_dict)
+
+    @pytest.mark.parametrize('name', list(CACHED))
+    def test_a_body_cached_while_public_is_not_replayed_once_private(self, app, seeded,
+                                                                    name):
+        """The review's scenario, in order: warm the cache on a public instance, make it
+        private, ask again. With the check inside the function this returned the cached
+        200; with the decorator above `cache.cached` the request never reaches the store."""
+        url = self.CACHED[name]
+        self._set_privacy(seeded.site, False)
+        client = app.test_client()
+        warmed = client.get(url)
+        assert warmed.status_code == 200 and SECRET in warmed.get_data(as_text=True), \
+            'the cache was not warmed, so this row would pass for the wrong reason'
+
+        self._set_privacy(seeded.site, True)
+        response = client.get(url)
+
+        assert response.status_code == 404
+        assert SECRET not in response.get_data(as_text=True)
+
+    @pytest.mark.parametrize('name', list(CACHED))
+    def test_nothing_is_cached_while_private_so_going_public_serves_at_once(self, app,
+                                                                           seeded, name):
+        """The same arithmetic backwards, and the half a fix could get wrong in the other
+        direction: because the refusal happens above the cache, no 404 is ever stored, so an
+        instance made public again starts serving immediately rather than answering from a
+        cached refusal."""
+        url = self.CACHED[name]
+        self._set_privacy(seeded.site, True)
+        client = app.test_client()
+        assert client.get(url).status_code == 404
+
+        self._set_privacy(seeded.site, False)
+        response = client.get(url)
+
+        assert response.status_code == 200
+        assert SECRET in response.get_data(as_text=True)
+
+    def test_the_site_row_itself_is_memoized_for_a_minute(self, app, seeded):
+        """The window this round does NOT close, pinned so nobody mistakes it for one that
+        is. `get_site_as_dict` is memoized for 60 seconds, so without dropping that memo a
+        freshly privatised instance keeps serving -- through this guard and through every
+        other one in the app. Fixing it means changing a global caching decision, which is
+        a separate argument with its own evidence."""
+        self._set_privacy(seeded.site, False)
+        client = app.test_client()
+        assert client.get('/community/general/feed').status_code == 200
+
+        seeded.site.private_instance = True   # deliberately WITHOUT dropping the memo
+        db.session.commit()
+
+        assert client.get('/tag/thetag/feed').status_code == 200
+
+
 def test_the_guard_runs_before_any_lookup_or_rate_limit():
     """Position, not just presence.
 
@@ -170,21 +278,47 @@ def test_the_guard_runs_before_any_lookup_or_rate_limit():
     import pathlib
 
     root = pathlib.Path(__file__).resolve().parent.parent
-    sites = [('app/community/routes.py', 'show_community_rss'),
-             ('app/user/routes.py', 'show_profile_rss'),
-             ('app/tag/routes.py', 'show_tag_rss'),
-             ('app/topic/routes.py', 'show_topic_rss'),
-             ('app/domain/routes.py', 'show_domain_rss'),
-             ('app/feed/routes.py', 'show_feed_rss'),
-             ('app/main/routes.py', 'index_rss')]
+    decorated = [('app/community/routes.py', 'show_community_rss'),
+                 ('app/user/routes.py', 'show_profile_rss'),
+                 ('app/tag/routes.py', 'show_tag_rss'),
+                 ('app/topic/routes.py', 'show_topic_rss'),
+                 ('app/domain/routes.py', 'show_domain_rss'),
+                 ('app/feed/routes.py', 'show_feed_rss')]
 
-    for path, name in sites:
+    for path, name in decorated:
         tree = ast.parse((root / path).read_text())
         fn = next(n for n in ast.walk(tree)
                   if isinstance(n, ast.FunctionDef) and n.name == name)
-        first = fn.body[0]
-        if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
-            first = fn.body[1]  # past the docstring
-        source = ast.dump(first)
+        names = []
+        for d in fn.decorator_list:
+            if isinstance(d, ast.Name):
+                names.append(d.id)
+            elif isinstance(d, ast.Call):
+                f = d.func
+                names.append(f.attr if isinstance(f, ast.Attribute) else getattr(f, 'id', ''))
 
-        assert 'private_instance' in source, f'{path}:{name} does not check it first'
+        assert 'refuse_if_private_instance' in names, f'{path}:{name} is not guarded'
+        # Outermost after the route, so it runs before `cache.cached` reads its store and
+        # before `limiter.limit` spends the caller's budget.
+        assert names.index('refuse_if_private_instance') == 1, \
+            f'{path}:{name} guards too late: {names}'
+        if 'cached' in names:
+            assert names.index('refuse_if_private_instance') < names.index('cached'), \
+                f'{path}:{name} is cached above its guard: {names}'
+
+
+def test_index_rss_still_checks_inline_and_says_why():
+    """`index_rss` keeps its inline check rather than the decorator, and that is not an
+    oversight: its own `@cache.cached` line is COMMENTED OUT (app/main/routes.py:1339), so
+    nothing stands between the request and the function, and its comment argues the
+    ordering against its own 304 handling instead. This row fails if someone re-enables
+    that cache without moving the check."""
+    import pathlib
+
+    source = (pathlib.Path(__file__).resolve().parent.parent
+              / 'app' / 'main' / 'routes.py').read_text()
+    head = source[source.index("def index_rss("):]
+    head = head[:head.index('current_etag')]
+
+    assert 'if g.site.private_instance:' in head
+    assert "#@cache.cached(timeout=600, query_string=True)" in source
