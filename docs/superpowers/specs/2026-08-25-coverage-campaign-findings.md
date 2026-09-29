@@ -23067,4 +23067,73 @@ clearest statement of the defect: the codebase knew the default and the RSS rout
 Eighteen mutants, all dead on a green baseline -- seventeen on the first pass, and the feed
 site's two once its control row served. 15,282 tests, 0 failures, 0 warnings. All 92 floors met.
 
-**Next free number: D1411.**
+## Round 220 — D1411, and the cache hole D1410's own commit review found
+
+**TWO THINGS, and the first is a correction to the round before it.** D1410's commit review flagged
+`authorization-bypass-via-cache` on exactly the three RSS views that carry `@cache.cached`:
+`show_community_rss`, `show_profile_rss` and `show_topic_rss`. The finding is right and the inline guard
+was the wrong shape:
+
+```
+@bp.route('/<actor>/feed', methods=['GET'])
+@cache.cached(timeout=600, query_string=True)
+def show_community_rss(actor):
+    if g.site.private_instance:      # <- never reached for a cached url
+        abort(404)
+```
+
+`cache.cached` returns its stored response **without calling the function**, so a body cached while the
+instance was public is replayed for up to 600 seconds after an admin makes it private. The rule is now
+`refuse_if_private_instance`, a decorator (`app/utils.py:2119`) listed directly under `@bp.route` and
+therefore the outermost wrapper -- it runs before the cache is consulted, and nothing is stored while
+private, so an instance made public again serves at once rather than from a cached refusal. Measured both
+ways: with the decorator moved back below `@cache.cached`, the replay row fails with `200 == 404`.
+
+**A SECOND CACHE, WHICH IS NOT THIS ROUND'S TO CLOSE.** Measuring the first needed a real backend, since
+the suite runs `CACHE_TYPE = 'NullCache'`, under which those rows would pass either way. With one, the rows
+*still* served 200 after the toggle: `g.site` comes from `get_site_as_dict`, which is
+`@cache.memoize(timeout=60)` (`app/utils.py:5995`). So **a privacy change takes up to a minute to be seen
+by any gate in this application** -- `login_required_if_private_instance` and `index_rss`'s own check
+included. That window predates the round and belongs to a global caching decision; the rows drop the memo
+explicitly when they toggle, and one row pins the staleness as a known property so nobody mistakes it for
+something that was fixed.
+
+**D1411: the rest of the sweep.** The GET routes carrying neither privacy decorator nor `login_required`
+were read one at a time. Five serve a post:
+
+```
+/post/1/embed              200  title in body
+/post/1/embed_code         200  title in body
+/post/1/oembed             200  title in body
+/post/1                    302  -> /auth/login
+```
+
+plus `/post/<id>/ical` and `/community/<name>/ical`. These get
+`login_required_if_private_instance`, **not** the unconditional refusal: an RSS reader cannot log in, but a
+person following an embed link in a browser can, and a member of a private instance should see their own
+instance's embeds and calendars. The two calendars are fixed on the argument rather than on a measured leak
+-- the seeded post is not an event, so the probe's calendar came back empty -- and their rows say so, and
+assert only that a public instance reaches the route's own logic rather than a login redirect.
+
+**WHAT THE PROBE MEASURED THAT STAYS OPEN, recorded rather than fixed:** `/post/<id>/options_menu` (988
+bytes, no title), `/post/<id>/share_mastodon`, `/user/<id>/preview`, `/u/<actor>/feeds` (12 KB) all answer
+200 on a private instance. None carried the post title, so none is a content leak of the kind above; what
+they disclose is that an object exists and some of its metadata. Worth a round of its own with its own
+argument about what an anonymous visitor to a private instance may learn.
+
+**A FOURTH EXISTING TEST HAD TO SAY WHAT INSTANCE IT MEANT.**
+`tests/test_request_hooks.py::test_embed_path_does_not_get_x_frame_options` asserts that `/post/<id>/embed`
+comes back WITHOUT `X-Frame-Options` (embeds are meant to be framed) and with `X-Content-Type-Options`, so
+that the header-setting hook's `/embed` exclusion is pinned. With the route gated it was redirected before
+any of those headers was set. Like the three in D1410, it now sets `private_instance = False` and says why:
+a test about response headers should not inherit its access-control posture from a column default.
+
+That is four tests across two rounds whose subject had nothing to do with privacy and which were
+nevertheless passing because six RSS views and five embed views ignored the setting. `make_site()` inherits
+`private_instance=True`, so almost every request-issuing test in this suite runs on a private instance -- a
+fact worth knowing before reading any of their results.
+
+Thirteen mutants, all dead, on a green baseline. 15,303 tests, 0 failures, 0 warnings.
+All 92 floors met.
+
+**Next free number: D1412.**
