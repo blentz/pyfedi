@@ -858,8 +858,6 @@ def process_inbox_request(request_json, store_ap_json):
                 if isinstance(actor_id, dict):  # Discourse does this
                     actor_id = actor_id['id']
                 feed = community = user = None
-                if actor_id and actor_id.startswith('https://s.rimu.geek.nz'):
-                    pass    # just here to set breakpoints on, during testing. remove before commit
                 if request_json['type'] == 'Announce' or request_json['type'] == 'Accept' or request_json['type'] == 'Reject':
                     community = find_actor_or_create_cached(actor_id, community_only=True, create_if_not_found=False)
                     if not community:
@@ -2330,8 +2328,6 @@ def activity_result(id):
 
 
 def process_new_content(user, community, store_ap_json, request_json, announced):
-    if user.user_name == 'rimu':
-        pass
     saved_json = request_json if store_ap_json else None
     id = request_json['id']
     if not announced:
