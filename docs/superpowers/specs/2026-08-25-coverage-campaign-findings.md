@@ -23450,4 +23450,77 @@ here so the next session starts from the list rather than from the report.
 Nine mutants, all dead, on a green baseline. 15,384 tests, 0 failures, 0 warnings.
 All 92 floors met. No code changed, so **D1416 is still free**.
 
+## Round 227 — the last eight lines of `app/api/alpha/views.py`, and a handler that cannot fire
+
+Round 226 named eight lines as needing a fixture of their own. Six are now covered, and the other two are a
+dead `except` whose measurement corrects something this round got wrong twice before getting it right.
+
+**COVERED (6):**
+
+* `:150` -- `interacted_at.get(post.id) or utcnow() - timedelta(days=1)`. `post_view` takes a dict so a
+  listing can read every post's last-interaction time in ONE query rather than one per post; the per-post
+  `SELECT` above it is the fallback. The batch path -- the one the list endpoints use -- was the uncovered
+  one, and both arms of the `or` now have a row: a post the batch covered, and a post missing from it.
+* `:916` -- a reply report's optional `description`, with the bare report as the other arm.
+* `:1204` -- `conversation_report_view`'s variant-1 early return, which answers before loading the
+  conversation.
+* `:1370`, `:1387` -- the `AllowedInstances` loop body and an instance's optional `version`. The allowlist
+  had never been read by any test because no row had ever created an entry; the version is round 226's shape
+  again, one adjacent optional field left behind.
+* `:1418` -- `cached_modlist_for_user(None)`. It is `@cache.memoize`d, so the argument is part of the key: an
+  anonymous caller and a real user must not share an entry.
+
+**`:381-382` CANNOT RUN, and the path to that conclusion is the round's real content.**
+
+```python
+if user.extra_fields:
+    v1['extra_fields'] = []
+    try:
+        extra_fields = user.extra_fields
+    except DetachedInstanceError:   # ... temporary detatched users ... 
+        extra_fields = db.session.get(User, user.id).extra_fields
+```
+
+`User.extra_fields` is `lazy='dynamic'` (`app/models.py:1749`), so the attribute answers an AppenderQuery
+and the assignment inside the `try` touches no database -- it cannot raise, whatever the session state.
+Measured on a user expunged from the session with one extra field committed first:
+
+```
+bool(user.extra_fields)   -> True      (an AppenderQuery is always truthy)
+list(user.extra_fields)   -> []        (no exception)
+user.extra_fields.count() -> 0
+```
+
+So a detached user's extra fields come back **empty**, silently, and the handler written for that case
+cannot fire. SQLAlchemy says so itself, on the `for` three lines below the except:
+
+> SAWarning: Instance <User ...> is detached, dynamic relationship cannot return a correct result. **This
+> warning will become a DetachedInstanceError in a future release.**
+
+which is why the rows assert that warning rather than filtering it: the day it becomes an error, the handler
+stops being dead and this file fails so the change is noticed.
+
+**I WAS WRONG TWICE ON THE WAY HERE, AND BOTH ERRORS ARE THE SAME ONE.** First I wrote a row asserting
+`pytest.raises(DetachedInstanceError)` on the attribute read -- it did not raise, because a dynamic
+relationship does not load on access. Then, having expired the instance to force a load, I saw a
+`DetachedInstanceError` out of `user_view` and concluded the handler was live but positioned wrongly, and
+changed the source to force the query inside the `try`. The traceback said otherwise on a closer read: the
+raise came from `flask_caching.make_cache_key` calling `User.__repr__`, one layer ABOVE the code under test,
+because expiring makes even a column read a load. The source change was reverted; it altered no behaviour and
+its comment asserted a 500 that does not happen. **Read which frame raised before concluding what raised.**
+
+**NOT FIXED, RECORDED.** Serving nothing is not obviously worse than serving a re-fetch, the scenario the
+comment names (`convert_archived_replies_to_tree`) is not reachable from any route these rows can drive, and
+changing it decides what an archived thread's author looks like in the API. The rows pin today's behaviour
+so that decision is taken deliberately.
+
+**TWO FIXTURE STATES THE PRODUCT CANNOT PRODUCE** were met on the way, both fact 781's shape: a `Report` with
+no `suspect_user_id` (which reaches `user_view(None)` and dies on `user.__table__`, since that function's
+`isinstance(user, int)` guard does not cover a None object), and a `Report` naming a conversation id that no
+row holds, which the foreign key refuses outright.
+
+Eight mutants, all dead, on a green baseline. 15,398 tests, 0 failures, 0 warnings.
+All 92 floors met. No code changed -- the one source edit this round made was reverted as
+behaviour-neutral -- so **D1416 is still free**.
+
 **Next free number: D1416.**
