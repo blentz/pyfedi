@@ -13485,3 +13485,18 @@ monkeypatching `render_template` in the route's module and assert each list's co
 `community.icon.delete_from_disk()` precedes `save_icon_file(...)`, so the `if file:` arm's other branch leaves
 a File row whose image is gone. Assert that state rather than skipping the branch -- and patch
 `File.delete_from_disk` with `autospec=True` so the row can name WHICH path was deleted.
+
+**984. `db.session.get(Model, None)` EMITS AN SAWarning, AND A NULLABLE FOREIGN KEY MAKES IT REACHABLE.**
+"fully NULL primary key identity cannot load any object" -- a warning, so the campaign's zero-warning rule
+turns it into a failure. Guard the lookup with `if self.fk_id` rather than relying on the `if row:` after it.
+See D1422.
+
+**985. A DANGLING FOREIGN KEY IS NOT A STATE THE DATABASE ALLOWS.**
+An `RssFeedItem` whose `post_id` names a deleted Post cannot be inserted -- the FK refuses it -- so "the row it
+points at is gone" is only reachable for a NULLABLE column via NULL. Fact 781's shape again: check the
+constraint before writing a row for the orphan case.
+
+**986. `Site`'s FIVE ACTIVITY COUNTS DO NOT SHARE THEIR CONDITIONS.**
+`active_now` requires `ap_id is null AND verified is true AND banned is false AND deleted is false`; the four
+`all_active_*` counts keep only the last two. A row that assumes all five agree gets the wrong totals -- the
+remote and unverified accounts are in the `all_active_*` numbers.
