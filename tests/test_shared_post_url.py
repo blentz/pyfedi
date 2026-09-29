@@ -1622,6 +1622,15 @@ class TestPixelfedArm:
         proves the HEAD was issued, and, with only one route registered, a GET
         that ever did escape to the transport would raise
         `AllMockedAssertionError` instead of passing unnoticed.
+
+        DRIVEN THROUGH SRC_WEB, NOT SRC_API, SINCE D1407. That round gave the API's
+        `url` an http(s) check (`app/shared/post.py:315`), so a scheme-less string is
+        refused there and can no longer reach `:619` at all. The web branch reads
+        `input.link_url.data` without re-validating -- `CreateLinkForm` carries the
+        `Regexp(r'^https?://')` that a real submission would have satisfied -- so a form
+        double is now the only local driver for this arm. Federated ingest can still
+        produce a scheme-less `post.url`: `url_is_storable` blocks named SCHEMES and a
+        string with no scheme has none to block, which is why the arm is not dead code.
         """
         bare = 'pixelfed.uno/p/bob/2'
         http_mock.head(url__regex=r'.*').mock(
@@ -1629,8 +1638,8 @@ class TestPixelfedArm:
                 "Request URL is missing an 'http://' or 'https://' protocol."))
         s = _seed()
 
-        edit_post(_api_input(url=bare), s.post, POST_TYPE_LINK, SRC_API,
-                  user=s.user, from_scratch=True)
+        edit_post(_web_form(link_url=bare), s.post, POST_TYPE_LINK,
+                  SRC_WEB, user=s.user, from_scratch=True)
 
         db.session.refresh(s.post)
         assert s.post.type == POST_TYPE_IMAGE

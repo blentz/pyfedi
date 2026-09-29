@@ -1502,17 +1502,26 @@ def test_the_domain_block_is_skipped_for_a_hostless_url(db_session):
     """:567, false arm. domain_from_url (app/utils.py:1561) returns None when
     urlparse finds no hostname, and every caller writes `if domain:` first.
 
+    THE URL CARRIES A SCHEME AND NO AUTHORITY ('https:///etc/passwd') rather than
+    the `file:///etc/passwd` this row used before D1407. That round added an
+    http(s) check on the API's `url` above this line, so a `file:` url is now
+    refused before the domain block is reached and no longer exercises it. The
+    hostless-but-parseable shape still gets there, and it is the one
+    `update_post_from_activity`'s own comment names: 'https:///x' parses and
+    `.hostname` is None. Everything below still holds -- the request httpx builds
+    from it is the same bare `/etc/passwd` path, which is what `match=` pins.
+
     MEASURED, against httpx 0.28.1 and this harness's respx setup, rather than
-    assumed: httpx does not raise while BUILDING a HEAD request for
-    'file:///etc/passwd' -- Client.build_request succeeds for it, so
+    assumed: httpx does not raise while BUILDING a HEAD request for a url with no
+    authority -- Client.build_request succeeds for it, so
     mime_type_using_head's `except (httpx.HTTPError, httpx.InvalidURL):` guard
     is not what is at stake here. What matters is what happens once the
     request is actually sent. This harness's session-scoped
     `block_outbound_http` (tests/conftest.py) replaces httpx's transport with
     an empty respx router BEFORE `http_mock` even exists, so a request already
     goes through respx whether or not a test asks for `http_mock`. respx's own
-    route matcher never matches a `file:` URL -- confirmed by registering
-    `http_mock.head('file:///etc/passwd')` in an isolated respx router and
+    route matcher never matches an authority-less URL -- confirmed by registering
+    the url itself in an isolated respx router and
     sending the same request through it: the call still misses the route and
     respx raises `respx.models.AllMockedAssertionError` (a plain
     AssertionError subclass, not httpx.HTTPError or httpx.InvalidURL), so
@@ -1544,7 +1553,7 @@ def test_the_domain_block_is_skipped_for_a_hostless_url(db_session):
 
     with pytest.raises(Exception,
                        match=r"RESPX: <Request\('HEAD', '/etc/passwd'\)> not mocked!"):
-        edit_post(_api_input(url='file:///etc/passwd'), s.post, POST_TYPE_LINK,
+        edit_post(_api_input(url='https:///etc/passwd'), s.post, POST_TYPE_LINK,
                   SRC_API, user=s.user, from_scratch=True)
 
     assert s.post.domain_id is None
