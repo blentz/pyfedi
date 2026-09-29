@@ -24194,4 +24194,35 @@ serve the host.
 
 Fourteen mutants, all dead, on a green baseline.
 
+---
+
+## Round 243 -- the un-moderated escalation, an Accept we sign, and the site payload
+
+Three clusters in `app/activitypub/util.py`, no defect.
+
+**A reported comment in a community nobody moderates escalates to the site admins.**
+`un_moderated` is the flag that says nobody is watching, and without the escalation a report
+there is filed and notified to an empty list of moderators. The post branch above had rows;
+the reply branch's escalation did not. Both halves of the condition are asserted -- a
+moderated community must not escalate, or every report becomes a site-wide alert, and a
+REMOTE community must not either, since escalating would make our admins responsible for
+content they do not host. The subtype is `comment_reported`, which D1392 fixed here, and the
+row pins it because the notification template renders a different block per subtype.
+
+**`process_quote_boost` signs an Accept with a local user's key and sends it to a peer.**
+Three things matter and are asserted together: it goes to the quoter's INSTANCE inbox, it is
+signed with the quoted post's author's private key, and the Accept carries the original
+QuoteRequest so the peer can tell which request was granted. The three refusals have rows
+too -- a post this instance does not hold, a post whose author is remote (only the author can
+grant a quote of their own post), and a peer whose Instance row has no inbox.
+
+**`lemmy_site_data()`'s languages and emojis** are what every Lemmy-compatible client reads.
+`all_languages` is the whole table while `discussion_languages` is hardcoded to `und` and
+`en` with a comment saying it should be an admin setting -- both are pinned, so the day it
+becomes a setting the rows say what changed. An emoji's colons come off its token, its
+space-separated aliases become one keyword object each, and `instance_id=1` keeps a peer's
+emojis out of a payload that claims them as ours.
+
+Seventeen mutants, all dead, on a green baseline.
+
 **Next free number: D1424.**
