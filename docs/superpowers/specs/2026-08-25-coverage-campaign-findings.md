@@ -24299,4 +24299,36 @@ render at all".
 
 Eighteen mutants, all dead, on a green baseline.
 
+---
+
+## Round 246 -- the anonymous path through seven block lists, and two fetch refusals
+
+`app/utils.py` has seven block/ban list helpers that each open with
+`if user_id == 0: return []`, which is the anonymous path -- `current_user.get_id()` answers
+`0` for a viewer with no account and every caller passes it straight through. None had a row
+for it. The rows drive all seven with rows present in every one of the tables behind them, so
+an answer of `[]` is a claim about the guard rather than about an empty database, and a
+control row asserts a signed-in viewer gets their own lists -- without which the seven would
+pass against helpers that always answer empty.
+
+**One equivalent mutant, recorded.** Deleting any single `user_id == 0` guard changes
+nothing: `user_id` is a serial primary key, so no account has id 0 and the skipped query
+matches nothing anyway. What the guards buy is seven skipped queries on every anonymous
+request. The non-equivalent mutants -- making the guard answer for EVERY viewer -- are killed.
+
+**`blocked_phrases` trims a Windows line ending.** Without `phrase.endswith('\r')`, every
+phrase but the last carries a trailing `\r` and matches nothing, so an admin editing the
+blocklist in a browser on Windows gets a filter that silently stops working. A blank line is
+skipped for the opposite reason: `'' in post.title` is True for every post.
+
+**The two refusals in front of an outbound fetch.** `opengraph_parse` truncates the URL at
+the `?` before fetching, which keeps a tracking query out of the request this instance makes
+to a third party, and answers None for anything it cannot read. `url_to_thumbnail_file` runs
+`is_invalid_get_request_uri` -- the SSRF guard -- BEFORE the request, so the row asserts
+nothing was fetched rather than that nothing was stored, and its hardcoded 15-second timeout
+for `washingtonpost.com` against 5 for everything else is asserted because a timeout is how
+this instance limits what one peer's link can cost it.
+
+Seventeen mutants dead, one provably equivalent, on a green baseline.
+
 **Next free number: D1424.**
