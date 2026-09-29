@@ -24376,4 +24376,39 @@ mutation runner is the only thing that does that. The suite is clean on a re-run
 passed), and the lesson is that these scans turn a torn read into a SyntaxError rather than
 an assertion failure, which is worth recognising on sight.
 
+---
+
+## Round 248 -- markdown that breaks the renderer, and what an upload is stored as
+
+Two clusters in `app/utils.py`, no defect.
+
+**`markdown_to_html` has two fallbacks, and the second renders nothing.** The input is a
+peer's post body, and the comment in the source names two live posts whose bodies made
+`markdown2` raise from inside its pygments handling. The retry drops exactly two extras --
+`markdown-in-html` and `fenced-code-blocks` -- and the row asserts which, by comparing the
+extras of the two attempts. If the retry fails too, the body becomes `''`: the post survives
+and its body does not, which is better than a 500 on every page it appears on. The inner
+handler is a BARE `except`, not `except TypeError`, because the retry uses a different extras
+set and can fail differently -- a row drives that. `escape_img` runs after whichever attempt
+produced the HTML, so the strange body gets escaped too.
+
+**`move_file_to_s3` has three near-identical blocks, and each reads `S3_PUBLIC_ACL`.** That
+is the security-relevant line: `ACL: public-read` makes the object world-readable at the
+provider, and it must be attached only when the admin asked for it -- a bucket already public
+by policy does not need it and one that is not must not be given it silently. Both states are
+asserted in all three blocks, because three copies is three places to forget one, and the
+first attempt's rows only covered the middle block, which left two mutants alive.
+
+Also covered: the local copy is unlinked after upload in each block (moving, not copying), a
+path already rewritten to a CDN URL is skipped, a path outside `app/static/media` is never
+uploaded, a File whose bytes are gone is skipped, and nothing happens at all when S3 is
+unconfigured. That last row needed the file to EXIST -- otherwise the `os.path.isfile` guard
+answers for the `store_files_in_s3()` one and the row proves nothing.
+
+**One equivalent mutant, recorded.** Dropping `not file_path.startswith('http')` alone
+changes nothing: a CDN URL does not start with `app/static/media` either, so the second half
+of the `and` refuses it anyway.
+
+Sixteen mutants dead, one provably equivalent, on a green baseline.
+
 **Next free number: D1424.**
