@@ -22760,4 +22760,84 @@ cannot produce or does not mean:
 Nine mutants, all dead on a green baseline. 15,152 tests, 0 failures, 0 warnings.
 All 92 floors met.
 
-**Next free number: D1407.**
+## Round 216 — D1407: fixing the peer side left the easier side open
+
+**Four rounds closed the federated route into three link columns. This round found the LOCAL route into two
+of them still open** — and open to anyone with an account rather than anyone with an instance.
+
+**D1407.** The web forms validate; the API schema only documents.
+
+* `CreatePostRequest.url` and `EditPostRequest.url` are `fields.String(metadata={"format": "url"})`
+  (`app/api/alpha/schema.py:1386, 1398`). `app/shared/post.py` took the value verbatim for `SRC_API`, and
+  the only check under it is `domain_from_url(url)` for a banned domain — which answers None for
+  `javascript:alert(1)` and skips the entire block. The web path fills the same column from
+  `CreateLinkForm.link_url` / `CreateVideoForm.video_url`, both carrying `Regexp(r'^https?://')`. Sink: the
+  ten bare `href="{{ post.url }}"` sites of D1404.
+* `CreatePostRequest.event` / `EditPostRequest.event` nest `PostEvent` (`schema.py:351-363`), whose
+  `online_link`, `external_participation_url` and `buy_tickets_link` carry the same declaration, and the
+  event-write block wrote all three straight onto the row. The web form offers only `online_link` and
+  already required the scheme. Sink: `post/_post_full.html:219`, D1403's href.
+
+```
+PROBE api post.url                   = 'javascript:alert(document.domain)'
+PROBE api online_link                = 'javascript:alert(document.domain)'
+PROBE api external_participation_url = 'javascript:alert(2)'
+PROBE api buy_tickets_link           = 'javascript:alert(3)'
+```
+
+**FACT 904 FOR THE SECOND TIME IN THREE ROUNDS.** `metadata={"format": "url"}` is OpenAPI documentation;
+marshmallow never reads it. D1405 found it on `avatar` and `cover`, and there are 44 such declarations in
+`schema.py`. The ones that matter are the request schemas, and a row in the new file asserts that these
+five still have `validators == []` — so if someone later adds a real `validate=`, the handler checks can be
+reconsidered rather than silently duplicated.
+
+**TWO ANSWERS, CHOSEN PER FIELD RATHER THAN PER FILE.** The post `url` is **refused**, with the exception
+the API already uses for bad input and the treatment D1405 gave `avatar`/`cover`: the caller is waiting and
+can fix the value, and a link post whose url was silently dropped is not the post they asked for. The three
+event links are **dropped**, matching `_as_url`'s use on the federated side: None is what those columns
+hold for an event that named no link, and the rest of the event is still what the author asked for.
+
+**THE EVENT RULE LANDED AT A SHARED WRITE, WHICH IS WHY IT COSTS THREE LINES AND NOT SIX.** One block in
+`app/shared/post.py` writes those three columns for both the web form and the API, and serves both
+`make_post` and `edit_post`. That makes five producers of `Event.online_link` now agreeing on one rule:
+`Post.new`, `update_post_from_activity`, the form's `Regexp`, and this block for web and API.
+
+**TWO EXISTING ROWS HAD TO MOVE, AND BOTH MOVES ARE THE FINDING RESTATED.**
+`tests/test_shared_post_make.py` reached `domain_from_url`'s hostless arm with `'not-a-url'` and
+`tests/test_shared_post_edit.py` with `'file:///etc/passwd'` — two urls the new guard refuses first. Both
+now use `'https:///x'`, which parses, has no hostname, and is the shape
+`update_post_from_activity`'s own comment already named. That those rows needed a non-http url to reach a
+line at all is the evidence that nothing was checking the scheme.
+
+**TWO SURVIVORS SHOWED THAT ONE OF THE TWO url GUARDS WAS UNOBSERVABLE, AND WHY IT IS STILL RIGHT.**
+Removing `make_post`'s copy of the check left every row passing, because `make_post` hands off to
+`edit_post` (`app/shared/post.py:277`, `from_scratch=True`) and that function's SRC_API branch re-reads the
+same `input['url']` and applies the same rule — so the request is still refused, just later. Measured with
+`make_post`'s copy replaced by `if False:`:
+
+```
+PROBE raised: Exception('url must be an http:// or https:// url')
+PROBE posts:  []
+PROBE votes:  0  post_count: 1
+```
+
+The insert is undone and **the counter is not**. `make_post` increments `community.post_count` and
+`user.post_count` and writes the author's self-vote before it delegates, so checking late leaves the
+community claiming one more post than it has. That is the whole observable difference between the two
+guards, and it is now the row that kills both mutants — a survivor pair that turned out to be about
+bookkeeping rather than about the scheme.
+
+**A THIRD EXISTING ROW HAD TO MOVE, AND IT IS THE MOST INFORMATIVE OF THE THREE.**
+`tests/test_shared_post_url.py::TestPixelfedArm::test_a_scheme_less_pixelfed_uno_url_takes_the_same_arm`
+drives `app/shared/post.py`'s `post.url.startswith('pixelfed.uno')` disjunct — the one with **no scheme** —
+and it drove it through the API. With the new check that string never gets there, so the row now uses a
+`SRC_WEB` form double: the web branch reads `input.link_url.data` without re-validating, and
+`CreateLinkForm`'s `Regexp` is what a real submission satisfies. The arm is still not dead code, because
+federated ingest can still produce a scheme-less `post.url` — `url_is_storable` blocks named schemes and a
+string with no scheme has none to block. Three tests, three urls chosen for reaching a line rather than for
+being plausible, and all three were only reachable because nothing checked the scheme.
+
+Eleven mutants, all dead on a green baseline -- nine on the first pass, and M1/M4 once the counter
+row existed. 15,192 tests, 0 failures, 0 warnings. All 92 floors met.
+
+**Next free number: D1408.**

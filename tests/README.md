@@ -13082,3 +13082,23 @@ without `name`, and read the refusal message rather than assuming the row under 
 refuses an absent domain rather than waving it through (app/utils.py:2486, changed 2026-08-29). A dispatcher
 test whose activity is silently refused as 'User cannot create post in Community' is usually this, not the
 behaviour under test -- set `ap_domain`, or double the gate and say why.
+
+**912. CLOSING THE FEDERATED ROUTE INTO A COLUMN DOES NOT CLOSE THE API ROUTE INTO IT, AND THE API ROUTE IS CHEAPER TO REACH.**
+D1403 and D1404 fixed `Event.online_link` and `Post.url` for a peer; both stayed open to any authenticated
+API client, because the web forms carry the `Regexp` and the API schema only documents the format. A peer
+needs its own instance; an API client needs an account. After fixing an ingest path, enumerate EVERY producer
+of the column -- `grep` the column name in app/shared, app/api and the form classes -- before calling the
+field done.
+
+**913. A TEST THAT NEEDS A MALFORMED VALUE TO REACH A LINE IS EVIDENCE THAT NOTHING VALIDATES THAT VALUE.**
+Two rows reached `domain_from_url`'s hostless arm with `'not-a-url'` and `'file:///etc/passwd'`, and a new
+scheme check made both unreachable. The rows were right about the line and wrong about the input: the shape
+that still gets there is `'https:///x'`, which parses and has no hostname. When a guard breaks a test, read
+whether the test was documenting a hole.
+
+**914. A GUARD DUPLICATED AT AN EARLIER BOUNDARY IS INVISIBLE UNTIL A TEST NAMES WHAT THE EARLY ONE SAVES.**
+`make_post` checks the API's url and then delegates to `edit_post`, which checks it again, so deleting the
+first check changed no test: the call still raised and no Post row survived. What it did change is that
+`community.post_count` and `user.post_count` had already been incremented -- the refusal left a counter
+claiming a post that does not exist. When a mutant of a defensive check survives, ask what the code does
+BETWEEN the two copies, and assert that.
