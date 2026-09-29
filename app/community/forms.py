@@ -494,13 +494,33 @@ class CreateEventForm(SubmittedUrlMixin, CreatePostForm):
         utc_start = local_start.astimezone(ZoneInfo('UTC'))
         utc_end = local_end.astimezone(ZoneInfo('UTC'))
 
+        # D1400, and D1001's shape three more times: each of these appended its
+        # complaint and then fell through to `return True` at the end of the method.
+        # WTForms computes `validate()`'s answer from field validation, and appending
+        # to `field.errors` afterwards does not change it -- so `validate_on_submit()`
+        # was True and the route went on to create the event, while the message sat on
+        # a form the route never renders again because it redirects on success.
+        #
+        # Measured: a start two days in the past validated True; so did an end in the
+        # past, and an end before its start.
+        #
+        # All three are still collected before refusing, rather than returning at the
+        # first, so a submitter with two problems is told about both. That is why this
+        # is a flag and not three early returns like the block below it.
+        times_are_wrong = False
         if utc_start < utcnow(naive=False):
             self.start_datetime.errors.append(_('This time is in the past.'))
+            times_are_wrong = True
         if utc_end < utcnow(naive=False):
             self.end_datetime.errors.append(_('This time is in the past.'))
+            times_are_wrong = True
 
         if self.start_datetime.data > self.end_datetime.data:
             self.start_datetime.errors.append(_('Start must be less than end.'))
+            times_are_wrong = True
+
+        if times_are_wrong:
+            return False
 
         # Validate online vs physical event requirements
         if self.online.data:
