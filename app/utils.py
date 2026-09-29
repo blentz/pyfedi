@@ -3769,11 +3769,32 @@ def read_language_choices() -> List[tuple]:
 
 
 def actor_contains_blocked_words(actor: str):
+    """Whether an actor name is one the admin has blocked.
+
+    D1388. `'' in anything` is True, and nothing skipped an empty entry -- so one
+    blank line in the setting blocked EVERY actor. A textarea submits `'spam\r\n'`
+    for one word and an Enter, and `'\r'.strip()` is `''`, so the most ordinary
+    way to fill this setting was enough. Measured against an innocent actor:
+
+        'spam'          not blocked   (correct)
+        'spam\n'        BLOCKED
+        'spam\r\n'      BLOCKED
+        '\nspam'        BLOCKED
+        'spam\n\nscam'  BLOCKED
+
+    Three callers made that a silent outage: `find_actor_or_create`
+    (app/activitypub/actor.py:72) resolves no remote actor at all,
+    `app/auth/util.py:219` refuses every registration, and
+    `app/auth/oauth_util.py:277` every OAuth signup. `blocked_phrases()` in this
+    same module already skips empty entries with `if phrase != ''`.
+    """
     actor = actor.lower().strip()
     blocked_words = get_setting('actor_blocked_words')
     if blocked_words and blocked_words.strip() != '':
         for blocked_word in blocked_words.split('\n'):
             blocked_word = blocked_word.lower().strip()
+            if not blocked_word:
+                continue
             if blocked_word in actor:
                 return True
     return False
@@ -3786,6 +3807,11 @@ def actor_profile_contains_blocked_words(user: User) -> bool:
     if blocked_words and blocked_words.strip() != '':
         for blocked_word in blocked_words.split('\n'):
             blocked_word = blocked_word.lower().strip()
+            # D1388, as in actor_contains_blocked_words above: an empty entry
+            # matched every bio, so `find_actor_or_create` refused every user who
+            # had one.
+            if not blocked_word:
+                continue
             if user.about_html and blocked_word in user.about_html.lower():
                 return True
     return False
