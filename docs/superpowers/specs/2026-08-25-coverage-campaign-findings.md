@@ -24142,4 +24142,56 @@ association TABLE; there is no model, so rows go in through
 
 Nineteen mutants, all dead, on a green baseline.
 
-**Next free number: D1423.**
+---
+
+## Round 242 -- a flagged domain silently discarded every post from it (D1423)
+
+**D1423.** `Post.new` -- the federated ingest path -- builds the Post object and, before it
+is ever added to the session, reaches the suspicious-domain block:
+
+```python
+                if domain.notify_mods:
+                    for community_member in post.community.moderators():
+```
+
+`post.community` is the RELATIONSHIP, and an object that has not been flushed has none,
+however good its `community_id` is. So the line was
+`AttributeError: 'NoneType' object has no attribute 'moderators'`, which `create_post`
+catches, logs as a failure, and turns into a dropped post.
+
+The effect is the opposite of the feature: flagging a Domain `notify_mods` notified nobody
+and made this instance silently discard every incoming post linking to that domain. Fixed
+by using `community`, which is already an argument to the function and is the same object.
+The twin block in `update_post_from_activity` is correct -- it runs against a persisted
+post, whose relationship is loaded.
+
+The same block's admin half was fine, and both halves now have rows, including
+`already_notified`, which stops an admin who also moderates the community getting two
+notifications for one post.
+
+**The cross-post stripper.** Lemmy writes `cross-posted from: https://...` into a link
+post's body; PieFed has its own cross-post UI, so the line is removed and the HTML
+re-rendered. Both spellings (one space and two) are matched, and the filter is per LINE, so
+a body mentioning the same domain elsewhere keeps those lines.
+
+The guard in front of it (`if post.body and '...' in post.body`) needed a specific row to
+be worth anything: on a markdown body, re-rendering changes nothing, so a mutant that
+rewrote EVERY body survived. The row that kills it sends the body as HTML --
+`mediaType: text/html`, where `body_html` is `allowlist_html(content)` and `body` is
+`html_to_text(...)`, so the two are not a round trip -- and asserts the peer's anchor
+survives.
+
+**What a reply addresses.** `PostReply.in_reply_to` and `PostReply.to` each have two arms,
+and the fixture gives the post's author and the parent reply's author different accounts:
+a nested reply points at the reply above it and is addressed to the person who wrote it,
+not to the post's author. Getting either wrong flattens a thread or addresses somebody who
+was not being answered.
+
+**Three fixture facts cost a cycle each:** `Post.new` takes the link from an ATTACHMENT,
+not the object's own `url` key; `create_post` refuses an object with no `content` at all;
+and the ingest path fetches the link (respx refuses anything unmocked), so the row has to
+serve the host.
+
+Fourteen mutants, all dead, on a green baseline.
+
+**Next free number: D1424.**

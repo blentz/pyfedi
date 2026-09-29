@@ -13514,3 +13514,19 @@ survives. Seed a different number of each.
 `Instance.votes_are_public` opens with the identity test so that a peer whose trust has never been set is not
 treated as trusted. A row for it sets the column to None explicitly -- the default from `make_instance` may
 already be False, which passes either way.
+
+**990. AN UNFLUSHED OBJECT HAS NO RELATIONSHIPS, ONLY FOREIGN KEYS.**
+`Post(community_id=community.id, ...)` that has not been added to the session answers `post.community` with
+None, so `post.community.moderators()` is an AttributeError. Use the object already in scope. This was D1423,
+and its symptom was a dropped post rather than a traceback, because `create_post` catches everything.
+
+**991. `Post.new` READS THE LINK FROM AN ATTACHMENT, NOT FROM `object['url']`.**
+A Create whose object carries `url` produces a post with `post.url is None` and skips every branch that
+depends on it. The Lemmy < 0.19.4 shape is `attachment: [{'type': 'Link', 'href': ...}]`. `create_post` also
+refuses an object with no `content`, and the ingest path issues a HEAD to the link, which respx blocks unless
+the row serves it.
+
+**992. A MARKDOWN BODY CANNOT SHOW THAT RE-RENDERING WAS SKIPPED.**
+`post.body_html == markdown_to_html(post.body)` already holds, so a mutant that re-renders every body changes
+nothing. Send the body as `mediaType: text/html` instead: there `body_html` is `allowlist_html(content)` and
+`body` is `html_to_text(...)`, so a rebuild is visible -- the anchor disappears.
