@@ -428,8 +428,14 @@ def list_communities():
     # if filtering by home instance
     if instance:
         communities = communities.filter(Community.ap_domain == instance)
-    
-    hide_nsfw = False
+
+    # D1418. `hide_nsfw = False` stood here, throwing away the decision made at the top of
+    # this function: an instance with `enable_nsfw` off sets it True, and this line put it
+    # straight back to False. The template shows the NSFW All/Yes/No selector when
+    # `hide_nsfw` is falsy, so a site that has disabled NSFW still offered the control.
+    # Picking `Yes` on it did nothing -- `nsfw` is already forced to 'no' above -- so the
+    # visible effect was an inert filter, not communities that should have been hidden.
+    # Both branches above assign the name, so nothing here is left unbound.
 
     if current_user.is_authenticated:
         if current_user.hide_low_quality:
