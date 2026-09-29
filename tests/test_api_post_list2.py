@@ -416,25 +416,25 @@ class TestNarrowing:
             ['first', 'second', 'third']
 
     def test_one_feed(self, env):
-        feed = make_local_feed('newsfeed')
+        feed = make_local_feed('newsfeed', public=True)
         make_feed_item(feed, env.community)
         db.session.commit()
         assert names(get_post_list2(None, {'feed_id': feed.id})) == \
             ['first', 'second', 'third']
 
     def test_a_feed_that_carries_its_children(self, env):
-        parent = make_local_feed('parent')
+        parent = make_local_feed('parent', public=True)
         parent.show_posts_in_children = True
-        child = make_local_feed('child')
+        child = make_local_feed('child', public=True)
         child.parent_feed_id = parent.id
         make_feed_item(child, env.community)
         db.session.commit()
         assert len(get_post_list2(None, {'feed_id': parent.id})['posts']) == 3
 
     def test_a_feed_that_does_not_carry_its_children(self, env):
-        parent = make_local_feed('parent')
+        parent = make_local_feed('parent', public=True)
         parent.show_posts_in_children = False
-        child = make_local_feed('child')
+        child = make_local_feed('child', public=True)
         child.parent_feed_id = parent.id
         make_feed_item(child, env.community)
         db.session.commit()
@@ -448,7 +448,7 @@ class TestNarrowing:
         """A feed is not the front page. Every other narrowing branch turns
         `segregate_instance_stickies` off, and the feed branch had that line
         only in an unreachable duplicate of itself."""
-        feed = make_local_feed('newsfeed')
+        feed = make_local_feed('newsfeed', public=True)
         make_feed_item(feed, env.community)
         env.posts[2].instance_sticky = True   # 'third', the oldest
         db.session.commit()

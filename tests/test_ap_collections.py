@@ -809,14 +809,19 @@ def test_the_feed_followers_collection_sets_its_cache_control(app, db_session):
     assert response.headers['Cache-Control'] == 'public, max-age=15'
 
 
-def test_a_non_public_feed_still_has_a_followers_collection(app, db_session):
-    """PINS a defect. `feed_followers` never reads `feed.public` at all.
-    `feed_outbox` and `feed_following` (app/activitypub/routes.py) both guard
-    `if not feed.public: abort(403)` right after the same lookup, and both
-    are exercised here -- `test_a_non_public_feed_outbox_is_403` and
-    `test_a_non_public_feed_following_is_403`. So the asymmetry this test
-    pins is proved on both sides: the two siblings 403 on a non-public feed
-    and `feed_followers` serves it.
+def test_a_non_public_feed_has_no_followers_collection(app, db_session):
+    """WAS A PIN; INVERTED by D1394, which repaired the asymmetry it recorded.
+
+    ORIGINAL PINNED CLAIM, now false: "`feed_followers` never reads
+    `feed.public` at all", while `feed_outbox` and `feed_following` both guard
+    `if not feed.public: abort(403)` right after the same lookup -- proved on
+    both sides here by `test_a_non_public_feed_outbox_is_403` and
+    `test_a_non_public_feed_following_is_403`.
+
+    What it served was `totalItems`: the number of accounts subscribed to a feed
+    the visitor may not open. `feed_moderators_route` was the fourth of the five
+    and served the owner's `ap_profile_id`; it is guarded now too, and
+    `test_a_non_public_feed_moderators_is_403` below is its row.
 
     `public=False` is passed explicitly: it is also `Feed.public`'s column
     default, and `make_local_feed`'s own default, so leaving it implicit would
@@ -827,7 +832,30 @@ def test_a_non_public_feed_still_has_a_followers_collection(app, db_session):
 
     response = collection_get(app, '/f/news/followers')
 
-    assert response.status_code == 200
+    assert response.status_code == 403
+
+
+def test_a_non_public_feed_moderators_is_403(app, db_session):
+    """D1394, the fifth endpoint and the second of the two that did not ask.
+    What it served was the owner's `ap_profile_id`, so a visitor who may not open
+    a private feed was told who made it.
+
+    An owner is created and assigned because `feed_moderators_route` reads
+    `feed.user_id` -- see `test_a_feed_moderators_collection_lists_its_owner`.
+    Without one the endpoint would raise before reaching any guard, and a 403
+    here would prove nothing about the guard.
+    """
+    site, instance = seed_actors()
+    feed = _seed_local_feed('news', public=False)
+    owner = make_user(instance, 'feedowner', local=True)
+    owner.ap_profile_id = 'https://test.piefed.local/u/feedowner'
+    feed.user_id = owner.id
+    db.session.commit()
+
+    response = collection_get(app, '/f/news/moderators')
+
+    assert response.status_code == 403
+    assert owner.ap_profile_id not in response.get_data(as_text=True)
 
 
 def test_a_feed_moderators_collection_lists_its_owner(app, db_session):

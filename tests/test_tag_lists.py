@@ -868,9 +868,9 @@ def test_a_feed_id_follows_the_feed_tree_only_when_asked(app, db_session,
     from tests.factories import make_feed_item, make_local_feed
     instance, alice, bob = _seed()
     tag = _tag()
-    parent_feed = make_local_feed('parentfeed')
+    parent_feed = make_local_feed('parentfeed', public=True)
     parent_feed.show_posts_in_children = show_posts_in_children
-    child_feed = make_local_feed('childfeed')
+    child_feed = make_local_feed('childfeed', public=True)
     child_feed.parent_feed_id = parent_feed.id
     db.session.commit()
     parent_community = make_community('parentcomm')
