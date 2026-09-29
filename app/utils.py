@@ -483,6 +483,40 @@ def has_unsafe_url_scheme(url: str, unsafe_schemes: frozenset = UNSAFE_URL_SCHEM
     return url_scheme(url) in unsafe_schemes
 
 
+def url_is_storable(url) -> bool:
+    """Whether a peer's url may be stored in `Post.url` at all.
+
+    D1404. `Post.url` is rendered as a bare `href` in ten templates --
+    `post/_post_full.html:8`, five sites in `post/post_teaser/_macros.html`, four in
+    `post/_post_teaser_masonry.html`, two of which also make it an `img src` -- and
+    `post_to_page` (app/activitypub/util.py:174) federates it back out again as a Link
+    attachment. The only guard between a peer's attachment url and all of that was
+    `url_is_parseable`, whose docstring says outright that it checks no scheme, so
+
+        {"attachment": [{"type": "Link", "href": "javascript:alert(document.domain)"}]}
+
+    was stored verbatim and clicked from the post page. Measured for all six attachment
+    shapes this codebase reads (Lemmy's `href`, NodeBB's `url`, Mastodon's Document,
+    WordPress's Audio, PixelFed's Image, a.gup.pe's dict) and through
+    `update_post_from_activity`, which replaced an already-stored `https://` url with it.
+
+    THE SET IS THE HREF BLOCKLIST, NOT AN http(s) ALLOWLIST, and the reason is the one
+    recorded at UNSAFE_URL_SCHEMES: this is a url REMOTE software chose, and allowlisting
+    means auditing every scheme that legitimately appears in a link post across the
+    fediverse. All four local producers of `Post.url` do require `^https?://`
+    (`CreateLinkForm.link_url`, `CreateVideoForm.video_url`, and the two Event fields),
+    so the allowlist is defensible here and would be strictly stronger -- but taking it
+    needs evidence about what peers actually send, and getting it wrong silently drops
+    real links from every remote instance. The blocklist closes the hole with no such
+    risk. Upgrading it later is a separate piece of work with its own evidence.
+
+    Parseability is tested first and kept: it is what stops `domain_from_url` returning
+    None into a `.banned` dereference at three of the four call sites, and the scheme
+    test is about a different failure.
+    """
+    return url_is_parseable(url) and not has_unsafe_url_scheme(url)
+
+
 def url_host(url: str) -> Optional[str]:
     """The host furl reads from `url`, or None when furl refuses to parse it.
 

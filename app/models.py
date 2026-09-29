@@ -2551,7 +2551,7 @@ class Post(db.Model):
             microblog_content_to_link, blocked_phrases, get_setting, \
             is_image_url, is_video_url, domain_from_url, opengraph_parse, shorten_string, fixup_url, \
             is_video_hosting_site, communities_banned_from, recently_upvoted_posts, blocked_users, \
-            url_is_parseable
+            url_is_storable
 
         microblog = False
         private = False
@@ -2702,11 +2702,13 @@ class Post(db.Model):
         # Every write above this line takes a url straight from a REMOTE peer.
         # One site for all of them, the Create twin of the guard in
         # update_post_from_activity (app/activitypub/util.py): refuse to store a
-        # url urlparse cannot read, rather than rejecting the peer's whole post,
+        # url urlparse cannot read OR one naming a scheme an href may not carry
+        # (D1404 -- six attachment shapes all stored javascript:), rather than
+        # rejecting the peer's whole post,
         # which would hand peers a way to make us drop content. None, not '',
         # because None is what Post.url holds for every post with no url and
         # what post_to_page tests for before federating an attachment out again.
-        if post.url and not url_is_parseable(post.url):
+        if post.url and not url_is_storable(post.url):
             post.url = None
 
         if post.url:
@@ -3057,8 +3059,10 @@ class Post(db.Model):
                 # This write is BELOW the domain block above, so nothing there
                 # saw it: a Mobilizon event's link had no ban check and no parse
                 # check at all. None is this branch's own "no url" value, set a
-                # few lines up, and the two must not diverge.
-                if post.url and not url_is_parseable(post.url):
+                # few lines up, and the two must not diverge. Same predicate as
+                # the Page path above, so an Event's link cannot carry a scheme
+                # a Page's link may not (D1404).
+                if post.url and not url_is_storable(post.url):
                     post.url = None
                 image_url = image_url_from(request_json['object'].get('image'))  # D1352
                 if image_url and post.image is None:
