@@ -24018,4 +24018,41 @@ The assertion now pulls out the `<input name="hide">` tag itself and checks both
 
 Nine mutants, all dead, on a green baseline.
 
+---
+
+## Round 239 -- replacing a community's images, and two admin listings
+
+Three clusters in `app/admin/routes.py`, no defect, and one piece of ordering worth writing
+down.
+
+**Uploading a new icon deletes the old file from disk BEFORE the new one is saved.**
+`community.icon.delete_from_disk()` runs, then `save_icon_file(...)`, then `if file:`
+attaches it. So a save that returns nothing leaves the community pointing at a File row
+whose image is gone. The row that covers `if file:` asserts exactly that, rather than
+glossing it: the ordering is the design -- the delete cannot be deferred without keeping the
+old path around -- and `save_icon_file` aborts rather than returning None for every input it
+rejects, so the state is unreachable from the route today. The banner block is a second copy
+on `image_id`, and its row asserts the icon is untouched, which kills a mutant that names
+the wrong column.
+
+The empty-field guard matters in the expensive direction: a browser submits `icon_file`
+with an empty filename when the admin picks nothing, and without
+`icon_file.filename != ''` that would delete the icon the community already has.
+
+**The deleted-content listing's `?days=` window** filters on `posted_at` alone, unlike the
+other two views in that route, which also require the AUTHOR to be recent. `?days=0` means
+all time, so the filter must be skipped rather than applied with a zero-length window, and
+the default of three days is asserted because that is what an admin opening the page from
+the menu gets.
+
+**Two vacuous rows the mutation pass caught.** The registrations queue reads a
+disposable-domain list only when `FLAG_THROWAWAY_EMAILS` is on AND the file exists -- and
+the flag-off row did not create the file, so the second half of the `and` answered for the
+first and a mutant dropping the flag check survived. And the queue lists `status=0` while a
+second query lists the recently approved: asserting a name appears on the page passes even
+if the approved application is in BOTH lists, so both lists are now captured as the template
+receives them.
+
+Twelve mutants, all dead, on a green baseline.
+
 **Next free number: D1422.**
