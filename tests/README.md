@@ -12811,3 +12811,23 @@ than the note -- and correct the note, because the next sweep trusts it.
 it belongs with `?id=999999` and gets the same 404, not with `abc`. Measured: SQLAlchemy binds the
 Python int and Postgres matches nothing -- no `NumericValueOutOfRange`, so `<int:...>` converters need
 no bound either. Grouping it with the unparsable values is what made three rows of a new file wrong.
+
+**871. `os.environ.get('X') or ['a-default']` GIVES A LIST ONLY WHILE X IS UNSET.**
+Set, it is a string, and `value in config['X']` silently changes from a membership test to a substring
+test: with `SKIP_RATE_LIMIT_IPS=192.168.1.10`, the callers `92.168.1.1` and `2.168.1.1` were both
+exempt from the login rate limit. Parse the variable into the type the caller assumes, at the config
+boundary AND at the caller, through one function -- and assert the SHIPPED default's type, because a
+test that only sets the value never sees the unset case.
+
+**872. A DUPLICATE VIEW FUNCTION NAME UNDER flask-smorest IS NOT A ROUTING BUG.**
+Two handlers called `post_alpha_user_follow` looked like one route serving the other's body, since
+Flask refuses two views under one endpoint. flask-smorest de-duplicates first --
+`User.post_alpha_user_follow` and `User.post_alpha_user_follow_20` -- so both routes ran correctly and
+only the endpoint NAME was wrong. Read `app.url_map.iter_rules()` before filing; and a test that both
+routes return 200 proves nothing about which function each ran, so assert the effect.
+
+**873. A CONFIG READ AT IMPORT CANNOT BE TESTED WITH `monkeypatch.setenv`.**
+`config.py` evaluates `os.environ.get(...)` once, when it is first imported, so the `Config` a test
+process holds was fixed before the test ran -- and a value the environment never set is the one case a
+broken expression gets right. The mutant reverting the line survived until the file executed config.py
+again by path, under another module name, with the variable set. Assert the type AND re-execute.

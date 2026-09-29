@@ -21786,4 +21786,81 @@ for it, and a visibility helper is the wrong place to learn whether a row exists
 Ten of eleven mutants dead on a green baseline, with the eleventh recorded above. 14,363 tests,
 0 failures, 0 warnings. All 92 floors met.
 
-**Next free number: D1396.**
+## Round 201 — D1396: a login rate-limit exemption decided by substring
+
+**D1396. `request.remote_addr in current_app.config['SKIP_RATE_LIMIT_IPS']`, where the config value is
+a list only while nobody has set it.**
+
+```python
+SKIP_RATE_LIMIT_IPS = os.environ.get('SKIP_RATE_LIMIT_IPS') or ['127.0.0.1']
+```
+
+`os.environ.get` returns a **string**. So the moment an operator sets the variable — and the name
+invites it, while no sample env file mentions it, so there is nothing to copy the right shape from —
+`in` stops being a membership test and becomes a substring test:
+
+```
+PROBE  configured             remote        exempt
+       ['127.0.0.1'] (list)   127.0.0.1     True     <- correct
+       ['127.0.0.1'] (list)   27.0.0.1      False    <- correct
+       '10.0.0.5'             0.0.0.5       True     <- never configured
+       '10.0.0.5'             0.0.5         True     <- not even an address
+       '192.168.1.10'         92.168.1.1    True     <- never configured
+       '192.168.1.10'         2.168.1.1     True     <- never configured
+       '10.0.0.5,10.0.0.6'    5,10.0.0.6    True
+       '10.0.0.5'             9.9.9.9       False
+```
+
+`92.168.1.1` and `2.168.1.1` are routable public addresses. The exemption's only two consumers are
+`limiter.limit('20/hour', exempt_when=is_trusted_request)` on `/api/alpha/user/login` and
+`limiter.limit('6/hour', ...)` on `/api/alpha/user/verify_credentials` — so what a wrongly-trusted
+caller gets is **unmetered password guessing against every account on the instance**, for as long as
+the operator's own address stays configured. `ProxyFix(x_for=1)` has already resolved `remote_addr`
+from `X-Forwarded-For`, so the address compared is the caller's, not a proxy's; the substring test is
+the whole of the failure.
+
+`config.ip_list` now takes the comma-separated string an environment variable carries **and** the list
+a Python config sets, and returns a list either way. `config.py` parses the environment through it and
+`is_trusted_request` normalises whatever it is handed through the same function, so a value set some
+other way — a test, a subclass, a deploy script writing Python — cannot bring the substring test
+back. An empty configuration yields `[]` rather than `['']`, because a list holding the empty string
+trusts everybody.
+
+`if current_app.debug: return True` stays: a development instance wants it, and it is why these two
+limits never fire in the suite. Every row of the new file sets `debug` False explicitly, since with it
+left alone a test asserting "this caller is exempt" passes whatever the rest of the function does.
+
+**A second finding in the same file, and it was not the defect it looked like.** `ruff --select F811`
+named two handlers three lines apart both called `post_alpha_user_follow` — `/user/follow` and
+`/user/unfollow`. Flask derives an endpoint from the function's name and refuses two different views
+under one endpoint, so this read as one route serving the other's body: following somebody would
+unfollow them. Measured instead of filed:
+
+```
+PROBE  RULE /api/alpha/user/follow     endpoint=User.post_alpha_user_follow
+       RULE /api/alpha/user/unfollow   endpoint=User.post_alpha_user_follow_20
+```
+
+flask-smorest de-duplicates the collision, so each route has run its own function all along. What the
+shadowing cost was the name: `url_for` and the generated OpenAPI document could only call unfollow
+`post_alpha_user_follow_20`. Renamed, with the endpoint pair pinned and the follow/unfollow rows
+strengthened to assert the `UserFollower` row appearing and disappearing — which is what proves the
+two bodies differ.
+
+**Also looked at and left alone.** `post_alpha_user_register` loads `UserRegistrationRequest` where
+every sibling loads its `*Response` schema — a real copy-paste slip, and dead: `post_user_register`
+and `get_user_captcha` both `raise Exception('not implemented')` (D1181), so the line never runs.
+Recorded here rather than changed, because a repair to unreachable code cannot be tested.
+
+**The mutation run refused the obvious test, and was right to.** Reverting `config.py` to
+`os.environ.get(...) or ['127.0.0.1']` left every test passing: with the variable unset both
+expressions produce the same list, and `config.py` reads the environment once, at import, so no
+`monkeypatch.setenv` reaches the `Config` this process holds. That is exactly why the defect survived
+— every test that ever looked saw the unset case, the only one that was already correct. The file now
+executes `config.py` again by path, under a different module name and with the variable set, and
+asserts the value its assignment produces.
+
+Fourteen mutants, all dead, on a green baseline. 14,407 tests, 0 failures, 0 warnings. All 92
+floors met.
+
+**Next free number: D1397.**
