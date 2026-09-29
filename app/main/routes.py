@@ -709,12 +709,6 @@ def keyboard_shortcuts():
     return render_template('keyboard_shortcuts.html')
 
 
-def list_files(directory):
-    for root, dirs, files in os.walk(directory):
-        for file in files:
-            yield os.path.join(root, file)
-
-
 @bp.route('/replay_inbox')
 @login_required
 def replay_inbox():
