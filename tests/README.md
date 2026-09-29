@@ -12864,3 +12864,16 @@ D1397's new guard in `search_for_feed` carried a `return None` that nothing exer
 line no mutant can be built against, so a mutation run cannot notice it. Run the floors on the round
 that ADDS code, not only on the round that adds tests -- and treat a drop as the round's own doing
 before looking anywhere else.
+
+**879. ASSERT A PRODUCER/CONSUMER RULE OVER THE SOURCE, NOT ONLY OVER TODAY'S FIELDS.**
+An edit page's GET pre-fill and POST write are two halves of one contract, and the campaign has repaired
+three separate cases of them disagreeing (D701, D702, D675). A behavioural test covers the fields it
+names; an AST test comparing the two sets covers every field added later. Sweep the pair, then pin the
+rule.
+
+**880. A BACKGROUND READER SEES MUTATED SOURCE WHILE A MUTATION RUN IS IN FLIGHT.**
+An automated security scan flagged `form.nsfw.data = community.nsfl` as a HIGH data-integrity bug. It was
+mutant M1, written to the file for the ten seconds that mutant's test run took. Fact 877's other edge:
+the runner's snapshot means nothing is lost, but anything reading the tree meanwhile -- a scan, a linter,
+a second agent -- is reading a deliberate defect. Check the file before acting on a report that arrives
+mid-run.

@@ -21985,4 +21985,58 @@ guard its sibling already had. Seven more mutants for those lines, all dead.
 Thirty-six mutants, all dead, on a green baseline. 14,671 tests, 0 failures, 0 warnings. All 92
 floors met.
 
+## Round 203 — no defect: the edit round trip, swept across all 27 of them
+
+**No defect this round.** The sweep is the substance, and it came back clean.
+
+**THE SHAPE.** A setting the POST writes and the GET does not pre-fill is a setting that editing
+**anything else on the page** silently resets, because the form round-trips through the browser and an
+unfilled field posts back its default. The campaign has been bitten by this three times: D701 was
+`feed_edit`'s NSFL pre-fill reading the NSFW column, so saving any edit to an NSFL feed cleared the
+flag; D702 was NSFW/NSFL taken past the site's switches; D675 was `is_instance_feed` taken from the
+caller. Each was one half of a pair disagreeing with the other half.
+
+**TWENTY-SEVEN FUNCTIONS IN `app/` DO BOTH**, and an AST sweep compared the two halves of each. Nine
+round-trip exactly. Every apparent divergence among the other eighteen is an artefact of looking for
+`row.col = form.x.data`, and each was checked rather than assumed:
+
+* `admin_site`, `admin_misc` and `admin_federation` write through `set_setting('x', form.x.data)` and
+  `db.session.execute`, never through an attribute — 17 apparent gaps in `admin_misc` alone;
+* `user_settings`' `compaction`, `low_bandwidth_mode`, `max_hours_per_day` and
+  `max_hours_change_restriction` are **cookies**, written with `resp.set_cookie` at
+  `app/user/routes.py:692-700` and pre-filled from `request.cookies`;
+* `languages`, in both community editors, is written by a `DELETE` plus
+  `community.languages.append(...)`;
+* `add_post`, `feed_copy` and `filter_selection` are **create** forms, where a pre-fill is a default
+  rather than the other half of a round trip;
+* `password`, `role`, `hide`, `countries`, `announcement`, `referrer` and `private` are each written
+  somewhere other than an attribute assignment, or are deliberately not persisted from that form.
+
+`admin_community_edit` itself round-trips completely: 23 fields written, the same 23 pre-filled. D1370's
+`is_local()` guard on the ActivityPub URL rewrite is in place, and every data field on
+`EditCommunityForm` is part of the pair — no control that does nothing.
+
+**The deliverable is its GET branch**, 26 statements no test had executed, on a page that writes 23
+community settings — **plus the rule asserted over the AST**, so that a field added to one half only
+fails in the suite rather than on an admin's first save. A behavioural test can only cover the fields it
+names; the source-level one covers every future field as well.
+
+**The round's residual: `if topic:` cannot fire.** `topic = db.session.get(Topic, old_topic_id)` is
+followed by a guard that is unreachable, and the schema is what guarantees it. `Community.topic_id` is a
+real foreign key, so an id no Topic row holds cannot be stored —
+`ForeignKeyViolation: Key (topic_id)=(999999) is not present in table "topic"` — and
+`Topic.communities` is `cascade="all, delete-orphan"` (`app/models.py:1124`), so deleting a topic
+deletes its communities. The first attempt at that test deleted the topic and got a **404** from the
+edit page, because the community being edited had gone with it. Fact 75 CAUSE 5, unreachable data, with
+the schema doing the guaranteeing. The guard stays — one line, and a cascade can change.
+
+**One observation, recorded and not changed.** `EditCommunityForm` has no `nsfl` field, and
+`Community.nsfl`'s only writer anywhere is `app/activitypub/util.py:894`, a peer's profile refresh
+(`app/community/forms.py:250`'s `nsfl` belongs to `CreatePostForm`, a post's flag). So the column is
+read by four filters and written by one peer-driven path, and a local community cannot be marked NSFL at
+all. That is a missing control rather than a broken one, so it is a feature request, not a repair.
+
+Fifteen mutants, all dead, on a green baseline. 14,687 tests, 0 failures, 0 warnings. All 92
+floors met.
+
 **Next free number: D1398.**
