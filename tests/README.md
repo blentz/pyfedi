@@ -13312,3 +13312,21 @@ traceback was read properly. The frame list is the evidence; the exception type 
 guard entirely and dies on `user.__table__`. Reached here by a `Report` with no `suspect_user_id`; every
 report the product writes sets one, so this is a fixture note rather than a defect, but the asymmetry is
 worth knowing before passing a nullable column straight into that function.
+
+**950. AN UNDECLARED QUERY PARAMETER IS A STRING, AND EVERY NON-EMPTY STRING IS TRUE.**
+`/post/list` accepted `debug` only through `unknown=INCLUDE`, so it never passed a field's `_deserialize`.
+`?debug=false` therefore arrived as `'false'` and `if data.get('debug'):` took the branch. A boolean option
+that a client cannot switch off looks identical to one that works, in every test that only ever turns it on.
+Declare the field; do not rely on `unknown=INCLUDE` to carry a typed value. See D1416.
+
+**951. `unknown = EXCLUDE` MAKES AN UNDECLARED PARAMETER DISAPPEAR, AND THE BRANCH BEHIND IT DEAD.**
+The same `debug` on `/comment/list` was dropped by `DefaultSchema.Meta.unknown`, so `data.get('debug')` was
+always `None` and the two lines behind it could not run from any request. A permanently-red pair of lines
+inside an otherwise-covered function is worth reading as "unreachable" before it is read as "untested".
+
+**952. TWO ARMS THAT AGREE ON EVERY GOOD INPUT ARE TOLD APART ONLY BY A BAD ONE.**
+The `debug` arm re-loads the response through the endpoint's schema; the other serves it directly. On a
+valid response both answer 200 with the same body, so a row that asks for `debug` proves nothing about
+`load()` having checked anything. Patch the list helper to return a value the schema refuses -- an integer
+in a declared `String` -- and the two arms answer 400 and 200. Assert the 400's MESSAGE too: a closed API
+gate is also a 400.
