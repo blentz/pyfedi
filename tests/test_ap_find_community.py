@@ -68,6 +68,26 @@ crashes there regardless of what the addressing loop's own guard does --
 there is no clean input that discriminates this operand in isolation without
 first resolving that separate, unguarded access. Reported, not fixed, and
 not synthesized into a misleading test.
+
+CLOSED BY D1397, which fixed the separate unguarded access this paragraph
+named: the reassignment now takes `request_json['object']` only when it is a
+dict, exactly as the `rjs` list eleven lines above already did. So the operand
+finally has an input that isolates it, and `TestANonDictObject` below is that
+input -- a string `object`, which is the shape Lemmy's `Add` and `Remove`
+carry, alongside the addressing that has to keep working through it. What the
+reassignment used to do instead was measured before it was changed:
+
+    find_community({'type': 'Create', 'object': 'https://peer.test/p/1'})
+        AttributeError: 'str' object has no attribute 'get'
+    ... 'object': 'https://peer.test/inReplyTo/1'
+        TypeError: string indices must be integers   (the substring test)
+    ... 'object': 42  /  None
+        TypeError: argument of type 'int' is not iterable
+    ... 'object': ['a']
+        AttributeError: 'list' object has no attribute 'get'
+
+tests/test_peer_json_non_objects.py holds the rest of that round; the rows here
+are the ones this file's own claim was about.
 """
 from app import db
 from app.activitypub.util import find_community
@@ -497,3 +517,49 @@ class TestMissingTypeKeyReturnsNone:
 
     def test_an_object_with_no_type_key_returns_none(self, app, db_session):
         assert find_community({'type': 'Add', 'object': {'id': 'https://peer.example/x'}}) is None
+
+
+class TestANonDictObject:
+    """D1397, and the operand this file's docstring recorded as untestable.
+
+    `'object' in request_json and isinstance(request_json['object'], dict)` decides
+    whether the addressing loop reads the inner object as well as the outer
+    activity. Falsifying only the second operand needs an `object` that is present
+    and not a dict -- and until D1397 that input crashed at the reassignment below
+    the loop, whatever the loop did.
+    """
+
+    def test_the_outer_addressing_is_still_read_when_object_is_a_string(
+            self, app, db_session):
+        """The operand's False arm, in isolation at last. An `Add` naming its
+        object by url, addressed to a community: the loop must skip the inner
+        object and still match on the outer `audience`."""
+        seed_community_owner()
+        community = make_community('addedto')
+
+        result = find_community({'type': 'Add',
+                                 'object': 'https://peer.example/u/alice',
+                                 'audience': community.ap_profile_id})
+
+        assert result == community
+
+    def test_the_inner_addressing_is_read_when_object_is_a_dict(self, app,
+                                                               db_session):
+        """The operand's True arm, with the outer activity carrying no addressing
+        at all -- so only the inner read can produce this answer."""
+        seed_community_owner()
+        community = make_community('innerobject')
+
+        result = find_community({'type': 'Create',
+                                 'object': {'audience': community.ap_profile_id}})
+
+        assert result == community
+
+    def test_a_string_object_naming_nothing_answers_none(self, app, db_session):
+        """No addressing anywhere, and the reassignment holding a string. This is
+        the bare `AttributeError: 'str' object has no attribute 'get'`."""
+        seed_community_owner()
+        make_community('unrelated')
+
+        assert find_community({'type': 'Add',
+                               'object': 'https://peer.example/u/alice'}) is None

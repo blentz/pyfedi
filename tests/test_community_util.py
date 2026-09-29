@@ -47,6 +47,7 @@ from app.community.util import (actor_to_community, community_in_list,
                                 send_to_remote_instance_fast,
                                 send_to_remote_instance_fast_task,
                                 send_to_remote_instance_task,
+                                search_for_community,
                                 set_community_theme_allowed, tags_from_string,
                                 tags_from_string_old)
 from app.models import (Community, File, Instance, Post, PostReply, Site, Tag,
@@ -670,3 +671,96 @@ class TestOddsAndEnds:
         this running; `remove_file.delete_from_disk()` on None was an
         AttributeError."""
         remove_old_file(999999)
+
+
+# --------------------------------------------------------------------------
+# search_for_community's webfinger walk -- D1397
+# --------------------------------------------------------------------------
+
+
+class TestTheWebfingerWalk:
+    """The twin of `search_for_feed`'s walk (tests/test_feed_util.py holds the
+    other half). Both read a document fetched from a REMOTE host, at a hostname the
+    caller supplied, and both assumed a mapping with a `links` list.
+
+    Covered here for symmetry on purpose: repairing two twins and testing one is
+    how a twin comes to diverge again.
+    """
+
+    def _seed(self):
+        instance = make_instance('test.piefed.local', software='piefed')
+        make_user(instance, 'founder', local=True)
+        db.session.commit()
+        return instance
+
+    @pytest.mark.parametrize('document', [
+        'not a document',   # `webfinger_json['links']` is a TypeError
+        42,
+        None,
+        ['links'],          # a list: `.get` is an AttributeError
+        {},                 # no `links` at all: a KeyError
+        {'links': 'https://remote.example/c/books'},   # iterated its CHARACTERS
+        {'links': 42},
+        {'links': None},
+    ])
+    def test_a_webfinger_document_this_shape_cannot_walk(self, app, db_session,
+                                                        document):
+        from unittest.mock import MagicMock, patch
+        self._seed()
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = document
+
+        with app.test_request_context('/'):
+            with patch('app.community.util.get_request',
+                       side_effect=[response]) as get:
+                assert search_for_community('!books@remote.example') is None
+
+        assert get.call_count == 1
+
+    def test_a_links_entry_that_is_not_an_object_is_skipped(self, app,
+                                                            db_session):
+        """The element rather than the list: `'rel' in <a string>` is a substring
+        test whose subscript raises, so one junk entry stopped the walk. A real
+        entry behind it must still be reached."""
+        from unittest.mock import MagicMock, patch
+        self._seed()
+        webfinger = MagicMock()
+        webfinger.status_code = 200
+        webfinger.json.return_value = {'links': [
+            'https://remote.example/rel/1',
+            42,
+            {'rel': 'self', 'type': 'application/activity+json',
+             'href': 'https://remote.example/c/books'}]}
+        actor = MagicMock()
+        actor.status_code = 200
+        actor.json.return_value = {'type': 'Group', 'preferredUsername': 'books'}
+        community = make_community('books')
+
+        with app.test_request_context('/'):
+            with patch('app.community.util.get_request',
+                       side_effect=[webfinger, actor]), \
+                    patch('app.community.util.actor_json_to_model',
+                          return_value=community), \
+                    patch('app.community.util.retrieve_mods_and_backfill'):
+                found = search_for_community('!books@remote.example')
+
+        assert found.id == community.id
+
+    def test_a_self_link_with_no_href_is_skipped(self, app, db_session):
+        """`'href' not in links` -- the guard `search_for_feed` already had and
+        this twin did not, so a `rel: self` entry without an href was a KeyError
+        rather than a reason to keep walking."""
+        from unittest.mock import MagicMock, patch
+        self._seed()
+        webfinger = MagicMock()
+        webfinger.status_code = 200
+        webfinger.json.return_value = {'links': [
+            {'rel': 'self', 'type': 'application/activity+json'}]}
+
+        with app.test_request_context('/'):
+            with patch('app.community.util.get_request',
+                       side_effect=[webfinger]) as get:
+                assert search_for_community('!books@remote.example') is None
+
+        assert get.call_count == 1
