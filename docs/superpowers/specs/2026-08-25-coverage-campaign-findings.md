@@ -21863,4 +21863,126 @@ asserts the value its assignment produces.
 Fourteen mutants, all dead, on a green baseline. 14,407 tests, 0 failures, 0 warnings. All 92
 floors met.
 
-**Next free number: D1397.**
+## Round 202 — D1397: a peer's array element read as an object without checking
+
+**D1397. `'type' in json_tag and json_tag['type'] == 'Mention'` is how this codebase reads an element
+of a peer's array, and over a string element `in` is a substring test whose subscript raises.**
+
+```
+PROBE  'type' in 'https://host/u/prototype'    ->  True
+       'https://host/u/prototype'['type']      ->  TypeError: string indices must be integers
+       'type' in 'https://x/u/typewriter'      ->  True
+       'type' in 'https://x/users/stereotype'  ->  True
+       'type' in 'https://x.test/@type'        ->  True
+```
+
+The arrays are `isinstance(..., list)` checked at every site. Their **elements** were not, at any of
+them. An AST sweep over `app/` — printed whole, not piped through `head` (fact 820) — found 41 sites
+of the shape "`'k' in X` with `X['k']` in the same function, where X is a loop variable and nothing in
+that function proves X is a dict". The peer-facing ones are repaired together, through one coercion
+placed beside `_as_text`, `_as_int`, `_as_float` and `parse_ap_timestamp`, which are the same family:
+
+```python
+def _as_dict(value):
+    return value if isinstance(value, dict) else {}
+```
+
+An empty dict rather than None, so the reads that follow need no second guard: `'type' in {}` is
+False and `{}.get('type')` is None.
+
+| what | where |
+| --- | --- |
+| `tag` entries | `Post.new`, `create_post_reply`, `update_post_reply_from_activity`, `update_post_from_activity` |
+| `attachment` entries | the same four, plus the single-dict Mastodon arm that read `['url']` outright |
+| poll `oneOf`/`anyOf` entries, and each entry's `replies` | three loops in `update_post_from_activity` |
+| `attributedTo` entries | `find_community`'s Video arm, `retrieve_mods_and_backfill` |
+| outbox `orderedItems` entries | `retrieve_mods_and_backfill` |
+| webfinger `links` entries | `search_for_community`, `search_for_feed` |
+
+**THE ANCHOR IS NOT AN ARRAY ELEMENT.** `find_community` reassigns
+`rj = request_json['object'] if 'object' in request_json else request_json` eleven lines after the
+`rjs` list takes the same value **only** when `isinstance(..., dict)`. So the reassignment could hold
+anything:
+
+```
+PROBE  find_community({'type': 'Create', 'object': 'https://peer.test/p/1'})
+         AttributeError: 'str' object has no attribute 'get'
+       ... 'object': 'https://peer.test/inReplyTo/1'
+         TypeError: string indices must be integers      (the substring test)
+       ... 'object': 42  /  None
+         TypeError: argument of type 'int' is not iterable
+       ... 'object': ['a']
+         AttributeError: 'list' object has no attribute 'get'
+```
+
+A string `object` is the ordinary shape, not a crafted one: Lemmy's `Add` and `Remove` name their
+object by url, and `app/activitypub/routes.py:1428` and `:1501` hand this function the whole activity
+whenever one arrives unannounced.
+
+**And `tests/test_ap_find_community.py` had already recorded it, as a gap it could not close.** Its
+docstring says the operand `'object' in request_json and isinstance(request_json['object'], dict)` was
+"deliberately NOT closed with a test", because "a non-dict 'object' value also reaches the unguarded
+`rj = ...` reassignment a few lines later ... so any input built to isolate THIS operand crashes there
+regardless. Reported, not fixed, and not synthesized into a misleading test." That was the right call
+and the right note; the reassignment is guarded now, so the operand finally has an input that isolates
+it, and its rows are in that file where the claim lives.
+
+**Three more unguarded reads of the same key, found on the way.**
+`request_json['object']['type']` appears three times in `update_post_from_activity` — the Video,
+Question and Event branches — with no membership test at all. The inbox's `object_has_missing_fields`
+checks the **activity's** keys, not the object's, so an Update whose object carries no `type` was a
+`KeyError` *after* the function had already written the title, the tags and the flair.
+
+**Where a bare string is real data it is accepted, not dropped.**
+`retrieve_mods_and_backfill`'s `attributedTo` arm required an embedded `Person` object, so a peer
+listing its moderators by url got **no moderators at all** — silently when the url contained no
+'type', and with a dead backfill task when it did, leaving the community created and never filled in.
+Both sibling readers of a list `attributedTo` (`app/activitypub/util.py:4472`, `:4556`) take
+`isinstance(a, dict)` first and a plain string in an `elif`; that arm has the same shape now.
+
+**The round's residual, recorded as an inverted test.** Coercing element 0 stops the TypeError in the
+`attachment` pre-check; it does not make element 1 reachable, because the pre-check is what decides
+whether the loop runs at all. So a peer can still suppress a post's url by prefixing one entry that is
+not a typed object. Left alone deliberately: `Post.new` carries the same element-0 pre-check over the
+same list, so the twins agree, and making it scan the whole list changes **which** attachment a post
+takes its url from — a behaviour change, not a crash fix. The test that was written asserting the
+Link is still found now asserts that it is not, and says why.
+
+**My own poll rows passed vacuously first time.** Without `type: 'Question'` in the object,
+`update_post_from_activity` never reaches the vote loop, so eleven rows asserting "this did not crash"
+had exercised nothing. Fact 861's shape a second time; every row carries the type now and asserts the
+`PollChoice` rows rather than the title.
+
+**THE MUTATION RUN REJECTED THE FIRST TEST FILE, NOT THE FIX: 11 of 29 survived.** Every survivor was
+the same mistake on the test side — a row that never entered the loop it claimed to be about — and the
+five causes are worth naming, because each one reads like a passing test:
+
+| why it survived | how many |
+| --- | --- |
+| **key mismatch.** The rows sent urls containing `'type'` at loops that read `href`, `url` and `name`. `'href' in 'https://x/u/prototype'` is False, so the subscript was never reached and the coercion never mattered | 4 |
+| **an element-0 pre-check.** `'type' in attachment[0]` decides whether the loop runs at all, so a list holding only a junk element exercises the pre-check and nothing else | 3 |
+| **a string answers `in` rather than raising.** `'totalItems' in 'not an object'` is False and the entry is skipped; only `42`, `None`, `True` make it a TypeError | 2 |
+| **the function was never called.** `create_post_reply` holds its own copies of both loops and no row invoked it | 2 |
+| **the fixture switched the arm off.** `ap_moderators_url = None` and `ap_outbox_url = None` are what send the tests down the `attributedTo` path, and they also make two other repaired sites unreachable | 2 |
+
+A twelfth survived the second run too: `Post.new`'s second attachment loop is inside the **Event**
+branch, and every row had sent `type: 'Page'`. The file now carries three named value sets —
+`NOT_ITERABLE` (the values for which `'k' in value` raises), `BAD_ATTACHMENTS` (urls containing each
+key that loop reads) and `BAD_VOTES` — plus `A_TYPED_ELEMENT` to get past the pre-check, a separate
+`replier` account (`create_post_reply` refuses a duplicate, and that refusal is indistinguishable from
+the crash), and classes for the moderators-collection and outbox arms. 144 rows became 274.
+
+**AND THE FLOOR CHECK CAUGHT WHAT THE MUTANTS COULD NOT.** With 29 mutants dead and 14,652 tests
+passing, `app/feed/util.py` had fallen from 100% to **98.69%**: the guard this round added to
+`search_for_feed` has a `return None` that no test reached, and a line no test reaches is a line no
+mutant can be built against either. It also exposed an asymmetry in the round's own work — the
+`search_for_community` / `search_for_feed` twins were both repaired and only one was tested, which is
+how a twin comes to diverge again. Both now have rows: eight malformed webfinger documents each (a
+string, a number, None, a list, no `links`, and `links` as a string, a number and None), an element
+that is not an object with a real one behind it, and for the community twin the `'href' not in links`
+guard its sibling already had. Seven more mutants for those lines, all dead.
+
+Thirty-six mutants, all dead, on a green baseline. 14,671 tests, 0 failures, 0 warnings. All 92
+floors met.
+
+**Next free number: D1398.**
