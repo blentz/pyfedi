@@ -24331,4 +24331,49 @@ this instance limits what one peer's link can cost it.
 
 Seventeen mutants dead, one provably equivalent, on a green baseline.
 
+---
+
+## Round 247 -- content provenance, the OpenGraph fallbacks, and pronouns
+
+Three clusters in `app/utils.py`, no defect.
+
+**`inspect_image_c2pa` decides whether an upload is labelled AI-generated.** Its answer sets
+`Post.ai_generated`, which viewers filter on, so both directions cost something: a
+misread manifest either puts a warning on somebody's own photograph or lets generated media
+past a filter they asked for. The rows drive each narrowing separately -- only
+`c2pa.actions` assertions are read, only the `created` and `placed` actions count, and only
+`trainedAlgorithmicMedia` in the source means generated, so an image EDITED with a model is
+not reported as made by one. `present` is set before the manifest is read, so an image
+carrying an empty manifest still reports provenance, which is the honest answer. Every
+optional key (`assertions`, `digitalSourceType`) has a row, because the whole body sits inside
+`except Exception: pass` and a `TypeError` in there would silently become "no provenance" --
+losing the `present` flag the reader had already established.
+
+**`parse_page`'s tail fills in what a page did not say in `og:`.** A `<meta
+name=description>` becomes `description`, and `og_description` only as a stand-in when the
+page has no `og:description` -- the row that kills that mutant gives a page BOTH and asserts
+the stand-in is absent, since otherwise it would shadow the real one. A `<title>` becomes
+`og:title` only when the page gave none, because a `<title>` is usually the headline with the
+site name appended.
+
+**`user_pronouns`** is a self-set field rendered beside a username everywhere it appears. The
+22-character limit drops an overlong value rather than truncating it, and a value containing
+`<` and `>` is reduced with `html_to_text` -- which is the line that stops somebody's
+"pronouns" being markup. The result is a `defaultdict(str)`, so a template can render it
+unconditionally.
+
+**A fixture fact:** `parse_page` fetches through `get_request`, which is memoized and does its
+own SSRF checking. Patching `httpx_client` underneath it fails inside flask-caching
+(`'Cache' object has no attribute 'app'`); patch `app.utils.get_request` instead.
+
+Sixteen mutants, all dead, on a green baseline.
+
+**One failure on the way, and it was not a defect.** The first full-suite run of this round
+failed `test_nothing_reads_a_source_content_by_subscript` -- one of the repo-scanning guard
+tests -- with a `SyntaxError` from `ast.parse`, on a copy of `app/utils.py` that ended
+mid-docstring. A worker had read the file while something was rewriting it whole; the
+mutation runner is the only thing that does that. The suite is clean on a re-run (15,807
+passed), and the lesson is that these scans turn a torn read into a SyntaxError rather than
+an assertion failure, which is worth recognising on sight.
+
 **Next free number: D1424.**
