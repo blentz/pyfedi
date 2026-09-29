@@ -13530,3 +13530,13 @@ the row serves it.
 `post.body_html == markdown_to_html(post.body)` already holds, so a mutant that re-renders every body changes
 nothing. Send the body as `mediaType: text/html` instead: there `body_html` is `allowlist_html(content)` and
 `body` is `html_to_text(...)`, so a rebuild is visible -- the anchor disappears.
+
+**993. `lemmy_site_data()` IS NOT `get_site_as_dict()`.**
+The `/api/v3/site` payload -- languages, custom emojis, admins -- is built in
+`app/activitypub/util.py:lemmy_site_data()`. `app/utils.py:get_site_as_dict()` is the API's own site view and
+has different keys. A row aimed at the wrong one fails with `KeyError: 'custom_emojis'`.
+
+**994. `Site.admins()` READS `g.admin_ids` WHEN THE CONTEXT HAS IT.**
+Setting `g.admin_ids = [user.id]` is how a row names the admins without building a Role, a RolePermission and
+a `user_role` row. The fixtures set it to `[]`, so a row about admin notifications has to set it or nobody is
+an admin.
