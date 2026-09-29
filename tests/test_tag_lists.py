@@ -15,6 +15,12 @@ Five defects are pinned here and repaired together:
       anonymous request was served posts from invite-only communities.
   P4  community_id reached int(), and topic_id and feed_id reached .get()
       followed by an attribute access -- three crafted parameters, three 500s.
+      HALF REPAIRED, and corrected by D1395. community_id got its `type=int`;
+      topic_id and feed_id got only an `or abort(404)`, which answers the id
+      naming no row -- a different failure with the same symptom. The id that is
+      not an id never reached the `or`, so `?topic_id=abc` stayed an
+      InvalidTextRepresentation out of the driver until D1395 measured it.
+      tests/test_crafted_id_parameters.py holds that measurement and the rows.
   P5  banning a tag flashed "and all content deleted" while purge_content() is
       commented out and every post survives.
 
