@@ -21424,4 +21424,36 @@ absence of a check as this round's oversight.
 Seven mutants, all dead, on a green baseline. 14,129 tests, 0 failures, 0 warnings. All 92
 floors met.
 
-**Next free number: D1390.**
+## Round 194 — the API handed callers its own SQL
+
+This round set out to confirm a claim round 193 put in the ledger, that the 55 alpha-API
+`int(data[...])` sites are schema-validated. Cross-referencing every key against
+`app/api/alpha/schema.py` says 54 are `fields.Integer()` — and **one is declared nowhere**:
+`data['page_cursor']` (`app/api/alpha/utils/post.py:65`). With `unknown=INCLUDE` an undeclared
+field arrives as a raw string, and `/post/list2` even hands clients an opaque sqlakeyset bookmark
+in `next_page` that could not parse. So `/post/list?page_cursor=abc` looked like a 500.
+
+**It answers 400** — and finding out why produced the round's actual defect.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1390** | `app/api/alpha/__init__.py`, `shared_error_handler` | Registered on all eleven alpha blueprints as `errorhandler(Exception)`, its final arm returned `str(e)` to the caller. For the deliberate refusals that is the API's contract; for a `SQLAlchemyError` it is the driver's message, the **full statement** and the **bound parameters**. | **fixed** | the body a client received: `{"code":400,"message":"(psycopg2.errors.InvalidTextRepresentation) invalid input syntax for type boolean: \"not-a-bool\" ... [SQL: INSERT INTO \"user\" (user_name, banned) VALUES (%(n)s, %(b)s)] [parameters: {...}]"}` |
+
+Schema, table and column names and the query's shape, to any caller who can provoke a database
+error — and this session has measured several such errors reachable from ordinary input. The
+exception is still logged and sent to Sentry; only what crosses the wire changed.
+
+**Deliberately narrow, and pinned as a decision.** Only the class whose `str()` embeds SQL is
+suppressed. A `ValueError` still reports its own text — which is how `page_cursor=abc` answers
+today — because suppressing every internal type would change messages this round has not
+enumerated, and their text names no schema. A test asserts that narrowness so a later round
+treats it as a choice rather than an oversight.
+
+**`NoResultFound` is itself a `SQLAlchemyError` subclass** and has its own branch earlier in the
+chain, so the new `isinstance` test cannot shadow it. Its mutant is dead, and so is the one
+removing the logging exemption for `incorrect_login` and `No object found.`
+
+Seven mutants, all dead, on a green baseline. 14,158 tests, 0 failures, 0 warnings. All 92
+floors met.
+
+**Next free number: D1391.**

@@ -12683,3 +12683,21 @@ before drawing conclusions from the bad ones.
 Ten unguarded-looking `[0]` reads were all `parse_qs` results under their own `in` tests; 55 of 58
 `int()` calls on request data were schema-validated. Writing that down converts two dead ends into
 two questions nobody has to ask again -- and it is how the one real site in the batch was found.
+
+**849. A BLANKET `errorhandler(Exception)` THAT RETURNS `str(e)` IS AN INFORMATION LEAK.**
+SQLAlchemy puts the statement and the bound parameters into `str(e)`, so an API whose catch-all
+echoed the exception handed callers `[SQL: INSERT INTO "user" ...]` and `[parameters: {...}]`
+whenever a database error could be provoked. Log the detail, send it to Sentry, and return a
+generic message for the exception classes that carry internals -- while leaving alone the bare
+`Exception('access_denied')` messages that ARE the API's contract.
+
+**850. CROSS-REFERENCE THE SCHEMA INSTEAD OF READING THE HANDLERS.**
+55 `int(data[...])` calls in the alpha API; an AST sweep matched each key against
+`fields.Integer` declarations in schema.py and found the single one declared nowhere. With
+`unknown=INCLUDE`, an undeclared field is exactly the one that arrives unvalidated -- so the
+schema is where the answer is, not the handler.
+
+**851. WHEN A SUSPECTED 500 TURNS OUT TO BE A 400, FIND OUT WHAT CONVERTED IT.**
+`page_cursor=abc` answered 400 and the hypothesis looked wrong. The conversion was a catch-all
+error handler -- which was itself the defect, and a worse one. A guard you did not know existed is
+worth reading before moving on.
