@@ -21719,4 +21719,71 @@ is the one test here that does.
 Twenty-six mutants, all dead, on a green baseline. 14,299 tests, 0 failures, 0 warnings. All 92
 floors met.
 
-**Next free number: D1395.**
+## Round 200 — D1395: four more query-string ids that reached the database unparsed
+
+**D1395. `?topic_id=abc` was a 500 out of the Postgres driver on three pages, two of
+them anonymous.** The campaign has recorded this shape three times already — D1311
+(`/communities?topic_id=` read `int()` bare, and a `<select>` sends the empty string when nothing is
+chosen), D1313 (`int(request.args.get('new_feed_id'))` on two feed routes) and D1389
+(`int(request.form.get('community_id'))` behind a `!= ''` test, which only rules out absent and
+empty). Four sites still had it:
+
+| site | login | what the caller got |
+| --- | --- | --- |
+| `/tags/posts/<id>?topic_id=` | none | `InvalidTextRepresentation: invalid input syntax for type integer: "abc"`, with `LINE 3: WHERE topic.id = 'abc'` |
+| `/tags/posts/<id>?feed_id=` | none | the same, `WHERE feed.id = 'abc'` |
+| `/modlog?communities=` | none | `ValueError: invalid literal for int() with base 10: 'abc'` |
+| `/feed/new?topic_id=` | yes | `InvalidTextRepresentation` again |
+
+`1.5`, `null` and `None` were the same three answers. All four now read `type=int`, which answers the
+default rather than raising, and the one in `feed_new` reads its parameter **once** instead of twice.
+
+**THE PART WORTH RECORDING IS THAT TWO OF THE FOUR WERE ALREADY CLAIMED AS FIXED.**
+`tests/test_tag_lists.py`'s P4 says "community_id reached `int()`, and topic_id and feed_id reached
+`.get()` followed by an attribute access — three crafted parameters, three 500s." That round gave
+`community_id` its `type=int` and gave the other two an `or abort(404)`. Those are two different
+failures with one symptom: `or abort(404)` answers the id that names **no** topic, and the id that
+**is not** an id never reached the `or`. So a docstring claimed a repair the code had not made, and a
+reader who trusted it — as this campaign's own sweeps do — would not look again. That docstring is
+corrected in place.
+
+**A guess that measurement refuted, and three test rows it corrected.** `Topic.id` is a four-byte
+`integer`, so `?topic_id=999999999999999999999999` looked like it would overflow past any parse
+guard and reach Postgres as a number too large for the column:
+
+```
+PROBE  db.session.get(Topic, 10**24)             None
+       GET /post/<24 digits>                     404
+       GET /community/<24 digits>/block          404
+       GET /api/alpha/post?id=<24 digits>        400
+```
+
+SQLAlchemy binds a Python int as a parameter and the comparison matches no row — no
+`NumericValueOutOfRange`, no rollback. The earlier failures came from the **string** reaching the
+column, not from its magnitude. So `type=int` is the whole fix, and the `<int:...>` path converters
+elsewhere need no bound. Three rows of the new file had asserted 200 for that value; they assert 404
+now, beside the ordinary id that names nothing, because after the conversion it is a well-formed id
+like any other.
+
+**One clean sweep, whose premise was wrong in the other direction.** `get_deduped_post_ids`' "All"
+arm is `c.show_all is true` with no `private` gate, while the `local` and `popular` arms both carry
+one and the alpha API's equivalent filters `Community.private` explicitly — which reads as a
+private-community leak on the busiest page on the instance. It is not: `app/utils.py:4405-4416`
+appends the private restriction **unconditionally**, for every viewer, in a block whose comment says
+it is kept outside the anonymous/authenticated split precisely so no arm can be added without it.
+`switch_to_unsilenced` does set `show_all = true` on private communities, which is untidy and reaches
+nothing.
+
+**One mutant survives, and D1394 is why.** `tag_posts`' feed branch reads
+`feed = db.session.get(Feed, feed_id) or abort(404)` and then, one line later, D1394's
+`if not feed_readable_by(feed, ...): abort(404)` — and `feed_readable_by(None, ...)` is False. So
+deleting the `or abort(404)` leaves the same 404 from the next statement, and no behavioural test can
+separate them: fact 75 CAUSE 9, a guard that cannot discriminate, arrived at by putting a second guard
+in front of the same answer. Both stay — the `or abort(404)` says what it means where a reader looks
+for it, and a visibility helper is the wrong place to learn whether a row exists. `show_tag` and
+`tag_cloud` hold the same pair; `feed_new` holds only one, and its mutant dies.
+
+Ten of eleven mutants dead on a green baseline, with the eleventh recorded above. 14,363 tests,
+0 failures, 0 warnings. All 92 floors met.
+
+**Next free number: D1396.**
