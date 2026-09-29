@@ -3929,7 +3929,36 @@ def undo_boost(target_ap_id: str, user: User) -> Union[Post, None]:
     return post
 
 
-def process_report(user, reported, request_json, session):
+def process_report(user, reported, request_json, session) -> bool:
+    """Record a peer's Flag, and say whether it was recorded.
+
+    D1401. The return value is new. `find_reported_object` resolves the flagged id
+    through `find_actor_or_create`, whose own signature is
+    `Union[User, Community, Feed, None]` -- so a peer flagging one of our COMMUNITIES
+    reaches the `elif isinstance(reported, Community): ...` arm below, which is a bare
+    ellipsis, and a peer flagging a Feed matches no arm at all. Either way this
+    function did nothing and said nothing, and the caller went on to log
+    `APLOG_REPORT, APLOG_SUCCESS` and fan the Flag out to the moderators' instances.
+
+    Measured:
+
+        find_reported_object(<a community actor url>)  ->  Community
+        process_report(reporter, community, ...)       ->  0 Report rows
+                                                           0 Notifications
+
+    So a report about a community was accepted, announced to other instances, logged
+    as a success, and recorded nowhere: no row in `/admin/reports`, no notification,
+    nothing a local admin could ever see. The log said the opposite of what happened,
+    which is worse than the missing feature -- an operator reading it has no reason to
+    look.
+
+    The Community and Conversation arms are still unimplemented. Implementing them is
+    a feature, not a repair: a community report needs the `targets` dict D1393 defined
+    for `community_report.html` (`suspect_community_name`, `reporter_user_name`) and a
+    notification subtype, and a conversation report needs the same for
+    `conversation_report.html`. What this change fixes is the claim, so the caller can
+    log a report it dropped as dropped.
+    """
     if 'summary' not in request_json:  # reports from peertube have no summary
         reasons = ''
         description = ''
@@ -3941,7 +3970,9 @@ def process_report(user, reported, request_json, session):
 
     if isinstance(reported, User):
         if reported.reports == -1:
-            return
+            # `-1` means this target is exempt from reports. Nothing is recorded, so
+            # the caller must not log a success either (D1401).
+            return False
         type = REPORT_TYPE_USER
         source_instance = session.get(Instance, user.instance_id)
         targets_data = {'gen': '0',
@@ -3971,9 +4002,12 @@ def process_report(user, reported, request_json, session):
                 admin.unread_notifications += 1
         reported.reports += 1
         session.commit()
+        return True
     elif isinstance(reported, Post):
         if reported.reports == -1:
-            return
+            # `-1` means this target is exempt from reports. Nothing is recorded, so
+            # the caller must not log a success either (D1401).
+            return False
         type = REPORT_TYPE_POST
         suspect_author = session.get(User, reported.author.id)
         source_instance = session.get(Instance, user.instance_id)
@@ -4028,9 +4062,12 @@ def process_report(user, reported, request_json, session):
 
         reported.reports += 1
         session.commit()
+        return True
     elif isinstance(reported, PostReply):
         if reported.reports == -1:
-            return
+            # `-1` means this target is exempt from reports. Nothing is recorded, so
+            # the caller must not log a success either (D1401).
+            return False
         type = REPORT_TYPE_REPLY
         post = session.get(Post, reported.post_id)
         suspect_author = session.get(User, reported.author.id)
@@ -4087,10 +4124,16 @@ def process_report(user, reported, request_json, session):
 
         reported.reports += 1
         session.commit()
+        return True
     elif isinstance(reported, Community):
-        ...
+        # D1401. Unimplemented, and now honest about it -- see this function's
+        # docstring for why implementing it is a feature rather than a repair.
+        return False
     elif isinstance(reported, Conversation):
-        ...
+        return False
+    # Anything else `find_reported_object` can hand us, which today means a Feed:
+    # `find_actor_or_create` returns one and no arm above matches it.
+    return False
 
 
 def process_quote_boost(core_activity: dict, post_ap: str, their_post_ap: str):

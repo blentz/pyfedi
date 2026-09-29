@@ -1372,10 +1372,42 @@ def process_inbox_request(request_json, store_ap_json):
                 if core_activity['type'] == 'Flag':  # Reported content
                     reported = find_reported_object(core_activity['object'])
                     if reported:
-                        process_report(user, reported, core_activity, session)
-                        log_incoming_ap(id, APLOG_REPORT, APLOG_SUCCESS, saved_json)
-                        announce_activity_to_followers(reported.community, user, request_json,
-                                                       is_flag=True, admin_instance_id=reported.author.instance_id)
+                        # D1401. `process_report` says whether it recorded anything.
+                        # `find_reported_object` resolves the flagged id through
+                        # `find_actor_or_create`, which answers a Community or a Feed
+                        # as readily as a User -- and `process_report`'s Community and
+                        # Conversation arms are unimplemented, while a Feed matches no
+                        # arm at all. This logged APLOG_SUCCESS for all of them, so a
+                        # report that reached no admin's queue and produced no
+                        # notification was recorded in the log as having worked.
+                        if process_report(user, reported, core_activity, session):
+                            log_incoming_ap(id, APLOG_REPORT, APLOG_SUCCESS, saved_json)
+                        else:
+                            log_incoming_ap(id, APLOG_REPORT, APLOG_IGNORED, saved_json,
+                                            f'Report of a {type(reported).__name__} is not recorded')
+                        # D1401's other half. This read `reported.community` and
+                        # `reported.author` unconditionally, and NEITHER exists on a
+                        # User or a Community -- both of which `find_reported_object`
+                        # returns:
+                        #
+                        #     User.community       AttributeError
+                        #     User.author          AttributeError
+                        #     Community.community  AttributeError
+                        #
+                        # So a peer reporting one of our USERS had the report recorded
+                        # and committed by `process_report`, and then this line raised
+                        # out of the inbox. The peer saw a 500 and retried, and every
+                        # retry recorded the report again.
+                        #
+                        # A Flag is announced to a community's followers, so it is
+                        # announceable only when it names content IN a community. A
+                        # report about a user or a community has no such community and
+                        # is not relayed -- the local record above is the whole of what
+                        # this instance does with it.
+                        if isinstance(reported, (Post, PostReply)):
+                            announce_activity_to_followers(
+                                reported.community, user, request_json, is_flag=True,
+                                admin_instance_id=reported.author.instance_id)
                     else:
                         log_incoming_ap(id, APLOG_REPORT, APLOG_IGNORED, saved_json,
                                         'Report ignored due to missing content')
