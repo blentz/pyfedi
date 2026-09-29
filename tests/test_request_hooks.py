@@ -263,7 +263,14 @@ def test_html_response_gets_nosniff_and_deny(app, db_session):
     assert response.headers['X-Frame-Options'] == 'DENY'
 
 
-def test_embed_path_does_not_get_x_frame_options(app, db_session):
+def test_embed_path_does_not_get_x_frame_options(app, db_session, site):
+    # D1411. `/post/<id>/embed` is now `@login_required_if_private_instance`, and
+    # `Site.private_instance` defaults to True (app/models.py:5017), so an anonymous
+    # request is redirected before any of these headers is set. This test is about the
+    # X-Frame-Options exclusion for embeds, not about privacy, so it asks for the public
+    # instance it always meant.
+    site.private_instance = False
+    db.session.commit()
     instance = make_instance('test.piefed.local', software='piefed')
     user = make_user(instance, 'embedauthor', local=True)
     community = make_community('embedcomm')
