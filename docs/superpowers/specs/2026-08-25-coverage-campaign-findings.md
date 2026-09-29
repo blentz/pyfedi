@@ -24055,4 +24055,54 @@ receives them.
 
 Twelve mutants, all dead, on a green baseline.
 
-**Next free number: D1422.**
+---
+
+## Round 240 -- model helpers with no rows (D1422)
+
+`app/models.py` is the lowest-covered module left outside the deprioritised ones. This
+round takes the small helpers whose absence is easiest to misread: a one-line accessor looks
+too simple to test right up until it returns the wrong thing on every page that calls it.
+
+**D1422 -- an RSS item with no post asked SQLAlchemy a question it warns about.**
+`RssFeedItem.delete_dependencies` opened with `db.session.get(Post, self.post_id)`, and
+`post_id` is nullable -- the importer records an item with `post_id=None` when it decides
+not to create a post (`app/cli.py`, in two places). SQLAlchemy answers that lookup with
+
+> SAWarning: fully NULL primary key identity cannot load any object. This condition may
+> raise an error in a future release.
+
+The `if post:` below already treated it as nothing to delete; asking at all was what
+warned, and the campaign runs at zero warnings. Guarded with `if self.post_id`.
+
+That guard is also the only shape that reaches the arm: a `post_id` naming a row that no
+longer exists violates the foreign key, so "the post was deleted first" is not a state the
+database allows (fact 781).
+
+**Deleting an RSS feed deletes the posts it created.** `RssFeed.delete_dependencies` calls
+into each item, and each item deletes its Post under a per-post redis lock. The rows assert
+one item deletes only its own post, which a helper deleting by feed would fail.
+
+**`_large_community_subscribers`** averages the top 15% of communities by subscriber count,
+cached for an hour, and is what decides whether a community counts as 'large'. Each
+condition has a row -- banned communities and empty ones are excluded, and the percentile
+filter is what makes the answer the top slice rather than the mean. The cache row installs
+a real `SimpleCache`, because `CACHE_TYPE = 'NullCache'` makes any "served from cache"
+assertion pass whether or not anything was cached, and then changes the data behind it to
+show the cache is READ.
+
+**`Site`'s five activity counts are five hand-written SQL strings.** `active_now` requires
+local, verified, unbanned and undeleted; the four `all_active_*` counts drop local and
+verified but keep the other two. Getting that asymmetry wrong in the rows cost a cycle --
+the first attempt assumed `verified` applied to all five.
+
+Also covered: `Domain.blocked_by` (asserted against a second account, so a helper ignoring
+`user_id` fails), `Domain.type_to_class` including the null and out-of-range cases, and
+`Feed.display_name` / `link` / `local_url` for a remote feed.
+
+**One equivalent mutant, recorded.** `Filter.keywords_string`'s `or self.keywords == ''`
+changes nothing: an empty string falls through to `''.split('\n')` == `['']`, which joins
+to `''`. The `is None` half is load-bearing; the other is not.
+
+Sixteen mutants dead, one provably equivalent, on a green baseline.
+
+**Next free number: D1423.**
