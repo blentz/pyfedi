@@ -20,7 +20,7 @@ from app.community.util import tags_from_string_old, end_poll_date, flair_from_f
 from app.constants import *
 from app.models import File, Notification, NotificationSubscription, Poll, PollChoice, PollChoiceVote, Post, \
     PostBookmark, PostVote, Report, Site, User, utcnow, Instance, Event, Community, CommunityFlair, \
-    votes_cast_today, adjust_domain_post_count, served_path
+    votes_cast_today, adjust_domain_post_count, served_path, _as_url
 from app.shared.tasks import task_selector
 from app.utils import render_template, authorise_api_user, shorten_string, gibberish, ensure_directory_exists, \
     piefed_markdown_to_lemmy_markdown, markdown_to_html, fixup_url, domain_from_url, \
@@ -199,6 +199,21 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None):
         title = input['title']
         url = input['url']
         language_id = input['language_id']
+        # D1407. The web forms require `^https?://` of this field
+        # (`CreateLinkForm.link_url`, `CreateVideoForm.video_url`); the API schema only
+        # DOCUMENTS it -- `fields.String(metadata={"format": "url"})`, and marshmallow
+        # does not validate `metadata`. The banned-domain check below is no help either:
+        # `domain_from_url('javascript:alert(1)')` is None, so the whole block is skipped.
+        # Ten templates render `post.url` as a bare href (D1404), so any authenticated
+        # API client could post a clickable `javascript:` link. Measured:
+        #
+        #     PROBE api post.url = 'javascript:alert(document.domain)'
+        #
+        # Refused rather than dropped, as the API's avatar and cover are (D1405): the
+        # caller is waiting for an answer and can fix the value.
+        if url and _as_url(url) is None:
+            raise Exception('url must be an http:// or https:// url')
+
     else:
         user = current_user
         title = input.title.data.strip()
@@ -285,6 +300,20 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         title = input['title'].strip()
         body = input['body']
         url = input['url']
+        # D1407. The web forms require `^https?://` of this field
+        # (`CreateLinkForm.link_url`, `CreateVideoForm.video_url`); the API schema only
+        # DOCUMENTS it -- `fields.String(metadata={"format": "url"})`, and marshmallow
+        # does not validate `metadata`. The banned-domain check below is no help either:
+        # `domain_from_url('javascript:alert(1)')` is None, so the whole block is skipped.
+        # Ten templates render `post.url` as a bare href (D1404), so any authenticated
+        # API client could post a clickable `javascript:` link. Measured:
+        #
+        #     PROBE api post.url = 'javascript:alert(document.domain)'
+        #
+        # Refused rather than dropped, as the API's avatar and cover are (D1405): the
+        # caller is waiting for an answer and can fix the value.
+        if url and _as_url(url) is None:
+            raise Exception('url must be an http:// or https:// url')
         nsfw = input['nsfw']
         ai_generated = input['ai_generated']
         notify_author = input['notify_author']
@@ -760,11 +789,27 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         event.participant_count = event_data.get('participant_count', 0)
         event.full = event_data.get('full', False)
         event.online = event_data.get('online', False)
-        event.online_link = event_data.get('online_link')
+        # D1407. The same rule the federated path applies in `Post.new` and
+        # `update_post_from_activity` (D1403), at the LOCAL producer of the same three
+        # columns. This block serves both the web form and the API: the form validates
+        # `online_link` with `Regexp(r'^https?://')` and does not offer the other two at
+        # all, while the API accepts all three as `fields.String` with a documented
+        # format and no validation. Measured, through `make_post(..., src=SRC_API)`:
+        #
+        #     PROBE api online_link                = 'javascript:alert(document.domain)'
+        #     PROBE api external_participation_url = 'javascript:alert(2)'
+        #     PROBE api buy_tickets_link           = 'javascript:alert(3)'
+        #
+        # `post/_post_full.html:219` renders `online_link` as a bare href. Dropped rather
+        # than refused, matching `_as_url`'s use on the federated side: None is what these
+        # columns hold for an event that named no link, and the rest of the event is still
+        # what the author asked for.
+        event.online_link = _as_url(event_data.get('online_link'), 1024)
         event.join_mode = event_data.get('join_mode', 'free')
-        event.external_participation_url = event_data.get('external_participation_url')
+        event.external_participation_url = _as_url(
+            event_data.get('external_participation_url'), 1024)
         event.anonymous_participation = event_data.get('anonymous_participation', False)
-        event.buy_tickets_link = event_data.get('buy_tickets_link')
+        event.buy_tickets_link = _as_url(event_data.get('buy_tickets_link'), 1024)
         event.event_fee_currency = event_data.get('event_fee_currency')
         event.event_fee_amount = event_data.get('event_fee_amount', 0)
         if 'location' in event_data:
