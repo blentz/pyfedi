@@ -76,11 +76,15 @@ def feed_new():
         return redirect(url_for('user.user_myfeeds', actor=current_user.link()))
 
     # Create Feed from a topic
-    if request.args.get('topic_id'):
-        # A 404 rather than an AttributeError: the id comes from a query string,
-        # and the link carrying it may have been opened before the topic was
-        # deleted. The rest of this file uses get_or_404 for the same reason.
-        topic = db.session.get(Topic, request.args.get('topic_id')) or abort(404)
+    # D1395. `type=int`, and read ONCE rather than twice. A 404 rather than an
+    # AttributeError: the id comes from a query string, and the link carrying it
+    # may have been opened before the topic was deleted. The rest of this file
+    # uses get_or_404 for the same reason. Without the conversion
+    # `?topic_id=abc` was `InvalidTextRepresentation` out of `db.session.get`
+    # -- a 500 for the id that is not one, where the id that names nothing
+    # already had its 404.
+    if topic_id := request.args.get('topic_id', type=int):
+        topic = db.session.get(Topic, topic_id) or abort(404)
         community_apids = []
         for community in topic.communities:
             community_apids.append(community.lemmy_link().replace('!', ''))

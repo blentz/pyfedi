@@ -528,8 +528,12 @@ def modlog():
     low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
     mod_action = request.args.get('mod_action', '')
     suspect_user_name = request.args.get('suspect_user_name', '')
-    community_id = request.args.get('communities', '0')
-    community_id = int(community_id) if community_id != '' else 0
+    # D1395, and D1389's shape verbatim: `int()` behind a `!= ''` test, which
+    # only rules out the empty string. `?communities=abc` was
+    # `ValueError: invalid literal for int() with base 10: 'abc'` and a 500 on a
+    # page anybody can open -- the modlog is public. `type=int` answers the
+    # default instead of raising, as :313 records for this same file.
+    community_id = request.args.get('communities', 0, type=int)
     user_name = request.args.get('user_name', '')
     can_see_names = False
     is_admin = False

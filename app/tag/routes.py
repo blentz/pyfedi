@@ -434,7 +434,16 @@ def tag_posts(tag_id):
     if community_id := request.args.get('community_id', type=int):
         posts = posts.filter(Post.community_id == community_id)
 
-    if topic_id := request.args.get('topic_id'):
+    # D1395. `type=int`, as `community_id` eleven lines above already reads it,
+    # and for the same reason -- which P4 of sub-project 68 named but only half
+    # repaired. That round added the `or abort(404)` beside this, which answers
+    # the id that names no topic; the id that is not one never got that far.
+    # Measured: `?topic_id=abc` reached `db.session.get(Topic, 'abc')` and
+    # Postgres answered `InvalidTextRepresentation: invalid input syntax for type
+    # integer: "abc"`, a 500 on a page anybody can open. `1.5` and `null` were
+    # the same. An id that does not parse names no topic either, so it gets the
+    # answer an absent parameter gets.
+    if topic_id := request.args.get('topic_id', type=int):
         topic = db.session.get(Topic, topic_id) or abort(404)
         # get posts from communities in that topic
         if topic.show_posts_in_children:  # include posts from child topics
@@ -445,7 +454,8 @@ def tag_posts(tag_id):
                                            {'topic_ids': tuple(topic_ids)}).scalars()
         posts = posts.filter(Post.community_id.in_(community_ids))
 
-    if feed_id := request.args.get('feed_id'):
+    # D1395, as topic_id above.
+    if feed_id := request.args.get('feed_id', type=int):
         feed = db.session.get(Feed, feed_id) or abort(404)
         # D1394, as show_tag:78.
         if not feed_readable_by(feed, current_user.id if current_user.is_authenticated else None):
