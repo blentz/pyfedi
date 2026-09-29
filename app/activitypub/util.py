@@ -3966,9 +3966,18 @@ def process_report(user, reported, request_json, session):
             already_notified = set()
             for admin in Site.admins():
                 if admin.id not in already_notified:
-                    notify = Notification(title='Reported user', url='/admin/reports', user_id=admin.id,
+                    # D1392. This is the POST branch, and the moderators above
+                    # are told `post_reported` for the same report -- the admin
+                    # was told `user_reported`, so
+                    # app/templates/user/notifs/20.html rendered them the block
+                    # for a reported USER: the wrong heading, and no post title
+                    # or body, though `targets_data` carries both. That block
+                    # reads `targets.reasons` and `targets.description`, which a
+                    # post report's dict does not have, so its detail panel
+                    # could not render either.
+                    notify = Notification(title=_('A post has been reported'), url='/admin/reports', user_id=admin.id,
                                           author_id=user.id, notif_type=NOTIF_REPORT,
-                                          subtype='user_reported',
+                                          subtype='post_reported',
                                           targets=targets_data)
                     session.add(notify)
                     admin.unread_notifications += 1
@@ -4022,9 +4031,12 @@ def process_report(user, reported, request_json, session):
             already_notified = set()
             for admin in Site.admins():
                 if admin.id not in already_notified:
-                    notify = Notification(title='Reported user', url='/admin/reports', user_id=admin.id,
+                    # D1392, the same mislabelling in the PostReply branch: the
+                    # moderators above get `comment_reported`, the admin got
+                    # `user_reported`.
+                    notify = Notification(title=_('A comment has been reported'), url='/admin/reports', user_id=admin.id,
                                           author_id=user.id, notif_type=NOTIF_REPORT,
-                                          subtype='user_reported',
+                                          subtype='comment_reported',
                                           targets=targets_data)
                     session.add(notify)
                     admin.unread_notifications += 1

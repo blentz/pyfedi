@@ -1081,7 +1081,21 @@ def report_profile(actor):
                             'source_instance_id': user.instance_id,
                             'source_instance_domain': source_instance.domain if source_instance else None,
                             'reporter_id': current_user.id,
-                            'reporter_user_name': current_user.user_name
+                            'reporter_user_name': current_user.user_name,
+                            # D1392. The federated twin of this report
+                            # (app/activitypub/util.py:3904) puts `reasons` and
+                            # `description` in the same dict, and
+                            # app/templates/user/notifs/20.html's `user_reported`
+                            # block renders them in a "More details" panel guarded
+                            # by `{% if notification.targets.reasons or
+                            # notification.targets.description %}`. Without them
+                            # here the panel stayed closed, so an admin could see
+                            # WHY a user was reported from a peer and not why one
+                            # of their own members reported somebody -- the
+                            # report's own columns, set two lines below from this
+                            # very form.
+                            'reasons': form.reasons_to_string(form.reasons.data),
+                            'description': form.description.data,
                             }
             report = Report(reasons=form.reasons_to_string(form.reasons.data),
                             description=form.description.data,
