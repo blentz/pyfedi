@@ -22432,4 +22432,69 @@ while nobody was notified.
 Fifteen mutants, all dead, on a green baseline. 14,846 tests, 0 failures, 0 warnings. All 92
 floors met.
 
-**Next free number: D1402.**
+## Round 211 — D1402: three validators that were one character wide
+
+**The coverage long tail had flattened** — every large module sat at 91-93% with scattered single-line
+runs — so this round swept a shape instead: **f-string interpolation into SQL**. Twenty-four sites build
+SQL from values. Twenty-three interpolate an int this process computed, a literal chosen by an
+if/elif chain, or `current_app.config['SERVER_NAME']`. The twenty-fourth guards itself with a regex, and
+the regex was wrong.
+
+**D1402. `re.match(r'^...$', v)` and `re.fullmatch(r'^...$', v)` differ for exactly one input: a value
+ending in a single newline**, because `$` matches at the end of the string **and** immediately before a
+trailing newline. Three validators in `app/` were written with `match` against an anchored pattern, and
+all three are boundaries whose whole job is to be exact.
+
+**THE ONE THAT WAS REACHABLE**, and whose own comment states the contract it failed to keep:
+
+```python
+# only accept a string with 0 and 1 in it. This makes it safe to use sql
+# injection-prone code below, which greatly simplifies the conversion of binary strings
+if not BINARY_RE.match(hash):
+...
+sql = f"""SELECT id FROM blocked_image WHERE length(replace((hash # B'{hash}')::text, '0', '')) < 15;"""
+```
+
+```
+PROBE  hash_matches_blocked_image('0'*256)        False
+       hash_matches_blocked_image('0'*256 + '\n') DataError:
+           (psycopg2.errors.InvalidTextRepresentation)
+```
+
+Not an injection — the newline stays inside the quoted literal — but a `DataError` that poisons the
+transaction. `Post.new` (`app/models.py:2685`) calls this, so a federated post is lost and the aborted
+transaction takes the rest of the inbox request; `app/shared/post.py:570` calls it on a local upload,
+where it is a 500. Reachable because `retrieve_image_hash` returned the hashing endpoint's
+`pdq_hash_binary` verbatim with only an `isinstance(str)` check, and an HTTP service emitting a trailing
+newline is ordinary. The hash is stripped there now as well — with the guard exact and no strip, such an
+endpoint's hashes would all fail the check and the blocklist would **silently** stop matching, which is
+the quieter of the two failures.
+
+**THE ONE THAT REACHED THE DATABASE.** `validate_user_name_charset` is the shared charset rule for
+self-registration and admin user creation, and `'alice\n'` satisfied it. `app/admin/routes.py:2125`
+stores `form.user_name.data` **unstripped**, so the newline reached the `user_name` column and every
+actor url built from it. Self-registration strips before calling the helper; the admin path did not —
+the producer/consumer divergence this campaign keeps finding, and the reason the boundary itself has to
+be exact rather than relying on its callers. Both are repaired.
+
+**THE ONE THAT WAS HARMLESS AND STILL WRONG.** `AddCommunityForm`'s url check accepted `'books\n'`, and
+the normalisation below it slugifies that away before storage. Nothing was stored wrong; the guard still
+did not mean what its message says, and a later edit moving the normalisation would have made it matter.
+
+**THE SWEEP IS PINNED AS A TEST**: no `.match()` in `app/` against a `$`-anchored pattern, read out of
+the AST so a compiled pattern assigned to a name resolves to its literal. Five other anchored checks
+already use `fullmatch`; two `match` calls are deliberate prefix tests on unanchored patterns.
+
+**BOTH SURVIVORS WERE VACUOUS CONTROLS OF MINE**, in two different ways. `if True:` — refuse every hash
+— survived because every row in that class asserted `False`, and a guard that refuses everything answers
+`False` too; the discriminating input is a hash that genuinely **matches** a blocked image, so the file
+now inserts one with `CAST(:h AS BIT(256))` and asserts True. And the community-url rows failed for a
+reason that had nothing to do with the charset: `AddCommunityForm.validate` opens with
+`if not super().validate(): return False`, so a form built by assigning `.data` afterwards fails on
+`community_name`'s `DataRequired` and never reaches the url checks — the refusal looked right and
+carried none of the messages under test.
+
+Ten mutants, all dead, on a green baseline. 14,887 tests, 0 failures, 0 warnings. All 92
+floors met.
+
+**Next free number: D1403.**
