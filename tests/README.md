@@ -13118,3 +13118,22 @@ asking about a url. Same shape of defect, opposite answer, and the deciding ques
 `File.source_url` is written from an API field (allowlist http(s): the client is supplying a url this
 instance will fetch) and from `process_upload` (blocklist: the value is a local `app/static/media/...` path
 with no scheme, and an allowlist would refuse every upload). The column does not decide; the producer does.
+
+**918. WHEN A DEFECT SHAPE IS FOUND, SWEEP FOR THE SHAPE WITH AN AST PASS AND PIN THE RESULT AS A TEST.**
+`is_image_url` sniffed a file extension off `urlparse(url).path` (D1408). A pass over `app/` for every
+function testing `endswith` against a collection of extensions found five, three of them classifying urls --
+including `File.is_image`, which was not in the round's plan. The sweep is now a test with an exemption list
+that states a REASON per entry, so the fourth site fails in the suite rather than waiting for a review.
+
+**919. AN AST SWEEP NEEDS A CONTROL ROW NAMING WHAT IT MUST FIND.**
+A pass whose matcher is subtly wrong finds nothing and its rule row passes -- round 199's failure in a
+different guise. This one asserts `is_image_url` and `is_video_url` are among its own results. Its first
+version missed both, because their `endswith` argument is a comprehension variable
+(`any(path.endswith(ext) for ext in common_image_extensions)`) rather than a literal, and only the control
+row would have caught that.
+
+**920. AN UNBOUNDED `in` TEST BESIDE ANCHORED ONES IS THE ODD ENTRY, AND IT IS USUALLY THE WRONG ONE.**
+`is_video_hosting_site` matched seven `https://` prefixes with `startswith` and PeerTube with
+`'videos/watch' in url`, so `javascript:videos/watch` was a video hosting site. When a predicate mixes
+anchored and unanchored tests over the same value, the unanchored one is the defect -- the same reading that
+found D1402's `match` beside five `fullmatch`es.

@@ -22901,4 +22901,91 @@ callers are not urls, while every caller of `is_image_url` is asking about a url
 Twelve mutants, all dead, on a green baseline. 15,223 tests, 0 failures, 0 warnings.
 All 92 floors met.
 
-**Next free number: D1409.**
+## Round 218 — D1409: the rest of the family, and the sweep that pins it
+
+**D1408 fixed one predicate; this round asks how many there are.** The answer, from an AST pass over `app/`
+for every function that tests `endswith` against a collection of file extensions: five, of which three
+classify a **url** and two classify an uploaded file's name.
+
+```
+is_video_url('javascript:x/y.mp4')                 True
+is_video_hosting_site('javascript:videos/watch')   True
+File(source_url='javascript:alert(1)/x.png').is_image()   True
+```
+
+`is_video_url` is the literal twin of `is_image_url` -- the same two lines, one function down.
+`File.is_image` (`app/models.py:976`) is a third copy over `thumbnail_url()`, which falls back to
+`source_url`; `admin/media.html:34` gates a link on it. And `is_video_hosting_site` matches seven anchored
+`https://` prefixes and then, for PeerTube, an **unbounded substring** -- `if 'videos/watch' in url` -- so
+any url carrying those eleven characters anywhere qualified. `_post_full.html:195` and
+`post_teaser/_macros.html:403` gate a PeerTube iframe on the same substring and feed it
+`Post.peertube_embed()` (`self.url.replace('watch', 'embed')`), so the template shares the shape.
+
+**NONE OF THE THREE IS A LIVE HOLE, AND ALL THREE ARE FIXED.** No caller stores a url on the two video
+answers -- they set `post.type` -- and `Post.url` can no longer hold a blocked scheme (D1404 federated,
+D1407 from the API). `File.is_image`'s input is `source_url`, whose every producer now checks the scheme
+(D1405, D1407, D1408). They are fixed for the reason `livescript` and `mocha` are in `UNSAFE_URL_SCHEMES`:
+the set is a blocklist and they belong in it. The PeerTube substring now requires an http(s) scheme, which
+leaves every real PeerTube url matching and stops the class without guessing at a path-segment anchor some
+peer's url shape might not match.
+
+**THE RULE IS PINNED OVER THE SOURCE, WHICH IS THE POINT OF THE ROUND.** The AST sweep is a test: every
+function in `app/` that sniffs a file extension must consult `has_unsafe_url_scheme`, or appear in an
+exemption list **with its reason**. The three current exemptions are an uploaded file's own name
+(`process_upload`, `guess_mime_type`, and the `allowed_extensions` blocks in `make_post`/`edit_post`),
+`request.path` in the 404 handler (this instance's own path, already split from the scheme), and
+`make_image_sizes_async`, which asks an already-stored `source_url` whether to skip resizing a gif -- by
+then the fetch has happened and a check would decide nothing. Round 211 pinned `re.match` against a
+`$`-anchored pattern the same way: the third site is the one nobody reviews.
+
+**THE SWEEP HAS ITS OWN CONTROL ROW**, because an AST pass that matched nothing would make the rule row
+pass for the wrong reason -- round 199's failure, where a guard that could never fire looked like a passing
+test. It asserts that `is_image_url` and `is_video_url` are among the functions found.
+
+**AND THE SWEEP IS WHAT FOUND THE THIRD COPY.** `File.is_image` was not in the round's plan; it appeared in
+the first run's failure list beside two exemptions, which is exactly the behaviour a sweep is for.
+
+### Also this round, and it found nothing: the API authorisation sweep
+
+QUESTION. For every function in `app/shared/*.py` and `app/api/alpha/utils/*.py` that
+mutates the database, does something check that the caller may act on the object it names?
+D1399 found an endpoint that authorised any stamp, so the class is known to be reachable.
+
+METHOD. An AST pass over both packages: a function counts as a mutator if it calls
+`db.session.commit/add/delete` or is named `make_*`, `edit_*`, `delete_*`, `restore_*`,
+`lock_*`, `remove_*`, `ban_*`, `add_*`, `mod_*`, `hide_*`. Then look for an ownership check
+in its source.
+
+RESULT: NO DEFECT. Every mutator checks. What the sweep actually measured, four times over,
+is that OWNERSHIP IS SPELLED FIVE DIFFERENT WAYS in this codebase, and each spelling had to
+be added to the matcher before the false positives went away:
+
+  1. a keyword to the authoriser -- `authorise_api_user(auth, id_match=post.user_id)`
+     (`delete_post`, `restore_post`, `edit_post`)
+  2. the WHERE clause -- `filter_by(id=reply_id, user_id=user_id).one()`
+     (`delete_reply`, `restore_reply`), `filter_by(sender_id=user_id, ...)`
+     (`put_private_message`, `post_private_message_delete`),
+     `filter_by(id=message_id, recipient_id=user.id)` (`post_private_message_mark_as_read`)
+  3. an inline comparison -- `if feed.user_id != user_id: abort(404)` (`delete_feed`)
+  4. a permission predicate -- `user_access('approve registrations', user.id)`
+     (`put_registration_approve`), `community.moderators()` + `mod_ids`
+     (`put_post_report_resolve`, `put_reply_report_resolve`), `is_moderator` /
+     `is_admin_or_staff` (`mod_remove_post` and the other mod actions)
+  5. self-scope by construction -- the action can only affect the caller's own row
+     (`hide_post`'s `DELETE ... WHERE user_id = :user_id`, bookmarks, subscriptions,
+     blocks), so there is nothing to own
+
+WORTH KEEPING. A sweep that returns nothing is still evidence, and this one says the
+guard is present at every mutator TODAY. It is not pinned as a test, and deliberately: a
+string-matching rule over five idioms would fail on the sixth legitimate spelling more often
+than it would catch a real gap, which is the opposite of what the D1402 and D1409 sweeps do
+(those pin ONE exact spelling of ONE rule).
+
+WHAT WOULD MAKE IT PINNABLE. A single `authorise(user, object, action)` helper that every
+mutator called, after which the sweep becomes "every mutator calls it". That is a
+refactor with its own argument, not a finding.
+
+Nine mutants, all dead, on a green baseline. 15,260 tests, 0 failures, 0 warnings.
+All 92 floors met.
+
+**Next free number: D1410.**
