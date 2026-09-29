@@ -13471,3 +13471,17 @@ one is absent.
 **980. `assert 'checked' in body` IS TRUE OF ANY PAGE WITH A TICKED BOX.**
 A form with several checkboxes satisfies it whatever the field under test is set to, so the mutant that stops
 reading the stored value survives. Pull out the `<input name="...">` tag with a regex and assert both states.
+
+**981. TO TEST ONE HALF OF AN `and`, MAKE THE OTHER HALF TRUE.**
+`if FLAG_THROWAWAY_EMAILS and os.path.isfile(...)` with the file absent is False whatever the flag says, so a
+mutant deleting the flag check survives. The flag-off row has to create the file too.
+
+**982. A NAME ON THE PAGE DOES NOT SAY WHICH LIST PUT IT THERE.**
+The registrations queue renders `registrations` (status 0) and `recently_approved` (status 1). Asserting the
+approved applicant's name appears passes even when it is in both lists. Capture the template's kwargs by
+monkeypatching `render_template` in the route's module and assert each list's contents.
+
+**983. AN IMAGE REPLACEMENT DELETES THE OLD FILE BEFORE SAVING THE NEW ONE.**
+`community.icon.delete_from_disk()` precedes `save_icon_file(...)`, so the `if file:` arm's other branch leaves
+a File row whose image is gone. Assert that state rather than skipping the branch -- and patch
+`File.delete_from_disk` with `autospec=True` so the row can name WHICH path was deleted.
