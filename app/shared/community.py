@@ -16,7 +16,8 @@ from app.chat.util import send_message
 from app.constants import *
 from app.email import send_email
 from app.models import CommunityBlock, CommunityMember, Notification, NotificationSubscription, User, Conversation, \
-    Community, Language, File, CommunityFlair, utcnow, CommunityInvitation, CommunityFavorite, CommunityFlairBlock
+    Community, Language, File, CommunityFlair, utcnow, CommunityInvitation, CommunityFavorite, \
+    CommunityFlairBlock, _as_url
 from app.shared.tasks import task_selector
 from app.shared.upload import process_upload
 from app.user.utils import search_for_user
@@ -309,6 +310,21 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
         discussion_languages = input['discussion_languages']
         question_answer = input['question_answer']
         user = authorise_api_user(auth, return_type='model')
+        # D1408. `fields.String(metadata={"format": "url"})` again (fact 904):
+        # marshmallow does not validate `metadata`, so these two arrive unchecked
+        # and become `File.source_url`, which `icon_image()`/`header_image()`
+        # return unchanged -- and `admin/edit_community.html:35` puts
+        # `header_image()` in a bare href. `is_image_url` below is not the guard
+        # it looks like: it sniffs the extension off `urlparse(url).path`, so
+        # `javascript:alert(1)/x.png` passed it. That predicate now refuses unsafe
+        # schemes too, and this is the allowlist half: an icon url from an API
+        # client is one this instance FETCHES, so http(s) is the whole of what is
+        # useful. Refused rather than dropped, as the API's other urls are -- the
+        # caller is waiting and can fix the value.
+        for field, value in (('icon_url', icon_url), ('banner_url', banner_url)):
+            if value and _as_url(value) is None:
+                raise Exception(f'{field} must be an http:// or https:// url')
+
     else:
         title = input.community_name.data
         description = piefed_markdown_to_lemmy_markdown(input.description.data)
