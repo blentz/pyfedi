@@ -23283,4 +23283,71 @@ No code changed, so no mutants and no suite run: the round is two negative sweep
 recorded findings. **D1414 is still free** -- neither recorded finding takes a number until it is
 fixed.
 
-**Next free number: D1414.**
+## Round 224 — D1414: a fallback a unique constraint made unreachable, and the coverage tail
+
+**Back to the coverage half of the standing instruction.** With `app/cli.py` and `app/nntp/*` set aside as
+lowest priority, the report's tail is ten files holding one to eight missing lines each -- 26 lines in all.
+This round resolved eleven -- and only NINE of them were reachable, which is the result
+worth keeping.
+
+**D1414. `app/activitypub/actor.py` carried this twice**, in `find_remote_actor` and in `find_actor_by_url`:
+
+```python
+if actor and actor.banned:
+    # Try to find a non-banned copy of the community
+    unbanned_actor = db.session.query(Community).filter(
+        Community.ap_profile_id == actor_url, Community.banned == False).first()
+    if unbanned_actor is None:
+        return None
+    actor = unbanned_actor
+```
+
+The uncovered line in each was **not** the refusal -- `return None` was already tested -- but
+`actor = unbanned_actor`. **`Community.ap_profile_id` is `unique=True`** (`app/models.py:1256`), so a second
+row with that id cannot exist: the only row the fallback query can match is the banned one it filters out.
+`unbanned_actor` was therefore always None, the refusal always fired, and the fallback was unreachable --
+which is exactly why it stayed uncovered while every line around it was tested. Both copies are now the bare
+refusal the constraint already guarantees, and a test asserts the constraint *and* measures it (inserting a
+twin raises `IntegrityError`), so a migration dropping uniqueness fails in the suite rather than silently
+reviving dead code.
+
+**I nearly recorded this as a covered line instead of a dead one.** The first version of the test asserted
+`find_remote_actor(banned.ap_profile_id) is None` and passed -- and the coverage report still listed the line
+as missing, because `is None` is satisfied by the refusal one line up. A row that passes while the line it
+was written for stays red is the same vacuous shape the mutation passes keep finding, caught this time by
+reading the coverage output rather than the test result.
+
+**THE NINE COVERED**, each with the arm's own reason stated:
+
+* `app/api/alpha/schema.py:38, 39, 47, 48, 56` -- three validators' refusal arms: a datetime that is not
+  Lemmy's format, a colour code that is not a string at all (the bare `except:` needs a TypeError, not a
+  non-matching string), and a title of nothing but whitespace, including a non-breaking space since the
+  strip is `re.U`.
+* `app/shared/tasks/notes.py:100-101` and `pages.py:107-108` -- `search_for_user` raising for a LOCAL
+  `@mention`, inside `except: pass`. `tests/test_shared_tasks_send_post.py`'s own docstring warned that a
+  row asserting "no notification" cannot tell "correctly skipped" from "crashed and swallowed", so each row
+  SPIES on the call as well as making it raise: the spy proves the arm was entered, the send completing
+  proves the exception was swallowed.
+
+**AND FOUR MORE TURNED OUT TO BE UNREACHABLE**, which is what the round really found. Two of them were
+written as ordinary tests first, and both passed while the line stayed red:
+
+* `app/topic/routes.py:212` -- `/topic/no-such-topic` DOES answer 404, from `abort(404)` at **line 67**,
+  inside the loop that resolves each path segment. Line 212 is the `else` of `if current_topic:`, and
+  `current_topic` comes from that same loop, so reaching it needs a miss that does not abort -- which
+  `split('/')` cannot produce.
+* `app/feed/routes.py:616` -- `show_feed` has no route of its own (the activitypub blueprint resolves the
+  feed and calls it, `app/activitypub/routes.py:2765`) and dereferences its argument at 481 and 530 before
+  `if current_feed:` at 536. A falsy feed raises long before the `else`.
+* `app/shared/community.py:723` -- `if not ap_id: return` after `flair.get_ap_id()`, which returns either an
+  existing `ap_id` or one built from `community.local_url()`, never anything falsy.
+* `app/api/alpha/utils/reply.py:369` -- `replies = []` under a comment reading `# shouldn't happen`.
+
+The evidence for these four is "an earlier statement already refused or dereferenced the value", which is
+weaker than D1414's schema constraint -- so they are documented, each pinned by a row naming the line that
+makes it dead, rather than deleted.
+
+Six mutants, all dead, on a green baseline. 15,362 tests, 0 failures, 0 warnings.
+All 92 floors met. `app/api/alpha/schema.py` and `app/activitypub/actor.py` are now at 100%.
+
+**Next free number: D1415.**

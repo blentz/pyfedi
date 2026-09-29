@@ -13242,3 +13242,22 @@ The POST-route sweep and the script sweep both came back clean. Unrecorded, the 
 at the same cost; recorded with what was examined and why each exemption holds, they are evidence. Two of
 this campaign's sweeps have now returned negatives (the app/shared authorisation sweep, round 218, and both
 of these), and in each case the write-up names the idioms that made the false positives.
+
+**938. A UNIQUE CONSTRAINT CAN MAKE A FALLBACK UNREACHABLE, AND THE COVERAGE REPORT IS WHERE IT SHOWS.**
+`find_remote_actor` looked for "a non-banned copy of the community" by re-querying the same
+`ap_profile_id` with `banned == False`. That column is `unique=True`, so the only row it could match is the
+banned one it excludes: the fallback was dead in both copies. When a line stays red while everything around
+it is green, ask what the schema forbids before writing a test for it.
+
+**939. A ROW CAN PASS WHILE THE LINE IT WAS WRITTEN FOR STAYS RED -- TWICE IN ONE FILE.**
+`assert find_remote_actor(banned_url) is None` passed on the refusal one line ABOVE the target. A mention of
+`@someone@elsewhere.example` covered the REMOTE branch's `except: pass` while the local pair this round
+needed stayed red. And `/topic/no-such-topic` really does answer 404 -- from an abort 145 lines earlier than
+the one being chased. Three rows, three passes, three untouched lines. Re-read the coverage report after
+adding a row; the test result cannot tell "this line now runs" from "something near it does".
+
+**940. `except: pass` NEEDS A SPY, NOT AN ABSENCE.**
+Two modules swallow `search_for_user` failures for an unresolvable `@mention`. A row asserting that no
+notification appeared cannot tell a correctly skipped mention from a crash that was swallowed -- the module's
+own docstring says so. Make the doubled function RECORD its call and then raise: the record proves the arm
+was entered, and the work completing afterwards proves the exception went no further.
