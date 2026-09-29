@@ -12736,3 +12736,21 @@ depending on where the report came from.
 **857. SCOPE A "THIS STRING MUST NOT APPEAR" TEST TO THE BRANCH THAT MUST NOT CONTAIN IT.**
 A test forbidding `title='Reported user'` anywhere in the file failed on the `User` branch, where
 it is the correct title. Take the branch's line range from the AST and assert within it.
+
+**858. A TEMPLATE PATH COMPUTED FROM DATA NEEDS A TEST PER VALUE THE DATA CAN TAKE.**
+`{% include "admin/reports/" + type_text().lower() + "_report.html" %}` renders five names and only
+four templates existed, so one community report made the whole queue TemplateNotFound -- and the
+include sits in a `{% for %}`, so every other pending report went with it. Enumerate the constants
+and assert a template exists for each, rather than testing the types that happen to be in a
+fixture.
+
+**859. A CONCLUSION OF "UNREACHABLE" IS WORTH REVISITING WHEN THE AREA COMES ROUND AGAIN.**
+Round 189 found `types[self.type]` unbounded, reasoned that every writer passes a constant, and
+recorded it as unreachable. True, and too narrow: the index was fine and the NAME it returned had
+no template. Its own tests missed the case because the one type-3 report they created was excluded
+by a filter before rendering.
+
+**860. A HAND-BUILT FIXTURE DICT DOES NOT TEST THE PRODUCER'S KEY NAMES.**
+Rows that construct `targets={...}` inline exercise the template only; the mutant renaming the
+producer's key survived all of them. One test that goes through the real route is what ties the two
+halves together.
