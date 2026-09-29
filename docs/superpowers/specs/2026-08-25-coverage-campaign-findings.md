@@ -24261,4 +24261,42 @@ and the symptom is a restriction that silently matches nobody.
 
 Fourteen mutants, all dead, on a green baseline.
 
+---
+
+## Round 245 -- the per-peer and per-viewer gates in `app/utils.py`
+
+Six helpers consulted before this instance talks to a peer or shows somebody a page, none of
+which had rows. No defect, but three things are worth having written down.
+
+**`instance_online` and `instance_gone_forever` disagree on purpose.** For a domain this
+instance has never seen, the first answers False and the second answers **True** -- a peer
+with no row has never been reached, so treating it as gone stops this instance retrying it
+forever. For the empty string the second answers False rather than True, so the two guards do
+not agree either. Both are now asserted rather than left to be discovered.
+
+**The banned-browser cookie is misspelt on purpose.** `user_cookie_banned` looks for
+`sesion`, not `session`, and its presence alone is the ban -- the value is never read. A row
+asserts that a correctly spelt `session` cookie does NOT ban the browser carrying it, which
+is every logged-in browser.
+
+**`guess_mime_type` is a security answer**, because it becomes a `Content-Type` on a stored
+upload. Its fallbacks build `image/<ext>`, never something a browser executes, and a file
+with no extension becomes `application/octet-stream`. Its FIRST fallback -- `if content_type
+is None` -- is unreachable: `mimetypes.guess_type` returns a 2-tuple for every input, and
+`(None, None)` takes the second fallback instead. Recorded with a row asserting the library's
+contract, since the two fallbacks are identical and removing the first changes nothing.
+
+**The rollback arms are gates failing open.** Each helper opens its own task session and
+re-raises after rolling back. A mutant that swallowed the failure and answered "not banned"
+or "online" is killed by a row that patches `get_task_session` to hand back a session whose
+`query` raises, and asserts the exception propagates AND the session was rolled back and
+closed.
+
+Also covered: the IP ban list (empty list, not None -- every caller writes
+`in banned_ip_addresses()`), and `user_filters_replies`, whose `hide_type == 1` keywords are
+collected under the key `'-1'` so the caller can tell "hide with a warning" from "do not
+render at all".
+
+Eighteen mutants, all dead, on a green baseline.
+
 **Next free number: D1424.**
