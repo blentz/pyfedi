@@ -21324,4 +21324,39 @@ design — `possible_communities()` only creates a section when it is non-empty,
 Eight mutants, all dead, on a green baseline. 14,039 tests, 0 failures, 0 warnings. All 92
 floors met.
 
-**Next free number: D1386.**
+## Round 191 — the reader the previous round did not sweep for, and a 500 behind it
+
+D1385 fixed one reader of `cross_post_community_id` and did not grep for the others. There were
+three.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D1386** | `app/main/routes.py`, `share` | `int(request.cookies.get('cross_post_community_id'))`, unguarded, on a route with **no** `@login_required` — anything can follow `/share`. | **fixed** | `'abc'`, `'null'`, `'1.5'` → `ValueError: invalid literal for int() with base 10` |
+| **D1387** | the same route and `app/templates/share.html` | `share.html` does `posts_keyed_by_community[community.id]`, and the two queries behind it disagreed: the post query excluded `Post.microblog == False` while the community query only excluded the community *named* `'microblogs'`. A microblog post — what a Mastodon Note with no title becomes, in any community — listed its community with no entry in the dict. | **fixed** | `UndefinedError: dict object has no element 1`, a 500 on a public route |
+
+The three readers of that cookie were: `app/post/routes.py:2680`, **already** guarded with
+`except (TypeError, ValueError)` and a row check, its comment naming both failures;
+`main.add_post`, fixed last round; and this one. The shape was documented in the codebase at one
+site and fixed at a second while still open at a third. Fact 839.
+
+**Four mutants survived the first pass, and every one was my test's fault, not the code's:**
+
+* `value="2"` appears in the dropdown whether or not it is the selection, so three assertions
+  were reading the chrome. The witness is `<option selected value="N">`, measured: no cookie
+  gives `selected count=0`;
+* the "tracking parameters are stripped" test asserted `utm_source` was absent from a page that
+  never echoes the url. Worse, the premise was wrong —
+  `remove_tracking_from_link` only canonicalises **youtu.be** links and leaves `utm_*` alone. The
+  test now shares a youtu.be link and checks it matches a post stored under the canonical form,
+  which is `https://youtube.com/...` with **no** `www.` — measured, not assumed.
+
+**And the "already shared" tests were vacuous before that.** `make_post`'s third positional is
+`ap_id`; it has no `url` parameter at all, so `Post.url` was never set and the lookup matched
+nothing. Both assertions had an `or` escape (`... or b'general' in data`) that hid it, and
+`b'general'` is in the dropdown on every render. The helper sets `url` explicitly now, and the
+witness is the page's own phrase — share.html renders the community name, never the post title.
+
+Nine mutants, all dead, on a green baseline. 14,065 tests, 0 failures, 0 warnings. All 92
+floors met.
+
+**Next free number: D1388.**
