@@ -14,7 +14,27 @@
                     <div class="flex-column flex-grow-1 pl-1">
                         <a href="/chat/{{ report.targets.suspect_conversation_id }}">{{ _('Reported Conversation') }}</a>
                     </div>
-                </div>                      
+                </div>
+                {# D1393. The other four report templates show these two, and this
+                   one showed neither -- so an admin triaging a reported
+                   conversation could not see WHY it was reported without opening
+                   the chat itself. #}
+                <div class="d-flex">
+                    <div class="p-start flex-column flex-grow-0">
+                        <p>{{ _('Reasons') }}:  </p>
+                    </div>
+                    <div class="flex-column flex-grow-1 pl-1">
+                        <p>  {{ report.reasons }}</p>
+                    </div>
+                </div>
+                <div class="d-flex">
+                    <div class="p-start flex-column flex-grow-0">
+                        <p>{{ _('Description') }}:  </p>
+                    </div>
+                    <div class="flex-column flex-grow-1 pl-1">
+                        <p>  {{ report.description }}</p>
+                    </div>
+                </div>
             </div>
         </div>
     </td>
