@@ -13,7 +13,7 @@ from app.api.alpha.utils.reply import get_reply_list
 from app.api.alpha.views import user_view, reply_view, post_view, community_view
 from app.constants import *
 from app.models import Conversation, ChatMessage, Notification, PostReply, User, Post, Community, File, UserFlair, \
-    user_file, UserExtraField, UserNote, RevokedToken, utcnow
+    user_file, UserExtraField, UserNote, RevokedToken, utcnow, _as_url
 from app.shared.user import block_another_user, unblock_another_user, subscribe_user, ban_user, unban_user, follow_user, \
     unfollow_user
 from app.utils import authorise_api_user, in_sorted_list, user_in_restricted_country, user_access, user_notes
@@ -360,27 +360,41 @@ def put_user_save_user_settings(auth, data):
     bot = data['bot'] if 'bot' in data else None
     display_name = data['display_name'] if 'display_name' in data else False
 
+    # D1405. The comment below used to read "valid url passed", and nothing checked
+    # that: the schema field is `fields.String` with `metadata={"format": "url"}`, and
+    # marshmallow does not validate `metadata`. The string became `File.source_url`,
+    # which `User.avatar_image()` and `cover_image()` return unchanged when there is no
+    # local copy, and eight templates put those in a bare `href` -- so any authenticated
+    # user could give themselves an avatar of `javascript:...` and have it clicked on
+    # their own profile page by anyone who visited it.
+    #
+    # Refused rather than dropped, unlike the federated path: this value came from a
+    # caller who is waiting for an answer and can fix it, where a peer's document is
+    # ingested as much as it can be. http(s) is the rule because make_image_sizes
+    # FETCHES this url with httpx.
     if "avatar" in data:
         if not data["avatar"]:
             # null value passed, remove avatar image
             avatar = None
             remove_avatar = True
         else:
-            # valid url passed, set avatar image
-            avatar = data["avatar"]
+            avatar = _as_url(data["avatar"], 1024)
+            if avatar is None:
+                raise Exception('avatar must be an http:// or https:// url')
             remove_avatar = False
     else:
         avatar = None
         remove_avatar = False
-    
+
     if "cover" in data:
         if not data["cover"]:
             # null value passed, remove avatar image
             cover = None
             remove_cover = True
         else:
-            # valid url passed, set avatar image
-            cover = data["cover"]
+            cover = _as_url(data["cover"], 1024)
+            if cover is None:
+                raise Exception('cover must be an http:// or https:// url')
             remove_cover = False
     else:
         cover = None

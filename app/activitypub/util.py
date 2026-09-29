@@ -3787,8 +3787,10 @@ def update_post_from_activity(post: Post, request_json: dict):
                         # Let's see if we can do better than the source instance did!
                         opengraph = opengraph_parse(thumbnail_url)
                         if opengraph and (opengraph.get('og:image', '') != '' or opengraph.get('og:image:url', '') != ''):
-                            filename = opengraph.get('og:image') or opengraph.get('og:image:url')
-                            if not filename.startswith('/'):
+                            # D1405, as app/models.py: `og:image` reaches
+                            # `File.source_url`, which is rendered as an href.
+                            filename = _as_url(opengraph.get('og:image') or opengraph.get('og:image:url'), 1024)
+                            if filename:
                                 image = File(source_url=filename, alt_text=shorten_string(opengraph.get('og:title'), 295))
                     if is_video_hosting_site(embed_url) or is_video_url(new_url):
                         post.type = POST_TYPE_VIDEO

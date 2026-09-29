@@ -99,19 +99,41 @@ def image_url_from(value, prefer_last: bool = False):
     Which end of a list is used is kept as it was: the LAST entry for an icon, where
     the largest is conventionally offered, and the FIRST for an image. An entry that
     is unusable gives None rather than a look at the other end.
+
+    D1405. Every shape is read through `_as_url`, so the scheme is checked here and
+    nowhere else. What this function returns becomes `File.source_url`, and
+    `File.view_url()`, `User.avatar_image()`, `User.cover_image()` and the Community
+    and Feed equivalents all return that string unchanged when there is no local copy
+    (`served_path` rewrites only our own `app/` paths). Twelve templates put
+    `view_url()` in a bare `href` and eight put `avatar_image()`/`cover_image()` there,
+    including `user/show_profile.html:40` -- so an actor with
+    `icon: {"url": "javascript:alert(document.domain)"}` was a clickable javascript:
+    link on its own profile page for every visitor. Measured:
+
+        PROBE actor icon      source_url='javascript:alert(document.domain)'
+              avatar_image()  'javascript:alert(document.domain)'
+              cover_image()   'javascript:alert(2)'
+
+    An ALLOWLIST of http(s) rather than the href blocklist `Post.url` gets
+    (`url_is_storable`), and the reason is what the value is FOR: this instance fetches
+    it, with `httpx`, in `make_image_sizes`. A scheme httpx cannot fetch is not a
+    picture this instance could ever display, so there is no legitimate `magnet:` or
+    `matrix:` image to protect and nothing to audit -- the argument recorded at
+    UNSAFE_URL_SCHEMES for keeping link schemes open does not apply to an image.
+
+    1024 is `File.source_url`'s own width, so a peer cannot make a DataError at commit
+    out of a very long url either.
     """
     if isinstance(value, str):
-        return value or None
+        return _as_url(value, 1024)
     if isinstance(value, dict):
-        url = value.get('url')
-        return url if isinstance(url, str) and url else None
+        return _as_url(value.get('url'), 1024)
     if isinstance(value, list) and value:
         entry = value[-1] if prefer_last else value[0]
         if isinstance(entry, dict):
-            url = entry.get('url')
-            return url if isinstance(url, str) and url else None
+            return _as_url(entry.get('url'), 1024)
         if isinstance(entry, str):
-            return entry or None
+            return _as_url(entry, 1024)
     return None
 
 
@@ -2738,8 +2760,15 @@ class Post(db.Model):
                 post.type = constants.POST_TYPE_IMAGE
                 opengraph = opengraph_parse(thumbnail_url)
                 if opengraph and (opengraph.get('og:image', '') != '' or opengraph.get('og:image:url', '') != ''):
-                    filename = opengraph.get('og:image') or opengraph.get('og:image:url')
-                    if not filename.startswith('/'):
+                    # D1405. `og:image` is a string from a page this instance
+                    # fetched, and it becomes `File.source_url`, which twelve
+                    # templates render as a bare `href` through `view_url()`. The
+                    # old guard, `not filename.startswith('/')`, skipped a relative
+                    # path and admitted every scheme; `_as_url` covers the relative
+                    # path too, since it has no http scheme, and applies the
+                    # column's 1024 width.
+                    filename = _as_url(opengraph.get('og:image') or opengraph.get('og:image:url'), 1024)
+                    if filename:
                         file = File(source_url=filename, alt_text=shorten_string(opengraph.get('og:title'), 295))
                         post.image = file
                         db.session.add(file)
@@ -2747,8 +2776,15 @@ class Post(db.Model):
                 post.type = constants.POST_TYPE_VIDEO
                 opengraph = opengraph_parse(thumbnail_url)
                 if opengraph and (opengraph.get('og:image', '') != '' or opengraph.get('og:image:url', '') != ''):
-                    filename = opengraph.get('og:image') or opengraph.get('og:image:url')
-                    if not filename.startswith('/'):
+                    # D1405. `og:image` is a string from a page this instance
+                    # fetched, and it becomes `File.source_url`, which twelve
+                    # templates render as a bare `href` through `view_url()`. The
+                    # old guard, `not filename.startswith('/')`, skipped a relative
+                    # path and admitted every scheme; `_as_url` covers the relative
+                    # path too, since it has no http scheme, and applies the
+                    # column's 1024 width.
+                    filename = _as_url(opengraph.get('og:image') or opengraph.get('og:image:url'), 1024)
+                    if filename:
                         filename = filename.replace('.jpg', '.720p.mp4')
                         file = File(source_url=filename, alt_text=shorten_string(opengraph.get('og:title'), 295))
                         post.image = file
@@ -2844,8 +2880,15 @@ class Post(db.Model):
                 # Let's see if we can do better than the source instance did!
                 opengraph = opengraph_parse(thumbnail_url)
                 if opengraph and (opengraph.get('og:image', '') != '' or opengraph.get('og:image:url', '') != ''):
-                    filename = opengraph.get('og:image') or opengraph.get('og:image:url')
-                    if not filename.startswith('/'):
+                    # D1405. `og:image` is a string from a page this instance
+                    # fetched, and it becomes `File.source_url`, which twelve
+                    # templates render as a bare `href` through `view_url()`. The
+                    # old guard, `not filename.startswith('/')`, skipped a relative
+                    # path and admitted every scheme; `_as_url` covers the relative
+                    # path too, since it has no http scheme, and applies the
+                    # column's 1024 width.
+                    filename = _as_url(opengraph.get('og:image') or opengraph.get('og:image:url'), 1024)
+                    if filename:
                         file = File(source_url=filename, alt_text=shorten_string(opengraph.get('og:title'), 295))
                         post.image = file
                         db.session.add(file)
