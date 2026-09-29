@@ -2115,7 +2115,10 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
                                                     targets_data = {'gen': '0',
                                                                     'post_id': post.id,
                                                                     'orig_post_title': post.title,
-                                                                    'orig_post_body': post.body
+                                                                    'orig_post_body': post.body,
+                                                                    'suspect_user_user_name': (
+                                                                        post.author.ap_id if post.author and post.author.ap_id
+                                                                        else post.author.user_name if post.author else ''),
                                                                     }
                                                     notification = Notification(title='Review this',
                                                                                 user_id=1,
@@ -2135,7 +2138,10 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
                                                         targets_data = {'gen': '0',
                                                                         'post_id': post.id,
                                                                         'orig_post_title': post.title,
-                                                                        'orig_post_body': post.body
+                                                                        'orig_post_body': post.body,
+                                                                        'suspect_user_user_name': (
+                                                                            post.author.ap_id if post.author and post.author.ap_id
+                                                                            else post.author.user_name if post.author else ''),
                                                                         }
                                                         notification = Notification(title='Review this',
                                                                                     user_id=1,
@@ -3756,7 +3762,10 @@ def update_post_from_activity(post: Post, request_json: dict):
                                         'post_id': post.id,
                                         'orig_post_title': post.title,
                                         'orig_post_body': post.body,
-                                        'orig_post_domain': post.domain,
+                                        'orig_post_domain': new_domain.name,
+                                        'suspect_user_user_name': (
+                                            post.author.ap_id if post.author and post.author.ap_id
+                                            else post.author.user_name if post.author else ''),
                                         }
                         if new_domain.notify_mods:
                             for community_member in post.community.moderators():
@@ -3770,12 +3779,10 @@ def update_post_from_activity(post: Post, request_json: dict):
                         if new_domain.notify_admins:
                             for admin in Site.admins():
                                 if admin.id not in already_notified:
-                                    targets_data = {'gen': '0',
-                                                    'post_id': post.id,
-                                                    'orig_post_title': post.title,
-                                                    'orig_post_body': post.body,
-                                                    'orig_post_domain': post.domain,
-                                                    }
+                                    # D1391. Rebuilt per admin with `post.domain`, the
+                                    # same unserialisable object as above; the dict
+                                    # built once before the loop already holds
+                                    # everything this needs.
                                     notify = Notification(title='Suspicious content',
                                                           url=post.ap_id, user_id=admin.id,
                                                           author_id=1, notif_type=NOTIF_REPORT,
