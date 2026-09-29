@@ -1110,6 +1110,7 @@ def cancel_inline(comment_id:int):
 @bp.route('/post/<int:post_id>/options_menu', defaults={'offer_markdown_source': 'False'}, methods=['GET'])
 @bp.route('/post/<int:post_id>/<string:offer_markdown_source>/options_menu', methods=['GET'])
 @block_bots
+@login_required_if_private_instance
 def post_options(post_id: int, offer_markdown_source: str):
     post = db.session.get(Post, post_id) or abort(404)
 
@@ -1133,6 +1134,7 @@ def post_options(post_id: int, offer_markdown_source: str):
 
 @bp.route('/post/<int:post_id>/comment/<int:comment_id>/options_menu', methods=['GET'])
 @block_bots
+@login_required_if_private_instance
 def post_reply_options(post_id: int, comment_id: int):
     post = db.session.get(Post, post_id) or abort(404)
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
@@ -2999,6 +3001,7 @@ def post_reply_unchoose_answer(post_reply_id):
 
 
 @bp.route('/post/<int:post_id>/share_mastodon', methods=['GET', 'POST'])
+@login_required_if_private_instance
 def post_share_mastodon(post_id):
     post = db.session.get(Post, post_id) or abort(404)
     form = ShareMastodonForm()
