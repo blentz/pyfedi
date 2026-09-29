@@ -23350,4 +23350,66 @@ makes it dead, rather than deleted.
 Six mutants, all dead, on a green baseline. 15,362 tests, 0 failures, 0 warnings.
 All 92 floors met. `app/api/alpha/schema.py` and `app/activitypub/actor.py` are now at 100%.
 
-**Next free number: D1415.**
+## Round 225 — D1415: an admin setting that 500'd every image upload, found by chasing a coverage line
+
+**`app/community/forms.py` was the largest remaining entry in the tail at 96.69%**, eight lines. Writing a
+row for one of them -- `import pillow_avif`, reachable only through the chan-image filter -- turned the round
+into a defect.
+
+**D1415.** `CreateImageForm.validate` runs an uploaded image through OCR when
+`Site.enable_chan_image_filter` is on:
+
+```python
+try:
+    if '.avif' in uploaded_file.filename:
+        import pillow_avif  # NOQA
+    image_text = pytesseract.image_to_string(Image.open(BytesIO(uploaded_file.read())).convert('L'))
+except FileNotFoundError:
+    image_text = ''
+except UnidentifiedImageError:
+    image_text = ''
+```
+
+`pytesseract` raises `TesseractNotFoundError` when the tesseract **binary** is missing -- the ordinary state
+of a machine that installed this application's Python dependencies and nothing else. Measured in the test
+image:
+
+```
+mro: ['TesseractNotFoundError', 'OSError', 'Exception', 'BaseException', 'object']
+is FileNotFoundError? False
+is OSError? True
+```
+
+It is an `OSError` and **not** a `FileNotFoundError`, so neither arm caught it: an admin turning the filter
+on without tesseract installed made **every image upload raise out of form validation** -- a 500 on the post
+form, for every image, until the setting was turned off again. The new arm answers the same `''` the other
+two do, so the filter degrades to off rather than to broken.
+
+**WHY NOBODY HIT IT AND WHY NO TEST FOUND IT.** The setting is off by default, so the whole block is
+invisible to an instance that leaves it alone -- and the suite, running in an image with no tesseract, could
+not have exercised the block without meeting the bug. That is the shape worth remembering: the code was
+untested *because* it was broken, and the coverage line was the only thing pointing at it.
+
+**THE OTHER SEVEN LINES**, and only five were reachable:
+
+* `:53` -- `return False` when `super().validate()` refuses. Covered by a form with an empty
+  `community_name`, and the row asserts `url.errors == []` to prove the function returned BEFORE the name
+  checks rather than after them.
+* `:110-111` -- a local **Feed** already holding the requested community name. The check filters
+  `Feed.ap_id == None`, so the round has a control proving a REMOTE feed of the same name does not collide.
+* `:706` -- `'Maximum of 50 at a time.'`, reachable only because the two caps count different things:
+  `recipients` drops blank lines and `lines` does not, so sixty newlines carrying three addresses is three
+  recipients and sixty lines -- under the first cap, over the second.
+* `:397` -- `site = Site()` when there is no Site row. Worth covering rather than dismissing: `make_site()`
+  is opt-in across this suite, and a fresh install reaches this code before the row exists.
+* `:419` and `:553` -- **unreachable**, the same line in two forms:
+  `if not isinstance(self.image_file.errors, list)`. Both functions open with
+  `if not super().validate(...): return False`, and WTForms replaces every field's `errors` with a list
+  during that call. The `isinstance` arm can only be False, so only the `else` runs. Documented rather than
+  deleted, as round 224's four were, and pinned by a row asserting the WTForms behaviour so a version that
+  leaves `errors` a tuple makes both arms live again.
+
+Six mutants, all dead, on a green baseline. 15,375 tests, 0 failures, 0 warnings.
+All 92 floors met.
+
+**Next free number: D1416.**
