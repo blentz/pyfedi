@@ -23912,4 +23912,42 @@ a remote feed's ActivityPub data belongs to the instance hosting it.
 
 Eleven mutants, all dead, on a green baseline.
 
+---
+
+## Round 236 -- what this instance publishes to somebody else's server
+
+`publicize_community` runs when a community is created here: it builds a link post about
+the new community and posts it to a REMOTE announcement community --
+`newcommunities@lemmy.world`, or `playground@piefed.social` in debug.
+`tests/test_community_lifecycle.py` patches the whole function out, so nothing had ever
+asserted what it sends or where.
+
+That is worth rows because every field is derived from the new community and handed to a
+third party. The function also REASSIGNS `community` partway down -- the argument is the
+community being announced, and by the time `make_post` is called the name refers to the
+announcement community -- so a mutant posting to the wrong one is the first thing the rows
+kill. The rest: the link is `public_url()` and not `lemmy_link()`, the body carries both,
+a community with no description must not publish the string `None`, and the language is
+the poster's with the site's as fallback.
+
+`publicize_community_task` asks eight named Lemmy instances to resolve the new community.
+Its call sites sit inside a triple-quoted block with four numbered reasons for being
+disabled, so nothing reaches it today. It is covered rather than deleted -- unlike D1420
+and D1421, this is a deliberately disabled feature with a written explanation, not an
+accident -- and the rows assert eight DIFFERENT hosts, which a mutant repeating one of
+them fails.
+
+`save_icon_file` ends with `if file_ext.lower() in allowed_extensions: ... else:
+abort(400)`, and the identical test at the top of the function has already aborted for
+every extension not in that list. The trailing `else` is unreachable. Recorded rather than
+deleted: it is the same refusal the function uses everywhere else, and removing it would
+let a future edit above it fall through silently. The row that says so reads the function's
+source and asserts the single guard.
+
+One fixture note: `Language` rows are seeded by a migration in production and the test
+database has none, while `Site.language_id` and `User.language_id` are both foreign keys --
+so a row about language preferences has to create the languages first.
+
+Twelve mutants, all dead, on a green baseline.
+
 **Next free number: D1422.**

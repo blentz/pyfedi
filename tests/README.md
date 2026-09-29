@@ -13434,3 +13434,13 @@ Flask strips the body, so both arms answer 200 with nothing. Call the view direc
 `process_downvote` was covered only where it differs from `process_upvote` (its extra `else`), so the vote it
 records, the log line it writes and the announce it sends had no row at all. Assert the SIGN
 (`effect == -1`): a delegate calling `vote(user, 'upvote', ...)` is identical in the ActivityPubLog.
+
+**973. THE TEST DATABASE HAS NO `Language` ROWS.**
+They are seeded by a migration in production. `Site.language_id` and `User.language_id` are foreign keys, so
+setting either to an arbitrary integer is `ForeignKeyViolation`. A row about language preferences creates the
+`Language` rows it needs and uses their ids.
+
+**974. A FUNCTION THAT REBINDS ITS OWN ARGUMENT NEEDS A ROW NAMING WHICH OBJECT IT ACTED ON.**
+`publicize_community(community)` reassigns `community` to the remote announcement community before calling
+`make_post`, so "it posted something" is true of both the right and the wrong target. Assert the id of the
+community the post was made IN, not just that a post was made.
