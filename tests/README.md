@@ -13540,3 +13540,14 @@ has different keys. A row aimed at the wrong one fails with `KeyError: 'custom_e
 Setting `g.admin_ids = [user.id]` is how a row names the admins without building a Role, a RolePermission and
 a `user_role` row. The fixtures set it to `[]`, so a row about admin notifications has to set it or nobody is
 an admin.
+
+**995. `Settings.value` IS JSON, AND `get_setting` SWALLOWS A PARSE ERROR.**
+Writing `f'"{value}"'` for a multi-line setting produces invalid JSON -- a raw newline inside a string --
+so `get_setting` returns the default and the row fails with no error anywhere. Use `json.dumps(value)`.
+
+**996. `round()` IS BANKER'S ROUNDING.**
+`round(62.5)` is 62, not 63. Assert the unrounded value with `pytest.approx` rather than rounding in the row.
+
+**997. `user2_cache` IS A MODULE-LEVEL DICT, NOT FLASK-CACHING.**
+`jaccard_similarity` memoizes the second account's upvotes in a plain dict that lives as long as the process,
+so it leaks between tests. Clear it in the fixture, before and after.

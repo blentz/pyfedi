@@ -24225,4 +24225,40 @@ emojis out of a payload that claims them as ours.
 
 Seventeen mutants, all dead, on a green baseline.
 
+---
+
+## Round 244 -- what this instance fetches, who it recommends, and who it restricts
+
+Four clusters in `app/utils.py`, no defect.
+
+**The two blocklists this instance downloads.** `retrieve_block_list` fetches a domain list
+from a GitHub raw URL and `retrieve_peertube_block_list` fetches a JSON one; an admin pastes
+either into the site's ban list. Both have a bare `except:`, and what they return on a
+failure is the whole point: None means "leave the list alone", `''` means "the list is
+empty now". The rows pin an ASYMMETRY between them rather than smoothing it over -- the
+peertube one initialises `list = ''` before its status check, so a 404 there returns `''`
+where the other returns None. A caller treating them the same is wrong about one.
+
+**`jaccard_similarity`** powers "people who liked this also liked". Intersection over UNION,
+not over either set, which is the row that uses numbers where the two differ (10 shared of
+16 between them is 62.5%, not 77%). The `> 12` floor exists because a small set makes a high
+score trivially easy -- two accounts sharing one upvote would read as 100% -- and
+`user2_cache` is a plain module-level dict, so the row that proves it is READ changes the
+database behind it and asserts the answer does not move.
+
+**`libretranslate_string`** calls somebody else's endpoint and is memoized for a day. A
+failure answers `''` rather than propagating into whatever page asked, and the memoize key
+covers the language pair, so asking for French does not return the German answer.
+
+**`user_in_restricted_country`** reads a newline-separated admin setting and strips each
+line, because the setting is a textarea and a trailing space would otherwise mean that
+country never matches.
+
+**A fixture fact worth the cycle it cost:** `Settings.value` holds JSON and `get_setting`
+returns the default when it cannot be parsed -- so a multi-line setting must be written with
+`json.dumps`, not wrapped in quotes by hand. A raw newline inside a JSON string is invalid,
+and the symptom is a restriction that silently matches nobody.
+
+Fourteen mutants, all dead, on a green baseline.
+
 **Next free number: D1424.**
