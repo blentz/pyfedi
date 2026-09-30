@@ -13776,3 +13776,18 @@ failure-then-success in the caller's own terms; respx would test httpx's normali
 **1041. `refresh_user_profile_task` SLEEPS `randint(3, 10)` SECONDS BETWEEN ATTEMPTS.**
 Patch `ap_util.time.sleep` in a fixture before driving the retry, or the row costs up to ten seconds
 of real time. Assert the argument is within 3..10 -- that the delay exists is the point of the retry.
+
+**1042. `Post.vote` AND `PostReply.vote` TAKE `(user, direction, emoji)`.**
+`vote(user, 'reversal')` is `TypeError: missing 1 required positional argument: 'emoji'` from the
+test, not from the code under test. Pass `None`.
+
+**1043. A GUARD AGAINST A NULL COLUMN THAT IS PART OF A PRIMARY KEY IS UNKILLABLE.**
+`is_instance_admin`'s `if self.instance_id:` cannot be distinguished from `if True:`, because
+`InstanceRole.instance_id` is a primary-key column: no role row with a null instance can exist, so
+the query the guard skips matches nothing either way. Record it as equivalent -- same argument as fact
+781.
+
+**1044. A POST'S `cross_posts` LISTS THE OTHER POSTS, NOT ITSELF.**
+`calculate_cross_posts` sets `self.cross_posts` outright from the rows it found and APPENDS `self.id`
+to theirs. So the newcomer's list names the existing post, and what the `len(...) < limit` arm decides
+is only whether the existing post names the newcomer back.
