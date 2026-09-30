@@ -246,6 +246,8 @@ class BackSiteContract:
 
     #: set by prepare()
     expected_default = None
+    #: 'post' for a POST-only site, which also needs the CSRF token
+    method = 'get'
 
     def prepare(self):
         """Create the DB rows. Return (path, user_or_None) and set
@@ -262,6 +264,8 @@ class BackSiteContract:
         with app.test_client() as client:
             if user is not None:
                 login(client, user)
+            if self.method == 'post':
+                return client.post(path, data={'csrf_token': csrf(app, client)}, headers=headers)
             return client.get(path, headers=headers)
 
     def test_a_same_site_referrer_is_followed(self, app, db_session, site):
@@ -321,7 +325,10 @@ class TestCommunitySubscribe(BackSiteContract):
 
 
 class TestCommunityUnsubscribe(BackSiteContract):
-    """app/community/routes.py unsubscribe -- had the SERVER_NAME substring guard."""
+    """app/community/routes.py unsubscribe -- had the SERVER_NAME substring guard.
+    POST-only since D994; the no-JS form POST is the one that goes back."""
+
+    method = 'post'
 
     def prepare(self):
         instance = make_instance('test.piefed.local', software='piefed')

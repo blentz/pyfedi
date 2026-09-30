@@ -10,6 +10,8 @@ Sub-project 80, slice D. Three defects:
 """
 from unittest.mock import patch
 
+from flask import render_template
+
 import pytest
 
 from app import cache, db
@@ -919,11 +921,38 @@ def test_join_then_add_joins_a_local_community_and_goes_to_the_post_form(
     token = csrf(app, client)
 
     with patch('app.community.routes.render_template', return_value='rendered'):
-        response = client.get(url(app, 'community.join_then_add',
-                                  actor=community.name))
+        response = client.post(url(app, 'community.join_then_add', actor=community.name),
+                               data={'csrf_token': token})
 
     assert response.status_code in (200, 302)
     assert _is_member(community, joiner)
+
+
+def test_join_then_add_by_get_is_refused(app, world):
+    """D994, fixed: joining changes state, so it is POST-only with the CSRF
+    token. The feed and topic "post to" pickers reach it with a 307, which
+    re-posts their own token-carrying form."""
+    community, joiner, founder = world
+    _able_to_post(joiner)
+    client = app.test_client()
+    login(client, joiner)
+
+    response = client.get(url(app, 'community.join_then_add', actor=community.name))
+
+    assert response.status_code == 405
+    assert not _is_member(community, joiner)
+
+
+def test_join_then_add_without_the_token_is_refused(app, world):
+    community, joiner, founder = world
+    _able_to_post(joiner)
+    client = app.test_client()
+    login(client, joiner)
+
+    response = client.post(url(app, 'community.join_then_add', actor=community.name))
+
+    assert response.status_code == 400
+    assert not _is_member(community, joiner)
 
 
 def test_join_then_add_on_an_unresolvable_actor_is_a_404(app, world):
@@ -933,8 +962,8 @@ def test_join_then_add_on_an_unresolvable_actor_is_a_404(app, world):
     client = app.test_client()
     login(client, joiner)
 
-    response = client.get(url(app, 'community.join_then_add',
-                              actor='no-such-community'))
+    response = client.post(url(app, 'community.join_then_add', actor='no-such-community'),
+                           data={'csrf_token': csrf(app, client)})
 
     assert response.status_code == 404
 
@@ -949,7 +978,8 @@ def test_join_then_add_does_not_join_twice(app, world):
     login(client, joiner)
 
     with patch('app.community.routes.render_template', return_value='rendered'):
-        client.get(url(app, 'community.join_then_add', actor=community.name))
+        client.post(url(app, 'community.join_then_add', actor=community.name),
+                    data={'csrf_token': csrf(app, client)})
 
     assert CommunityMember.query.filter_by(community_id=community.id,
                                            user_id=joiner.id).count() == 1
@@ -1021,22 +1051,41 @@ def test_a_banned_user_joining_themselves_is_told_why(app, world):
     assert flashed.call_args.args[0] == 'You cannot join this community'
 
 
-def test_leaving_a_community_by_get_says_so(app, member_client):
-    """`if request.method == 'GET':` -- the no-JS path flashes, because there
-    is no HTMX fragment to swap in. The POST path returns the button instead,
-    which is why the flash is conditional."""
+def test_leaving_a_community_by_get_is_refused(app, member_client):
+    """D994, fixed (owner ruling 2026-09-30). Leaving used to accept GET, which
+    `login_required` never CSRF-checks, so any page could make a signed-in user
+    leave a community. It is POST-only now; the no-JS button is a form."""
+    client, token, community, joiner = member_client
+
+    response = client.get(url(app, 'community.unsubscribe', actor=community.name))
+
+    assert response.status_code == 405
+    assert _is_member(community, joiner)
+
+
+def test_leaving_a_community_without_the_token_is_refused(app, member_client):
+    client, token, community, joiner = member_client
+
+    response = client.post(url(app, 'community.unsubscribe', actor=community.name))
+
+    assert response.status_code == 400
+    assert _is_member(community, joiner)
+
+
+def test_leaving_a_community_by_form_says_so(app, member_client):
+    """The no-JS path, now a plain form POST: it flashes and goes back, because
+    there is no HTMX fragment to swap in."""
     client, token, community, joiner = member_client
 
     with patch('app.community.routes.flash') as flashed:
-        response = client.get(url(app, 'community.unsubscribe',
-                                  actor=community.name))
+        response = client.post(url(app, 'community.unsubscribe', actor=community.name),
+                               data={'csrf_token': token})
 
     assert response.status_code == 302
     assert 'You left' in str(flashed.call_args.args[0])
 
 
-def test_leaving_a_community_by_post_returns_the_join_button(app,
-                                                             member_client):
+def test_leaving_a_community_by_htmx_returns_the_join_button(app, member_client):
     """The HTMX path returns the re-rendered button fragment rather than a
     redirect."""
     client, token, community, joiner = member_client
@@ -1044,10 +1093,24 @@ def test_leaving_a_community_by_post_returns_the_join_button(app,
     with patch('app.community.routes.render_template', return_value='rendered') as render:
         response = client.post(url(app, 'community.unsubscribe',
                                    actor=community.name),
-                               data={'csrf_token': token})
+                               data={'csrf_token': token},
+                               headers={'HX-Request': 'true'})
 
     assert response.status_code == 200
     assert render.call_args.args == ('community/_join_button.html',)
+
+
+def test_the_leave_button_is_a_form_carrying_the_token(app, world):
+    """D994: the button every page includes posts with the CSRF token, with
+    htmx or without it, instead of linking to a GET."""
+    community, joiner, founder = world
+
+    with app.test_request_context('/'):
+        html = render_template('community/_leave_button.html', community=community)
+
+    assert f'<form method="post" action="/community/{community.link()}/unsubscribe"' in html
+    assert 'name="csrf_token"' in html
+    assert 'href=' not in html
 
 
 def test_an_owner_is_told_to_hand_over_first(app, world):
@@ -1061,7 +1124,8 @@ def test_an_owner_is_told_to_hand_over_first(app, world):
     login(client, joiner)
 
     with patch('app.community.routes.flash') as flashed:
-        client.get(url(app, 'community.unsubscribe', actor=community.name))
+        client.post(url(app, 'community.unsubscribe', actor=community.name),
+                    data={'csrf_token': csrf(app, client)})
 
     assert 'make someone else the owner' in flashed.call_args.args[0]
 
@@ -1119,7 +1183,8 @@ def test_join_then_add_on_a_remote_community_sends_a_follow(app, world):
 
     with patch('app.community.routes.send_post_request') as send:
         with patch('app.community.routes.render_template', return_value='rendered'):
-            client.get(url(app, 'community.join_then_add', actor=remote.link()))
+            client.post(url(app, 'community.join_then_add', actor=remote.link()),
+                        data={'csrf_token': csrf(app, client)})
 
     assert CommunityJoinRequest.query.filter_by(user_id=joiner.id,
                                                 community_id=remote.id).count() == 1
@@ -1143,7 +1208,8 @@ def test_join_then_add_on_a_dead_remote_instance_sends_nothing(app, world):
 
     with patch('app.community.routes.send_post_request') as send:
         with patch('app.community.routes.render_template', return_value='rendered'):
-            client.get(url(app, 'community.join_then_add', actor=remote.link()))
+            client.post(url(app, 'community.join_then_add', actor=remote.link()),
+                        data={'csrf_token': csrf(app, client)})
 
     assert send.call_args_list == []
     assert _is_member(remote, joiner)
@@ -1184,8 +1250,8 @@ def test_join_then_add_refuses_a_user_banned_from_the_community(app, world):
     login(client, joiner)
 
     with patch('app.community.routes.render_template', return_value='rendered'):
-        response = client.get(url(app, 'community.join_then_add',
-                                  actor=community.name))
+        response = client.post(url(app, 'community.join_then_add', actor=community.name),
+                               data={'csrf_token': csrf(app, client)})
 
     assert response.status_code == 401
 
@@ -1238,16 +1304,17 @@ def test_leaving_everything_does_not_leave_a_feed_you_own(app, world):
     assert leave_feed.call_args_list == [], 'leave-all abandoned a feed it owns'
 
 
-def test_leaving_by_post_says_nothing(app, member_client):
-    """`if request.method == 'GET':` guards the flash -- the HTMX path swaps in
-    the re-rendered button instead, and a flash queued there would appear
-    unannounced on whatever page the reader loads next."""
+def test_leaving_by_htmx_says_nothing(app, member_client):
+    """`if not request.headers.get('HX-Request'):` guards the flash -- the HTMX
+    path swaps in the re-rendered button instead, and a flash queued there would
+    appear unannounced on whatever page the reader loads next."""
     client, token, community, joiner = member_client
 
     with patch('app.community.routes.render_template', return_value='rendered'):
         with patch('app.community.routes.flash') as flashed:
             client.post(url(app, 'community.unsubscribe',
-                            actor=community.name), data={'csrf_token': token})
+                            actor=community.name), data={'csrf_token': token},
+                        headers={'HX-Request': 'true'})
 
     assert flashed.call_args_list == []
 
@@ -1267,7 +1334,7 @@ def test_join_then_add_does_not_claim_you_joined_when_you_already_had(
 
     with patch('app.community.routes.render_template', return_value='rendered'):
         with patch('app.community.routes.flash') as flashed:
-            client.get(url(app, 'community.join_then_add',
-                           actor=community.name))
+            client.post(url(app, 'community.join_then_add', actor=community.name),
+                        data={'csrf_token': csrf(app, client)})
 
     assert flashed.call_args_list == []
