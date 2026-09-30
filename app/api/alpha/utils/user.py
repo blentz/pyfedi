@@ -1038,8 +1038,12 @@ def post_user_ban(auth, data):
         # `to_ban.banned = True`, so an id that does not resolve was
         # `AttributeError: 'NoneType' object has no attribute 'banned'`.
         # Measured as PROBE bf5.
-        if db.session.get(User, target_user_id) is None:
+        target = db.session.get(User, target_user_id)
+        if target is None:
             raise Exception('person not found')
+        # D1178: only an admin may ban an admin, and nobody may ban user 1.
+        if target.id == 1 or (target.is_admin() and not user.is_admin()):
+            raise Exception('cannot_ban_admin')
 
         ban_user({'person_id': target_user_id,
                   'ban_ip_address': ban_ip_address,

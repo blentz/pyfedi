@@ -17,9 +17,9 @@ Five defects, all measured:
   and both utils were `...` stubs whose route then loads a schema from None
   (D1181).
 
-Registered and pinned: an account with `ban users` may ban an administrator,
-including the founder (D1178); and a token carrying no `jti` cannot be
-revoked, while logout answers success (D1182).
+Registered and pinned: a token carrying no `jti` cannot be revoked, while
+logout answers success (D1182). An account with `ban users` could ban an
+administrator, including the founder (D1178); fixed, owner ruling 2026-09-30.
 """
 import jwt
 import pytest
@@ -335,27 +335,58 @@ def test_unbanning_somebody_who_does_not_exist(app, env):
     assert str(refused.value) == 'person not found'
 
 
-def test_an_administrator_can_be_banned_by_staff(app, env):
-    """D1178, PINNED as it stands. Nothing here or in `ban_user` protects an
-    account that administers the instance -- including user 1, whose
-    `user_access` answers True for everything but whose `banned` column still
-    stops them logging in. Measured: `PROBE bf4 outcome: accepted | admin
-    banned: True`.
+def make_admin(user):
+    """`User.is_admin()` looks for a role NAMED 'Admin', not a permission."""
+    role = Role.query.filter_by(name='Admin').first() or Role(name='Admin', weight=0)
+    db.session.add(role)
+    db.session.commit()
+    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.commit()
+    return user
 
-    Whether staff may ban an admin is a product decision: an instance may
-    genuinely need one admin removed by another, and a rule written here
-    would also have to say what happens to the founder. Update this test when
-    that decision is made (D1178).
-    """
+
+def test_an_administrator_cannot_be_banned_by_staff(app, env):
+    """D1178, fixed (owner ruling 2026-09-30). `ban users` used to reach any
+    account, administrators and user 1 included. Only an admin may ban an
+    admin now."""
     from app.api.alpha.utils.user import post_user_ban
 
     actor, target = env
     give(actor, 'ban users')
-    give(target, 'administer all users')
+    make_admin(target)
+
+    with pytest.raises(Exception) as refused:
+        post_user_ban(token(actor), {'person_id': target.id, 'reason': 'because'})
+
+    assert str(refused.value) == 'cannot_ban_admin'
+    assert target.banned is False
+
+
+def test_an_administrator_can_be_banned_by_another(app, env):
+    from app.api.alpha.utils.user import post_user_ban
+
+    actor, target = env
+    give(make_admin(actor), 'ban users')  # a real Admin role carries it
+    make_admin(target)
 
     post_user_ban(token(actor), {'person_id': target.id, 'reason': 'because'})
 
     assert target.banned is True
+
+
+def test_nobody_bans_user_1(app, env, api_baseline):
+    """D1178: not even another admin may ban the founder."""
+    from app.api.alpha.utils.user import post_user_ban
+
+    actor, target = env
+    give(make_admin(actor), 'ban users')
+    founder = api_baseline.user1
+
+    with pytest.raises(Exception) as refused:
+        post_user_ban(token(actor), {'person_id': founder.id, 'reason': 'because'})
+
+    assert str(refused.value) == 'cannot_ban_admin'
+    assert founder.banned is False
 
 
 # --------------------------------------------------------------------------

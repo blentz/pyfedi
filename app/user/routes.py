@@ -859,6 +859,11 @@ def ban_profile(actor):
             flash(_('You cannot ban yourself.'), 'error')
             goto = safe_redirect_target(request.args.get('redirect'), f'/u/{actor}')
             return redirect(goto)
+        # D1178: only an admin may ban an admin, and nobody may ban user 1.
+        elif user.id == 1 or (user.is_admin() and not current_user.is_admin()):
+            flash(_('You cannot ban an administrator.'), 'error')
+            goto = safe_redirect_target(request.args.get('redirect'), f'/u/{actor}')
+            return redirect(goto)
         else:
             if form.validate_on_submit():
                 form.person_id = user.id

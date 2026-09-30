@@ -27,7 +27,7 @@ import pytest
 from app import db
 from app.constants import REPORT_TYPE_USER
 from app.models import (Community, CommunityMember, Instance, Notification,
-                        Report, Site, User, UserBlock)
+                        Report, Role, Site, User, UserBlock, user_role)
 from tests.factories import (grant_permission, make_community,
                              make_community_member, make_instance, make_user)
 
@@ -618,6 +618,64 @@ def test_you_cannot_ban_yourself(app, env):
     assert ban.call_args is None
     messages = ' '.join(str(call.args[0]) for call in flashed.call_args_list)
     assert 'cannot ban yourself' in messages
+
+
+def make_admin(user):
+    """`User.is_admin()` looks for a role NAMED 'Admin', not a permission."""
+    role = Role.query.filter_by(name='Admin').first() or Role(name='Admin', weight=0)
+    db.session.add(role)
+    db.session.commit()
+    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.commit()
+    return user
+
+
+def test_a_moderator_cannot_ban_an_administrator(app, env):
+    """D1178, fixed (owner ruling 2026-09-30): only an admin may ban an admin,
+    on the web as on the API."""
+    client, founder, viewer, target = env
+    moderator_of_users(viewer)
+    make_admin(target)
+    token = csrf(app, client)
+
+    with patch('app.user.routes.ban_user') as ban:
+        with patch('app.user.routes.flash') as flashed:
+            response = client.post(f'/u/{target.user_name}/ban',
+                                   data={'reason': 'spam', 'submit': 'Ban',
+                                         'csrf_token': token})
+
+    assert response.status_code == 302
+    assert ban.call_args is None
+    messages = ' '.join(str(call.args[0]) for call in flashed.call_args_list)
+    assert 'cannot ban an administrator' in messages
+
+
+def test_an_administrator_can_ban_another(app, env):
+    client, founder, viewer, target = env
+    moderator_of_users(make_admin(viewer))  # a real Admin role carries 'ban users'
+    make_admin(target)
+    token = csrf(app, client)
+
+    with patch('app.user.routes.ban_user') as ban:
+        client.post(f'/u/{target.user_name}/ban',
+                    data={'reason': 'spam', 'submit': 'Ban', 'csrf_token': token})
+
+    assert ban.call_args.args[0].person_id == target.id
+
+
+def test_nobody_can_ban_user_1(app, env):
+    """D1178: not even another admin may ban the founder."""
+    client, founder, viewer, target = env
+    moderator_of_users(make_admin(viewer))
+    token = csrf(app, client)
+
+    with patch('app.user.routes.ban_user') as ban:
+        response = client.post(f'/u/{founder.user_name}/ban',
+                               data={'reason': 'spam', 'submit': 'Ban',
+                                     'csrf_token': token})
+
+    assert response.status_code == 302
+    assert ban.call_args is None
 
 
 def test_someone_without_the_permission_cannot_ban(app, env):
