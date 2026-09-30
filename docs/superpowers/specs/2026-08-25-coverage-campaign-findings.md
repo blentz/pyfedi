@@ -24518,4 +24518,43 @@ contain it once, and narrowing the replacement changes what the player is asked 
 
 Twenty mutants, all dead, on a green baseline.
 
-**Next free number: D1424.**
+---
+
+## Round 252 -- the ranking math, the YouTube embed (D1424), and four display helpers
+
+**D1424 -- a timestamped YouTube link embedded from the beginning.** `youtube_embed` has two
+branches, one for `watch?v=` and one for `/shorts/`. The shorts branch renamed the timestamp
+parameter (`t` -> `start`) and the watch branch did not -- and the iframe player ignores `t`
+while honouring `start`. So every ordinary `youtube.com/watch?v=...&t=90` post played from zero
+while the same video posted as a short started where the poster meant. Found by writing the row
+for the rename and having it fail on the branch that was supposed to be the easy one. Fixed with
+the same two lines.
+
+**`post_ranking` is the 'hot' sort**, and both its guards are about nullable columns: a null
+date ranks a post as brand new rather than raising `None - datetime`, and a null score is
+treated as 1 rather than raising in `abs()`. The arithmetic itself has rows for each factor --
+score moves a post by a LOGARITHM while age moves it linearly, a negative score subtracts rather
+than adding, and a score of zero drops the log term entirely so two unvoted posts are ordered by
+time.
+
+**The early-downvote amplifiers needed the config changing to be testable at all.**
+`SPICY_UNDER_30` and `SPICY_UNDER_60` both DEFAULT TO 1.0 in `config.py`, which makes the
+amplification an identity -- no assertion could tell the three bands apart. The rows set them to
+distinct values, and then each band is visible: under 30 total votes, under 60, and above. The
+`PostVote` row stores the TRUE effect (`-1.0`) rather than the amplified one, because that row is
+what a later Undo reverses.
+
+**Three mutants were false kills, and the mutation runner is what exposed it.** The vote-band
+anchors matched the UPVOTE branch first -- there are two copies of each threshold -- and
+replacing an `elif` line with `if False:` orphans the chain into a SyntaxError, which fails every
+test and looks exactly like a kill. Re-anchored onto the downvote branch by line number, with
+`elif False:` / `elif True:` so the chain stays valid.
+
+Also covered: `PollChoice.percentage`, floored so the bars never total more than 100;
+`ModLog.action_to_str`, which falls back to the raw action name so an action added without a
+label still renders; and `get_correct_link`, which prefixes `u/` for the five person-targeting
+actions and must not double it.
+
+Sixteen mutants, all dead, on a green baseline.
+
+**Next free number: D1425.**

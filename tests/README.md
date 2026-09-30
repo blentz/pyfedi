@@ -13632,3 +13632,12 @@ has to use a longer one, or the two cases are the same test.
 `Post.blurred`'s `or`-chain spans four lines. A row that satisfies the first clause never evaluates the rest,
 so a per-file coverage check can report them missing while the full suite covers them. Check the suite's
 numbers before adding rows for them.
+
+**1014. `SPICY_UNDER_10/30/60` ALL DEFAULT TO 1.0, SO THE VOTE AMPLIFIERS ARE IDENTITIES IN TESTS.**
+No assertion can tell the three bands of `Post.vote` apart until the row monkeypatches distinct values into
+`app.config`. With the defaults, every mutant that changes which band is used survives.
+
+**1015. REPLACING AN `elif` LINE WITH `if False:` IS A SYNTAX ERROR, WHICH LOOKS LIKE A KILL.**
+The orphaned `elif` below it fails to parse, every test errors, and the mutation runner records KILLED. Mutate
+an `elif` to `elif False:` / `elif True:`, and anchor by LINE NUMBER when the same condition appears in more
+than one branch -- `Post.vote` has two copies of each vote threshold, one per direction.
