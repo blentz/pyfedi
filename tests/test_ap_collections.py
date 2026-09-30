@@ -581,10 +581,11 @@ def test_a_users_followers_are_listed(app, db_session):
     assert bob.ap_public_url in response.json['items']
 
 
-def test_a_user_without_a_followers_url_is_404(app, db_session):
-    """The SECOND conjunct of `user is not None and user.ap_followers_url`.
-    The user exists and is local, so only the missing column can cause the 404 --
-    which is what makes this test the one that kills that conjunct.
+def test_a_user_without_a_followers_url_is_served(app, db_session):
+    """D181, fixed. `ap_followers_url` is only set when a remote Follow is first
+    accepted, so a local user nobody remote follows used to 404 here. The
+    collection is now served, its `id` computed by `User.followers_url()` --
+    the same `public_url() + '/followers'` the lazy setter would store.
     """
     site, instance = seed_actors()
     alice = make_user(instance, 'alice', local=True)
@@ -593,7 +594,9 @@ def test_a_user_without_a_followers_url_is_404(app, db_session):
 
     response = collection_get(app, '/u/alice/followers')
 
-    assert response.status_code == 404
+    assert response.status_code == 200
+    assert response.json['id'] == 'https://test.piefed.local/u/alice/followers'
+    assert response.json['totalItems'] == 0
 
 
 def test_a_banned_user_has_no_followers_collection(app, db_session):

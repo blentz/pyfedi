@@ -2195,7 +2195,7 @@ def community_followers(actor):
 def user_followers(actor):
     actor = actor.strip()
     user = db.session.query(User).filter_by(user_name=actor, banned=False, ap_id=None).first()
-    if user is not None and user.ap_followers_url:
+    if user is not None:
         # Get all followers, except those that are blocked by user by doing an outer join
         followers = db.session.query(User).join(UserFollower, User.id == UserFollower.remote_user_id) \
             .outerjoin(UserBlock,
@@ -2209,7 +2209,7 @@ def user_followers(actor):
             items.append(f.ap_public_url)
         result = {
             "@context": default_context(),
-            "id": user.ap_followers_url,
+            "id": user.followers_url(),
             "type": "Collection",
             "totalItems": len(items),
             "items": items
