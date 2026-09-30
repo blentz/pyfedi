@@ -25055,4 +25055,46 @@ row that does not exist. Fact 781's shape again.
 
 Twenty-one mutants dead, three provably equivalent, on a green baseline.
 
+
+---
+
+## Round 266 -- a boost from a banned account, and the remaining refresh arms
+
+No source change. Twenty rows on `app/activitypub/util.py`, the weightiest on
+`process_microblog_announce`, whose trust gate is the only thing between a peer's Announce and a post
+appearing in a local reader's feed.
+
+* **The banned-announcer backstop.** `find_actor_or_create_cached` refuses a banned actor it LOOKS
+  UP, so the only way to this arm is an id cached by `_find_actor_id_cached` before the ban. The row
+  reproduces exactly that -- the cached lookup patched to answer with the banned account -- and
+  asserts the refusal happens ABOVE every network call, which the gate's own comment requires.
+* **The already-ingested arm and its private-community gate.** `Post.get_by_ap_id(uri)` answers for a
+  LOCAL post too, because local ap_ids are guessable, so a remote actor a single local user follows
+  could otherwise Announce `https://<server>/post/<id>` and have it recorded as a boost -- including
+  a post in an invite-only or local-only community. Three rows: recorded without a fetch, refused for
+  a private community, and the distinct reason string that tells the two apart in the log.
+* **The resolve path.** Its row had to use a uri that is NOT already a post: a post seeded under the
+  announced uri returns from the arm eleven lines above and never reaches `create_resolved_object` at
+  all. That is what let the `isinstance(resolved, Post)` mutant survive the first pass.
+
+`create_post_reply`'s "Could not find parent post" is a DIFFERENT refusal from finding no parent at
+all: all three of `find_reply_parent`'s answers absent takes the outer `else`, while this arm is a
+reply whose root was identified and whose post was not.
+
+Also covered: both `current_app.debug` dispatch arms, whose `else` adds `countdown=randint(1, 10)` --
+a refresh is triggered by rendering a page that mentions the actor, so without the countdown a
+popular remote community has every worker fetch its profile at the same instant; kbin's `moderators`
+spelling of a feed's owner collection, where the `else: owners_url = None` and the unconditional
+assignment below it mean a feed whose server stopped publishing one has the stale url REMOVED rather
+than fetched for ever; the `nsfl` flag, which a refresh only ever turns on, recorded because the
+asymmetry with `sensitive` beside it reads like a bug; the promotion of an existing FeedMember to
+owner, which a second row would have the unique constraint refuse; and `actor_json_to_model`'s
+`except KeyError`, reached by `endpoints` present WITHOUT `sharedInbox` -- every other key that
+constructor reads is either guarded with an `in` test or read above the `try`.
+
+`banned_user_agents()` is a stub returning `[]`, and has a row saying so. Its callers read an empty
+list as "block nobody", and a blocklist that quietly starts matching is a federation outage.
+
+Eighteen mutants, all dead, on a green baseline.
+
 **Next free number: D1432.**
