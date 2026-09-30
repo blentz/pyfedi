@@ -13851,3 +13851,18 @@ instead: set `last_run` to an old value, call, and require it to have moved.
 `https://{S3_PUBLIC_URL}/archived/`, and give the fake S3 client a `put_object` as well as a
 `delete_object` -- the archive itself is uploaded through the same connection whose deletes a test may
 be refusing.
+
+**1056. `db.session.get(Model, None)` WARNS, SO GUARD THE ID BEFORE THE LOOKUP.**
+"SAWarning: fully NULL primary key identity cannot load any object" is what a nullable foreign key
+answers, and the suite's warning count is this campaign's ratchet -- so a new row that reaches such a
+call shows up as a warning rather than a failure. Fixed twice now (D1422, D1434); grep for
+`db.session.get(` with an unguarded nullable column before adding rows near one, and assert the repair
+with the `recwarn` fixture.
+
+**1057. `mimetypes.guess_type` RETURNS A TUPLE AND NEVER None.**
+`if guess_type(path) is None:` is dead code; the live test is `[0] is None`. Round 270 deleted one such
+arm that had been duplicating its own fallback.
+
+**1058. `guess_mime_type`'s FALLBACK IS `image/<ext>`, WHICH IS ACCIDENTALLY RIGHT FOR IMAGES.**
+So a row using `.webp` or `.png` cannot tell the guessed answer from the fallback. Use a non-image
+extension -- `.json` is what `archive_post` uploads -- when the arm selection is what is under test.
