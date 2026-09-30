@@ -410,11 +410,9 @@ def sync_defederation_subscriptions():
     """Update and sync defederation subscriptions"""
     session = get_task_session()
     try:
-        session.execute(text('DELETE FROM banned_instances WHERE subscription_id is not null'))
-        session.commit()
-
+        # each download replaces its own subscription's bans in one transaction
         for defederation_sub in session.query(DefederationSubscription).all():
-            download_defeds(defederation_sub.id, defederation_sub.domain)
+            download_defeds(defederation_sub.id, defederation_sub.domain, replace=True)
 
     except Exception:
         session.rollback()

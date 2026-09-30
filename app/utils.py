@@ -4193,26 +4193,31 @@ def parse_redis_socket_string(connection_string: str):
     return host, port, db_num, password
 
 
-def download_defeds(defederation_subscription_id: int, domain: str):
+def download_defeds(defederation_subscription_id: int, domain: str, replace: bool = False):
     if current_app.debug:
-        download_defeds_worker(defederation_subscription_id, domain)
+        download_defeds_worker(defederation_subscription_id, domain, replace)
     else:
-        download_defeds_worker.delay(defederation_subscription_id, domain)
+        download_defeds_worker.delay(defederation_subscription_id, domain, replace)
 
 
 @celery.task
-def download_defeds_worker(defederation_subscription_id: int, domain: str):
+def download_defeds_worker(defederation_subscription_id: int, domain: str, replace: bool = False):
     session = get_task_session()  # noqa: F811
     try:
         allowed_instances = [instance.domain for instance in session.query(AllowedInstances).all()]
+        defederation_list = retrieve_defederation_list(domain)
+        # The periodic sync replaces the subscription's bans. The old rows go in
+        # the same transaction the new ones arrive in, and only once the new
+        # list is in hand, so a failed download never leaves instances unbanned.
+        if replace:
+            session.query(BannedInstances).filter(
+                BannedInstances.subscription_id == defederation_subscription_id).delete()
         # A domain the list names twice, or a subscription downloaded twice
         # from the admin screen, used to insert a second row: nothing here
-        # looked for one, and `BannedInstances.domain` is not unique. The
-        # periodic sync deletes every subscription row before reloading, so
-        # only the direct path could grow.
+        # looked for one, and `BannedInstances.domain` is not unique.
         already = {row.domain for row in session.query(BannedInstances).filter(
             BannedInstances.subscription_id == defederation_subscription_id)}
-        for defederation_url in retrieve_defederation_list(domain):
+        for defederation_url in defederation_list:
             if defederation_url not in allowed_instances and defederation_url not in already:
                 already.add(defederation_url)
                 session.add(BannedInstances(domain=defederation_url, reason='auto', subscription_id=defederation_subscription_id))

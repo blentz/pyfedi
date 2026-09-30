@@ -124,16 +124,18 @@ def _seed_instance(domain, software='mastodon'):
 class TestSyncDefederationSubscriptions:
     """`sync_defederation_subscriptions:409` -- refresh subscription-sourced bans.
 
-    `:413` deletes every ban carrying a `subscription_id` and `:414` commits,
-    then `:416` walks the subscriptions and `:417` hands each to
-    `download_defeds`. `:419-421` rolls back and re-raises.
-
-    `BannedInstances.subscription_id` is None for a ban a local admin placed
-    (`app/models.py:70`), which is what `:413`'s WHERE clause distinguishes.
+    The task walks the subscriptions and hands each to `download_defeds` with
+    `replace=True`, which swaps that subscription's bans in one transaction
+    (D378). It rolls back and re-raises on failure.
     """
 
-    def test_subscription_bans_are_cleared_and_admin_bans_survive(self, db_session, monkeypatch):
-        """`:413`'s WHERE clause. Deleting it would take the admin ban too."""
+    def test_the_sync_itself_deletes_no_bans(self, db_session, monkeypatch):
+        """D378, fixed. The sync used to delete and COMMIT every
+        subscription-sourced ban before any download ran, so until the
+        downloads landed -- or for good, if one failed -- those instances were
+        unbanned. Each download now replaces its own subscription's bans in
+        one transaction, so with the download stubbed out nothing is deleted.
+        """
         monkeypatch.setattr(
             'app.shared.tasks.maintenance.download_defeds', _Recorder())
         sub = DefederationSubscription(domain='sub.example')
@@ -147,7 +149,7 @@ class TestSyncDefederationSubscriptions:
 
         db.session.expire_all()
         remaining = {b.domain for b in db.session.query(BannedInstances).all()}
-        assert remaining == {'from-admin.example'}
+        assert remaining == {'from-sub.example', 'from-admin.example'}
 
     def test_every_subscription_is_handed_over_with_its_id_and_domain(self, db_session, monkeypatch):
         """`:417`'s call. The set comparison is deliberate: `:416` returns
@@ -165,26 +167,32 @@ class TestSyncDefederationSubscriptions:
         sync_defederation_subscriptions()
 
         assert {(c[0][0], c[0][1]) for c in recorder.calls} == expected
+        assert all(c[1] == {'replace': True} for c in recorder.calls)
 
     def test_a_failing_download_rolls_back_and_re_raises(self, db_session, monkeypatch):
         """`:419-421`. The task does not swallow -- Celery must see the failure.
 
-        This proves the exception propagates rather than being swallowed. It
-        does NOT discriminate a mutant that drops `:420`'s `session.rollback()`
-        alone: by the time the loop at `:416` runs, `:414`'s commit has already
-        landed, so the rollback here only ever acts on a transaction holding
-        nothing but the read at `:416`. No observable state depends on whether
-        that rollback runs, so no assertion here can tell the two apart.
+        D378, fixed: the subscription's existing ban survives the failure,
+        where the sync used to have deleted and committed it already. The
+        rollback itself is still not discriminated: the transaction it acts on
+        holds nothing but the subscription read.
         """
         def _boom(*args, **kwargs):
             raise RuntimeError('defed download failed')
 
         monkeypatch.setattr('app.shared.tasks.maintenance.download_defeds', _boom)
-        db.session.add(DefederationSubscription(domain='sub.example'))
+        sub = DefederationSubscription(domain='sub.example')
+        db.session.add(sub)
+        db.session.commit()
+        db.session.add(BannedInstances(domain='from-sub.example', subscription_id=sub.id))
         db.session.commit()
 
         with pytest.raises(RuntimeError, match='defed download failed'):
             sync_defederation_subscriptions()
+
+        db.session.expire_all()
+        assert db.session.query(BannedInstances).filter_by(
+            domain='from-sub.example').first() is not None
 
     def test_no_subscriptions_is_not_an_error(self, db_session, monkeypatch):
         """Covers the zero-iteration arm of `:416`'s loop, nothing more.
@@ -192,11 +200,10 @@ class TestSyncDefederationSubscriptions:
         In isolation this cannot distinguish correct empty-subscription
         handling from a task that does nothing at all -- it leans on the other
         three tests in this class to establish that the task does something.
-        It also cannot be strengthened by adding a subscription-sourced ban for
-        `:413` to delete: `BannedInstances.subscription_id` is a foreign key to
+        It also cannot be strengthened with a subscription-sourced ban:
+        `BannedInstances.subscription_id` is a foreign key to
         `defederation_subscription.id` (`app/models.py:70`), so with zero
-        subscription rows no subscription-sourced ban can exist for the DELETE
-        to remove.
+        subscription rows none can exist.
         """
         recorder = _Recorder()
         monkeypatch.setattr(
