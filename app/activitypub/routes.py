@@ -1670,8 +1670,8 @@ def process_inbox_request(request_json, store_ap_json):
                                     cache.delete_memoized(moderating_communities_ids_all_users)
                                     cache.delete_memoized(Community.moderators, community)
                                     log_incoming_ap(id, APLOG_REMOVE, APLOG_SUCCESS, saved_json)
-                                add_to_modlog('remove_mod', actor=mod, target_user=old_mod, community=community,
-                                              link_text=old_mod.display_name(), link=old_mod.link())
+                                    add_to_modlog('remove_mod', actor=mod, target_user=old_mod, community=community,
+                                                  link_text=old_mod.display_name(), link=old_mod.link())
                             else:
                                 log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json,
                                                 'Cannot find: ' + core_activity['object'])

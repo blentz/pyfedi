@@ -1577,22 +1577,13 @@ def test_remove_mod_unresolvable_actor_reports_cannot_find(app, db_session, monk
     assert log.activity_type == APLOG_ADD[1]
 
 
-def test_remove_mod_without_existing_membership_writes_modlog_but_logs_nothing(
+def test_remove_mod_without_existing_membership_writes_no_modlog(
         app, db_session, monkeypatch):
-    """routes.py's current :1550-1566 -- `add_to_modlog('remove_mod', ...)`
-    sits OUTSIDE the `if existing_membership:` block (:1550-1564), at the
-    same indentation as the `if old_mod:` body it shares with it
-    (:1550/:1565-1566). When the named actor resolves but has NO
-    CommunityMember row for this community, `if existing_membership:` is
-    False, so NEITHER `log_incoming_ap` branch inside it runs -- but
-    `add_to_modlog` still fires unconditionally once `old_mod` resolves.
-    Registered here as a defect, NOT fixed.
-
-    Asserts both halves: the modlog call happened (with `old_mod`'s own
-    identity, since no membership row exists to read from), and
-    `ActivityPubLog.query.count() == 0` with LOG_ACTIVITYPUB_TO_DB turned
-    ON, so the zero-count assertion is load-bearing rather than vacuous
-    (this campaign's rule).
+    """D84, fixed. `add_to_modlog('remove_mod', ...)` used to sit outside
+    the `if existing_membership:` block, so a Remove naming an actor with no
+    CommunityMember row here recorded a demotion that never happened. It
+    now sits inside it: no membership, no modlog entry, and (with
+    LOG_ACTIVITYPUB_TO_DB on, so the zero count is load-bearing) no log row.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, moderator, admin = _seed_community_with_mod_and_admin(name='removemodcomm3')
@@ -1613,12 +1604,7 @@ def test_remove_mod_without_existing_membership_writes_modlog_but_logs_nothing(
 
     assert CommunityMember.query.filter_by(community_id=community.id, user_id=old_mod.id).count() == 0
 
-    assert len(calls['add_to_modlog']) == 1
-    args, kwargs = calls['add_to_modlog'][0]
-    assert args[0] == 'remove_mod'
-    assert sa_inspect(kwargs['actor']).identity[0] == moderator.id
-    assert sa_inspect(kwargs['target_user']).identity[0] == old_mod.id
-    assert sa_inspect(kwargs['community']).identity[0] == community.id
+    assert calls['add_to_modlog'] == []
 
     assert ActivityPubLog.query.count() == 0
 
