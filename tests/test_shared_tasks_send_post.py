@@ -957,6 +957,48 @@ def test_an_event_with_both_times_still_emits_both_keys(db_session, http_mock):
     assert page['endTime'] == '2030-06-01T10:00:00+00:00'
 
 
+def test_a_poll_typed_post_with_no_poll_row_still_sends(db_session, http_mock):
+    """D490, fixed. A POLL-typed post with no `Poll` row used to raise
+    AttributeError on `None.end_poll`; nothing enforces that the type implies
+    the row. The poll fields are now simply left out."""
+    s = _seed(post_type=POST_TYPE_POLL, local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    _send(s.post)
+
+    page = _page_of(route)
+    assert page['type'] == 'Question'
+    assert 'oneOf' not in page and 'anyOf' not in page
+
+
+def test_an_event_typed_post_with_no_event_row_still_sends(db_session, http_mock):
+    """D490, fixed. The same for an EVENT-typed post with no `Event` row, at
+    both reads: the Page's event fields and the follower Note's localised
+    start. The follower is what reaches the second."""
+    s = _seed(post_type=POST_TYPE_EVENT, local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    follower_route = _inward_follower(s, http_mock)
+
+    _send(s.post)
+
+    assert 'startTime' not in _page_of(route)
+    assert _sent_activity(follower_route)['object']['content'] == '<p>a post</p>'
+
+
+def test_a_link_post_with_no_url_gets_its_title_as_a_paragraph(db_session, http_mock):
+    """D490, fixed. `post.url` is nullable and was concatenated on the
+    strength of `post.type` alone, a TypeError for a LINK post without one.
+    Such a post now gets the plain title paragraph instead of an anchor."""
+    s = _seed(post_type=POST_TYPE_LINK, url=None, local_community=False,
+              with_keys=True)
+    _remote_inbox(s, http_mock)
+    follower_route = _inward_follower(s, http_mock)
+
+    _send(s.post)
+
+    assert _sent_activity(follower_route)['object']['content'] == '<p>a post</p>'
+
+
 # ---------------------------------------------------------------------------
 # The poll options block, :226-230
 # ---------------------------------------------------------------------------

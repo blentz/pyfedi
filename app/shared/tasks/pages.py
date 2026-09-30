@@ -219,8 +219,8 @@ def send_post(post_id, edit=False, session=None):
         elif post.image.thumbnail_path:
             image_url = post.image.thumbnail_path.replace('app/static/', f"{current_app.config['SERVER_URL']}/static/")
         page['image'] = {'type': 'Image', 'url': image_url}
-    if post.type == POST_TYPE_POLL:
-        poll = Poll.query.filter_by(post_id=post.id).first()
+    # a post's type does not guarantee its Poll or Event row exists
+    if post.type == POST_TYPE_POLL and (poll := Poll.query.filter_by(post_id=post.id).first()) is not None:
         if poll.end_poll is not None:
             page['endTime'] = ap_datetime(poll.end_poll)
         page['votersCount'] = poll.total_votes() if edit else 0
@@ -228,8 +228,7 @@ def send_post(post_id, edit=False, session=None):
         for choice in PollChoice.query.filter_by(post_id=post.id).order_by(PollChoice.sort_order).all():
             choices.append({'type': 'Note', 'name': choice.choice_text, 'replies': {'type': 'Collection', 'totalItems': choice.num_votes if edit else 0}})
         page['oneOf' if poll.mode == 'single' else 'anyOf'] = choices
-    elif post.type == POST_TYPE_EVENT:
-        event = Event.query.filter_by(post_id=post.id).first()
+    elif post.type == POST_TYPE_EVENT and (event := Event.query.filter_by(post_id=post.id).first()) is not None:
         if event.start is not None:
             page['startTime'] = ap_datetime(event.start)
         if event.end is not None:
@@ -315,11 +314,11 @@ def send_post(post_id, edit=False, session=None):
     note['content'] = ''
     if note['type'] == 'Page' or note['type'] == 'Event':
         note['type'] = 'Note'
-    if post.type == POST_TYPE_LINK or post.type == POST_TYPE_VIDEO:
+    if (post.type == POST_TYPE_LINK or post.type == POST_TYPE_VIDEO) and post.url:
         note['content'] += '<p><a href=' + post.url + '>' + post.title + '</a></p>'
     elif post.type != POST_TYPE_POLL:
         note['content'] = '<p>' + post.title + '</p>'
-    if post.type == POST_TYPE_EVENT and post.event.start is not None:
+    if post.type == POST_TYPE_EVENT and post.event is not None and post.event.start is not None:
         # Convert UTC time to event timezone
         event_tz = ZoneInfo(post.event.timezone)
         local_start = post.event.start.replace(tzinfo=ZoneInfo('UTC')).astimezone(event_tz)
