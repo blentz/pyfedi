@@ -2453,7 +2453,7 @@ def post_reply_purge(post_id: int, comment_id: int):
     return redirect(post.slug if post.slug else url_for('activitypub.post_ap', post_id=post.id))
 
 
-@bp.route('/post/<int:post_id>/notification', methods=['GET', 'POST'])
+@bp.route('/post/<int:post_id>/notification', methods=['POST'])  # POST only: CSRF (D994 sibling)
 @login_required
 def post_notification(post_id: int):
     try:
@@ -2462,7 +2462,7 @@ def post_notification(post_id: int):
         abort(404)
 
 
-@bp.route('/post_reply/<int:post_reply_id>/notification', methods=['GET', 'POST'])
+@bp.route('/post_reply/<int:post_reply_id>/notification', methods=['POST'])  # POST only: CSRF (D994 sibling)
 @login_required
 def post_reply_notification(post_reply_id: int):
     try:
