@@ -1209,7 +1209,8 @@ def process_inbox_request(request_json, store_ap_json):
                                                                                       follow_id=user.id).first()
                             if join_request:
                                 existing_follow = session.query(UserFollower).filter_by(local_user_id=join_request.user_id,
-                                                                                        remote_user_id=join_request.follow_id).first()
+                                                                                        remote_user_id=join_request.follow_id,
+                                                                                        is_inward=False).first()
                                 if existing_follow:
                                     existing_follow.is_accepted = False
                                 requestor_user.num_following -= 1
