@@ -519,6 +519,16 @@ class TestModeratorsUrl:
         community = actor_json_to_model(document, '!memes', PEER)
         assert community.ap_moderators_url == f'https://{PEER}/c/memes/moderators'
 
+    def test_a_moderators_object_leaves_no_moderators_url(self, app, db_session):
+        """D233, fixed. The `moderators` arm had no isinstance test, so a
+        collection object went into ap_moderators_url, a String column, and
+        the commit failed. It now falls through to None like a missing key."""
+        peer_instance(PEER)
+        document = _group('memes', fields={
+            'moderators': {'type': 'OrderedCollection', 'id': f'https://{PEER}/c/memes/mods'}})
+        community = actor_json_to_model(document, '!memes', PEER)
+        assert community.ap_moderators_url is None
+
     def test_neither_key_leaves_no_moderators_url(self, app, db_session):
         peer_instance(PEER)
         community = actor_json_to_model(_group('memes'), '!memes', PEER)

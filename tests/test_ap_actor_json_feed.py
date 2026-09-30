@@ -575,26 +575,22 @@ class TestOwnersUrl:
         assert db.session.query(Feed).count() == 0
 
     def test_a_null_moderators_is_refused(self, app, db_session):
-        """`moderators` present with a null value.
-
-        This reaches the refusal through the SECOND arm, not the third: the
-        elif tests only `'moderators' in activity_json`, which a null value
-        satisfies, so owners_url is assigned None by the elif and the else is
-        never entered. The guard's own comment names this case as one of the
-        two that leave owners_url None; nothing pinned it until here.
-
-        That the elif arm is the one taken was confirmed by mutation rather
-        than by reading: making the elif assign a non-None sentinel instead of
-        the document's value fails this test (the sentinel is fetched, and
-        http_mock has no route for it) while
-        test_neither_attributed_to_nor_moderators_is_refused, which reaches
-        the same refusal through the else, keeps passing.
-
-        No http_mock route is registered because the guard runs before any
-        fetch, exactly as in the two refusal tests above.
+        """`moderators` present with a null value. Since D233's fix the elif
+        requires a string, so a null takes the `else` arm and owners_url is
+        None; the guard then refuses before any fetch, which is why no
+        http_mock route is registered.
         """
         peer_instance(PEER)
         document = _feed(fields={'moderators': None})
+        assert actor_json_to_model(document, '~news', PEER) is None
+        assert db.session.query(Feed).count() == 0
+
+    def test_a_moderators_object_is_refused(self, app, db_session):
+        """D233, fixed. With no isinstance test on the `moderators` arm, a
+        collection object became owners_url and was handed to get_request.
+        It now leaves owners_url None and is refused like a missing key."""
+        peer_instance(PEER)
+        document = _feed(fields={'moderators': {'type': 'OrderedCollection', 'id': _owners_url()}})
         assert actor_json_to_model(document, '~news', PEER) is None
         assert db.session.query(Feed).count() == 0
 
