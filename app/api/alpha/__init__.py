@@ -1,10 +1,12 @@
 from flask import Blueprint, current_app, jsonify
 from flask_smorest import Blueprint as ApiBlueprint
 from flask_limiter import RateLimitExceeded
-from sqlalchemy.exc import SQLAlchemyError
+from marshmallow import ValidationError
 from sqlalchemy.orm.exc import NoResultFound
 import sentry_sdk
 from werkzeug.exceptions import HTTPException, UnprocessableEntity
+
+from app.models import PostReplyValidationError
 
 # Non-documented routes in swagger UI
 bp = Blueprint('api_alpha', __name__)
@@ -122,32 +124,19 @@ def shared_error_handler(e):
             current_app.logger.exception("API exception")
             if current_app.config['SENTRY_DSN']:
                 sentry_sdk.capture_exception(e)
-        # D1390. `str(e)` is the API's error contract -- the deliberate refusals
-        # throughout app/shared and app/api/alpha/utils are bare
-        # `Exception('incorrect_login')`, `Exception('access_denied')` and the
-        # like, and the caller is meant to read them. A SQLAlchemyError's `str()`
-        # is not that: it carries the driver's message, the full statement and the
-        # bound parameters. Measured, the body a client received:
-        #
-        #     {"code":400,"message":"(psycopg2.errors.InvalidTextRepresentation)
-        #      invalid input syntax for type boolean: \"not-a-bool\" ...
-        #      [SQL: INSERT INTO \"user\" (user_name, banned) VALUES
-        #      (%(n)s, %(b)s)] [parameters: {...}]"}
-        #
-        # -- schema, table and column names, and the query's shape, to any caller
-        # who can provoke a database error. The exception is still logged and sent
-        # to Sentry above, where it belongs; only what crosses the wire changes.
-        #
-        # Deliberately narrow: this covers the class whose `str()` embeds SQL.
-        # Other internal types (ValueError, KeyError, AttributeError) still report
-        # their own text, because suppressing those would change messages this
-        # round has not enumerated -- and their text does not contain the schema.
-        if isinstance(e, SQLAlchemyError):
-            message = 'database error'
-        else:
-            message = str(e)
-        response = {"code": 400, "message": message, "status": "Bad Request"}
-        return jsonify(response), 400
+        # D1390, D895. `str(e)` is the API's error contract only for the
+        # deliberate refusals: the bare `Exception('incorrect_login')`,
+        # `Exception('access_denied')` and the like throughout app/shared and
+        # app/api/alpha/utils, PostReply.new's PostReplyValidationError, and
+        # validation and HTTP errors. Anything else is an internal error whose
+        # `str()` may name a table, a column, the full SQL statement and its
+        # bound parameters, or a path -- a SQLAlchemyError measurably did. It is
+        # logged and sent to Sentry above; the caller gets a generic 500.
+        if type(e) is Exception or isinstance(e, (PostReplyValidationError, ValidationError, HTTPException)):
+            response = {"code": 400, "message": str(e), "status": "Bad Request"}
+            return jsonify(response), 400
+        response = {"code": 500, "message": "internal error", "status": "Internal Server Error"}
+        return jsonify(response), 500
 
 
 # Register the shared error handler for all blueprints

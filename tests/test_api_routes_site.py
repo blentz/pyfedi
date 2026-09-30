@@ -124,7 +124,10 @@ class TestSearch:
         response = env.client.get('/api/alpha/search')
         assert response.status_code == 400
 
-    def test_resolving_something_this_instance_does_not_know(self, env):
+    def test_resolving_something_this_instance_does_not_know(self, env, http_mock):
+        # The remote answers 404. Unmocked, the fetch raised respx's own error,
+        # which D895 now answers as an internal 500 rather than a 400.
+        http_mock.get('https://far.test/p/1').respond(404)
         response = env.client.get('/api/alpha/resolve_object',
                                   headers=auth(env.reader),
                                   query_string={'q': 'https://far.test/p/1'})

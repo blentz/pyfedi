@@ -21,20 +21,19 @@ parameters**. Measured, the body a client received:
 provoke a database error. The exception is still logged and sent to Sentry; only
 what crosses the wire changed.
 
-DELIBERATELY NARROW, and pinned as such. Only the class whose `str()` embeds SQL
-is suppressed. A `ValueError` still reports its own text, because suppressing
-every internal type would change messages this round has not enumerated -- and
-their text does not contain the schema. The row below asserting a `ValueError`
-still reaches the caller is there so the narrowness is a recorded decision rather
-than an oversight to be "fixed" later without thought.
+D895, fixed (owner ruling 2026-09-30). D1390 was deliberately narrow; the ruling
+widened it. Every exception that is not one of the API's deliberate refusals -- a
+bare `Exception('...')`, a `PostReplyValidationError`, a marshmallow
+`ValidationError` or an `HTTPException` -- is an internal error: logged in full,
+and answered with a generic 500 `internal error`. A database error is one of them.
 
 WHAT THIS ROUND SET OUT TO FIND, AND DID NOT. `page_cursor` is the one
 `int(data[...])` key in the whole alpha API that no schema declares as
 `fields.Integer` -- 54 of 55 are validated, and `unknown=INCLUDE` lets an
 undeclared one through as a raw string. `/post/list?page_cursor=abc` looked like a
 500 waiting to happen, and `/post/list2` even hands clients an opaque sqlakeyset
-bookmark in `next_page` that would not parse. It answers 400, because of this very
-handler. Recorded so the next round does not re-derive it.
+bookmark in `next_page` that would not parse. It answered 400, because of this very
+handler; since D895 its `ValueError` is an internal error and answers 500.
 """
 import pytest
 from flask import current_app
@@ -70,10 +69,11 @@ def a_db_error():
 
 class TestADatabaseError:
     def test_the_caller_is_told_nothing_about_the_query(self, app):
+        """Since D895 a database error is answered as every internal error is."""
         code, body = handled(app, a_db_error())
 
-        assert code == 400
-        assert body['message'] == 'database error'
+        assert code == 500
+        assert body['message'] == 'internal error'
 
     def test_the_statement_and_parameters_do_not_cross_the_wire(self, app):
         """The measured leak, asserted on the serialised body rather than on the
@@ -98,8 +98,8 @@ class TestADatabaseError:
     def test_every_sqlalchemy_error_is_generic(self, app, exception):
         code, body = handled(app, exception)
 
-        assert code == 400
-        assert body['message'] == 'database error'
+        assert code == 500
+        assert body['message'] == 'internal error'
 
     def test_it_is_still_logged_and_reported(self, app):
         """The detail belongs in the log and in Sentry, not in the response. A fix
@@ -146,16 +146,48 @@ class TestTheDeliberateRefusals:
 
         assert logged.called
 
-    def test_a_value_error_still_reports_its_own_text(self, app):
-        """The recorded limit of D1390's fix: only the class whose `str()` embeds
-        SQL is suppressed. A `ValueError` says what it was -- which is how
-        `/post/list?page_cursor=abc` answers today -- and its text names no
-        schema."""
-        code, body = handled(
-            app, ValueError("invalid literal for int() with base 10: 'abc'"))
+    def test_a_post_reply_refusal_reaches_the_caller(self, app):
+        """`PostReply.new` refuses with its own exception type, which reaches the
+        API uncaught; its text is written for the user."""
+        from app.models import PostReplyValidationError
+
+        code, body = handled(app, PostReplyValidationError('Comments are disabled on this post'))
 
         assert code == 400
-        assert body['message'] == "invalid literal for int() with base 10: 'abc'"
+        assert body['message'] == 'Comments are disabled on this post'
+
+    def test_a_plain_http_exception_keeps_its_text(self, app):
+        from werkzeug.exceptions import NotFound
+
+        code, body = handled(app, NotFound())
+
+        assert code == 400
+        assert body['message'] == str(NotFound())
+
+
+class TestAnInternalError:
+    """D895, fixed. Anything that is not a deliberate refusal is an internal
+    error: its text may name a table, a column, a constraint or a path, so the
+    caller gets a generic 500 and the detail goes to the log."""
+
+    @pytest.mark.parametrize('exception', [
+        ValueError("invalid literal for int() with base 10: 'abc'"),
+        RuntimeError('relation "user_role" does not exist'),
+        KeyError('secret_column'),
+        AttributeError("'NoneType' object has no attribute 'ap_id'"),
+    ])
+    def test_the_caller_gets_a_generic_500(self, app, exception):
+        code, body = handled(app, exception)
+
+        assert code == 500
+        assert body == {'code': 500, 'message': 'internal error',
+                        'status': 'Internal Server Error'}
+
+    def test_it_is_logged_in_full(self, app):
+        with patch.object(current_app.logger, 'exception') as logged:
+            handled(app, RuntimeError('relation "user_role" does not exist'))
+
+        assert logged.called
 
 
 class TestTheEarlierBranches:
@@ -168,7 +200,7 @@ class TestTheEarlierBranches:
 
         assert code == 400
         assert body['status'] == 'Not found'
-        assert body['message'] != 'database error'
+        assert body['message'] != 'internal error'
 
     def test_a_blocking_io_error_is_bad_credentials(self, app):
         code, body = handled(app, BlockingIOError('too many attempts'))
