@@ -1929,7 +1929,16 @@ def blocked_users(user_id) -> List[int]:
 @cache.memoize(timeout=86400)
 def blocked_phrases() -> List[str]:
     site = db.session.get(Site, 1)
-    if site.blocked_phrases:
+    # D1429. `site.blocked_phrases` was read outright, so with no Site row this
+    # raised `AttributeError: 'NoneType' object has no attribute
+    # 'blocked_phrases'` -- and `PostReply.new` two lines above its own
+    # `if site is None: site = Site()` calls this, so that default could only
+    # ever be reached by a reply with an EMPTY BODY. The row is written by
+    # `flask init-db`, and an instance whose migrations have run but whose setup
+    # has not can already be delivered to: every incoming post and reply with a
+    # body was lost, `Post.new` and `PostReply.new` alike. No row means no
+    # blocked phrases, which is the same answer as an empty setting.
+    if site and site.blocked_phrases:
         blocked_phrases = []
         for phrase in site.blocked_phrases.split('\n'):
             if phrase != '':
