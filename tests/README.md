@@ -13713,3 +13713,13 @@ opposite fails -- check the lookup order before predicting which row survives.
 **1030. `cascade="all, delete-orphan"` MAKES `collection.remove(x)` AND `session.delete(x)` EQUIVALENT.**
 Either line alone removes the row, so mutating one survives. Keep both, assert both ends -- the row is gone
 from the table AND from the collection -- and record the pair as equivalent rather than chasing it.
+
+**1031. NEVER REGISTER A PROBE ROUTE TO TEST A DECORATOR.**
+`app.add_url_rule` raises "can no longer be called on the application" once the app has handled a request, so a
+probe route may pass the file on its own and fail the full suite -- under xdist another file in the same worker
+has already made a request. Wrap a function by hand, patch `app.utils.current_user` for the acting account, and
+call it inside `app.test_request_context(...)`. Assert the redirect AND that the wrapped body did not run: a
+decorator that fails open is a route with no gate.
+
+**1032. `notify_admin` TAKES SIX ARGUMENTS: (title, url, author_id, notif_type, subtype, targets).**
+Calling it with four raises `TypeError` from inside the test rather than from the code under test.
