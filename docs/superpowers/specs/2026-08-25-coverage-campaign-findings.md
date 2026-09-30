@@ -25097,4 +25097,41 @@ list as "block nobody", and a blocklist that quietly starts matching is a federa
 
 Eighteen mutants, all dead, on a green baseline.
 
+
+---
+
+## Round 267 -- the cache key a rendered page is stored under
+
+No source change. Thirty-one rows on `app/utils.py`, the weightiest on `make_cache_key`, which is
+what `@cache.cached()` stores a RENDERED PAGE under. Every element of both keys points the same way:
+two requests that must see different pages have to produce different keys, or one reader is served
+another reader's page out of the cache.
+
+* `_anon_` versus `_user_{id}`, and two accounts never sharing a key. Without the id every signed-in
+  reader shares one entry, and the first one's page -- their subscriptions, their filters, their vote
+  arrows -- is served to the rest.
+* the `Accept` header on the anonymous branch, which the line's own comment explains: the SAME url
+  answers HTML to a browser and ActivityPub JSON to a peer, and both are anonymous.
+* `Accept-Language`, for the same reason one step over.
+* `request.url` rather than `request.path`, ON BOTH BRANCHES. The two keys are separate f-strings, so
+  a row proving `?page=2` differs on one says nothing about the other -- which is exactly what let
+  that mutant survive the first pass until a signed-in row was added.
+
+**A note for the next reader of the security review.** This round's mutation pass drew an automated
+HIGH finding, "Cache Key Collision / Information Disclosure", quoting `if False:` at
+`app/utils.py:241`. That was mutant M1 of this round's own runner, sampled mid-run; the pass KILLED
+it, `git diff app/` was empty afterwards, and the suggested fix was the code already in the tree.
+Seventh occurrence of a review reading a live mutant.
+
+Also covered: the mixed http/https rewrite, whose `replace` is anchored on this instance's OWN server
+name because a peer's https url must stay https; `get_setting`'s `except JSONDecodeError` fallback,
+for a settings row that predates a format change; two more of `get_request`'s normalisations to
+`httpx.HTTPError` (`ValueError` and `StreamError`, neither of which descends from it, so an
+unconverted one escapes every handler in every caller); `is_local_image_url`'s three-host allowlist,
+including this instance's own bucket; the ~five-day give-up that marks an instance `gone_forever`; and
+`get_recipient_language`'s three arms, which exist so a notification is written in the RECIPIENT's
+language rather than the language of whoever triggered it.
+
+Twenty-one mutants, all dead, on a green baseline.
+
 **Next free number: D1432.**
