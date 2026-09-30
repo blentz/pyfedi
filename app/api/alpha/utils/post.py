@@ -2,7 +2,7 @@ from datetime import timedelta
 
 from flask import current_app, g
 from sqlalchemy import desc, text, and_, exists, asc, or_
-from sqlakeyset import get_page
+from sqlakeyset import InvalidPage, get_page
 from sqlalchemy.exc import IntegrityError
 
 from app import db, plugins, cache
@@ -62,7 +62,12 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
     type = data['type_'] if 'type_' in data else "All"
     sort = data['sort'] if 'sort' in data else "Hot"
     if 'page_cursor' in data:
-        page = int(data['page_cursor'])
+        # D895 follow-up: no schema declares page_cursor, so this is the caller's raw
+        # string, and one that is not a number is their mistake -- a 400, not a 500.
+        try:
+            page = int(data['page_cursor'])
+        except ValueError:
+            raise Exception('invalid page_cursor')
     elif 'page' in data:
         page = int(data['page'])
     else:
@@ -1264,7 +1269,10 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
         posts = posts.filter(Post.reply_count > 0, Post.last_active != None)
         posts = posts.order_by(desc(Post.last_active), desc(Post.id))
 
-    page_obj = get_page(posts, per_page=limit, page=bookmark)
+    try:
+        page_obj = get_page(posts, per_page=limit, page=bookmark)
+    except InvalidPage:  # also BadBookmark: a cursor this server never handed out (D895 follow-up)
+        raise Exception('invalid page_cursor')
     posts = SqlKeysetPagination(page_obj)
 
     if user_id:

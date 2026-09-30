@@ -316,6 +316,18 @@ class TestPaging:
         assert second['next_page'] is None
         assert names(first) + names(second) == ['first', 'second', 'third']
 
+    @pytest.mark.parametrize('cursor', ['garbage', '>s:foo~i:42', '1.5'])
+    def test_a_cursor_that_does_not_parse_is_a_refusal(self, env, cursor):
+        """D895 follow-up (owner ruling 2026-09-30). A bookmark the caller made
+        up is invalid input, so it is raised as the API's own refusal type -- a
+        bare Exception, answered 400 -- rather than as the pagination library's
+        error, which D895 now answers as an internal 500."""
+        with pytest.raises(Exception) as refused:
+            get_post_list2(None, {'limit': 2, 'page_cursor': cursor})
+
+        assert type(refused.value) is Exception
+        assert str(refused.value) == 'invalid page_cursor'
+
     def test_the_page_key_is_read_as_a_cursor_too(self, env):
         first = get_post_list2(None, {'limit': 2})
         second = get_post_list2(None, {'limit': 2,

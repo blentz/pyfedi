@@ -775,6 +775,18 @@ class TestPaging:
         res = get_post_list(None, {'limit': 2, 'page_cursor': '2'})
         assert len(res['posts']) == 1
 
+    @pytest.mark.parametrize('cursor', ['abc', '1.5', ''])
+    def test_a_cursor_that_is_not_a_number_is_a_refusal(self, env, cursor):
+        """D895 follow-up (owner ruling 2026-09-30). `page_cursor` is the one
+        paging key no schema declares, so `int()` saw the raw string, and its
+        ValueError became a 500 once D895 stopped echoing internal errors. It is
+        the caller's mistake, so it is raised as the API's own refusal type."""
+        with pytest.raises(Exception) as refused:
+            get_post_list(None, {'limit': 2, 'page_cursor': cursor})
+
+        assert type(refused.value) is Exception
+        assert str(refused.value) == 'invalid page_cursor'
+
     def test_the_pages_of_a_single_community(self, env):
         """The other pagination: narrowing by community turns off the raw-SQL
         path, so this is Flask-SQLAlchemy's paginate rather than the branch
