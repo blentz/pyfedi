@@ -13603,3 +13603,12 @@ uncovered and their mutants alive. Parametrize over the field.
 The row for "nothing happens when S3 is unconfigured" passed with the file absent -- but so would a mutant that
 ignored the config, because `os.path.isfile` refused it instead. Make every later guard PASS so the one being
 tested is the only thing that can refuse.
+
+**1008. A ROW THAT DRIVES `make_image_sizes_async` WRITES REAL FILES UNDER `app/static/media`.**
+Pillow, the thumbnailing and the file writes all run for real; only the download, the C2PA read and the OCR are
+worth replacing. The written names come from `gibberish(15)`, so clean up by walking the directory and deleting
+what was not there before, or the working tree fills with stray images.
+
+**1009. COPY A MUTANT'S ANCHOR OUT OF THE FILE, NOT OUT OF THE SOURCE LISTING.**
+Deeply nested lines in `app/activitypub/util.py` are indented 40+ columns and often carry a trailing comment.
+Hand-typing the anchor produces ANCHOR MISMATCH every time; read `lines[n-1]` and `repr()` it into the runner.

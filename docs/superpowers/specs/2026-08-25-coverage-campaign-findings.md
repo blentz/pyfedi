@@ -24411,4 +24411,41 @@ of the `and` refuses it anyway.
 
 Sixteen mutants dead, one provably equivalent, on a green baseline.
 
+---
+
+## Round 249 -- the two moderation decisions inside the image resizer
+
+`make_image_sizes_async` downloads the image behind a federated post and resizes it. On the
+way it takes two decisions that are not about resizing, and neither had a row.
+
+**It sets `Post.ai_generated` from the image's C2PA manifest.** The UPDATE is
+`WHERE image_id = :file_id`, so the label follows the IMAGE and reaches every post that uses
+it -- a cross-posted picture labels all of them, which a row asserts. The read happens only
+for `directory == 'posts'`: the same task resizes avatars and community icons, and an
+AI-generated avatar is not a post to label.
+
+**It runs OCR over the image and reports it.** Four conditions have to hold first -- the site
+has `enable_chan_image_filter` on, the community is marked toxic, the image is narrower than
+2000px (the source's own comment: wider images tend to be photographs), and `ALLOW_4CHAN` is
+unset in the environment -- and then the text has to contain `Anonymous` AND either `No.` or
+` N0`. Only then is a notification raised to user 1. Every one of those narrowings has a row,
+because each is a reason an image is NOT scanned, and OCR over every federated image would be
+a per-image cost on every instance.
+
+**The handler here is wide, and that is the point.** `except Exception: image_text = ''` is
+the federated sibling of D1415, where the same filter in `app/community/forms.py` caught only
+`FileNotFoundError` and let `TesseractNotFoundError` out of form validation -- which made
+every image upload fail on an instance that turned the filter on without tesseract installed.
+A row drives `TesseractNotFoundError` here and asserts the image is still processed: the
+width is written, the post arrives, it simply is not scanned.
+
+Also covered: the `site is None` fallback, which matters because the task runs in its OWN
+session -- a Site row this session holds is not necessarily one that session can see -- and
+because the alternative is an `AttributeError` inside a celery task where nothing would see
+it; a `.gif` returning before anything is downloaded, since resizing breaks the animation; a
+non-image content type never reaching Pillow; and a file id whose row has been deleted between
+queueing and running.
+
+Fifteen mutants, all dead, on a green baseline.
+
 **Next free number: D1424.**
