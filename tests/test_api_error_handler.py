@@ -33,7 +33,9 @@ WHAT THIS ROUND SET OUT TO FIND, AND DID NOT. `page_cursor` is the one
 undeclared one through as a raw string. `/post/list?page_cursor=abc` looked like a
 500 waiting to happen, and `/post/list2` even hands clients an opaque sqlakeyset
 bookmark in `next_page` that would not parse. It answered 400, because of this very
-handler; since D895 its `ValueError` is an internal error and answers 500.
+handler. D895 made that `ValueError` a 500, so both listings now raise the API's
+own refusal, `invalid page_cursor`, for a cursor that does not parse (D895
+follow-up) and it is a 400 again.
 """
 import pytest
 from flask import current_app

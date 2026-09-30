@@ -61,6 +61,13 @@ class TestReadingPosts:
         assert response.status_code == 200
         assert 'posts' in response.get_json()
 
+    @pytest.mark.parametrize('path', ['/api/alpha/post/list', '/api/alpha/post/list2'])
+    def test_a_cursor_that_does_not_parse_is_a_400(self, env, path):
+        """D895 follow-up: invalid client input stays a 400, not an internal 500."""
+        response = env.client.get(path, query_string={'page_cursor': 'abc'})
+        assert response.status_code == 400
+        assert response.get_json()['message'] == 'invalid page_cursor'
+
     def test_the_other_listing(self, env):
         response = env.client.get('/api/alpha/post/list2')
         assert response.status_code == 200
