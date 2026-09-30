@@ -24694,4 +24694,44 @@ or `featured` url then makes the task fetch THAT, which the rows have to serve.
 
 Fifteen mutants, all dead, on a green baseline.
 
-**Next free number: D1426.**
+---
+
+## Round 257 -- deleting an account without deleting somebody else's images (D1426)
+
+**D1426.** `User.delete_dependencies` deletes an account's uploads in one loop and its own
+profile images in another. The second loop checks `User.cover_id` / `User.avatar_id` before
+deleting a File. The first loop checked only whether ANOTHER ACCOUNT had a `user_file`
+association -- not whether one referenced the file as its avatar or cover.
+
+`avatar_id` is a foreign key, so this was not a case of quietly blanking somebody's profile:
+
+    ForeignKeyViolation: update or delete on table "file" violates foreign key constraint
+    "user_avatar_id_fkey" on table "user"
+
+which aborts the whole `delete_dependencies` call and leaves the account half-deleted. Fixed by
+giving the first loop the same check the second already has.
+
+**The two loops need separate rows, and the D1426 fix is why.** With the check added, a File that
+another account references AND that has a `user_file` row is now refused by the FIRST loop -- so
+the second loop's guards became unreachable from those rows. They have their own now: a File
+referenced only as a profile image, with no upload row at all, never reaches the first loop, and a
+File somebody else uploaded but this account used as its avatar reaches the second loop's
+`user_file` check instead.
+
+**One state is unreachable and recorded as such.** `user_file.file_id` is a foreign key, so an
+association row pointing at a deleted File cannot be inserted -- fact 781's shape. The
+`if file is None: continue` guard is real for the cover/avatar ids, which are read off the User row
+before the flush that nulls them, so the File may have been deleted by the loop above in between.
+
+Also covered: `recalculate_attitude`, whose ten-vote floor is why a new account is not judged on
+its first few clicks, counting post votes and reply votes together; the pending application row a
+deleted account leaves in the admin queue, and that an APPROVED one is left alone because it records
+a decision somebody made; and four identity helpers. `lemmy_link` lower-cases a remote handle
+because it is the lookup key for a mention, while `link` does NOT because it is what the UI prints
+-- two answers from one column, each with a row.
+
+Thirteen mutants dead, one provably equivalent: `instance_domain`'s middle arm cannot be
+distinguished, because a local account's Instance row IS this instance and its `domain` is
+`SERVER_NAME`.
+
+**Next free number: D1427.**

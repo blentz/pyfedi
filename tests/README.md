@@ -13673,3 +13673,13 @@ that document makes the task fetch those collections, which the row then has to 
 **1022. THE KEY IS `postingRestrictedToMods`, NOT `restrictedToMods`.**
 A row using the shorter spelling passes only because the column's default is already False. Check the key
 against the source before asserting the column.
+
+**1023. A FOREIGN KEY TURNS "DELETED SOMEBODY ELSE'S IMAGE" INTO AN ABORTED TRANSACTION.**
+`User.avatar_id` references `file.id`, so a missing reference check does not blank a profile -- it raises
+`ForeignKeyViolation` on the DELETE and aborts the whole `delete_dependencies` call, leaving the account
+half-deleted. That was D1426. When testing a deletion path, seed the sharing case and watch for the
+IntegrityError, not just for the wrong row disappearing.
+
+**1024. `User.lemmy_link` LOWER-CASES A HANDLE AND `User.link` DOES NOT.**
+Both read `ap_id`. The first is the lookup key for a mention, the second is what the UI prints. A row for
+either must name which, or a mutant swapping them survives.
