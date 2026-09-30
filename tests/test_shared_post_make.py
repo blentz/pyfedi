@@ -95,7 +95,7 @@ from app.constants import (
     SRC_API,
     SRC_WEB,
 )
-from app.models import Domain, Post, PostVote, utcnow
+from app.models import Community, Domain, Post, PostVote, User, utcnow
 from tests.factories import (
     bearer,
     make_community,
@@ -1139,6 +1139,33 @@ def test_a_failing_edit_post_rolls_back_the_post_and_the_vote(db_session):
 
     assert db.session.query(Post).count() == 0
     assert db.session.query(PostVote).count() == 0
+
+
+def test_a_failing_edit_post_restores_the_post_counts(db_session):
+    """D463, fixed. The rollback deleted the post and the vote but left
+    `community.post_count` and `user.post_count` incremented, so every failed
+    upload (D473 counts four ways) inflated both by one for a post that does
+    not exist. The handler now puts them back."""
+    s = seed_make_context()
+    community_before = s.community.post_count
+    author_before = s.author.post_count
+
+    original = post_module.edit_post
+
+    def exploding_edit_post(*args, **kwargs):
+        raise Exception('edit blew up')
+
+    post_module.edit_post = exploding_edit_post
+    try:
+        with pytest.raises(Exception, match='edit blew up'):
+            make_post(_api_input(), s.community, POST_TYPE_ARTICLE, SRC_API,
+                      auth=bearer(s.author))
+    finally:
+        post_module.edit_post = original
+
+    db.session.expire_all()
+    assert db.session.get(Community, s.community.id).post_count == community_before
+    assert db.session.get(User, s.author.id).post_count == author_before
 
 
 def test_a_failing_edit_post_re_raises_the_original_exception(db_session):
