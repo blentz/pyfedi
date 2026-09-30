@@ -375,6 +375,20 @@ def test_a_feed_is_created(app, env):
         stranger.id
 
 
+def test_a_feed_whose_url_is_taken_is_refused_by_name(app, env):
+    """D681, fixed. `Feed.name` is unique and nothing checked it, so a
+    second feed with the same url was an IntegrityError. `make_feed` now
+    refuses it first with a message the API returns as a 400."""
+    from app.api.alpha.utils.feed import post_feed
+
+    owner, stranger, public, private = env
+
+    with pytest.raises(Exception, match='A feed with that url already exists'):
+        post_feed(token(stranger), {'name': 'publicfeed', 'title': 'Mine now'})
+
+    assert Feed.query.filter_by(name='publicfeed').count() == 1
+
+
 def test_a_private_feed_is_named_after_its_owner(app, env):
     """A private feed's url carries the owner's name, so two people may each
     have one of the same name."""
