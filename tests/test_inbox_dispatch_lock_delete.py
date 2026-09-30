@@ -529,6 +529,30 @@ def test_lock_fallback_second_half_resolves_a_reply_when_no_post_matches(app, db
     assert log.result == 'success'
 
 
+def test_a_nodebb_reply_whose_url_contains_post_can_be_locked(app, db_session, monkeypatch):
+    """D104, fixed. NodeBB replies carry '/post/' in their ap_id, and the
+    '/post/' branch tried only Post.get_by_ap_id, so such a reply could not
+    be locked. It now falls back to PostReply on a miss, as the Undo/Lock
+    arm and the no-substring branch already do.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+
+    mod, community, post, parent_reply, child_reply, author = _seed_lockable_comment()
+    nodebb_ap_id = 'https://peer.example/post/99'
+    parent_reply.ap_id = nodebb_ap_id
+    db.session.commit()
+    make_community_member(mod, community, is_moderator=True)
+
+    activity = inbox_activity(mod, activity_type='Lock', object_uri=nodebb_ap_id)
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    assert parent_reply.replies_enabled is False
+    assert child_reply.replies_enabled is False
+    assert ActivityPubLog.query.one().result == 'success'
+
+
 def test_a_delete_naming_an_unknown_feed_is_refused(app, db_session, monkeypatch):
     """routes.py:1268-1279 (pre-fix numbering). The feed lookup returns None
     -- no Feed row on this instance has this `ap_public_url` -- and

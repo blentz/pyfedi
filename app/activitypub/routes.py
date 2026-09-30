@@ -1468,6 +1468,8 @@ def process_inbox_request(request_json, store_ap_json):
                     post_reply = None
                     if '/post/' in core_activity['object']:
                         post = Post.get_by_ap_id(core_activity['object'])
+                        if post is None:  # NodeBB replies have /post/ in their ap_id
+                            post_reply = PostReply.get_by_ap_id(core_activity['object'])
                     elif '/comment/' in core_activity['object']:
                         post_reply = PostReply.get_by_ap_id(core_activity['object'])
                     else:
