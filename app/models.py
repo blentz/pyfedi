@@ -2945,7 +2945,8 @@ class Post(db.Model):
             ap_language = language_from_ap(request_json['object'].get('language'))
             if ap_language is not None:
                 post.language = find_language_or_create(*ap_language)
-            elif 'contentMap' in request_json['object'] and isinstance(request_json['object']['contentMap'], dict):
+            # A non-empty dict: an empty map names no language, like an absent one, and next(iter({})) raises
+            elif isinstance(request_json['object'].get('contentMap'), dict) and request_json['object']['contentMap']:
                 language = find_language(next(iter(request_json['object']['contentMap'])))
                 post.language_id = language.id if language else None
             else:

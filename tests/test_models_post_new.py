@@ -30,6 +30,7 @@ from app import db
 from app.constants import (POST_TYPE_ARTICLE, POST_TYPE_IMAGE, POST_TYPE_LINK,
                            POST_TYPE_VIDEO)
 from app.models import Language, Post, Site, Tag
+from app.utils import site_language_id
 from tests.factories import (make_community, make_community_flair,
                              make_community_member, make_user)
 
@@ -346,6 +347,14 @@ class TestTheLicenceAndTheLanguage:
     def test_a_content_map_naming_a_language_nobody_here_has(self, env):
         post = new(env, contentMap={'xx': 'hello'})
         assert post.language_id is None
+
+    def test_an_empty_content_map(self, env):
+        """Fixed alongside D255/D272. `next(iter({}))` raised StopIteration
+        and lost the post; an empty map now names no language, like an
+        absent one, so the site language applies."""
+        post = new(env, contentMap={})
+        assert post is not None
+        assert post.language_id == site_language_id()
 
     def test_a_post_that_names_no_language_at_all(self, env):
         post = new(env)
