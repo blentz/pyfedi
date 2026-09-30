@@ -996,10 +996,11 @@ def do_subscribe(actor, user_id, admin_preload=False, joined_via_feed=False):
             session.close()
 
 
-@bp.route('/<actor>/unsubscribe', methods=['GET', 'POST'])
+@bp.route('/<actor>/unsubscribe', methods=['POST'])
 @login_required
 def unsubscribe(actor):
-    # POST is used by htmx, GET when JS is disabled
+    # POST only, so login_required checks the CSRF token (D994). htmx swaps in the
+    # join button; without JS the button is a plain form, answered with a redirect.
     community = actor_to_community(actor)
 
     if community is not None:
@@ -1040,7 +1041,7 @@ def unsubscribe(actor):
                 community.subscriptions_count -= 1
                 db.session.commit()
 
-                if request.method == 'GET':
+                if not request.headers.get('HX-Request'):
                     flash(Markup(_('You left %(community_name)s',
                                    community_name=community_link_markup(community))))
                 cache.delete_memoized(community_membership, current_user, community)
@@ -1049,7 +1050,7 @@ def unsubscribe(actor):
                 # todo: community deletion
                 flash(_('You need to make someone else the owner before unsubscribing.'), 'warning')
 
-        if request.method == 'POST':
+        if request.headers.get('HX-Request'):
             return render_template('community/_join_button.html', community=community)
         else:
             # send them back where they came from
@@ -1058,11 +1059,13 @@ def unsubscribe(actor):
         abort(404)
 
 
-@bp.route('/<actor>/join_then_add', methods=['GET', 'POST'])
+@bp.route('/<actor>/join_then_add', methods=['POST'])
 @login_required
 @validation_required
 @approval_required
 def join_then_add(actor):
+    # POST only, so login_required checks the CSRF token (D994). The feed and topic
+    # post pickers reach it with a 307, which re-posts their token-carrying form.
     community = actor_to_community(actor)
     # D992's shape, third instance in this file. The actor comes from the URL,
     # so an unresolvable one was an AttributeError on the next line rather than

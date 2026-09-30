@@ -287,9 +287,9 @@
                             <td width="100">
                                 {% if current_user.is_authenticated -%}
                                     {% if community.id in pending_communities and community.id not in joined_communities -%}
-                                        <a class="btn btn-outline-secondary btn-sm" href="/community/{{ community.link() }}/unsubscribe" rel="nofollow">
-                                            {{ _('Pending') }}
-                                        </a>
+                                        <form method="post" action="/community/{{ community.link() }}/unsubscribe"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <button type="submit" class="btn btn-outline-secondary btn-sm">{{ _('Pending') }}</button>
+                                        </form>
                                     {% elif community.id in joined_communities -%}
                                         {% include "community/_leave_button.html" %}
                                     {% else -%}

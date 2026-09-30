@@ -206,7 +206,9 @@ def test_a_real_community_id_still_redirects_to_the_join_page(app, db_session):
         response = client.post(f'/topic/{topic.machine_name}/submit',
                                data={'community_id': str(community.id), 'csrf_token': token})
 
-    assert response.status_code == 302
+    # 307, not 302: join_then_add is POST-only (D994), so the browser has to
+    # re-post this form, CSRF token included.
+    assert response.status_code == 307
     assert response.headers['Location'] == f'/community/{community.link()}/join_then_add'
 
 

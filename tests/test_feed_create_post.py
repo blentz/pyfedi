@@ -107,7 +107,7 @@ class TestACommunityIdThatIsNotANumber:
 
         response = submit(app, client, f'  {in_feed.id}  ')
 
-        assert response.status_code == 302
+        assert response.status_code == 307  # re-posts the token to join_then_add (D994)
         assert response.headers['Location'] == '/community/general/join_then_add'
 
 
@@ -119,7 +119,7 @@ class TestACommunityIdThatResolves:
 
         response = submit(app, client, str(in_feed.id))
 
-        assert response.status_code == 302
+        assert response.status_code == 307  # re-posts the token to join_then_add (D994)
         assert response.headers['Location'] == '/community/general/join_then_add'
 
     def test_a_community_outside_the_feed_is_still_accepted(self, app, env):
@@ -131,7 +131,7 @@ class TestACommunityIdThatResolves:
 
         response = submit(app, client, str(outside.id))
 
-        assert response.status_code == 302
+        assert response.status_code == 307  # re-posts the token to join_then_add (D994)
         assert response.headers['Location'] == '/community/elsewhere/join_then_add'
 
 

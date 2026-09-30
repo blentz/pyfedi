@@ -32,9 +32,9 @@
             <div class="row mb-4 mt-4">
                 <div class="col-auto">
                     {% if current_user.is_authenticated and community_membership(current_user, community) in [SUBSCRIPTION_MEMBER, SUBSCRIPTION_MODERATOR, SUBSCRIPTION_OWNER] -%}
-                        <a class="btn btn-warning" href="/community/{{ community.link() }}/unsubscribe" rel="nofollow" style="float: right;">{{ _('Leave') }}</a>
+                        <form method="post" action="/community/{{ community.link() }}/unsubscribe" style="float: right;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-warning">{{ _('Leave') }}</button></form>
                     {% elif current_user.is_authenticated and community_membership(current_user, community) == SUBSCRIPTION_PENDING -%}
-                        <a class="btn btn-outline-secondary" href="/community/{{ community.link() }}/unsubscribe" rel="nofollow" style="float: right;">{{ _('Pending') }}</a>
+                        <form method="post" action="/community/{{ community.link() }}/unsubscribe" style="float: right;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-outline-secondary">{{ _('Pending') }}</button></form>
                     {% endif %}
                 </div>
             </div>

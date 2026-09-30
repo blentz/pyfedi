@@ -1,3 +1,3 @@
-<a class="btn btn-warning btn-sm" href="/community/{{ community.link() }}/unsubscribe" rel="nofollow"
-   aria-label="{{ _('Leave %(name)s', name=community.display_name()) }}"
-   hx-post="/community/{{ community.link() }}/unsubscribe" hx-trigger="click throttle:1s" hx-swap="outerHTML">{{ _('Leave') }} <span class="fe fe-leave"></span></a>
+<form method="post" action="/community/{{ community.link() }}/unsubscribe" class="d-inline"
+      hx-post="/community/{{ community.link() }}/unsubscribe" hx-trigger="submit throttle:1s" hx-swap="outerHTML"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-warning btn-sm"
+   aria-label="{{ _('Leave %(name)s', name=community.display_name()) }}">{{ _('Leave') }} <span class="fe fe-leave"></span></button></form>

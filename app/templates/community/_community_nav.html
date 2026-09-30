@@ -130,9 +130,9 @@
                             </li>
                         {% elif current_user.is_authenticated and community_membership(current_user, community) == SUBSCRIPTION_PENDING -%}
                             <li>
-                                <a class="dropdown-item" href="/community/{{ community.link() }}/unsubscribe" rel="nofollow">
-                                    {{ _('Pending') }}
-                                </a>
+                                <form method="post" action="/community/{{ community.link() }}/unsubscribe"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="dropdown-item">{{ _('Pending') }}</button>
+                                </form>
                             </li>
                         {% else -%}
                             {% if not community.instance.gone_forever %}

@@ -675,7 +675,8 @@ def feed_create_post(feed_name):
         if not posted_community_id.strip().isdigit():
             abort(404)
         community = db.session.get(Community, int(posted_community_id)) or abort(404)
-        return redirect(url_for('community.join_then_add', actor=community.link()))
+        # 307 keeps the POST and its CSRF token: join_then_add is POST-only (D994)
+        return redirect(url_for('community.join_then_add', actor=community.link()), code=307)
     return render_template('feed/feed_create_post.html', communities=communities, sub_communities=sub_communities,
                            feed=feed,
                            SUBSCRIPTION_OWNER=SUBSCRIPTION_OWNER, SUBSCRIPTION_MODERATOR=SUBSCRIPTION_MODERATOR)

@@ -644,7 +644,7 @@ def test_choosing_a_community_on_the_submit_page_redirects_to_it(app, db_session
         response = client.post('/f/submitfeed/submit', data={
             'csrf_token': csrf(app, client), 'community_id': str(community.id)})
 
-    assert response.status_code == 302
+    assert response.status_code == 307  # re-posts the token to join_then_add (D994)
     assert community.link() in response.headers['Location']
 
 

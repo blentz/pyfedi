@@ -37,7 +37,8 @@ the user to the community they just joined. Escaping the whole message would
 show them raw `<a href=...>` text. The values are escaped, the structure is not.
 """
 import pytest
-from flask import g, render_template_string
+from flask import g, render_template_string, session
+from flask_wtf.csrf import generate_csrf
 from unittest.mock import patch
 
 from app import db
@@ -253,8 +254,18 @@ class TestTheOtherThreeCallSites:
             sess['_fresh'] = True
         return client
 
+    def _token(self, app, client):
+        """unsubscribe and join_then_add are POST-only since D994, and
+        login_required validates the CSRF token on every POST."""
+        with app.test_request_context():
+            token = generate_csrf()
+            raw = session['csrf_token']
+        with client.session_transaction() as sess:
+            sess['csrf_token'] = raw
+        return token
+
     def test_leaving_a_community(self, app, env, api_baseline):
-        """`unsubscribe`'s `request.method == 'GET'` arm. Leaving renders the
+        """`unsubscribe`'s no-JS (non-HTMX) arm. Leaving renders the
         same link, and the community is the one being left -- so the peer's
         title reaches the DOM on the way out as well as the way in.
 
@@ -271,8 +282,10 @@ class TestTheOtherThreeCallSites:
                                        community_id=community.id))
         db.session.commit()
 
-        response = self._signed_in(app, member).get(
-            '/community/localmemes/unsubscribe', follow_redirects=True)
+        client = self._signed_in(app, member)
+        response = client.post('/community/localmemes/unsubscribe',
+                               data={'csrf_token': self._token(app, client)},
+                               follow_redirects=True)
 
         assert response.status_code == 200
         assert b'You left' in response.data, 'the flash never fired'
@@ -300,7 +313,8 @@ class TestTheOtherThreeCallSites:
         # rendered under the test config (`csrf_token` is absent from the form).
         # The flash is read out of the session instead, which is where it waits
         # for the next request either way.
-        response = client.get('/community/localmemes/join_then_add')
+        response = client.post('/community/localmemes/join_then_add',
+                               data={'csrf_token': self._token(app, client)})
 
         assert response.status_code == 302
         with client.session_transaction() as sess:

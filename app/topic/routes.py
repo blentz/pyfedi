@@ -282,7 +282,8 @@ def topic_create_post(topic_name):
     community_id = request.form.get('community_id', type=int)
     if community_id:
         community = db.session.get(Community, community_id) or abort(404)
-        return redirect(url_for('community.join_then_add', actor=community.link()))
+        # 307 keeps the POST and its CSRF token: join_then_add is POST-only (D994)
+        return redirect(url_for('community.join_then_add', actor=community.link()), code=307)
     return render_template('topic/topic_create_post.html', communities=communities, sub_communities=sub_communities,
                            topic=topic,
                            SUBSCRIPTION_OWNER=SUBSCRIPTION_OWNER, SUBSCRIPTION_MODERATOR=SUBSCRIPTION_MODERATOR,

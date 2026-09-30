@@ -67,18 +67,17 @@ KNOWN_GET_MUTATORS = {
     'search.run_search', 'user.notifications', 'user.user_files',
 
     # Found only once MUTATING_HELPERS was added, and all three carry the
-    # same deliberate comment as `community.unsubscribe` below: POST from
-    # htmx, GET when JavaScript is off. The CSRF exposure is real -- a forged
-    # GET can make somebody follow or unfollow something -- but removing the
-    # GET removes the no-JS path, which is the product decision recorded as
-    # D994 rather than a mechanical fix.
+    # deliberate comment `community.unsubscribe` carried: POST from htmx, GET
+    # when JavaScript is off. The CSRF exposure is real -- a forged GET can make
+    # somebody follow or unfollow something. D994's ruling (2026-09-30) made
+    # `community.unsubscribe` and `community.join_then_add` POST-only, with a
+    # form for the no-JS path; these three have not had that change yet.
     'community.subscribe', 'post.post_notification',
     'post.post_reply_notification',
 
     # NOT YET FIXED. These are the ones that match D955's shape and change
     # something at the caller's direction. Each belongs to a blueprint this
     # campaign has not finished; the entry is removed when its slice lands.
-    'community.unsubscribe', 'community.join_then_add',
     'community.community_wiki_revert_revision',
     'feed.feed_notification', 'feed.feed_unsubscribe',
     'topic.topic_notification',
