@@ -22,6 +22,7 @@ measured:
 from unittest.mock import patch
 
 import pytest
+from flask import render_template
 
 from app import db
 from app.constants import POST_STATUS_REVIEWING
@@ -1113,10 +1114,9 @@ def able_to_subscribe(user):
     return user
 
 
-def test_subscribing_by_post_returns_the_leave_button(app, env):
-    """`admin_preload=request.method == 'POST'` -- htmx posts and gets a
-    fragment back, and the no-JS path gets a redirect. D994 is why the GET arm
-    is still there."""
+def test_subscribing_by_htmx_returns_the_leave_button(app, env):
+    """`admin_preload` is set for the htmx request: it gets a fragment back and
+    no flash, and the no-JS form gets a redirect."""
     client, community, mod, member, outsider = env
     viewer = as_user(app, able_to_subscribe(member))
     token = csrf(app, viewer)
@@ -1125,22 +1125,61 @@ def test_subscribing_by_post_returns_the_leave_button(app, env):
         with patch('app.community.routes.render_template',
                    return_value='rendered') as render:
             response = viewer.post(f'/community/{community.name}/subscribe',
-                                   data={'csrf_token': token})
+                                   data={'csrf_token': token},
+                                   headers={'HX-Request': 'true'})
 
     assert response.status_code == 200
     assert subscribe.call_args.kwargs == {'admin_preload': True}
     assert render.call_args.args[0] == 'community/_leave_button.html'
 
 
-def test_subscribing_by_get_sends_the_visitor_back(app, env):
+def test_subscribing_by_form_sends_the_visitor_back(app, env):
+    client, community, mod, member, outsider = env
+    viewer = as_user(app, able_to_subscribe(member))
+    token = csrf(app, viewer)
+
+    with patch('app.community.routes.do_subscribe') as subscribe:
+        response = viewer.post(f'/community/{community.name}/subscribe',
+                               data={'csrf_token': token})
+
+    assert response.status_code == 302
+    assert subscribe.call_args.kwargs == {'admin_preload': False}
+
+
+def test_subscribing_by_get_is_refused(app, env):
+    """D994 sibling, fixed (owner ruling 2026-09-30). Joining accepted GET, which
+    login_required never CSRF-checks, so any page could make a signed-in user
+    join a community. It is POST-only now; the no-JS Join button is a form."""
     client, community, mod, member, outsider = env
     viewer = as_user(app, able_to_subscribe(member))
 
     with patch('app.community.routes.do_subscribe') as subscribe:
         response = viewer.get(f'/community/{community.name}/subscribe')
 
-    assert response.status_code == 302
-    assert subscribe.call_args.kwargs == {'admin_preload': False}
+    assert response.status_code == 405
+    assert subscribe.call_args is None
+
+
+def test_subscribing_without_the_token_is_refused(app, env):
+    client, community, mod, member, outsider = env
+    viewer = as_user(app, able_to_subscribe(member))
+
+    with patch('app.community.routes.do_subscribe') as subscribe:
+        response = viewer.post(f'/community/{community.name}/subscribe')
+
+    assert response.status_code == 400
+    assert subscribe.call_args is None
+
+
+def test_the_join_button_is_a_form_carrying_the_token(app, env):
+    client, community, mod, member, outsider = env
+
+    with app.test_request_context('/'):
+        html = render_template('community/_join_button.html', community=community)
+
+    assert f'<form method="post" action="/community/{community.link()}/subscribe"' in html
+    assert 'name="csrf_token"' in html
+    assert 'href=' not in html
 
 
 def a_wiki_page(community, author, title='A page'):

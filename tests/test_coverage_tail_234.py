@@ -245,7 +245,9 @@ class TestACommunityThisInstanceDoesNotHave:
         response = env.client.get(f'/c/{community.name}/subscribe')
 
         assert response.status_code == 302
-        assert community.name in response.headers['Location']
+        # The community page, not the subscribe route: subscribe is POST-only since
+        # D994's sibling fix, so the intent lands where the reader confirms with Join.
+        assert response.headers['Location'] == f'/c/{community.name}'
 
 
 # --------------------------------------------------------------------------

@@ -9,7 +9,7 @@
                         {% elif current_user.is_authenticated and community_membership(current_user, community) == SUBSCRIPTION_PENDING -%}
                             <form method="post" action="/community/{{ community.link() }}/unsubscribe"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="w-100 btn btn-outline-secondary">{{ _('Pending') }}</button></form>
                         {% else -%}
-                            <a class="w-100 btn btn-primary" href="/community/{{ community.link() }}/subscribe" rel="nofollow">{{ _('Join') }}</a>
+                            <form method="post" action="/community/{{ community.link() }}/subscribe"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="w-100 btn btn-primary">{{ _('Join') }}</button></form>
                         {% endif -%}
                     </div>
                     {% if not community.restricted_to_mods or (community.restricted_to_mods and current_user.is_authenticated and community_membership(current_user, community) in [SUBSCRIPTION_MODERATOR, SUBSCRIPTION_OWNER]) -%}
