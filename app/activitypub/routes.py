@@ -1173,15 +1173,29 @@ def process_inbox_request(request_json, store_ap_json):
 
                 # Reject: remote server is rejecting our previous follow request
                 if core_activity['type'] == 'Reject':
-                    if not isinstance(core_activity['object'], dict) or 'type' not in core_activity['object']:
+                    requestor_user = None
+                    if isinstance(core_activity['object'], str):  # a.gup.pe rejects using a string with the ID of the follow request, as it accepts
+                        join_request_parts = core_activity['object'].split('/')
+                        try:
+                            join_request = session.query(CommunityJoinRequest).filter_by(uuid=join_request_parts[-1]).first()
+                        except Exception:  # old style join requests were just a number
+                            session.rollback()
+                            join_request = session.get(CommunityJoinRequest, join_request_parts[-1])
+                        if join_request:
+                            requestor_user = session.get(User, join_request.user_id)
+                        if not requestor_user:
+                            log_incoming_ap(id, APLOG_ACCEPT, APLOG_FAILURE, saved_json, 'Could not find recipient of Reject')
+                            return
+                    elif not isinstance(core_activity['object'], dict) or 'type' not in core_activity['object']:
                         log_incoming_ap(id, APLOG_ACCEPT, APLOG_FAILURE, saved_json, 'Reject object is not an activity with a type')
                         return
-                    if core_activity['object']['type'] == 'Follow':
+                    elif core_activity['object']['type'] == 'Follow':
                         requestor_user = find_actor_or_create_cached(core_activity['object']['actor'])
                         if not requestor_user:
                             log_incoming_ap(id, APLOG_ACCEPT, APLOG_FAILURE, saved_json, 'Could not find recipient of Reject')
                             return
 
+                    if requestor_user:
                         if community:
                             join_request = session.query(CommunityJoinRequest).filter_by(user_id=requestor_user.id,
                                                                                 community_id=community.id).first()
