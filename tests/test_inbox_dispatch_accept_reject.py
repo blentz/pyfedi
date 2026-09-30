@@ -566,7 +566,7 @@ def test_the_user_branch_creates_a_new_follower_row(app, db_session, monkeypatch
     object's actor) are both plain remote Users under the same instance --
     ap_profile_id differs by username, so there is no collision. Note the
     asymmetry recorded in the Step 1 table: existing_follow's lookup here
-    filters `is_inward=False` (:1136); Reject's equivalent (Task 8) does not.
+    filters `is_inward=False` (:1136), as Reject's equivalent now does (D74).
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance = make_instance('peer.example')
@@ -837,11 +837,9 @@ def test_the_reject_feed_branch_deletes_a_membership_with_no_join_request(
 def test_the_reject_user_branch_flips_an_existing_follow_and_decrements(
         app, db_session, monkeypatch):
     """routes.py:1179-1189, join request PRESENT / existing_follow PRESENT.
-    Unlike Accept's equivalent lookup (:1136), this existing_follow query
-    does not filter on is_inward at all (the asymmetry noted in the Task 6
-    outcome-table comment above) -- make_follow's default is_inward=False
-    keeps this test inside the shape that filter would also match, so this
-    test does not itself exercise that asymmetry.
+    The existing_follow query now filters is_inward=False like Accept's
+    (D74); test_a_reject_leaves_the_inward_follow_between_the_same_users_alone
+    below covers the inward row it must skip.
 
     D79: unlike the sibling community (:1161) and feed (:1172) branches,
     this branch never calls `session.delete(join_request)`. The assertion
@@ -871,6 +869,31 @@ def test_the_reject_user_branch_flips_an_existing_follow_and_decrements(
     # endorse it.
     assert db.session.query(UserFollowRequest).filter_by(
         user_id=joiner.id, follow_id=target.id).first() is not None
+
+
+def test_a_reject_leaves_the_inward_follow_between_the_same_users_alone(app, db_session, monkeypatch):
+    """D74, fixed. The inward row for the same pair (target follows joiner)
+    has the same local_user_id/remote_user_id as joiner's outward follow of
+    target. Reject's lookup did not filter on is_inward the way Accept's
+    does, so it could flip that inward row instead. It now touches only the
+    outward follow the Reject is about.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    target = _stamp_remote_user(instance, 'target')
+    joiner = _stamp_remote_user(instance, 'joiner')
+    make_user_follow_request(joiner, target)
+    make_follow(joiner, target, is_accepted=True, is_inward=True)
+
+    activity = inbox_activity(target, activity_type='Reject',
+                              object=_follow_object(joiner.ap_profile_id))
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    inward = db.session.query(UserFollower).filter_by(
+        local_user_id=joiner.id, remote_user_id=target.id, is_inward=True).one()
+    assert inward.is_accepted is True
 
 
 def test_a_reject_decrements_num_following_even_with_no_follower_row(app, db_session, monkeypatch):
