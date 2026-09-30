@@ -214,6 +214,11 @@ class TestConfig(Config):
     SQLALCHEMY_DATABASE_URI = TEST_DATABASE_URL
     CACHE_TYPE = 'NullCache'
     SERVER_NAME = 'test.piefed.local'
+    # Flask-Limiter's init_app() copies RATELIMIT_ENABLED onto the shared
+    # `limiter` every time create_app() runs, and config.py defaults it to True.
+    # Without this, any test that builds its own app re-enables the limiter that
+    # disable_rate_limiter switched off for the session, and later tests see 429.
+    RATELIMIT_ENABLED = False
 
 
 @pytest.fixture(scope='session')
