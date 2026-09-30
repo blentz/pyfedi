@@ -4398,7 +4398,7 @@ def process_microblog_announce(request_json, id, store_ap_json) -> Union[Post, N
 
     # create_resolved_object performs the attributedTo / domain-match impersonation
     # check. Do not duplicate it here.
-    resolved = create_resolved_object(uri, post_data, urlparse(uri).netloc,
+    resolved = create_resolved_object(uri, post_data, host_of(uri),
                                       find_microblogging_community(), id, store_ap_json)
     if not isinstance(resolved, Post):
         log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, 'Boosted object did not resolve to a post')
@@ -4690,28 +4690,29 @@ def resolve_remote_post(uri: str, community, announce_id, store_ap_json, nodebb=
 
 def create_resolved_object(uri, post_data, uri_domain, community, announce_id, store_ap_json):
     # find the author. Make sure their domain matches the site hosting it to mitigate impersonation attempts
+    # Hosts, not authorities (D22). uri_domain is an authority from the caller -- the alpha API's may carry a
+    # port -- so it is normalised too, and '//' makes urlparse read it as one. An empty host is refused below
+    # rather than compared, because host_of degrades what urlparse rejects to '' and '' == '' is True.
+    uri_domain = host_of(f'//{uri_domain}') if uri_domain else ''
     actor_domain = None
     actor = None
     if 'attributedTo' in post_data:
         attributed_to = post_data['attributedTo']
         if isinstance(attributed_to, str):
             actor = attributed_to
-            parsed_url = urlparse(actor)
-            actor_domain = parsed_url.netloc
+            actor_domain = host_of(actor)
         elif isinstance(attributed_to, list):
             for a in attributed_to:
                 if isinstance(a, dict) and a.get('type') == 'Person':
                     actor = a.get('id')
                     if isinstance(actor, str):  # Ensure `actor` is a valid string
-                        parsed_url = urlparse(actor)
-                        actor_domain = parsed_url.netloc
+                        actor_domain = host_of(actor)
                     break
                 elif isinstance(a, str):
                     actor = a
-                    parsed_url = urlparse(actor)
-                    actor_domain = parsed_url.netloc
+                    actor_domain = host_of(actor)
                     break
-    if uri_domain != actor_domain:
+    if not uri_domain or uri_domain != actor_domain:
         return None
 
     user = find_actor_or_create(actor)
