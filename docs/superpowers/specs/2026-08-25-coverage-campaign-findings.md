@@ -24591,4 +24591,32 @@ commits in its own session (fact 976), so the rows go through a helper that call
 
 Fourteen mutants, all dead, on a green baseline.
 
+---
+
+## Round 254 -- finding the thing a peer's activity refers to
+
+Two resolvers in `app/activitypub/util.py`, both handed an `ap_id` a peer chose.
+
+**`find_reply_parent` decides what an incoming reply replies to**, and returns
+`(post_id, parent_comment_id, root_id)`. `root_id` is what keeps a deep thread threaded, and it
+is assigned in TWO places -- the hint branch and the fallback -- so it needed two rows: a
+top-level comment's `root_id` is NULL, which a mutant dropping the value satisfies for free, so
+both rows use a NESTED comment and the second uses a url with no hint in it.
+
+**`find_liked_object` decides where a vote lands.** It refuses a non-string id, because an Undo's
+`object` is whatever the peer put there, and it refuses an ARCHIVED post -- whose replies are
+collapsed and whose score is fixed, so a late vote has nowhere to go. It caches `(id, type)`
+rather than the model, since a SQLAlchemy object cannot be serialised into redis, and the row that
+proves the cache is read deletes the row behind it and watches the id come back anyway.
+
+**Four survivors, all provably equivalent, and the mutation pass is what made them visible as a
+group.** The `'comment' in in_reply_to` hint, the `'post' in in_reply_to` hint, and
+`'/comment/' in ap_id` are all optimisations: deleting any of them changes no answer, because the
+fallback below tries both lookups outright. And the archived-post refusal exists on both sides of
+the cache -- deleting either one still answers None, since the other catches it. Every one is kept
+for the query it saves, and each is now recorded in the test file beside the row that cannot
+distinguish it.
+
+Nine mutants dead, four provably equivalent, on a green baseline.
+
 **Next free number: D1425.**
