@@ -741,24 +741,77 @@ def test_a_post_context_attributes_itself_to_the_community(app, db_session, monk
     assert response.json['attributedTo'] != post.public_url()
 
 
-def test_a_deleted_post_has_no_context(app, db_session, monkeypatch):
-    """`if post.deleted: abort(404)` -- the ONLY `deleted` guard among the four
-    content-object endpoints. `post_replies_ap`, which serves the same post's
-    replies, has none, which is pinned by
-    `test_post_replies_are_served_for_a_deleted_post`; neither does `post_ap`,
-    which serves the post itself, pinned by
-    `test_a_deleted_post_is_still_served_as_activitypub_json`.
-
+def test_a_deleted_post_context_is_410_with_a_tombstone(app, db_session, monkeypatch):
+    """D190, fixed. `post_ap_context` answers through `post_ap_refusal`, so a
+    deleted post gets the same 410 and Tombstone as `post_ap` and
+    `post_replies_ap` rather than the 404 it alone used to give.
     `deleted` is set explicitly; `make_post` sets `deleted=False`.
     """
     _double_the_delegates(monkeypatch)
     community, author, post = seed_local_post()
+    post.ap_id = f'https://test.piefed.local/post/{post.id}'
     post.deleted = True
     db.session.commit()
 
     response = ap_get(app, f'/post/{post.id}/context')
 
-    assert response.status_code == 404
+    assert response.status_code == 410
+    assert response.json['type'] == 'Tombstone'
+
+
+def test_a_post_context_is_403_for_a_local_only_community(app, db_session, monkeypatch):
+    """D190, fixed. Before, `deleted` was the context's only guard, so a
+    `local_only` community's post title and reply URIs were served to peers.
+    `local_only` is set explicitly; it defaults to False.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post(title='secret title')
+    community.local_only = True
+    db.session.commit()
+
+    response = ap_get(app, f'/post/{post.id}/context')
+
+    assert response.status_code == 403
+    assert 'secret title' not in response.get_data(as_text=True)
+
+
+def test_a_post_context_is_403_for_a_private_community(app, db_session, monkeypatch):
+    """D190, fixed: the `private` arm of the shared gate."""
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    community.private = True
+    db.session.commit()
+
+    response = ap_get(app, f'/post/{post.id}/context')
+
+    assert response.status_code == 403
+
+
+def test_a_post_context_is_403_for_an_unpublished_post(app, db_session, monkeypatch):
+    """D190, fixed. Status is set explicitly -- the column default is
+    POST_STATUS_PUBLISHED, so leaving it implicit would assert nothing.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    post.status = POST_STATUS_REVIEWING
+    db.session.commit()
+
+    response = ap_get(app, f'/post/{post.id}/context')
+
+    assert response.status_code == 403
+
+
+def test_a_post_context_is_401_when_the_author_has_blocked_the_requesting_instance(app, db_session, monkeypatch):
+    """D190, fixed: the author-block arm of the shared gate."""
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    blocked = make_instance('blocked.example')
+    make_instance_block(author, blocked)
+
+    response = ap_get(app, f'/post/{post.id}/context',
+                      user_agent='Test (+https://blocked.example)')
+
+    assert response.status_code == 401
 
 
 def test_a_post_context_omits_deleted_replies(app, db_session, monkeypatch):
