@@ -591,6 +591,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
                 img.thumbnail((image_max_dimension, image_max_dimension), resample=Image.LANCZOS)
 
                 kwargs = {}
+                original_place = final_place
                 if image_format:
                     kwargs['format'] = image_format.upper()
                     final_ext = '.' + image_format.lower()
@@ -599,6 +600,8 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
                     kwargs['quality'] = int(image_quality)
 
                 img.save(final_place, optimize=True, **kwargs)
+                if final_place != original_place:
+                    os.unlink(original_place)   # the upload was re-encoded under a new extension (D465)
             else:
                 raise Exception('filetype not allowed')
 

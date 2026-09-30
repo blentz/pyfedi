@@ -940,13 +940,11 @@ def test_media_image_format_avif_imports_pillow_avif_a_second_time(
 
         assert 'pillow_avif' in sys.modules
         # `:527` renames `final_place` to a new `.avif` path for the
-        # re-encoded save; the ORIGINAL `.png` `:487` saved is never
-        # removed, so two files exist here, not one -- verified empirically
-        # against this container (a first run asserting `== 1` failed with
-        # `2 == 1`, listing both the `.png` and the `.avif` path).
+        # re-encoded save, and the original `.png` is now removed (D465,
+        # fixed: it used to survive beside the `.avif`).
         written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
-        assert len(written) == 2
-        assert any(p.suffix == '.avif' for p in written)
+        assert len(written) == 1
+        assert written[0].suffix == '.avif'
     finally:
         if had_pillow_avif is not None:
             sys.modules['pillow_avif'] = had_pillow_avif
@@ -1365,24 +1363,11 @@ def test_a_configured_format_rewrites_the_saved_extension(
     `:527` replaces `final_place`'s extension, so a `.png` upload with WEBP
     configured lands on disk as `.webp`. That is what is asserted here.
 
-    TWO FILES ARE EXPECTED, NOT ONE -- a REGISTERED DEFECT, not a test bug.
-    `:487` saves the original upload to `<name>.png`; `:527` then rewrites
-    `final_place` to `<name>.webp` and `:531` saves the re-encoded image
-    there. Nothing between `:485` and `:563` unlinks the pre-rename `.png`
-    path -- `:563`'s `os.unlink` runs only in the S3 branch, and only on the
-    NEW path -- so both files survive on disk. Task 4's
-    `test_media_image_format_avif_imports_pillow_avif_a_second_time` found
-    this the same way (a first run asserting `== 1` failed with `2 == 1`)
-    and pinned it there as a known defect rather than correct behaviour;
-    this test pins the same defect for the WEBP arm rather than silently
-    re-deriving the wrong (`== 1`) expectation.
-
-    Positive control for the `== 2` count:
-    `test_an_uploaded_image_is_saved_and_linked` above takes the DEFAULT
-    (`MEDIA_IMAGE_FORMAT == ''`) path with an otherwise-identical `.png`
-    upload and asserts `len(written) == 1` -- so the second file here is
-    attributable to the configured format taking `:524`'s TRUE arm, not to
-    some format-independent mechanism that always leaves two files behind.
+    ONE FILE, NOT TWO -- D465, fixed. `:487` saves the original upload to
+    `<name>.png` and `:527` rewrites `final_place` to `<name>.webp` for the
+    re-encoded save; nothing removed the `.png`, so both survived on disk
+    (the S3 branch's unlink only ever touched the new path). The original is
+    now unlinked once the re-encoded copy is written.
     """
     monkeypatch.setitem(app.config, 'MEDIA_IMAGE_FORMAT', 'WEBP')
     assert app.config['MEDIA_IMAGE_FORMAT'] == 'WEBP'
@@ -1393,9 +1378,8 @@ def test_a_configured_format_rewrites_the_saved_extension(
               uploaded_file=make_upload(filename='pic.png', fmt='PNG'))
 
     written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
-    assert len(written) == 2
-    assert any(p.suffix == '.webp' for p in written)
-    assert any(p.suffix == '.png' for p in written)
+    assert len(written) == 1
+    assert written[0].suffix == '.webp'
     db.session.refresh(s.post)
     assert s.post.image_id is not None
 
