@@ -1307,7 +1307,7 @@ def process_inbox_request(request_json, store_ap_json):
 
                 if core_activity['type'] == 'Delete':
                     # check if its a feed being deleted
-                    if isinstance(core_activity['object'], dict) and core_activity['object']['type'] == 'Feed':
+                    if isinstance(core_activity['object'], dict) and core_activity['object'].get('type') == 'Feed':
                         # find the user in the traffic
                         user = find_actor_or_create_cached(actor_id)
                         # find the feed
@@ -1349,8 +1349,11 @@ def process_inbox_request(request_json, store_ap_json):
                         return
                     elif isinstance(core_activity['object'], str):
                         ap_id = core_activity['object']  # lemmy
-                    else:
+                    elif isinstance(core_activity['object'], dict) and 'id' in core_activity['object']:
                         ap_id = core_activity['object']['id']  # kbin
+                    else:
+                        log_incoming_ap(id, APLOG_DELETE, APLOG_FAILURE, saved_json, 'Delete object has no id')
+                        return
                     to_delete = find_liked_object(ap_id)  # Just for Posts and Replies (User deletes go through process_delete_request())
 
                     if to_delete:  # Deleting content. User self-deletes are handled in process_delete_request()
