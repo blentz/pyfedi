@@ -30,7 +30,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     Licence, UserExtraField, Feed, FeedMember, FeedItem, CommunityFlair, UserFlair, Topic, Event, InstanceBan, Emoji, \
     UserFollower, PostBoost, parse_ap_timestamp, image_url_from, markdown_source, \
     _as_text, _as_int, _as_float, _as_dict, _as_url, property_value_fields, public_key_pem, \
-    language_from_ap, adjust_domain_post_count, actor_name_from_ap
+    language_from_ap, adjust_domain_post_count, actor_name_from_ap, PostReplyValidationError
 from app.utils import get_request, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
     sanitise_posting_warning, \
     is_image_url, domain_from_url, gibberish, ensure_directory_exists, shorten_string, fixup_url, \
@@ -2998,9 +2998,15 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
                         db.session.commit()
 
             return post_reply
-        except Exception as ex:
+        except PostReplyValidationError as ex:  # PostReply.new's refusals, this function's normal refusal path
             log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, str(ex))
             return None
+        except Exception as ex:
+            # D263. Anything else is a real failure, not a refusal: roll back first so the log row is not written
+            # into a transaction the error has aborted, then re-raise rather than return a None that looks like one.
+            db.session.rollback()
+            log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, str(ex))
+            raise
     else:
         log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, 'Unable to find parent post/comment')
         return None
