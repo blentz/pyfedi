@@ -1,4 +1,6 @@
 """tests/test_ap_collections.py"""
+import pytest
+
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.models import Post
@@ -856,6 +858,23 @@ def test_a_non_public_feed_moderators_is_403(app, db_session):
 
     assert response.status_code == 403
     assert owner.ap_profile_id not in response.get_data(as_text=True)
+
+
+@pytest.mark.parametrize('collection', ['outbox', 'following', 'moderators', 'followers'])
+def test_a_banned_feed_has_no_collections(app, db_session, collection):
+    """D176, fixed. The four feed collection lookups filter `banned=False`, as
+    the community and user collection lookups do; before, a banned feed was
+    served by all four. `banned` defaults to False, so it is set explicitly on
+    an otherwise public feed.
+    """
+    seed_actors()
+    feed = _seed_local_feed('news', public=True)
+    feed.banned = True
+    db.session.commit()
+
+    response = collection_get(app, f'/f/news/{collection}')
+
+    assert response.status_code == 404
 
 
 def test_a_feed_moderators_collection_lists_its_owner(app, db_session):
