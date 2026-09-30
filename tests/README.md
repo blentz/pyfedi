@@ -13817,3 +13817,26 @@ Patch `app.utils.mime_type_using_head` to return None when the sniff is not what
 A row proving the url, the sort or the post id is in the anonymous key says NOTHING about the
 signed-in key. Assert each element on both branches -- patch `app.utils.current_user` with
 `is_anonymous = False` and an `id` for the signed-in side.
+
+**1050. `sqlalchemy.exc.IntegrityError` IS NOT A `psycopg2.IntegrityError`.**
+`issubclass` is False -- the MRO is DatabaseError -> DBAPIError -> StatementError -> SQLAlchemyError.
+An `except IntegrityError` that imported the psycopg2 class never fires on a duplicate key. Round 268
+found three such handlers. `tests/test_coverage_tail_268.py` sweeps `app/` for the import.
+
+**1051. TO TEST A HANDLER AROUND A RACE, INJECT THE FAILURE AT THE SESSION THE CODE FETCHED.**
+Patch `get_task_session` to answer with a proxy that delegates everything and raises once from
+`commit`. Make it raise ONLY for the commit being tested -- key on what is pending
+(`any(isinstance(obj, CommunityMember) for obj in inner.new)`) -- because a task commits several
+times and usually only one of them is guarded.
+
+**1052. A GUARD WHOSE ABSENCE RAISES INSIDE AN EXISTING `try` NEEDS THE CALL ASSERTED, NOT THE ROW.**
+Dropping `if not reply_author: continue` calls `PostReply.new(None, ...)`, whose AttributeError the
+surrounding `except` swallows -- so no reply is stored either way. Patch the callee, record its
+arguments, and assert it was never reached.
+
+**1053. A TEST CAN PIN A DEFECT SO WELL THAT FIXING IT BREAKS THE TEST.**
+`test_a_membership_race_is_caught_as_an_integrity_error` raised `psycopg2.IntegrityError` on purpose,
+with a docstring saying the handler "looks unable to catch what an actual concurrent-insert race would
+raise in production". Correcting the import made that test the suite's one failure. When a round fixes
+a class or a signature, grep the suite for rows written against the OLD one -- a green suite before
+the fix is not evidence the fix is wrong.

@@ -25134,4 +25134,63 @@ language rather than the language of whoever triggered it.
 
 Twenty-one mutants, all dead, on a green baseline.
 
-**Next free number: D1432.**
+
+---
+
+## Round 268 -- three dead exception handlers, and who becomes a moderator
+
+**D1432 and D1433. `except IntegrityError` caught the wrong class in three places, so all three
+handlers were dead code.** Both `app/community/util.py` and `app/activitypub/routes.py` opened with
+
+    from psycopg2 import IntegrityError
+
+while SQLAlchemy raises `sqlalchemy.exc.IntegrityError`, whose MRO is
+
+    IntegrityError -> DatabaseError -> DBAPIError -> StatementError -> SQLAlchemyError
+
+with no psycopg2 ancestor at all. Measured: `issubclass(sqlalchemy.exc.IntegrityError,
+psycopg2.IntegrityError)` is False. Each of the three guarded an INSERT that a concurrent copy of the
+same work loses on a unique constraint:
+
+* `retrieve_mods_and_backfill`'s two moderator loops. Two backfills of one community run together
+  whenever a search and an Announce arrive at once, and the loser's `CommunityMember` insert went
+  past the dead handler to the outer `except Exception: session.rollback(); raise` -- which is
+  exactly the community-created-then-never-filled-in failure those handlers were written to prevent.
+* the inbox `Accept` handler's own `CommunityMember` insert. Two Accepts for one join request -- a
+  peer retrying, or sending both an Accept and an Announce of it -- took the whole inbox request down
+  with a 500 instead of logging "Membership already exists".
+
+Both imports now come from `sqlalchemy.exc`, and two rows guard the deletion: the two classes are
+asserted unrelated, and an AST sweep refuses `IntegrityError` imported from psycopg2 anywhere under
+`app/`.
+
+**D1433 had already been registered, by the test that covered it.**
+`tests/test_inbox_dispatch_accept_reject.py::test_a_membership_race_is_caught_as_an_integrity_error`
+carried the finding in its own docstring -- "this except clause looks unable to catch what an actual
+concurrent-insert race would raise in production" -- and deliberately raised PSYCOPG2's class, "to
+prove the except clause works for the class it declares, not to claim that class is what a real race
+would produce". So the handler had a passing test and no defence. That test was the full suite's one
+failure after this fix, which is the correct outcome: it now raises
+`sqlalchemy.exc.IntegrityError`, the class production produces, and its docstring and the file's
+findings list record the repair rather than the defect. A test written against a wrong class is worth
+re-reading whenever the class is corrected.
+
+**The row for a dead handler needs the failure injected at the session the task fetched.** A real
+race cannot be reproduced inside a test that runs in one transaction, so `get_task_session` answers
+with a proxy whose `commit` raises once -- and only for the commit with a pending `CommunityMember`,
+because the task commits several times and only those are guarded.
+
+Also covered: both moderator readers (a `moderators` OrderedCollection and an `attributedTo` list,
+with the collection winning when a server publishes both), each one's promotion of an existing
+subscriber rather than a second membership row the unique constraint would refuse, each one's
+`if mod:` guard for an actor that will not resolve, a backfilled post whose author will not resolve
+or is LOCAL, and the reply arms -- including D1406's url check repeated on the FETCHED tree, because
+that tree did not come through an inbox and inherits no check.
+
+**A reply with no author needed a different observable.** Removing that guard calls `PostReply.new`
+with None, the AttributeError is swallowed by the `except` around it, and both versions store
+nothing -- so the row asserts the CALL does not happen rather than that no row appears.
+
+Thirteen mutants, all dead, on a green baseline.
+
+**Next free number: D1434.**
