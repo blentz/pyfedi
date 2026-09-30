@@ -24799,4 +24799,36 @@ plain function double records nothing -- the recorder has to answer on `.delay` 
 
 Fourteen mutants, all dead, on a green baseline.
 
+---
+
+## Round 260 -- reconciling a community's flair with what its own server says
+
+`update_community_flair_from_tags` and `remove_outdated_community_flair` keep this instance's
+`CommunityFlair` rows in step with the tag list in a peer's Group document. Posts are attached to
+flair rows, so a row removed here takes its associations with it -- a post loses its label.
+
+**There are two keys, and which one applies depends on the row.** A row carrying an `ap_id` survives
+if that id is in the keep-set; a row without one survives if its NAME is. Both arms have rows, in both
+directions.
+
+**The lookup ORDER decides an outcome worth writing down.** `find_flair_or_create` tries the
+document's `id` first and the name second, and its update arm backfills an `ap_id` only when the row
+has none. So a document that reuses a NAME under a NEW id matches by name, keeps the row, and keeps
+the row's ORIGINAL id -- the keep-set is then built from the row's id rather than the document's. The
+first attempt at this row asserted the opposite and failed, which is how the ordering came to light.
+Recorded rather than changed: the row's post associations survive, which is the conservative outcome.
+
+**An unusable tag stops the reconciliation before the removal pass.** `if updated_flair_obj is None:
+return` -- a document that cannot be trusted to say which flair should exist must not be allowed to
+delete what the community already has.
+
+**Three survivors, all redundancies rather than gaps.** `processed_names` cannot be distinguished in
+the paired path, because `find_flair_or_create` backfills an `ap_id` onto every matched row and the id
+arm then keeps it -- the name keep-set matters only when the removal pass is called directly, which one
+row does. And `community.flair.remove(flair)` and `session.delete(flair)` are each equivalent to the
+other, because the relationship cascades with `delete-orphan`; both are kept for saying what is meant
+at both ends, and one row asserts both ends at once.
+
+Ten mutants dead, three provably equivalent, on a green baseline.
+
 **Next free number: D1427.**
