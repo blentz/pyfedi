@@ -25005,4 +25005,54 @@ failure is caught. What the row distinguishes is the `raise`.
 
 Eighteen mutants dead, one provably equivalent, on a green baseline.
 
-**Next free number: D1431.**
+
+---
+
+## Round 265 -- the small decisions on a row
+
+Forty-one rows on `app/models.py`, grouped by the QUESTION rather than by the class, because the
+same question is asked of three different rows with three copies of the answer:
+
+* `notification_subscribers()` on Community, User and Feed -- one table, three raw SQL reads, each
+  filtering on its own `type` constant. Entity ids are per-table, so the same number names a
+  community, an account and a feed; without the `type` filter a community inherits the subscribers
+  of the account with its id, and the notification is then SENT to them.
+* `is_instance_admin` on Community and User -- the same `InstanceRole.role == 'admin'` lookup twice,
+  both read by permission checks. The `role` filter is covered on both copies, because a filter
+  dropped from one says nothing about the other.
+* `subscribed()` on User and Feed, whose answers draw the Join/Leave button, including the
+  `SUBSCRIPTION_PENDING` arm a private community's join request sits in.
+* the `reversal` arms of `Post.vote` and `PostReply.vote`. The comment above `PostReply`'s
+  `raise ValueError` records what it replaced: an `assert`, which vanishes under `python -O`, and
+  the fall-through then cast a NEW DOWNVOTE past the caller's permission gates.
+
+**D1431. `User.is_following`'s fourth arm was unreachable and is deleted.** `is_accepted` is a
+nullable Boolean, so `is True`, `is None` and `is False` exhaust it -- the `else: return 'no'` could
+not be reached, and returned what the fall-through already gives. One row records as OBSERVED rather
+than as wanted that a REFUSED follow shares the `pending` arm with an unanswered one, so it draws the
+same button.
+
+**Three survivors, all provably equivalent.**
+
+* Both `if self.instance_id:` guards. `InstanceRole.instance_id` is part of that table's PRIMARY KEY,
+  so it is NOT NULL and no role row with a null instance can exist -- the query the guard skips could
+  never match. Fact 781's shape.
+* `Community.delete_dependencies`' rss-feed loop. `Community.rss_feeds` cascades
+  `all, delete-orphan`, `RssFeed.items` cascades `all,delete`, and the posts those items name are in
+  this community, so the post loop below reaches them anyway. Three separate reasons, each of which
+  alone would make the loop redundant. Kept: it states the ordering it wants, and the cascade that
+  makes it redundant is a schema detail three classes away.
+
+Also covered: the two `FileNotFoundError` races, where the handler is what stops a file another
+worker removed between the `os.path.isfile` and the `os.unlink` aborting the whole delete and leaving
+the row half-removed; `calculate_cross_posts`' hardcoded `lemmy.zip/c/dailygames` exemption, which
+nothing else in the codebase names; and the nine-entry cross-post limit, without which a url posted
+to a hundred communities gives every one of them a hundred-entry list that every render reads.
+
+`User.delete_dependencies`' `if file is None: continue` is NOT covered and is recorded here instead:
+`User.cover_id` and `User.avatar_id` are foreign keys, so an id captured from them cannot name a File
+row that does not exist. Fact 781's shape again.
+
+Twenty-one mutants dead, three provably equivalent, on a green baseline.
+
+**Next free number: D1432.**
