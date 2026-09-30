@@ -14,7 +14,7 @@ from werkzeug.datastructures import MultiDict
 from app import db
 from app.feed.forms import AddCopyFeedForm, EditFeedForm, SearchRemoteFeed
 from app.models import Community, User
-from tests.factories import make_community, make_instance, make_user, web_ctx
+from tests.factories import make_community, make_instance, make_local_feed, make_user, web_ctx
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -128,6 +128,19 @@ def test_a_url_that_collides_with_a_user_is_refused(app, db_session, deleted, ex
     valid, form = _validate(app, owner, url='takenname')
     assert valid is False
     assert expected in [str(e) for e in form.url.errors]
+
+
+def test_a_url_that_names_an_existing_feed_once_normalised_is_refused(app, db_session):
+    """D681, fixed. The form compared the url as typed against `Feed.name`,
+    but `make_feed` stores it slugified, so 'afeed_' passed validation and
+    then collided with 'afeed' at the unique index: an IntegrityError 500.
+    The form now checks the name the feed would actually be stored under."""
+    instance, owner = _seed()
+    make_local_feed('afeed', public=True)
+
+    valid, form = _validate(app, owner, url='afeed_')
+    assert valid is False
+    assert 'A Feed with this url already exists.' in [str(e) for e in form.url.errors]
 
 
 def test_communities_must_carry_a_host(app, db_session):

@@ -257,6 +257,9 @@ def make_feed(input, src, auth=None, uploaded_icon_file=None, uploaded_banner_fi
     # these three copies all carried was dead text; a mutant that removed it could
     # not be killed, which is how it was found.
     url = feed_machine_name(url, public, user)
+    # Feed.name is unique: refuse a taken one here, not as an IntegrityError at commit (D681)
+    if db.session.query(Feed).filter_by(name=url).first() is not None:
+        raise Exception('A feed with that url already exists')
     base = f"https://{current_app.config['SERVER_NAME']}/f/{url}"
 
     private_key, public_key = RsaKeys.generate_keypair()

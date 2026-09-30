@@ -1,10 +1,12 @@
 from flask_babel import lazy_gettext as _l
+from flask_login import current_user
 from flask_wtf import FlaskForm
 from sqlalchemy import func
 from wtforms import StringField, SubmitField, TextAreaField, BooleanField, SelectField, FileField
 from wtforms.validators import DataRequired, Length, Optional
 
-from app.models import Community, User
+from app.models import Community, Feed, User
+from app.shared.feed import feed_machine_name
 from app.utils import apply_feed_url_rules
 
 
@@ -35,6 +37,12 @@ class AddCopyFeedForm(FlaskForm):
             return False
         else:
             if not apply_feed_url_rules(self):
+                return False
+            # apply_feed_url_rules compares the url as typed, but make_feed stores it
+            # slugified, so 'afeed_' passed there and collided with 'afeed' (D681)
+            name = feed_machine_name(self.url.data, self.public.data, current_user)
+            if Feed.query.filter(Feed.name == name).first() is not None:
+                self.url.errors.append(_l('A Feed with this url already exists.'))
                 return False
             community = Community.query.filter(Community.name == self.url.data.strip().lower(),
                                                Community.ap_id == None).first()
