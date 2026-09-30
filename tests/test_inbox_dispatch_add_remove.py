@@ -106,9 +106,9 @@ Outcome table, derived from source:
     - permission guard (1425-1427): `not community.is_moderator(mod) and
       not community.is_instance_admin(mod)` -- denies and logs FAILURE
       'Does not have permission', returns, if BOTH halves are true.
-    - `target = core_activity['target']` (1428) is read with NO guard at
-      all -- a peer that omits `target` gets an uncaught KeyError, not a
-      logged refusal. Probed, not fixed.
+    - `target = core_activity['target']` (1428) used to be read with no
+      guard, so a peer omitting `target` got an uncaught KeyError (D88).
+      A missing or non-string target is now refused and logged.
     - featured/sticky target (1429-1442): if `community.ap_featured_url`
       is empty, it is BACKFILLED to `community.ap_profile_id + '/featured'`
       (1429-1430) before being read into `featured_url` (1431) -- so this
@@ -640,19 +640,24 @@ def test_unknown_target_for_add(app, db_session, monkeypatch):
     assert log.exception_message == 'Unknown target for Add'
 
 
-def test_a_target_omitted_entirely_raises_keyerror(app, db_session, monkeypatch):
-    """routes.py's current :1428 -- `target = core_activity['target']` is
-    read with no `.get()`, no `in` check, nothing. A peer that omits
-    `target` altogether gets an uncaught KeyError, not a logged refusal.
-    Probes the observed behaviour; does not fix it.
+def test_a_target_omitted_entirely_is_refused(app, db_session, monkeypatch):
+    """D88, fixed. The community branch read `core_activity['target']` with no
+    guard once the permission check passed, so a peer omitting `target` got an
+    uncaught KeyError instead of a logged refusal. It is now refused before
+    anything on the community, including the featured-URL backfill, changes.
     """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, moderator, admin = _seed_community_with_mod_and_admin(name='notargetcomm')
 
     activity = _add_from_community(
         community, moderator, 'https://peer.example/whatever', include_target=False)
 
-    with pytest.raises(KeyError, match='target'):
-        dispatch(activity)
+    dispatch(activity)
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Add has no target'
+
 
 
 def test_add_with_neither_community_nor_feed_resolvable_is_refused(app, db_session, monkeypatch):
@@ -1328,8 +1333,8 @@ def test_remove_ovo_st_keeps_the_generated_follow_id_when_no_join_request_exists
 #     'Does not have permission', returns, if BOTH halves are true. Unlike
 #     Add's identical guard, this one's log_incoming_ap call passes
 #     APLOG_ADD, not APLOG_REMOVE -- mislabelling finding #1.
-#   - `target = core_activity['target']` (:1535) is read with no guard,
-#     same unguarded-KeyError shape as Add's :1428.
+#   - `target = core_activity['target']` (:1535): a missing or non-string
+#     target is refused and logged, as in Add (D88, fixed).
 #   - featured/sticky target (:1536-1549): backfill and case-insensitive
 #     compare identical to Add's; on match, `post.sticky = False` (the
 #     opposite of Add's `= True`) is committed and SUCCESS is logged
@@ -1639,18 +1644,22 @@ def test_remove_unknown_target(app, db_session, monkeypatch):
     assert log.activity_type == APLOG_ADD[1]
 
 
-def test_remove_target_omitted_entirely_raises_keyerror(app, db_session, monkeypatch):
-    """routes.py's current :1535 -- `target = core_activity['target']` is
-    read with no `.get()`, no `in` check, nothing, same unguarded shape as
-    Add's :1428. Probes the observed behaviour; does not fix it.
+def test_remove_target_omitted_entirely_is_refused(app, db_session, monkeypatch):
+    """D88, fixed. Same unguarded `core_activity['target']` read as Add's, and
+    the same fix: a Remove with no target is refused and logged.
     """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, moderator, admin = _seed_community_with_mod_and_admin(name='removenotargetcomm')
 
     activity = _remove_from_community(
         community, moderator, 'https://peer.example/whatever-remove', include_target=False)
 
-    with pytest.raises(KeyError, match='target'):
-        dispatch(activity)
+    dispatch(activity)
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Remove has no target'
+
 
 
 def test_remove_with_neither_community_nor_feed_resolvable_is_refused(
