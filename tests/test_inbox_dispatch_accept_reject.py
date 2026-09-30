@@ -31,6 +31,7 @@ probe file itself was deleted after use; it changed nothing under `app/`.
 """
 from datetime import timedelta
 
+import pytest
 from sqlalchemy.exc import IntegrityError
 
 from app import db
@@ -915,6 +916,56 @@ def test_a_reject_of_a_non_follow_object_is_silently_ignored(app, db_session, mo
     dispatch(activity)
 
     assert ActivityPubLog.query.count() == 0
+
+
+@pytest.mark.parametrize('activity_type', ['Accept', 'Reject'])
+@pytest.mark.parametrize('malformed_object', [{'actor': 'https://follower.example/u/joiner'}, 42],
+                         ids=['dict-without-type', 'int'])
+def test_an_accept_or_reject_of_an_untyped_object_is_refused(
+        app, db_session, monkeypatch, activity_type, malformed_object):
+    """D70, fixed. Both arms read `core_activity['object']['type']` with no
+    check that the object is a dict carrying 'type', so an object dict
+    without one raised KeyError and a non-dict (other than Accept's string
+    form) raised TypeError, uncaught, with no log row. Both are now refused
+    and logged before any membership is touched.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    community, instance = _seed_agupe_community()
+
+    activity = inbox_activity(community, activity_type=activity_type, object=malformed_object)
+
+    dispatch(activity)
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == f'{activity_type} object is not an activity with a type'
+
+
+def test_an_agupe_string_reject_is_refused_without_touching_membership(app, db_session, monkeypatch):
+    """D70, fixed. a.gup.pe sends a Follow's ID as a bare string, and the
+    Accept arm has a lookup for that form; the Reject arm has none, and used
+    to index the string by 'type' and raise TypeError. It is now refused and
+    logged. Whether a string Reject should cancel the join request the way
+    a string Accept admits it is a separate decision; until then the join
+    request and membership are left exactly as they were.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    community, instance = _seed_agupe_community()
+    joiner = make_user(instance, 'joiner')
+    join_request = make_community_join_request(joiner, community)
+    make_community_member(joiner, community)
+
+    activity = inbox_activity(
+        community, activity_type='Reject',
+        object=f'https://peer.example/activities/follow/{join_request.uuid}')
+
+    dispatch(activity)
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Reject object is not an activity with a type'
+    assert CommunityJoinRequest.query.count() == 1
+    assert CommunityMember.query.filter_by(user_id=joiner.id, community_id=community.id).count() == 1
 
 
 # --- Step 6: the APLOG_ACCEPT mislabelling, :1154, :1168, :1178, :1189 ---
