@@ -56,11 +56,20 @@ def vote_for_reply(reply_id: int, vote_direction, federate: bool, emoji: str | N
     # banned user is refused with 403 rather than handed the buttons back
     # unchanged, which says what happened, and `can_upvote` is false for them
     # too so the order is what decides which answer they get.
-    if src == SRC_WEB and ((vote_direction == 'upvote' and not can_upvote(user, reply.community)) or (
-            vote_direction == 'downvote' and not can_downvote(user, reply.community))):
-        return render_template('post/_comment_voting_buttons.html', comment=reply,
-                               recently_upvoted_replies=[], recently_downvoted_replies=[],
-                               community=reply.community)
+    if src == SRC_WEB:
+        refused = (vote_direction == 'upvote' and not can_upvote(user, reply.community)) or (
+                vote_direction == 'downvote' and not can_downvote(user, reply.community))
+        if vote_direction == 'reversal':
+            # The API arm's reversal gate above, for the URL's direction segment (D408).
+            existing_vote = db.session.query(PostReplyVote).filter_by(
+                user_id=user.id, post_reply_id=reply_id).first()
+            if existing_vote:
+                refused = (existing_vote.effect > 0 and not can_upvote(user, reply.community)) or (
+                        existing_vote.effect < 0 and not can_downvote(user, reply.community))
+        if refused:
+            return render_template('post/_comment_voting_buttons.html', comment=reply,
+                                   recently_upvoted_replies=[], recently_downvoted_replies=[],
+                                   community=reply.community)
 
     if votes_cast_today(user.id) > current_app.config['VOTE_QUOTA']:
         abort(429)
