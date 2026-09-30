@@ -16,6 +16,7 @@ resolution sub-project 48 used for make_community.
 import pytest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from flask_login import login_user
 
 from app import db
 from app.models import Community, CommunityJoinRequest, CommunityMember, Feed, FeedItem, Instance, User
@@ -180,13 +181,15 @@ def test_feed_add_community_route_acts_only_as_the_signed_in_user(app, db_sessio
     s = _seed()
     attacker = make_user(s.instance, 'attacker', local=True)
     db.session.commit()
-    qs = (f'user_id={s.owner.id}&new_feed_id={s.feed.id}'
-          f'&current_feed_id=0&community_id={s.community.id}')
+    form = {'user_id': s.owner.id, 'new_feed_id': s.feed.id,
+            'current_feed_id': 0, 'community_id': s.community.id}
 
-    with web_ctx(app, attacker, query_string=qs):
+    # __wrapped__: past login_required's CSRF check, which is not under test here
+    with app.test_request_context('/', method='POST', data=form):
+        login_user(attacker)
         with patch('app.community.routes.do_subscribe') as subscribe:
             with pytest.raises(NotFound):
-                feed_add_community()
+                feed_add_community.__wrapped__()
 
     assert subscribe.call_count == 0
 
@@ -210,12 +213,13 @@ def test_feed_add_community_route_refuses_a_source_feed_the_user_does_not_own(ap
     db.session.commit()
     assert s.feed.user_id == s.owner.id
     assert s.bystander_feed.user_id != s.owner.id
-    qs = (f'user_id={s.owner.id}&new_feed_id={s.feed.id}'
-          f'&current_feed_id={s.bystander_feed.id}&community_id={s.community.id}')
+    form = {'user_id': s.owner.id, 'new_feed_id': s.feed.id,
+            'current_feed_id': s.bystander_feed.id, 'community_id': s.community.id}
 
-    with web_ctx(app, s.owner, query_string=qs):
+    with app.test_request_context('/', method='POST', data=form):
+        login_user(s.owner)
         with pytest.raises(NotFound):
-            feed_add_community()
+            feed_add_community.__wrapped__()
 
     assert db.session.get(FeedItem, victim_item.id) is not None
     assert s.bystander_feed.num_communities == 1

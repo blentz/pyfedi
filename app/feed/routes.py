@@ -8,6 +8,7 @@ from flask import g, current_app, request, redirect, url_for, flash, abort, make
 from markupsafe import Markup, escape
 from flask_babel import _
 from flask_login import current_user
+from flask_wtf.csrf import generate_csrf
 from slugify import slugify
 from sqlalchemy import desc, or_
 
@@ -382,7 +383,7 @@ def feed_notification(feed_id: int):
     return render_template('feed/_notification_toggle.html', feed=feed)
 
 
-@bp.route('/feed/add_community', methods=['GET'])
+@bp.route('/feed/add_community', methods=['POST'])
 @login_required
 def feed_add_community():
     # this expects a user_id, a new_feed_id, a current_feed_id,
@@ -395,9 +396,9 @@ def feed_add_community():
     # string, a bytes-like object or a real number, not 'NoneType'` and one
     # carrying a word was a ValueError -- a 500 either way, where the checks
     # below already say what the answer should be.
-    feed_id = request.args.get('new_feed_id', 0, type=int)
-    current_feed_id = request.args.get('current_feed_id', 0, type=int)
-    community_id = request.args.get('community_id', 0, type=int)
+    feed_id = request.form.get('new_feed_id', 0, type=int)
+    current_feed_id = request.form.get('current_feed_id', 0, type=int)
+    community_id = request.form.get('community_id', 0, type=int)
 
     # make sure the signed-in user owns the feed being added to, and -- when a
     # community is being moved out of another feed -- the feed it is moving from
@@ -451,14 +452,21 @@ def feed_list():
     if current_feed_id != 0:
         options_html = options_html + f'<li><a class="dropdown-item" href="/feed/remove_community?user_id={user_id}&new_feed_id=0&current_feed_id={current_feed_id}&community_id={community_id}">None</li>'
 
-    # for loop to add the rest of the options to the html
+    # for loop to add the rest of the options to the html. Adding changes state, so
+    # each option is a POST form carrying the CSRF token rather than a link (D664).
+    csrf_token = generate_csrf()
     for feed in user_feeds:
         # skip the current_feed if it has one
         if feed.id == current_feed_id:
             continue
         # escape(): this is hand-built HTML and the title is user-supplied, so
         # the one interpolated value that is not an integer is escaped here.
-        options_html = options_html + f'<li><a class="dropdown-item" href="/feed/add_community?user_id={user_id}&new_feed_id={feed.id}&current_feed_id={current_feed_id}&community_id={community_id}">{escape(feed.title)}</li>'
+        options_html = options_html + (f'<li><form method="post" action="/feed/add_community">'
+                                       f'<input type="hidden" name="csrf_token" value="{csrf_token}">'
+                                       f'<input type="hidden" name="new_feed_id" value="{feed.id}">'
+                                       f'<input type="hidden" name="current_feed_id" value="{current_feed_id}">'
+                                       f'<input type="hidden" name="community_id" value="{community_id}">'
+                                       f'<button type="submit" class="dropdown-item">{escape(feed.title)}</button></form></li>')
 
     return options_html
 

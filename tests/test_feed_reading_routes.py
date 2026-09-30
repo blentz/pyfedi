@@ -140,7 +140,7 @@ def test_the_feed_dropdown_survives_a_request_without_arguments(app, db_session)
     body = response.get_data(as_text=True)
     assert response.status_code == 200
     assert 'Snoopers own feed' in body
-    assert 'current_feed_id=0' in body and 'community_id=0' in body
+    assert 'name="current_feed_id" value="0"' in body and 'name="community_id" value="0"' in body
 
 
 def test_the_feed_dropdown_escapes_the_title(app, db_session):
@@ -165,7 +165,7 @@ def test_the_feed_dropdown_escapes_the_title(app, db_session):
     body = response.get_data(as_text=True)
     assert '<img src=x onerror=alert(1)>' not in body
     assert '&lt;img src=x onerror=alert(1)&gt;' in body
-    assert body.startswith('<li><a class="dropdown-item"')
+    assert body.startswith('<li><form method="post" action="/feed/add_community">')
 
 
 def test_the_feed_dropdown_offers_a_none_entry_when_the_community_is_in_a_feed(app, db_session):
@@ -203,9 +203,13 @@ def test_the_feed_dropdown_offers_a_none_entry_when_the_community_is_in_a_feed(a
     assert (f'<li><a class="dropdown-item" href="/feed/remove_community?user_id={owner.id}'
             f'&new_feed_id=0&current_feed_id={current.id}'
             f'&community_id={community.id}">None</li>') in body
-    assert (f'<li><a class="dropdown-item" href="/feed/add_community?user_id={owner.id}'
-            f'&new_feed_id={other.id}&current_feed_id={current.id}'
-            f'&community_id={community.id}">Other feed</li>') in body
+    # D664: adding is a POST form carrying a CSRF token, not a link
+    assert '<form method="post" action="/feed/add_community">' in body
+    assert 'name="csrf_token" value="' in body
+    assert (f'<input type="hidden" name="new_feed_id" value="{other.id}">'
+            f'<input type="hidden" name="current_feed_id" value="{current.id}">'
+            f'<input type="hidden" name="community_id" value="{community.id}">'
+            f'<button type="submit" class="dropdown-item">Other feed</button>') in body
     assert 'Third feed' in body
     assert 'Current feed' not in body
 
