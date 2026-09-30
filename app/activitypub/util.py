@@ -2274,8 +2274,13 @@ def find_instance_id(server):
             db.session.add(new_instance)
             db.session.commit()
         except IntegrityError:
+            # D1425. This returned the Instance OBJECT while every other path in this function
+            # returns an id -- so the one arm that fires when two inbox workers meet the same
+            # new peer at once handed its caller something no caller expects. Every one of them
+            # assigns the result to an `instance_id` and uses it as a foreign key or compares
+            # it to `InstanceBan.instance_id`, which is a different value and a different type.
             db.session.rollback()
-            return db.session.query(Instance).filter_by(domain=server).one()
+            return db.session.query(Instance).filter_by(domain=server).one().id
 
         # Spawn background task to fill in more details
         new_instance_profile(new_instance.id)
