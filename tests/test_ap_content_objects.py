@@ -884,21 +884,16 @@ def test_a_successful_activity_result_is_ok(app, db_session):
     assert response.json == 'Ok'
 
 
-def test_a_failed_activity_result_discloses_the_internal_exception_message(app, db_session):
-    """PINS A DEFECT, and it is this slice's most serious. DO NOT FIX --
-    registered, because choosing the replacement is a decision about what peers
-    are told.
+def test_a_failed_activity_result_reports_the_result_but_not_the_exception(app, db_session):
+    """D187, fixed. On a non-'success' result the endpoint returns only
+    `{'error': activity.result}`.
 
-    On a non-'success' result the endpoint returns
-    `{'error': activity.result, 'message': activity.exception_message}`.
-    `ActivityPubLog.exception_message` is populated from caught exceptions, so
-    this instance's internal error text is served to anyone who can name an
-    activity id -- and the id is one the REMOTE instance chose and therefore
-    already knows. There is no authentication on this route.
-
-    The message asserted here is deliberately shaped like a real internal
-    error, including a file path, to make the disclosure legible in the test
-    output rather than abstract.
+    `ActivityPubLog.exception_message` is populated from caught exceptions, and
+    this route has no authentication -- the activity id is one the REMOTE
+    instance chose, so the peer that triggered a failure could read back this
+    instance's internal error text. The message seeded here is shaped like a
+    real internal error, file path and constraint name included, so a
+    regression that serves it again fails on both substrings.
     """
     seed_actors()
     make_activitypub_log('https://peer.example/activities/announce/boom',
@@ -909,9 +904,9 @@ def test_a_failed_activity_result_discloses_the_internal_exception_message(app, 
         response = client.get('/activity_result/peer.example/activities/announce/boom')
 
     assert response.status_code == 200
-    assert response.json['error'] == 'failure'
-    assert 'app/activitypub/util.py:1214' in response.json['message']
-    assert 'user_ap_id_key' in response.json['message']
+    assert response.json == {'error': 'failure'}
+    assert 'app/activitypub/util.py' not in response.get_data(as_text=True)
+    assert 'user_ap_id_key' not in response.get_data(as_text=True)
 
 
 def test_an_unknown_activity_result_is_404(app, db_session):
