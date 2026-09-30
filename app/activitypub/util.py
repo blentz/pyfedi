@@ -3464,7 +3464,8 @@ def update_post_from_activity(post: Post, request_json: dict):
         ap_language = language_from_ap(request_json['object'].get('language'))  # D1355
         if ap_language is not None:
             new_language = find_language_or_create(*ap_language)
-        elif 'contentMap' in request_json['object'] and isinstance(request_json['object']['contentMap'], dict):
+        # A non-empty dict: an empty map names no language, like an absent one, and next(iter({})) raises (D255)
+        elif isinstance(request_json['object'].get('contentMap'), dict) and request_json['object']['contentMap']:
             new_language = find_language(next(iter(request_json['object']['contentMap'])))
         # find_language_or_create() can return a row it has only add()ed, whose id is still
         # None (the app factory sets autoflush=False), so `id is None` means "brand new" and

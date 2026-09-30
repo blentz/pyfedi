@@ -1968,6 +1968,23 @@ def test_a_post_content_map_that_is_not_a_dict_is_ignored(app, db_session, redis
     assert post.language_id == seeded
 
 
+def test_an_empty_post_content_map_leaves_the_language_alone(app, db_session, redis_lock_only_double):
+    """D255, fixed. `"contentMap": {}` passed the `isinstance(..., dict)` test
+    and `next(iter({}))` raised StopIteration out of the function, losing the
+    whole Update. An empty map now names no language, the same as an absent
+    one, so the post keeps the language it had."""
+    post = _seed_post()
+    english = Language(code='en', name='English')
+    db.session.add(english)
+    db.session.commit()
+    post.language_id = english.id
+    db.session.commit()
+
+    update_post_from_activity(post, _update(name='t', content='x', contentMap={}, type='Note'))
+
+    assert post.language_id == english.id
+
+
 def test_a_post_language_dict_wins_over_content_map(app, db_session, redis_lock_only_double):
     """`elif` -- the two are alternatives, not both. A document carrying both
     must resolve through `language` and never consult `contentMap`.
