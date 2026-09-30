@@ -25193,4 +25193,46 @@ nothing -- so the row asserts the CALL does not happen rather than that no row a
 
 Thirteen mutants, all dead, on a green baseline.
 
+
+---
+
+## Round 269 -- what survives a failure
+
+No source change. Twenty-two rows on `app/utils.py`, nearly all of them on failure handling, which is
+where an uncovered arm costs the most: each exists because the thing it guards has already gone wrong
+once, and nothing downstream gets a second chance.
+
+* **`archive_post`.** Archiving is DESTRUCTIVE -- the body lives in the file afterwards and not in the
+  row -- so the two `except Exception: pass` arms around the S3 object deletes are what stop a bucket
+  refusing a delete from aborting a run that has already nulled the columns. The `raise` at the end is
+  the opposite decision for the opposite reason: the caller must not record the post as archived. And
+  the debug filename's random suffix is what lets a developer re-run the task without D1335's
+  overwrite.
+* **`log_cron_task_to_db` is the one task-session handler in this file that deliberately does NOT
+  re-raise.** It records that a cron task ran, so raising would make the bookkeeping the thing that
+  breaks the task. Both halves of that asymmetry now have rows.
+* **`instance_banned('')` answers True**, and the comment records the 2026-08-29 reversal: it
+  answered False until then, and with `instance_allowed`'s empty case answering True the pair failed
+  OPEN in both federation modes -- a banned instance evaded its ban by malforming its actor id.
+
+**Two survivors needed the assertion moved, and one could not be killed at all.**
+
+* `if cron_log:` cannot be distinguished by row count -- `CronJobLog.name` is unique, so the mutant's
+  INSERT loses the constraint and this function's own `except` swallows it, leaving one row either
+  way. The row now asserts `last_run` MOVES, which is the column the scheduler reads to decide
+  whether a task is overdue.
+* `instance_redirect_allowed`'s `if not domain: return False` is provably equivalent, and the reason
+  is the last line of the same function: `return not instance_banned(domain)`, which fails closed on
+  an absent domain. An unreadable host reaches False either way -- through the guard, or through two
+  more queries. Kept for those two queries on a hot path. Seeding `Instance(domain=None)` does not
+  distinguish them either.
+
+Also covered: the `:emoji:` substitution, which builds an `<img src=...>` from a value an admin
+configured and which no other row in the suite reaches because `allowlist_html` skips it under
+`test_env`; the empty-pattern guard beside it, without which `"|".join(())` would match at every
+character boundary of every rendered body; and `allowed_instance_domains`, whose emptiness is what
+turns allowlist federation OFF.
+
+Thirteen mutants dead, one provably equivalent, on a green baseline.
+
 **Next free number: D1434.**
