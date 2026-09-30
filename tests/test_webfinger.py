@@ -411,6 +411,37 @@ def test_a_local_only_community_is_not_served(app, db_session):
     assert response.status_code == 404
 
 
+def test_a_banned_community_is_not_served(app, db_session):
+    """D153, fixed. `banned=False` in the Community lookup, the guard the User
+    and Feed lookups beside it already carry. Community deletion bans the
+    community to hide it, so without this a deleted community stayed
+    resolvable. `banned` defaults to False, so it is set explicitly.
+    """
+    seed_local_actors()
+    community = make_community(name='books', host='test.piefed.local')
+    community.banned = True
+    db.session.commit()
+
+    response = webfinger_get(app, resource='acct:books@test.piefed.local')
+
+    assert response.status_code == 404
+
+
+def test_a_deleted_community_is_not_served(app, db_session):
+    """D153, fixed. `ap_deleted_at=None` in the Community lookup, the
+    soft-delete guard the Feed lookup already carries. It has no column
+    default, so it is set explicitly while `banned` stays False.
+    """
+    seed_local_actors()
+    community = make_community(name='books', host='test.piefed.local')
+    community.ap_deleted_at = utcnow()
+    db.session.commit()
+
+    response = webfinger_get(app, resource='acct:books@test.piefed.local')
+
+    assert response.status_code == 404
+
+
 def test_a_remote_community_is_not_served(app, db_session):
     """The lookup builds the profile id from OUR SERVER_URL, so a community
     published on another host cannot match it whatever its name.
