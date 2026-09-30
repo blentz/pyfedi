@@ -141,26 +141,19 @@ All four mutations were run one at a time and `app/activitypub/routes.py` was
 restored immediately after each, verified via `git diff --stat app/`
 producing no output for `app/` before this file's own change was committed.
 
-PROBE, routes.py:878 (`elif request_json['type'] == 'Update' and 'type' in
-request_json['object']:`): fed a Community (Group) actor an Update whose
-object is the string 'https://peer.example/some-type-of-thing' (contains the
-substring "type", so the membership test passes even though `object` is not
-a dict). OBSERVED: the very next line, `if request_json['object']['type'] ==
-'Group':`, indexes a str with a str and raises `TypeError: string indices
-must be integers, not 'str'`, uncaught inside process_inbox_request's own try
-block, propagating through routes.py:1885's `except Exception:
-session.rollback(); raise` and out of dispatch() -- a real, uncaught
-500-shaped failure for production's DEBUG branch, not a silent fall to any of
-the 882-892 refusals. No ActivityPubLog row is written. This is the campaign's
-most-cited defect class: a membership test is never a type test.
+D50, fixed (`elif request_json['type'] == 'Update' and 'type' in
+request_json['object']:`): a Community (Group) actor's Update whose object is
+the string 'https://peer.example/some-type-of-thing' passed that membership
+test on the substring "type" and then raised `TypeError: string indices must
+be integers` indexing the string, with no log row. The test is now guarded
+by an isinstance check, so a string object falls to the Group chain's
+'Unexpected activity from Group' refusal. A membership test is never a type
+test.
 
 D49, fixed (`if isinstance(actor_id, dict): actor_id = actor_id['id']`):
 a dict actor with no 'id' key (`{'type': 'Person'}`) used to raise
 `KeyError: 'id'` before any log_incoming_ap call was reachable. It is now
 refused with a logged failure before any actor lookup.
-
-Both probes assert the observed behaviour (`pytest.raises`); neither changes
-`app/`.
 
 TASK 8 -- the seam: three signed requests, through the real /inbox route.
 
@@ -688,34 +681,24 @@ def test_an_unexpected_activity_type_from_a_group_actor_is_refused(app, db_sessi
 
 def test_an_update_from_a_group_actor_whose_object_is_a_string_containing_type(
         app, db_session, monkeypatch):
-    """routes.py:878 -- `'type' in request_json['object']` is a membership
-    test, and a membership test is never a type test. The findings doc
-    states this rule in one line; it explains D13's original miss and D30's
-    surviving mutant. This test establishes what the code ACTUALLY does with
-    object='https://peer.example/some-type-of-thing' -- it does not assert a
-    fix.
-
-    OBSERVED: with a Community actor (the Group case) and an Update activity
-    whose object is that string (which contains the substring "type", so
-    `'type' in request_json['object']` is True as a substring test), the very
-    next line -- `if request_json['object']['type'] == 'Group':` -- indexes a
-    str with a str. Python raises `TypeError: string indices must be
-    integers, not 'str'` (exact wording depends on Python version). This is
-    NOT caught anywhere inside process_inbox_request's own try block; it
-    propagates through routes.py:1885's `except Exception: session.rollback();
-    raise` and out of the direct dispatch() call used throughout this file --
-    i.e. a real, uncaught 500-shaped failure for production's DEBUG branch,
-    not a silent fall to any of the refusals at 882-892. No ActivityPubLog
-    row is written for this activity at all, because log_incoming_ap is never
-    reached on this path.
+    """D50, fixed. `'type' in request_json['object']` is a membership test,
+    and a membership test is never a type test: for a string object that
+    contains the substring "type" it passed, and the next line indexed the
+    str with a str and raised TypeError, uncaught, with no log row. The
+    check now requires a dict, so this Update is refused as any other
+    unexpected activity from a Group is.
     """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     community = _seed_remote_group_community()
 
     activity = inbox_activity(community, activity_type='Update',
                               object='https://peer.example/some-type-of-thing')
 
-    with pytest.raises(TypeError, match='string indices must be integers'):
-        dispatch(activity)
+    dispatch(activity)
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Unexpected activity from Group'
 
 
 def test_an_activity_from_an_actor_that_is_neither_is_refused(app, db_session, monkeypatch):

@@ -885,7 +885,7 @@ def process_inbox_request(request_json, store_ap_json):
                         if request_json['type'] == 'Add' or request_json['type'] == 'Remove':
                             log_incoming_ap(id, APLOG_ADD, APLOG_IGNORED, saved_json, 'NodeBB Topic Management')
                             return
-                        elif request_json['type'] == 'Update' and 'type' in request_json['object']:
+                        elif request_json['type'] == 'Update' and isinstance(request_json['object'], dict) and 'type' in request_json['object']:
                             if request_json['object']['type'] == 'Group':
                                 community = actor  # process it same as Update/Group from Lemmy
                             elif request_json['object']['type'] == 'OrderedCollection':
