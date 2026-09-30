@@ -101,8 +101,13 @@ def csrf(app, client):
 # --------------------------------------------------------------------------
 
 
-def test_a_user_with_no_passkeys_is_told_they_have_none(app, db_session):
-    """Before the repair this message could not be produced at all:
+def test_a_user_with_no_passkeys_is_told_what_anyone_is_told(app, db_session):
+    """D888 residue, fixed (owner ruling 2026-09-30). This account used to get
+    'No passkeys found for alice', which told an unauthenticated caller the
+    account exists; it now gets the message an unknown name and a failed
+    assertion get.
+
+    P1's history: before its repair the old message could not be produced at all:
 
         PROBE h1 type: AppenderQuery
         PROBE h1 count: 0
@@ -126,7 +131,7 @@ def test_a_user_with_no_passkeys_is_told_they_have_none(app, db_session):
                                      'response': {}})
 
     assert response.get_json() == {'verified': False,
-                                   'message': 'No passkeys found for alice'}
+                                   'message': 'No valid passkeys found for alice'}
 
 
 def test_a_user_whose_passkeys_all_fail_is_told_none_are_valid(app, db_session):
