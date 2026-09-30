@@ -77,7 +77,9 @@ def passkey_verification():
         # False -- this message could never be produced. allowed_credentials
         # above already uses the correct spelling.
         if not user.passkeys.count():
-            error_message = f'No passkeys found for {username}'
+            # D888: the same answer as an unknown name or a failed assertion, so
+            # this endpoint cannot be used to test whether an account exists
+            error_message = f'No valid passkeys found for {username}'
         else:
             challenge = cache.get(f'challenge_{user.id}')
             success = False
