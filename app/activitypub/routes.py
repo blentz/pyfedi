@@ -2227,8 +2227,12 @@ def user_followers(actor):
 def comment_ap(comment_id):
     reply = db.session.get(PostReply, comment_id) or abort(404)
     if is_activitypub_request():
+        if not reply.is_local():
+            return redirect(reply.ap_id, code=301)
         if reply.community.local_only or reply.community.private:
             abort(403)
+        if reply.deleted:
+            return tombstone_response(reply.ap_id, 'Note')
         if reply.author.has_blocked_instance(find_instance_id(requestor_domain())):
             return make_response(f'Author has blocked {requestor_domain()}'), 401
         reply_data = comment_model_to_json(reply) if request.method == 'GET' else []
@@ -2246,6 +2250,14 @@ def comment_ap(comment_id):
         return continue_discussion(reply.post.id, comment_id)
 
 
+def tombstone_response(ap_id: str, former_type: str):
+    """410 Gone with an ActivityPub Tombstone for deleted content."""
+    resp = jsonify({'@context': default_context(), 'id': ap_id, 'type': 'Tombstone', 'formerType': former_type})
+    resp.status_code = 410
+    resp.content_type = 'application/activity+json'
+    return resp
+
+
 def post_ap_refusal(post: Post):
     """The response that refuses an ActivityPub fetch of `post` (or of its replies or context), or None to serve it.
 
@@ -2254,10 +2266,7 @@ def post_ap_refusal(post: Post):
     if post.community.local_only or post.community.private or post.status < POST_STATUS_PUBLISHED:
         abort(403)
     if post.deleted:
-        resp = jsonify({'@context': default_context(), 'id': post.ap_id, 'type': 'Tombstone', 'formerType': 'Page'})
-        resp.status_code = 410
-        resp.content_type = 'application/activity+json'
-        return resp
+        return tombstone_response(post.ap_id, 'Page')
     if post.author.has_blocked_instance(find_instance_id(requestor_domain())):
         return make_response(f'Author has blocked {requestor_domain()}'), 401
     return None
