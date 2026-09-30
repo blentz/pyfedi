@@ -24619,4 +24619,40 @@ distinguish it.
 
 Nine mutants dead, four provably equivalent, on a green baseline.
 
-**Next free number: D1425.**
+---
+
+## Round 255 -- the counters a ban leaves behind (D1425)
+
+**D1425 -- `find_instance_id`'s race arm returned the wrong kind of thing.** Every path in that
+function answers an id, except the one that fires when two inbox workers meet the same new peer
+in the same instant:
+
+```python
+        except IntegrityError:
+            db.session.rollback()
+            return db.session.query(Instance).filter_by(domain=server).one()
+```
+
+That is the Instance ROW. Every caller assigns the result to an `instance_id` and uses it as a
+foreign key or compares it to `InstanceBan.instance_id` -- a different value and a different
+type. The arm is rare by construction, which is why nothing had noticed. Fixed with `.id`, and the
+row that found it simulates the competing INSERT by having the first `commit()` insert the winner
+through the same session and then raise.
+
+**The bookkeeping either side of a ban's deletions.** `site_ban_remove_data` and
+`community_ban_remove_data` both decrement `child_count` on every ANCESTOR of a deleted nested
+reply -- `reply.path[:-1]`, which excludes the reply's own id, because it is being deleted rather
+than gaining a child. A row asserts the deleted reply's own count is untouched, which is what
+kills the mutant that drops the slice. Both also recalculate a deleted link post's cross-posts,
+so the other copies stop advertising a post that is gone.
+
+**The two functions differ on purpose and the rows say how.** A site ban ZEROES the account's
+`post_count` and `post_reply_count`, because everything they wrote is gone; a community ban
+DECREMENTS them, because their content elsewhere survives. And the visible reply count on a post
+comes down only `if not blocked.bot` -- a bot's replies were never counted towards it, so
+subtracting them would take the total below what any reader saw.
+
+Twelve mutants dead, one provably equivalent (the `rollback()` beside the race arm, fact 977's
+shape), on a green baseline.
+
+**Next free number: D1426.**

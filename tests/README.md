@@ -13655,3 +13655,12 @@ changes no answer -- they save a query. Do not chase the survivor; record it bes
 A row asserting `root_id` against a first-level reply passes even if the helper drops the value.
 Use a NESTED reply, and write one row per assignment site -- `find_reply_parent` sets it in both
 the hint branch and the fallback.
+
+**1019. TO DRIVE AN `except IntegrityError` ARM, HAVE THE PATCHED `commit()` INSERT THE COMPETING ROW.**
+Seeding the row first means the function finds it and never reaches the INSERT. Patch `db.session.commit` so
+its first call rolls back, inserts the winner, commits that, and THEN raises `IntegrityError` -- which is the
+order the losing worker actually sees.
+
+**1020. `reply.path[:-1]` EXCLUDES THE REPLY ITSELF, AND ONLY A ROW ABOUT THE REPLY PROVES IT.**
+The ban functions decrement `child_count` on every ancestor. Asserting the parent's count is right does not
+catch a mutant that drops the slice -- assert the deleted reply's own `child_count` is still 0.
