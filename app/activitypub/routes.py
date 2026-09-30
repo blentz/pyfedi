@@ -2124,7 +2124,8 @@ def community_featured(actor):
     actor = actor.strip()
     community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first()
     if community is not None:
-        posts = Post.query.filter_by(community_id=community.id, sticky=True, deleted=False).all()
+        posts = Post.query.filter_by(community_id=community.id, sticky=True, deleted=False).filter(
+            Post.status >= POST_STATUS_PUBLISHED).all()
 
         community_data = {
             "@context": default_context(),
