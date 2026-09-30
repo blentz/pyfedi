@@ -168,14 +168,14 @@ def test_the_feed_dropdown_escapes_the_title(app, db_session):
     assert body.startswith('<li><form method="post" action="/feed/add_community">')
 
 
-def test_the_feed_dropdown_offers_a_none_entry_when_the_community_is_in_a_feed(app, db_session):
-    """:419-420's guard, and the loop's skip at :425-426, in one test because
-    the skip's precondition is the guard's.
+def test_the_feed_dropdown_skips_the_current_feed_and_offers_no_dead_none_entry(app, db_session):
+    """The loop's skip of the current feed, and the "None" entry that is no
+    longer there (D664 sibling, fixed).
 
     Three feeds: the one the community is currently in (skipped), and two
-    others (listed). The href is asserted as a WHOLE STRING rather than by
-    fragment -- it carries four ids, and this campaign has watched adjacent ids
-    swap without a test noticing (D653).
+    others (listed). The form fields are asserted as a WHOLE STRING rather than
+    by fragment -- they carry three ids, and this campaign has watched adjacent
+    ids swap without a test noticing (D653).
     """
     instance, owner, snooper = _seed()
     # Decoys first: Feed and Community have separate sequences, so without them
@@ -200,9 +200,10 @@ def test_the_feed_dropdown_offers_a_none_entry_when_the_community_is_in_a_feed(a
                               f'&community_id={community.id}&current_feed_id={current.id}')
 
     body = response.get_data(as_text=True)
-    assert (f'<li><a class="dropdown-item" href="/feed/remove_community?user_id={owner.id}'
-            f'&new_feed_id=0&current_feed_id={current.id}'
-            f'&community_id={community.id}">None</li>') in body
+    # D664 sibling, fixed: the "None" item linked to /feed/remove_community,
+    # which upstream deleted (da20347da), so it was a dead link and is gone.
+    assert 'remove_community' not in body
+    assert '>None<' not in body
     # D664: adding is a POST form carrying a CSRF token, not a link
     assert '<form method="post" action="/feed/add_community">' in body
     assert 'name="csrf_token" value="' in body

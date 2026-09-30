@@ -155,10 +155,10 @@ def test_an_unknown_topic_aborts_before_the_line_that_looked_uncovered(app, publ
 
 
 def test_show_feed_dereferences_its_argument_long_before_the_uncovered_else(app, public):
-    """`app/feed/routes.py:628`, the same shape. `show_feed` has no route of its own -- the
+    """`app/feed/routes.py:623`, the same shape. `show_feed` has no route of its own -- the
     activitypub blueprint resolves the feed and calls it (`app/activitypub/routes.py:2765`)
-    -- and it reads `feed_readable_by(feed, ...)` at 493 and `feed.title` at 542 before
-    reaching `if current_feed:` at 548. A falsy feed raises long before the `else`.
+    -- and it reads `feed_readable_by(feed, ...)` at 488 and `feed.title` at 537 before
+    reaching `if current_feed:` at 543. A falsy feed raises long before the `else`.
 
     Read out of the source rather than driven, because driving it would mean calling
     `show_feed(None)` and asserting the AttributeError -- which pins the crash, not the
@@ -166,10 +166,10 @@ def test_show_feed_dereferences_its_argument_long_before_the_uncovered_else(app,
     """
     source = _lines('app/feed/routes.py')
 
-    assert 'feed_readable_by(feed' in source[492]
-    assert 'feed.title' in source[541]
-    assert source[547].strip() == 'if current_feed:'
-    assert source[627].strip() == 'abort(404)'
+    assert 'feed_readable_by(feed' in source[487]
+    assert 'feed.title' in source[536]
+    assert source[542].strip() == 'if current_feed:'
+    assert source[622].strip() == 'abort(404)'
 
 
 # --------------------------------------------------------------------------
