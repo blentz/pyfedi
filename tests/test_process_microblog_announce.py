@@ -79,9 +79,9 @@ def test_banned_actor_is_rejected_without_fetching(db_session, fetch_spy, follow
     actor object, which returns False for actor.banned (app/activitypub/actor.py
     lines 59-60), and find_actor_or_create() then returns None. So
     process_microblog_announce exits at the "Announce actor is not a known user"
-    branch, not at its own `if announcer.banned:` check -- that check is a
-    stale-cache backstop only reachable through a _find_actor_id_cached() entry
-    cached before the actor was banned, which this test does not construct.
+    branch, not at its own `if announcer.banned:` check -- that check is
+    defence in depth that the lookup now makes unreachable, a stale ID-cache
+    hit included (D59).
     """
     from app import db
     from app.activitypub.util import process_microblog_announce
