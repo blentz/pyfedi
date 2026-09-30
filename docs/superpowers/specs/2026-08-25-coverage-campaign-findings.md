@@ -24867,4 +24867,57 @@ before.
 
 Fourteen mutants, all dead, on a green baseline.
 
-**Next free number: D1427.**
+
+---
+
+## Round 262 -- the Content-Type a peer sends a thumbnail under
+
+`url_to_thumbnail_file` fetches an image a peer named and writes it under `app/static/media/posts`,
+which this instance serves. D1327 stopped the peer choosing the extension. What no row covered was
+how the header is READ.
+
+**D1427. The Content-Type was read case-sensitively, twice.** RFC 9110 section 8.3.1 makes a media
+type and its subtype case-insensitive, and both readings compared raw bytes:
+
+* `content_type.startswith('image')` -- so `Content-Type: IMAGE/PNG` failed the gate for the whole
+  block and the thumbnail was discarded with no log line at all.
+* `"svg" in content_type` -- so `image/SVG+XML`, which is what a peer serving an SVG may
+  legitimately send, missed the sanitiser. The extension then fell through the lowercase allowlist
+  to `.img`, where Pillow refused it.
+
+Neither was exploitable: the allowlist and Pillow between them meant the unsanitised bytes were
+dropped rather than served. Both are a peer's SPELLING deciding whether a fetch works. The header is
+now case-folded once, where it is read.
+
+**D1428. The second SVG sanitisation was then unreachable, and is deleted.** `if file_extension ==
+'.svg' and "svg" not in content_type: sanitize_svg_bytes(...)` stood below the extension map.
+`file_extension` is `'.svg'` only when the subtype is `svg`, the subtype is a substring of the
+content type, and a content type containing `svg` takes the arm above -- so after the case-fold
+nothing reaches it. Its one live input before the fold was the single spelling `image/SVG`, which now
+takes that arm too. `TestEverySvgIsSanitisedExactlyOnce` parametrises five spellings and asserts the
+script is gone from the stored bytes for each, which is what says the deletion removed no defence.
+
+Also covered: the `;`-parameter strip, which without it makes `image/png; charset=utf-8` an `.img`;
+the two `ExtraArgs` on the S3 arm, including `ACL: public-read`, which decides whether the object is
+world-readable; `guess_mime_type(temp_file_path)` rather than the peer's header as the stored
+`ContentType`, so the CDN does not hand back the content type the peer chose after the extension was
+taken away from it; and `discard_unsanitized_svg`, whose `os.path.isfile` guard stops `open(path,
+'wb')` CREATING the file it was asked to destroy.
+
+**Two survivors needed a different observable.** The allowlist fallback cannot be seen in the
+returned row -- the resize renames the path to the configured format and unlinks the original, so the
+peer-chosen name exists nowhere by the time the function returns. The row records what `Image.open`
+was handed instead. And `discard_unsanitized_svg`'s guard is invisible for a plain missing file,
+because without it `open` creates the file and `os.remove` then deletes it: the end state is
+identical. Put the path inside a directory that does not exist and the two differ -- silence with the
+guard, a logged `FileNotFoundError` without it.
+
+**One survivor is an environment equivalence.** `import pillow_avif` cannot be killed here, because
+Pillow 12.3 reads and writes AVIF natively (`PIL.features.check('avif')` is True) and the plugin is
+redundant. `requirements.txt` pins no Pillow version, so a deployment below 11.3 still needs it --
+the line stays, in this function and in the nine other copies under `app/`, one marked "do not
+remove".
+
+Eighteen mutants dead, one environment-equivalent, on a green baseline.
+
+**Next free number: D1429.**
