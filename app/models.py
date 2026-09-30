@@ -2204,6 +2204,16 @@ class User(UserMixin, db.Model):
                 {'file_id': file.id, 'user_id': self.id})
             if shared:
                 continue
+            # D1426. The cover/avatar loop below checks `User.cover_id` / `User.avatar_id`
+            # before deleting a File; this loop checked only OTHER USERS' `user_file`
+            # associations. So a file this account uploaded that another account references as
+            # its avatar or cover was deleted here, and the DELETE hit
+            # `user_avatar_id_fkey` -- a ForeignKeyViolation that aborts the whole
+            # `delete_dependencies` call, leaving the account half-deleted. Same check, same
+            # policy as the loop below.
+            if db.session.query(User).filter(
+                    or_(User.cover_id == file.id, User.avatar_id == file.id)).count() > 0:
+                continue
             file.delete_from_disk(purge_cdn=purge_cdn)
             db.session.delete(file)
         
