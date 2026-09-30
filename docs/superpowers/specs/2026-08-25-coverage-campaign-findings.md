@@ -25235,4 +25235,47 @@ turns allowlist federation OFF.
 
 Thirteen mutants dead, one provably equivalent, on a green baseline.
 
-**Next free number: D1434.**
+
+---
+
+## Round 270 -- a warning per render, and a duplicated fallback
+
+Twenty-two rows sweeping the last one-line arms across `app/models.py` and `app/utils.py`. Two of
+them turned up source defects, and the first was found by the suite's WARNING count rather than by a
+mutant.
+
+**D1434. `Feed.parent_feed_name` called `db.session.get(Feed, None)` for every top-level feed.**
+SQLAlchemy answers that with
+
+    SAWarning: fully NULL primary key identity cannot load any object. This
+    condition may raise an error in a future release.
+
+and `parent_feed_id` is NULL for most feeds, so it fired once per render of every one of them. The
+`if parent_feed else ""` below it already treated the answer as no parent; asking the question at all
+was the whole cost. Same guard, same reasoning as D1422 in `RssFeedItem.delete_dependencies`. The row
+asserts through `recwarn` rather than leaving it to the suite's warning count, so the repair is
+pinned where it is read. `Feed.path` beside it was already guarded with `while parent_id is not
+None`.
+
+**D1435. `guess_mime_type`'s first arm was unreachable, and duplicated the fallback below it.**
+`mimetypes.guess_type` returns a `(type, encoding)` TUPLE and never None, so `if content_type is
+None:` could not fire and the live test was always the tuple's own `[0] is None`. Both arms held the
+same two lines, kept in step by hand. Deleted.
+
+**The row that distinguishes those two arms cannot use an image extension.** The fallback answers
+`image/<ext>`, which is RIGHT for `.webp` and wrong for everything else -- so `if True:` survived
+until a row used `.json`. `archive_post` uploads a `.json.gz` through this function and the value
+becomes the object's `ContentType`, which is what a browser obeys.
+
+Also covered: all three remaining `if current_app.debug: <task>(...) else: <task>.delay(...)` pairs
+(the CDN purge, and the mirrored video and archived JSON deletes in `Post.delete_dependencies`,
+where a `delay` that is not queued is a file nothing will ever name again -- D1343's neighbourhood);
+`languages_for_form`'s arm for an account that HAS chosen reading languages, ordered by name because
+it is rendered as a select; `posts_with_blocked_images`, whose join is a HAMMING DISTANCE so it
+matches near-duplicates of a PDQ-hashed blocklist rather than exact bytes, with rows for the deleted
+and unhashed exclusions; and `show_reason_why_no_federation`, the only place somebody is told their
+own block means what they write here will never leave.
+
+Nineteen mutants, all dead, on a green baseline.
+
+**Next free number: D1436.**
