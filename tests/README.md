@@ -13840,3 +13840,14 @@ with a docstring saying the handler "looks unable to catch what an actual concur
 raise in production". Correcting the import made that test the suite's one failure. When a round fixes
 a class or a signature, grep the suite for rows written against the OLD one -- a green suite before
 the fix is not evidence the fix is wrong.
+
+**1054. AN UPSERT ON A UNIQUE COLUMN CANNOT BE TESTED BY ROW COUNT.**
+Dropping `log_cron_task_to_db`'s `if cron_log:` does not create a second `CronJobLog` row -- `name` is
+unique, the INSERT loses, and the function's own `except` swallows it. Assert the TIMESTAMP advances
+instead: set `last_run` to an old value, call, and require it to have moved.
+
+**1055. `archive_post`'s S3 ARM STORES A URL IN `Post.archived`, NOT A PATH.**
+`os.path.isfile(post.archived)` fails there. Assert the value starts with
+`https://{S3_PUBLIC_URL}/archived/`, and give the fake S3 client a `put_object` as well as a
+`delete_object` -- the archive itself is uploaded through the same connection whose deletes a test may
+be refusing.
