@@ -2538,6 +2538,9 @@ def process_poll_vote(user, store_ap_json, request_json, announced):
     saved_json = request_json if store_ap_json else None
     id = request_json['id']
     ap_id = request_json['object'] if not announced else request_json['object']['object']
+    if 'choice_text' not in (request_json if not announced else request_json['object']):
+        log_incoming_ap(id, APLOG_RATE, APLOG_FAILURE, saved_json, 'Poll vote has no choice_text')
+        return
     choice_text = request_json['choice_text'] if not announced else request_json['object']['choice_text']
     if isinstance(ap_id, dict) and 'id' in ap_id:
         ap_id = ap_id['id']
