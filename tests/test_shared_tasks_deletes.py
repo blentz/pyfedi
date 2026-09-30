@@ -1162,21 +1162,17 @@ def test_a_local_only_community_still_reaches_the_authors_followers(
     `:130` returns only when the author has NO followers -- so a POST delete by
     an author who DOES have followers passes both guards and goes on to reach
     them. That is the one state in which `:127` and `:130` differ from each
-    other, and no other test in this file constructs it.
+    other.
 
-    THE ROW COUNT COVERS BOTH SENDS, NOT JUST THE FAN-OUT. `local_only` does
-    not touch the remote-community branch at `:200-203` -- this test never
-    previously asserted anything about `community_route` or the total number
-    of sends, so a regression sending the community's own Delete twice (or the
-    fan-out twice) would have passed. As in the sibling test above, exactly
-    two sends happen here -- the remote community's direct Delete at `:202`
-    and the fan-out send at `:216` -- so `ActivityPubLog.count() == 2`, not
-    the `_delivered_inboxes` set, is what a duplicate of either send cannot
-    slip past.
+    D336, fixed: passing `:130` reaches ONLY the fan-out. The remote
+    community's own inbox is not sent to, as every other sender in
+    app/shared/tasks skips a `local_only` community outright -- so exactly one
+    send happens, and `ActivityPubLog.count() == 1` is what a community send
+    cannot slip past (no route is registered for PEER_INBOX, so it would fall
+    through to the empty router and still write its row).
     """
     s = _seed(local_community=False, with_keys=True)
     _make_deliverable(s)
-    community_route = http_mock.post(PEER_INBOX).respond(200, json={})
     fan_route, _inst, _fan = _personal_follower(s, http_mock)
     s.community.local_only = True
     db.session.commit()
@@ -1184,8 +1180,27 @@ def test_a_local_only_community_still_reaches_the_authors_followers(
     delete_post(None, s.user.id, s.post.id)
 
     assert _delivered_inboxes(fan_route) == {OTHER_INBOX}
-    assert len(community_route.calls) == 1
-    assert db.session.query(ActivityPubLog).count() == 2
+    assert db.session.query(ActivityPubLog).count() == 1
+
+
+def test_a_local_only_local_community_announces_nothing_to_its_followers(
+        db_session, http_mock):
+    """D336, fixed: a LOCAL `local_only` community whose author has followers
+    used to fall through to the Announce loop and send the Delete to every
+    `following_instances()` row. Now only the author's own followers are
+    reached; the following instance has no route, so an Announce would still
+    show up as a second `ActivityPubLog` row."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    _following_instance_without_a_mocked_route(s)
+    fan_route, _inst, _fan = _personal_follower(s, http_mock)
+    s.community.local_only = True
+    db.session.commit()
+
+    delete_post(None, s.user.id, s.post.id)
+
+    assert _delivered_inboxes(fan_route) == {OTHER_INBOX}
+    assert db.session.query(ActivityPubLog).count() == 1
 
 
 def test_delete_pm_sends_a_delete_to_the_remote_recipient(db_session, http_mock):
