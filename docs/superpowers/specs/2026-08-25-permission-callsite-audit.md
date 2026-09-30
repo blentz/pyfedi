@@ -193,6 +193,8 @@ only one of the five that is not simply "working as intended".
 
 ### F12 and Task 7 are the same defect from two directions
 
+**FIXED at `4abd7816`** (2026-09-30): `make_post` and `edit_post` pass the real poster, and the `'users'` rule honours it.
+
 Task 7 audited `can_upload_video` forward and found that its `'users'` branch
 **ignores its own injected user**: the condition is
 `not current_user.is_authenticated and user is None`, so the moment `user` is
