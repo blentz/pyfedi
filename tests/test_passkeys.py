@@ -15,8 +15,8 @@ One defect is pinned here and repaired with it:
 
 TWO SERIOUS SHAPES ARE REGISTERED RATHER THAN REPAIRED, both pinned here as the
 behaviour they are: the cloned-authenticator check is disabled (R1) and the
-options endpoint enumerates usernames (R2). R2 is now fixed (D888, owner
-ruling 2026-09-30). See the design note for why neither
+options endpoint enumerates usernames (R2). Both are now fixed (D886/D887
+and D888, owner ruling 2026-09-30). See the design note for why neither
 is a coverage round's call.
 
 THE WEBAUTHN LIBRARY IS MOCKED AT ITS BOUNDARY. Producing a real authenticator
@@ -27,9 +27,12 @@ ARGUMENTS asserted -- which for a security check is the behaviour, not a
 detail (the campaign's mock rule, since the call IS the thing under test).
 """
 import base64
+import importlib
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy import text
 from webauthn.helpers.exceptions import (InvalidAuthenticationResponse,
                                          InvalidRegistrationResponse)
 
@@ -59,6 +62,12 @@ def _passkey(user, device='phone', counter=0, passkey_id='aGVsbG8='):
     db.session.add(passkey)
     db.session.commit()
     return passkey
+
+
+def authenticated(new_sign_count=0):
+    """What verify_authentication_response returns: the login reads
+    `new_sign_count` from it and stores it (D886)."""
+    return SimpleNamespace(new_sign_count=new_sign_count)
 
 
 def login(client, user):
@@ -142,26 +151,17 @@ def test_a_user_whose_passkeys_all_fail_is_told_none_are_valid(app, db_session):
 
 
 # --------------------------------------------------------------------------
-# R1: the cloned-authenticator check, pinned as the behaviour it is
+# R1 (D886, fixed): the cloned-authenticator check
 # --------------------------------------------------------------------------
 
 
-def test_the_stored_signature_counter_is_not_checked(app, db_session):
-    """R1, and the reason it is registered rather than repaired.
-
-    WebAuthn's signature counter exists so a relying party can detect a CLONED
-    authenticator: the RP stores the last count and refuses a response that
-    does not exceed it. This application passes a hardcoded
-    `credential_current_sign_count=0`, so every count is acceptable -- while
-    maintaining the stored counter on every login.
-
-        PROBE h3 stored counter was 41; verify called with sign_count: 0
-        PROBE h3 counter after: 42
-
-    The value is written and never read. Repairing it needs a migration
-    decision, not a one-line change: the stored counters are themselves wrong,
-    incremented by one rather than set from the authenticator's reported count,
-    so switching the check on would reject real authenticators.
+def test_the_stored_signature_counter_is_checked_and_updated(app, db_session):
+    """D886, fixed (owner ruling 2026-09-30). The login passed a hardcoded
+    `credential_current_sign_count=0`, so WebAuthn's cloned-authenticator check
+    accepted every count, and then did `counter += 1`. It now passes the stored
+    counter, so the library refuses a count that does not exceed it (both 0 is
+    allowed: an authenticator with no counter), and stores the count the
+    authenticator reported.
     """
     instance, alice = _seed()
     _passkey(alice, counter=41)
@@ -169,14 +169,51 @@ def test_the_stored_signature_counter_is_not_checked(app, db_session):
 
     with patch('app.auth.passkeys.parse_authentication_credential_json',
                return_value='CRED'):
-        with patch('app.auth.passkeys.verify_authentication_response') as verify:
-            client.post('/auth/passkeys/login_verification',
-                        json={'username': 'alice', 'redirect': '/', 'response': {}})
+        with patch('app.auth.passkeys.verify_authentication_response',
+                   return_value=authenticated(57)) as verify:
+            response = client.post('/auth/passkeys/login_verification',
+                                   json={'username': 'alice', 'redirect': '/', 'response': {}})
 
-    assert verify.call_args.kwargs['credential_current_sign_count'] == 0
-
+    assert response.get_json()['verified'] is True
+    assert verify.call_args.kwargs['credential_current_sign_count'] == 41
     db.session.expire_all()
-    assert Passkey.query.filter_by(user_id=alice.id).first().counter == 42
+    assert Passkey.query.filter_by(user_id=alice.id).first().counter == 57
+
+
+def test_a_regressed_signature_counter_is_refused(app, db_session):
+    """D886: the library's refusal of a count that did not advance is a failed
+    login like any other, and the stored counter is left alone."""
+    instance, alice = _seed()
+    _passkey(alice, counter=41)
+    client = app.test_client()
+
+    with patch('app.auth.passkeys.parse_authentication_credential_json',
+               return_value='CRED'):
+        with patch('app.auth.passkeys.verify_authentication_response',
+                   side_effect=InvalidAuthenticationResponse('count 3 not greater than 41')):
+            response = client.post('/auth/passkeys/login_verification',
+                                   json={'username': 'alice', 'redirect': '/', 'response': {}})
+
+    assert response.get_json()['verified'] is False
+    db.session.expire_all()
+    assert Passkey.query.filter_by(user_id=alice.id).first().counter == 41
+
+
+def test_the_migration_resets_every_invented_counter(app, db_session):
+    """D886: every stored counter was made up by `counter += 1` rather than
+    reported by an authenticator, and a counter-less (synced) passkey reports 0
+    forever -- checked against 41 it would be locked out. The migration sets them
+    all to 0, from where the real counts are tracked."""
+    instance, alice = _seed()
+    _passkey(alice, counter=41)
+    _passkey(alice, counter=3, passkey_id='d29ybGQ=')
+    migration = importlib.import_module('migrations.versions.9c3e5a1d7b20_passkey_counter_reset')
+
+    with patch.object(migration.op, 'execute', side_effect=lambda sql: db.session.execute(text(sql))):
+        migration.upgrade()
+    db.session.commit()
+
+    assert [p.counter for p in Passkey.query.filter_by(user_id=alice.id)] == [0, 0]
 
 
 def test_a_successful_login_stamps_the_passkey_as_used(app, db_session):
@@ -191,7 +228,8 @@ def test_a_successful_login_stamps_the_passkey_as_used(app, db_session):
 
     with patch('app.auth.passkeys.parse_authentication_credential_json',
                return_value='CRED'):
-        with patch('app.auth.passkeys.verify_authentication_response'):
+        with patch('app.auth.passkeys.verify_authentication_response',
+                   return_value=authenticated()):
             client.post('/auth/passkeys/login_verification',
                         json={'username': 'alice', 'redirect': '/', 'response': {}})
 
@@ -344,7 +382,8 @@ def test_a_valid_passkey_logs_the_owner_in(app, db_session):
 
     with patch('app.auth.passkeys.parse_authentication_credential_json',
                return_value='CRED'):
-        with patch('app.auth.passkeys.verify_authentication_response'):
+        with patch('app.auth.passkeys.verify_authentication_response',
+                   return_value=authenticated()):
             response = client.post('/auth/passkeys/login_verification',
                                    json={'username': 'alice', 'redirect': '/feed',
                                          'response': {}})
@@ -371,7 +410,8 @@ def test_the_login_is_verified_against_this_host_and_challenge(app, db_session):
     with patch('app.auth.passkeys.cache.get', return_value='CHALLENGE'):
         with patch('app.auth.passkeys.parse_authentication_credential_json',
                    return_value='CRED'):
-            with patch('app.auth.passkeys.verify_authentication_response') as verify:
+            with patch('app.auth.passkeys.verify_authentication_response',
+                   return_value=authenticated()) as verify:
                 client.post('/auth/passkeys/login_verification',
                             json={'username': 'alice', 'redirect': '/',
                                   'response': {}})
@@ -394,7 +434,8 @@ def test_a_passkey_login_is_remembered(app, db_session):
 
     with patch('app.auth.passkeys.parse_authentication_credential_json',
                return_value='CRED'):
-        with patch('app.auth.passkeys.verify_authentication_response'):
+        with patch('app.auth.passkeys.verify_authentication_response',
+                   return_value=authenticated()):
             response = client.post('/auth/passkeys/login_verification',
                                    json={'username': 'alice', 'redirect': '/',
                                          'response': {}})
@@ -412,7 +453,8 @@ def test_a_login_with_no_redirect_goes_to_the_front_page(app, db_session):
 
     with patch('app.auth.passkeys.parse_authentication_credential_json',
                return_value='CRED'):
-        with patch('app.auth.passkeys.verify_authentication_response'):
+        with patch('app.auth.passkeys.verify_authentication_response',
+                   return_value=authenticated()):
             response = client.post('/auth/passkeys/login_verification',
                                    json={'username': 'alice', 'redirect': '',
                                          'response': {}})
@@ -430,7 +472,7 @@ def test_the_second_passkey_is_tried_when_the_first_fails(app, db_session):
     _passkey(alice, device='laptop', passkey_id=base64.b64encode(b'two').decode())
     client = app.test_client()
 
-    attempts = [InvalidAuthenticationResponse('first one is not this device'), None]
+    attempts = [InvalidAuthenticationResponse('first one is not this device'), authenticated()]
 
     with patch('app.auth.passkeys.parse_authentication_credential_json',
                return_value='CRED'):
@@ -473,7 +515,8 @@ def test_a_public_key_stored_as_bytes_is_used_as_it_is(app, db_session):
 
     with patch('app.auth.passkeys.parse_authentication_credential_json',
                return_value='CRED'):
-        with patch('app.auth.passkeys.verify_authentication_response') as verify:
+        with patch('app.auth.passkeys.verify_authentication_response',
+                   return_value=authenticated()) as verify:
             client.post('/auth/passkeys/login_verification',
                         json={'username': 'alice', 'redirect': '/', 'response': {}})
 
@@ -647,7 +690,8 @@ def test_registering_a_passkey_stores_it_against_the_owner(app, db_session):
     client = app.test_client()
     login(client, alice)
     verification = type('Verification', (), {'credential_id': b'newcred',
-                                             'credential_public_key': b'newkey'})()
+                                             'credential_public_key': b'newkey',
+                                             'sign_count': 0})()
 
     with patch('app.user.passkeys.parse_registration_credential_json',
                return_value='CRED'):
@@ -691,7 +735,8 @@ def test_the_registration_is_verified_against_this_host(app, db_session):
     client = app.test_client()
     login(client, alice)
     verification = type('Verification', (), {'credential_id': b'c',
-                                             'credential_public_key': b'k'})()
+                                             'credential_public_key': b'k',
+                                             'sign_count': 0})()
 
     with patch('app.user.passkeys.parse_registration_credential_json',
                return_value='CRED'):
@@ -704,13 +749,10 @@ def test_the_registration_is_verified_against_this_host(app, db_session):
     assert verify.call_args.kwargs['expected_origin'] == 'https://test.piefed.local'
 
 
-def test_the_registration_does_not_store_the_authenticators_sign_count(app, db_session):
-    """R4, pinned as the behaviour it is: `registration_verification.sign_count`
-    is available and discarded, so every credential starts at the column
-    default of 0 however many times its authenticator has been used. The other
-    half of R1 -- the counter this application keeps was never the
-    authenticator's.
-    """
+def test_the_registration_stores_the_authenticators_sign_count(app, db_session):
+    """D887, fixed (owner ruling 2026-09-30): `registration_verification.sign_count`
+    was discarded, so every credential started at 0 however many times its
+    authenticator had been used. It is the starting counter now."""
     instance, alice = _seed()
     client = app.test_client()
     login(client, alice)
@@ -725,4 +767,4 @@ def test_the_registration_does_not_store_the_authenticators_sign_count(app, db_s
             client.post('/user/passkeys/registration/verification',
                         json={'response': {}, 'device': 'laptop'})
 
-    assert Passkey.query.filter_by(user_id=alice.id).first().counter == 0
+    assert Passkey.query.filter_by(user_id=alice.id).first().counter == 97

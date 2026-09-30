@@ -113,7 +113,8 @@ def user_passkey_verification():
     # Store the raw public key bytes directly (SQLAlchemy will handle binary data)
     db.session.add(Passkey(passkey_id=credential_id_b64, user_id=current_user.id,
                            public_key=registration_verification.credential_public_key,
-                           device=registration_device))
+                           device=registration_device,
+                           counter=registration_verification.sign_count))  # D887
     db.session.commit()
     flash(f'{registration_device} passkey registered. Next time you log in, click LOG IN WITH PASSKEY.')
     return current_user.user_name
