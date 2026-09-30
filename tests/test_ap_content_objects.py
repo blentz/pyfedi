@@ -83,9 +83,8 @@ def _double_the_delegates(monkeypatch):
 
 
 def test_a_comment_is_served_as_activitypub_json(app, db_session, monkeypatch):
-    """`comment_ap`'s ordinary path. Unlike `post_ap` it has NO `is_local()`
-    check, so it serves ANY reply it can resolve -- including a remote one,
-    which is registered rather than pinned here.
+    """`comment_ap`'s ordinary path, for a local reply. A remote reply is
+    redirected to its origin instead (D191), as `post_ap` does for a post.
 
     `Cache-Control` is 120, matching `post_ap` and differing from
     `post_replies_ap` and `post_ap_context`, which both use 15.
@@ -166,6 +165,63 @@ def test_a_comment_in_a_private_community_is_403(app, db_session, monkeypatch):
     community.private = True
     db.session.commit()
     reply = make_post_reply(post, author)
+
+    response = ap_get(app, f'/comment/{reply.id}')
+
+    assert response.status_code == 403
+
+
+def test_a_remote_comment_redirects_to_its_origin(app, db_session, monkeypatch):
+    """D191, fixed. Mirrors `post_ap`: a reply whose `ap_id` is on another host
+    is 301-redirected there, so the origin stays authoritative for it, where
+    before its JSON was re-served from here.
+    """
+    calls = _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    reply = make_post_reply(post, author)
+    reply.ap_id = 'https://peer.example/comment/9'
+    db.session.commit()
+
+    response = ap_get(app, f'/comment/{reply.id}')
+
+    assert response.status_code == 301
+    assert response.headers['Location'] == 'https://peer.example/comment/9'
+    assert calls['comment_model_to_json'] == []
+
+
+def test_a_deleted_comment_is_410_with_a_tombstone(app, db_session, monkeypatch):
+    """D191, fixed. A soft-deleted local reply answers 410 with a `Tombstone`,
+    as a deleted post does, where before it was served in full. `deleted` is
+    set explicitly; `make_post_reply` sets it False.
+    """
+    calls = _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    reply = make_post_reply(post, author)
+    reply.ap_id = f'https://test.piefed.local/comment/{reply.id}'
+    reply.deleted = True
+    db.session.commit()
+
+    response = ap_get(app, f'/comment/{reply.id}')
+
+    assert response.status_code == 410
+    assert response.content_type == 'application/activity+json'
+    assert response.json['type'] == 'Tombstone'
+    assert response.json['formerType'] == 'Note'
+    assert response.json['id'] == reply.ap_id
+    assert calls['comment_model_to_json'] == []
+
+
+def test_a_deleted_comment_in_a_private_community_is_403_not_410(app, db_session, monkeypatch):
+    """D191, fixed. The visibility gate runs before the deleted gate, so a
+    Tombstone never confirms that a reply existed where the caller may not see.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    community.private = True
+    db.session.commit()
+    reply = make_post_reply(post, author)
+    reply.deleted = True
+    db.session.commit()
 
     response = ap_get(app, f'/comment/{reply.id}')
 
@@ -474,9 +530,8 @@ def test_a_remote_post_redirects_to_its_origin(app, db_session, monkeypatch):
     ap_id.startswith(SERVER_URL)` (app/models.py), so a remote `ap_id` on a
     DIFFERENT host is what makes it false.
 
-    This is an asymmetry, not just a branch: `comment_ap` has no `is_local()`
-    check at all and re-serves a remote reply's JSON as though this instance
-    were authoritative for it. Registered, not fixed.
+    `comment_ap` does the same for a remote reply since D191; see
+    `test_a_remote_comment_redirects_to_its_origin`.
     """
     _double_the_delegates(monkeypatch)
     site, instance = seed_actors()
