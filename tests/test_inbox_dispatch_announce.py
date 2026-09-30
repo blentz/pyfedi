@@ -210,23 +210,22 @@ def test_an_ordered_collection_without_ordered_items_is_refused(app, db_session,
     assert log.exception_message == 'Announced OrderedCollection has no orderedItems list'
 
 
-def test_an_announce_whose_inner_object_has_no_actor(app, db_session, monkeypatch):
-    """routes.py:915 -- `request_json['object']['actor']`, unguarded, on a
-    peer-supplied inner object, reached whenever `feed` is falsy (914).
-
-    OBSERVED: with object={} (a dict, so it skips the str/list/
-    OrderedCollection arms above it, but carries no 'actor' key), the line
-    raises `KeyError: 'actor'` immediately, uncaught inside
-    process_inbox_request's own try block -- the same uncaught 500-shaped
-    failure as the probe above, not a fall to the 920-922 refusal. No
-    ActivityPubLog row is written.
+def test_an_announce_whose_inner_object_has_no_actor_is_refused(app, db_session, monkeypatch):
+    """D52, fixed. When `feed` is falsy the unwrap reads the inner object's
+    'actor' to find the user. An inner dict with no 'actor' key (object={},
+    which skips the str/list/OrderedCollection arms) raised KeyError there,
+    uncaught, with no log row. It is now refused and logged.
     """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community = _seed_announcing_community()
 
     activity = inbox_activity(community, activity_type='Announce', object={})
 
-    with pytest.raises(KeyError, match='actor'):
-        dispatch(activity)
+    dispatch(activity)
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Announce object has no actor'
 
 
 # --- Step 4: the inner-actor walk and what it sets ---

@@ -925,6 +925,9 @@ def process_inbox_request(request_json, store_ap_json):
                             process_inbox_request(fake_activity, store_ap_json)  # Process the Announce (with single object) as normal
                         return
                     if not feed:
+                        if 'actor' not in request_json['object']:
+                            log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json, 'Announce object has no actor')
+                            return
                         user = find_actor_or_create_cached(request_json['object']['actor'])
                         if user and isinstance(user, User):
                             if user.banned:
