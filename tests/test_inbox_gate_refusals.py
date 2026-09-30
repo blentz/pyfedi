@@ -211,28 +211,14 @@ Rows 7 and 8 are the pair Task 2's AST derivation flagged as sharing one
 `return '', 200` (line 663) -- distinguishable only by `exception_message`,
 which is exactly what the tests below assert on instead of the status code.
 
-OrderedCollection exemption -- a finding, not a test of correct behaviour
--------------------------------------------------------------------------
-`object_has_missing_fields` (app/activitypub/util.py:4659-4663) returns
-False for ANY object typed `OrderedCollection`, unconditionally:
-
-    if 'type' in object and object['type'] == 'OrderedCollection':
-        return False
-
-No other key is checked. So an Announce whose object is `{'type':
-'OrderedCollection'}` -- no `id`, no `actor`, no `object` -- passes the
-field check at routes.py:657 and falls through. The very next line inside
-that same `if request_json['type'] == 'Announce'...` block that still
-executes is routes.py:671, `id = object['id']`, which raises `KeyError:
-'id'` because this object has no `id` key at all. Flask's test app runs with
-`TESTING = True` and no `PROPAGATE_EXCEPTIONS` override, so the exception
-propagates out of `client.post(...)` rather than being turned into a 500
-response -- confirmed by running the test below, not assumed. The test
-demonstrates reachability (a `pytest.raises(KeyError)` around the POST) and
-is deliberately NOT written as a refusal test: there is no `exception_
-message` to assert here, because `log_incoming_ap` is never reached on this
-path. This is an unhandled-exception defect for the register (Task 8), not
-something this sub-project fixes.
+OrderedCollection exemption (D42, fixed)
+----------------------------------------
+`object_has_missing_fields` exempts an object typed `OrderedCollection` from
+the actor/object check, since a collection has neither. It used to exempt it
+from the `id` check too, so an Announce of a bare `{'type':
+'OrderedCollection'}` passed the field check and then raised `KeyError:
+'id'` at `id = object['id']` a few lines later, with no log row. The
+exemption now still requires `id`, and such an Announce is refused as row 8.
 
 Note for Tasks 4-5 (this same file): the local-content check (row 9,
 routes.py:665-669) sits AFTER `object_has_missing_fields`, so any test of it
@@ -532,43 +518,27 @@ def test_an_announce_of_local_content_is_dropped(app, signing_peer, monkeypatch)
     assert ActivityPubLog.query.one().exception_message == 'Activity about local content which is already present'
 
 
-def test_an_announce_of_an_ordered_collection_is_not_refused_by_the_field_check(app, signing_peer, monkeypatch):
-    """FINDING, not a refusal test: object_has_missing_fields returns False
-    for ANY OrderedCollection-typed object without checking id/actor/object
-    (app/activitypub/util.py:4661-4662), so this Announce -- wrapping an
-    object with no id, no actor, no object, nothing but 'type' -- is not
-    caught at routes.py:657 and falls through. The very next statement still
-    inside that Announce branch, routes.py:671 (`id = object['id']`), then
-    raises KeyError, because this object has no 'id' either. There is no
-    exception_message to assert here: log_incoming_ap is never reached on
-    this path, and TESTING=True (no PROPAGATE_EXCEPTIONS override) lets that
-    KeyError propagate out of the test client rather than becoming a 500.
-    Reported for the defect register (Task 8, D42), not fixed here.
+def test_an_announce_of_an_ordered_collection_with_no_id_is_refused(app, signing_peer, monkeypatch):
+    """D42, fixed. object_has_missing_fields exempts OrderedCollection-typed
+    objects from the id/actor/object check, because a collection legitimately
+    has no actor or object of its own -- but the very next statement in the
+    Announce branch, `id = object['id']`, still needs an id. An Announce
+    wrapping `{'type': 'OrderedCollection'}` and nothing else used to pass the
+    field check and then raise KeyError: 'id' with no log row. The exemption
+    now still requires an id, so this is refused with the same logged 200 as
+    any other Announce object missing its minimum fields.
 
-    Two assertions beyond `pytest.raises`, both added by a whole-branch
-    review:
-
-    - The KeyError is qualified. D42's entire claim is that the crash is
-      `object['id']` at routes.py:671 -- a bare `pytest.raises(KeyError)`
-      would be satisfied by a KeyError raised anywhere in the request,
-      including from a future unrelated dict access, so `args[0] == 'id'`
-      is what actually ties the test to the reported defect.
-    - No ActivityPubLog row is written, WITH logging enabled. The point of
-      D42 is that this path crashes instead of producing one of the gate's
-      normal logged refusals; asserting the count without setting
-      `LOG_ACTIVITYPUB_TO_DB` would assert nothing at all, since the flag
-      defaults to False and every other refusal in this file would also
-      write zero rows under it.
+    LOG_ACTIVITYPUB_TO_DB is enabled so the one-row assertion is meaningful:
+    with the flag at its default of False no refusal writes a row.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     activity = inbox_activity(signing_peer, activity_type='Announce', object={'type': 'OrderedCollection'})
 
     with app.test_client() as client:
-        with pytest.raises(KeyError) as excinfo:
-            client.post('/inbox', json=activity)
+        response = client.post('/inbox', json=activity)
 
-    assert excinfo.value.args[0] == 'id'
-    assert ActivityPubLog.query.count() == 0
+    assert response.status_code == 200
+    assert ActivityPubLog.query.one().exception_message == 'Missing minimum expected fields in JSON Announce object'
 
 
 def test_a_disallowed_actor_is_refused_under_strong_allowlist(app, signing_peer, monkeypatch):

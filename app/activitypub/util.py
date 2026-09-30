@@ -5277,5 +5277,5 @@ def proactively_delete_content(community: Community, ap_id: str):
 def object_has_missing_fields(object):
     # Validate the 'object' part of an Activity
     if 'type' in object and object['type'] == 'OrderedCollection':
-        return False
+        return not 'id' in object  # a collection has no actor/object, but the inbox still reads its id (D42)
     return not 'id' in object or not 'type' in object or not 'actor' in object or not 'object' in object
