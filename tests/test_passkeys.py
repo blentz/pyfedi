@@ -15,7 +15,8 @@ One defect is pinned here and repaired with it:
 
 TWO SERIOUS SHAPES ARE REGISTERED RATHER THAN REPAIRED, both pinned here as the
 behaviour they are: the cloned-authenticator check is disabled (R1) and the
-options endpoint enumerates usernames (R2). See the design note for why neither
+options endpoint enumerates usernames (R2). R2 is now fixed (D888, owner
+ruling 2026-09-30). See the design note for why neither
 is a coverage round's call.
 
 THE WEBAUTHN LIBRARY IS MOCKED AT ITS BOUNDARY. Producing a real authenticator
@@ -199,27 +200,30 @@ def test_a_successful_login_stamps_the_passkey_as_used(app, db_session):
 
 
 # --------------------------------------------------------------------------
-# R2: the options endpoint and username enumeration
+# R2 (D888, fixed): the options endpoint and username enumeration
 # --------------------------------------------------------------------------
 
 
-def test_the_options_endpoint_names_an_unknown_user(app, db_session):
-    """R2, pinned as the behaviour it is rather than endorsed.
-
-        PROBE h2 unknown status: 200 body: {"error":"Could not find user nobody"}
-
-    An unauthenticated caller can therefore test whether an account exists. The
-    VERIFICATION endpoint in the same file deliberately does not do this -- it
-    answers 'No valid passkeys found for …' whether the user is missing or
-    merely has no working credential -- so the asymmetry is between two
-    endpoints written by the same hand.
+def test_the_options_endpoint_answers_an_unknown_user_like_a_known_one(app, db_session):
+    """D888, fixed. The endpoint used to answer
+    {"error": "Could not find user nobody"}, so an unauthenticated caller could
+    test whether an account exists. An unknown name now gets options of the same
+    status and shape as a real account's, offering no credential, and the login
+    then fails with the verification endpoint's generic message.
     """
     _seed()
     client = app.test_client()
 
-    response = client.post('/auth/passkeys/login_options', json={'username': 'nobody'})
+    with patch('app.auth.passkeys.cache.set') as cache_set:
+        unknown = client.post('/auth/passkeys/login_options', json={'username': 'nobody'})
+        known = client.post('/auth/passkeys/login_options', json={'username': 'alice'})
 
-    assert response.get_json() == {'error': 'Could not find user nobody'}
+    assert unknown.status_code == known.status_code == 200
+    assert unknown.content_type == known.content_type
+    assert set(unknown.get_json()) == set(known.get_json())
+    assert unknown.get_json()['allowCredentials'] == []
+    # Nobody to cache a challenge for: only alice's request stored one.
+    assert cache_set.call_count == 1
 
 
 def test_the_verification_endpoint_does_not_name_an_unknown_user(app, db_session):
@@ -277,18 +281,23 @@ def test_a_user_can_be_found_by_email(app, db_session):
     ('banned', True),
     ('ap_id', 'alice@remote.example'),
 ])
-def test_a_banned_or_remote_account_gets_no_challenge(app, db_session, column, value):
+def test_a_banned_or_remote_account_gets_no_usable_challenge(app, db_session, column, value):
     """The two filters beside the name match. A remote account has no local
-    credential to offer, and a banned one must not be handed a login path.
+    credential to offer, and a banned one must not be handed a login path --
+    it is answered exactly as an unknown name is (D888): options offering no
+    credential, with no challenge stored against the account.
     """
     instance, alice = _seed()
+    _passkey(alice)
     setattr(alice, column, value)
     db.session.commit()
     client = app.test_client()
 
-    response = client.post('/auth/passkeys/login_options', json={'username': 'alice'})
+    with patch('app.auth.passkeys.cache.set') as cache_set:
+        response = client.post('/auth/passkeys/login_options', json={'username': 'alice'})
 
-    assert 'error' in response.get_json()
+    assert response.get_json()['allowCredentials'] == []
+    assert cache_set.call_args_list == []
 
 
 # --------------------------------------------------------------------------
