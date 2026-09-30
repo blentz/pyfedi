@@ -4,8 +4,9 @@ MEASUREMENT BASIS. Before this file existed the module carried 44 missing
 statements and 31 missing arcs on the full-suite --cov=app run at 97a56e713.
 
 THE SLEEP. search_for_feed retries a failed webfinger after
-`sleep(randint(3, 10))`, on the request thread. Every test that reaches that
-path patches app.feed.util.sleep, or the suite pays ten seconds a row.
+`sleep(randint(3, 10))` only when a Celery caller passes `retry=True` (D738);
+request-path callers never sleep. Tests that reach the retry patch
+app.feed.util.sleep, or the suite pays ten seconds a row.
 """
 import httpx
 import pytest
@@ -223,14 +224,24 @@ def test_a_links_entry_that_is_not_an_object_is_skipped(app, db_session):
     assert found.id == feed.id
 
 
-def test_a_webfinger_failure_is_retried_once_after_a_sleep(app, db_session):
-    """:58-67. One HTTPError is retried after `sleep(randint(3, 10))`; a second
-    gives up and returns None.
+def test_a_webfinger_failure_on_the_request_path_is_not_retried(app, db_session):
+    """D738, fixed. A failed webfinger used to sleep 3-10 seconds on the
+    request thread and retry. By default it now gives up at once."""
+    _seed()
 
-    The sleep is patched -- it runs on the request thread, and the suite would
-    otherwise pay up to ten seconds for this test alone (registered as R1).
-    Both the retry and the give-up are asserted through the call count.
-    """
+    with app.test_request_context('/'):
+        with patch('app.feed.util.sleep') as slept, \
+                patch('app.feed.util.get_request',
+                      side_effect=httpx.HTTPError('boom')) as get:
+            assert search_for_feed('~remotefeed@remote.example') is None
+        assert slept.call_count == 0
+        assert get.call_count == 1
+
+
+def test_a_webfinger_failure_is_retried_once_after_a_sleep_when_asked(app, db_session):
+    """`retry=True`, which the Celery caller passes: one HTTPError is retried
+    after `sleep(randint(3, 10))`; a second gives up and returns None. Both are
+    asserted through the call count."""
     _seed()
 
     with app.test_request_context('/'):
@@ -239,7 +250,7 @@ def test_a_webfinger_failure_is_retried_once_after_a_sleep(app, db_session):
                       side_effect=[httpx.HTTPError('boom'), _webfinger_response(),
                                    _actor_response()]) as get, \
                 patch('app.feed.util.actor_json_to_model', return_value=None):
-            assert search_for_feed('~remotefeed@remote.example') is None
+            assert search_for_feed('~remotefeed@remote.example', retry=True) is None
         assert slept.call_count == 1
         assert get.call_count == 3
 
@@ -247,7 +258,7 @@ def test_a_webfinger_failure_is_retried_once_after_a_sleep(app, db_session):
         with patch('app.feed.util.sleep') as slept, \
                 patch('app.feed.util.get_request',
                       side_effect=httpx.HTTPError('boom')) as get:
-            assert search_for_feed('~remotefeed@remote.example') is None
+            assert search_for_feed('~remotefeed@remote.example', retry=True) is None
         assert slept.call_count == 1
         assert get.call_count == 2
 

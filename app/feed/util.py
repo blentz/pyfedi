@@ -35,7 +35,7 @@ def feeds_for_form_children(feeds, current_feed: int, depth: int) -> List[Tuple[
     return result
 
 
-def search_for_feed(address: str, allow_fetch: bool = True):
+def search_for_feed(address: str, allow_fetch: bool = True, retry: bool = False):
     if address.startswith('~'):
         # Exactly two parts, or the address is not one: '~a@b@c' used to raise
         # ValueError out of this unpacking, and feed_add_remote's first arm
@@ -66,6 +66,9 @@ def search_for_feed(address: str, allow_fetch: bool = True):
             webfinger_data = get_request(f"https://{server}/.well-known/webfinger",
                                          params={'resource': f"acct:{address}"})  # include the ~ on the start to indicate we're searching for a feed
         except httpx.HTTPError:
+            # only a Celery caller passes retry; the request thread must not sleep
+            if not retry:
+                return None
             sleep(randint(3, 10))
             try:
                 webfinger_data = get_request(f"https://{server}/.well-known/webfinger",
