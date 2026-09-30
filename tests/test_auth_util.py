@@ -24,8 +24,7 @@ import httpx
 import pytest
 
 from app import cache, db
-from app.auth.util import (check_user_finished_onboarding,
-                           configure_bandwidth_cookies, create_new_user_from_ldap,
+from app.auth.util import (configure_bandwidth_cookies, create_new_user_from_ldap,
                            create_registration_application, get_country,
                            get_font_preference, handle_user_application,
                            ip2location, no_admins_logged_in_recently,
@@ -632,32 +631,6 @@ def test_the_registration_form_is_handed_the_site(app, env):
 # --------------------------------------------------------------------------
 
 
-def test_somebody_who_has_joined_something_has_finished_onboarding(app, env):
-    client, founder = env
-    community = make_community('general')
-    make_community_member(founder, community)
-    founder.finished_onboarding = False
-    db.session.commit()
-
-    with app.test_request_context('/'):
-        with patch('app.auth.util.current_user', founder):
-            check_user_finished_onboarding()
-
-    assert founder.finished_onboarding is True
-
-
-def test_somebody_who_has_joined_nothing_has_not(app, env):
-    client, founder = env
-    founder.finished_onboarding = False
-    db.session.commit()
-
-    with app.test_request_context('/'):
-        with patch('app.auth.util.current_user', founder):
-            check_user_finished_onboarding()
-
-    assert founder.finished_onboarding is False
-
-
 @pytest.mark.parametrize('low_bandwidth,expected', [(True, '1'), (False, '0')])
 def test_the_bandwidth_choice_is_remembered(app, env, low_bandwidth, expected):
     client, founder = env
@@ -815,17 +788,13 @@ def test_a_warning_instance_registers_you_seeing_everything(app, env):
 
 def test_a_safe_next_page_is_taken_as_it_is(app, env):
     """`?next=` is attacker-supplied, so an off-origin one is dropped -- but a
-    safe one is used without touching the onboarding column, which is what
-    `is_safe_redirect_target` rather than `safe_redirect_target` buys."""
+    safe one is used as it is."""
     from app.auth.util import determine_next_page
 
     client, founder = env
 
     with app.test_request_context('/auth/login?next=/somewhere'):
-        with patch('app.auth.util.check_user_finished_onboarding') as checked:
-            assert determine_next_page() == '/somewhere'
-
-    checked.assert_not_called()
+        assert determine_next_page() == '/somewhere'
 
 
 def test_an_off_origin_next_page_is_dropped(app, env):

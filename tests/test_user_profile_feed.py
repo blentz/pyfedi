@@ -226,7 +226,7 @@ def test_a_post_whose_body_cannot_be_encoded_is_skipped(app, env):
     bad.body_html = '<p>bad</p>'
     db.session.commit()
 
-    with patch('app.user.routes.is_valid_xml_utf8',
+    with patch('app.rss_extras._is_valid_xml_utf8',
                side_effect=lambda text: 'bad' not in text):
         response = client.get('/u/author/feed')
 
@@ -239,7 +239,7 @@ def test_a_post_whose_title_cannot_be_encoded_is_skipped(app, env):
     a_post(community, author, 1, title='fine')
     a_post(community, author, 2, title='unencodable title')
 
-    with patch('app.user.routes.is_valid_xml_utf8',
+    with patch('app.rss_extras._is_valid_xml_utf8',
                side_effect=lambda text: 'unencodable' not in text):
         response = client.get('/u/author/feed')
 
@@ -305,25 +305,29 @@ def test_a_feed_without_an_avatar_or_bio_still_works(app, env):
     assert b'apple-touch-icon.png' in response.data
 
 
-def test_a_media_url_becomes_an_enclosure(app, env):
+def test_a_media_url_becomes_media_content(app, env):
+    """RSSFeed attaches a post's url as media:content, typed when it can be."""
     client, author, community = env
     a_post(community, author, 1, url='https://example.com/audio.mp3')
 
     response = client.get('/u/author/feed')
 
-    assert b'enclosure' in response.data
+    assert b'<media:content' in response.data
+    assert b'type="audio/mpeg"' in response.data
 
 
-def test_the_same_url_twice_is_only_enclosed_once(app, env):
-    """`already_added` -- two posts sharing a url would otherwise produce two
-    entries claiming the same enclosure."""
+def test_two_posts_sharing_a_url_each_carry_it(app, env):
+    """media:content belongs to its entry, so a url shared by two posts is
+    attached to both -- and neither post is dropped from the feed."""
     client, author, community = env
     a_post(community, author, 1, title='first', url='https://example.com/a.mp3')
     a_post(community, author, 2, title='second', url='https://example.com/a.mp3')
 
     response = client.get('/u/author/feed')
 
-    assert response.data.count(b'<enclosure') == 1
+    assert b'first' in response.data
+    assert b'second' in response.data
+    assert response.data.count(b'<media:content') == 2
 
 
 def test_a_post_with_a_slug_is_linked_by_it(app, env):
@@ -543,29 +547,31 @@ def test_an_upload_lands_back_where_it_started(app, env):
     assert 'evil.example' not in response.headers['Location']
 
 
-def test_a_page_url_carries_no_enclosure(app, env):
-    """`if type and not type.startswith('text/')` -- an ordinary link post's
-    url is a web page, and an enclosure tells a reader to download it as
-    media."""
+def test_a_page_url_is_media_content_typed_as_html(app, env):
+    """An ordinary link post's url is a web page. media:content only mandates
+    a url, so it is still attached, typed so a reader does not treat it as a
+    download."""
     client, author, community = env
     a_post(community, author, 1, url='https://example.com/article.html')
 
     response = client.get('/u/author/feed')
 
-    assert b'enclosure' not in response.data
+    assert b'<enclosure' not in response.data
+    assert b'<media:content' in response.data
+    assert b'type="text/html"' in response.data
 
 
-def test_a_url_with_no_recognisable_type_carries_no_enclosure(app, env):
-    """The first half of the same condition: `mimetype_from_url` answers None
-    for a url it cannot type, and `fe.enclosure(..., type=None)` would put an
-    empty type into the document."""
+def test_a_url_with_no_recognisable_type_is_attached_untyped(app, env):
+    """`mimetype_from_url` answers None for a url it cannot type. The url is
+    still attached, with no type attribute rather than an empty one."""
     client, author, community = env
     a_post(community, author, 1, url='https://example.com/whatever')
 
-    with patch('app.user.routes.mimetype_from_url', return_value=None):
+    with patch('app.rss_extras.mimetype_from_url', return_value=None):
         response = client.get('/u/author/feed')
 
-    assert b'enclosure' not in response.data
+    assert b'<media:content url="https://example.com/whatever"' in response.data
+    assert b'type=""' not in response.data
 
 
 def test_a_blank_url_line_creates_no_file(app, env):

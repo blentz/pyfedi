@@ -538,7 +538,7 @@ DOCUMENTED_EXEMPTIONS = {
                     "parameter, and that route checks it before redirecting."),
         ),
         Exempt(
-            line="referrer=request.args.get('referrer'))",
+            line="referrer=request.args.get('referrer'),",
             occurrences=1,
             reason=("render_template keyword. It becomes a hidden field in "
                     "post_block_image_purge_posts.html, Jinja-escaped, and is "
@@ -547,7 +547,7 @@ DOCUMENTED_EXEMPTIONS = {
     ],
     'app/admin/routes.py': [
         Exempt(
-            line="form=form, referrer=request.args.get('referrer'))",
+            line="form=form, referrer=request.args.get('referrer'),",
             occurrences=1,
             reason=("render_template keyword, same template and same reasoning "
                     "as the app/post/routes.py entry above."),
