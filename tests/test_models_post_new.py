@@ -405,6 +405,14 @@ class TestAMicroblogPost:
         assert post.title
         assert post.microblog is True
 
+    def test_a_null_name_is_treated_like_a_missing_one(self, env):
+        """D258, fixed. `"name": null` skipped the microblog branch and
+        `None.strip()` raised; it now means the same as no name at all."""
+        post = new(env, name=None, type='Note',
+                   content='<p>something worth reading</p>')
+        assert post.title
+        assert post.microblog is True
+
     def test_one_addressed_to_the_public_is_not_private(self, env):
         post = self.a_note(env, content='<p>hello</p>')
         assert post.private is False

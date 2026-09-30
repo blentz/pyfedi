@@ -3433,7 +3433,8 @@ def update_post_from_activity(post: Post, request_json: dict):
 
         # title
         old_title = post.title
-        if 'name' in request_json['object']:
+        # A null name means no title, like an absent one: None.upper() below would raise (D258)
+        if 'name' in request_json['object'] and request_json['object']['name'] is not None:
             new_title = request_json['object']['name']
             post.microblog = False
         else:

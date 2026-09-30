@@ -2599,7 +2599,7 @@ class Post(db.Model):
 
         microblog = False
         private = False
-        if 'name' not in request_json['object']:  # Microblog posts
+        if request_json['object'].get('name') is None:  # Microblog posts; a null name is no name (D258)
             private = True
             if 'content' in request_json['object'] and request_json['object']['content'] is not None:
                 title = ""
