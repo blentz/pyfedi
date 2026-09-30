@@ -13744,3 +13744,20 @@ is handed, which is the peer-chosen name itself.
 missing path is identical either way. Point the path INSIDE A DIRECTORY THAT DOES NOT EXIST and they
 diverge -- the guard returns in silence, and no guard means a logged `FileNotFoundError`. Same shape
 as fact 1007, where a later guard answered for the one under test.
+
+**1036. AN UNSAVED `Site()` READS `None`, NOT THE COLUMN DEFAULTS.**
+`PostReply.new`'s `if site is None: site = Site()` fallback gives every flag `None`, because a
+SQLAlchemy `default=` is applied on INSERT. The effective answer matches `default=False` here, but do
+not assert a fallback row's flags as False -- assert the BEHAVIOUR the falsy value produces.
+
+**1037. A GUARD BEHIND A SHORT-CIRCUITING `and` IS UNOBSERVABLE FOR ORDINARY INPUT.**
+`reply_is_low_effort(reply.body) and site.enable_this_comment_filter` never dereferences `site` for an
+ordinary body, so removing the `site = Site()` default above it changes nothing. Feed the input that
+makes the LEFT side true -- a body of `this`, or a `https://media.tenor.com/` link for the gif filter
+-- and the two versions diverge. Same family as facts 1007 and 1035.
+
+**1038. `is_image_url` HEAD-REQUESTS ANY URL WHOSE EXTENSION IT CANNOT JUDGE.**
+So a `Post.new` row with an `Image` attachment needs `http_mock.head(url)` registered, or
+`create_post` swallows `AllMockedAssertionError` in its `except Exception` and answers None with the
+reason only in `ActivityPubLog`. Call `Post.new` directly when a create returns None for no visible
+reason -- `create_post` logs the exception to the database rather than raising it.
