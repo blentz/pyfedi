@@ -1215,6 +1215,7 @@ def process_inbox_request(request_json, store_ap_json):
                                     if existing_follow.is_accepted:  # only an accepted follow was counted
                                         requestor_user.num_following -= 1
                                     existing_follow.is_accepted = False
+                                session.delete(join_request)
                                 session.commit()
                                 log_incoming_ap(id, APLOG_ACCEPT, APLOG_SUCCESS, saved_json)
                     return
