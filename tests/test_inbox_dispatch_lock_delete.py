@@ -94,13 +94,11 @@ fix, not this task's; fixed by Task 2 as D97 above.
 ### Observations beyond the two registered defects
 
   - Delete's own selector for the Feed-vs-other split, `:1266`
-    (`core_activity['object']['type'] == 'Feed'`), reads `['type']`
-    unconditionally once `object` is confirmed a dict. A dict `object` with
-    no `'type'` key at all raises `KeyError` right there, before either
-    registered defect is reached and before ANY `ap_id` extraction --
-    a third crash path in this arm, distinct from the two named in the
-    plan. Not registered by this task's brief; noted here for whoever
-    triages defects next, not treated as this task's to fix.
+    (`core_activity['object']['type'] == 'Feed'`), used to read `['type']`
+    unconditionally once `object` was confirmed a dict, so a dict with no
+    'type' raised KeyError (D92, fixed). It now reads the type with
+    `.get()`, so an untyped dict takes the kbin path by its id, and a dict
+    with no id either is refused and logged.
   - Delete's Feed-branch reassigns the arm's `user` local from
     `find_actor_or_create_cached(actor_id)` (`:1268`), which is a SEPARATE
     lookup from whatever `user` the preamble resolved before dispatch
@@ -117,7 +115,6 @@ fix, not this task's; fixed by Task 2 as D97 above.
     attribute would miss the subtree ever being touched.
 """
 
-import pytest
 from sqlalchemy import inspect as sa_inspect
 
 from app import db
@@ -980,31 +977,43 @@ def test_delete_of_an_unmatched_ap_id_logs_nothing(app, db_session, monkeypatch)
     assert ActivityPubLog.query.count() == 0
 
 
-def test_delete_of_a_dict_object_with_no_type_key_raises_keyerror(app, db_session, monkeypatch):
-    """routes.py:1266's `isinstance(core_activity['object'], dict) and
-    core_activity['object']['type'] == 'Feed'` reads `['type']`
-    unconditionally once `object` is confirmed a dict -- the `isinstance`
-    check only short-circuits the case where `object` is NOT a dict at all.
-    A dict `object` with no `'type'` key raises `KeyError` right there,
-    before either registered defect's guard and before any `ap_id`
-    extraction. Not registered by this task's brief; flagged in Task 1's
-    module docstring ('Observations beyond the two registered defects') and
-    pinned here as a probe, not fixed.
-
-    OBSERVED: the KeyError propagates all the way out of dispatch() --
-    caught only by the arm's own outer `except Exception: session.
-    rollback(); raise` (routes.py:1889-1891), which re-raises rather than
-    logging or swallowing it. No ActivityPubLog row is written.
+def test_delete_of_a_dict_object_with_no_type_key_takes_the_kbin_path(app, db_session, monkeypatch):
+    """D92, fixed. The Feed-vs-other selector read `object['type']` once the
+    object was a dict, so a dict with an id but no 'type' raised KeyError
+    before its id was ever used. Only a Feed needs the type; any other dict
+    is handled by its id (the kbin shape), so an untyped dict now reaches
+    the same continuation and its content is deleted.
     """
-    instance = make_instance('peer.example')
-    sender = make_user(instance, 'sender')
-    sender.ap_fetched_at = utcnow()
-    db.session.commit()
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, sender, author, post = _seed_deletable_post()
 
-    activity = inbox_activity(sender, activity_type='Delete',
-                              object={'id': 'https://peer.example/objects/1'})
+    calls = record_moderation(monkeypatch, 'delete_post_or_comment', 'announce_activity_to_followers')
 
-    with pytest.raises(KeyError, match=r"^'type'$"):
-        dispatch(activity)
+    activity = inbox_activity(sender, activity_type='Delete', object={'id': post.ap_id})
 
-    assert ActivityPubLog.query.count() == 0
+    dispatch(activity)
+
+    assert len(calls['delete_post_or_comment']) == 1
+    args, _kwargs = calls['delete_post_or_comment'][0]
+    assert sa_inspect(args[1]).identity[0] == post.id
+
+
+def test_delete_of_a_dict_object_with_no_id_is_refused(app, db_session, monkeypatch):
+    """D92, fixed. With the type read made safe, a dict object with neither
+    'type' nor 'id' would raise KeyError at the kbin path's `object['id']`
+    instead. It is refused and logged, and nothing is deleted.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, sender, author, post = _seed_deletable_post()
+
+    calls = record_moderation(monkeypatch, 'delete_post_or_comment', 'announce_activity_to_followers')
+
+    activity = inbox_activity(sender, activity_type='Delete', object={'summary': 'no id here'})
+
+    dispatch(activity)
+
+    assert calls['delete_post_or_comment'] == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Delete object has no id'
+
