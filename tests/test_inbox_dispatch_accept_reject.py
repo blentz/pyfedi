@@ -31,7 +31,7 @@ probe file itself was deleted after use; it changed nothing under `app/`.
 """
 from datetime import timedelta
 
-from psycopg2 import IntegrityError
+from sqlalchemy.exc import IntegrityError
 
 from app import db
 from app.activitypub import routes as activitypub_routes
@@ -207,13 +207,16 @@ def test_an_agupe_numeric_style_accept_retries_by_primary_key(app, db_session, m
 #   - the user branch's existing_follow lookup filters on is_inward=False
 #     (:1136); Reject's equivalent (Task 8) does not filter on is_inward at
 #     all -- an asymmetry between Accept and Reject's otherwise-parallel code.
-#   - routes.py:6 imports `IntegrityError` from `psycopg2`, not
-#     `sqlalchemy.exc`, so :1114's `except IntegrityError:` binds to
-#     psycopg2's class. A real duplicate-key race through session.add()/
-#     commit() on a SQLAlchemy session raises `sqlalchemy.exc.IntegrityError`
-#     instead (not a subclass of psycopg2's), so this except clause looks
-#     unable to catch the exception an actual production race would produce.
-#     See the IntegrityError test below for how this was driven regardless.
+#   - REGISTERED AND NOW FIXED as D1432/D1433. routes.py:6 imported
+#     `IntegrityError` from `psycopg2`, not `sqlalchemy.exc`, so :1114's
+#     `except IntegrityError:` bound to psycopg2's class -- which a real
+#     duplicate-key race never raises, because SQLAlchemy's own
+#     IntegrityError has no psycopg2 ancestor (`issubclass` is False). The
+#     handler was dead: a second Accept for one join request took the inbox
+#     request down with a 500 instead of logging "Membership already exists".
+#     Both that import and the pair in app/community/util.py now come from
+#     `sqlalchemy.exc`, and the test below raises the class production
+#     actually produces.
 #   - :1108 reads `User.query.get(join_request.user_id)` -- Flask-SQLAlchemy's
 #     scoped session -- sandwiched between :1104-1106 and :1110-1111, which
 #     both use the task-local `session` object. Under this file's direct-call
@@ -448,17 +451,14 @@ def test_a_membership_race_is_caught_as_an_integrity_error(app, db_session, monk
     assertion on `exception_message == 'Membership already exists'` is what
     proves the rollback branch specifically ran, not the ordinary one.
 
-    Finding to register: routes.py:6 imports `IntegrityError` from
-    `psycopg2`, not `sqlalchemy.exc` -- so :1114's `except IntegrityError:`
-    binds to psycopg2's class. A real duplicate-key race raised through
-    `session.add()`/`session.commit()` on a SQLAlchemy session surfaces as
-    `sqlalchemy.exc.IntegrityError` (which wraps the driver error in `.orig`,
-    and is not a subclass of psycopg2's exception), so this except clause
-    looks unable to catch what an actual concurrent-insert race would raise
-    in production. This test raises psycopg2's IntegrityError specifically
-    (matching what :1114 actually names) to prove the except clause works
-    for the class it declares -- not to claim that class is what a real race
-    would produce.
+    D1432/D1433, registered here and since fixed: :6 imported
+    `IntegrityError` from `psycopg2`, which is not what a duplicate-key race
+    raises -- `sqlalchemy.exc.IntegrityError` wraps the driver error in
+    `.orig` and has no psycopg2 ancestor, so `issubclass` is False and this
+    handler was dead code. A second Accept for one join request took the
+    whole inbox request down with a 500 instead of logging "Membership
+    already exists". The import now comes from `sqlalchemy.exc`, and this
+    test raises THAT class -- the one a real race produces.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     community, instance = _seed_agupe_community()
@@ -476,7 +476,9 @@ def test_a_membership_race_is_caught_as_an_integrity_error(app, db_session, monk
         def _add(instance_to_add, *args, **kwargs):
             if not state['raised'] and isinstance(instance_to_add, CommunityMember):
                 state['raised'] = True
-                raise IntegrityError('duplicate key value violates unique constraint (simulated race)')
+                raise IntegrityError(
+                    'INSERT INTO community_member', {},
+                    Exception('duplicate key value violates unique constraint'))
             return real_add(instance_to_add, *args, **kwargs)
 
         real_session.add = _add
