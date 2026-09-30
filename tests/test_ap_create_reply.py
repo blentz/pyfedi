@@ -22,6 +22,8 @@ message, which differs per guard.
 import contextlib
 
 import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 
 from app import db
 from app.activitypub.util import create_post_reply, notify_about_post_reply
@@ -932,32 +934,13 @@ def test_a_reply_to_a_locked_comment_is_refused(app, db_session, redis_lock_only
 
 def test_the_tail_exception_handler_pins_a_postreply_new_validation_error(app, db_session, redis_lock_only_double,
                                                                           ap_log):
-    """`except Exception as ex: log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE,
-    saved_json, str(ex)); return None` -- `create_post_reply`'s tail handler.
+    """A `PostReplyValidationError` from `PostReply.new` is this function's
+    normal refusal path: logged with its own message, and None returned.
 
-    This pins CURRENT BEHAVIOUR, not an endorsement of it. Reading
-    `PostReply.new` (app/models.py:2967-3051), the handler's `except
-    Exception` is wide enough to catch every `PostReplyValidationError` it
-    can raise -- 'Comments are disabled on this post', 'Banned from
-    commenting', 'Blocked phrase in comment', 'Replier blocked', 'Duplicate
-    reply', 'Gif comment ignored', 'Low quality reply' -- and, being a bare
-    `Exception`, anything else `PostReply.new` or the Mention/flair code
-    above it happens to raise, including bugs. That breadth is registered
-    here as a FINDING (an over-wide except that turns arbitrary production
-    exceptions into a silent `None` with only a log row to show for it), not
-    something this test asserts is correct design. It is pinned through a
-    REAL validation error rather than an injected artificial exception,
-    because 'Comments are disabled on this post' is an actual production
-    path a remote reply can hit (a post's `comments_enabled` is toggled
-    False by its author or a mod), not a fixture invented to force the
-    `except` block to run.
-
-    `post.comments_enabled` defaults `True` (app/models.py:1717); this test
-    sets it `False` so `PostReply.new`'s FIRST check
-    (`if not post.comments_enabled: raise PostReplyValidationError(_('Comments
-    are disabled on this post'))`, app/models.py:2977-2978) fires before any
-    of the other guards it could equally have raised through, keeping the
-    test independent of the rest of `PostReply.new`'s body.
+    D263's fix narrowed the handler to this class; everything else now
+    propagates (see the test below). 'Comments are disabled on this post' is
+    a real path a remote reply can hit, and it is `PostReply.new`'s first
+    check, so no other guard can raise in its place.
     """
     community, post, replier = _seed_scenario()
     post.comments_enabled = False
@@ -969,6 +952,28 @@ def test_the_tail_exception_handler_pins_a_postreply_new_validation_error(app, d
     assert PostReply.query.count() == 0
     log = ActivityPubLog.query.one()
     assert log.exception_message == 'Comments are disabled on this post'
+
+
+def test_a_database_error_in_the_tail_is_rolled_back_logged_and_raised(app, db_session, redis_lock_only_double,
+                                                                       ap_log, monkeypatch):
+    """D263, fixed. The bare `except Exception` used to turn every failure
+    after the head guards into a None indistinguishable from a refusal, and
+    to write its log row into the transaction the error had just aborted,
+    replacing the real error with PendingRollbackError. A non-validation
+    error now rolls the session back, is logged, and is re-raised.
+    """
+    community, post, replier = _seed_scenario()
+
+    def broken_new(*args, **kwargs):
+        db.session.execute(text('SELECT * FROM no_such_table'))
+
+    monkeypatch.setattr(PostReply, 'new', broken_new)
+
+    with pytest.raises(ProgrammingError):
+        _create(community, post, replier)
+
+    log = ActivityPubLog.query.one()
+    assert 'no_such_table' in log.exception_message
 
 
 # --- attachment loop ---------------------------------------------------
