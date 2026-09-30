@@ -980,13 +980,13 @@ def test_an_accept_or_reject_of_an_untyped_object_is_refused(
     assert log.exception_message == f'{activity_type} object is not an activity with a type'
 
 
-def test_an_agupe_string_reject_is_refused_without_touching_membership(app, db_session, monkeypatch):
-    """D70, fixed. a.gup.pe sends a Follow's ID as a bare string, and the
-    Accept arm has a lookup for that form; the Reject arm has none, and used
-    to index the string by 'type' and raise TypeError. It is now refused and
-    logged. Whether a string Reject should cancel the join request the way
-    a string Accept admits it is a separate decision; until then the join
-    request and membership are left exactly as they were.
+def test_an_agupe_string_reject_cancels_the_join_request(app, db_session, monkeypatch):
+    """D70, fixed. a.gup.pe sends a Follow's ID as a bare string. The
+    Reject arm used to index that string by 'type' and raise TypeError, and
+    then refused it. It now looks the join request up by the string's last
+    path segment, as the Accept arm does, and cancels it exactly as a
+    dict-object Reject of the Follow would: join request and membership are
+    both deleted.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     community, instance = _seed_agupe_community()
@@ -1000,11 +1000,28 @@ def test_an_agupe_string_reject_is_refused_without_touching_membership(app, db_s
 
     dispatch(activity)
 
+    db.session.expire_all()
+    assert ActivityPubLog.query.one().result == 'success'
+    assert CommunityJoinRequest.query.count() == 0
+    assert CommunityMember.query.filter_by(user_id=joiner.id, community_id=community.id).count() == 0
+
+
+def test_an_agupe_string_reject_for_an_unknown_request_is_refused(app, db_session, monkeypatch):
+    """D70, fixed. A string Reject whose last path segment names no join
+    request has no one to act for, and is refused like an unresolvable
+    Follow actor."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    community, instance = _seed_agupe_community()
+
+    activity = inbox_activity(
+        community, activity_type='Reject',
+        object='https://peer.example/activities/follow/00000000-0000-0000-0000-000000000000')
+
+    dispatch(activity)
+
     log = ActivityPubLog.query.one()
     assert log.result == 'failure'
-    assert log.exception_message == 'Reject object is not an activity with a type'
-    assert CommunityJoinRequest.query.count() == 1
-    assert CommunityMember.query.filter_by(user_id=joiner.id, community_id=community.id).count() == 1
+    assert log.exception_message == 'Could not find recipient of Reject'
 
 
 # --- Step 6: the APLOG_ACCEPT mislabelling, :1154, :1168, :1178, :1189 ---
