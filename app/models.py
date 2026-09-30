@@ -2398,10 +2398,13 @@ class User(UserMixin, db.Model):
         if user_follow:
             if user_follow.is_accepted is True:
                 return 'following'
+            # D1431. An `else: return 'no'` stood below the next arm and was
+            # unreachable: `is_accepted` is a nullable Boolean, so True, None and
+            # False exhaust its values and the two arms here cover all three. The
+            # value it would have returned is the one the fall-through already
+            # gives.
             elif user_follow.is_accepted is None or user_follow.is_accepted is False:
                 return 'pending'
-            else:
-                return 'no'
         return 'no'
 
 
