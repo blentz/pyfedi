@@ -13683,3 +13683,14 @@ IntegrityError, not just for the wrong row disappearing.
 **1024. `User.lemmy_link` LOWER-CASES A HANDLE AND `User.link` DOES NOT.**
 Both read `ap_id`. The first is the lookup key for a mention, the second is what the UI prints. A row for
 either must name which, or a mutant swapping them survives.
+
+**1025. THREE PERMISSION SETTINGS NEED THE ACCOUNT THE PREVIOUS ONE ADMITTED.**
+`Community.can_invite`'s members-only / mods-only / owner-only arms all refuse a stranger, so three rows using
+a stranger pass against one arm doing all the work. Test mods-only with the MEMBER and owner-only with the
+MODERATOR.
+
+**1026. `g.locale` IS SET BY `before_request`, SO A DIRECT CALL INTO A FORMATTER HAS NONE.**
+`humanize_number` -> `format_compact_decimal(value, locale=g.locale)` raises `AttributeError: locale`. Set
+`g.locale = 'en'` in a fixture that depends on the app fixture, or the fixture runs before the app context
+exists. And `format_compact_decimal` rounds 1215 to `1K`, not `1.2K` -- assert which column was read, not the
+formatting.

@@ -24734,4 +24734,39 @@ Thirteen mutants dead, one provably equivalent: `instance_domain`'s middle arm c
 distinguished, because a local account's Instance row IS this instance and its `domain` is
 `SERVER_NAME`.
 
+---
+
+## Round 258 -- who may invite somebody, and the two flair formats
+
+Four clusters on `Community` in `app/models.py`, no defect.
+
+**`can_invite` is an authorisation check made of three one-line arms**, and each arm is
+`not is_<role>(u)` -- so a mistake widens the permission rather than narrowing it. The rows are
+built so each setting is tested with the account the PREVIOUS setting admitted: members-only
+admits a member and refuses a stranger, mods-only refuses that same member, owner-only refuses
+that same moderator. Without that chaining, three rows using a stranger would all pass against
+one arm doing the work of three.
+
+**`is_member`'s anonymous guard is what those settings are read through.** Its `else` branch
+dereferences `user.id`, and flask-login's anonymous user has no `id` at all -- so removing the
+guard is an AttributeError rather than a wrong answer.
+
+**`humanize_subscribers` has a caller-supplied override, and it is `"value" in kwargs` rather
+than a truthiness test** -- so a supplied 0 is honoured instead of falling through to the column.
+A row asserts exactly that. `total_subscriptions_count` is NULL for a community whose server has
+never reported one, and the fallback to the local count is what keeps `humanize_number(None)` off
+the page.
+
+**`flair_for_ap` publishes the same five fields under two sets of names** -- Lemmy's
+`lemmy:CommunityTag` with snake_case keys and the newer `CommunityPostTag` with camelCase -- so a
+peer reading one format finds nothing in the other. Both are pinned key by key, version 1 is the
+default, and an unknown version publishes nothing rather than guessing.
+
+**A mis-anchored mutant again, and the same cause as round 252.** `def is_member(self, user)`
+appears twice in `app/models.py` -- on `Conversation` and on `Community` -- and a `find` by that
+string hit the first, mutating an unrelated loop into something harmless. The survivor was the
+runner telling the truth about the wrong line.
+
+Fourteen mutants, all dead, on a green baseline.
+
 **Next free number: D1427.**
