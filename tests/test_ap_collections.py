@@ -1015,20 +1015,12 @@ def test_a_non_public_feed_outbox_is_403(app, db_session):
     assert response.status_code == 403
 
 
-def test_the_feed_outbox_publishes_local_only_communities(app, db_session):
-    """PINS a defect. `feed_outbox`'s own comment says it "will just be the
-    same as the /following collection". It is not: `feed_following`
-    (app/activitypub/routes.py) skips communities that are `local_only` or
-    `private` -- its query and loop are identical to `feed_outbox`'s except
-    for that one extra `if c.local_only or c.private: continue`, and each of
-    its disjuncts is pinned separately by
-    `test_feed_following_skips_local_only_communities` and
-    `test_feed_following_skips_private_communities`. `feed_outbox` applies no
-    such filter.
-
-    So the endpoint documented as equivalent publishes the URL of a community
-    its twin deliberately withholds. `local_only` is set explicitly; it
-    defaults to False.
+def test_the_feed_outbox_withholds_local_only_communities(app, db_session):
+    """D172, fixed. `feed_outbox`'s own comment says it "will just be the same
+    as the /following collection", and now it is: it skips `local_only` and
+    `private` communities as `feed_following` does, where before it published
+    the URL its twin deliberately withholds. `local_only` is set explicitly;
+    it defaults to False.
     """
     seed_actors()
     feed = _seed_local_feed('news', public=True)
@@ -1040,7 +1032,25 @@ def test_the_feed_outbox_publishes_local_only_communities(app, db_session):
     response = collection_get(app, '/f/news/outbox')
 
     assert response.status_code == 200
-    assert community.ap_public_url in response.json['items']
+    assert response.json['items'] == []
+
+
+def test_the_feed_outbox_lists_a_community_by_its_public_url(app, db_session):
+    """D172, fixed. Items are `public_url()`, as in `feed_following`, which
+    falls back to the local URL when `ap_public_url` is null -- before, such a
+    community contributed a literal null to the outbox.
+    """
+    seed_actors()
+    feed = _seed_local_feed('news', public=True)
+    community = seed_local_community('books')
+    community.ap_public_url = None
+    db.session.commit()
+    _feed_item(feed, community)
+
+    response = collection_get(app, '/f/news/outbox')
+
+    assert response.json['items'] == [community.public_url()]
+    assert response.json['items'] != [None]
 
 
 def test_the_feed_outbox_malformed_join_is_masked_by_orm_deduplication(app, db_session):

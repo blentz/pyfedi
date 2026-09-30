@@ -2864,7 +2864,9 @@ def feed_outbox(actor):
     items = []
     for fi in feed_items:
         c = db.session.get(Community, fi.community_id)
-        items.append(c.ap_public_url)
+        if c.local_only or c.private:
+            continue
+        items.append(c.public_url())
     result = {
         "@context": default_context(),
         "id": feed.ap_outbox_url,
