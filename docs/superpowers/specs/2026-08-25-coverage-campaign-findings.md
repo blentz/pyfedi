@@ -25278,4 +25278,44 @@ own block means what they write here will never leave.
 
 Nineteen mutants, all dead, on a green baseline.
 
+
+---
+
+## Round 271 -- the last one-line arms, across four modules
+
+No source change. Twenty-two rows, each on one line that answers one question. Three of them turned
+out to be redundant rather than untested, and the proofs are worth keeping.
+
+**`can_create_post`'s instance-ban line is redundant.** `if content.instance_id in
+banned_instances(user.id)` sits ONE LINE BELOW `if content.id in communities_banned_from(user.id)`,
+and `communities_banned_from` joins `InstanceBan` to `Community` on `instance_id` -- so every
+community on a banned instance is already in that list, by id. `InstanceBan.instance_id` is part of
+that table's primary key, so no null-instance row can slip past the join either. The row asserts the
+refusal whichever line produces it; the line stays because it states the instance-level rule where a
+reader of the function looks for it.
+
+**`pending_communities`' guard is redundant in both halves.** Without it the query runs as
+`user_id IS NULL` or `user_id = 0`, and `CommunityJoinRequest.user_id` is a foreign key to `user.id`,
+so neither can match. Kept for the query it saves on every listing page.
+
+**`undo_boost`'s empty-target guard is NOT redundant, and the row that shows it seeds a post with a
+NULL `ap_id`.** `Post.ap_id` is nullable, so without the guard `Post.get_by_ap_id(None)` runs as
+`ap_id IS NULL` and matches whichever post that is -- an Undo naming nothing would then remove a
+boost from an arbitrary post. `''` has no such row to find, so only the None case can show it. Both
+`if True:` and `if False:` survived until that row existed and until a row covered the happy path,
+because every input was refused either way.
+
+Also covered: the embedded-actor unwrap in `find_actor_or_create_cached`, which is how a peer inlining
+a whole actor document where a url is expected stops being an AttributeError; the existing-row arms of
+`find_licence_or_create` and `find_hashtag_or_create`, without which every post naming a licence or a
+hashtag adds a duplicate, with the `name`/`display_as` case-folding split; the
+`calculate_cross_posts(delete_only=True)` call that takes a deleted post OUT of its siblings' "also
+posted in" lists, which would otherwise link to a 404; `mime_type_using_head`'s two empty answers,
+including the `application/octet-stream` one that means the server has not identified the file;
+`User.get_id` answering 0 rather than None; `User.get_by_email`'s strip, which is the password-reset
+lookup; and `Passkey.__repr__`, where the device name is the only thing distinguishing one of
+somebody's keys from another.
+
+Fourteen mutants dead, three provably redundant, on a green baseline.
+
 **Next free number: D1436.**

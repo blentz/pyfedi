@@ -13866,3 +13866,18 @@ arm that had been duplicating its own fallback.
 **1058. `guess_mime_type`'s FALLBACK IS `image/<ext>`, WHICH IS ACCIDENTALLY RIGHT FOR IMAGES.**
 So a row using `.webp` or `.png` cannot tell the guessed answer from the fallback. Use a non-image
 extension -- `.json` is what `archive_post` uploads -- when the arm selection is what is under test.
+
+**1059. `communities_banned_from` ALREADY INCLUDES EVERY COMMUNITY ON AN INSTANCE THE ACCOUNT BANNED.**
+It joins `InstanceBan` to `Community` on `instance_id`, so `can_create_post`'s later
+`content.instance_id in banned_instances(user.id)` cannot be reached with a different answer. A row
+for the instance-level refusal asserts the refusal, not which line produced it -- do not expect that
+mutant to die.
+
+**1060. `Post.ap_id` IS NULLABLE, SO `Post.get_by_ap_id(None)` MATCHES A ROW.**
+That is what makes `undo_boost`'s `if not target_ap_id:` load-bearing rather than decorative: without
+it an Undo naming nothing removes a boost from whichever post has no ap_id. Seed such a post to kill
+the mutant; `''` finds nothing and proves nothing.
+
+**1061. A GUARD AND A HAPPY PATH ARE BOTH NEEDED, OR `if True:` AND `if False:` BOTH SURVIVE.**
+`undo_boost`'s two refusal rows passed under either mutant, because every input the file gave it was
+refused anyway. One row where the function SUCCEEDS is what makes the guard's rows mean anything.
