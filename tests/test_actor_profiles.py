@@ -208,8 +208,7 @@ def test_a_banned_remote_community_is_not_found(app, db_session, monkeypatch):
     """The remote lookup's `banned=False`. Seeded explicitly -- `Community.banned`
     defaults to False, so leaving it alone would assert nothing.
 
-    Note the LOCAL lookup has no such guard; that asymmetry is registered, not
-    fixed here.
+    The LOCAL lookup carries the same guard since D158; see the next test.
     """
     site, instance = seed_actors()
     community = make_community(name='books', host='peer.example')
@@ -219,6 +218,21 @@ def test_a_banned_remote_community_is_not_found(app, db_session, monkeypatch):
     _double_the_renderers(monkeypatch)
 
     response = profile_get(app, '/c/books@peer.example', accept='text/html')
+
+    assert response.status_code == 404
+
+
+def test_a_banned_local_community_is_not_found(app, db_session, monkeypatch):
+    """D158, fixed. The local lookup now filters `banned=False` like the remote
+    one above; before, a banned local community's actor document was served.
+    """
+    seed_actors()
+    community = make_community(name='books', host='test.piefed.local')
+    community.banned = True
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/c/books', accept=AP_ACCEPT)
 
     assert response.status_code == 404
 
@@ -659,8 +673,7 @@ def test_a_banned_remote_feed_is_not_found(app, db_session, monkeypatch):
     respect, `banned`, so this test's kill of the `banned=False` clause is not
     confounded with the host, the ap_id, or anything else.
 
-    Note the LOCAL lookup has no such guard; that asymmetry is registered for
-    community_profile above and holds here too, not fixed in either place.
+    The LOCAL lookup carries the same guard since D158; see the next test.
     """
     seed_actors()
     feed = make_local_feed('news', public=True)
@@ -670,6 +683,21 @@ def test_a_banned_remote_feed_is_not_found(app, db_session, monkeypatch):
     _double_the_renderers(monkeypatch)
 
     response = profile_get(app, '/f/news@peer.example', accept='text/html')
+
+    assert response.status_code == 404
+
+
+def test_a_banned_local_feed_is_not_found(app, db_session, monkeypatch):
+    """D158, fixed. The local lookup now filters `banned=False` like the remote
+    one above; before, a banned local feed's actor document was served.
+    """
+    seed_actors()
+    feed = make_local_feed('news', public=True)
+    feed.banned = True
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/f/news', accept=AP_ACCEPT)
 
     assert response.status_code == 404
 

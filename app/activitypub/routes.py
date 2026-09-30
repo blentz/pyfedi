@@ -530,7 +530,7 @@ def community_profile(actor):
         community: Community = Community.query.filter_by(ap_id=actor.lower(), banned=False).first()
     else:
         profile_id = f"https://{current_app.config['SERVER_NAME']}/c/{actor.lower()}"
-        community: Community = Community.query.filter_by(ap_profile_id=profile_id, ap_id=None).first()
+        community: Community = Community.query.filter_by(ap_profile_id=profile_id, ap_id=None, banned=False).first()
     if community is not None:
         if is_activitypub_request():
             if community.local_only or community.private:
@@ -2758,7 +2758,7 @@ def feed_profile(actor, feed_owner=None):
             abort(400)
         feed: Feed = db.session.query(Feed).filter_by(ap_id=actor.lower(), banned=False).first()
     else:
-        feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None).first()
+        feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None, banned=False).first()
     if feed is not None:
         if is_activitypub_request():
             # check if feed is public, if not abort
