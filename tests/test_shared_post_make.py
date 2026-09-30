@@ -917,6 +917,28 @@ def test_a_video_upload_is_accepted_when_video_uploads_are_enabled(db_session):
     assert db.session.query(Post).count() == 1
 
 
+def test_a_video_upload_is_judged_against_the_api_caller(db_session):
+    """F12, fixed. `make_post` called `can_upload_video()` with no user, so
+    under the 'users' policy the token's owner was judged as the ambient
+    `current_user` (anonymous, or absent outside a request) and refused. It
+    now passes the real user. `edit_post` is stubbed as in the tests above."""
+    s = seed_make_context()
+
+    original_setting = get_setting('allow_video_file_uploads', 'no')
+    set_setting('allow_video_file_uploads', 'users')
+    original_edit_post = post_module.edit_post
+    post_module.edit_post = lambda *args, **kwargs: args[1]
+    try:
+        user_id, post = make_post(_api_input(), s.community, POST_TYPE_VIDEO,
+                                  SRC_API, auth=bearer(s.author),
+                                  uploaded_file=SimpleNamespace(filename='clip.mp4'))
+    finally:
+        post_module.edit_post = original_edit_post
+        set_setting('allow_video_file_uploads', original_setting)
+
+    assert db.session.query(Post).count() == 1
+
+
 def test_a_webm_upload_is_accepted_when_video_uploads_are_enabled(db_session):
     """`:201`'s full extension list, not just `.mp4`.
 

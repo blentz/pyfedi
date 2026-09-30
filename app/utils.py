@@ -2832,7 +2832,7 @@ def can_upload_video(user: User | None = None):
         return False
     elif upload_access == 'admins' and not upload_user.is_admin_or_staff():
         return False
-    elif upload_access == 'users' and not current_user.is_authenticated and user is None:
+    elif upload_access == 'users' and not upload_user.is_authenticated:
         return False
     return True
 

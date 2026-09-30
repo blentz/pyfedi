@@ -522,6 +522,24 @@ def test_a_video_upload_is_accepted_when_video_uploads_are_enabled(db_session, c
     assert len(written) == 1
 
 
+def test_a_video_upload_is_judged_against_the_api_caller(db_session, chdir_upload, http_mock):
+    """F12, fixed. `edit_post` called `can_upload_video()` with no user, so
+    under the 'users' policy an API caller was judged as the anonymous web
+    `current_user` and refused. It now passes the real user."""
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    s = _seed()
+    original = get_setting('allow_video_file_uploads', 'no')
+    try:
+        set_setting('allow_video_file_uploads', 'users')
+        edit_post(_api_input(), s.post, POST_TYPE_VIDEO, SRC_API, user=s.user,
+                  uploaded_file=make_upload(filename='clip.mp4'))
+    finally:
+        set_setting('allow_video_file_uploads', original)
+
+    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+    assert len(written) == 1
+
+
 def test_an_upload_lands_in_the_per_post_media_directory(db_session, chdir_upload, http_mock):
     """`:472`'s FALSE arm, arc `472->475`.
 

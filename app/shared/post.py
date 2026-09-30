@@ -251,7 +251,7 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None):
     if uploaded_file and uploaded_file.filename != '':
         # check if this is an allowed type of file
         allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.mpo', '.avif', '.svg']
-        if type == POST_TYPE_VIDEO and can_upload_video():
+        if type == POST_TYPE_VIDEO and can_upload_video(user):
             allowed_extensions.extend(['.mp4', '.webm', '.mov'])
         file_ext = os.path.splitext(uploaded_file.filename)[1]
         if file_ext.lower() not in allowed_extensions:
@@ -531,7 +531,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
     if uploaded_file and uploaded_file.filename != '':
         # check if this is an allowed type of file
         allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.mpo', '.avif', '.svg']
-        if type == POST_TYPE_VIDEO and can_upload_video():
+        if type == POST_TYPE_VIDEO and can_upload_video(user):
             allowed_extensions.extend(['.mp4', '.webm', '.mov'])
         file_ext = os.path.splitext(uploaded_file.filename)[1]
         if file_ext.lower() not in allowed_extensions:
