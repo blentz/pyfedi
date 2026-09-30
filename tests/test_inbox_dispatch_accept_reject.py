@@ -841,10 +841,9 @@ def test_the_reject_user_branch_flips_an_existing_follow_and_decrements(
     (D74); test_a_reject_leaves_the_inward_follow_between_the_same_users_alone
     below covers the inward row it must skip.
 
-    D79: unlike the sibling community (:1161) and feed (:1172) branches,
-    this branch never calls `session.delete(join_request)`. The assertion
-    below documents that defect -- the surviving UserFollowRequest row --
-    rather than endorsing it as correct behaviour.
+    D79, fixed: this branch now deletes the UserFollowRequest like the
+    community and feed branches do, so a repeated Reject finds nothing to
+    act on a second time.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance = make_instance('peer.example')
@@ -864,11 +863,8 @@ def test_the_reject_user_branch_flips_an_existing_follow_and_decrements(
     assert follow.is_accepted is False
     assert joiner.num_following == 0
     assert ActivityPubLog.query.one().result == 'success'
-    # D79: the UserFollowRequest is never deleted on this branch, unlike the
-    # community and feed branches -- this pins the defect, it does not
-    # endorse it.
     assert db.session.query(UserFollowRequest).filter_by(
-        user_id=joiner.id, follow_id=target.id).first() is not None
+        user_id=joiner.id, follow_id=target.id).first() is None
 
 
 def test_a_reject_leaves_the_inward_follow_between_the_same_users_alone(app, db_session, monkeypatch):
