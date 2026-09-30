@@ -2861,7 +2861,7 @@ def feed_outbox(actor):
         # don't provide activitypub info for remote feeds
         abort(400)
     else:
-        feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None).first()
+        feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None, banned=False).first()
 
     # unknown feed - 404 rather than crashing on feed.public below
     if feed is None:
@@ -2901,7 +2901,7 @@ def feed_following(actor):
         # don't provide activitypub info for remote feeds
         abort(400)
     else:
-        feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None).first()
+        feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None, banned=False).first()
 
     # unknown feed - 404 rather than crashing on feed.public below
     if feed is None:
@@ -2941,7 +2941,7 @@ def feed_moderators_route(actor):
         # don't provide activitypub info for remote feeds
         abort(400)
     else:
-        feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None).first()
+        feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None, banned=False).first()
     # D1394. Two of the five AP feed endpoints checked `public` and two did not.
     # `feed_profile`, `/outbox` and `/following` all answer 403 for a private
     # feed; this one named its owner and `/followers` counted its members. Same
@@ -2978,7 +2978,7 @@ def feed_followers(actor):
         # don't provide activitypub info for remote feeds
         abort(400)
     else:
-        feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None).first()
+        feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None, banned=False).first()
         # D1394, as feed_moderators_route above.
         if feed is not None and not feed.public:
             abort(403)
