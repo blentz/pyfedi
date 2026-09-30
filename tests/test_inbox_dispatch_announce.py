@@ -187,29 +187,27 @@ def test_an_announce_of_an_ordered_collection_processes_every_item(
         'Blocked or unfound user for Announce object actor ' + carol.ap_profile_id}
 
 
-# --- Step 3: the two unguarded reads -- observations, not fixes ---
+# --- Step 3: the two formerly unguarded reads (D51, D52, fixed) ---
 
 
-def test_an_ordered_collection_without_ordered_items(app, db_session, monkeypatch):
-    """routes.py:909 -- `request_json['object']['orderedItems']` is reached
-    on `type == 'OrderedCollection'` alone, with no membership check on
-    'orderedItems' itself first.
-
-    OBSERVED: with object={'type': 'OrderedCollection'} (no 'orderedItems'
-    key), the `for obj in request_json['object']['orderedItems']:` line
-    raises `KeyError: 'orderedItems'` immediately, uncaught inside
-    process_inbox_request's own try block, propagating through routes.py's
-    `except Exception: session.rollback(); raise` and out of dispatch() -- a
-    real, uncaught 500-shaped failure, not a logged refusal. No
-    ActivityPubLog row is written.
+def test_an_ordered_collection_without_ordered_items_is_refused(app, db_session, monkeypatch):
+    """D51, fixed. The OrderedCollection unwrap was chosen on
+    `type == 'OrderedCollection'` alone and then iterated
+    `request_json['object']['orderedItems']` with no check that the key
+    exists, so a collection without it raised KeyError, uncaught, with no
+    log row. It is now refused and logged before any recursion.
     """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community = _seed_announcing_community()
 
     activity = inbox_activity(community, activity_type='Announce',
                               object={'type': 'OrderedCollection'})
 
-    with pytest.raises(KeyError, match='orderedItems'):
-        dispatch(activity)
+    dispatch(activity)
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Announced OrderedCollection has no orderedItems list'
 
 
 def test_an_announce_whose_inner_object_has_no_actor(app, db_session, monkeypatch):

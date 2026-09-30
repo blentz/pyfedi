@@ -916,6 +916,9 @@ def process_inbox_request(request_json, store_ap_json):
                             process_inbox_request(fake_activity, store_ap_json)  # Process the Announce (with single object) as normal
                         return
                     elif 'type' in request_json['object'] and request_json['object']['type'] == 'OrderedCollection':
+                        if not isinstance(request_json['object'].get('orderedItems'), list):
+                            log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json, 'Announced OrderedCollection has no orderedItems list')
+                            return
                         for obj in request_json['object']['orderedItems']:
                             fake_activity = request_json.copy()
                             fake_activity['object'] = obj
