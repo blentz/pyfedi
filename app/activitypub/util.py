@@ -43,17 +43,6 @@ from app.utils import get_request, allowlist_html, get_setting, ap_datetime, mar
     url_is_storable
 
 
-def public_key():
-    if not os.path.exists('./public.pem'):
-        os.system('openssl genrsa -out private.pem 2048')
-        os.system('openssl rsa -in private.pem -outform PEM -pubout -out public.pem')
-    else:
-        publicKey = open('./public.pem', 'r').read()
-        PUBLICKEY = publicKey.replace('\n', '\\n')  # JSON-LD doesn't want to work with linebreaks,
-        # but needs the \n character to know where to break the line ;)
-        return PUBLICKEY
-
-
 def community_members(community_id):
     sql = 'SELECT COUNT(*) as c FROM "user" as u '
     sql += 'INNER JOIN community_member cm on u.id = cm.user_id '
