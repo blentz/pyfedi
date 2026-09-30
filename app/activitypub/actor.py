@@ -175,8 +175,10 @@ def schedule_actor_refresh(actor, override=False):
                 refresh_feed_profile(actor.id)
 
 
-def fetch_remote_actor_data(url: str, retry_count=1):
-    """Fetch actor data with retry logic."""
+def fetch_remote_actor_data(url: str, retry=False, retry_count=1):
+    """Fetch actor data. Only a housekeeping Celery task passes retry: the inbox and web requests must not sleep (D775)."""
+    if not retry:
+        retry_count = 0
     for attempt in range(retry_count + 1):
         response = None
         try:
@@ -233,12 +235,14 @@ def fetch_remote_actor_data(url: str, retry_count=1):
 
 
 
-def fetch_actor_from_webfinger(address: str, server: str):
-    """Fetch actor data using webfinger protocol."""
+def fetch_actor_from_webfinger(address: str, server: str, retry=False):
+    """Fetch actor data using webfinger protocol. Sleeps and retries only when retry is passed (D775)."""
     try:
         webfinger_data = get_request(f"https://{server}/.well-known/webfinger",
                                      params={'resource': f"acct:{address}@{server}"})
     except httpx.HTTPError:
+        if not retry:
+            return None
         time.sleep(randint(3, 10))
         try:
             webfinger_data = get_request(f"https://{server}/.well-known/webfinger",
@@ -260,6 +264,8 @@ def fetch_actor_from_webfinger(address: str, server: str):
                 try:
                     actor_data = get_request(link['href'], headers={'Accept': type_header})
                 except httpx.HTTPError:
+                    if not retry:
+                        return None
                     time.sleep(randint(3, 10))
                     try:
                         actor_data = get_request(link['href'], headers={'Accept': type_header})
@@ -280,17 +286,17 @@ def fetch_actor_from_webfinger(address: str, server: str):
 
 
 def create_actor_from_remote(actor_address: str, community_only=False,
-                             feed_only=False) -> User | Community | Feed | None:
+                             feed_only=False, retry=False) -> User | Community | Feed | None:
     """Create a new actor from remote data."""
     if actor_address.startswith('https://') or actor_address.startswith('http://'):
         server, address = extract_domain_and_actor(actor_address)
-        actor_json = fetch_remote_actor_data(actor_address)
+        actor_json = fetch_remote_actor_data(actor_address, retry=retry)
     else:
         # Try webfinger
         address, server = normalise_actor_string(actor_address)
         if not address:
             return None
-        actor_json = fetch_actor_from_webfinger(address, server)
+        actor_json = fetch_actor_from_webfinger(address, server, retry=retry)
 
     if actor_json:
         actor_model = actor_json_to_model(actor_json, address, server)

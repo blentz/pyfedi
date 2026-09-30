@@ -13,9 +13,11 @@ Four defects are pinned here and repaired together:
       app/feed/util.py -- and both copies are repaired together.
   P3  the webfinger response was closed only on the success path, so a 404 or
       an unacceptable content type leaked its connection.
-  P4  (harness, not code) the retry paths sleep 3-10 seconds on the request
-      thread; every test here patches app.activitypub.actor.time.sleep, which
-      is fact 302.
+  P4  (harness, not code) the retry paths sleep 3-10 seconds; every test
+      that reaches one patches app.activitypub.actor.time.sleep, which is
+      fact 302. Since D775 only a caller passing retry=True -- the
+      housekeeping Celery tasks -- reaches them; the inbox and request paths
+      never sleep.
 """
 import pytest
 from unittest.mock import patch
@@ -459,9 +461,11 @@ def test_a_banned_remote_community_is_not_returned(app, db_session):
 def _fetch(responses, **kwargs):
     """Run the fetch with get_request doubled and the retry sleep patched.
 
-    The sleep is `time.sleep(randint(3, 10))` on the request thread (D775), so
-    an unpatched retry row costs the suite up to ten seconds. Fact 302.
+    `retry=True` unless a row says otherwise: the retry rows below describe
+    the Celery callers' path (D775). An unpatched retry costs the suite up to
+    ten seconds. Fact 302.
     """
+    kwargs.setdefault('retry', True)
     with patch('app.activitypub.actor.get_request', side_effect=responses) as request:
         with patch('app.activitypub.actor.time.sleep') as slept:
             result = fetch_remote_actor_data('https://remote.example/u/alice', **kwargs)
@@ -616,6 +620,20 @@ def test_a_dns_failure_is_not_retried(app, db_session):
 
     result, request, slept = _fetch([httpx.ConnectError('no such host'),
                                      _Resp(payload={'type': 'Person'})])
+
+    assert result is None
+    assert request.call_count == 1
+    assert slept.call_count == 0
+
+
+def test_by_default_an_overloaded_peer_is_not_retried(app, db_session):
+    """D775, fixed. The fetch slept 3-10 seconds and retried for every caller,
+    the inbox and web requests included. Without `retry=True` it now gives up
+    after one attempt and never sleeps."""
+    _seed()
+
+    result, request, slept = _fetch([_Resp(status_code=503), _Resp(payload={'type': 'Person'})],
+                                    retry=False)
 
     assert result is None
     assert request.call_count == 1
@@ -790,7 +808,53 @@ def test_a_url_is_fetched_directly_and_a_handle_through_webfinger(app, db_sessio
     assert webfinger.call_args.args == ('alice', 'remote.example')
 
 
-def test_a_handle_that_does_not_parse_is_refused_before_any_request(app, db_session):
+def test_the_retry_choice_is_handed_to_whichever_fetch_runs(app, db_session):
+    """D775. `create_actor_from_remote` defaults to no retry and passes the
+    caller's choice on, to the direct fetch and to webfinger alike."""
+    _seed()
+
+    for kwargs, expected in (({}, False), ({'retry': True}, True)):
+        with patch('app.activitypub.actor.fetch_remote_actor_data', return_value=None) as direct, \
+             patch('app.activitypub.actor.fetch_actor_from_webfinger', return_value=None) as webfinger:
+            create_actor_from_remote('https://remote.example/u/alice', **kwargs)
+            create_actor_from_remote('alice@remote.example', **kwargs)
+        assert direct.call_args.kwargs == {'retry': expected}
+        assert webfinger.call_args.kwargs == {'retry': expected}
+
+
+def test_find_actor_or_create_passes_its_retry_choice_to_the_creator(app, db_session):
+    """D775. The default is no retry; only the housekeeping Celery tasks ask."""
+    from app.activitypub.util import find_actor_or_create
+    _seed()
+
+    for kwargs, expected in (({}, False), ({'retry': True}, True)):
+        with patch('app.activitypub.actor.create_actor_from_remote', return_value=None) as create:
+            find_actor_or_create('https://remote.example/u/alice', **kwargs)
+        assert create.call_args.kwargs['retry'] is expected
+
+
+def test_only_the_housekeeping_celery_tasks_ask_for_a_retry(app, db_session):
+    """D775. The owner's ruling: inbox processing and web requests never sleep
+    and retry; the six housekeeping tasks keep it. Read from source, because
+    driving six tasks to their lookups would test their plumbing, not this."""
+    import ast
+    from pathlib import Path
+    retrying = {'import_settings_task', 'retrieve_mods_and_backfill',
+                'refresh_community_profile_task', 'refresh_feed_profile_task',
+                'new_instance_profile_task', 'monitor_healthy_instances'}
+    seen = {}
+    for path in Path('app').rglob('*.py'):
+        for node in ast.walk(ast.parse(path.read_text(encoding='utf8'))):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            for call in ast.walk(node):
+                if isinstance(call, ast.Call) and ast.unparse(call.func).endswith(
+                        ('find_actor_or_create', 'find_actor_or_create_cached')):
+                    asks = any(k.arg == 'retry' for k in call.keywords)
+                    seen.setdefault(node.name, set()).add(asks)
+    assert {name for name, asks in seen.items() if True in asks} == retrying
+    assert all(seen[name] == {True} for name in retrying)
+
     """normalise_actor_string returns ('', '') for a string with no '@', and
     the guard on that empty address is what stops a webfinger request to a
     server named ''.
@@ -967,11 +1031,32 @@ def test_a_bare_name_that_matches_nothing_is_none(app, db_session):
 # --------------------------------------------------------------------------
 
 
-def _webfinger_fetch(responses):
+def _webfinger_fetch(responses, retry=True):
+    """`retry=True` by default, as `_fetch`: the retry rows are the Celery path."""
     with patch('app.activitypub.actor.get_request', side_effect=responses) as request:
         with patch('app.activitypub.actor.time.sleep') as slept:
-            result = fetch_actor_from_webfinger('alice', 'remote.example')
+            result = fetch_actor_from_webfinger('alice', 'remote.example', retry=retry)
     return result, request, slept
+
+
+def test_by_default_a_failed_webfinger_request_is_not_retried(app, db_session):
+    """D775, fixed. Neither the webfinger request nor the actor fetch it leads
+    to sleeps and retries unless the caller passes `retry=True`."""
+    import httpx
+    _seed()
+    links = [{'rel': 'self', 'href': 'https://remote.example/u/alice'}]
+
+    result, request, slept = _webfinger_fetch([httpx.ConnectError('refused'), _webfinger(links)],
+                                              retry=False)
+    assert result is None
+    assert request.call_count == 1
+    assert slept.call_count == 0
+
+    result, request, slept = _webfinger_fetch([_webfinger(links), httpx.ConnectError('refused'),
+                                               _Resp(payload={'type': 'Person'})], retry=False)
+    assert result is None
+    assert request.call_count == 2
+    assert slept.call_count == 0
 
 
 def test_a_webfinger_lookup_returns_the_actor_it_points_at(app, db_session):
@@ -1110,7 +1195,8 @@ def test_the_fetch_loop_answers_none_when_it_is_asked_for_no_attempts(app, db_se
     _seed()
 
     with patch('app.activitypub.actor.get_request') as request:
-        assert fetch_remote_actor_data('https://remote.example/u/alice', retry_count=-1) is None
+        assert fetch_remote_actor_data('https://remote.example/u/alice', retry=True,
+                                       retry_count=-1) is None
 
     assert request.call_count == 0
 
