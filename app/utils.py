@@ -2662,16 +2662,16 @@ def banned_ip_addresses() -> List[str]:
 
 
 def guess_mime_type(file_path: str) -> str:
-    content_type = mimetypes.guess_type(file_path)
-    if content_type is None:
+    # D1435. An `if content_type is None:` arm stood above this, duplicating the
+    # fallback below it, and it was unreachable: `mimetypes.guess_type` returns a
+    # (type, encoding) TUPLE and never None, so the tuple's own `[0] is None` was
+    # always the live test. The duplicate is gone rather than both being kept in
+    # step by hand.
+    guessed_type = mimetypes.guess_type(file_path)[0]
+    if guessed_type is None:
         ext = os.path.splitext(file_path)[1].lower().lstrip('.')  # get extension without dot
-        content_type = f'image/{ext}' if ext else 'application/octet-stream'
-    else:
-        if content_type[0] is None:
-            ext = os.path.splitext(file_path)[1].lower().lstrip('.')  # get extension without dot
-            return f'image/{ext}' if ext else 'application/octet-stream'
-        content_type = content_type[0]
-    return content_type
+        return f'image/{ext}' if ext else 'application/octet-stream'
+    return guessed_type
 
 
 def can_downvote(user, community: Community, communities_banned_from_list=None) -> bool:

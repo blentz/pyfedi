@@ -5252,7 +5252,14 @@ class Feed(db.Model):
         return owner.ap_id if owner.ap_id else owner.user_name
 
     def parent_feed_name(self):
-        parent_feed = db.session.get(Feed, self.parent_feed_id)
+        # D1434, as D1422 in RssFeedItem.delete_dependencies: a top-level feed has
+        # `parent_feed_id` NULL, and `db.session.get(Feed, None)` answers
+        # "SAWarning: fully NULL primary key identity cannot load any object. This
+        # condition may raise an error in a future release." The `if parent_feed`
+        # below already treats it as no parent; asking the question at all is what
+        # warns, once per render of every top-level feed.
+        parent_feed = db.session.get(Feed, self.parent_feed_id) if self.parent_feed_id \
+            else None
         return parent_feed.title if parent_feed else ""
 
     def subscribed(self, user_id: int) -> int:
