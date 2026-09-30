@@ -269,6 +269,10 @@ def feed_copy(feed_id: int):
             copy_feed_form.nsfw.data = False
         if g.site.enable_nsfl is False:
             copy_feed_form.nsfl.data = False
+        # Feed.name is unique: refuse a taken one here, not as an IntegrityError at commit (D681)
+        if db.session.query(Feed).filter_by(name=copy_feed_form.url.data).first() is not None:
+            flash(_('A Feed with this url already exists.'), 'error')
+            return redirect(url_for('feed.feed_copy', feed_id=feed_id))
 
         private_key, public_key = RsaKeys.generate_keypair()
         feed = Feed(user_id=current_user.id, title=copy_feed_form.title.data, name=copy_feed_form.url.data,

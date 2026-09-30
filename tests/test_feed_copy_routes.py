@@ -964,3 +964,27 @@ def test_a_lookup_search_that_fails_for_another_reason_says_nothing(app, db_sess
     assert response.status_code == 200
     assert flash_stub.call_count == 1
     assert 'not found' in str(flash_stub.call_args.args[0]).lower()
+
+
+def test_copying_a_feed_to_a_url_that_is_taken_is_refused_before_the_insert(app, db_session):
+    """D681's sibling, fixed. feed_copy builds its Feed itself rather than
+    through make_feed, so the form's normalised-name check was its only guard
+    and anything past it was an IntegrityError at the unique index. The route
+    now refuses a taken name before the insert, as make_feed does. The form's
+    check is bypassed here so that the route's own is what answers."""
+    instance, owner = _seed()
+    source = _feed(owner)
+    _feed(owner, name='copiedfeed')
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.AddCopyFeedForm.validate',
+                   new=lambda self, extra_validators=None: True), \
+                patch('app.feed.routes.render_template', return_value='rendered'), \
+                patch('app.feed.routes.flash') as flash_stub:
+            response = client.post(f'/feed/{source.id}/copy', data=_copy_payload(app, client))
+
+    assert response.status_code == 302
+    assert response.headers['Location'].endswith(f'/feed/{source.id}/copy')
+    assert 'A Feed with this url already exists.' in str(flash_stub.call_args)
+    assert Feed.query.filter_by(name='copiedfeed').count() == 1
