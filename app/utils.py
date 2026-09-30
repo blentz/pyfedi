@@ -2743,7 +2743,7 @@ def can_create_post(user, content: Community) -> bool:
         return False
 
     if user.is_local():
-        if user.verified is False or user.private_key is None:
+        if not user.verified or user.private_key is None:
             return False
     else:
         if not hasattr(g, 'site'):
@@ -2792,7 +2792,7 @@ def can_create_post_reply(user, content: Community) -> bool:
         return False
 
     if user.is_local():
-        if user.verified is False or user.private_key is None:
+        if not user.verified or user.private_key is None:
             return False
     else:
         if not hasattr(g, 'site'):
@@ -4059,7 +4059,7 @@ def authorise_api_user(auth, return_type=None, id_match=None) -> User | dict | i
         user = db.session.get(User, user_id)
         if user is None:
             raise Exception('incorrect_login')
-        if user.ap_id is not None or user.verified is False or user.banned is True or user.deleted is True:
+        if user.ap_id is not None or not user.verified or user.banned is True or user.deleted is True:
             raise Exception('incorrect_login')
         if user.password_updated_at:
             issued_at_time = decoded['iat']

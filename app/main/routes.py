@@ -1166,7 +1166,7 @@ def find_duplicate_values(dictionary):
 
 
 def verification_warning():
-    if hasattr(current_user, 'verified') and current_user.verified is False:
+    if hasattr(current_user, 'verified') and not current_user.verified:
         flash(_('Please click the link in your email inbox to verify your account.'), 'warning')
 
 

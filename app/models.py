@@ -1646,7 +1646,7 @@ class User(UserMixin, db.Model):
     title = db.Column(db.String(256))
     email = db.Column(db.String(255), index=True)
     password_hash = db.Column(db.String(165))
-    verified = db.Column(db.Boolean, default=False)
+    verified = db.Column(db.Boolean, default=False, server_default='false', nullable=False)  # NOT NULL: guards read `not user.verified` (D645)
     verification_token = db.Column(db.String(16), index=True)
     banned = db.Column(db.Boolean, default=False, index=True)
     banned_until = db.Column(db.DateTime)  # null == permanent ban
