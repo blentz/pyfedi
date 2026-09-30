@@ -19,7 +19,8 @@ before the one that says 404. And `_feed_add_community` behind it deleted a
 FeedItem it had not found and inserted one it already had.
 """
 import pytest
-from flask import g
+from flask import g, session as flask_session
+from flask_wtf.csrf import generate_csrf
 
 from app import cache, db
 from app.models import Community, Feed, FeedItem, Language, Site, Topic, User
@@ -249,12 +250,19 @@ class TestAddingACommunityToAFeed:
     reach a row without asking whether it is there."""
 
     def add(self, env, **params):
-        query = '&'.join(f'{key}={value}' for key, value in params.items())
-        return env.client.get(f'/feed/add_community?{query}')
+        """A POST with a CSRF token (D664); the ids go in the form."""
+        with env.app.test_request_context():
+            g.pop('csrf_token', None)  # generate_csrf caches on g, which a second call here shares
+            token = generate_csrf()
+            raw = flask_session['csrf_token']
+        with env.client.session_transaction() as sess:
+            sess['csrf_token'] = raw
+        return env.client.post('/feed/add_community',
+                               data={'csrf_token': token, **params})
 
     def test_no_parameters_at_all(self, env):
         """`int(None)` -- the parameter absent, not merely wrong."""
-        assert env.client.get('/feed/add_community').status_code == 404
+        assert self.add(env).status_code == 404
 
     def test_a_missing_new_feed_id(self, env):
         assert self.add(env, current_feed_id=0,
@@ -387,9 +395,10 @@ class TestAddingACommunityToAFeed:
 
     def test_an_anonymous_caller_is_sent_to_log_in(self, env):
         feed = a_feed(env.user)
-        response = env.anonymous.get(
-            f'/feed/add_community?new_feed_id={feed.id}&current_feed_id=0'
-            f'&community_id={env.community.id}')
+        response = env.anonymous.post(
+            '/feed/add_community',
+            data={'new_feed_id': feed.id, 'current_feed_id': 0,
+                  'community_id': env.community.id})
         assert response.status_code == 302
         assert '/auth/login' in response.headers['Location']
         assert FeedItem.query.count() == 0

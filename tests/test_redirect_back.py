@@ -170,9 +170,34 @@ class TestFeedAddCommunityRedirect:
         return user, feed, community
 
     def _add(self, client, user, feed, community, headers=None):
-        return client.get(f'/feed/add_community?user_id={user.id}&new_feed_id={feed.id}'
-                          f'&current_feed_id=0&community_id={community.id}',
-                          headers=headers or {})
+        token = csrf(client.application, client)
+        return client.post('/feed/add_community',
+                           data={'csrf_token': token, 'new_feed_id': feed.id,
+                                 'current_feed_id': 0, 'community_id': community.id},
+                           headers=headers or {})
+
+    def test_a_get_is_refused(self, app, db_session):
+        """D664, fixed. The route was a state-changing GET with no CSRF token,
+        so any page could make a signed-in user add a community to their own
+        feed. It is now POST-only."""
+        user, feed, community = self._setup()
+        with app.test_client() as client:
+            login(client, user)
+            response = client.get(f'/feed/add_community?new_feed_id={feed.id}'
+                                  f'&current_feed_id=0&community_id={community.id}')
+        assert response.status_code == 405
+        assert db.session.get(Feed, feed.id).num_communities == 0
+
+    def test_a_post_without_a_csrf_token_is_refused(self, app, db_session):
+        """D664, fixed. The POST has to carry the token."""
+        user, feed, community = self._setup()
+        with app.test_client() as client:
+            login(client, user)
+            response = client.post('/feed/add_community',
+                                   data={'new_feed_id': feed.id, 'current_feed_id': 0,
+                                         'community_id': community.id})
+        assert response.status_code == 400
+        assert db.session.get(Feed, feed.id).num_communities == 0
 
     def test_the_user_goes_back_to_the_page_they_came_from(self, app, db_session):
         user, feed, community = self._setup()
@@ -193,9 +218,7 @@ class TestFeedAddCommunityRedirect:
 
     def test_a_referrer_equal_to_the_request_url_falls_back_to_the_index(self, app, db_session):
         user, feed, community = self._setup()
-        path = (f'/feed/add_community?user_id={user.id}&new_feed_id={feed.id}'
-                f'&current_feed_id=0&community_id={community.id}')
-        same = url_of(app, path)
+        same = url_of(app, '/feed/add_community')
         with app.test_client() as client:
             login(client, user)
             response = self._add(client, user, feed, community, headers={'Referer': same})
