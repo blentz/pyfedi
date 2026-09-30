@@ -3417,6 +3417,11 @@ class Post(db.Model):
 
             if 'v' in query_params:
                 video_id = query_params.pop('v')[0]
+                # D1424. The `/shorts/` branch below renamed `t` to `start` and this one did
+                # not, so an ordinary `watch?v=...&t=90` link embedded from the beginning: the
+                # iframe player ignores `t` and honours `start`. Same rename, same two lines.
+                if 't' in query_params:
+                    query_params['start'] = query_params.pop('t')[0]
                 if rel:
                     query_params['rel'] = '0'
                 new_query = urlencode(query_params, doseq=True)
