@@ -25351,4 +25351,45 @@ branch; a fix applied to one copy says nothing about the other, so this is the r
 
 Nine mutants, all dead, on a green baseline.
 
+
+---
+
+## Round 273 -- the remaining one-line arms, and a paginator's backwards half
+
+No source change. Twenty-two rows.
+
+**Two survivors needed the row restructured, and each taught something about the shape of the
+code.**
+
+* `purge_content(soft=False)`'s `db.session.delete(reply)` could not be told from
+  `reply.deleted = True` while the reply was on the PURGED ACCOUNT'S OWN post: `purge_content` deletes
+  the post, and the reply goes with it by cascade either way. The row now puts the reply on somebody
+  else's post, which is also the case that matters -- a banned account's comments under other
+  people's posts are what a moderator is deciding about.
+* `prev_bookmark` returning `bookmark_next` instead of `bookmark_previous` survived an assertion that
+  the value is not None, because both are non-None on page two. The row now FOLLOWS the bookmark and
+  requires the rows of the page before.
+
+**Three guards are equivalent, for one reason in three shapes.** `user_notes`,
+`favorite_communities` and `following_user_ids` all guard an absent or zero account id, and
+`UserNote.user_id`, `CommunityFavorite.user_id` and `UserFollower.local_user_id` are foreign keys to
+`user.id` -- so a query for NULL or 0 matches nothing and the answer is the same empty collection
+either way. Each is kept for the query it saves, because all three are read per row of every listing
+page. Fact 1043's argument.
+
+**`Feed.path`'s `if parent_feed is None: break` is unreachable, and the database says so.**
+`feed.parent_feed_id` is a foreign key to `feed.id` with no cascade, so deleting a parent a child
+still names raises `psycopg2.errors.ForeignKeyViolation: update or delete on table "feed" violates
+foreign key constraint "feed_parent_feed_id_fkey"` -- measured while writing the row that tried it.
+There is no state in which the id is set and the row is gone.
+
+Also covered: `encode_jwt_token`'s refusal to sign with an empty `SECRET_KEY`, which is the only thing
+between a missing config value and tokens any instance could forge; `add_to_modlog`'s closed
+vocabulary, which is what keeps every log line renderable; the local and remote spellings of
+`User.mention_tag` and `Feed.lemmy_link`, where naming the wrong host produces a handle that addresses
+nobody; and `parse_page`'s content-type gate, including the `.get('Content-Type', '')` default that
+makes a missing header a refusal rather than an AttributeError.
+
+Twelve mutants dead, three provably equivalent, on a green baseline.
+
 **Next free number: D1436.**

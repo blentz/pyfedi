@@ -13888,3 +13888,12 @@ bare `except:`, so a fetch failure is swallowed by design. Patch the module's `g
 answer with a proxy whose `get` raises and which delegates everything else -- that lookup is inside
 the outer `try` and inside no inner one. Pair it with a control row that drives the inner handler, or
 the row does not say which failures are ordinary.
+
+**1063. A SOFT-VERSUS-HARD DELETE NEEDS A ROW THE CASCADE DOES NOT REACH.**
+`purge_content(soft=False)`'s `session.delete(reply)` is indistinguishable from `reply.deleted = True`
+for a reply on the purged account's OWN post, because the post is deleted and the reply cascades with
+it. Put the reply under somebody else's post.
+
+**1064. `prev_bookmark is not None` PROVES NOTHING ABOUT WHICH BOOKMARK IT IS.**
+`bookmark_next` is also non-None on page two. Follow the bookmark and assert the rows of the page
+before -- the same argument as fact 1028 about two arms that produce the same value.
