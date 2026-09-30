@@ -1,7 +1,7 @@
 """resolve_remote_post_from_search (app/activitypub/util.py) is the third
 resolver: given a URI, it fetches, unwraps NodeBB's two container shapes, and
 creates a Post. Its own comment says it is called "from UI, via 'search' option
-in navbar"; that comment is stale, and the register's D24 says so -- the `Move`
+in navbar"; that comment was stale, and the register's D24 said so -- the `Move`
 activity handler in app/activitypub/routes.py also calls it, with a
 peer-supplied string, which is what makes this function peer-reachable rather
 than user-driven.
@@ -691,15 +691,30 @@ class TestThisCopysAttributedToWalk:
         assert Post.query.filter_by(ap_id=URI).count() == 0
 
 
-class TestThisCopysDomainGate:
-    """D24's surface: `uri_domain != actor_domain`, both sides raw
-    `urlparse(...).netloc`. Unlike create_resolved_object's, BOTH operands here
-    are derived inside this function from raw strings, which is why the
-    register rates this one inconsistency-dependent rather than systematic --
-    a peer whose authority is spelled the same way everywhere passes.
+def author_lookup_spy(monkeypatch, user):
+    """Stand in for find_actor_or_create, returning `user` and recording the
+    URIs asked for -- being asked at all means the domain gate let the call
+    through."""
+    asked = []
 
-    These pin what it does today. A fix to D24 flips the last two to a created
-    post.
+    def lookup(actor, *args, **kwargs):
+        asked.append(actor)
+        return user
+
+    monkeypatch.setattr('app.activitypub.util.find_actor_or_create', lookup)
+    return asked
+
+
+class TestThisCopysDomainGate:
+    """D24, fixed. `uri_domain != actor_domain` used to compare raw
+    `urlparse(...).netloc` on both sides, so a peer that spelled its own host
+    with a capital or an explicit `:443` in one place and not the other was
+    refused -- reachable by a peer through the `Move` handler. Both sides now
+    go through host_of, so the case and port tests are created. The port case
+    stubs the author lookup, which keys on the exact URI.
+
+    An author URI urlparse rejects used to raise ValueError; it now degrades
+    to '' and is refused.
     """
 
     def test_an_author_on_another_host_is_refused(self, app, peer_author, http_mock):
@@ -710,18 +725,26 @@ class TestThisCopysDomainGate:
         assert resolve_remote_post_from_search(URI) is None
         assert Post.query.filter_by(ap_id=URI).count() == 0
 
-    def test_a_case_difference_in_the_author_host_refuses(self, app, peer_author, http_mock):
+    def test_a_case_difference_in_the_author_host_is_created(self, app, peer_author, http_mock):
         community = make_community('news', host=PEER_OBJECT_HOST)
         mixed = f'https://{PEER_OBJECT_HOST.capitalize()}/users/alice'
         serve_remote_object(http_mock, URI, resolvable(public_note(attributed_to=mixed), community))
 
-        assert resolve_remote_post_from_search(URI) is None
-        assert Post.query.filter_by(ap_id=URI).count() == 0
+        assert resolve_remote_post_from_search(URI).ap_id == URI
 
-    def test_an_explicit_default_port_on_the_author_refuses(self, app, peer_author, http_mock):
+    def test_an_explicit_default_port_on_the_author_is_created(self, app, peer_author, http_mock, monkeypatch):
         community = make_community('news', host=PEER_OBJECT_HOST)
         ported = f'https://{PEER_OBJECT_HOST}:443/users/alice'
         serve_remote_object(http_mock, URI, resolvable(public_note(attributed_to=ported), community))
+        passed_the_gate = author_lookup_spy(monkeypatch, peer_author)
+
+        assert resolve_remote_post_from_search(URI).ap_id == URI
+        assert passed_the_gate == [ported]
+
+    def test_an_author_uri_urlparse_rejects_is_refused_without_raising(self, app, peer_author, http_mock):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        broken = 'https://[broken/users/alice'
+        serve_remote_object(http_mock, URI, resolvable(public_note(attributed_to=broken), community))
 
         assert resolve_remote_post_from_search(URI) is None
         assert Post.query.filter_by(ap_id=URI).count() == 0

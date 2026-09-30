@@ -4828,14 +4828,16 @@ def populate_child_feed_worker(feed_id, child_feed):
         db.session.remove()
 
 
-# called from UI, via 'search' option in navbar, or 'Retrieve a post from the original server' in community sidebar
+# called from UI, via 'search' option in navbar, or 'Retrieve a post from the original server' in community sidebar,
+# and from the Move activity handler with a peer-supplied URI
 def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
     post = Post.get_by_ap_id(uri)
     if post:
         return post
 
-    parsed_url = urlparse(uri)
-    uri_domain = parsed_url.netloc
+    # Hosts, not authorities (D24), as in create_resolved_object: an empty host is refused at the gate below
+    # rather than compared, because host_of degrades what urlparse rejects to '' and '' == '' is True.
+    uri_domain = host_of(uri)
     actor_domain = None
     actor = None
 
@@ -4870,8 +4872,7 @@ def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
         ordered_items = post_data['orderedItems']
         total_items = post_data['totalItems']
         uri = ordered_items[0]
-        parsed_url = urlparse(uri)
-        uri_domain = parsed_url.netloc
+        uri_domain = host_of(uri)
         post_data = remote_object_to_json(uri)
         if not post_data:
             return None
@@ -4886,22 +4887,19 @@ def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
         attributed_to = post_data['attributedTo']
         if isinstance(attributed_to, str):
             actor = attributed_to
-            parsed_url = urlparse(actor)
-            actor_domain = parsed_url.netloc
+            actor_domain = host_of(actor)
         elif isinstance(attributed_to, list):
             for a in attributed_to:
                 if isinstance(a, dict) and a.get('type') == 'Person':
                     actor = a.get('id')
                     if isinstance(actor, str):  # Ensure `actor` is a valid string
-                        parsed_url = urlparse(actor)
-                        actor_domain = parsed_url.netloc
+                        actor_domain = host_of(actor)
                     break
                 elif isinstance(a, str):
                     actor = a
-                    parsed_url = urlparse(actor)
-                    actor_domain = parsed_url.netloc
+                    actor_domain = host_of(actor)
                     break
-    if uri_domain != actor_domain:
+    if not uri_domain or uri_domain != actor_domain:
         return None
 
     # find the community the post was submitted to
