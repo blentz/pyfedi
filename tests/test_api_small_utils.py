@@ -310,16 +310,26 @@ def test_the_scoped_uploads_refuse_an_unauthorised_caller(app, db_session,
         assert upload.call_args_list == []
 
 
-def test_an_upload_with_a_bad_token_falls_back_to_the_session(app, db_session,
-                                                              api_baseline):
-    """R1, pinned as the behaviour it is rather than endorsed.
+def test_an_upload_with_a_bad_token_is_refused_even_with_a_session(app, db_session,
+                                                                   api_baseline):
+    """D880, fixed. A bad token used to fall back to the session user, so a
+    client sending a WRONG token was never told and never learned to refresh.
+    A presented token is now the only credential considered.
+    """
+    user = api_baseline.user1
 
-        PROBE g1 bad token + session  -> {'url': 'u.png'}, as <User user1_1>
-        PROBE g2 bad token, no session -> Exception incorrect_login
+    with app.test_request_context('/'):
+        login_user(user)
+        with patch('app.api.alpha.utils.upload.process_upload') as upload:
+            with pytest.raises(Exception, match='incorrect_login'):
+                post_upload_image('Bearer not-a-real-token', image_file='FILE')
 
-    A client sending a WRONG token is never told: it is accepted as the session
-    user, so it never learns to refresh. Registered rather than changed --
-    altering what an invalid token does is an authentication decision.
+        assert upload.call_args_list == []
+
+
+def test_an_upload_with_no_token_uses_the_session(app, db_session, api_baseline):
+    """D880's other side: with no Authorization header at all, the browser
+    session still identifies the caller.
     """
     user = api_baseline.user1
 
@@ -327,7 +337,7 @@ def test_an_upload_with_a_bad_token_falls_back_to_the_session(app, db_session,
         login_user(user)
         with patch('app.api.alpha.utils.upload.process_upload',
                    return_value='https://cdn.example/a.png') as upload:
-            result = post_upload_image('Bearer not-a-real-token', image_file='FILE')
+            result = post_upload_image(None, image_file='FILE')
 
         # Asserted INSIDE the request context. The fallback passes
         # `current_user` itself, which is a LocalProxy: read after the context
@@ -389,18 +399,30 @@ def test_deleting_an_image_reports_success(app, db_session, api_baseline):
     assert delete.call_args.kwargs['user_id'] == user.id
 
 
-def test_deleting_an_image_with_a_bad_token_falls_back_to_the_session(app, db_session,
-                                                                      api_baseline):
-    """The same fallback as the upload endpoint, on the delete endpoint. Both
-    copies are covered because R1 is about both.
+def test_deleting_an_image_with_a_bad_token_is_refused_even_with_a_session(app, db_session,
+                                                                           api_baseline):
+    """D880, fixed, on the delete endpoint: a presented token that does not
+    authorise is refused rather than replaced by the session user.
     """
     user = api_baseline.user1
 
     with app.test_request_context('/'):
         login_user(user)
         with patch('app.api.alpha.utils.upload.process_file_delete') as delete:
-            result = post_image_delete('Bearer not-a-real-token',
-                                       {'file': 'https://cdn.example/a.png'})
+            with pytest.raises(Exception, match='incorrect_login'):
+                post_image_delete('Bearer not-a-real-token',
+                                  {'file': 'https://cdn.example/a.png'})
+
+        assert delete.call_args_list == []
+
+
+def test_deleting_an_image_with_no_token_uses_the_session(app, db_session, api_baseline):
+    user = api_baseline.user1
+
+    with app.test_request_context('/'):
+        login_user(user)
+        with patch('app.api.alpha.utils.upload.process_file_delete') as delete:
+            result = post_image_delete(None, {'file': 'https://cdn.example/a.png'})
 
     assert result == {'result': 'ok'}
     assert delete.call_args.kwargs['user_id'] == user.id
