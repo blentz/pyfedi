@@ -2771,6 +2771,9 @@ def unban_user(blocker, blocked, community, core_activity):
             cache.delete_memoized(moderating_communities, blocked.id)
             cache.delete_memoized(banned_instances, blocked.id)
             cache.delete_memoized(blocked_or_banned_instances, blocked.id)
+
+        add_to_modlog('unban_user', actor=blocker, target_user=blocked, reason=reason,
+                      link_text=blocked.display_name(), link=f'u/{blocked.link()}')
     else:
         db.session.query(CommunityBan).filter(CommunityBan.community_id == community.id,
                                               CommunityBan.user_id == blocked.id).delete()

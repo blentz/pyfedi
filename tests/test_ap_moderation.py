@@ -1199,14 +1199,11 @@ def test_a_community_unban_removes_the_ban_and_clears_the_membership_flag(
     assert db.session.query(ModLog).filter_by(action='unban_user').count() == 1
 
 
-def test_an_instance_unban_writes_no_modlog_entry(app, db_session, monkeypatch):
-    """PINS A DEFECT. `unban_user`'s INSTANCE branch calls no
-    `add_to_modlog` at all, while its community branch does and BOTH
-    branches of `ban_user` do. So an instance-wide ban is recorded in the
-    moderation log and its reversal is not.
-
-    The unban itself is asserted to have worked, so this cannot pass by the
-    call having failed: the InstanceBan row is gone and the modlog is empty.
+def test_an_instance_unban_writes_a_modlog_entry(app, db_session, monkeypatch):
+    """D204, fixed. `unban_user`'s INSTANCE branch called no `add_to_modlog`,
+    while its community branch and both branches of `ban_user` do, so an
+    instance-wide ban was logged and its reversal was not. It now writes the
+    same entry the instance-wide ban does, as `unban_user`.
     """
     site, instance, community, author, moderator = seed_moderation_scene()
     make_instance_ban(author, instance)
@@ -1217,7 +1214,12 @@ def test_an_instance_unban_writes_no_modlog_entry(app, db_session, monkeypatch):
                                    'summary': 'appeal upheld'}})
 
     assert db.session.query(InstanceBan).filter_by(user_id=author.id).count() == 0
-    assert db.session.query(ModLog).count() == 0
+    entries = db.session.query(ModLog).all()
+    assert len(entries) == 1
+    assert entries[0].action == 'unban_user'
+    assert entries[0].target_user_id == author.id
+    assert entries[0].reason == 'appeal upheld'
+    assert entries[0].community_id is None
 
 
 def test_a_community_unban_notifies_only_a_user_who_has_posted_there(
