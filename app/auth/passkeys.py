@@ -26,20 +26,21 @@ def passkey_options():
         User.ap_id == None,
         User.banned == False,
     ).first()
+    # D888: an unknown (or banned, or remote) name gets options of the same shape
+    # as a real account's, offering no credential, so this endpoint cannot be
+    # used to test whether an account exists. The login then fails generically.
+    options = generate_authentication_options(
+        rp_id=request.host,
+        timeout=120000,
+        allow_credentials=allowed_credentials(user) if user else [],
+        user_verification=UserVerificationRequirement.PREFERRED,
+    )
     if user:
-        options = generate_authentication_options(
-            rp_id=request.host,
-            timeout=120000,
-            allow_credentials=allowed_credentials(user),
-            user_verification=UserVerificationRequirement.PREFERRED,
-        )
         cache.set(f'challenge_{user.id}', options.challenge, timeout=3600)
-        json_obj = options_to_json(options)
-        response = make_response(json_obj)
-        response.content_type = 'application/json'
-        return response
-    else:
-        return jsonify({"error": f"Could not find user {username}"})
+    json_obj = options_to_json(options)
+    response = make_response(json_obj)
+    response.content_type = 'application/json'
+    return response
 
 
 # ----------------------------------------------------------------------
