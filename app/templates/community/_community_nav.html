@@ -137,9 +137,9 @@
                         {% else -%}
                             {% if not community.instance.gone_forever %}
                                 <li>
-                                    <a class="dropdown-item" href="/community/{{ community.link() }}/subscribe" rel="nofollow">
-                                        {{ _('Join') }}
-                                    </a>
+                                    <form method="post" action="/community/{{ community.link() }}/subscribe"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="dropdown-item">{{ _('Join') }}</button>
+                                    </form>
                                 </li>
                             {% endif %}
                         {% endif -%}

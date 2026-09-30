@@ -308,6 +308,7 @@ class TestTheExternalInteractionHandOff:
                 query_string={'uri': f'https://{HOST}/c/general'})
 
         assert response.status_code == 302
-        assert response.headers['Location'] == \
-            f'/community/{env.community.link()}/subscribe'
+        # The community page, where Join is a CSRF-checked form: subscribe is
+        # POST-only since D994's sibling fix, so a hand-off cannot join by GET.
+        assert response.headers['Location'] == f'/c/{env.community.link()}'
         assert lookup.call_args.kwargs == {'community_only': True}

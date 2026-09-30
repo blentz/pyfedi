@@ -861,14 +861,16 @@ def show_community_ical(actor):
         abort(404)
 
 
-@bp.route('/<actor>/subscribe', methods=['GET', 'POST'])
+@bp.route('/<actor>/subscribe', methods=['POST'])
 @login_required
 @validation_required
 @approval_required
 def subscribe(actor):
-    # POST is used by htmx, GET when JS is disabled
-    do_subscribe(actor, current_user.id, admin_preload=request.method == 'POST')
-    if request.method == 'POST':
+    # POST only, so login_required checks the CSRF token (D994 sibling). htmx swaps in
+    # the leave button; without JS the button is a plain form, answered with a redirect.
+    htmx = bool(request.headers.get('HX-Request'))
+    do_subscribe(actor, current_user.id, admin_preload=htmx)
+    if htmx:
         community = actor_to_community(actor)
         return render_template('community/_leave_button.html', community=community)
     else:

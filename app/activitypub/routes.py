@@ -627,8 +627,9 @@ def community_profile(actor):
 
 @bp.route('/c/<actor>/subscribe', methods=['GET'])
 def community_profile_subscribe(actor):
-    # For use by FEP 3b86, activity intents. See webfinger()
-    return redirect(url_for('community.subscribe', actor=actor))
+    # For use by FEP 3b86, activity intents. See webfinger(). The community page, where
+    # Join is a CSRF-checked form: community.subscribe is POST-only (D994 sibling).
+    return redirect(url_for('activitypub.community_profile', actor=actor))
 
 
 @bp.route('/inbox', methods=['POST'])
@@ -3030,7 +3031,7 @@ def feed_followers(actor):
 @bp.route('/activitypub/externalInteraction', methods=['GET'])
 def activitypub_external_interaction():
     """The "subscribe from your own instance" hand-off: a caller names a community by
-    uri and is redirected to its subscribe page.
+    uri and is redirected to its page, where Join is a form (D994 sibling).
 
     D1399. Both arms fell off the end of the function and returned None, which Flask
     answers with
@@ -3048,7 +3049,8 @@ def activitypub_external_interaction():
     community = find_actor_or_create_cached(uri, community_only=True)
     if not community or not isinstance(community, Community):
         abort(404)
-    return redirect(f'/community/{community.link()}/subscribe')
+    # The community page, where Join is a CSRF-checked form (D994 sibling)
+    return redirect(f'/c/{community.link()}')
 
 
 @bp.route('/quote_boost_auth')

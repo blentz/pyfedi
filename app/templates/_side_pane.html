@@ -18,7 +18,7 @@
                                 <form method="post" action="/community/{{ community.link() }}/unsubscribe"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="w-100 btn btn-outline-secondary">{{ _('Pending') }}</button></form>
                             {% else -%}
                                 {% if not community.instance.gone_forever %}
-                                    <a class="w-100 btn btn-primary" href="/community/{{ community.link() }}/subscribe" rel="nofollow">{{ _('Join') }}</a>
+                                    <form method="post" action="/community/{{ community.link() }}/subscribe"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="w-100 btn btn-primary">{{ _('Join') }}</button></form>
                                 {% endif %}
                             {% endif -%}
                         </div>

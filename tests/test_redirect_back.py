@@ -323,6 +323,8 @@ class TestCommunitySubscribe(BackSiteContract):
         self.expected_default = '/c/joinable'
         return f'/community/{community.name}/subscribe', user
 
+    method = 'post'  # POST-only since D994's sibling fix
+
 
 class TestCommunityUnsubscribe(BackSiteContract):
     """app/community/routes.py unsubscribe -- had the SERVER_NAME substring guard.
