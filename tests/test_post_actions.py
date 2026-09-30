@@ -21,6 +21,8 @@ from datetime import datetime
 from unittest.mock import patch
 
 import pytest
+from flask import get_template_attribute, render_template
+from flask_login import login_user
 
 from app.constants import (POST_TYPE_ARTICLE, POST_TYPE_IMAGE, POST_TYPE_POLL,
                            SUBSCRIPTION_OWNER)
@@ -1140,6 +1142,42 @@ def test_subscribing_to_a_comment_that_does_not_exist(app, env):
 
     assert client.post('/post_reply/999999/notification',
                        data={'csrf_token': token}).status_code == 404
+
+
+@pytest.mark.parametrize('which', ['post', 'post_reply'])
+def test_toggling_reply_notifications_by_get_is_refused(app, env, which):
+    """D994 sibling, fixed (owner ruling 2026-09-30). Both bells accepted GET,
+    which login_required never CSRF-checks, so any page could subscribe or
+    unsubscribe a signed-in user. They are POST-only now, and the bell is a form."""
+    anon, community, post, mod, author, outsider = env
+    target = post if which == 'post' else a_reply(post, author)
+    client = as_user(app, outsider)
+
+    assert client.get(f'/{which}/{target.id}/notification').status_code == 405
+    assert client.post(f'/{which}/{target.id}/notification').status_code == 400
+    assert NotificationSubscription.query.filter_by(
+        user_id=outsider.id, entity_id=target.id).count() == 0
+
+
+def test_the_bells_are_forms_carrying_the_token(app, env):
+    anon, community, post, mod, author, outsider = env
+    reply = a_reply(post, author)
+
+    with app.test_request_context('/'):
+        login_user(outsider)
+        post_bell = render_template('post/_post_notification_toggle.html', post=post)
+        reply_bell = render_template('post/_reply_notification_toggle.html',
+                                     comment={'comment': reply})
+        macro_bell = get_template_attribute('post/reply/_macros.html',
+                                            'render_reply_notification_toggle')(
+            {'comment': reply}, current_user=outsider)
+
+    assert f'<form method="post" action="/post/{post.id}/notification"' in post_bell
+    for html in (reply_bell, macro_bell):
+        assert f'<form method="post" action="/post_reply/{reply.id}/notification"' in html
+    for html in (post_bell, reply_bell, macro_bell):
+        assert 'name="csrf_token"' in html
+        assert 'href=' not in html
 
 
 def test_setting_a_reminder_about_a_post(app, env):
