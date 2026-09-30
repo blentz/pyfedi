@@ -13881,3 +13881,10 @@ the mutant; `''` finds nothing and proves nothing.
 **1061. A GUARD AND A HAPPY PATH ARE BOTH NEEDED, OR `if True:` AND `if False:` BOTH SURVIVE.**
 `undo_boost`'s two refusal rows passed under either mutant, because every input the file gave it was
 refused anyway. One row where the function SUCCEEDS is what makes the guard's rows mean anything.
+
+**1062. TO REACH A TASK'S OUTER `except`, RAISE FROM THE ROW LOOKUP, NOT THE FETCH.**
+`new_instance_profile_task`, `make_image_sizes_async` and their siblings wrap every network call in a
+bare `except:`, so a fetch failure is swallowed by design. Patch the module's `get_task_session` to
+answer with a proxy whose `get` raises and which delegates everything else -- that lookup is inside
+the outer `try` and inside no inner one. Pair it with a control row that drives the inner handler, or
+the row does not say which failures are ordinary.
