@@ -593,6 +593,33 @@ def test_a_quote_request_delegates_and_logs_success(app, db_session, monkeypatch
     assert ActivityPubLog.query.one().result == 'success'
 
 
+def test_a_quote_request_with_a_bare_uri_instrument_is_processed(app, db_session, monkeypatch):
+    """D56, fixed. The D56 guard refused any instrument that was not an
+    object with an id, including a bare URI string. That string is the
+    quoting post's id, so it is now taken as their_post_ap directly.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    make_site()
+    instance = make_instance('peer.example')
+    actor = make_user(instance, 'alice')
+    actor.ap_fetched_at = utcnow()
+    db.session.commit()
+
+    calls = []
+    monkeypatch.setattr(activitypub_routes, 'process_quote_boost',
+                         lambda *args: calls.append(args))
+
+    activity = inbox_activity(actor, activity_type='QuoteRequest',
+                              object='https://peer.example/objects/1',
+                              instrument='https://peer.example/objects/2')
+
+    dispatch(activity)
+
+    assert len(calls) == 1
+    assert calls[0][2] == 'https://peer.example/objects/2'
+    assert ActivityPubLog.query.one().result == 'success'
+
+
 def test_a_quote_request_without_an_instrument_is_refused(app, db_session, monkeypatch):
     """D56, fixed. The arm read `core_activity['instrument']['id']` with no
     guard, so a QuoteRequest omitting 'instrument' raised KeyError before
