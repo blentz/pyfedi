@@ -1520,6 +1520,48 @@ class TestVoteForReplySourceAndPermission:
         finally:
             _clear_votes_cast(s.user.id)
 
+    def test_a_web_reversal_is_refused_when_the_permission_that_cast_the_vote_is_gone(
+            self, db_session, app):
+        """D408's sibling, fixed. The web gate tested only the 'upvote' and
+        'downvote' literals, so a 'reversal' taken from the URL path segment
+        reached `reply.vote()` with no permission check. It now takes the API
+        arm's gate: the permission that would have cast the existing vote.
+
+        The witness is the surviving row; the refusal renders the buttons."""
+        make_site()
+        s = _seed_reply()
+        try:
+            vote_for_reply(s.reply.id, 'upvote', True, None, SRC_API,
+                           auth=bearer(s.user))
+            s.user.bot = True
+            db.session.commit()
+
+            with web_ctx(app, s.user):
+                result = vote_for_reply(s.reply.id, 'reversal', True, None, SRC_WEB)
+
+            assert result.status_code == 200
+            assert PostReplyVote.query.filter_by(
+                post_reply_id=s.reply.id, user_id=s.user.id).count() == 1
+        finally:
+            _clear_votes_cast(s.user.id)
+
+    def test_a_web_reversal_still_works_for_a_permitted_voter(self, db_session, app):
+        """The positive control: with the permission intact the web reversal
+        lands and the vote is gone, so the gate does not refuse every voter."""
+        make_site()
+        s = _seed_reply()
+        try:
+            vote_for_reply(s.reply.id, 'upvote', True, None, SRC_API,
+                           auth=bearer(s.user))
+
+            with web_ctx(app, s.user):
+                vote_for_reply(s.reply.id, 'reversal', True, None, SRC_WEB)
+
+            assert PostReplyVote.query.filter_by(
+                post_reply_id=s.reply.id, user_id=s.user.id).count() == 0
+        finally:
+            _clear_votes_cast(s.user.id)
+
     def test_the_web_arm_loads_the_reply_and_reads_current_user(self, db_session, app):
         """`:19` false -> `:27`, `:28`. Arc 19->27; statements 27, 28.
 
