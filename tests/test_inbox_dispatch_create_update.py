@@ -249,6 +249,25 @@ def test_a_poll_vote_for_an_unknown_choice_is_now_logged(app, db_session, monkey
     assert log.exception_message == 'Poll vote for an unknown choice'
 
 
+def test_a_second_note_vote_in_a_single_mode_poll_replaces_the_first(app, db_session, monkeypatch):
+    """D120, fixed. The Note-shaped path shares vote_for_choice with
+    process_poll_vote, which used to dedupe only per (user, choice). In a
+    single-choice poll a new vote from the same user now replaces the
+    earlier one.
+    """
+    instance, voter, post, poll, yes = seed_poll_post(choice_text='yes')
+    no = make_poll_choice(post, 'no', sort_order=1)
+
+    dispatch(create_activity(voter, poll_note(post.ap_id, 'yes')))
+    dispatch(create_activity(voter, poll_note(post.ap_id, 'no')))
+
+    from app.models import PollChoice, PollChoiceVote
+    db.session.expire_all()
+    assert [v.choice_id for v in db_session.query(PollChoiceVote).filter_by(user_id=voter.id)] == [no.id]
+    assert db.session.get(PollChoice, yes.id).num_votes == 0
+    assert db.session.get(PollChoice, no.id).num_votes == 1
+
+
 def test_a_poll_vote_from_a_banned_instance_is_refused(app, db_session, monkeypatch):
     """D119, fixed. process_poll_vote refuses a voter whose instance is
     banned; this Note-shaped path had no such check. It is now refused the

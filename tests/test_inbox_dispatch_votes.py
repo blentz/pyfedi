@@ -636,6 +636,52 @@ def test_poll_vote_success_votes_logs_and_announces_only_when_not_announced(app,
     assert kwargs == {}
 
 
+def _vote(voter, post, choice_text, n):
+    request_json = {'id': f'https://peer.example/activities/{n}', 'object': post.ap_id,
+                    'choice_text': choice_text}
+    process_poll_vote(voter, True, request_json, False)
+
+
+def test_a_second_single_mode_poll_vote_replaces_the_first(app, db_session, monkeypatch):
+    """D120, fixed. vote_for_choice deduped only per (user, choice), so a
+    remote voter could hold a vote on every choice of a single-choice poll.
+    A new vote from the same user now replaces the earlier one, and both
+    choices' num_votes follow.
+    """
+    voter, post, yes = _seed_poll_scenario()
+    no = PollChoice(post_id=post.id, choice_text='no', sort_order=1)
+    db.session.add(no)
+    db.session.commit()
+    monkeypatch.setattr(activitypub_routes, 'announce_activity_to_followers', lambda *a, **k: None)
+
+    _vote(voter, post, 'yes', 1)
+    _vote(voter, post, 'no', 2)
+
+    db.session.expire_all()
+    assert [v.choice_id for v in PollChoiceVote.query.filter_by(user_id=voter.id)] == [no.id]
+    assert db.session.get(PollChoice, yes.id).num_votes == 0
+    assert db.session.get(PollChoice, no.id).num_votes == 1
+
+
+def test_a_multiple_mode_poll_keeps_a_vote_per_choice(app, db_session, monkeypatch):
+    """D120: the multiple-choice side is unchanged -- each choice keeps its
+    own vote from the same user."""
+    voter, post, yes = _seed_poll_scenario()
+    db.session.get(Poll, post.id).mode = 'multiple'
+    no = PollChoice(post_id=post.id, choice_text='no', sort_order=1)
+    db.session.add(no)
+    db.session.commit()
+    monkeypatch.setattr(activitypub_routes, 'announce_activity_to_followers', lambda *a, **k: None)
+
+    _vote(voter, post, 'yes', 1)
+    _vote(voter, post, 'no', 2)
+
+    db.session.expire_all()
+    assert PollChoiceVote.query.filter_by(user_id=voter.id).count() == 2
+    assert db.session.get(PollChoice, yes.id).num_votes == 1
+    assert db.session.get(PollChoice, no.id).num_votes == 1
+
+
 def test_poll_vote_announced_reads_the_nested_object_and_choice_text(app, db_session, monkeypatch):
     """routes.py:2439-2440 -- for an announced activity, BOTH `ap_id` and
     `choice_text` come from inside `request_json['object']`, not the

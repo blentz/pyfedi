@@ -4859,6 +4859,10 @@ class Poll(db.Model):
         existing_vote = PollChoiceVote.query.filter(PollChoiceVote.user_id == user_id,
                                                     PollChoiceVote.choice_id == choice_id).first()
         if not existing_vote:
+            if self.mode == 'single':  # a new vote replaces this user's earlier one
+                for old_vote in self.user_votes(user_id):
+                    db.session.get(PollChoice, old_vote.choice_id).num_votes -= 1
+                    db.session.delete(old_vote)
             new_vote = PollChoiceVote(choice_id=choice_id, user_id=user_id, post_id=self.post_id)
             db.session.add(new_vote)
             choice = db.session.get(PollChoice, choice_id)
