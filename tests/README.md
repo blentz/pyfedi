@@ -13664,3 +13664,12 @@ order the losing worker actually sees.
 **1020. `reply.path[:-1]` EXCLUDES THE REPLY ITSELF, AND ONLY A ROW ABOUT THE REPLY PROVES IT.**
 The ban functions decrement `child_count` on every ancestor. Asserting the parent's count is right does not
 catch a mutant that drops the slice -- assert the deleted reply's own `child_count` is still 0.
+
+**1021. `refresh_community_profile_task` TAKES THE DOCUMENT AS ITS SECOND ARGUMENT.**
+`refresh_community_profile_task(community_id, activity_json)` fetches only when `activity_json` is falsy, so a
+row about the body hands the document over and makes no request. Recording a `followers` or `featured` url in
+that document makes the task fetch those collections, which the row then has to serve.
+
+**1022. THE KEY IS `postingRestrictedToMods`, NOT `restrictedToMods`.**
+A row using the shorter spelling passes only because the column's default is already False. Check the key
+against the source before asserting the column.

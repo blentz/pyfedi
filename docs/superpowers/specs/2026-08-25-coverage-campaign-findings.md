@@ -24655,4 +24655,43 @@ subtracting them would take the total below what any reader saw.
 Twelve mutants dead, one provably equivalent (the `rollback()` beside the race arm, fact 977's
 shape), on a green baseline.
 
+---
+
+## Round 256 -- the optional fields a community's own server can change
+
+`refresh_community_profile_task` applies the Group document a peer serves for its own community,
+once a day. `tests/test_ap_refresh_community_profile.py` covers the flair loop and the guards; the
+rest of the body had no rows, and three of those fields change what this instance DOES:
+
+* `postUrlType` -- the URL shape every post made here afterwards gets (round 251's two shapes).
+* `postingRestrictedToMods` -- an access control. Once set, local accounts may not post in a
+  community they were posting in yesterday. Note the spelling: `restrictedToMods` is not the key,
+  and a row written against the wrong one passes for the wrong reason.
+* `genAI`, `sensitive`, `nsfl` -- the labels a reader filters on.
+
+`sensitive` is ASSIGNED (`... if 'sensitive' in activity_json else False`), so a community that
+stops marking itself NSFW stops being marked here; `nsfl` is only ever SET, never cleared. That
+asymmetry is now a row rather than an accident waiting to be tidied.
+
+**A PeerTube channel is restricted whatever its document says.** The line below the optional fields
+reads the INSTANCE's software, so this is the one setting a community cannot opt out of -- a
+broadcast channel is not a place to post.
+
+**The images repeat round 253's finding for feeds:** a url change in the peer's document deletes a
+File on this instance's disk, an unchanged url must not (the refresh is daily), and the banner is a
+second copy of the block whose row asserts the icon is untouched.
+
+**The moderator list is a remote server deciding who may delete content here.** An account named in
+their collection becomes a moderator, an existing member is PROMOTED rather than given a second
+CommunityMember row (the primary key is the pair, so a duplicate is an IntegrityError mid-refresh),
+an entry given as an object is read by its `id`, and an account dropped from the collection loses
+the flag -- without which a demoted moderator keeps deleting content.
+
+**A fixture fact worth the cycle:** the task's signature is
+`refresh_community_profile_task(community_id, activity_json)` and it fetches only when the second
+argument is falsy, so a row about the body hands the document over directly. Recording a `followers`
+or `featured` url then makes the task fetch THAT, which the rows have to serve.
+
+Fifteen mutants, all dead, on a green baseline.
+
 **Next free number: D1426.**
