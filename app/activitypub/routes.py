@@ -2329,7 +2329,8 @@ def activity_result(id):
         if activity.result == 'success':
             return jsonify('Ok')
         else:
-            return jsonify({'error': activity.result, 'message': activity.exception_message})
+            # exception_message holds internal exception text; this route is unauthenticated
+            return jsonify({'error': activity.result})
     else:
         abort(404)
 
