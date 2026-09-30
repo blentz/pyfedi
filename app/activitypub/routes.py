@@ -2206,6 +2206,23 @@ def comment_ap(comment_id):
         return continue_discussion(reply.post.id, comment_id)
 
 
+def post_ap_refusal(post: Post):
+    """The response that refuses an ActivityPub fetch of `post` (or of its replies), or None to serve it.
+
+    Visibility is checked before deletion so a Tombstone never confirms that a post existed somewhere the caller
+    may not see."""
+    if post.community.local_only or post.community.private or post.status < POST_STATUS_PUBLISHED:
+        abort(403)
+    if post.deleted:
+        resp = jsonify({'@context': default_context(), 'id': post.ap_id, 'type': 'Tombstone', 'formerType': 'Page'})
+        resp.status_code = 410
+        resp.content_type = 'application/activity+json'
+        return resp
+    if post.author.has_blocked_instance(find_instance_id(requestor_domain())):
+        return make_response(f'Author has blocked {requestor_domain()}'), 401
+    return None
+
+
 @bp.route('/post/<int:post_id>/', methods=['GET', 'HEAD'])
 def post_ap2(post_id):
     return redirect(url_for('activitypub.post_ap', post_id=post_id))
@@ -2216,10 +2233,9 @@ def post_ap(post_id):
     if (request.method == 'GET' or request.method == 'HEAD') and is_activitypub_request():
         post: Post = db.session.get(Post, post_id) or abort(404)
         if post.is_local():
-            if post.community.local_only or post.community.private or post.status < POST_STATUS_PUBLISHED:
-                abort(403)
-            if post.author.has_blocked_instance(find_instance_id(requestor_domain())):
-                return make_response(f'Author has blocked {requestor_domain()}'), 401
+            refusal = post_ap_refusal(post)
+            if refusal is not None:
+                return refusal
             if request.method == 'GET':
                 post_data = post_to_page(post)
                 post_data['@context'] = default_context()
@@ -2258,6 +2274,9 @@ def post_nice(community_name, post_id, slug):
 def post_replies_ap(post_id):
     if (request.method == 'GET' or request.method == 'HEAD') and is_activitypub_request():
         post = db.session.get(Post, post_id) or abort(404)
+        refusal = post_ap_refusal(post)
+        if refusal is not None:
+            return refusal
 
         if request.method == 'GET':
             replies = post_replies_for_ap(post.id)

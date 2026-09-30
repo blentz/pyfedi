@@ -411,31 +411,43 @@ def test_an_unpublished_post_is_403(app, db_session, monkeypatch):
     assert response.status_code == 403
 
 
-def test_a_deleted_post_is_still_served_as_activitypub_json(app, db_session, monkeypatch):
-    """PINS a defect. `post_ap` contains no `post.deleted` reference at all, so
-    a soft-deleted post's full `Page` JSON is served to any ActivityPub caller,
-    while `GET /post/<id>/context` for the SAME row aborts 404 on
-    `if post.deleted:` -- the contrast
-    `test_a_deleted_post_has_no_context` asserts from the other side.
-
-    Not fixed: adding the guard is a federation-visibility decision, the same
-    class as D189-D191. This test asserts 200, so it fails loudly the moment
-    the guard is added.
+def test_a_deleted_post_is_410_with_a_tombstone(app, db_session, monkeypatch):
+    """D199, fixed. A soft-deleted local post answers 410 Gone with an
+    ActivityPub `Tombstone` (ActivityPub 6.11) instead of its full `Page`, so a
+    peer that refetches learns the post is gone and can drop its copy.
 
     `deleted` is set explicitly; `make_post` sets `deleted=False`, so resting
-    on the default would assert nothing.
+    on the default would assert nothing. `ap_id` is set because a local post
+    in production always has one, and the Tombstone's `id` is that value.
     """
     calls = _double_the_delegates(monkeypatch)
     community, author, post = seed_local_post()
+    post.ap_id = f'https://test.piefed.local/post/{post.id}'
     post.deleted = True
     db.session.commit()
 
     response = ap_get(app, f'/post/{post.id}')
 
-    assert response.status_code == 200
+    assert response.status_code == 410
     assert response.content_type == 'application/activity+json'
-    assert response.json['type'] == 'Page'
-    assert calls['post_to_page'] == [post]
+    assert response.json['type'] == 'Tombstone'
+    assert response.json['formerType'] == 'Page'
+    assert response.json['id'] == post.ap_id
+    assert calls['post_to_page'] == []
+
+
+def test_a_deleted_post_in_a_private_community_is_403_not_410(app, db_session, monkeypatch):
+    """The visibility gate runs before the deleted gate, so a Tombstone never
+    confirms that a post existed in a community the caller may not see."""
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    community.private = True
+    post.deleted = True
+    db.session.commit()
+
+    response = ap_get(app, f'/post/{post.id}')
+
+    assert response.status_code == 403
 
 
 def test_a_post_is_401_when_the_author_has_blocked_the_requesting_instance(app, db_session, monkeypatch):
@@ -583,13 +595,12 @@ def test_post_replies_are_served_as_an_ordered_collection(app, db_session, monke
     assert calls['post_replies_for_ap'] == [post.id]
 
 
-def test_post_replies_are_served_for_a_local_only_community(app, db_session, monkeypatch):
-    """PINS a defect. `post_ap` aborts 403 for a `local_only` community;
-    `post_replies_ap` has no visibility guard at all, so the same post's
-    replies are enumerated to any caller. `local_only` is set explicitly; it
-    defaults to False.
+def test_post_replies_are_403_for_a_local_only_community(app, db_session, monkeypatch):
+    """D189, fixed. `post_replies_ap` applies the same gates as `post_ap`, so
+    a `local_only` community's replies are not enumerated to peers.
+    `local_only` is set explicitly; it defaults to False.
     """
-    _double_the_delegates(monkeypatch)
+    calls = _double_the_delegates(monkeypatch)
     community, author, post = seed_local_post()
     community.local_only = True
     community.private = False
@@ -597,42 +608,67 @@ def test_post_replies_are_served_for_a_local_only_community(app, db_session, mon
 
     response = ap_get(app, f'/post/{post.id}/replies')
 
-    assert response.status_code == 200
-    assert response.json['totalItems'] == 1
+    assert response.status_code == 403
+    assert calls['post_replies_for_ap'] == []
 
 
-def test_post_replies_are_served_for_an_unpublished_post(app, db_session, monkeypatch):
-    """PINS a defect. `post_ap` aborts 403 on `status < POST_STATUS_PUBLISHED`;
-    `post_replies_ap` applies no status guard, so an under-review post's
-    replies are published. Status is set explicitly -- the column default is
+def test_post_replies_are_403_for_a_private_community(app, db_session, monkeypatch):
+    """D189, fixed: the `private` arm of the shared gate."""
+    calls = _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    community.private = True
+    db.session.commit()
+
+    response = ap_get(app, f'/post/{post.id}/replies')
+
+    assert response.status_code == 403
+    assert calls['post_replies_for_ap'] == []
+
+
+def test_post_replies_are_403_for_an_unpublished_post(app, db_session, monkeypatch):
+    """D189, fixed. Status is set explicitly -- the column default is
     POST_STATUS_PUBLISHED, so leaving it implicit would assert nothing.
     """
-    _double_the_delegates(monkeypatch)
+    calls = _double_the_delegates(monkeypatch)
     community, author, post = seed_local_post()
     post.status = POST_STATUS_REVIEWING
     db.session.commit()
 
     response = ap_get(app, f'/post/{post.id}/replies')
 
-    assert response.status_code == 200
+    assert response.status_code == 403
+    assert calls['post_replies_for_ap'] == []
 
 
-def test_post_replies_are_served_for_a_deleted_post(app, db_session, monkeypatch):
-    """PINS a defect, and it is the sharpest of the three: `post_ap_context`
-    -- the endpoint immediately BELOW this one, serving the same post's reply
-    URIs -- aborts 404 on `post.deleted`. `post_replies_ap` does not.
-
-    `deleted` is set explicitly; `make_post` sets `deleted=False`, so this is
-    a contrary baseline rather than a default.
+def test_post_replies_are_410_for_a_deleted_post(app, db_session, monkeypatch):
+    """D189, fixed. Same answer as `post_ap` for the same row: 410 and a
+    Tombstone for the post.
     """
-    _double_the_delegates(monkeypatch)
+    calls = _double_the_delegates(monkeypatch)
     community, author, post = seed_local_post()
+    post.ap_id = f'https://test.piefed.local/post/{post.id}'
     post.deleted = True
     db.session.commit()
 
     response = ap_get(app, f'/post/{post.id}/replies')
 
-    assert response.status_code == 200
+    assert response.status_code == 410
+    assert response.json['type'] == 'Tombstone'
+    assert calls['post_replies_for_ap'] == []
+
+
+def test_post_replies_are_401_when_the_author_has_blocked_the_requesting_instance(app, db_session, monkeypatch):
+    """D189, fixed: the author-block arm, mirrored from `post_ap`."""
+    calls = _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    blocked = make_instance('blocked.example')
+    make_instance_block(author, blocked)
+
+    response = ap_get(app, f'/post/{post.id}/replies',
+                      user_agent='Test (+https://blocked.example)')
+
+    assert response.status_code == 401
+    assert calls['post_replies_for_ap'] == []
 
 
 def test_an_unknown_post_replies_collection_is_404(app, db_session, monkeypatch):
