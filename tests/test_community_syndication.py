@@ -271,25 +271,27 @@ def test_a_community_without_an_icon_or_description_still_has_a_feed(app, env):
     assert b'apple-touch-icon.png' in response.data
 
 
-def test_a_post_with_a_media_url_carries_an_enclosure(app, env):
-    """`mimetype_from_url` decides; a text/* type is not an enclosure, and a
-    url it cannot type is not either."""
+def test_a_post_with_a_media_url_carries_media_content(app, env):
+    """RSSFeed attaches a post's url as media:content, typed by
+    `mimetype_from_url` when it can be."""
     client, mine, theirs, mod = env
     a_post(mine, mod, 1, url='https://example.com/audio.mp3')
 
     response = app.test_client().get(f'/community/{mine.name}/feed')
 
     assert b'audio.mp3' in response.data
-    assert b'enclosure' in response.data
+    assert b'<media:content' in response.data
+    assert b'type="audio/mpeg"' in response.data
 
 
-def test_a_post_with_a_page_url_carries_no_enclosure(app, env):
+def test_a_post_with_a_page_url_is_media_content_typed_as_html(app, env):
     client, mine, theirs, mod = env
     a_post(mine, mod, 1, url='https://example.com/article.html')
 
     response = app.test_client().get(f'/community/{mine.name}/feed')
 
-    assert b'enclosure' not in response.data
+    assert b'<enclosure' not in response.data
+    assert b'type="text/html"' in response.data
 
 
 def test_a_post_with_a_slug_is_linked_by_it(app, env):

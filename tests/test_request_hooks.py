@@ -235,7 +235,7 @@ def test_static_path_gets_long_lived_cache_control(app, db_session):
     with app.test_client() as client:
         response = client.get('/static/browserconfig.xml')
 
-    assert response.headers['Cache-Control'] == 'public, max-age=31536000'
+    assert response.headers['Cache-Control'] == 'public, max-age=31536000, immutable'
 
 
 def test_activity_json_response_does_not_set_a_session_cookie(app, db_session):
