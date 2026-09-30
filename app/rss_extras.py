@@ -102,7 +102,7 @@ class RSSFeed:
 
         if post.author:
             # @see post.author.email
-            fe.author(email=cls._email_from_public_url(post.author.ap_public_url))
+            fe.author(email=cls._email_from_public_url(post.author.public_url()))
 
         fe.pubDate(post.created_at.replace(tzinfo=timezone.utc))
         # reply_count_cross_posted is nullable and can drift negative, so fall back and clamp
