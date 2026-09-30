@@ -24769,4 +24769,34 @@ runner telling the truth about the wrong line.
 
 Fourteen mutants, all dead, on a green baseline.
 
+---
+
+## Round 259 -- a microblog's derived title, and the files a deleted post takes
+
+Two clusters in `app/models.py`, no defect.
+
+**A Note has no title, so `Post.new` derives one and then reads it back for content markers.**
+`[NSFL]`, `(NSFL)`, `[COMBAT]` and `[NSFW]` / `(NSFW)` are what a Mastodon poster types by hand,
+because they have no field to set -- and this instance's readers filter on the COLUMN. The two `if`s
+are separate rather than an `elif`, so a post can carry both, and `title.upper()` means a lower-case
+marker counts.
+
+**Two arms decide a microblog's url, and telling them apart took a specific fixture.** The heading
+arm fires when `microblog_content_to_title` finds an `<h1>` wrapped in an anchor; the body arm calls
+`microblog_content_to_link(..., exclude=<the author's host>)`. With both links on a third-party host
+the two arms give the same answer, so the mutant survived -- the row now puts the heading's link on
+the AUTHOR'S OWN host, which the body fallback excludes, and only the heading arm can produce it.
+
+**The deleted post's files.** The video arm derives an S3 key with `s3_key_from_url` rather than
+sending the url (D1343's repair, and a mutant reversing it is killed), and the type test matters even
+for a url that IS in the bucket: an image post's file is owned by its `File` row, and `url` is shared
+between cross-posts, so a second ask could be for a file another post still shows. The archive arm is
+the same shape with a local-disk fallback, and the `ArchivedPostReply` rows go whether or not the
+file does.
+
+**A fixture fact:** the S3 deletion is dispatched as `delete_from_s3.delay(...)` outside debug, so a
+plain function double records nothing -- the recorder has to answer on `.delay` as well.
+
+Fourteen mutants, all dead, on a green baseline.
+
 **Next free number: D1427.**

@@ -13694,3 +13694,13 @@ MODERATOR.
 `g.locale = 'en'` in a fixture that depends on the app fixture, or the fixture runs before the app context
 exists. And `format_compact_decimal` rounds 1215 to `1K`, not `1.2K` -- assert which column was read, not the
 formatting.
+
+**1027. A CELERY TASK REACHED AS `task.delay(...)` NEEDS A DOUBLE WITH A `.delay` ATTRIBUTE.**
+`Post.delete_dependencies` dispatches `delete_from_s3.delay(keys)` outside debug. Patching the module
+attribute with a plain function records nothing, because nothing calls it -- use an object whose `__call__`
+AND `.delay` both record.
+
+**1028. TWO ARMS THAT PRODUCE THE SAME VALUE NEED INPUTS WHERE THEY DIVERGE.**
+`Post.new` takes a microblog's url from an `<h1>` anchor or, failing that, from the body -- and
+`microblog_content_to_link` excludes the AUTHOR'S host. Put the heading's link on the author's own host and
+the body's elsewhere, or both arms answer alike and the mutant lives.
