@@ -198,8 +198,11 @@ class TestAttachingARemoteFeedAsAChild:
 
         parent_id, child_id = parent.id, child.id
 
-        with patch('app.feed.util.search_for_feed', return_value=child):
+        with patch('app.feed.util.search_for_feed', return_value=child) as search:
             ap_util.populate_child_feed_worker(parent_id, '~child@peer.example')
+
+        # D738: a Celery task, so it keeps the webfinger retry the request path lost.
+        assert search.call_args.kwargs == {'retry': True}
 
         # The worker ends with `db.session.remove()`, which detaches every object this test
         # was holding -- so the row is read back by id rather than refreshed.
