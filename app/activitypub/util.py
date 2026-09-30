@@ -2290,6 +2290,15 @@ def find_instance_by_domain(server):
     return db.session.query(Instance).filter_by(domain=server).first()
 
 
+def known_instance_id(server):
+    """The id of an instance this server already knows, or None. Unlike find_instance_id it never creates a row
+    or spawns a fetch, so unauthenticated GETs can use it without writing to the database."""
+    if not server:
+        return None
+    instance = find_instance_by_domain(server)
+    return instance.id if instance else None
+
+
 def new_instance_profile(instance_id: int):
     if instance_id:
         if current_app.debug:

@@ -1,7 +1,11 @@
 """tests/test_ap_content_objects.py"""
+import pytest
+
 from app import db
 from app.activitypub import routes as activitypub_routes
+from app.activitypub import util as activitypub_util
 from app.constants import POST_STATUS_PUBLISHED, POST_STATUS_REVIEWING
+from app.models import Instance
 from tests.factories import (make_activitypub_log, make_community, make_instance,
                              make_instance_block, make_post, make_post_reply, make_user)
 from tests.test_actor_profiles import seed_actors
@@ -17,7 +21,7 @@ def ap_get(app, path, user_agent=None):
     doubled -- the parse is part of what is under test.
 
     `user_agent` is separate because `requestor_domain()` (app/utils.py) reads
-    it and returns '' unless it contains a '+'. Since `find_instance_id('')`
+    it and returns '' unless it contains a '+'. Since `known_instance_id('')`
     returns None and `has_blocked_instance(None)` returns False, the 401
     instance-block branch in `comment_ap` and `post_ap` is UNREACHABLE without
     a '+'-style agent string. A test that omits it measures the wrong branch.
@@ -949,6 +953,28 @@ def test_an_unknown_post_context_is_404(app, db_session, monkeypatch):
     response = ap_get(app, '/post/999999/context')
 
     assert response.status_code == 404
+
+
+@pytest.mark.parametrize('path', ['/post/{post}', '/post/{post}/replies', '/post/{post}/context',
+                                  '/comment/{reply}'])
+def test_a_get_from_an_unknown_instance_creates_no_instance_row(app, db_session, monkeypatch, path):
+    """D193, fixed. The author-block check on these GETs looks the requesting
+    instance up without creating it: an unknown instance cannot have been
+    blocked. Before, `find_instance_id` committed an `Instance` row and
+    spawned a profile fetch for whatever domain the User-Agent named.
+    """
+    _double_the_delegates(monkeypatch)
+    spawned = []
+    monkeypatch.setattr(activitypub_util, 'new_instance_profile', lambda instance_id: spawned.append(instance_id))
+    community, author, post = seed_local_post()
+    reply = make_post_reply(post, author)
+
+    response = ap_get(app, path.format(post=post.id, reply=reply.id),
+                      user_agent='Test (+https://unknown.example)')
+
+    assert response.status_code == 200
+    assert db.session.query(Instance).filter_by(domain='unknown.example').first() is None
+    assert spawned == []
 
 
 def test_a_logged_activity_is_served_as_its_stored_json(app, db_session):

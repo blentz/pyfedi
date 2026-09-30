@@ -25,7 +25,7 @@ from app.activitypub.util import users_total, active_half_year, active_month, lo
     process_report, ensure_domains_match, refresh_community_profile, \
     comment_model_to_json, restore_post_or_comment, ban_user, unban_user, \
     log_incoming_ap, find_community, site_ban_remove_data, community_ban_remove_data, verify_object_from_source, \
-    post_replies_for_ap, is_vote, find_instance_id, resolve_remote_post_from_search, proactively_delete_content, \
+    post_replies_for_ap, is_vote, known_instance_id, resolve_remote_post_from_search, proactively_delete_content, \
     process_quote_boost, object_has_missing_fields, find_microblogging_community, process_announce_of_uri, \
     announce_target_uri, undo_boost
 from app.community.routes import show_community
@@ -2233,7 +2233,7 @@ def comment_ap(comment_id):
             abort(403)
         if reply.deleted:
             return tombstone_response(reply.ap_id, 'Note')
-        if reply.author.has_blocked_instance(find_instance_id(requestor_domain())):
+        if reply.author.has_blocked_instance(known_instance_id(requestor_domain())):
             return make_response(f'Author has blocked {requestor_domain()}'), 401
         reply_data = comment_model_to_json(reply) if request.method == 'GET' else []
         resp = jsonify(reply_data)
@@ -2267,7 +2267,7 @@ def post_ap_refusal(post: Post):
         abort(403)
     if post.deleted:
         return tombstone_response(post.ap_id, 'Page')
-    if post.author.has_blocked_instance(find_instance_id(requestor_domain())):
+    if post.author.has_blocked_instance(known_instance_id(requestor_domain())):
         return make_response(f'Author has blocked {requestor_domain()}'), 401
     return None
 
