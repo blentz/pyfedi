@@ -30,9 +30,9 @@ def block_another_user(person_id, src, auth=None):
             flash(_('You cannot block yourself.'), 'error')
             return
 
-    role = db.session.execute(text('SELECT role_id FROM "user_role" WHERE user_id = :person_id'),
-                              {'person_id': person_id}).scalar()
-    if role == ROLE_ADMIN or role == ROLE_STAFF:
+    # Every role counts: reading one user_role row let a multi-role admin be blocked (D558)
+    person = db.session.get(User, person_id)
+    if person is not None and person.is_admin_or_staff():
         if src == SRC_API:
             raise Exception('cannot_block_admin_or_staff')
         else:

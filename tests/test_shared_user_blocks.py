@@ -34,18 +34,13 @@ re-derived with `/usr/bin/grep -cE "^ *def test_.*bot_challenge"`):
   :306-307's SRC_API arm, and a PINNED DEFECT: :320 builds the Conversation
   from `user` but :322 appends `current_user`. Registered, not fixed.
 
-THE ROLE TRAP. `block_another_user:33-35` reads
-`SELECT role_id FROM "user_role" WHERE user_id = :person_id` with `.scalar()`
-and compares the result against the INTEGERS ROLE_ADMIN (4) and ROLE_STAFF
-(3) from app/constants.py:80-81. tests/factories.py:365's `grant_permission`
-mints a fresh Role per call with a sequential id, and tests/conftest.py:131
-resets every sequence between tests -- so the third or fourth
-`grant_permission` call in a test would make its subject staff or admin BY
-ID, refusing a block for a reason the test never intended. Every role in this
-file is therefore created with an EXPLICIT id, and named something that is
-neither 'Admin' nor 'Staff' so that `User.is_admin()`'s name path
-(app/models.py:1263) cannot satisfy an assertion the id comparison was
-supposed to carry.
+THE ROLE CHECK. `block_another_user` refuses a target for whom
+`User.is_admin_or_staff()` is true, which keys on role NAME ('Admin',
+'Staff') and treats id 1 as admin. It used to read one arbitrary `role_id`
+from `user_role` with `.scalar()` and compare it to ROLE_ADMIN/ROLE_STAFF, so
+a multi-role admin could be blocked depending on row order (D558). Roles here
+are created with explicit ids and real names, and user id 1 is burned so that
+the id-1 admin rule cannot carry an assertion meant for the role check.
 """
 from types import SimpleNamespace
 
@@ -66,10 +61,8 @@ def _seed_blockers():
     The first user minted in any test is id 1, deterministically:
     tests/conftest.py:131-132 runs `SELECT setval(c.oid, 1, false)` over every
     sequence after every test. `User.is_admin` (app/models.py:1259-1261)
-    returns True for id 1 regardless of roles. Nothing in THIS file reads
-    is_admin -- block_another_user compares role ids, not names -- but the
-    burn is kept so that a later test added to this file cannot inherit the
-    trap silently. tests/test_shared_reply_make.py:247 is the precedent.
+    returns True for id 1 regardless of roles, and block_another_user asks
+    is_admin_or_staff(), so neither party here may hold id 1. tests/test_shared_reply_make.py:247 is the precedent.
     """
     instance = make_instance('remote.example')
     burn = make_user(instance, 'burn-the-id-1-seat', local=True)
@@ -81,15 +74,13 @@ def _seed_blockers():
     return SimpleNamespace(blocker=blocker, target=target)
 
 
-def _give_role_with_id(user, role_id):
-    """Put `user` in `user_role` against a role whose id is exactly role_id.
+def _give_role(user, role_id, name):
+    """Put `user` in `user_role` against a Role with this id and name.
 
-    `user_role.role_id` is a foreign key to `role.id` (app/models.py:937), so
-    the Role row has to exist. The name deliberately avoids 'Admin' and
-    'Staff' -- block_another_user reads the ID, and a name that also satisfies
-    User.is_admin() would let a future assertion pass for the wrong reason.
+    `user_role.role_id` is a foreign key to `role.id`, so the Role row has to
+    exist. `is_admin_or_staff()` reads the name.
     """
-    db.session.add(Role(id=role_id, name=f'role-with-id-{role_id}', weight=0))
+    db.session.add(Role(id=role_id, name=name, weight=0))
     db.session.commit()
     db.session.execute(user_role.insert().values(user_id=user.id, role_id=role_id))
     db.session.commit()
@@ -192,14 +183,9 @@ def test_block_another_user_web_refuses_self_without_raising(app, db_session):
     assert db.session.query(UserBlock).count() == 0
 
 
-def test_block_another_user_api_refuses_an_admin_by_role_id(app, db_session):
-    """ROLE_ADMIN is 4 and the comparison at :35 is against that INTEGER.
-
-    The role is named 'role-with-id-4', not 'Admin', so nothing here can be
-    satisfied by User.is_admin()'s name path.
-    """
+def test_block_another_user_api_refuses_an_admin(app, db_session):
     s = _seed_blockers()
-    _give_role_with_id(s.target, ROLE_ADMIN)
+    _give_role(s.target, ROLE_ADMIN, 'Admin')
 
     with pytest.raises(Exception, match='cannot_block_admin_or_staff'):
         block_another_user(s.target.id, SRC_API, bearer(s.blocker))
@@ -207,11 +193,11 @@ def test_block_another_user_api_refuses_an_admin_by_role_id(app, db_session):
     assert db.session.query(UserBlock).count() == 0
 
 
-def test_block_another_user_api_refuses_staff_by_role_id(app, db_session):
-    """The second operand of :35's `or`. Without this test that operand could
-    be deleted outright and every other test in this file would stay green."""
+def test_block_another_user_api_refuses_staff(app, db_session):
+    """The staff half of `is_admin_or_staff()`. Without this test that half
+    could be dropped and every other test in this file would stay green."""
     s = _seed_blockers()
-    _give_role_with_id(s.target, ROLE_STAFF)
+    _give_role(s.target, ROLE_STAFF, 'Staff')
 
     with pytest.raises(Exception, match='cannot_block_admin_or_staff'):
         block_another_user(s.target.id, SRC_API, bearer(s.blocker))
@@ -226,7 +212,7 @@ def test_block_another_user_allows_a_target_holding_an_unprivileged_role(app, db
     version of :35 that refused EVERY user holding any role at all.
     """
     s = _seed_blockers()
-    _give_role_with_id(s.target, 2)
+    _give_role(s.target, 2, 'Moderator')
 
     returned = block_another_user(s.target.id, SRC_API, bearer(s.blocker))
 
@@ -234,9 +220,25 @@ def test_block_another_user_allows_a_target_holding_an_unprivileged_role(app, db
     assert db.session.query(UserBlock).count() == 1
 
 
+def test_block_another_user_refuses_an_admin_who_also_holds_another_role(app, db_session):
+    """D558, fixed. The guard read ONE `role_id` from `user_role` with
+    `.scalar()`, so an admin who also held an unprivileged role was judged by
+    whichever row came back first and could be blocked. The unprivileged role
+    is inserted first so the old read would see it. It now asks
+    `is_admin_or_staff()`, which considers every role."""
+    s = _seed_blockers()
+    _give_role(s.target, 2, 'Moderator')
+    _give_role(s.target, ROLE_ADMIN, 'Admin')
+
+    with pytest.raises(Exception, match='cannot_block_admin_or_staff'):
+        block_another_user(s.target.id, SRC_API, bearer(s.blocker))
+
+    assert db.session.query(UserBlock).count() == 0
+
+
 def test_block_another_user_web_refuses_an_admin_without_raising(app, db_session):
     s = _seed_blockers()
-    _give_role_with_id(s.target, ROLE_ADMIN)
+    _give_role(s.target, ROLE_ADMIN, 'Admin')
 
     with web_ctx(app, s.blocker):
         from flask import session
