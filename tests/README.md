@@ -13908,3 +13908,14 @@ than leaving the line looking covered.
 `WTF_CSRF_ENABLED = False` removes that field, so an incomplete payload fails as
 `jinja2.exceptions.UndefinedError` rather than as a form error. Make the payload VALIDATE --
 `communities` carries DataRequired -- and pass a CSRF token per fact 355 anyway.
+
+**1067. A DETACHED *DYNAMIC* RELATIONSHIP WARNS RATHER THAN RAISING.**
+On SQLAlchemy 2.0.52, `user.extra_fields` on a detached instance answers an empty result and emits
+"SAWarning: ... dynamic relationship cannot return a correct result. This warning will become a
+DetachedInstanceError in a future release." So an `except DetachedInstanceError` around one cannot be
+reached, and a row that tries puts a warning into the suite. Recorded as D1437.
+
+**1068. `make_image_sizes_async` PICKS ITS FORMAT FROM THE RESPONSE'S CONTENT TYPE.**
+Not from the source url's extension. A `.tiff` url served as `image/png` takes the PNG arm, so the
+unknown-format fallback needs `content_type='image/tiff'` -- and the response also needs that header at
+all, per `tests/test_ap_make_image_sizes.py`'s own helper.
