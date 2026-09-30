@@ -13897,3 +13897,14 @@ it. Put the reply under somebody else's post.
 **1064. `prev_bookmark is not None` PROVES NOTHING ABOUT WHICH BOOKMARK IT IS.**
 `bookmark_next` is also non-None on page two. Follow the bookmark and assert the rows of the page
 before -- the same argument as fact 1028 about two arms that produce the same value.
+
+**1065. A ROUTE THAT 404s MAY BE 404ing IN THE ROUTER.**
+An `abort(404)` inside a view is not covered by a request for a path the URL map does not match, and
+the mutant survives. Check `app.url_map` for which rule actually serves the path -- `/f/<actor>` is
+registered in `app/activitypub/routes.py`, not `app/feed/routes.py` -- and say so in the row rather
+than leaving the line looking covered.
+
+**1066. AN INVALID FEED FORM RE-RENDERS A TEMPLATE THAT NEEDS `form.csrf_token`.**
+`WTF_CSRF_ENABLED = False` removes that field, so an incomplete payload fails as
+`jinja2.exceptions.UndefinedError` rather than as a form error. Make the payload VALIDATE --
+`communities` carries DataRequired -- and pass a CSRF token per fact 355 anyway.

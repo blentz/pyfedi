@@ -25392,4 +25392,48 @@ makes a missing header a refusal rather than an AttributeError.
 
 Twelve mutants dead, three provably equivalent, on a green baseline.
 
-**Next free number: D1436.**
+
+---
+
+## Round 274 -- the last scattered lines, and a dead prefix strip
+
+Twelve rows across six modules.
+
+**D1436. REPORTED AND NOT FIXED: the `/f/` strip in `feed/routes.py` cannot run.** Both
+`:58` (create) and `:250` (copy) do
+
+    if form.url.data.strip().lower().startswith('/f/'):
+        form.url.data = form.url.data[3:]
+
+after `form.validate_on_submit()` -- and `AddCopyFeedForm.validate` calls `apply_feed_url_rules`,
+which for a public feed does `self.url.data.strip().split('/', 1)[0]`. For `/f/pasted_feed` that is
+`''`, which then fails the `^[a-zA-Z0-9_]+$` charset check. So somebody pasting a feed's address out
+of their URL bar is told "Url is invalid" rather than having the prefix stripped, and both lines are
+dead. Fixing it means moving the strip ahead of `apply_feed_url_rules` or teaching that helper about
+the prefix -- a change to validation ORDER on a helper shared by the create, copy and edit forms,
+which is a maintainer's decision. Two rows pin what happens today: a plain name works, the pasted one
+creates nothing.
+
+**Two mutants survived because the rows assert a 404 the ROUTER produces.** Replacing
+`topic/routes.py:212`'s or `feed/routes.py:616`'s `abort(404)` with `pass` leaves those rows green:
+`/f/<actor>` is registered in `app/activitypub/routes.py` and calls `show_feed` only for a feed it has
+already found, and an unmatched topic path never reaches the view. Those aborts are the arm for a path
+the router matched and the lookup inside did not resolve. The rows keep their value -- they assert the
+user-visible answer for something that is not here -- and their docstring now says plainly what they
+do not cover, rather than leaving two lines looking covered.
+
+**`process_upload`'s final `if not url: raise` is unreachable**, and recorded rather than chased:
+`url` is assigned unconditionally at `:86`, every path that does not reach that line raises first
+(`filetype not allowed`, `SVG file could not be sanitized`, `file not uploaded`), and the S3 branch
+reassigns it. Fact 781's shape in plain control flow rather than in the schema.
+
+Also covered: `comm_flair_ap_format`'s refusal to publish a flair whose id cannot be derived -- the id
+is what `update_community_flair_from_tags` matches on later (round 260), so an entry without one is a
+flair no peer can reconcile; the three `Site.active_*` delegations, which are published in nodeinfo and
+so misreport the instance's size if they read the wrong window; `Post.get_by_slug`, on the path of
+every friendly url; and `Post.url_domain`, which must be the HOST because it is what a reader judges a
+link's source by.
+
+Six mutants dead, two recorded as not distinguished, on a green baseline.
+
+**Next free number: D1437.**
