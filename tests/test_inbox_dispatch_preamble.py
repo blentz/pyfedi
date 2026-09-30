@@ -154,13 +154,10 @@ session.rollback(); raise` and out of dispatch() -- a real, uncaught
 the 882-892 refusals. No ActivityPubLog row is written. This is the campaign's
 most-cited defect class: a membership test is never a type test.
 
-PROBE, routes.py:856-857 (`if isinstance(actor_id, dict): actor_id =
-actor_id['id']`): fed a dict actor with no 'id' key at all
-(`{'type': 'Person'}`). OBSERVED: `KeyError: 'id'` raised immediately at 857,
-before find_actor_or_create_cached is ever called and before any
-log_incoming_ap call is reachable, propagating the same way as the string-
-object probe above -- another uncaught 500-shaped failure, not a logged
-refusal.
+D49, fixed (`if isinstance(actor_id, dict): actor_id = actor_id['id']`):
+a dict actor with no 'id' key (`{'type': 'Person'}`) used to raise
+`KeyError: 'id'` before any log_incoming_ap call was reachable. It is now
+refused with a logged failure before any actor lookup.
 
 Both probes assert the observed behaviour (`pytest.raises`); neither changes
 `app/`.
@@ -740,22 +737,14 @@ def test_an_activity_from_an_actor_that_is_neither_is_refused(app, db_session, m
     assert ActivityPubLog.query.one().exception_message == 'Actor was not a user or a community'
 
 
-def test_a_dict_actor_without_an_id_key(app, db_session, monkeypatch):
-    """routes.py:856-857 -- Discourse sends a dict actor
-    (`{'id': '...', 'type': 'Person', ...}`), unpacked unconditionally at
-    `actor_id = actor_id['id']`. Establish the observed behaviour with a dict
-    that has no 'id' key at all, rather than fix it.
-
-    OBSERVED: `{'type': 'Person'}['id']` raises `KeyError: 'id'` immediately
-    at line 857, before find_actor_or_create_cached is ever called and
-    before any log_incoming_ap call is reachable (id itself, used by every
-    log_incoming_ap call, is read one line earlier at 854 and is fine here --
-    it is the ACTOR dict, not the activity, that is missing 'id'). Like the
-    string-object probe above, this propagates uncaught through routes.py:1885's
-    `except Exception: session.rollback(); raise` and out of dispatch() --
-    a real, uncaught 500-shaped failure for production's DEBUG branch. No
-    ActivityPubLog row is written.
+def test_a_dict_actor_without_an_id_key_is_refused(app, db_session, monkeypatch):
+    """D49, fixed. Discourse sends a dict actor (`{'id': '...', 'type':
+    'Person', ...}`), which the preamble unpacks to its id. A dict with no
+    'id' key used to raise KeyError there, before find_actor_or_create_cached
+    or any log_incoming_ap call, so the activity vanished with no log row.
+    It is now refused and logged, and no actor is looked up or created.
     """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     make_site()
     instance = make_instance('peer.example')
     actor = make_user(instance, 'alice')
@@ -763,8 +752,11 @@ def test_a_dict_actor_without_an_id_key(app, db_session, monkeypatch):
     activity = inbox_activity(actor, activity_type='Like')
     activity['actor'] = {'type': 'Person'}
 
-    with pytest.raises(KeyError, match='id'):
-        dispatch(activity)
+    dispatch(activity)
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Actor object has no id'
 
 
 # --- Task 8: the seam -- three signed requests, through the real /inbox route ---

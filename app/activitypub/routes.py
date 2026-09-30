@@ -863,6 +863,9 @@ def process_inbox_request(request_json, store_ap_json):
                 id = request_json['id']
                 actor_id = request_json['actor']
                 if isinstance(actor_id, dict):  # Discourse does this
+                    if 'id' not in actor_id:
+                        log_incoming_ap(id, APLOG_NOTYPE, APLOG_FAILURE, saved_json, 'Actor object has no id')
+                        return
                     actor_id = actor_id['id']
                 feed = community = user = None
                 if request_json['type'] == 'Announce' or request_json['type'] == 'Accept' or request_json['type'] == 'Reject':
