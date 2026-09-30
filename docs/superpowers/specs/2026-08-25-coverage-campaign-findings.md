@@ -24920,4 +24920,41 @@ remove".
 
 Eighteen mutants dead, one environment-equivalent, on a green baseline.
 
-**Next free number: D1429.**
+
+---
+
+## Round 263 -- what a federated Create writes onto a post
+
+`Post.new` and `PostReply.new` in `app/models.py` are how every post and comment from another server
+enters this database. The arms left uncovered were the ones that make a DECISION about the incoming
+content rather than copying it: three separate writers of `indexable`, the `nsfl` and `ai_generated`
+flags a community imposes on every post in it whatever the post said, `edited_at` from the activity's
+own type, the `text/markdown` body spelling, and the `file_path` an attachment may name.
+
+**D1429. `blocked_phrases()` raised `AttributeError` with no Site row, and lost every incoming post
+and reply.** `app/utils.py`'s `blocked_phrases()` read `site.blocked_phrases` outright on
+`db.session.get(Site, 1)`. `PostReply.new` has its own `if site is None: site = Site()` two lines
+BELOW its call to `blocked_phrases()`, so that default could only ever be reached by a reply with an
+EMPTY BODY -- everything else raised first, and `create_post` / `create_post_reply` swallow the
+exception and log a failure. The Site row is written by `flask init-db`, and an instance whose
+migrations have run but whose setup has not can already be delivered to. No row now means no blocked
+phrases, which is the same answer as an empty setting.
+
+**The `Site()` default is observable in exactly one place.** Both filters below it read
+`predicate(reply.body) and site.<flag>`, so for an ordinary body Python short-circuits and `site` is
+never dereferenced -- the default cannot be told from no default at all. A body of `this` makes
+`reply_is_low_effort` true, the flag is read, and the two answers diverge. Worth recording: what the
+default reads is `None`, not the column's `default=False`, because a SQLAlchemy column default is
+applied on INSERT and this instance is never saved. Same effective answer, reached by short-circuit
+rather than by the configured default.
+
+Also covered: the `IntegrityError` retry, which answers with the reply another inbox worker committed
+rather than raising at the caller that will federate it on; both copies of the AI-detection
+`except` arm, which is what stops an unreachable third-party endpoint discarding a new account's
+first post (D1332's neighbour, and D1331's); an Event's banner `File`; and the author's own upvote
+with the memo it invalidates for a LOCAL author only -- `recently_upvoted_posts` is what draws the
+voted arrow, so without it a local author's own new post shows an unvoted one until the memo expires.
+
+Twenty-two mutants, all dead, on a green baseline.
+
+**Next free number: D1430.**
