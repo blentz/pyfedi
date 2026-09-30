@@ -286,6 +286,8 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None):
     except Exception as e:
         db.session.delete(vote)
         db.session.delete(post)
+        community.post_count -= 1   # undo the increments above, or a post that never existed is counted (D463)
+        user.post_count -= 1
         db.session.commit()
         raise e
 
