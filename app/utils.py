@@ -3342,7 +3342,18 @@ def url_to_thumbnail_file(filename) -> File:
         return None
 
     if response.status_code == 200:
+        # D1427. Case-folded once, because RFC 9110 section 8.3.1 makes a media
+        # type and its subtype case-insensitive and both readings below used to
+        # be case-sensitive. `Content-Type: IMAGE/PNG` failed `startswith` and
+        # the whole thumbnail was silently discarded, and `image/SVG+XML` --
+        # which is what a peer serving an SVG may legitimately send -- failed the
+        # `"svg" in content_type` test, so the sanitiser was not reached and the
+        # extension fell through to `.img`, where Pillow refused it. Both
+        # spellings are a peer's, so neither should decide whether the fetch
+        # works.
         content_type = response.headers.get('content-type')
+        if content_type:
+            content_type = content_type.lower()
         if content_type and content_type.startswith('image'):
             # Sanitize SVG files to remove potentially dangerous elements.
             #
@@ -3389,9 +3400,14 @@ def url_to_thumbnail_file(filename) -> File:
                     if file_extension not in allowed_thumbnail_extensions:
                         file_extension = '.img'
 
-                # Also sanitize if file extension is .svg (regardless of content-type)
-                if file_extension == '.svg' and "svg" not in content_type:
-                    response_content = sanitize_svg_bytes(response_content)
+                # D1428. A second `if file_extension == '.svg' and "svg" not in
+                # content_type: sanitize` stood here, and with D1427's case-fold
+                # above it is unreachable: `file_extension` is `'.svg'` only when
+                # `subtype` is `svg`, `subtype` is a substring of `content_type`,
+                # and a `content_type` containing `svg` takes the arm above
+                # instead. It was reachable before the case-fold, for the single
+                # spelling `image/SVG`, which now takes that arm too. Every SVG
+                # still passes through `sanitize_svg_bytes` exactly once.
             except ValueError as e:
                 current_app.logger.info(f"Discarding unsanitizable remote SVG {filename}: {e}")
                 response.close()
