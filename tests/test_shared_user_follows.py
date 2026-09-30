@@ -51,20 +51,20 @@ module's seeding convention (tests/test_shared_user_bans.py:73 and
 tests/test_shared_reply_make.py:247 are the precedent) so that the id-1
 user is never silently the follower or target of any assertion here.
 
-THE COUNTER ASYMMETRY (a registered finding, not fixed here):
+THE COUNTER ASYMMETRY (D557, fixed):
 follow_user's manually-approving arm at :241-242 sets `is_accepted = None`
 and skips the counter increments at :245-246 entirely, so neither
-`user.num_following` nor `to_follow.num_followers` moves. But
-unfollow_user:286-287 decrements both counters UNCONDITIONALLY, with no
-matching guard. Following and then unfollowing a manually-approving user
-therefore drives both counters negative.
-test_follow_then_unfollow_a_manually_approving_target_drives_counters_negative
+`user.num_following` nor `to_follow.num_followers` moves. unfollow_user
+used to decrement both counters UNCONDITIONALLY, so following and then
+unfollowing a manually-approving user drove both negative. It now
+decrements only when it deletes an accepted follow row.
+test_follow_then_unfollow_a_manually_approving_target_leaves_counters_at_zero
 asserts both halves -- the follow alone would be consistent with the
 counters simply never being implemented for that arm.
 
 What each test below closes:
 
-- test_follow_then_unfollow_a_manually_approving_target_drives_counters_negative
+- test_follow_then_unfollow_a_manually_approving_target_leaves_counters_at_zero
   follow_user lines 242, 253, 256 and arcs [241,242], [252,253] (the
   manually-approving arm and its "someone wants to follow you" notification);
   unfollow_user line 280 and arc [279,280] (the SRC_API auth arm). This
@@ -91,7 +91,7 @@ from types import SimpleNamespace
 from flask import get_flashed_messages
 
 from app.constants import SRC_API, SRC_PLD
-from app.models import Notification, NotificationSubscription, User
+from app.models import Notification, NotificationSubscription, User, UserFollower
 from app.shared.user import follow_user, subscribe_user, unfollow_user
 from tests.factories import bearer, make_instance, make_site, make_user, web_ctx
 
@@ -144,17 +144,16 @@ def _recording_task_selector():
         user_module.task_selector = original
 
 
-def test_follow_then_unfollow_a_manually_approving_target_drives_counters_negative(app, db_session):
-    """PINS AN ASYMMETRY. follow_user:241-242 sets `is_accepted = None` and
+def test_follow_then_unfollow_a_manually_approving_target_leaves_counters_at_zero(app, db_session):
+    """D557, fixed. follow_user:241-242 sets `is_accepted = None` and
     skips :245-246, so neither counter moves for a manually-approving
-    target -- but unfollow_user:286-287 decrements both unconditionally,
-    with no matching guard. Following and then unfollowing a
-    manually-approving user therefore drives both counters NEGATIVE.
+    target. unfollow_user used to decrement both unconditionally, driving
+    them to -1; it now decrements only when it deletes an accepted follow,
+    so both stay at 0.
 
     Both halves are asserted here rather than only the follow, because the
     follow alone is consistent with the counters simply not being
-    implemented. The drift is the finding; it is registered separately, not
-    fixed here.
+    implemented.
 
     Also closes follow_user:252-256 -- :251's is_local() is True for a
     local target and :252's `is_accepted is None` (set at :242) selects the
@@ -177,7 +176,8 @@ def test_follow_then_unfollow_a_manually_approving_target_drives_counters_negati
     a kill unless a viable non-crashing variant of the same fault also
     dies. Logging in s.target gives that mutant a non-crashing resolution
     (`user` becomes the target instead of the follower), which the
-    follower-/target-keyed counter assertions below then catch. Do not
+    follower-keyed row assertion below then catches (the counters no longer
+    move for this pending follow, so they cannot). Do not
     "tidy away" this web_ctx call thinking it is dead weight for an
     SRC_API path -- it exists solely to give the :279-280 mutant something
     non-crashing to be wrong against.
@@ -215,10 +215,39 @@ def test_follow_then_unfollow_a_manually_approving_target_drives_counters_negati
     assert calls == []
     db_session.expire_all()
 
+    assert db_session.query(UserFollower).filter_by(
+        local_user_id=s.follower.id, remote_user_id=s.target.id).count() == 0
     follower = db_session.get(User, s.follower.id)
     target = db_session.get(User, s.target.id)
-    assert follower.num_following == -1
-    assert target.num_followers == -1
+    assert follower.num_following == 0
+    assert target.num_followers == 0
+
+
+def test_unfollow_with_no_follow_row_leaves_counters_alone(app, db_session):
+    """D557, fixed. Unfollowing someone never followed deletes nothing, so
+    neither counter moves."""
+    s = _seed_followers(target_local=True)
+
+    with web_ctx(app, s.follower), _recording_task_selector():
+        unfollow_user(s.target.id, SRC_API, bearer(s.follower))
+    db_session.expire_all()
+
+    assert db_session.get(User, s.follower.id).num_following == 0
+    assert db_session.get(User, s.target.id).num_followers == 0
+
+
+def test_unfollow_of_an_accepted_follow_undoes_both_counters(app, db_session):
+    """D557, fixed. The positive control: an accepted follow was counted,
+    so deleting it lowers both counters back to 0."""
+    s = _seed_followers(target_local=True)
+
+    with web_ctx(app, s.follower), _recording_task_selector():
+        follow_user(s.target.id, SRC_API, bearer(s.follower))
+        unfollow_user(s.target.id, SRC_API, bearer(s.follower))
+    db_session.expire_all()
+
+    assert db_session.get(User, s.follower.id).num_following == 0
+    assert db_session.get(User, s.target.id).num_followers == 0
 
 
 def test_unfollow_user_dispatches_a_task_for_a_remote_target(app, db_session):

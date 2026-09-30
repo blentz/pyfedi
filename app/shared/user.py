@@ -283,12 +283,12 @@ def unfollow_user(follow_id: int, src, auth=None):
 
     to_unfollow: User = db.session.get(User, follow_id)
 
-    user.num_following -= 1
-    to_unfollow.num_followers -= 1
-
-    db.session.execute(text(
-        'DELETE FROM "user_follower" WHERE local_user_id = :local_user_id AND remote_user_id = :remote_user_id AND is_inward is false'),
-            {'local_user_id': user.id, 'remote_user_id': to_unfollow.id})
+    removed = db.session.execute(text(
+        'DELETE FROM "user_follower" WHERE local_user_id = :local_user_id AND remote_user_id = :remote_user_id AND is_inward is false RETURNING is_accepted'),
+            {'local_user_id': user.id, 'remote_user_id': to_unfollow.id}).scalars().all()
+    if any(removed):  # only an accepted follow was counted
+        user.num_following -= 1
+        to_unfollow.num_followers -= 1
     db.session.commit()
 
     if not to_unfollow.is_local():
