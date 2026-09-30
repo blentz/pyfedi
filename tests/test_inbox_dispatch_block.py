@@ -69,31 +69,14 @@ with `LOG_ACTIVITYPUB_TO_DB` explicitly True and assert
 of logging being off (Task 6's shipped mistake, called out in this task's
 brief).
 
-The brief also asks to establish what happens "including when `object` is
-not a string." Read literally, that scenario cannot be reached independent
-of finding 2 below: `core_activity['object']` is read via `.lower()` at
-:1617 UNCONDITIONALLY, for every Block activity regardless of whether
-'target' is present -- so a non-string `object` never survives to reach the
-Mastodon branch's own `isinstance(core_activity['object'], str)` guard at
-:1670. It crashes three lines into the arm, before 'target' is even
-inspected. The "no target path logs nothing on any outcome" claim is
-therefore true in the strongest available sense: not just on its own two
-reachable outcomes (create / skip), but also on the crash outcome finding 2
-demonstrates, which happens to every no-target Block whose object is not a
-string, before this branch's own code ever runs.
+A Block whose `object` is not a string never reaches the Mastodon branch:
+it is refused at the top of the arm (finding 2, D87, fixed).
 
-**2. `core_activity['object'].lower()` (:1617) reads before any `isinstance`
-check.** `test_a_dict_shaped_object_crashes_before_any_isinstance_check`
-below feeds a dict-shaped `object` (no 'target', matching the Mastodon
-shape the brief asks about) and observes `AttributeError: 'dict' object has
-no attribute 'lower'`, raised at :1617 -- three lines into the arm, before
-'target' is inspected, before `blocked` is looked up, and long before the
-Mastodon path's own `isinstance(core_activity['object'], str)` guard at
-:1670 is ever reached. No `log_incoming_ap` call fires; the exception
-propagates out of `dispatch()` uncaught by anything inside
-`process_inbox_request`'s own try block (only the bare
-`except Exception: session.rollback(); raise` at :1889 sees it, and
-re-raises).
+**2. `core_activity['object'].lower()` used to run before any `isinstance`
+check (D87, fixed).** A dict-shaped `object` raised `AttributeError: 'dict'
+object has no attribute 'lower'` three lines into the arm, with no log row.
+`test_a_dict_shaped_object_is_refused_before_any_lookup` below now asserts a
+logged refusal instead.
 
 **3. `blocked.ban_until = core_activity['expires']` (or `['endTime']`),
 :1645/:1647 -- established, not assumed. In plain words: a remote
@@ -215,7 +198,6 @@ the same delegate, only one of which guards it.
 import json
 from datetime import datetime, timezone
 
-import pytest
 from sqlalchemy import inspect as sa_inspect
 
 from app import db
@@ -268,17 +250,14 @@ def test_cc_is_emptied_when_not_announced_and_storing_json_and_unknown_blocked_i
     assert stored['cc'] == []
 
 
-def test_a_dict_shaped_object_crashes_before_any_isinstance_check(app, db_session, monkeypatch):
-    """routes.py:1617 -- `core_activity['object'].lower()` runs
-    unconditionally, before 'target' is inspected and long before the
-    Mastodon path's own `isinstance(core_activity['object'], str)` guard at
-    :1670. A dict has no `.lower()` method.
-
-    No 'target' key is set, matching the Mastodon shape the brief's Step 7
-    describes -- but per this file's module docstring (finding 2), the
-    crash happens identically whether or not 'target' is present, since
-    :1617 runs before either code path is chosen.
+def test_a_dict_shaped_object_is_refused_before_any_lookup(app, db_session, monkeypatch):
+    """D87, fixed. The arm called `core_activity['object'].lower()` before
+    looking at 'target' or at the Mastodon path's own `isinstance(..., str)`
+    guard, so a dict-shaped object raised AttributeError with no log row. A
+    Block's object must be the blocked actor's ID; anything else is now
+    refused and logged, and no ban or UserBlock is recorded.
     """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance = make_instance('peer.example')
     blocker = make_user(instance, 'admin')
     blocker.ap_fetched_at = utcnow()
@@ -287,10 +266,12 @@ def test_a_dict_shaped_object_crashes_before_any_isinstance_check(app, db_sessio
     activity = inbox_activity(blocker, activity_type='Block',
                               object={'id': 'https://peer.example/users/victim', 'type': 'Person'})
 
-    with pytest.raises(AttributeError, match=r"'dict' object has no attribute 'lower'"):
-        dispatch(activity)
+    dispatch(activity)
 
-    assert ActivityPubLog.query.count() == 0
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Block object is not an actor ID'
+    assert UserBlock.query.count() == 0
 
 
 # --- The site-ban path: routes.py:1628-1652 ---

@@ -1694,6 +1694,9 @@ def process_inbox_request(request_json, store_ap_json):
                     if not announced and store_ap_json:
                         core_activity['cc'] = []  # cut very long list of instances
 
+                    if not isinstance(core_activity['object'], str):
+                        log_incoming_ap(id, APLOG_USERBAN, APLOG_FAILURE, saved_json, 'Block object is not an actor ID')
+                        return
                     blocker = user
                     already_banned = False
                     blocked_ap_id = core_activity['object'].lower()
