@@ -519,19 +519,17 @@ def test_an_authorization_refusal_reaches_the_caller_as_its_message(app, db_sess
     assert body['message'] == 'Insufficient permissions to manage registrations'
 
 
-def test_an_internal_failures_text_is_echoed_to_the_caller(app, db_session):
-    """R1, pinned in both directions rather than endorsed.
-
-    The final `else` returns `str(e)` to the caller whatever the exception was,
-    so an internal failure's text -- which may name a table, a column, a
-    constraint or a path -- reaches an unauthenticated client. The branch is
-    deliberate for the application's OWN raised strings; what is registered is
-    that it does not distinguish them from anything else.
+def test_an_internal_failures_text_is_not_echoed_to_the_caller(app, db_session):
+    """D895, fixed. The final `else` used to return `str(e)` whatever the
+    exception was, so an internal failure's text -- which may name a table, a
+    column, a constraint or a path -- reached an unauthenticated client. Only the
+    application's own refusals keep their text now; anything else is a generic
+    500, and the detail is logged.
     """
     body, status = _handle(app, RuntimeError('relation "user_role" does not exist'))
 
-    assert status == 400
-    assert body['message'] == 'relation "user_role" does not exist'
+    assert status == 500
+    assert body['message'] == 'internal error'
 
 
 @pytest.mark.parametrize('message, logged', [
