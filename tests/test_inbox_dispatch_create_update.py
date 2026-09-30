@@ -249,6 +249,26 @@ def test_a_poll_vote_for_an_unknown_choice_is_now_logged(app, db_session, monkey
     assert log.exception_message == 'Poll vote for an unknown choice'
 
 
+def test_a_poll_vote_from_a_banned_instance_is_refused(app, db_session, monkeypatch):
+    """D119, fixed. process_poll_vote refuses a voter whose instance is
+    banned; this Note-shaped path had no such check. It is now refused the
+    same way. The preamble's actor lookup already turns away an actor whose
+    URL is on a banned instance, so routes' own `instance_banned` is patched
+    to isolate this arm's check rather than seeding a BannedInstances row.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, voter, post, poll, choice = seed_poll_post()
+    monkeypatch.setattr(activitypub_routes, 'instance_banned', lambda domain: domain == instance.domain)
+
+    dispatch(create_activity(voter, poll_note(post.ap_id, 'yes')))
+
+    from app.models import PollChoiceVote
+    assert db_session.query(PollChoiceVote).count() == 0
+    log = ActivityPubLog.query.one()
+    assert log.result == 'ignored'
+    assert log.exception_message == 'Cannot rate this'
+
+
 def test_a_poll_vote_on_a_local_authors_post_stamps_it_and_schedules_an_edit(app, db_session, monkeypatch):
     """`post_being_replied_to.author.is_local()` -- the LOCAL branch. `edited_at`
     is seeded to a stale value first, so the stamp is evidence of the write

@@ -1264,7 +1264,10 @@ def process_inbox_request(request_json, store_ap_json):
                         if (core_activity['object']['type'] == 'Note' and 'name' in core_activity['object'] and  # Poll Votes
                                 'inReplyTo' in core_activity['object'] and 'attributedTo' in core_activity['object'] and
                                 not 'published' in core_activity['object']):
-                            post_being_replied_to = Post.get_by_ap_id(core_activity['object']['inReplyTo'])
+                            if instance_banned(user.instance.domain):  # as process_poll_vote does
+                                log_incoming_ap(id, APLOG_CREATE, APLOG_IGNORED, saved_json, 'Cannot rate this')
+                                return
+                            post_being_replied_to =Post.get_by_ap_id(core_activity['object']['inReplyTo'])
                             if post_being_replied_to:
                                 poll_data = session.get(Poll, post_being_replied_to.id)
                                 choice = session.query(PollChoice).filter_by(post_id=post_being_replied_to.id,
