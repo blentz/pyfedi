@@ -127,7 +127,8 @@ def process_webfinger_request(resource):
                                                                                                  ap_id=None).first()
         if object is None:
             profile_id = f"{current_app.config['SERVER_URL']}/c/{actor.strip().lower()}"
-            object = Community.query.filter_by(ap_profile_id=profile_id, ap_id=None, local_only=False).first()
+            object = Community.query.filter_by(ap_profile_id=profile_id, ap_id=None, local_only=False,
+                                               banned=False, ap_deleted_at=None).first()
             type = 'Group'
             if object is None:
                 object = Feed.query.filter_by(name=actor.strip(), ap_id=None, public=True,
