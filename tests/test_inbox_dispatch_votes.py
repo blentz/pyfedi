@@ -85,16 +85,10 @@ the imports), which patches that SAME single `app.redis_client` attribute
 to a narrower double whose `.lock(...)` is a genuine no-op context manager,
 instead of `redis_double`.
 
-Step 2's `test_a_poll_vote_without_choice_text` is an OBSERVATION probe per
-the task brief, not a design choice: routes.py:2440 reads
-`request_json['choice_text']` (for a non-announced activity) with no `.get`
-and no prior guard, immediately after the `ap_id` line and BEFORE
-`Post.get_by_ap_id` is ever called -- so a peer that sends a Vote/Note
-activity missing `choice_text` raises an unhandled KeyError out of
-process_poll_vote, regardless of whether the target post exists. Verified by
-running it: the probe test's `pytest.raises(KeyError, match='choice_text')`
-passes against the unmodified function. Registered as a finding for Task 9;
-not fixed here.
+Step 2's `test_a_poll_vote_without_choice_text_is_refused` covers D55, fixed:
+process_poll_vote used to read `choice_text` with no guard, before
+`Post.get_by_ap_id`, so a vote missing it raised an unhandled KeyError. It is
+now refused and logged.
 
 Step 4 drops each piece of process_question_answer's permission guard,
 routes.py:2474:
@@ -735,24 +729,23 @@ def test_poll_vote_blocked_by_a_banned_instance(app, db_session, monkeypatch):
     assert row.exception_message == 'Cannot rate this'
 
 
-def test_a_poll_vote_without_choice_text(app, db_session, monkeypatch):
-    """routes.py:2440 -- `request_json['choice_text']` is read unguarded from
-    a peer-supplied activity. Establish and assert the observed behaviour.
-
-    OBSERVED: for a non-announced activity missing the `choice_text` key
-    entirely, this line raises an unhandled `KeyError` straight out of
-    process_poll_vote -- BEFORE `Post.get_by_ap_id` is even called, since the
-    `choice_text` read sits directly after the `ap_id` read and above the
-    post lookup. A real peer omitting this field (or a client library that
-    treats it as optional) crashes activity processing rather than being
-    refused gracefully. Registered as a finding for Task 9; not fixed here.
+def test_a_poll_vote_without_choice_text_is_refused(app, db_session, monkeypatch):
+    """D55, fixed. `choice_text` comes straight from the peer's activity and
+    was read with no guard, before the post lookup, so a vote omitting it
+    raised KeyError out of process_poll_vote whether or not the post existed.
+    It is now refused and logged, and no vote is recorded.
     """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     voter, post, _choice = _seed_poll_scenario()
 
     request_json = {'id': 'https://peer.example/activities/1', 'object': post.ap_id}
 
-    with pytest.raises(KeyError, match='choice_text'):
-        process_poll_vote(voter, True, request_json, False)
+    process_poll_vote(voter, True, request_json, False)
+
+    assert PollChoiceVote.query.count() == 0
+    row = ActivityPubLog.query.one()
+    assert row.result == 'failure'
+    assert row.exception_message == 'Poll vote has no choice_text'
 
 
 # --- Task 6: process_question_answer, routes.py:2463-2496 ---
