@@ -24831,4 +24831,40 @@ at both ends, and one row asserts both ends at once.
 
 Ten mutants dead, three provably equivalent, on a green baseline.
 
+---
+
+## Round 261 -- the decorators that refuse a request
+
+Six decorators in `app/utils.py` wrap routes and decide whether a request is answered at all, and
+each one's refusal was a single uncovered `return redirect(...)`. A decorator that fails OPEN is a
+route with no gate, so every row asserts the redirect AND that the wrapped function did not run.
+
+* `validation_required` -- an account that has not confirmed its email. The gate against a signup
+  flood.
+* `trustworthy_account_required` and `aged_account_required` -- an account too new or too quiet.
+* `login_required_if_private_instance` -- whose CONTENT WARNING arm runs before the
+  private-instance test, so an instance showing a warning shows it to everybody, and the
+  acknowledgement is a cookie rather than an account setting.
+* `check_anoobis` -- the proof-of-work challenge, with a user-agent ALLOWLIST. Mastodon, Lemmy and
+  the rest cannot solve a proof of work, so the row for the allowlist matters more than the one for
+  the challenge: challenging them breaks federation.
+
+**Do not register probe routes to test a decorator.** The first attempt added a route per decorator
+with `app.add_url_rule`, which passed the file on its own and FAILED THE FULL SUITE: Flask refuses
+that call once the app has handled a request, and under xdist another file in the same worker has
+already made one. Every row now wraps a function by hand, patches `app.utils.current_user` to supply
+the acting account, and calls it inside `test_request_context` -- no app mutation, no ordering
+dependency.
+
+Also covered: `notify_admin`, which loops over every admin so an instance with two tells both, and
+increments the badge that is what an admin actually sees; `user_filters_home` and
+`user_filters_posts`, the two siblings of round 245's reply filter, each reading its own column and
+each with its own copy of the `'-1'` convention; `site_language_id` / `site_language_code`, whose
+optional `site` argument has to WIN because they are called from celery tasks with no `g.site`; and
+`days_to_add_for_next_month`, which takes a DATETIME and subtracts on the dates -- the comment beside
+that call records the bug where taking `.day` off a datetime moved a noon-scheduled post to the day
+before.
+
+Fourteen mutants, all dead, on a green baseline.
+
 **Next free number: D1427.**
