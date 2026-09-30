@@ -2831,6 +2831,9 @@ def admin_emoji_delete(emoji_id):
 def masquerade(user_id):
     user = db.session.get(User, user_id)
     if user is not None and user.is_local():
+        # D942: an admin-only audit record, written before the session changes hands
+        add_to_modlog('masquerade', actor=current_user, target_user=user,
+                      link_text=user.display_name(), link=user.link())
         login_user(user, False)
         return redirect('/')
     return ''

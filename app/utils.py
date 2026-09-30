@@ -4010,9 +4010,10 @@ def add_to_modlog(action: str, actor: User, target_user: User = None, reason: st
     post_id = post.id if post else None
     reply_id = reply.id if reply else None
     reason = shorten_string(reason, 512)
+    public = get_setting('public_modlog', False) and action not in ModLog.admin_only_actions
     db.session.add(ModLog(user_id=actor.id, type=action_type, action=action, target_user_id=target_user_id,
                           community_id=community_id, post_id=post_id, reply_id=reply_id,
-                          reason=reason, link=link, link_text=link_text, public=get_setting('public_modlog', False)))
+                          reason=reason, link=link, link_text=link_text, public=public))
     db.session.commit()
 
 

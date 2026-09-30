@@ -23,7 +23,8 @@ import pytest
 from flask import current_app, g
 
 from app import db
-from app.models import BlockedImage, CmsPage, Emoji, File, Post, Site, User
+from app.models import BlockedImage, CmsPage, Emoji, File, ModLog, Post, Site, User
+from app.utils import set_setting
 from tests.factories import (grant_permission, make_community,
                              make_community_member, make_file, make_post,
                              make_user)
@@ -514,6 +515,28 @@ class TestMasquerading:
         assert response.status_code == 302
         assert response.headers['Location'] == '/'
         assert signed_in_as(env.client) == str(env.member.id)
+
+    def test_masquerading_is_recorded_for_admins_only(self, env):
+        """D942, fixed (owner ruling 2026-09-30). Becoming another account left
+        no trail anywhere. It now writes a modlog entry naming the admin, the
+        account and the time -- never public, even on an instance whose modlog
+        is, because only admins see non-public entries."""
+        set_setting('public_modlog', True)
+        admin = an_admin(env, 'change instance settings')
+        login(env.client, admin)
+
+        env.client.get(f'/admin/masquerade/{env.member.id}')
+
+        entry = ModLog.query.filter_by(action='masquerade').one()
+        assert entry.user_id == admin.id
+        assert entry.target_user_id == env.member.id
+        assert entry.created_at is not None
+        assert entry.public is False
+
+    def test_a_refused_masquerade_records_nothing(self, env):
+        login(env.client, an_admin(env, 'change instance settings'))
+        env.client.get('/admin/masquerade/999999')
+        assert ModLog.query.filter_by(action='masquerade').count() == 0
 
     def test_a_remote_account_cannot_be_masqueraded_as(self, env):
         remote = make_user(env.baseline.instance_remote, 'faraway')

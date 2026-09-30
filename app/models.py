@@ -4984,8 +4984,12 @@ class ModLog(db.Model):
         'unlock_post': _l('Un-lock post'),
         'lock_post_reply': _l('Lock comment'),
         'unlock_post_reply': _l('Un-lock comment'),
-        'move_post': _l('Move post')
+        'move_post': _l('Move post'),
+        'masquerade': _l('Masqueraded as account')
     }
+
+    # Actions recorded for admins only, whatever the public_modlog setting (D942)
+    admin_only_actions = {'masquerade'}
 
     def action_to_str(self):
         if self.action in self.action_map:
@@ -4994,7 +4998,8 @@ class ModLog(db.Model):
             return self.action
 
     def get_correct_link(self):
-        user_action_list = ["add_mod", "remove_mod", "delete_user", "undelete_user", "ban_user", "unban_user"]
+        user_action_list = ["add_mod", "remove_mod", "delete_user", "undelete_user", "ban_user", "unban_user",
+                            "masquerade"]
 
         if self.action in user_action_list and not self.link.startswith("u/"):
             return "u/" + self.link
