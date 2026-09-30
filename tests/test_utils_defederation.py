@@ -236,17 +236,41 @@ class TestWhatTheSubscriptionWrites:
             download_defeds_worker(subscription.id, DOMAIN)
         assert self.banned(subscription) == set()
 
+    def test_a_replacing_download_drops_what_the_list_no_longer_names(
+            self, env, subscription):
+        """D378, fixed. The periodic sync's `replace=True` swaps the
+        subscription's bans for the new list in the worker's one commit."""
+        with patch('app.utils.retrieve_defederation_list',
+                   return_value=['old.test', 'kept.test']):
+            download_defeds_worker(subscription.id, DOMAIN)
+        with patch('app.utils.retrieve_defederation_list',
+                   return_value=['kept.test', 'new.test']):
+            download_defeds_worker(subscription.id, DOMAIN, replace=True)
+        assert self.banned(subscription) == {'kept.test', 'new.test'}
+
+    def test_a_failed_replacing_download_keeps_the_old_bans(self, env,
+                                                            subscription):
+        """D378, fixed. Nothing is deleted until the new list is in hand."""
+        with patch('app.utils.retrieve_defederation_list',
+                   return_value=['old.test']):
+            download_defeds_worker(subscription.id, DOMAIN)
+        with patch('app.utils.retrieve_defederation_list',
+                   side_effect=RuntimeError('unreachable')):
+            with pytest.raises(RuntimeError):
+                download_defeds_worker(subscription.id, DOMAIN, replace=True)
+        assert self.banned(subscription) == {'old.test'}
+
     def test_in_debug_the_download_runs_here_and_now(self, env, monkeypatch):
         monkeypatch.setattr(current_app, 'debug', True)
         with patch('app.utils.download_defeds_worker') as worker:
             download_defeds(7, DOMAIN)
-        worker.assert_called_once_with(7, DOMAIN)
+        worker.assert_called_once_with(7, DOMAIN, False)
 
     def test_otherwise_it_is_queued(self, env, monkeypatch):
         monkeypatch.setattr(current_app, 'debug', False)
         with patch('app.utils.download_defeds_worker') as worker:
-            download_defeds(7, DOMAIN)
-        worker.delay.assert_called_once_with(7, DOMAIN)
+            download_defeds(7, DOMAIN, replace=True)
+        worker.delay.assert_called_once_with(7, DOMAIN, True)
 
 
 # --------------------------------------------------------------------------
