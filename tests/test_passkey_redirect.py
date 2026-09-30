@@ -40,7 +40,7 @@ from flask import current_app
 from unittest.mock import patch
 
 from app.utils import is_safe_redirect_target
-from tests.test_passkeys import _passkey, _seed
+from tests.test_passkeys import _passkey, _seed, authenticated
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -61,7 +61,8 @@ def verified(app, next_value, body=None):
         payload = body
     with patch('app.auth.passkeys.parse_authentication_credential_json',
                return_value='CRED'):
-        with patch('app.auth.passkeys.verify_authentication_response'):
+        with patch('app.auth.passkeys.verify_authentication_response',
+                   return_value=authenticated()):
             response = client.post('/auth/passkeys/login_verification',
                                    json=payload)
     return response
@@ -224,6 +225,7 @@ class TestTheRegistrationTwin:
                 patch('app.user.passkeys.verify_registration_response') as verify:
             verify.return_value.credential_id = b'cred-id'
             verify.return_value.credential_public_key = b'rawkey'
+            verify.return_value.sign_count = 0
             response = client.post('/user/passkeys/registration/verification',
                                    json=body)
         return alice, response

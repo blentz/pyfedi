@@ -92,17 +92,20 @@ def passkey_verification():
                     # always False for any row loaded from the database.
                     credential_public_key = passkey.public_key
 
-                    verify_authentication_response(
+                    # D886: the stored counter, so the library refuses a count that did
+                    # not advance (a cloned authenticator), unless both are 0 -- an
+                    # authenticator with no counter. The reported count is then kept.
+                    verification = verify_authentication_response(
                         credential=auth_credential,
                         expected_rp_id=request.host,
                         expected_challenge=challenge,
                         expected_origin=f'https://{request.host}',
                         credential_public_key=credential_public_key,
-                        credential_current_sign_count=0,
+                        credential_current_sign_count=passkey.counter,
                         require_user_verification=False,
                     )
                     # print(f'{passkey} is valid')
-                    passkey.counter += 1
+                    passkey.counter = verification.new_sign_count
                     passkey.used = utcnow()
                     success = True
                     break
