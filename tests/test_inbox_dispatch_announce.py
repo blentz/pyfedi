@@ -228,6 +228,41 @@ def test_an_announce_whose_inner_object_has_no_actor_is_refused(app, db_session,
     assert log.exception_message == 'Announce object has no actor'
 
 
+@pytest.mark.parametrize('missing', ['id', 'type'])
+def test_an_announce_whose_inner_activity_has_no_id_or_type_is_refused(
+        app, db_session, monkeypatch, missing):
+    """D127, fixed. The gate checks the outer activity's id and type, but the
+    unwrap handed the inner object to every arm as `core_activity` without
+    re-checking its own, and the arms read `core_activity['type']` and
+    `core_activity['id']` unguarded -- an Announce{Create{ChatMessage}} whose
+    inner Create had no id reached process_chat and raised KeyError. The
+    unwrap now refuses an inner activity missing either key, once, instead
+    of every arm having to guard its own read. Nothing is dispatched.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community = _seed_announcing_community()
+    bob = make_user(instance, 'bob')
+    bob.ap_fetched_at = utcnow()
+    db.session.commit()
+
+    calls = []
+    monkeypatch.setattr(activitypub_routes, 'process_chat', lambda *args: calls.append(args))
+
+    inner = {'id': 'https://peer.example/activities/create/1', 'type': 'Create',
+             'actor': bob.ap_profile_id,
+             'object': {'id': 'https://peer.example/chat/1', 'type': 'ChatMessage',
+                        'attributedTo': bob.ap_profile_id, 'content': 'hi'}}
+    del inner[missing]
+    activity = inbox_activity(community, activity_type='Announce', object=inner)
+
+    dispatch(activity)
+
+    assert calls == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Announce object has no id or type'
+
+
 # --- Step 4: the inner-actor walk and what it sets ---
 
 
@@ -393,7 +428,8 @@ def test_an_announce_from_a_feed_skips_the_inner_actor_walk(
                          lambda *args: calls.append(args))
 
     activity = inbox_activity(feed, activity_type='Announce',
-                              object={'actor': banned_user.ap_profile_id, 'type': 'Like'})
+                              object={'id': 'https://peer.example/activities/like/1',
+                                      'actor': banned_user.ap_profile_id, 'type': 'Like'})
 
     dispatch(activity)
 

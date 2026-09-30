@@ -939,6 +939,11 @@ def process_inbox_request(request_json, store_ap_json):
                     else:
                         user = None
 
+                    # The gate only checked the outer activity; every arm below reads the inner one's id and type (D127)
+                    if 'id' not in request_json['object'] or 'type' not in request_json['object']:
+                        log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json, 'Announce object has no id or type')
+                        return
+
                     # Now that we have the community and the user from an Announce, we can save repeating code by removing it
                     # core_activity is checked for its Type, but the original request_json is sometimes passed to any other functions
                     announced = True
