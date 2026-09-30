@@ -2259,7 +2259,7 @@ def comment_ap(comment_id):
 
 
 def post_ap_refusal(post: Post):
-    """The response that refuses an ActivityPub fetch of `post` (or of its replies), or None to serve it.
+    """The response that refuses an ActivityPub fetch of `post` (or of its replies or context), or None to serve it.
 
     Visibility is checked before deletion so a Tombstone never confirms that a post existed somewhere the caller
     may not see."""
@@ -2349,8 +2349,9 @@ def post_replies_ap(post_id):
 def post_ap_context(post_id):
     if (request.method == 'GET' or request.method == 'HEAD') and is_activitypub_request():
         post = db.session.get(Post, post_id) or abort(404)
-        if post.deleted:
-            abort(404)
+        refusal = post_ap_refusal(post)
+        if refusal is not None:
+            return refusal
         if post.community.local_only or post.community.private:
             abort(403)
         if request.method == 'GET':
