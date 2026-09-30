@@ -16,6 +16,10 @@ from zero prior coverage, hence 14 statements / 8 arcs missing each.
 (a `SimpleNamespace` with `.instance`, `.user`, `.community`) and names are
 fixed by the plan, not just local convenience.
 
+D615, FIXED (owner ruling 2026-09-30): both guards are now
+`community.is_owner(user) or user.is_admin()`. What follows describes the
+three-operand guard they replaced.
+
 THE THREE-OPERAND GUARD, at both `:494` and `:523`:
 `if not (community.is_owner(user) or community.is_moderator(user) or
 user.is_admin_or_staff()):`. `is_owner(user)` and `is_moderator(user)` are NOT
@@ -85,7 +89,7 @@ from sqlalchemy.exc import NoResultFound
 
 from app import db
 from app.constants import NOTIF_NEW_MOD, SRC_API, SRC_WEB
-from app.models import CommunityMember, Conversation, ModLog, Notification
+from app.models import CommunityMember, Conversation, ModLog, Notification, Role, user_role
 from app.shared.community import (add_mod_to_community, delete_community, remove_mod_from_community,
                                   restore_community)
 from tests.factories import (bearer, make_community, make_community_member, make_conversation,
@@ -148,6 +152,16 @@ from tests.factories import (bearer, make_community, make_community_member, make
 # Task 8's mutation pass should expect a mutant deleting `community.is_owner
 # (user) or` to survive both this file's owner-alone tests and treat it as
 # already explained here, not as an uncovered gap.
+
+
+def grant_role(user, name):
+    """A role with exactly this NAME, which is what `is_admin()` and
+    `is_staff()` read."""
+    role = Role(name=name, weight=0)
+    db.session.add(role)
+    db.session.commit()
+    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.commit()
 
 
 def _make_site_admin(user):
@@ -249,18 +263,11 @@ def test_delete_community_api_owner_alone_deletes_and_returns_user_id(app, db_se
     assert calls == [('delete_community', {'user_id': s.user.id, 'community_id': s.community.id})]
 
 
-def test_delete_community_web_moderator_alone_deletes_and_returns_none(app, db_session, monkeypatch):
-    """`:488`'s else arm (`current_user`), `:494`'s guard passing through its
-    SECOND operand alone (is_moderator=True, is_owner=False, no admin role --
-    a plain moderator, the shape federated moderators are created in, and the
-    one case of the three that is genuinely separable; see the REDUNDANT
-    DISJUNCT comment above for why operand one never is), and `:512`'s false
-    arm: a non-API src falls off the end of the function and returns `None`
-    rather than the user's id.
-
-    See the previous test's docstring for why `task_selector` is patched on
-    `app.shared.community` and what the argument assertion is defending
-    against.
+def test_delete_community_web_moderator_alone_is_refused(app, db_session, monkeypatch):
+    """D615, fixed (owner ruling 2026-09-30). A plain moderator (not owner, no
+    admin role) used to pass the guard and could soft-delete the whole
+    community. Only the owner and instance admins may now, as the web route
+    `community_delete` already required.
     """
     s = _seed()
     make_community_member(s.user, s.community, is_moderator=True)
@@ -269,11 +276,23 @@ def test_delete_community_web_moderator_alone_deletes_and_returns_none(app, db_s
                          lambda task_key, **kw: calls.append((task_key, kw)))
 
     with web_ctx(app, s.user):
-        returned = delete_community(s.community.id, SRC_WEB)
+        with pytest.raises(Exception, match='incorrect_login'):
+            delete_community(s.community.id, SRC_WEB)
 
-    assert returned is None
-    assert s.community.banned is True
-    assert calls == [('delete_community', {'user_id': s.user.id, 'community_id': s.community.id})]
+    assert s.community.banned is False
+    assert calls == []
+
+
+def test_delete_community_staff_alone_is_refused(app, db_session):
+    """D615: staff are not instance admins, so the ruling leaves them out too."""
+    s = _seed()
+    grant_role(s.user, 'Staff')
+
+    with web_ctx(app, s.user):
+        with pytest.raises(Exception, match='incorrect_login'):
+            delete_community(s.community.id, SRC_WEB)
+
+    assert s.community.banned is False
 
 
 def test_delete_community_admin_alone_without_membership_deletes(app, db_session, monkeypatch):
@@ -408,14 +427,9 @@ def test_restore_community_api_owner_alone_restores_and_returns_user_id(app, db_
     assert calls == [('restore_community', {'user_id': s.user.id, 'community_id': s.community.id})]
 
 
-def test_restore_community_web_moderator_alone_restores_and_returns_none(app, db_session, monkeypatch):
-    """`:517`'s else arm, `:523`'s guard passing through its SECOND operand
-    alone (plain moderator, not owner, not staff -- the one of the three
-    that is genuinely separable; see the REDUNDANT DISJUNCT comment above),
-    and `:536`'s false arm: a non-API src returns `None`.
-
-    See the previous test's docstring for the `task_selector` patch and
-    argument assertion.
+def test_restore_community_web_moderator_alone_is_refused(app, db_session, monkeypatch):
+    """D615, fixed: restoring is held to the same rule as deleting -- the
+    owner and instance admins only, not a plain moderator.
     """
     s = _seed()
     s.community.banned = True
@@ -426,11 +440,11 @@ def test_restore_community_web_moderator_alone_restores_and_returns_none(app, db
                          lambda task_key, **kw: calls.append((task_key, kw)))
 
     with web_ctx(app, s.user):
-        returned = restore_community(s.community.id, SRC_WEB)
+        with pytest.raises(Exception, match='incorrect_login'):
+            restore_community(s.community.id, SRC_WEB)
 
-    assert returned is None
-    assert s.community.banned is False
-    assert calls == [('restore_community', {'user_id': s.user.id, 'community_id': s.community.id})]
+    assert s.community.banned is True
+    assert calls == []
 
 
 def test_restore_community_admin_alone_without_membership_restores(app, db_session, monkeypatch):
