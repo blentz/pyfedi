@@ -235,35 +235,23 @@ def test_an_announce_whose_inner_object_has_no_actor(app, db_session, monkeypatc
 
 
 def test_an_announce_whose_inner_actor_is_banned_is_refused(app, db_session, monkeypatch):
-    """routes.py:916-919.
+    """A banned inner actor served from a STALE ID-cache entry is refused at
+    the lookup itself (D59, fixed).
 
-    Reaching this branch through find_actor_or_create_cached's ORDINARY path
-    is impossible: find_actor_by_url (app/activitypub/actor.py) filters a
-    banned actor out at the lookup itself (`if actor.banned and not
-    allow_banned: return False`), which find_actor_or_create turns into a
-    plain None before routes.py ever sees an object to call `.banned` on --
-    see the discovery noted in test_an_announce_of_a_list_processes_every_element
-    above, where a banned inner actor lands on 920-922 instead. The ONLY way
-    routes.py can observe `user.banned == True` here is a STALE hit in
-    find_actor_or_create_cached's Redis ID cache (app/activitypub/util.py:
-    313-321): the fast path at lines 355-360 re-fetches the model by primary
-    key with `db.session.get`, which applies NO banned filter at all, once
-    `_find_actor_id_cached` has already returned a hit. That is a real
-    production scenario (a user resolved while in good standing, then banned
-    within the cache's 10-minute window) but is UNREACHABLE in this suite's
-    own test config, where CACHE_TYPE is 'NullCache' (tests/conftest.py) --
-    `_find_actor_id_cached` never actually caches, so it always re-runs the
-    filtering lookup fresh and never returns a stale hit.
+    find_actor_or_create_cached's Redis fast path caches only (id, type) and
+    re-fetches by primary key. Before D59 that re-fetch applied no banned
+    filter, so an actor resolved in good standing and banned within the
+    cache's 10-minute window came back as a live User, and only routes.py's
+    own `if user.banned:` backstop stopped it. The cache hit now applies the
+    same checks as the uncached path, so the refusal happens in the lookup and
+    routes.py logs the "Blocked or unfound user" arm. The backstop stays as
+    defence in depth.
 
-    So this test simulates a warm cache by monkeypatching
-    `_find_actor_id_cached` itself (a private collaborator inside
-    app/activitypub/util.py, not process_inbox_request) to return this one
-    banned user's (id, 'User') for exactly this actor's URL -- reproducing
-    the shape a real warm cache would hand back -- while delegating every
-    other URL to the real function unchanged. This is not doubling the
-    function under test: process_inbox_request and find_actor_or_create_cached
-    both run for real; only the innermost cache lookup is puppeted to have
-    the one stale entry a live Redis cache could have produced.
+    This suite's CACHE_TYPE is 'NullCache', so a warm cache is simulated by
+    monkeypatching `_find_actor_id_cached` itself to return this one banned
+    user's (id, 'User') for exactly this actor's URL, delegating every other
+    URL to the real function. process_inbox_request and
+    find_actor_or_create_cached both run for real.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community = _seed_announcing_community()
@@ -292,7 +280,8 @@ def test_an_announce_whose_inner_actor_is_banned_is_refused(app, db_session, mon
 
     dispatch(activity)
 
-    assert ActivityPubLog.query.one().exception_message == f'{banned_user.ap_id} is banned'
+    assert ActivityPubLog.query.one().exception_message == \
+        f'Blocked or unfound user for Announce object actor {user_url}'
 
 
 def test_an_announce_whose_inner_actor_is_unfound_is_refused(

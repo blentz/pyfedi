@@ -382,7 +382,15 @@ def find_actor_or_create_cached(actor: str, create_if_not_found=True, community_
         elif actor_type == 'Feed':
             actor_obj = db.session.get(Feed, actor_id)
 
+        # The cache holds only the id, so an actor banned or deleted since it was cached must be refused here, with
+        # the same checks the uncached path applies: find_local_user for local users, validate_remote_actor otherwise
         if actor_obj:
+            if actor_obj.is_local():
+                if isinstance(actor_obj, User) and actor_obj.banned:
+                    return None
+            elif not validate_remote_actor(actor_url, actor_obj):
+                return None
+
             # Schedule a refresh if needed
             schedule_actor_refresh(actor_obj)
             return actor_obj
@@ -4343,11 +4351,8 @@ def process_microblog_announce(request_json, id, store_ap_json) -> Union[Post, N
     if not announcer or not isinstance(announcer, User):
         log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, 'Announce actor is not a known user')
         return None
-    # Stale-cache backstop, not the primary defence: find_actor_or_create_cached()
-    # already rejects a banned actor upstream, via validate_remote_actor() inside
-    # find_actor_by_url(), for any actor already present in the database. This
-    # branch only fires for a _find_actor_id_cached() entry cached before the
-    # actor was banned, which bypasses that upstream check.
+    # Defence in depth, not the primary defence: find_actor_or_create_cached()
+    # already rejects a banned actor, on a cache miss and on a cache hit alike.
     if announcer.banned:
         log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, f'{announcer.ap_id} is banned')
         return None

@@ -80,17 +80,15 @@ def announce(actor_uri, object_uri):
 class TestABoostFromAnAccountThatIsBanned:
 
     def test_a_banned_announcer_is_refused(self, followed_booster, log_spy):
-        """`if announcer.banned`. The comment above it says exactly what it is for: an id cached by
-        `_find_actor_id_cached` BEFORE the ban skips the upstream `validate_remote_actor` check, so
-        this is the arm that stops a banned account's boosts appearing in a local feed until the
-        cache expires.
+        """`if announcer.banned`, defence in depth. Since D59 `find_actor_or_create_cached` refuses a
+        banned actor on a cache hit as well as a miss, so only a stubbed lookup reaches this arm.
         """
         followed_booster.banned = True
         db.session.commit()
         fetched = []
 
-        # The stale cache itself. `find_actor_or_create_cached` refuses a banned actor it LOOKS UP,
-        # so the only way to the backstop is an id already cached -- which is what this patch is.
+        # `find_actor_or_create_cached` refuses a banned actor, so the backstop is reached only by
+        # stubbing the lookup to hand one back.
         with patch.object(ap_util, 'find_actor_or_create_cached',
                           return_value=followed_booster), \
                 patch.object(ap_util, 'remote_object_to_json',

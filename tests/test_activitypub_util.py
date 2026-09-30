@@ -320,6 +320,44 @@ def test_the_cached_wrapper_serves_a_stale_id_when_the_url_lookup_can_no_longer_
     assert from_cache.id == community_id
 
 
+@pytest.mark.parametrize('change', ['banned', 'deleted'])
+def test_the_cached_wrapper_refuses_a_remote_user_banned_or_deleted_after_caching(
+        app, db_session, site, local_instance, remote_instance, real_cache, change):
+    """D59, fixed. A cache hit re-fetches the row by primary key, and that
+    re-fetch used to apply no filter at all: an actor banned (or deleted)
+    within ten minutes of being resolved was still returned to every caller
+    that did not re-check for itself. The hit now applies the same actor-level
+    checks the uncached path's `validate_remote_actor` does.
+
+    The priming call is asserted, so the refusal below is a refusal of a
+    cached id and not a miss.
+    """
+    url = f'https://{REMOTE_DOMAIN}/u/wakko'
+    user = make_remote_actor(remote_instance, 'wakko')
+    user.ap_profile_id = url
+    db.session.commit()
+    assert find_actor_or_create_cached(url, create_if_not_found=False).id == user.id
+
+    setattr(user, change, True)
+    db.session.commit()
+
+    assert find_actor_or_create_cached(url, create_if_not_found=False) is None
+
+
+def test_the_cached_wrapper_refuses_a_local_user_banned_after_caching(
+        app, db_session, site, local_instance, real_cache):
+    """D59, fixed, local arm. The uncached path's `find_local_user` filters
+    `banned=False`; the cache hit now does too."""
+    url = f'https://{app.config["SERVER_NAME"]}/u/localadmin'
+    user = make_local_actor('localadmin')
+    assert find_actor_or_create_cached(url, create_if_not_found=False).id == user.id
+
+    user.banned = True
+    db.session.commit()
+
+    assert find_actor_or_create_cached(url, create_if_not_found=False) is None
+
+
 def test_signed_request_async(app):
     """Test the signed_request function with send_via_async=True to verify signature generation"""
     private_key, public_key = RsaKeys.generate_keypair()
