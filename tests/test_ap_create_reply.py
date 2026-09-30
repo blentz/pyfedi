@@ -666,6 +666,21 @@ def test_content_map_supplies_the_language_when_language_is_absent(app, db_sessi
     assert reply.language_id == italian.id
 
 
+def test_an_empty_content_map_falls_to_site_language_id(app, db_session, redis_lock_only_double):
+    """D272, fixed. `"contentMap": {}` passed the `isinstance(..., dict)` test
+    and `next(iter({}))` raised StopIteration above the tail `try`, so every
+    reply Create carrying it was lost. An empty map now names no language and
+    takes the `else` arm, exactly as a document without `contentMap` does."""
+    community, post, replier = _seed_scenario()
+    _make_language('es', 'Spanish')
+    english = _make_language('en', 'English')
+    document = _reply_doc(content='hello', contentMap={})
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply.language_id == english.id
+
+
 def test_a_content_map_naming_an_unknown_language_leaves_the_reply_unlanguaged(app, db_session,
                                                                               redis_lock_only_double):
     """The `else None` arm of `language_id = language.id if language else
