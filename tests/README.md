@@ -13622,3 +13622,13 @@ Session`. Keep the ids before the call and read the rows back with `db.session.g
 `log_incoming_ap`'s `if saved_json:` guard survived every row until one asserted
 `row.activity_json is None` -- a mutant that always stored writes the string `null`, which no other assertion
 notices.
+
+**1012. `len(self.ap_id) == 10` MEANS "NO ID YET".**
+`Post.generate_ap_id` treats a ten-character ap_id as a `gibberish(10)` placeholder written before the row had
+an id. A row for that guard has to use a ten-character string, and one for "an existing id is never rewritten"
+has to use a longer one, or the two cases are the same test.
+
+**1013. A SHORT-CIRCUITING MULTI-LINE `return` LEAVES LATER LINES UNCOVERED IN A SINGLE-FILE RUN.**
+`Post.blurred`'s `or`-chain spans four lines. A row that satisfies the first clause never evaluates the rest,
+so a per-file coverage check can report them missing while the full suite covers them. Check the suite's
+numbers before adding rows for them.
