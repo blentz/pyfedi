@@ -2870,7 +2870,8 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
         ap_language = language_from_ap(request_json['object'].get('language'))  # D1355
         if ap_language is not None:
             language_id = find_language_or_create(*ap_language).id
-        elif 'contentMap' in request_json['object'] and isinstance(request_json['object']['contentMap'], dict):
+        # A non-empty dict: an empty map names no language, like an absent one, and next(iter({})) raises (D272)
+        elif isinstance(request_json['object'].get('contentMap'), dict) and request_json['object']['contentMap']:
             language = find_language(next(iter(request_json['object']['contentMap'])))  # Combination of next and iter gets the first key in a dict
             language_id = language.id if language else None
         else:
