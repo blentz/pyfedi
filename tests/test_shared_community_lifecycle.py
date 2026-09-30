@@ -2197,34 +2197,24 @@ def test_make_community_no_existing_community_conflict_creates_successfully(app,
     assert Community.query.filter_by(name='totallyfreshcommunity').one() is not None
 
 
-def test_make_community_guard_verified_none_registered_defect_not_blocked(app, db_session):
-    """REGISTERED, NOT FIXED: `:239`'s `user.verified is False` is an `is`
-    identity check, not a truthiness check -- `app/models.py:981`'s
-    `verified = db.Column(db.Boolean, default=False)` carries no
-    `nullable=False`, so `verified=None` is a constructible state, and
-    `None is False` evaluates `False`. Combined with a real private key
-    (`with_keys=True`), `:239`'s guard does NOT raise for a user who was
-    never actually verified -- `None` is neither `True` nor `False`, and
-    only the LATTER is checked. `authorise_api_user`'s own, separate
-    verified check (see this section's header comment) uses the identical
-    `is False` idiom, so it does not block this state either, and the
-    SRC_API arm can be used directly.
-
-    This test pins today's actual, defective behaviour: an unverified
-    (`verified=None`, never through the real verification flow) but keyed
-    user's community creation SUCCEEDS regardless.
+def test_make_community_guard_refuses_a_user_whose_verified_is_none(app, db_session):
+    """D645, fixed. `:239` read `user.verified is False`, and `None is False`
+    is False, so a keyed user whose `verified` was NULL -- never verified --
+    created a community. The column is now NOT NULL, so the None is set in
+    memory only, and the guard now reads `not user.verified`. SRC_WEB, as in
+    the unverified test above, so `authorise_api_user` cannot answer first.
     """
     s = _seed()
     _seed_und_language()
     user = _keyed_user(s.instance, 'nullverified')
     user.verified = None
-    db.session.commit()
-    assert user.verified is None, 'test setup must produce a genuine None, not a falsy True/False'
-    api_input = _api_input(name='defectcommunity')
+    web_input = _web_input(url='defectcommunity')
 
-    make_community(api_input, SRC_API, bearer(user))
+    with web_ctx(app, user):
+        with pytest.raises(Exception) as exc_info:
+            make_community(web_input, SRC_WEB)
 
-    assert Community.query.filter_by(name='defectcommunity').one() is not None
+    assert str(exc_info.value) == "You can't create a community until your account is verified."
 
 
 # `make_community` (app/shared/community.py:253-290), the last uncovered group

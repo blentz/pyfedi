@@ -1,0 +1,35 @@
+"""User columns that code reads as plain values, and so must never be NULL.
+
+Each column here was nullable with only a Python-side default, which the ORM
+applies on INSERT and never to a row it did not write. A migration backfills
+the NULLs and makes the column NOT NULL with a matching server default, so the
+schema and the model agree whoever is writing.
+"""
+import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
+
+from app import db
+from app.models import User
+from tests.factories import make_instance, make_user
+
+
+def test_user_verified_cannot_be_null(db_session):
+    """D645, fixed. `verified` accepted NULL, and `user.verified is False`
+    guards (the API entry gate among them) let such a user straight through.
+    The column is now NOT NULL, backfilled to false."""
+    user = make_user(make_instance('remote.example'), 'someone', local=True)
+    user.verified = None
+
+    with pytest.raises(IntegrityError):
+        db.session.commit()
+    db.session.rollback()
+
+
+def test_user_verified_defaults_to_false_in_the_database(db_session):
+    """D645. The server default covers a write that bypasses the ORM."""
+    assert User.__table__.c.verified.nullable is False
+    verified = db.session.execute(text(
+        'INSERT INTO "user" (user_name) VALUES (:name) RETURNING verified'),
+        {'name': 'rawinsert'}).scalar()
+    assert verified is False

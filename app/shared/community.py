@@ -237,7 +237,7 @@ def make_community(input, src, auth=None, uploaded_icon_file=None, uploaded_bann
         question_answer = input.question_answer.data
         user = current_user
 
-    if user.verified is False or user.private_key is None:
+    if not user.verified or user.private_key is None:
         raise Exception("You can't create a community until your account is verified.")
 
     # slugify() answers '' for a name made entirely of characters it strips, and
