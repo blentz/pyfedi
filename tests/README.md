@@ -13641,3 +13641,7 @@ No assertion can tell the three bands of `Post.vote` apart until the row monkeyp
 The orphaned `elif` below it fails to parse, every test errors, and the mutation runner records KILLED. Mutate
 an `elif` to `elif False:` / `elif True:`, and anchor by LINE NUMBER when the same condition appears in more
 than one branch -- `Post.vote` has two copies of each vote threshold, one per direction.
+
+**1016. "THE TEXT IS STILL THERE" DOES NOT PROVE THE WRAP WAS SKIPPED.**
+`allowlist_html` tidies `<p><p>x</p></p>` back to one paragraph, so a mutant that wraps already-wrapped HTML
+survives any assertion that merely looks for the text. Assert the exact string.

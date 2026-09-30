@@ -24557,4 +24557,38 @@ actions and must not double it.
 
 Sixteen mutants, all dead, on a green baseline.
 
+---
+
+## Round 253 -- the rest of a remote feed's profile refresh
+
+`tests/test_ap_refresh_profiles.py` covers the user and community refreshes in detail and the
+feed task's own guards. What it did not cover was the feed task's body past the fetch, and that
+body deletes files.
+
+**A changed icon url in a peer's document deletes a file on this instance's disk.** The
+comparison is `icon_entry != feed.icon.source_url`, which is the only thing this instance can
+compare -- so the rows assert three states: a first icon is attached with nothing deleted, a
+changed url deletes the old File and attaches the new one, and an UNCHANGED url leaves both
+alone. That last one matters because the refresh runs daily: without the equality test every
+feed's icon would be deleted and re-downloaded every day. The cover is a second copy of the
+block on `image_id`, and its row asserts the icon is untouched.
+
+**The retry is one sleep and one second attempt**, and the second handler is wider than the
+first (`except Exception` rather than `except httpx.HTTPError`) because the retry can fail
+differently. It returns rather than raising: a peer being unreachable is not this instance's
+error.
+
+**The description follows D1346's shape.** A summary that does not start with `<` is wrapped in
+a paragraph (PeerTube sends plain text), the peer's own `source` markdown is preferred over their
+rendered HTML so an edit here round-trips, and without a source the text is derived from the HTML
+so the edit box holds something a person can edit.
+
+**One row needed sharpening and one fixture fact bit again.** "HTML is left as HTML" passed even
+with the wrap applied twice, because the sanitiser tidies `<p><p>...</p></p>` -- the assertion is
+now on the exact string. And every assertion in the file read a stale row at first: the task
+commits in its own session (fact 976), so the rows go through a helper that calls
+`db.session.expire_all()` before reading back.
+
+Fourteen mutants, all dead, on a green baseline.
+
 **Next free number: D1425.**
