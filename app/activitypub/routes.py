@@ -1501,6 +1501,9 @@ def process_inbox_request(request_json, store_ap_json):
                         if not community.is_moderator(mod) and not community.is_instance_admin(mod):
                             log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json, 'Does not have permission')
                             return
+                        if not isinstance(core_activity.get('target'), str):
+                            log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json, 'Add has no target')
+                            return
                         target = core_activity['target']
                         if not community.ap_featured_url:
                             community.ap_featured_url = community.ap_profile_id + '/featured'
@@ -1607,6 +1610,9 @@ def process_inbox_request(request_json, store_ap_json):
                     elif community:
                         if not community.is_moderator(mod) and not community.is_instance_admin(mod):
                             log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json, 'Does not have permission')
+                            return
+                        if not isinstance(core_activity.get('target'), str):
+                            log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json, 'Remove has no target')
                             return
                         target = core_activity['target']
                         if not community.ap_featured_url:
