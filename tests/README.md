@@ -13761,3 +13761,18 @@ So a `Post.new` row with an `Image` attachment needs `http_mock.head(url)` regis
 `create_post` swallows `AllMockedAssertionError` in its `except Exception` and answers None with the
 reason only in `ActivityPubLog`. Call `Post.new` directly when a create returns None for no visible
 reason -- `create_post` logs the exception to the database rather than raising it.
+
+**1039. `session.rollback()` BEFORE A `finally: session.close()` IS UNKILLABLE.**
+Closing a SQLAlchemy session releases its transaction, so everything uncommitted is discarded whether
+the rollback ran or not. Record it as an equivalent mutant; assert the `raise` instead, which IS
+observable. Same pair as round 253's task-session finding.
+
+**1040. PATCH `get_request` RATHER THAN THE TRANSPORT TO TEST A RETRY.**
+`app/utils.py:get_request` normalises every transport failure to `httpx.HTTPError` before a caller
+sees it, and the refresh tasks' retries are written against that one class. `patch.object(ap_util,
+'get_request', side_effect=[httpx.HTTPError('...'), httpx.Response(200, json=doc)])` scripts a
+failure-then-success in the caller's own terms; respx would test httpx's normalisation as well.
+
+**1041. `refresh_user_profile_task` SLEEPS `randint(3, 10)` SECONDS BETWEEN ATTEMPTS.**
+Patch `ap_util.time.sleep` in a fixture before driving the retry, or the row costs up to ten seconds
+of real time. Assert the argument is within 3..10 -- that the delay exists is the point of the retry.
