@@ -532,7 +532,7 @@ def check_instance_health():
                     instance.failures += 1
                     current_app.logger.warning(f"Error rechecking dormant instance {instance.domain}: {e}")
 
-            session.commit()
+                session.commit()
 
     except Exception:
         session.rollback()

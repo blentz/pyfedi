@@ -1293,10 +1293,7 @@ class TestCheckInstanceHealthRecheck:
     def test_a_raising_request_counts_a_failure(self, db_session, monkeypatch):
         """`:496`'s increment, on the single-instance path where it survives.
 
-        One instance only. With two, `:495`'s rollback discards the first
-        instance's uncommitted increment before the second reaches `:499`'s
-        commit -- see the sweep test below, and the register entry for the
-        batched commit.
+        One instance only; the sweep tests below cover two.
         """
         def _raise(*args, **kwargs):
             raise RuntimeError('recheck exploded')
@@ -1315,12 +1312,9 @@ class TestCheckInstanceHealthRecheck:
     def test_a_raising_request_does_not_end_the_sweep(self, db_session, monkeypatch):
         """`:494`'s handler lets the loop continue to the next instance.
 
-        The oracle is which domains were ATTEMPTED, not what was persisted.
-        `:499` commits once after the whole loop and `:495` rolls back inside
-        it, so with two raisers only the last one's `:496` increment survives
-        -- a real defect, registered by this round rather than fixed. Asserting
-        over `failures` here would lock that behaviour in as though it were the
-        contract.
+        D381, fixed: both raisers' increments persist. The loop used to commit
+        once after the sweep, so the second raiser's rollback discarded the
+        first one's uncommitted increment; it now commits per instance.
 
         `get_request_instance(uri, instance: Instance, params=None,
         headers=None)` (`app/utils.py:189`) and the call site at `:459` passes
@@ -1345,6 +1339,31 @@ class TestCheckInstanceHealthRecheck:
         check_instance_health()
 
         assert set(attempted) == {'bad-one.example', 'bad-two.example'}
+        db.session.expire_all()
+        assert [i.failures for i in db.session.query(Instance).filter(
+            Instance.domain.in_(['bad-one.example', 'bad-two.example']))] == [1, 1]
+
+    def test_a_later_raise_does_not_undo_an_earlier_revival(self, db_session, monkeypatch):
+        """D381, fixed. A revival in the same sweep as a later raiser used to be
+        rolled back with it. `back.example` is seeded first so the raiser comes
+        after it in the sweep, which is the order that lost the revival."""
+        def _fetch(uri, *args, **kwargs):
+            if 'bad.example' in uri:
+                raise RuntimeError('recheck exploded')
+            return _response(200, {'software': {'name': 'PieFed', 'version': '1.0'}})
+
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance', _fetch)
+        self._dormant_pending_recheck('back.example', href='https://back.example/nodeinfo/2.0')
+        db.session.commit()
+        self._dormant_pending_recheck('bad.example', href='https://bad.example/nodeinfo/2.0')
+        db.session.commit()
+
+        check_instance_health()
+
+        db.session.expire_all()
+        assert db.session.query(Instance).filter_by(domain='back.example').first().dormant is False
+        assert db.session.query(Instance).filter_by(domain='bad.example').first().failures == 1
 
     def test_a_raising_banned_check_rolls_back_and_reraises(self, db_session, monkeypatch):
         """`:501-503`, the function's OUTER handler -- distinct from the inner
