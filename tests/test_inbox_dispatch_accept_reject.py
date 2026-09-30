@@ -896,11 +896,12 @@ def test_a_reject_leaves_the_inward_follow_between_the_same_users_alone(app, db_
     assert inward.is_accepted is True
 
 
-def test_a_reject_decrements_num_following_even_with_no_follower_row(app, db_session, monkeypatch):
-    """routes.py:1187 runs whenever a join request exists, regardless of
-    whether existing_follow was found, so num_following can drift below the
-    number of rows it counts -- and nothing floors it at zero. Task 7's fix
-    deliberately did not change this. Registered by Task 9, not fixed."""
+def test_a_reject_with_no_follower_row_leaves_num_following_alone(app, db_session, monkeypatch):
+    """D75, fixed. The decrement used to run whenever a join request
+    existed, whether or not an accepted follow was there to undo, so a
+    Reject with no prior acceptance drove num_following to -1. It now
+    moves only when an accepted follow is flipped back.
+    """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance = make_instance('peer.example')
     target = _stamp_remote_user(instance, 'target')
@@ -915,8 +916,27 @@ def test_a_reject_decrements_num_following_even_with_no_follower_row(app, db_ses
     db.session.expire_all()
     assert db.session.query(UserFollower).filter_by(
         local_user_id=joiner.id, remote_user_id=target.id).first() is None
-    assert joiner.num_following == -1
+    assert joiner.num_following == 0
     assert ActivityPubLog.query.one().result == 'success'
+
+
+def test_a_reject_of_a_pending_follow_leaves_num_following_alone(app, db_session, monkeypatch):
+    """D75, fixed. A follow that was never accepted was never counted, so
+    rejecting it flips nothing that num_following reflects."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    target = _stamp_remote_user(instance, 'target')
+    joiner = _stamp_remote_user(instance, 'joiner')
+    make_user_follow_request(joiner, target)
+    make_follow(joiner, target, is_accepted=False, is_inward=False)
+
+    activity = inbox_activity(target, activity_type='Reject',
+                              object=_follow_object(joiner.ap_profile_id))
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    assert joiner.num_following == 0
 
 
 # --- Step 5: the silently-ignored object types, :1151 ---
