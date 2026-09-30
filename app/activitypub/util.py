@@ -301,8 +301,11 @@ def banned_user_agents():
 
 
 def find_actor_or_create(actor: str, create_if_not_found=True, community_only=False, feed_only=False,
-                         allow_banned=False) -> Union[User, Community, Feed, None]:
+                         allow_banned=False, retry=False) -> Union[User, Community, Feed, None]:
     """Find an actor by URL or webfinger, optionally creating it if not found.
+
+    retry lets a failed fetch sleep and try again. Only housekeeping Celery tasks
+    pass it: the inbox and web requests must not sleep (D775).
 
     Consider using find_actor_or_create_cached() for better performance
     """
@@ -328,7 +331,7 @@ def find_actor_or_create(actor: str, create_if_not_found=True, community_only=Fa
     elif create_if_not_found:
         # Create the actor from remote data
         from app.activitypub.actor import create_actor_from_remote
-        return create_actor_from_remote(actor_url, community_only, feed_only)
+        return create_actor_from_remote(actor_url, community_only, feed_only, retry=retry)
     else:
         return None
 
@@ -1045,7 +1048,7 @@ def refresh_community_profile_task(community_id, activity_json):
                             if mods_data and 'type' in mods_data and mods_data['type'] == 'OrderedCollection' and 'orderedItems' in mods_data:
                                 for actor in mods_data['orderedItems']:
                                     time.sleep(0.5)
-                                    user = find_actor_or_create(actor)
+                                    user = find_actor_or_create(actor, retry=True)
                                     if user:
                                         existing_membership = session.query(CommunityMember).\
                                             filter_by(community_id=community.id, user_id=user.id).first()
@@ -1217,7 +1220,7 @@ def refresh_feed_profile_task(feed_id):
                             if owners_data and 'type' in owners_data and owners_data['type'] == 'OrderedCollection' and 'orderedItems' in owners_data:
                                 for actor in owners_data['orderedItems']:
                                     time.sleep(0.5)
-                                    user = find_actor_or_create(actor)
+                                    user = find_actor_or_create(actor, retry=True)
                                     if user:
                                         existing_membership = session.query(FeedMember).filter_by(feed_id=feed.id,
                                                                                          user_id=user.id).first()
@@ -1265,7 +1268,7 @@ def refresh_feed_profile_task(feed_id):
                             if following_collection and 'items' in following_collection:
                                 for fci in following_collection['items']:
                                     community_ap_id = fci
-                                    community = find_actor_or_create(community_ap_id, community_only=True)
+                                    community = find_actor_or_create(community_ap_id, community_only=True, retry=True)
                                     if community and isinstance(community, Community):
                                         feed_item = FeedItem(feed_id=feed.id, community_id=community.id)
                                         session.add(feed_item)
@@ -2368,7 +2371,7 @@ def new_instance_profile_task(instance_id: int):
                                         or not admin['person'].get('actor_id'):
                                     continue
                                 admin_profile_ids.append(admin['person']['actor_id'].lower())
-                                user = find_actor_or_create(admin['person']['actor_id'])
+                                user = find_actor_or_create(admin['person']['actor_id'], retry=True)
                                 if user and not instance.user_is_admin(user.id):
                                     new_instance_role = InstanceRole(instance_id=instance.id, user_id=user.id, role='admin')
                                     session.add(new_instance_role)

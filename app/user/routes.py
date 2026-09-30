@@ -1476,7 +1476,7 @@ def import_settings_task(user_id, redis_key):
 
                 # Follow communities
                 for community_ap_id in import_entries(contents_json, 'followed_communities'):
-                    community = find_actor_or_create(community_ap_id, community_only=True)
+                    community = find_actor_or_create(community_ap_id, community_only=True, retry=True)
                     if community:
                         if community.posts.count() == 0:
                             server, name = extract_domain_and_actor(community.ap_profile_id)
@@ -1526,7 +1526,7 @@ def import_settings_task(user_id, redis_key):
                             cache.delete_memoized(community_membership, user, community)
 
                 for community_ap_id in import_entries(contents_json, 'blocked_communities'):
-                    community = find_actor_or_create(community_ap_id, community_only=True)
+                    community = find_actor_or_create(community_ap_id, community_only=True, retry=True)
                     if community:
                         existing_block = session.query(CommunityBlock).filter_by(user_id=user.id, community_id=community.id).first()
                         if not existing_block:
@@ -1535,7 +1535,7 @@ def import_settings_task(user_id, redis_key):
 
 
                 for user_ap_id in import_entries(contents_json, 'blocked_users'):
-                    blocked_user = find_actor_or_create(user_ap_id)
+                    blocked_user = find_actor_or_create(user_ap_id, retry=True)
                     if blocked_user:
                         existing_block = session.query(UserBlock).filter_by(blocker_id=user.id, blocked_id=blocked_user.id).first()
                         if not existing_block:
@@ -1545,7 +1545,7 @@ def import_settings_task(user_id, redis_key):
                                 ...  # todo: federate block
 
                 for user_note in import_entries(contents_json, 'user_notes'):
-                    note_target = find_actor_or_create(user_note['target'])
+                    note_target = find_actor_or_create(user_note['target'], retry=True)
                     if note_target:
                         session.add(UserNote(user_id=user.id, target_id=note_target.id, body=user_note['body']))
 

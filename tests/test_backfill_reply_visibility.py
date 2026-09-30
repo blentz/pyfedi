@@ -81,7 +81,7 @@ def test_followers_only_backfilled_reply_is_refused(db_session, monkeypatch):
         return post
 
     monkeypatch.setattr('app.community.util.remote_object_to_json', fake_fetch)
-    monkeypatch.setattr('app.community.util.find_actor_or_create', lambda uri: author)
+    monkeypatch.setattr('app.community.util.find_actor_or_create', lambda uri, retry=False: author)
     monkeypatch.setattr('app.community.util.create_post', fake_create_post)
 
     retrieve_mods_and_backfill(community.id, 'remote.example', 'microblogs', None)

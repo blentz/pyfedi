@@ -644,7 +644,7 @@ def monitor_healthy_instances():
                             profile_id = admin['person']['actor_id']
                             if profile_id.startswith('https://') or profile_id.startswith('http://'):
                                 admin_profile_ids.append(profile_id.lower())
-                                user = find_actor_or_create(profile_id)
+                                user = find_actor_or_create(profile_id, retry=True)
                                 if user and not instance.user_is_admin(user.id):
                                     new_instance_role = InstanceRole(
                                         instance_id=instance.id,

@@ -149,7 +149,7 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                             and isinstance(mods_data.get('orderedItems'), list)):
                         for actor in mods_data['orderedItems']:
                             sleep(0.5)
-                            mod = find_actor_or_create(actor)
+                            mod = find_actor_or_create(actor, retry=True)
                             if mod:
                                 existing_membership = session.query(CommunityMember).filter_by(community_id=community.id, user_id=mod.id).first()
                                 if existing_membership:
@@ -184,7 +184,7 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                                 continue
                             if not isinstance(actor, str) or not actor:
                                 continue
-                            mod = find_actor_or_create(actor)
+                            mod = find_actor_or_create(actor, retry=True)
                             if mod:
                                 existing_membership = session.query(CommunityMember).filter_by(community_id=community.id, user_id=mod.id).first()
                                 if existing_membership:
@@ -246,7 +246,7 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                             if is_peertube and mod:
                                 user = mod
                             elif 'attributedTo' in activity and isinstance(activity['attributedTo'], str):
-                                user = find_actor_or_create(activity['attributedTo'])
+                                user = find_actor_or_create(activity['attributedTo'], retry=True)
                                 if not user:
                                     continue
                             else:
@@ -297,7 +297,7 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                                                 # Find the author of the reply
                                                 if 'attributedTo' not in reply_data:
                                                     continue
-                                                reply_author = find_actor_or_create(reply_data['attributedTo'])
+                                                reply_author = find_actor_or_create(reply_data['attributedTo'], retry=True)
                                                 if not reply_author:
                                                     continue
                                                 
