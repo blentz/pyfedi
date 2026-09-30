@@ -316,12 +316,11 @@ def test_a_non_sticky_post_is_not_featured(app, db_session, monkeypatch):
     assert response.json['orderedItems'] == []
 
 
-def test_a_featured_post_under_review_is_published_anyway(app, db_session, monkeypatch):
-    """PINS a defect. `community_outbox` filters
-    `Post.status > POST_STATUS_REVIEWING`; `community_featured` filters only
-    `deleted=False`. So a sticky post still under review is HIDDEN from the
-    outbox and PUBLISHED in the featured collection -- the same post, two
-    endpoints, opposite answers.
+def test_a_featured_post_under_review_is_withheld(app, db_session, monkeypatch):
+    """D179, fixed. `community_featured` now filters
+    `status >= POST_STATUS_PUBLISHED` as `community_outbox` does; before, a
+    sticky post still under review was hidden from the outbox and published
+    in the featured collection.
 
     Status is set to 0 (POST_STATUS_REVIEWING) explicitly; the column defaults
     to 1, which would pass any filter.
@@ -338,7 +337,7 @@ def test_a_featured_post_under_review_is_published_anyway(app, db_session, monke
     response = collection_get(app, '/c/books/featured')
 
     assert response.status_code == 200
-    assert response.json['orderedItems'] == ['PAGE']
+    assert response.json['orderedItems'] == []
 
 
 def test_the_featured_collection_sets_no_cache_control(app, db_session, monkeypatch):
