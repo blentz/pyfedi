@@ -13723,3 +13723,24 @@ decorator that fails open is a route with no gate.
 
 **1032. `notify_admin` TAKES SIX ARGUMENTS: (title, url, author_id, notif_type, subtype, targets).**
 Calling it with four raises `TypeError` from inside the test rather than from the code under test.
+
+**1033. PILLOW 12.3 READS AND WRITES AVIF NATIVELY, SO `import pillow_avif` CANNOT BE KILLED.**
+`PIL.features.check('avif')` is True on the pinned-by-nothing Pillow this suite installs, so removing
+any of the ten `import pillow_avif  # NOQA` lines under `app/` changes nothing here. The line is still
+load-bearing below Pillow 11.3, and one copy is marked "do not remove" -- record the mutant as an
+environment equivalence rather than deleting the import or chasing a row for it.
+
+**1034. `url_to_thumbnail_file` DOES NOT REPORT THE EXTENSION IT WROTE THE PEER'S BYTES UNDER.**
+The resize saves in `MEDIA_IMAGE_MEDIUM_FORMAT`, renames the path to that format and unlinks the
+original, so the returned `File` names a `.webp` whatever the header said. Two ways to see the real
+one: set `MEDIA_IMAGE_MEDIUM_FORMAT` to `''`, which turns the reformat off and leaves the fetched
+extension in `file_path` -- and which also makes Pillow infer the format from that extension, so a
+rejected extension becomes a dropped thumbnail; or patch `app.utils.Image.open` to record the path it
+is handed, which is the peer-chosen name itself.
+
+**1035. A GUARD WHOSE FAILURE THE NEXT LINE UNDOES NEEDS A THIRD STATE.**
+`discard_unsanitized_svg`'s `if not os.path.isfile(filepath): return` looks untestable: without it,
+`open(filepath, 'wb')` creates the file and `os.remove` deletes it again, so the end state for a
+missing path is identical either way. Point the path INSIDE A DIRECTORY THAT DOES NOT EXIST and they
+diverge -- the guard returns in silence, and no guard means a logged `FileNotFoundError`. Same shape
+as fact 1007, where a later guard answered for the one under test.
