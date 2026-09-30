@@ -25436,4 +25436,52 @@ link's source by.
 
 Six mutants dead, two recorded as not distinguished, on a green baseline.
 
-**Next free number: D1437.**
+
+---
+
+## Round 275 -- the last coverable lines
+
+Ten rows. No source change.
+
+**D1437. REPORTED AND NOT FIXED: `user_view`'s `except DetachedInstanceError` cannot fire.**
+
+    if user.extra_fields:
+        try:
+            extra_fields = user.extra_fields
+        except DetachedInstanceError:
+            extra_fields = db.session.get(User, user.id).extra_fields
+
+`User.extra_fields` is a DYNAMIC relationship, and on SQLAlchemy 2.0.52 a detached instance does not
+raise for one. Measured:
+
+    SAWarning: Instance <User at 0x...> is detached, dynamic relationship cannot return a correct
+    result. This warning will become a DetachedInstanceError in a future release.
+
+So the collection comes back EMPTY, the `if` above the `try` is falsy, and the handler is never
+entered. The comment beside it names the caller -- `convert_archived_replies_to_tree`, which builds
+temporary `User` objects -- so an archived thread's authors silently lose their profile fields today,
+with a warning in a log rather than an error. Fixing it means testing `inspect(user).detached` and
+re-reading by id BEFORE the `if`, or having the archived-thread path build attached users: a change to
+either the view or the archive reader, and a maintainer's call. No row drives the detached case,
+deliberately -- doing so puts that SAWarning into the suite, whose warning count this campaign
+ratchets.
+
+**The icon-format arm is selected by the RESPONSE's content type, not by the url.** `image/tiff` is
+what reaches the `else: PNG` fallback; a `.tiff` url served as `image/png` takes the PNG arm and the
+mutant survives. Worth knowing for any row near `make_image_sizes_async`.
+
+Covered: `calculate_cross_posts`' append-below-the-limit arm, which with round 265's refusal-at-the-limit
+row is what the limit means; the `else: PNG` fallback for a community or user image whose extension has
+no rule -- PNG because those two directories PRESERVE format rather than converting, since an avatar is
+re-federated and cached by peers; and both of `process_downvote`'s IGNORED arms, one for a community
+that forbids downvotes and one for an account over its daily vote quota, each with the control that
+says the function does apply a vote it accepts.
+
+`search_for_community`'s own debug dispatch (`app/community/util.py:111`) is left uncovered and listed
+here rather than left unexplained: the handle form webfingers before reaching it and the url form takes
+a different branch, so it needs a webfinger fixture rather than a patch. The same dispatch pattern is
+covered in three other places (rounds 266, 270).
+
+Seven mutants, all dead, on a green baseline.
+
+**Next free number: D1438.**
