@@ -24484,4 +24484,38 @@ so the mutant was moved onto the `raise`, and "the activity body is always store
 until a row asserted `activity_json is None` when the caller passed nothing -- otherwise the
 column gets the string `null`.
 
+---
+
+## Round 251 -- the URL a post gets, and what it publishes about itself
+
+Four clusters on `Post` in `app/models.py`, no defect.
+
+**`generate_ap_id` writes a post's identity once.** Two URL shapes, chosen by the community's
+`post_url_type`: the friendly `/c/<name>@<domain>/p/<id>/<slug>` and the old `/post/<id>`. A
+title that `slugify` reduces to nothing falls back to the old shape, because `/p/<id>/` with
+nothing after it is not a URL. And the guard is
+`ap_id is None or ap_id == '' or len(ap_id) == 10`: the ten-character case is a `gibberish(10)`
+placeholder written before the row has an id, and it has to read as "no id yet" rather than as
+somebody's real one -- rewriting a published ap_id orphans every reply and vote that referenced
+it. `generate_slug` is the incoming-post half and must leave the id alone, which has its own
+row.
+
+**`tags_for_activitypub` is what peers receive.** Flair travels with `blur_images`, so the flair
+that hides an image here asks other instances to hide it too; hashtags carry a link back to this
+instance; and a custom emoji used in the body travels with its image URL, because a peer cannot
+render `:partyparrot:` without it. The scan is skipped unless the body contains a colon, which
+is most posts, and a token matching no Emoji row publishes nothing -- bodies are full of colons
+in ordinary use (times, URLs, ratios).
+
+**`blurred` reads `== 2`, not truthiness.** `1` means hide the post entirely and is handled
+elsewhere, so a truthiness test would blur for viewers who asked not to see the post at all.
+Spoiler flair is the one condition in BOTH arms: it is the community's decision rather than the
+viewer's, and no preference switches it off.
+
+**One thing recorded rather than changed:** `peertube_embed` is `self.url.replace('watch',
+'embed')`, unanchored -- a host containing the word is rewritten too. PeerTube's own URLs
+contain it once, and narrowing the replacement changes what the player is asked for.
+
+Twenty mutants, all dead, on a green baseline.
+
 **Next free number: D1424.**
