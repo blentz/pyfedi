@@ -13791,3 +13791,19 @@ the query the guard skips matches nothing either way. Record it as equivalent --
 `calculate_cross_posts` sets `self.cross_posts` outright from the rows it found and APPENDS `self.id`
 to theirs. So the newcomer's list names the existing post, and what the `len(...) < limit` arm decides
 is only whether the existing post names the newcomer back.
+
+**1045. `process_microblog_announce` RETURNS EARLY FOR A URI THAT IS ALREADY A POST.**
+`Post.get_by_ap_id(uri)` runs before the fetch, so a row that seeds a post under the ANNOUNCED uri
+tests the already-ingested arm, not the resolve path -- and every mutant below that point survives.
+Use a different uri for the boost object than the seeded post's `ap_id` when the resolve path is what
+is meant.
+
+**1046. TO REACH A STALE-CACHE BACKSTOP, PATCH THE CACHED LOOKUP.**
+`if announcer.banned` in `process_microblog_announce` cannot be reached by banning the account:
+`find_actor_or_create_cached` refuses a banned actor upstream. Patch that function to answer with the
+banned row, which IS the state the backstop is written for.
+
+**1047. `actor_json_to_model`'s `except KeyError` IS REACHED BY `endpoints` WITHOUT `sharedInbox`.**
+Every other key the `User(...)` constructor reads is guarded with an `in` test or read above the
+`try`, and `activity_json['id']` is read at the domain-match check well before it -- so a document
+missing `id` raises outside the handler.
