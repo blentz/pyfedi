@@ -410,13 +410,15 @@ def test_an_announce_from_a_feed_skips_the_inner_actor_walk(
     (915-922), and the feed path sets `user = None` instead of running it.
 
     The inner object's actor is a BANNED user that would trip 917-919's
-    refusal if the walk ran -- so reaching process_upvote at all (rather
-    than the banned refusal) is direct evidence the walk did not run, and
-    `user` arriving as None is evidence of the 924 assignment specifically
-    (not just a skip that left `user` as whatever it was before, which
-    would also be None here since the preamble never sets it for a feed
-    actor -- see routes.py:858).
+    refusal if the walk ran -- so the refusal logged here being the feed
+    one, not the banned one, is direct evidence the walk did not run.
+
+    D115, fixed: with `user` and `community` both None, this Like used to
+    reach process_upvote with a None user. Every arm but Add/Remove (which
+    act on the feed) and Create/Update (which guard this themselves) now
+    refuses it instead.
     """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, feed = _seed_announcing_feed()
     banned_user = make_user(instance, 'bob')
     banned_user.banned = True
@@ -433,10 +435,10 @@ def test_an_announce_from_a_feed_skips_the_inner_actor_walk(
 
     dispatch(activity)
 
-    assert len(calls) == 1
-    user_arg, store_ap_json_arg, request_json_arg, announced_arg = calls[0]
-    assert user_arg is None
-    assert announced_arg is True
+    assert calls == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Like announced by a feed has no user or community'
 
 
 def test_an_announce_sets_core_activity_to_the_inner_object(app, db_session, monkeypatch):

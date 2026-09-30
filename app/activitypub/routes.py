@@ -945,6 +945,13 @@ def process_inbox_request(request_json, store_ap_json):
                         log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json, 'Announce object has no id or type')
                         return
 
+                    # A feed's Announce leaves user and community None. Only Add/Remove act on the feed itself, and
+                    # Create/Update refuse this case on their own; every other arm needs a user or community (D115)
+                    if user is None and community is None and request_json['object']['type'] not in ('Add', 'Remove', 'Create', 'Update'):
+                        log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json,
+                                        f"{request_json['object']['type']} announced by a feed has no user or community")
+                        return
+
                     # Now that we have the community and the user from an Announce, we can save repeating code by removing it
                     # core_activity is checked for its Type, but the original request_json is sometimes passed to any other functions
                     announced = True
