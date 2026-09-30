@@ -1176,34 +1176,20 @@ class TestQuestionEditPath:
 
         assert _stored_sort_orders(post) == [('Yes', 1), ('No', 2)]
 
-    def test_the_edit_path_returns_before_the_totals_loop(self, app, db_session,
+    def test_cancelling_totals_do_not_take_the_edit_path(self, app, db_session,
                                                           redis_lock_only_double):
-        """The `return` at `:3353`.
+        """D291, fixed. Totals of -3 and 3 used to sum to the 0 that routes an
+        Update into the Edit path, which deletes every choice and vote. A count
+        is a non-negative int; -3 is now treated as no count, so the sum is 3,
+        the totals path runs, and the rows are updated in place: 'No' takes 3
+        and 'Yes' keeps its 7.
 
-        WHY THE TOTALS ARE -3 AND 3, and not the zeroes every other test here
-        sends. `:3353` does not guard the Links section the way the totals arm's
-        `:3368` does -- deleting it drops control into the totals loop at
-        `:3356-3365`, which commits at `:3366` and returns at `:3368`, still
-        short of the Links section. So `post.url` survives either way, and an
-        all-zero Update makes that loop a no-op that rewrites the same 0s. This
-        was measured, not predicted: with `return` → `pass` applied, the
-        all-zero version of this test PASSED and the mutant survived.
-
-        `:3331` accumulates `vote['replies']['totalItems']` with no sign check,
-        so -3 and 3 sum to the 0 that `:3333` routes on while still being
-        numbers the totals loop would WRITE. The Edit path recreates both rows at
-        `PollChoice.num_votes`'s `default=0` (app/models.py:3824); the totals
-        loop, if reached, would put -3 and 3 there instead. That is what makes
-        the two 0s below a claim about `:3353` rather than about the default --
-        and the seeded 7 and 11, on rows of the same names, are the contrary
-        baseline for the recreation itself.
-
-        `post.url` is asserted too, as the outer witness the rest of this file
-        uses: the Links section's no-url `else` at `:3550-3567` sets
-        `post.type = POST_TYPE_ARTICLE` and `post.url = None`.
+        This replaces the test that used -3/3 to observe the Edit path's
+        `return`: with totals that can only sum to 0 when every usable one is
+        0, the totals loop would write those same 0s, so that `return` no
+        longer changes any outcome here.
         """
         post = _seed_post()
-        _seed_link_witness(post)
         _seed_poll(post, [('Yes', 7), ('No', 11)])
 
         update_post_from_activity(post, _poll_update(_choice('Yes', -3), _choice('No', 3),
@@ -1211,9 +1197,7 @@ class TestQuestionEditPath:
 
         db.session.expire_all()
 
-        assert _stored_choices(post) == [('Yes', 0), ('No', 0)]
-        assert post.url == f'https://{PEER}/post/1'
-        assert post.type == POST_TYPE_POLL
+        assert _stored_choices(post) == [('Yes', 7), ('No', 3)]
 
 
 class TestQuestionTotalsUpdate:
@@ -1314,6 +1298,24 @@ class TestQuestionTotalsUpdate:
         assert post.type == POST_TYPE_POLL
         # ... and the arm did run, so this is not a test of an untaken path.
         assert _stored_choices(post) == [('Yes', 3)]
+
+    def test_a_total_that_is_not_a_non_negative_int_is_ignored(self, app, db_session,
+                                                               redis_lock_only_double):
+        """D291, fixed. `totalItems` was summed and written unchecked: a string,
+        a list, a null or a dict raised TypeError out of the function, a float
+        went into an Integer column, and a negative became a negative
+        `num_votes`. Each is now treated like a missing `totalItems`, and the
+        well-formed sibling still lands."""
+        post = _seed_post()
+        _seed_poll(post, [('A', 7), ('B', 11), ('C', 13), ('D', 17), ('E', 19), ('F', 23)])
+
+        update_post_from_activity(post, _poll_update(
+            _choice('A', '3'), {'name': 'B', 'replies': {'totalItems': None}}, _choice('C', 3.5), _choice('D', -2),
+            _choice('E', True), _choice('F', 5)))
+
+        db.session.expire_all()
+
+        assert _stored_choices(post) == [('A', 7), ('B', 11), ('C', 13), ('D', 17), ('E', 19), ('F', 5)]
 
     def test_malformed_votes_are_skipped_and_their_siblings_still_land(
             self, app, db_session, redis_lock_only_double):

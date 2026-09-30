@@ -3404,6 +3404,11 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
         db.session.commit()
 
 
+def _is_vote_count(value) -> bool:
+    """A poll choice's totalItems as a peer should send it: a non-negative int (bool excluded) (D291)."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def update_post_from_activity(post: Post, request_json: dict):
     from app import redis_client
     with redis_client.lock(f"lock:post:{post.id}", timeout=60, blocking_timeout=60):
@@ -3610,6 +3615,11 @@ def update_post_from_activity(post: Post, request_json: dict):
                     continue
                 if not 'totalItems' in _as_dict(vote['replies']):
                     continue
+                # D291. A count is a non-negative int, and anything else is treated as no count, like a missing
+                # totalItems: a negative could cancel another to the 0 that routes into the destructive Edit path
+                # below, and a non-number raised TypeError here.
+                if not _is_vote_count(vote['replies']['totalItems']):
+                    continue
 
                 total_vote_count += vote['replies']['totalItems']
 
@@ -3653,6 +3663,8 @@ def update_post_from_activity(post: Post, request_json: dict):
                 if not 'replies' in vote:
                     continue
                 if not 'totalItems' in _as_dict(vote['replies']):
+                    continue
+                if not _is_vote_count(vote['replies']['totalItems']):  # D291, as the counting loop
                     continue
                 choice = PollChoice.query.filter_by(post_id=post.id, choice_text=vote['name']).first()
                 if choice:
