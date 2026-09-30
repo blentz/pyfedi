@@ -38,10 +38,9 @@ own let the call through:
   defect, and also left unfixed: it is a keyword-argument-shaped hole in the
   impersonation check, opened by a caller rather than by the data.
 - `announce_actor_domain != uri_domain` -- the same-host rule proper, and the
-  one registered as D21. Both sides are raw `urlparse(...).netloc`, so the
-  comparison is case-sensitive, port-sensitive and userinfo-sensitive.
-  TestRawNetlocComparison pins what that does TODAY; it is characterisation,
-  not endorsement.
+  one registered as D21. Both sides used to be raw `urlparse(...).netloc`,
+  so the comparison was case-, port- and userinfo-sensitive; both now go
+  through host_of, and TestRawNetlocComparison covers the fix.
 
 The three are covered separately and deliberately not folded together: they
 fail in different ways and a fix to one would not touch the others. Each of
@@ -242,32 +241,33 @@ class TestGateRefusal:
 
 
 class TestRawNetlocComparison:
-    """D21, pinned as it behaves today: both sides of the comparison are raw
-    `urlparse(...).netloc`, with no case folding, no default-port handling and
-    no userinfo stripping. These two cases are the same authority written two
-    ways, and both are refused.
+    """D21, fixed. Both sides of the same-host rule used to be raw
+    `urlparse(...).netloc`, so the community host written with a capital or an
+    explicit `:443` was refused although it names the very host the post lives
+    on. Both now go through host_of, which lowercases and drops the port and
+    any userinfo, so these are created.
 
-    Characterisation only -- the campaign registered this and did not fix it,
-    and these tests are what make a later fix verifiable. A fix would flip
-    both of them to a created post, which is the point: today nothing would
-    notice.
-
-    Production change that fails these: none that is a fix. They fail if the
-    comparison starts normalising, which is exactly what a reader wants to be
-    told when someone lands D21's fix.
+    An object URI urlparse rejects used to raise ValueError out of the
+    resolver; host_of degrades it to '', and an empty host is refused rather
+    than compared, so '' can never match a community host that also failed.
     """
 
-    def test_a_case_difference_in_the_announce_host_refuses(self, app, peer_author):
+    def test_a_case_difference_in_the_announce_host_is_created(self, app, peer_author, http_mock):
         community = make_community('news', host=PEER_OBJECT_HOST.capitalize())
+        serve_remote_object(http_mock, URI, public_note())
 
-        assert resolved_post(community) is None
-        assert Post.query.filter_by(ap_id=URI).count() == 0
+        assert resolved_post(community).ap_id == URI
 
-    def test_an_explicit_default_port_on_the_announce_host_refuses(self, app, peer_author):
+    def test_an_explicit_default_port_on_the_announce_host_is_created(self, app, peer_author, http_mock):
         community = make_community('news', host=f'{PEER_OBJECT_HOST}:443')
+        serve_remote_object(http_mock, URI, public_note())
 
-        assert resolved_post(community) is None
-        assert Post.query.filter_by(ap_id=URI).count() == 0
+        assert resolved_post(community).ap_id == URI
+
+    def test_an_object_uri_urlparse_rejects_is_refused_without_raising(self, app, peer_author):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+
+        assert resolved_post(community, uri='https://[broken/post/1') is None
 
 
 class TestFetchReturnsNone:
