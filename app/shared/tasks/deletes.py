@@ -173,7 +173,10 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
 
     domains_sent_to = []
 
-    if community.is_local():
+    # a local_only community federates nothing itself; only the author's followers (below) are reached
+    if community.local_only:
+        pass
+    elif community.is_local():
         if is_restore:
             del undo['@context']
             object_json=undo
