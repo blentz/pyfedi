@@ -1688,7 +1688,7 @@ class User(UserMixin, db.Model):
     can_send_pm = db.Column(db.Boolean, default=True)
     finished_onboarding = db.Column(db.Boolean, default=False)
     ignore_bots = db.Column(db.Integer, default=0)
-    unread_notifications = db.Column(db.Integer, default=0)
+    unread_notifications = db.Column(db.Integer, default=0, server_default='0', nullable=False)  # NOT NULL: read as `+= 1` everywhere (D274)
     ip_address = db.Column(db.String(50))
     ip_address_country = db.Column(db.String(50))
     instance_id = db.Column(db.Integer, db.ForeignKey('instance.id'), index=True)
