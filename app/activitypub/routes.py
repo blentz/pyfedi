@@ -1952,6 +1952,9 @@ def process_inbox_request(request_json, store_ap_json):
 
                 if core_activity['type'] == 'QuoteRequest':
                     post_ap = core_activity['object']
+                    if not isinstance(core_activity.get('instrument'), dict) or 'id' not in core_activity['instrument']:
+                        log_incoming_ap(id, APLOG_QUOTEBOOST, APLOG_FAILURE, saved_json, 'QuoteRequest has no instrument id')
+                        return
                     their_post_ap = core_activity['instrument']['id']
                     process_quote_boost(core_activity, post_ap, their_post_ap)
                     log_incoming_ap(id, APLOG_QUOTEBOOST, APLOG_SUCCESS, saved_json)

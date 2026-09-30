@@ -125,18 +125,9 @@ Step 3 -- QuoteRequest, routes.py:1880-1884, and a probe of its unguarded
 read. `process_quote_boost` (a real outbound-signing side effect) is doubled;
 `log_incoming_ap`'s own SUCCESS call runs for real.
 
-PROBE, routes.py:1882 (`their_post_ap = core_activity['instrument']['id']`):
-fed a QuoteRequest with no 'instrument' key at all. OBSERVED: this line
-raises `KeyError: 'instrument'` immediately, before `process_quote_boost` is
-ever called and before `log_incoming_ap`'s SUCCESS call at :1884 is
-reachable -- the same unguarded-read shape as D2 and D13 (see this
-campaign's other probes, e.g. test_inbox_dispatch_preamble.py's Update/Group
-probe and test_inbox_dispatch_votes.py's choice_text probe): a peer that
-omits 'instrument' crashes activity processing with an uncaught 500-shaped
-failure, propagating through routes.py:1885's `except Exception:
-session.rollback(); raise` and out of dispatch(), rather than a logged
-refusal. No ActivityPubLog row is written. Registered as a finding for Task
-9; not fixed here.
+D56, fixed: a QuoteRequest with no 'instrument' key used to raise
+`KeyError: 'instrument'` at `core_activity['instrument']['id']`, before
+`process_quote_boost` and with no log row. It is now refused and logged.
 
 Step 4 -- the except/finally every arm unwinds through, routes.py:1885-1889.
 
@@ -602,31 +593,32 @@ def test_a_quote_request_delegates_and_logs_success(app, db_session, monkeypatch
     assert ActivityPubLog.query.one().result == 'success'
 
 
-def test_a_quote_request_without_an_instrument(app, db_session, monkeypatch):
-    """routes.py:1882 -- `core_activity['instrument']['id']` is read
-    unguarded from a peer-supplied activity, the same KeyError shape as D2
-    and D13. Establish and assert the observed behaviour.
-
-    OBSERVED: with no 'instrument' key on the activity at all, this line
-    raises `KeyError: 'instrument'` immediately -- BEFORE process_quote_boost
-    is ever called and before the SUCCESS log at :1884 is reachable --
-    propagating uncaught through routes.py:1885's `except Exception:
-    session.rollback(); raise` and out of dispatch(). No ActivityPubLog row
-    is written. Registered as a finding for Task 9; not fixed here.
+def test_a_quote_request_without_an_instrument_is_refused(app, db_session, monkeypatch):
+    """D56, fixed. The arm read `core_activity['instrument']['id']` with no
+    guard, so a QuoteRequest omitting 'instrument' raised KeyError before
+    process_quote_boost or any log call. It is now refused and logged, and
+    no quote approval is sent.
     """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     make_site()
     instance = make_instance('peer.example')
     actor = make_user(instance, 'alice')
     actor.ap_fetched_at = utcnow()
     db.session.commit()
 
+    calls = []
+    monkeypatch.setattr(activitypub_routes, 'process_quote_boost',
+                         lambda *args: calls.append(args))
+
     activity = inbox_activity(actor, activity_type='QuoteRequest',
                               object='https://peer.example/objects/1')
 
-    with pytest.raises(KeyError, match='instrument'):
-        dispatch(activity)
+    dispatch(activity)
 
-    assert ActivityPubLog.query.count() == 0
+    assert calls == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'QuoteRequest has no instrument id'
 
 
 # --- Step 4: the except/finally every arm unwinds through, routes.py:1885-1889 ---
