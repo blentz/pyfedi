@@ -59,13 +59,10 @@ None, so a document with no usable author reaches the comparison with None on
 one side. That refusal is a different path from a domain MISMATCH even though
 both return None, and both are covered.
 
-This is **D22's surface**. Both sides are raw `urlparse(...).netloc`, so the
-comparison is case-, port- and userinfo-sensitive, and the register rates the
-alpha-API call path worse than the inbox ones because that path lowercases one
-side and not the other. The tests below pin what it does TODAY. They are
-characterisation, not endorsement: a fix to D22 flips the case and port cases
-from refusal to a created post, and it should, which is exactly what makes
-them useful to whoever lands it.
+This was **D22's surface**. Both sides were raw `urlparse(...).netloc`, so the
+comparison was case-, port- and userinfo-sensitive; both now go through
+host_of, and an empty `uri_domain` is refused rather than compared.
+TestRawNetlocComparison covers the fix.
 
 THE THREE-PART GUARD `if user and community and post_data` has one operand
 that cannot be tested the way the other two can. See TestPostDataOperandIsDead
@@ -187,6 +184,7 @@ from datetime import datetime
 import pytest
 
 from app import db
+from app.activitypub import util
 from app.activitypub.util import create_resolved_object
 from app.models import ActivityPubLog, Post, PostReply
 from tests.factories import (AS_PUBLIC_URI, PEER_OBJECT_HOST, PEER_OBJECT_URI, make_community,
@@ -387,42 +385,92 @@ class TestTheDomainGate:
         assert Post.query.filter_by(ap_id=URI).count() == 0
 
 
+def author_lookup_spy(monkeypatch, user):
+    """Stand in for find_actor_or_create, returning `user` and recording the
+    URIs asked for -- being asked at all means the domain gate let the call
+    through."""
+    asked = []
+
+    def lookup(actor, *args, **kwargs):
+        asked.append(actor)
+        return user
+
+    monkeypatch.setattr(util, 'find_actor_or_create', lookup)
+    return asked
+
+
 class TestRawNetlocComparison:
-    """D22, pinned as it behaves today. Both operands are raw
-    `urlparse(...).netloc`: no case fold, no default-port handling, no
-    userinfo stripping. Each case below is the SAME host written two ways, and
-    every one is refused.
+    """D22, fixed. Both operands used to be raw `urlparse(...).netloc`, so the
+    same host written with a capital, an explicit `:443` or a userinfo was
+    refused -- systematically on the alpha-API path, where get_resolve_object
+    lowercases `uri_domain` and nothing lowercased `actor_domain`. Both now go
+    through host_of, so each case below is created.
 
-    The register rates the alpha-API call path worse than the inbox paths
-    precisely because get_resolve_object lowercases `uri_domain` and nothing
-    lowercases `actor_domain`; the first test is that situation reproduced at
-    the parameter, which is where it actually bites.
+    The port and userinfo cases stub the author lookup: find_actor_or_create
+    keys on the exact URI and would fetch that spelling, which is a question
+    about actor identity, not about this gate.
 
-    Characterisation only. A fix flips all three to a created post -- these
-    tests are how whoever lands it can tell it worked, and today nothing else
-    would notice.
+    `uri_domain` is an authority from the caller, so it is normalised too, and
+    the normalised host is what goes into the synthesised activity id. An
+    author URI urlparse rejects used to raise ValueError; it now degrades to ''
+    and compares unequal.
     """
 
-    def test_a_lowercased_uri_domain_against_a_mixed_case_author_refuses(self, app, peer_author):
+    def test_a_lowercased_uri_domain_against_a_mixed_case_author_is_created(self, app, peer_author):
         community = make_community('news', host=PEER_OBJECT_HOST)
         mixed_case_author = f'https://{PEER_OBJECT_HOST.capitalize()}/users/alice'
 
-        assert resolved(public_note(mixed_case_author), community) is None
-        assert Post.query.filter_by(ap_id=URI).count() == 0
+        assert resolved(public_note(mixed_case_author), community).ap_id == URI
 
-    def test_an_explicit_default_port_on_the_author_refuses(self, app, peer_author):
+    def test_an_explicit_default_port_on_the_author_is_created(self, app, peer_author, monkeypatch):
         community = make_community('news', host=PEER_OBJECT_HOST)
         ported_author = f'https://{PEER_OBJECT_HOST}:443/users/alice'
 
-        assert resolved(public_note(ported_author), community) is None
-        assert Post.query.filter_by(ap_id=URI).count() == 0
+        passed_the_gate = author_lookup_spy(monkeypatch, peer_author)
 
-    def test_userinfo_in_the_author_uri_refuses(self, app, peer_author):
+        assert resolved(public_note(ported_author), community).ap_id == URI
+        assert passed_the_gate == [ported_author]
+
+    def test_userinfo_in_the_author_uri_is_created(self, app, peer_author, monkeypatch):
         community = make_community('news', host=PEER_OBJECT_HOST)
         userinfo_author = f'https://alice@{PEER_OBJECT_HOST}/users/alice'
 
-        assert resolved(public_note(userinfo_author), community) is None
+        passed_the_gate = author_lookup_spy(monkeypatch, peer_author)
+
+        assert resolved(public_note(userinfo_author), community).ap_id == URI
+        assert passed_the_gate == [userinfo_author]
+
+    def test_a_ported_mixed_case_uri_domain_is_stripped_into_the_synthesised_id(
+            self, app, peer_author, monkeypatch):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        seen = []
+        real_create_post = util.create_post
+
+        def spy(store_ap_json, community, request_json, user, announce_id=None):
+            seen.append(request_json['id'])
+            return real_create_post(store_ap_json, community, request_json, user, announce_id)
+
+        monkeypatch.setattr(util, 'create_post', spy)
+
+        assert resolved(public_note(), community, uri_domain=f'{PEER_OBJECT_HOST.capitalize()}:443').ap_id == URI
+        assert seen[0].startswith(f'https://{PEER_OBJECT_HOST}/activities/create/')
+
+    def test_an_author_uri_urlparse_rejects_is_refused_without_raising(self, app, peer_author):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+
+        assert resolved(public_note('https://[broken/users/alice'), community) is None
         assert Post.query.filter_by(ap_id=URI).count() == 0
+
+    def test_an_unparseable_uri_domain_does_not_match_an_unparseable_author(
+            self, app, peer_author, monkeypatch):
+        """Both degrade to '', and '' == '' -- the empty-host refusal is what
+        keeps two failed parses from agreeing. The lookup is stubbed to accept
+        anything, so only the gate can refuse."""
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        passed_the_gate = author_lookup_spy(monkeypatch, peer_author)
+
+        assert resolved(public_note('https://[broken/users/alice'), community, uri_domain='[broken') is None
+        assert passed_the_gate == []
 
 
 class TestTheUserOperand:
@@ -501,32 +549,25 @@ class TestPostDataOperandIsDead:
     - `'attributedTo' in post_data` is False for the first three and raises
       TypeError for the rest, so `actor` and `actor_domain` stay None either
       way;
-    - the gate `uri_domain != actor_domain` then refuses -- unless `uri_domain`
-      is ALSO None, which is the only way through;
-    - and on that one path, find_actor_or_create(None) raises AttributeError on
-      `actor.strip()` before the conjunction is ever evaluated.
+    - the gate then refuses. It used to let one path through, a None
+      `uri_domain` comparing equal to the None `actor_domain`, which then
+      crashed with AttributeError in find_actor_or_create(None). Since D22's
+      fix an empty `uri_domain` is refused before any comparison, so that
+      escape hatch is closed too.
 
     So there is no input for which control reaches `and post_data` with the
     first two operands true and that operand false. It is dead as a decision.
-    The test below pins the escape hatch -- the None/None path that gets past
-    the gate -- and asserts the crash, because the crash is what proves the
-    operand unreachable rather than merely untested.
+    The test below pins that the old None/None path is now an ordinary
+    refusal.
 
-    Task 7 owns the register; this belongs in it as a new entry, alongside the
-    older observation that this function's callers differ in whether they can
-    supply a None uri_domain at all.
-
-    Production change that fails this: guarding find_actor_or_create against a
-    None actor, which would make the third operand reachable -- and would be a
-    fine fix. The test is then the record of what changed, not an objection.
+    Production change that fails this: letting a None `uri_domain` reach the
+    comparison unrefused, which reopens the None/None path and its crash.
     """
 
-    def test_a_none_uri_domain_and_an_empty_document_crash_before_the_operand(self, app, peer_author):
+    def test_a_none_uri_domain_and_an_empty_document_are_refused(self, app, peer_author):
         community = make_community('news', host=PEER_OBJECT_HOST)
 
-        with pytest.raises(AttributeError):
-            resolved({}, community, uri_domain=None)
-
+        assert resolved({}, community, uri_domain=None) is None
         assert Post.query.filter_by(ap_id=URI).count() == 0
 
 
