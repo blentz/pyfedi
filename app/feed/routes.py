@@ -440,8 +440,7 @@ def feed_list():
     # The acting user comes from the SESSION, not the query string. This used to
     # filter on `int(request.args.get('user_id'))`, so any logged-in account
     # could read any other account's feed titles -- including feeds that account
-    # had made private, since the query has no `public` filter. The parameter
-    # survives only in the links built below, which is what it is for.
+    # had made private, since the query has no `public` filter.
     user_id = current_user.id
     # Defaults, as show_feed:459 reads its own arguments: three unguarded int()
     # calls made a request without them a 500 rather than an empty dropdown.
@@ -452,10 +451,6 @@ def feed_list():
 
     # setup html base to send back
     options_html = ""
-
-    # add the none option if already in a feed
-    if current_feed_id != 0:
-        options_html = options_html + f'<li><a class="dropdown-item" href="/feed/remove_community?user_id={user_id}&new_feed_id=0&current_feed_id={current_feed_id}&community_id={community_id}">None</li>'
 
     # for loop to add the rest of the options to the html. Adding changes state, so
     # each option is a POST form carrying the CSRF token rather than a link (D664).
