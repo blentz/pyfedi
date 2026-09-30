@@ -1762,6 +1762,9 @@ def process_inbox_request(request_json, store_ap_json):
                     return
 
                 if core_activity['type'] == 'Undo':
+                    if not isinstance(core_activity['object'], dict) or 'type' not in core_activity['object']:
+                        log_incoming_ap(id, APLOG_NOTYPE, APLOG_FAILURE, saved_json, 'Undo object is not an activity with a type')
+                        return
                     if core_activity['object']['type'] == 'Follow':  # Unsubscribe from a community or user
                         target_ap_id = core_activity['object']['object']
                         target = find_actor_or_create_cached(target_ap_id)

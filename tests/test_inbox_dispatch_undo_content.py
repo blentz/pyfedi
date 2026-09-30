@@ -484,19 +484,27 @@ def test_an_undo_of_an_unrecognised_type_falls_through_to_monitor(app, db_sessio
     assert log.exception_message == 'Unmatched activity'
 
 
-def test_a_string_inner_object_cannot_reach_choose_answer_at_all(app, db_session, monkeypatch):
-    """FIX 4's justification. The arm selects ChooseAnswer by reading
-    `core_activity['object']['type']`, so a STRING inner object raises
-    TypeError before any sub-type is chosen -- which is why the
-    `isinstance(core_activity['object'], str)` branch inside ChooseAnswer was
-    unreachable. Same equivalent-mutant class as D95 and D96.
+@pytest.mark.parametrize('inner_object', ['https://peer.example/comment/1', {'id': 'https://peer.example/like/1'}],
+                         ids=['bare-string', 'dict-without-type'])
+def test_an_undo_of_an_untyped_object_is_refused(app, db_session, monkeypatch, inner_object):
+    """D112, fixed. The arm chooses its sub-type by reading
+    `core_activity['object']['type']`, so a bare-string inner object (a
+    legal AS2 shape, the URI of the activity being undone) raised TypeError
+    and a dict without 'type' raised KeyError, uncaught, with no log row.
+    Acting on a bare URI would mean resolving what it refers to, which this
+    arm has never done; it is now refused and logged instead. This is also
+    why the `isinstance(..., str)` branch inside ChooseAnswer is unreachable
+    (FIX 4).
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance = make_instance('peer.example')
     author = make_user(instance, 'author')
 
-    activity = inbox_activity(author, activity_type='Undo',
-                              object='https://peer.example/comment/1')
+    activity = inbox_activity(author, activity_type='Undo', object=inner_object)
 
-    with pytest.raises(TypeError):
-        dispatch(activity)
+    dispatch(activity)
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Undo object is not an activity with a type'
+
