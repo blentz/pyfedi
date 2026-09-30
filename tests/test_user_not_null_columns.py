@@ -33,3 +33,25 @@ def test_user_verified_defaults_to_false_in_the_database(db_session):
         'INSERT INTO "user" (user_name) VALUES (:name) RETURNING verified'),
         {'name': 'rawinsert'}).scalar()
     assert verified is False
+
+
+def test_user_unread_notifications_cannot_be_null(db_session):
+    """D274, fixed. The column was added nullable with no backfill, so every
+    user row older than that migration held NULL and the ~50
+    `unread_notifications += 1` sites raised TypeError on it. It is now NOT
+    NULL, backfilled to 0."""
+    user = make_user(make_instance('remote.example'), 'someone', local=True)
+    user.unread_notifications = None
+
+    with pytest.raises(IntegrityError):
+        db.session.commit()
+    db.session.rollback()
+
+
+def test_user_unread_notifications_defaults_to_zero_in_the_database(db_session):
+    """D274. The server default covers a write that bypasses the ORM."""
+    assert User.__table__.c.unread_notifications.nullable is False
+    unread = db.session.execute(text(
+        'INSERT INTO "user" (user_name) VALUES (:name) RETURNING unread_notifications'),
+        {'name': 'rawinsert'}).scalar()
+    assert unread == 0
