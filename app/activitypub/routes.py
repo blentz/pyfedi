@@ -3,7 +3,14 @@ from flask import request, current_app, abort, jsonify, json, g, url_for, redire
 from flask_babel import _
 from flask_login import current_user
 from furl import furl
-from psycopg2 import IntegrityError
+# D1433, as D1432 in app/community/util.py: SQLAlchemy raises
+# `sqlalchemy.exc.IntegrityError`, which has no psycopg2 ancestor, so the
+# `except IntegrityError` around the Accept handler's CommunityMember insert never
+# fired. Two Accepts for one join request -- a retry, or a peer sending both an
+# Accept and an Announce of it -- lost the race on the unique constraint and took
+# the whole inbox request down with a 500 instead of logging the membership as
+# already existing.
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import desc, or_, text, func
 
 from app import db, cache, celery, limiter

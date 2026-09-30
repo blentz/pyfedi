@@ -10,7 +10,15 @@ from PIL import Image, ImageOps
 from flask import request, abort, g, current_app, json
 from flask_login import current_user
 from pillow_heif import register_heif_opener
-from psycopg2 import IntegrityError
+# D1432. This was `from psycopg2 import IntegrityError`, which is NOT the class
+# SQLAlchemy raises: a duplicate key arrives as `sqlalchemy.exc.IntegrityError`,
+# whose MRO is DatabaseError -> DBAPIError -> StatementError -> SQLAlchemyError,
+# with no psycopg2 ancestor at all. So neither `except IntegrityError` below ever
+# fired, and a second backfill of the same community -- a search and an Announce
+# arriving together -- aborted at the outer `except Exception: rollback; raise`,
+# which is the community-half-filled failure those handlers were written to
+# prevent.
+from sqlalchemy.exc import IntegrityError
 from flask_babel import _, lazy_gettext as _l
 
 from app import db, cache, celery
