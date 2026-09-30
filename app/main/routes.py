@@ -142,7 +142,7 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag):
     post_ids = get_deduped_post_ids(result_id, community_ids, sort, tag,
                                     include_following=view_filter == 'subscribed' and current_user.is_authenticated,
                                     community_sql=community_sql)
-    has_next_page = len(post_ids) > page + 1 * page_length
+    has_next_page = len(post_ids) > (page + 1) * page_length  # page is 0-based; `page + 1 * page_length` was page + page_length (D781)
     post_ids = paginate_post_ids(post_ids, page, page_length=page_length)
     posts = post_ids_to_models(post_ids, sort)
 

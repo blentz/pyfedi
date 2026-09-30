@@ -11,6 +11,8 @@ defect, measured first:
   is an access check a conditional request walks past, and it is the same
   defect this campaign fixed in the community feed (D1252).
 """
+from unittest.mock import patch
+
 import pytest
 from flask import g
 
@@ -43,6 +45,36 @@ def env(app, api_baseline):
                            community=community, author=author, post=post,
                            reader=api_baseline.user3,
                            baseline=api_baseline)
+
+
+class TestTheNextPageLink:
+    """D781, fixed. `len(post_ids) > page + 1 * page_length` read as
+    `page + page_length` because `*` binds tighter, so a page past the last
+    full one still offered a next page. It is now `(page + 1) * page_length`,
+    as the api/alpha copy (D776) was fixed.
+
+    Five ids at two per page: pages 0-2 hold them, so page 1 has a next page
+    and page 2 does not -- where the old test read `5 > 4` and offered one.
+    """
+
+    def _next_url(self, env, app, monkeypatch, page):
+        monkeypatch.setitem(app.config, 'PAGE_LENGTH', 2)
+        captured = {}
+
+        def fake_render(template, **kwargs):
+            captured.update(kwargs)
+            return 'rendered'
+
+        with patch('app.main.routes.get_deduped_post_ids', return_value=[1, 2, 3, 4, 5]), \
+                patch('app.main.routes.render_template', side_effect=fake_render):
+            assert env.client.get(f'/home/new/all?page={page}').status_code == 200
+        return captured['next_url']
+
+    def test_a_middle_page_offers_the_next(self, env, app, monkeypatch):
+        assert self._next_url(env, app, monkeypatch, page=1) is not None
+
+    def test_the_last_page_offers_no_next(self, env, app, monkeypatch):
+        assert self._next_url(env, app, monkeypatch, page=2) is None
 
 
 class TestTheFrontPage:
