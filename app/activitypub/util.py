@@ -4671,11 +4671,13 @@ def remote_object_to_json(uri):
 # called from incoming activitypub, when the object in an Announce is just a URL
 # despite the name, it works for both posts and replies
 def resolve_remote_post(uri: str, community, announce_id, store_ap_json, nodebb=False) -> Union[Post, PostReply, None]:
-    parsed_url = urlparse(uri)
-    uri_domain = parsed_url.netloc
-    announce_actor = community.ap_profile_id
-    parsed_url = urlparse(announce_actor)
-    announce_actor_domain = parsed_url.netloc
+    # Hosts, not authorities (D21): a community host with a capital or an
+    # explicit port is the same host. host_of turns a URI urlparse rejects into
+    # '', which is refused here rather than compared -- '' == '' is True.
+    uri_domain = host_of(uri)
+    if not uri_domain:
+        return None
+    announce_actor_domain = host_of(community.ap_profile_id)
     if announce_actor_domain != 'ovo.st' and not nodebb and announce_actor_domain != uri_domain:
         return None
 
