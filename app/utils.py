@@ -6427,7 +6427,7 @@ def inspect_image_c2pa(data: bytes, mimetype: str) -> dict:
     return result
 
 def get_event_start(post_id: int):
-    post = Post.query.get(post_id)
+    post = db.session.get(Post, post_id)
 
     if post and post.is_event():
         if getattr(post.event, "start", False):
