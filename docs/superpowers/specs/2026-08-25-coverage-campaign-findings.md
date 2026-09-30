@@ -25318,4 +25318,37 @@ somebody's keys from another.
 
 Fourteen mutants dead, three provably redundant, on a green baseline.
 
+
+---
+
+## Round 272 -- six task handlers that must report their own failure
+
+No source change. Eleven rows, and the decision under test is the same one six times:
+
+    except Exception:
+        session.rollback()
+        raise
+
+Not the rollback -- fact 1039 records that it cannot be distinguished from its absence when
+`finally: session.close()` follows, because closing a SQLAlchemy session releases its transaction.
+The `raise` is what every row asserts, and what stops a half-done job being reported as a finished
+one: `instance_banned` (a federation gate, MEMOIZED for 150 seconds, so a swallowed failure would
+cache "not banned" for every peer), `new_instance_profile_task` (the dialect this instance speaks to a
+peer), `get_nodebb_replies_in_background`, `make_image_sizes_async` (the File row that names files
+that were never made), `retrieve_mods_and_backfill` (created-but-empty is the failure D1259 and D1260
+both were), and `process_delete_request` (an account deleting itself, half-purged).
+
+**Where to inject the failure, when every fetch is already swallowed.** Four of these wrap their
+network calls in a bare `except:` by design, so a fetch failure cannot reach the outer handler at all.
+The one place inside the outer `try` and inside no inner one is the ROW LOOKUP at the top -- so
+`get_task_session` answers with a proxy whose `get` raises and which delegates everything else. Each
+row also has a control that drives the inner handler, so the rows say which failures are ordinary and
+which are not.
+
+Also covered: the SECOND copy of `retrieve_mods_and_backfill`'s `except IntegrityError`, in the
+`attributedTo` branch. Round 268 fixed the class both handlers name and covered only the collection
+branch; a fix applied to one copy says nothing about the other, so this is the row for the other.
+
+Nine mutants, all dead, on a green baseline.
+
 **Next free number: D1436.**
