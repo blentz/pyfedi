@@ -13704,3 +13704,12 @@ AND `.delay` both record.
 `Post.new` takes a microblog's url from an `<h1>` anchor or, failing that, from the body -- and
 `microblog_content_to_link` excludes the AUTHOR'S host. Put the heading's link on the author's own host and
 the body's elsewhere, or both arms answer alike and the mutant lives.
+
+**1029. `find_flair_or_create` MATCHES BY ID FIRST, THEN BY NAME, AND BACKFILLS AN `ap_id` ONLY WHEN THE ROW HAS NONE.**
+So a peer's document reusing a flair NAME under a new id keeps the existing row and its original id, and the
+keep-set the removal pass reads is built from the ROW's id rather than the document's. A row asserting the
+opposite fails -- check the lookup order before predicting which row survives.
+
+**1030. `cascade="all, delete-orphan"` MAKES `collection.remove(x)` AND `session.delete(x)` EQUIVALENT.**
+Either line alone removes the row, so mutating one survives. Keep both, assert both ends -- the row is gone
+from the table AND from the collection -- and record the pair as equivalent rather than chasing it.
