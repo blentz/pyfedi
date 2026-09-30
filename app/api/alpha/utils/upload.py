@@ -9,13 +9,14 @@ from app.utils import authorise_api_user
 
 
 def post_upload_image(auth, image_file=None):
-    try:
+    # D880: a presented token must authorise by itself; only a request with no
+    # token at all falls back to the browser session.
+    if auth:
         user: User = authorise_api_user(auth, return_type="model")
-    except Exception:
-        if current_user.is_authenticated:
-            user = current_user
-        else:
-            raise Exception('incorrect_login')
+    elif current_user.is_authenticated:
+        user = current_user
+    else:
+        raise Exception('incorrect_login')
 
     user_id = user.id
     total_size = 0
@@ -45,12 +46,11 @@ def post_upload_user_image(auth, image_file=None):
 
 
 def post_image_delete(auth, data):
-    try:
+    if auth:
         user_id = authorise_api_user(auth)
-    except Exception:
-        if current_user.is_authenticated:
-            user_id = current_user.id
-        else:
-            raise Exception('incorrect_login')
+    elif current_user.is_authenticated:
+        user_id = current_user.id
+    else:
+        raise Exception('incorrect_login')
     process_file_delete(data['file'], user_id=user_id)
     return {'result': 'ok'}
