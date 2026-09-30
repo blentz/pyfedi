@@ -12,7 +12,7 @@ Read directly from app/utils.py:
         return False
     elif upload_access == 'admins' and not upload_user.is_admin_or_staff():
         return False
-    elif upload_access == 'users' and not current_user.is_authenticated and user is None:
+    elif upload_access == 'users' and not upload_user.is_authenticated:
         return False
     return True
 
@@ -30,31 +30,17 @@ object, logged in or not. So `upload_user.get_id() != 1` really is testing
 "is this the user with database id 1", and factories hand out id 1 first --
 every test below is deliberate about which user lands on id 1.
 
---- THE BUG (suspected-defects list; documented here, NOT fixed) ---
+--- F12, fixed ---
 
-`upload_user = user or current_user` is computed once at the top and used by
-the `admins` branch, but the `users` branch ignores it entirely:
-
-    elif upload_access == 'users' and not current_user.is_authenticated and user is None:
-        return False
-
-Read that compound with `user` (the injected parameter) held not-None: `user
-is None` is False, so the whole `and` chain is False regardless of
-`current_user`, so the `elif` doesn't match, so execution falls through to
-`return True`. Concretely: under the 'users' policy,
-`can_upload_video(some_user)` returns True for ANY user object passed in --
-banned, anonymous-in-the-request-sense, doesn't matter -- because the
-function never actually inspects `some_user`. It only ever inspects
-`current_user` (the ambient Flask-Login proxy) and whether `user` was passed
-at all. TestCanUploadVideoUsersPolicy.test_users_policy_grants_any_injected_user_under_the_bug
-below demonstrates this directly and is deliberately named to say what it
-is: a pinned description of CURRENT behaviour that is under review, not an
-endorsement of it as correct. If this is ever fixed to consult `upload_user`
-(as the `admins` branch does), that test will start failing and should be
-updated as part of the fix, not treated as a regression to chase.
+The `users` branch used to read `not current_user.is_authenticated and user
+is None`, ignoring `upload_user`: any injected user passed, and a caller that
+injected none (make_post/edit_post on the API path) was judged as the
+anonymous web user. It now consults `upload_user` like the other branches.
+TestCanUploadVideoUsersPolicy.test_users_policy_judges_the_injected_user
+pins the fixed behaviour.
 """
 
-from flask_login import current_user, login_user
+from flask_login import AnonymousUserMixin, current_user, login_user
 
 from app.models import Role, user_role
 from app import db
@@ -197,20 +183,14 @@ class TestCanUploadVideoAdminsPolicy:
 
 
 class TestCanUploadVideoUsersPolicy:
-    """`elif upload_access == 'users' and not current_user.is_authenticated
-    and user is None: return False` -- the branch documented as buggy at
-    the top of this file. Unlike the other three branches, this one reads
-    `current_user` (Flask-Login's ambient proxy) rather than `upload_user`,
-    so establishing a real logged-in current_user needs a request context
-    and login_user, not just constructing a User row.
+    """`elif upload_access == 'users' and not upload_user.is_authenticated:
+    return False`. With no injected user, `upload_user` is Flask-Login's
+    ambient `current_user`, so establishing a real logged-in current_user
+    needs a request context and login_user, not just constructing a User row.
 
-    The two tests below cover the branch as its authors evidently intended
-    it to work: called with no injected user, so `user is None` is True and
-    `current_user`'s authentication state is what decides. The third test
-    holds `current_user` fixed at anonymous and flips only whether `user` is
-    injected -- which is the direct demonstration of the bug described at
-    the top of this file: injecting ANY user, authenticated or not, bypasses
-    this branch's refusal entirely.
+    The first two tests call it with no injected user, so `current_user`'s
+    authentication state decides. The third holds `current_user` at
+    anonymous and injects a user, which is what decides then (F12).
     """
 
     def test_users_policy_permits_an_authenticated_current_user(self, app, db_session):
@@ -229,8 +209,8 @@ class TestCanUploadVideoUsersPolicy:
     def test_users_policy_refuses_an_anonymous_current_user(self, app, db_session):
         """No login_user call: current_user is Flask-Login's
         AnonymousUserMixin, is_authenticated False, get_id() None. Called
-        with no injected user, so `user is None` is True -- both halves of
-        the compound are satisfied and the refusal fires."""
+        with no injected user, so `upload_user` is that anonymous user and
+        the refusal fires."""
         make_instance('test.piefed.local', software='piefed')
         original = get_setting('allow_video_file_uploads')
         try:
@@ -240,23 +220,13 @@ class TestCanUploadVideoUsersPolicy:
         finally:
             set_setting('allow_video_file_uploads', original)
 
-    def test_users_policy_grants_any_injected_user_under_the_bug(self, app, db_session):
-        """THE BUG, demonstrated directly. Same anonymous current_user as
-        the refused case immediately above -- the ONLY difference is that a
-        user object is now injected. `upload_user = user or current_user`
-        is computed but never consulted by this branch: `user is None` is
-        False, so `not current_user.is_authenticated and user is None`
-        short-circuits to False regardless of current_user, the elif does
-        not match, and execution falls through to `return True`.
-
-        This is CURRENT, ACTUAL behaviour, pinned so it is visible and under
-        review -- not a statement that granting upload access to an
-        unauthenticated caller's arbitrarily-injected user is correct
-        policy. Compare directly against
-        test_users_policy_refuses_an_anonymous_current_user above: identical
-        setup, identical current_user state, and the outcome flips from
-        False to True purely because a user was injected.
-        """
+    def test_users_policy_judges_the_injected_user(self, app, db_session):
+        """F12, fixed. The branch read `current_user` and only asked whether a
+        user was injected, so any injected object passed and an API caller
+        with none injected was judged as the anonymous web user. It now
+        consults `upload_user`, like the other branches: with the same
+        anonymous `current_user`, an injected real user is permitted and an
+        injected anonymous one is refused."""
         make_instance('test.piefed.local', software='piefed')
         injected = make_user(None, 'injecteduploader', local=True)
         original = get_setting('allow_video_file_uploads')
@@ -265,6 +235,7 @@ class TestCanUploadVideoUsersPolicy:
             with app.test_request_context('/'):
                 # current_user is anonymous here -- no login_user call.
                 assert can_upload_video(injected) is True
+                assert can_upload_video(AnonymousUserMixin()) is False
         finally:
             set_setting('allow_video_file_uploads', original)
 
