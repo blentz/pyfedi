@@ -881,7 +881,7 @@ def refresh_community_profile_task(community_id, activity_json):
                 if activity_json:
                     if 'attributedTo' in activity_json and isinstance(activity_json['attributedTo'], str):  # lemmy and mbin
                         mods_url = activity_json['attributedTo']
-                    elif 'moderators' in activity_json:  # kbin
+                    elif 'moderators' in activity_json and isinstance(activity_json['moderators'], str):  # kbin
                         mods_url = activity_json['moderators']
                     else:
                         mods_url = None
@@ -1141,7 +1141,7 @@ def refresh_feed_profile_task(feed_id):
 
                     if 'attributedTo' in activity_json and isinstance(activity_json['attributedTo'], str):  # lemmy, mbin, and our feeds
                         owners_url = activity_json['attributedTo']
-                    elif 'moderators' in activity_json:  # kbin, and our feeds
+                    elif 'moderators' in activity_json and isinstance(activity_json['moderators'], str):  # kbin, and our feeds
                         owners_url = activity_json['moderators']
                     else:
                         owners_url = None
@@ -1421,7 +1421,7 @@ def actor_json_to_model(activity_json, address, server):
             return community
         if 'attributedTo' in activity_json and isinstance(activity_json['attributedTo'], str):  # lemmy and mbin
             mods_url = activity_json['attributedTo']
-        elif 'moderators' in activity_json:  # kbin
+        elif 'moderators' in activity_json and isinstance(activity_json['moderators'], str):  # kbin
             mods_url = activity_json['moderators']
         else:
             mods_url = None
@@ -1629,7 +1629,7 @@ def actor_json_to_model(activity_json, address, server):
             return feed
         if 'attributedTo' in activity_json and isinstance(activity_json['attributedTo'], str):  # lemmy, mbin, and our feeds
             owners_url = activity_json['attributedTo']
-        elif 'moderators' in activity_json:  # kbin, and our feeds
+        elif 'moderators' in activity_json and isinstance(activity_json['moderators'], str):  # kbin, and our feeds
             owners_url = activity_json['moderators']
         else:
             owners_url = None
@@ -1644,8 +1644,9 @@ def actor_json_to_model(activity_json, address, server):
         # get the owners list
         # these users will be added to feedmember db entries at the bottom of this function
         if owners_url is None:
-            # The third arm of the owners_url choice above, and a 'moderators'
-            # key whose value is null, both leave owners_url as None. Passing
+            # The third arm of the owners_url choice above, taken also by a
+            # 'moderators' key that is not a string (D233), leaves owners_url
+            # as None. Passing
             # that to get_request used to be the only way this branch reported
             # the problem, and it reported it inconsistently: with DEBUG off
             # is_invalid_get_request_uri refused the uri and get_request raised

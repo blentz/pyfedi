@@ -844,6 +844,21 @@ def test_the_moderators_url_falls_back_to_the_kbin_spelling(app, db_session, htt
     assert membership.is_moderator is True
 
 
+def test_a_moderators_object_is_not_stored_as_the_moderators_url(app, db_session, http_mock):
+    """D233, fixed. The `attributedTo` arm checked `isinstance(..., str)` and
+    the kbin `moderators` arm below it did not, so a peer sending a collection
+    OBJECT there put a dict into the String column and the commit failed,
+    losing the whole refresh. A non-string now takes the `else` arm."""
+    community = _remote_community()
+
+    refresh_community_profile_task(community.id, _group_document(
+        fields={'moderators': {'type': 'OrderedCollection', 'id': f'https://{PEER}/c/memes/moderators'}}))
+
+    db.session.refresh(community)
+    assert community.title == 'Memes, refreshed'
+    assert community.ap_moderators_url is None
+
+
 def test_the_sensitive_flag_sets_nsfw(app, db_session, http_mock):
     """`community.nsfw = activity_json['sensitive'] if 'sensitive' in ... else False`
     -- note the else, which means an absent key RESETS nsfw rather than
@@ -1186,6 +1201,20 @@ def test_refreshing_a_feed_applies_the_peers_document(app, db_session, http_mock
 
     db.session.refresh(feed)
     assert feed.title == 'News, refreshed'
+
+
+def test_a_feed_moderators_object_is_not_stored_as_the_moderators_url(app, db_session, http_mock):
+    """D233, fixed, the feed copy: a `moderators` object used to go into
+    `Feed.ap_moderators_url`, a String column, and fail the commit."""
+    feed = _remote_feed()
+    _serve(http_mock, feed.ap_public_url, _feed_document(
+        fields={'moderators': {'type': 'OrderedCollection', 'id': f'https://{PEER}/f/news/moderators'}}))
+
+    refresh_feed_profile_task(feed.id)
+
+    db.session.refresh(feed)
+    assert feed.title == 'News, refreshed'
+    assert feed.ap_moderators_url is None
 
 
 def test_refreshing_a_local_feed_does_nothing(
