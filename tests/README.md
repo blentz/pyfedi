@@ -13645,3 +13645,13 @@ than one branch -- `Post.vote` has two copies of each vote threshold, one per di
 **1016. "THE TEXT IS STILL THERE" DOES NOT PROVE THE WRAP WAS SKIPPED.**
 `allowlist_html` tidies `<p><p>x</p></p>` back to one paragraph, so a mutant that wraps already-wrapped HTML
 survives any assertion that merely looks for the text. Assert the exact string.
+
+**1017. A HINT BRANCH IN FRONT OF A FALLBACK THAT TRIES EVERYTHING IS AN EQUIVALENT MUTANT.**
+`find_reply_parent` reads `comment`/`post` out of the url before falling back to trying both
+lookups, and `_find_liked_object_id` reads `/comment/` the same way. Deleting any of those hints
+changes no answer -- they save a query. Do not chase the survivor; record it beside the row.
+
+**1018. `root_id` IS NULL ON A TOP-LEVEL COMMENT.**
+A row asserting `root_id` against a first-level reply passes even if the helper drops the value.
+Use a NESTED reply, and write one row per assignment site -- `find_reply_parent` sets it in both
+the hint branch and the fallback.
