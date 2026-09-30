@@ -513,7 +513,8 @@ def delete_community(community_id: int, src, auth=None):
         user = current_user
 
     community = db.session.get(Community, community_id)
-    if not (community.is_owner(user) or community.is_moderator(user) or user.is_admin_or_staff()):
+    # D615: the owner and instance admins only, as the web route community_delete requires
+    if not (community.is_owner(user) or user.is_admin()):
         raise Exception('incorrect_login')
     if not community.is_local():
         raise Exception('Only local communities can be deleted')
@@ -542,7 +543,7 @@ def restore_community(community_id: int, src, auth=None):
         user = current_user
 
     community = db.session.query(Community).filter_by(id=community_id).one()
-    if not (community.is_owner(user) or community.is_moderator(user) or user.is_admin_or_staff()):
+    if not (community.is_owner(user) or user.is_admin()):  # D615
         raise Exception('incorrect_login')
     if not community.is_local():
         raise Exception('Only local communities can be restored')
