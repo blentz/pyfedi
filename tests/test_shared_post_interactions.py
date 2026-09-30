@@ -1080,6 +1080,48 @@ def test_a_web_reversal_bypasses_the_upvote_gate_for_a_blocked_user(db_session, 
         user_id=s.voter.id, post_id=s.post.id).count() == 0
 
 
+def test_a_web_reversal_is_refused_when_the_permission_that_cast_the_vote_is_gone(db_session, app):
+    """D408, fixed. The web arm gated only the 'upvote' and 'downvote'
+    literals, so a 'reversal' taken from the URL path segment reached
+    `post.vote()` with no permission check and a voter who had lost
+    `can_upvote` could still withdraw their upvote. It now takes the API
+    arm's gate: the permission that would have cast the existing vote.
+
+    The witness is the surviving row; the refusal renders the buttons."""
+    s = seed_post_context()
+    try:
+        vote_for_post(s.post.id, 'upvote', True, None, SRC_API,
+                      auth=bearer(s.voter))
+        s.voter.bot = True
+        db.session.commit()
+
+        with web_ctx(app, s.voter):
+            result = vote_for_post(s.post.id, 'reversal', True, None, SRC_WEB)
+
+        assert result.status_code == 200
+        assert db.session.query(PostVote).filter_by(
+            user_id=s.voter.id, post_id=s.post.id).count() == 1
+    finally:
+        _clear_votes_cast(s.voter.id)
+
+
+def test_a_web_reversal_still_works_for_a_permitted_voter(db_session, app):
+    """D408's positive control: with the permission intact the web reversal
+    lands and the vote is gone, so the gate does not refuse every voter."""
+    s = seed_post_context()
+    try:
+        vote_for_post(s.post.id, 'upvote', True, None, SRC_API,
+                      auth=bearer(s.voter))
+
+        with web_ctx(app, s.voter):
+            vote_for_post(s.post.id, 'reversal', True, None, SRC_WEB)
+
+        assert db.session.query(PostVote).filter_by(
+            user_id=s.voter.id, post_id=s.post.id).count() == 0
+    finally:
+        _clear_votes_cast(s.voter.id)
+
+
 # --- Task 6: vote_for_post, the ban check through the return arms ---
 
 def test_a_banned_user_is_aborted_with_403(db_session, app):

@@ -55,8 +55,16 @@ def vote_for_post(post_id: int, vote_direction, federate: bool, emoji: str, src,
         post = db.session.get(Post, post_id) or abort(404)
         user = current_user
 
-        if (vote_direction == 'upvote' and not can_upvote(user, post.community)) or (
-                vote_direction == 'downvote' and not can_downvote(user, post.community)):
+        refused = (vote_direction == 'upvote' and not can_upvote(user, post.community)) or (
+                vote_direction == 'downvote' and not can_downvote(user, post.community))
+        if vote_direction == 'reversal':
+            # The API arm's reversal gate above, for the URL's direction segment (D408).
+            existing_vote = db.session.query(PostVote).filter_by(
+                user_id=user.id, post_id=post_id).first()
+            if existing_vote:
+                refused = (existing_vote.effect > 0 and not can_upvote(user, post.community)) or (
+                        existing_vote.effect < 0 and not can_downvote(user, post.community))
+        if refused:
             template = 'post/_post_voting_buttons.html' if request.args.get('style',
                                                                             '') == '' else 'post/_post_voting_buttons_masonry.html'
             return render_template(template, post=post, community=post.community, recently_upvoted=[],
