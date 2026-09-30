@@ -13807,3 +13807,13 @@ banned row, which IS the state the backstop is written for.
 Every other key the `User(...)` constructor reads is guarded with an `in` test or read above the
 `try`, and `activity_json['id']` is read at the domain-match check well before it -- so a document
 missing `id` raises outside the handler.
+
+**1048. `is_image_url` ASKS THE SERVER BEFORE IT LOOKS AT THE EXTENSION.**
+`mime_type_using_head(url)` runs first and the extension list is only the fallback, so a row about
+`is_local_image_url`'s HOST allowlist still fails on `AllMockedAssertionError` for a plain `.png`.
+Patch `app.utils.mime_type_using_head` to return None when the sniff is not what is under test.
+
+**1049. `make_cache_key`'s TWO BRANCHES ARE SEPARATE f-STRINGS.**
+A row proving the url, the sort or the post id is in the anonymous key says NOTHING about the
+signed-in key. Assert each element on both branches -- patch `app.utils.current_user` with
+`is_anonymous = False` and an `id` for the signed-in side.
