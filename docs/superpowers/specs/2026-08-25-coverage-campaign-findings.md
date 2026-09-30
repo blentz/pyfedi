@@ -24448,4 +24448,40 @@ queueing and running.
 
 Fifteen mutants, all dead, on a green baseline.
 
+---
+
+## Round 250 -- what a local account is told when a peer bans it
+
+`ban_user`'s community branch already had rows for the CommunityBan row, the membership flag
+and the modlog entry. What had none was everything the BANNED PERSON experiences, and all of
+it is conditional.
+
+The notification is raised only when `community.has_poster(blocked)` -- a ban from a community
+somebody never posted in is not news they asked for -- and it carries the community's name and
+a link to the moderator chat, which is how the banned person can ask about it. The unread badge
+is a SEPARATE decision: `if not current_app.debug`, with a comment saying why (incrementing it
+hangs the app when an activity is re-submitted from the admin UI), so both states have a row.
+Their pending join request is withdrawn, or an approval later would re-admit them, and their
+notification subscription is removed, or they keep being told about content they cannot reply
+to.
+
+All of that happens only `if blocked.is_local()`. A remote account's notifications, join
+requests and subscriptions live on its own instance, and a row asserts this instance writes
+none of them -- while still recording the ban, which is ours to keep.
+
+`summary` is optional in both the Block and the Undo, and `reason = ''` in each -- the value
+reaches the public modlog, where `None` would render as the word None.
+
+Also covered: `populate_child_feed_worker`, which resolves a feed on another instance and
+attaches it as a child here (and raises when it cannot, because a celery retry needs the
+failure to be loud); and `log_incoming_ap`, the inbox's audit trail, including its
+`if session:` arm -- half its callers run inside a celery task with their own session, and
+committing to `db.session` from there writes into a transaction nobody will finish.
+
+Eighteen mutants, all dead, on a green baseline. Two needed the rows sharpening: the
+`session.rollback()` in the feed worker's `except` is the familiar equivalent mutant (fact 977)
+so the mutant was moved onto the `raise`, and "the activity body is always stored" survived
+until a row asserted `activity_json is None` when the caller passed nothing -- otherwise the
+column gets the string `null`.
+
 **Next free number: D1424.**

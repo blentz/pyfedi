@@ -13612,3 +13612,13 @@ what was not there before, or the working tree fills with stray images.
 **1009. COPY A MUTANT'S ANCHOR OUT OF THE FILE, NOT OUT OF THE SOURCE LISTING.**
 Deeply nested lines in `app/activitypub/util.py` are indented 40+ columns and often carry a trailing comment.
 Hand-typing the anchor produces ANCHOR MISMATCH every time; read `lines[n-1]` and `repr()` it into the runner.
+
+**1010. A WORKER THAT ENDS WITH `db.session.remove()` DETACHES EVERYTHING THE ROW WAS HOLDING.**
+`populate_child_feed_worker` and its siblings call `db.session.remove()` in `finally`, so
+`db.session.refresh(obj)` afterwards is `InvalidRequestError: Instance ... is not persistent within this
+Session`. Keep the ids before the call and read the rows back with `db.session.get`.
+
+**1011. ASSERT THE COLUMN IS None WHEN THE OPTIONAL ARGUMENT WAS NOT PASSED.**
+`log_incoming_ap`'s `if saved_json:` guard survived every row until one asserted
+`row.activity_json is None` -- a mutant that always stored writes the string `null`, which no other assertion
+notices.
