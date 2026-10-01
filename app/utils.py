@@ -54,6 +54,7 @@ from wtforms.validators import ValidationError
 from markupsafe import Markup
 import boto3
 from app import db, cache, httpx_client, celery, get_ip_address, plugins
+from app.pinned_http import is_refused_address
 from app.constants import *
 import re
 from PIL import Image, ImageOps, ImageCms
@@ -6214,12 +6215,11 @@ def is_invalid_get_request_uri(uri):
         # 8.8.8.8, 1.1.1.1, 93.184.216.34, 2606:4700:4700::1111,
         # 2001:4860:4860::8888 and 2a00:1450:4001:827::200e, all still accepted.
         #
-        # What this does NOT fix: the address is resolved here and resolved again
-        # by whoever makes the request, so a name that answers differently the
-        # second time (DNS rebinding) still gets through. Closing that needs the
-        # request pinned to the address checked here, which is a change to the
-        # HTTP client rather than to this predicate.
-        if any(not ip.is_global or ip.is_reserved or ip.is_multicast for ip in ips):
+        # The request resolves the name again to connect, so a name that answers
+        # differently the second time (DNS rebinding) would get past this check
+        # alone; R162 pins the connection itself, in app/pinned_http.py, which
+        # refuses the same addresses with this same predicate.
+        if any(is_refused_address(ip) for ip in ips):
             return True
 
         return False

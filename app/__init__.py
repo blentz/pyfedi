@@ -23,6 +23,7 @@ import httpx
 from authlib.integrations.flask_client import OAuth
 
 from config import Config
+from app.pinned_http import pinned_transport
 
 
 def get_locale():
@@ -98,7 +99,7 @@ cache = Cache()
 compress = Compress()
 limiter = Limiter(get_ip_address, storage_uri='redis+'+Config.CACHE_REDIS_URL if Config.CACHE_REDIS_URL.startswith("unix://") else Config.CACHE_REDIS_URL)
 celery = Celery(__name__, broker=Config.CELERY_BROKER_URL)
-httpx_client = httpx.Client(http2=True)
+httpx_client = httpx.Client(http2=True, transport=pinned_transport(http2=True))  # R162
 oauth = OAuth()
 redis_client = None  # Will be initialized in create_app()
 rest_api = Api()

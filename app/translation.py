@@ -1,7 +1,11 @@
 # copied from https://github.com/LibreTranslate/LibreTranslate
 
 from typing import Any, Dict
-from app import httpx_client
+import httpx
+
+# R162: not the shared, pinned client. The endpoint is the admin's own LibreTranslate, which is commonly
+# on a private network the SSRF guard refuses; no peer chooses this URL.
+httpx_client = httpx.Client(http2=True)
 
 
 class LibreTranslateAPI:

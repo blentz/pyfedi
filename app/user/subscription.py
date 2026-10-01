@@ -4,6 +4,7 @@ from flask_login import logout_user, current_user
 from flask_babel import _, lazy_gettext as _l
 
 from app import db
+from app.pinned_http import pinned_transport
 from app.models import User, CmsPage
 from app.user import bp
 from app.utils import render_template, login_required
@@ -78,7 +79,7 @@ def stripe_redirect(plan):
             flash(_('You do not have a donation to manage yet.'))
             return redirect(url_for('user.choose_plan'))
 
-        with httpx.Client(timeout=10) as client:
+        with httpx.Client(timeout=10, transport=pinned_transport()) as client:  # R162
             response = client.post(
                 'https://api.stripe.com/v1/billing_portal/sessions',
                 data={'customer': stripe_customer, 'return_url': url_for('user.choose_plan', _external=True)},
