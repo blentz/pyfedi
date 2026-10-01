@@ -772,6 +772,20 @@ def test_an_image_post_with_an_image_row_still_gets_its_attachment(db_session, h
                                       'name': 'a picture'}]
 
 
+def test_a_link_post_with_no_url_gets_no_link_attachment(db_session, http_mock):
+    """D300, fixed (the None half): a LINK post can carry a null url (a peer's
+    PeerTube `{"id": null}` through fixup_url), and :178 sent it as
+    `{'href': None, 'type': 'Link'}`. It now checks the url, as the outbox
+    builder in app/activitypub/util.py does."""
+    s = _seed(post_type=POST_TYPE_LINK, url=None, local_community=False,
+              with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    _send(s.post)
+
+    assert _attachment_of(route) == []
+
+
 def test_a_non_image_post_with_an_image_row_gets_no_image_attachment(db_session, http_mock):
     """:180's TYPE test, isolated from its image_id test.
 

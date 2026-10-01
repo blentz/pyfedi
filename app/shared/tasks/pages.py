@@ -175,7 +175,7 @@ def send_post(post_id, edit=False, session=None):
     language = {'identifier': post.language_code(), 'name': post.language_name()}
     source = {'content': post.body, 'mediaType': 'text/markdown'}
     attachment = []
-    if post.type == POST_TYPE_LINK or post.type == POST_TYPE_VIDEO:
+    if (post.type == POST_TYPE_LINK or post.type == POST_TYPE_VIDEO) and post.url is not None:
         attachment.append({'href': post.url, 'type': 'Link'})
     elif post.type == POST_TYPE_IMAGE and post.image_id:
         attachment.append({'type': 'Image', 'url': post.image.source_url, 'name': post.image.alt_text})
