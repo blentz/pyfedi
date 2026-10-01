@@ -54,7 +54,7 @@ from flask import current_app, g
 
 from app import db
 from app.constants import SRC_API
-from app.models import Feed, Site
+from app.models import Feed, Site, User
 from app.shared.feed import edit_feed, make_feed
 from tests.factories import make_instance, make_local_feed, make_user
 
@@ -293,8 +293,10 @@ class TestWhatIsDeliberatelyNotRewritten:
         before = urls(feed)
         assert not feed.is_local()
 
-        edit_feed(payload('RenamedFeed'), feed, SRC_API, auth=token(env),
-                  from_scratch=True)
+        admin = db.session.get(User, 1)  # User.is_admin() is true for id 1
+        assert admin.is_admin()
+
+        edit_feed(payload('RenamedFeed'), feed, SRC_API, auth=token(admin))
 
         assert urls(feed) == before
         assert feed.ap_domain == 'remote.piefed.local'

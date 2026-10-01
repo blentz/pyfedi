@@ -277,26 +277,19 @@ def test_edit_feed_lets_an_admin_through(app, db_session):
     assert db.session.get(Feed, s.feed.id).title == 'Admin edit'
 
 
-def test_edit_feed_from_scratch_skips_the_ownership_check_entirely(app, db_session):
-    """PINNED, REGISTERED AND NOT FIXED (R1): `from_scratch=True` skips the
-    check, so a caller that passes it edits any feed.
-
-    Latent: no caller passes True. `/usr/bin/grep -rn "from_scratch" app/`
-    finds the True-passing call sites only in app/shared/post.py:243 and
-    app/shared/community.py:282, whose make_* functions delegate to their
-    edit_* twin; make_feed does not delegate, it duplicates, which is the same
-    divergence that left make_feed accepting is_instance_feed from anyone
-    (D675) while edit_feed has always gated it.
-
-    Pinned rather than repaired so that a future caller which starts passing
-    True fails a test rather than a review.
-    """
+def test_edit_feed_from_scratch_still_checks_ownership(app, db_session):
+    """D694, fixed: `from_scratch=True` skipped the ownership check, so a
+    caller passing it could edit any feed (latent: no caller passes it). The
+    check now runs whatever from_scratch is; the feed is untouched."""
     s = _seed()
+    original_title = s.feed.title
     with _site_ctx(app, s.stranger):
         with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
-            edit_feed(_form(title='No check at all'), s.feed, SRC_WEB, from_scratch=True)
+            with pytest.raises(Exception, match='incorrect_login'):
+                edit_feed(_form(title='No check at all'), s.feed, SRC_WEB, from_scratch=True)
 
-    assert db.session.get(Feed, s.feed.id).title == 'No check at all'
+    db.session.rollback()
+    assert db.session.get(Feed, s.feed.id).title == original_title
 
 
 # --------------------------------------------------------------------------
