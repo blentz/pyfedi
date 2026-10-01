@@ -1,3 +1,4 @@
+import hmac
 import os.path
 import json
 import time
@@ -1600,6 +1601,13 @@ def my_year_in_review(year):
 @bp.route('/webhook', methods=['POST'])
 @limiter.limit("60 per 1 minutes", methods=['POST'])
 def receive_webhook():
+    # The plugins act on whatever arrives here, so only a caller holding WEBHOOK_SECRET may reach them
+    secret = current_app.config['WEBHOOK_SECRET']
+    if not secret:
+        abort(404)
+    if not hmac.compare_digest(request.headers.get('X-Webhook-Secret', '').encode(), secret.encode()):
+        abort(403)
+
     payload = request.get_json()
 
     if not payload:

@@ -209,48 +209,66 @@ class TestTheBotChallenge:
 
 
 class TestTheWebhook:
-    """`/webhook` takes JSON from anyone, with no signature, secret or token, and hands it
-    to `plugins.fire_hook("webhook", payload)`. These rows pin what it does today; the
-    missing authentication is recorded in the findings ledger as a maintainer decision
-    rather than changed here, because what should authenticate it depends on which plugins
-    an instance runs.
+    """R223, fixed. `/webhook` took JSON from anyone, with no signature, secret or token,
+    and handed it to `plugins.fire_hook("webhook", payload)`. It now answers only a caller
+    presenting `WEBHOOK_SECRET` in `X-Webhook-Secret`, and 404s while no secret is
+    configured (owner ruling 2026-09-30).
     """
 
-    def test_a_payload_is_accepted_and_handed_to_the_plugins(self, env, monkeypatch):
-        """`:1597`, `:1602`, `:1604`. The hook call is intercepted so the row asserts WHAT
-        was passed on, not merely that the request was accepted."""
+    SECRET = 'a-shared-secret'
+
+    @pytest.fixture
+    def fired(self, env, monkeypatch):
         fired = []
         monkeypatch.setattr('app.main.routes.plugins.fire_hook',
                             lambda name, payload: fired.append((name, payload)))
+        monkeypatch.setitem(env.app.config, 'WEBHOOK_SECRET', self.SECRET)
+        return fired
 
-        response = env.anonymous.post('/webhook', json={'event': 'ping', 'id': 7})
+    def test_a_payload_is_accepted_and_handed_to_the_plugins(self, env, fired):
+        """The hook call is intercepted so the row asserts WHAT was passed on, not merely
+        that the request was accepted."""
+        response = env.anonymous.post('/webhook', json={'event': 'ping', 'id': 7},
+                                      headers={'X-Webhook-Secret': self.SECRET})
 
         assert response.status_code == 202
         assert fired == [('webhook', {'event': 'ping', 'id': 7})]
 
-    def test_an_empty_payload_is_refused_without_firing_anything(self, env, monkeypatch):
-        """`:1599-1600`. An empty JSON object is falsy, so `{}` is refused by the same
-        branch that refuses a missing body -- and nothing reaches the plugins."""
-        fired = []
-        monkeypatch.setattr('app.main.routes.plugins.fire_hook',
-                            lambda name, payload: fired.append((name, payload)))
+    def test_with_no_secret_configured_the_endpoint_does_not_exist(self, env, fired,
+                                                                    monkeypatch):
+        monkeypatch.setitem(env.app.config, 'WEBHOOK_SECRET', '')
 
-        response = env.anonymous.post('/webhook', json={})
+        response = env.anonymous.post('/webhook', json={'event': 'ping'},
+                                      headers={'X-Webhook-Secret': ''})
+
+        assert response.status_code == 404
+        assert fired == []
+
+    @pytest.mark.parametrize('headers', [{}, {'X-Webhook-Secret': 'wrong'}],
+                             ids=['missing', 'wrong'])
+    def test_a_caller_without_the_secret_is_refused(self, env, fired, headers):
+        response = env.anonymous.post('/webhook', json={'event': 'ping'}, headers=headers)
+
+        assert response.status_code == 403
+        assert fired == []
+
+    def test_an_empty_payload_is_refused_without_firing_anything(self, env, fired):
+        """An empty JSON object is falsy, so `{}` is refused by the same branch that
+        refuses a missing body -- and nothing reaches the plugins."""
+        response = env.anonymous.post('/webhook', json={},
+                                      headers={'X-Webhook-Secret': self.SECRET})
 
         assert response.status_code == 400
         assert response.get_json()['error'] == 'no payload received'
         assert fired == []
 
-    def test_a_body_that_is_not_json_is_refused_too(self, env, monkeypatch):
+    def test_a_body_that_is_not_json_is_refused_too(self, env, fired):
         """`request.get_json()` raises on an unparseable body unless it is allowed to
         fail, so this row says which of the two happens today: a 415 from Flask rather than
         the endpoint's own 400. Either way no hook fires."""
-        fired = []
-        monkeypatch.setattr('app.main.routes.plugins.fire_hook',
-                            lambda name, payload: fired.append((name, payload)))
-
         response = env.anonymous.post('/webhook', data='not json',
-                                      content_type='text/plain')
+                                      content_type='text/plain',
+                                      headers={'X-Webhook-Secret': self.SECRET})
 
         assert response.status_code >= 400
         assert fired == []

@@ -120,6 +120,7 @@ class Config(object):
     STRIPE_MONTHLY_SMALL_TEXT = os.environ.get('STRIPE_MONTHLY_SMALL_TEXT') or ''
     STRIPE_MONTHLY_BIG_TEXT = os.environ.get('STRIPE_MONTHLY_BIG_TEXT') or ''
     WEBHOOK_SIGNING_SECRET = os.environ.get('WEBHOOK_SIGNING_SECRET') or ''
+    WEBHOOK_SECRET = os.environ.get('WEBHOOK_SECRET') or ''
 
     S3_REGION = os.environ.get('S3_REGION') or ''
     S3_ENDPOINT = os.environ.get('S3_ENDPOINT') or ''
