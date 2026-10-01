@@ -3617,7 +3617,9 @@ def update_post_from_activity(post: Post, request_json: dict):
                     if profile_id and isinstance(profile_id, str) and profile_id.startswith('https://' + current_app.config['SERVER_NAME']):
                         profile_id = profile_id.lower()
                         recipient = User.query.filter_by(ap_profile_id=profile_id, ap_id=None).first()
-                        if recipient:
+                        # the reply path's suppression rules that mean anything on a post: the author
+                        # mentioning themselves, a block, and a notification already sent (D254)
+                        if recipient and recipient.id != post.user_id:
                             blocked_senders = blocked_users(recipient.id)
                             if post.user_id not in blocked_senders:
                                 existing_notification = Notification.query.filter(Notification.user_id == recipient.id,
