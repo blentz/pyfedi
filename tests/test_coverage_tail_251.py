@@ -386,10 +386,10 @@ class TestThePeertubeEmbedUrl:
 
         assert env.post.peertube_embed() is None
 
-    def test_every_occurrence_of_watch_is_replaced(self, env):
-        """`str.replace` is not anchored, so a URL whose path repeats the word is rewritten
-        twice. Recorded rather than changed: PeerTube's own URLs contain it once, and
-        narrowing the replacement is a change to what the player is asked for."""
-        env.post.url = 'https://watch.example/videos/watch/abc'
+    def test_only_the_videos_watch_segment_is_replaced(self, env):
+        """R251, fixed (owner ruling). The replacement is anchored to the `/videos/watch/` path
+        segment: it was `str.replace('watch', 'embed')`, which also rewrote a host or any other
+        part of the URL carrying the word, pointing the player at a different server."""
+        env.post.url = 'https://watch.example/videos/watch/abc?t=watch'
 
-        assert env.post.peertube_embed() == 'https://embed.example/videos/embed/abc'
+        assert env.post.peertube_embed() == 'https://watch.example/videos/embed/abc?t=watch'

@@ -13,7 +13,7 @@ file had the same shape:
 an UNBOUNDED substring -- `if 'videos/watch' in url` -- so any url carrying those eleven
 characters anywhere qualified. `_post_full.html:195` and `post_teaser/_macros.html:403` gate
 a PeerTube iframe on the same substring and feed it `Post.peertube_embed()`
-(`self.url.replace('watch', 'embed')`), so the template shares the shape.
+(`self.url.replace('/videos/watch/', '/videos/embed/', 1)`), so the template shares the shape.
 
 NEITHER IS A LIVE HOLE TODAY, AND BOTH ARE FIXED ANYWAY. No caller stores a url on these
 answers -- they set `post.type` to POST_TYPE_VIDEO -- and `Post.url` can no longer hold one
