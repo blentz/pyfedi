@@ -1285,35 +1285,54 @@ def test_join_feed_imports_the_remote_following_collection(app, db_session, auto
         assert subscribe.call_args.kwargs == {'joined_via_feed': True}
 
 
-def test_join_feed_raises_on_a_following_collection_that_is_an_ordered_collection(app, db_session):
-    """PIN (R2, registered and NOT fixed): :82 reads
-    following_collection['items'] with no fallback, so an OrderedCollection
-    reply -- 'orderedItems' -- raises KeyError.
+def test_join_feed_reads_an_ordered_collection_s_ordered_items(app, db_session):
+    """D682, fixed (owner ruling 2026-09-30). The following collection used to
+    be read as `following_collection['items']` only, so an OrderedCollection
+    reply raised KeyError after the membership and join request were committed.
+    `orderedItems` is now read when `items` is absent, and its communities
+    become feed items like an unordered collection's.
+    """
+    s = _seed()
+    feed = _remote_feed()
+    s.member.feed_auto_follow = False
+    community = make_community('followed', host='remote.piefed.local')
+    db.session.commit()
+    feed_id, member_id, community_id = feed.id, s.member.id, community.id
 
-    The consequence is what makes this worth pinning rather than shrugging at:
-    the membership and the join request are committed at :45 and :64, BEFORE
-    the read, so the user is left subscribed to a feed whose communities were
-    never imported and whose caller saw a 500. Both rows are asserted present
-    after the raise.
+    with app.test_request_context('/'):
+        with patch('app.shared.feed.send_post_request'), \
+                patch('app.shared.feed.find_actor_or_create', return_value=community), \
+                patch('app.shared.feed.get_request') as get:
+            get.return_value = SimpleNamespace(json=lambda: {'orderedItems': [community.ap_profile_id]})
+            join_feed('remotefeed@remote.piefed.local', member_id, SRC_API)
 
-    The rollback at :107 does not undo them: they were committed, and rollback
-    only discards what is pending.
+    assert FeedItem.query.filter_by(feed_id=feed_id, community_id=community_id).count() == 1
+    assert FeedMember.query.filter_by(user_id=member_id, feed_id=feed_id).count() == 1
+
+
+def test_join_feed_with_no_items_in_the_collection_leaves_no_membership(app, db_session):
+    """D682, fixed: a following collection with neither `items` nor
+    `orderedItems` still fails, but the membership, the join request and the
+    subscriber count it had already committed are undone, so the user is not
+    left subscribed to a feed whose communities were never imported.
     """
     s = _seed()
     feed = _remote_feed()
     s.member.feed_auto_follow = False
     db.session.commit()
     feed_id, member_id = feed.id, s.member.id
+    subscriptions_before = feed.subscriptions_count
 
     with app.test_request_context('/'):
         with patch('app.shared.feed.send_post_request'), \
                 patch('app.shared.feed.get_request') as get:
-            get.return_value = SimpleNamespace(json=lambda: {'orderedItems': []})
-            with pytest.raises(KeyError, match='items'):
+            get.return_value = SimpleNamespace(json=lambda: {'type': 'OrderedCollection'})
+            with pytest.raises(ValueError):
                 join_feed('remotefeed@remote.piefed.local', member_id, SRC_API)
 
-    assert FeedMember.query.filter_by(user_id=member_id, feed_id=feed_id).count() == 1
-    assert FeedJoinRequest.query.filter_by(user_id=member_id, feed_id=feed_id).count() == 1
+    assert FeedMember.query.filter_by(user_id=member_id, feed_id=feed_id).count() == 0
+    assert FeedJoinRequest.query.filter_by(user_id=member_id, feed_id=feed_id).count() == 0
+    assert db.session.get(Feed, feed_id).subscriptions_count == subscriptions_before
 
 
 def test_join_feed_rolls_back_and_re_raises_what_the_remote_call_raised(app, db_session):
@@ -1338,6 +1357,10 @@ def test_join_feed_rolls_back_and_re_raises_what_the_remote_call_raised(app, db_
                 patch('app.shared.feed.get_request', side_effect=RemoteExploded('boom')):
             with pytest.raises(RemoteExploded, match='boom'):
                 join_feed('remotefeed@remote.piefed.local', member_id, SRC_API)
+
+    # D682: the rows committed before the failure are removed too.
+    assert FeedMember.query.filter_by(user_id=member_id).count() == 0
+    assert FeedJoinRequest.query.filter_by(user_id=member_id).count() == 0
 
 
 def test_join_feed_does_not_flash_to_an_api_caller_who_is_already_subscribed(app, db_session):
