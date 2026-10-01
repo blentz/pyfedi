@@ -699,6 +699,30 @@ def test_saving_an_edit_redirects_by_whether_the_url_changed(app, db_session, ne
     assert db.session.get(Feed, feed.id).name == new_url
 
 
+def test_renaming_a_feed_on_the_web_moves_its_activitypub_urls(app, db_session):
+    """D711, fixed: the route rewrote `name` itself before calling edit_feed,
+    so edit_feed saw no rename and skipped D1371's rewrite of the five actor
+    urls -- on the web a renamed feed kept answering to its old identity. The
+    route now leaves the slug to edit_feed and reads url_changed afterwards."""
+    instance, owner, stranger = _seed()
+    feed = _feed(owner)
+    assert feed.is_local()
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()), \
+                patch('app.shared.feed.existing_communities', return_value=[]):
+            response = client.post(f'/feed/{feed.id}/edit',
+                                   data=_edit_payload(app, client, url='renamedfeed'),
+                                   headers={'Referer': 'https://test.piefed.local/f/lifecyclefeed'})
+
+    assert response.headers['Location'] == '/f/renamedfeed'
+    edited = db.session.get(Feed, feed.id)
+    assert (edited.name, edited.machine_name) == ('renamedfeed', 'renamedfeed')
+    assert edited.ap_profile_id == 'https://test.piefed.local/f/renamedfeed'
+    assert edited.ap_outbox_url == 'https://test.piefed.local/f/renamedfeed/outbox'
+
+
 # --------------------------------------------------------------------------
 # Task 6: feed_delete's cache bust, feed_notification, feed_unsubscribe's tail.
 # --------------------------------------------------------------------------
