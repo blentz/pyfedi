@@ -399,6 +399,90 @@ def test_a_reply_language_that_is_not_a_dict_is_ignored(app, db_session, redis_l
     assert reply.language_id == seeded
 
 
+def test_a_reply_content_map_supplies_the_language(app, db_session, redis_lock_only_double):
+    """D253, fixed (owner ruling): a reply Update follows the post rule, so a
+    Mastodon `contentMap` with no `language` sets the reply's language through
+    `find_language` as it does a post's
+    (`test_a_post_content_map_supplies_the_language`).
+    """
+    reply = _seed_reply()
+    english = Language(code='en', name='English')
+    german = Language(code='de', name='German')
+    db.session.add_all([english, german])
+    db.session.commit()
+    reply.language_id = english.id
+    db.session.commit()
+
+    update_post_reply_from_activity(reply, _update(content='x', contentMap={'de': '<p>hallo</p>'}))
+
+    assert reply.language_id == german.id
+
+
+def test_a_reply_content_map_naming_an_unknown_language_leaves_it_alone(
+        app, db_session, redis_lock_only_double):
+    """D250, fixed (owner ruling): the language is assigned only when a
+    language was found and differs, as on a post. `find_language` looks up and
+    does not create, so a code this instance does not carry changes nothing.
+    """
+    reply = _seed_reply()
+    english = Language(code='en', name='English')
+    db.session.add(english)
+    db.session.commit()
+    reply.language_id = english.id
+    db.session.commit()
+
+    update_post_reply_from_activity(reply, _update(content='x', contentMap={'xx': '<p>?</p>'}))
+
+    assert reply.language_id == english.id
+
+
+def test_a_reply_markdown_media_type_renders_the_content(app, db_session, redis_lock_only_double):
+    """D252, fixed (owner ruling): an object-level `mediaType: text/markdown`
+    is honoured on a reply as on a post. It used to be wrapped and allowlisted,
+    so `**bold**` showed as literal asterisks on a reply and bold on a post.
+    """
+    reply = _seed_reply()
+
+    update_post_reply_from_activity(reply, _update(content='**bold**', mediaType='text/markdown'))
+
+    assert reply.body == '**bold**'
+    assert '<strong>' in reply.body_html or '<b>' in reply.body_html
+
+
+def test_a_reply_html_media_type_skips_the_wrap(app, db_session, redis_lock_only_double):
+    """D252, fixed (owner ruling): the reply follows the post's whole content
+    chain, so declared `text/html` is allowlisted as sent, with no `<p>` wrap
+    (`test_a_post_html_media_type_skips_the_wrap_that_else_would_apply`).
+    """
+    reply = _seed_reply()
+
+    update_post_reply_from_activity(reply, _update(content='plain html', mediaType='text/html'))
+
+    assert reply.body_html == 'plain html'
+
+
+def test_a_reply_update_takes_the_same_lock_timeouts_as_a_post(app, db_session, monkeypatch):
+    """D249, fixed (owner ruling): the reply lock was `timeout=10,
+    blocking_timeout=6` where the post's is 60/60, so a slow Update on a reply
+    gave up where the same work on a post waited. Both now take 60/60.
+    """
+    taken = []
+
+    class _Recording:
+        def lock(self, name, **kwargs):
+            taken.append((name, kwargs))
+            return contextlib.nullcontext()
+
+    monkeypatch.setattr('app.redis_client', _Recording())
+    reply = _seed_reply()
+
+    update_post_reply_from_activity(reply, _update(content='x'))
+    update_post_from_activity(reply.post, _update(name='t', content='x', type='Note'))
+
+    assert taken == [(f'lock:post_reply:{reply.id}', {'timeout': 60, 'blocking_timeout': 60}),
+                     (f'lock:post:{reply.post.id}', {'timeout': 60, 'blocking_timeout': 60})]
+
+
 def test_a_reply_distinguished_flag_is_applied(app, db_session, redis_lock_only_double):
     """`distinguished` is copied verbatim. Seeded False first -- the column's
     own default -- so the document's True is the only thing that could have
@@ -1956,8 +2040,8 @@ def test_a_post_language_new_to_this_instance_is_created_and_applied(app, db_ses
 
 
 def test_a_post_content_map_supplies_the_language(app, db_session, redis_lock_only_double):
-    """THE ASYMMETRY. `contentMap`'s first key is read as a language code
-    through `find_language`, a fallback the reply function does not have.
+    """`contentMap`'s first key is read as a language code through
+    `find_language`, a fallback the reply function now shares (D253).
 
     `find_language` LOOKS UP rather than creating -- it returns `None` for a
     code the database does not already carry, and `if new_language and ...`
@@ -2115,10 +2199,9 @@ def test_a_post_language_that_is_not_a_dict_is_ignored(app, db_session, redis_lo
 
 
 def test_an_unchanged_post_language_is_not_reassigned(app, db_session, redis_lock_only_double):
-    """THE SECOND ASYMMETRY. `if new_language and (new_language.id is None or
-    new_language.id != old_language_id)` -- the post path assigns only on a
-    change (or on a row so new it has no id yet); the reply path assigns
-    unconditionally.
+    """`if new_language and (new_language.id is None or new_language.id !=
+    old_language_id)` -- the post path assigns only on a change (or on a row
+    so new it has no id yet), and the reply path now does too (D250).
 
     The post is seeded with German already assigned (committed, with a real
     id, so the guard's `is None` disjunct is False and its `!=` disjunct is

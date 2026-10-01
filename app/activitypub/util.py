@@ -3350,27 +3350,41 @@ def notify_about_post_reply(parent_reply: Union[PostReply, None], new_reply: Pos
 
 def update_post_reply_from_activity(reply: PostReply, request_json: dict):
     from app import redis_client
-    with redis_client.lock(f"lock:post_reply:{reply.id}", timeout=10, blocking_timeout=6):
+    # the same lock, content and language rules as update_post_from_activity (D249, D250, D252, D253)
+    with redis_client.lock(f"lock:post_reply:{reply.id}", timeout=60, blocking_timeout=60):
         if 'content' in request_json['object'] and request_json['object']['content'] is not None:   # Kbin, Mastodon, etc provide their posts as html
-            # A local, not request_json['object']['content']: that dict is the caller's (D139)
-            content = request_json['object']['content']
-            if not (content.startswith('<p>') or content.startswith('<blockquote>')):
-                content = '<p>' + content + '</p>'
-            reply.body_html = allowlist_html(content)
+            # prefer Markdown in 'source' in provided
             source_markdown = markdown_source(request_json['object'])  # D1346
             if source_markdown is not None:
                 reply.body = source_markdown
-                reply.body_html = markdown_to_html(reply.body)          # prefer Markdown if provided, overwrite version obtained from HTML
+                reply.body_html = markdown_to_html(reply.body)
+            elif 'mediaType' in request_json['object'] and request_json['object']['mediaType'] == 'text/html':
+                reply.body_html = allowlist_html(request_json['object']['content'])
+                reply.body = html_to_text(reply.body_html)
+            elif 'mediaType' in request_json['object'] and request_json['object']['mediaType'] == 'text/markdown':
+                reply.body = request_json['object']['content']
+                reply.body_html = markdown_to_html(reply.body)
             else:
+                # A local, not request_json['object']['content']: that dict is the caller's (D139)
+                content = request_json['object']['content']
+                if not (content.startswith('<p>') or content.startswith('<blockquote>')):
+                    content = '<p>' + content + '</p>'
+                reply.body_html = allowlist_html(content)
                 reply.body = html_to_text(reply.body_html)
         # Language
+        old_language_id = reply.language_id
+        new_language = None
         ap_language = language_from_ap(request_json['object'].get('language'))  # D1355
         if ap_language is not None:
-            language = find_language_or_create(*ap_language)
-            # find_language_or_create() can return a row it has only add()ed, whose id is
-            # still None (the app factory sets autoflush=False). Assign the relationship
-            # and let SQLAlchemy resolve the id at flush, as the tag and flair arms do.
-            reply.language = language
+            new_language = find_language_or_create(*ap_language)
+        # A non-empty dict: an empty map names no language, like an absent one, and next(iter({})) raises (D255)
+        elif isinstance(request_json['object'].get('contentMap'), dict) and request_json['object']['contentMap']:
+            new_language = find_language(next(iter(request_json['object']['contentMap'])))
+        # find_language_or_create() can return a row it has only add()ed, whose id is
+        # still None (the app factory sets autoflush=False). Assign the relationship
+        # and let SQLAlchemy resolve the id at flush, as the tag and flair arms do.
+        if new_language and (new_language.id is None or new_language.id != old_language_id):
+            reply.language = new_language
 
         # Distinguished
         if 'distinguished' in request_json['object']:
