@@ -466,9 +466,8 @@ def block_outbound_http():
     NOT YET BLOCKED -- three transports in app/ bypass httpx entirely and DO
     reach the real internet under this harness. Verified by probe, not inferred:
 
-    - urllib (urllib.request.urlopen) -- app/nntp/server.py:767 fetches images
-      with it. A probe against https://example.com/ returned status 200 with
-      this fixture active.
+    - urllib -- app/nntp/server.py fetched images with it until R162's residue
+      routed that fetch through get_request; no app/ code uses it now.
     - botocore/urllib3 (boto3) -- ten app modules use it (app/cli.py,
       app/email.py, app/admin/util.py, app/community/util.py, app/utils.py,
       app/activitypub/util.py, app/main/routes.py, app/shared/post.py,

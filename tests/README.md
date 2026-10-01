@@ -1608,8 +1608,8 @@ from "the themed macro never ran".
   httpx's transports only. Three transports in `app/` are **not yet blocked**
   and do reach the real internet under this harness (all three verified by
   probe, not inferred):
-  - `urllib` — `app/nntp/server.py:767` (`urllib.request.urlopen`). A probe
-    against `https://example.com/` returned 200 with the fixture active.
+  - `urllib` — formerly `app/nntp/server.py`'s image fetch, which now goes
+    through `get_request` (R162 residue), so httpx and this fixture see it.
   - `botocore`/`urllib3` (boto3) — ten modules: `app/cli.py`, `app/email.py`,
     `app/admin/util.py`, `app/community/util.py`, `app/utils.py`,
     `app/activitypub/util.py`, `app/main/routes.py`, `app/shared/post.py`,
