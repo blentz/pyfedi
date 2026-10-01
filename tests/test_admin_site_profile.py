@@ -482,10 +482,12 @@ def test_a_disallowed_extension_is_refused_by_the_form(admin_client,
     assert glob.glob(f'{MEDIA}/logo_*') == []
 
 
+@pytest.mark.parametrize('filename', ['payload.php', 'icon.gif'])
 def test_the_routes_own_extension_check_still_refuses_what_the_form_would_let_by(
-        app, db_session, media_is_clean):
+        app, db_session, media_is_clean, filename):
     """The SECOND layer, `if file_ext.lower() not in allowed_extensions:
-    abort(400)`.
+    abort(400)`. D918, fixed (owner ruling): no GIF site icons, so `.gif` is
+    off the route's list too, as it always was off the form's.
 
     It is unreachable through the form today, because FileAllowed's list is a
     strict subset of `allowed_extensions` -- registered as D916. That makes it
@@ -510,7 +512,7 @@ def test_the_routes_own_extension_check_still_refuses_what_the_form_would_let_by
         token = generate_csrf()
         raw = flask_session['csrf_token']
 
-    payload = _payload(token, icon=(io.BytesIO(_png(50, 50)), 'payload.php'))
+    payload = _payload(token, icon=(io.BytesIO(_png(50, 50)), filename))
     with app.test_request_context('/admin/site', method='POST', data=payload,
                                   content_type='multipart/form-data'):
         flask_session['csrf_token'] = raw
