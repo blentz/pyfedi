@@ -701,40 +701,42 @@ def extract_domain_and_actor(url_string: str):
     return server_domain, actor
 
 
-def refresh_user_profile(user_id):
+def refresh_user_profile(user_id, activity_json=None):
     if current_app.debug:
-        refresh_user_profile_task(user_id)
+        refresh_user_profile_task(user_id, activity_json)
     else:
-        refresh_user_profile_task.apply_async(args=(user_id,), countdown=randint(1, 10))
+        refresh_user_profile_task.apply_async(args=(user_id, activity_json), countdown=randint(1, 10))
 
 
 @celery.task
-def refresh_user_profile_task(user_id):
+def refresh_user_profile_task(user_id, activity_json=None):
     session = get_task_session()
     try:
         with patch_db_session(session):
             user: User = session.get(User, user_id)
             if user and user.instance_id and user.instance.online():
-                try:
-                    actor_data = get_request(user.ap_public_url, headers={'Accept': 'application/activity+json'})
-                except httpx.HTTPError:  # get_request has already retried once (D224)
-                    return
-                except Exception:  # not bare: a worker shutdown must propagate (D220)
+                if not activity_json:
                     try:
-                        site = session.get(Site, 1)
-                        actor_data = signed_get_request(user.ap_public_url, site.private_key,
-                                                        f"{current_app.config['SERVER_URL']}/actor#main-key")
-                    except Exception:
+                        actor_data = get_request(user.ap_public_url, headers={'Accept': 'application/activity+json'})
+                    except httpx.HTTPError:  # get_request has already retried once (D224)
                         return
-                if actor_data.status_code == 200:
-                    try:
-                        activity_json = actor_data.json()
-                        actor_data.close()
-                    except JSONDecodeError:
-                        user.instance.failures += 1
-                        session.commit()
-                        return
+                    except Exception:  # not bare: a worker shutdown must propagate (D220)
+                        try:
+                            site = session.get(Site, 1)
+                            actor_data = signed_get_request(user.ap_public_url, site.private_key,
+                                                            f"{current_app.config['SERVER_URL']}/actor#main-key")
+                        except Exception:
+                            return
+                    if actor_data.status_code == 200:
+                        try:
+                            activity_json = actor_data.json()
+                            actor_data.close()
+                        except JSONDecodeError:
+                            user.instance.failures += 1
+                            session.commit()
+                            return
 
+                if activity_json:
                     # update indexible state on their posts, if necessary
                     new_indexable = activity_json['indexable'] if 'indexable' in activity_json else True
                     if new_indexable != user.indexable:
@@ -876,7 +878,7 @@ def refresh_community_profile(community_id, activity_json=None):
 
 
 @celery.task
-def refresh_community_profile_task(community_id, activity_json):
+def refresh_community_profile_task(community_id, activity_json=None):
     session = get_task_session()
     try:
         with patch_db_session(session):
@@ -887,6 +889,13 @@ def refresh_community_profile_task(community_id, activity_json):
                         actor_data = get_request(community.ap_public_url, headers={'Accept': 'application/activity+json'})
                     except httpx.HTTPError:  # get_request has already retried once (D224)
                         return
+                    except Exception:  # a peer that requires signed fetches, as for users (D221)
+                        try:
+                            site = session.get(Site, 1)
+                            actor_data = signed_get_request(community.ap_public_url, site.private_key,
+                                                            f"{current_app.config['SERVER_URL']}/actor#main-key")
+                        except Exception:
+                            return
                     if actor_data.status_code == 200:
                         try:
                             activity_json = actor_data.json()
@@ -1128,33 +1137,42 @@ def refresh_community_profile_task(community_id, activity_json):
         session.close()
 
 
-def refresh_feed_profile(feed_id):
+def refresh_feed_profile(feed_id, activity_json=None):
     if current_app.debug:
-        refresh_feed_profile_task(feed_id)
+        refresh_feed_profile_task(feed_id, activity_json)
     else:
-        refresh_feed_profile_task.apply_async(args=(feed_id,), countdown=randint(1, 10))
+        refresh_feed_profile_task.apply_async(args=(feed_id, activity_json), countdown=randint(1, 10))
 
 
 @celery.task
-def refresh_feed_profile_task(feed_id):
+def refresh_feed_profile_task(feed_id, activity_json=None):
     session = get_task_session()
     try:
         with patch_db_session(session):
             feed: Feed = session.get(Feed, feed_id)
             if feed and feed.instance_id and feed.instance.online() and not feed.is_local():
-                try:
-                    actor_data = get_request(feed.ap_public_url, headers={'Accept': 'application/activity+json'})
-                except httpx.HTTPError:  # get_request has already retried once (D224)
-                    return
-                if actor_data.status_code == 200:
+                if not activity_json:
                     try:
-                        activity_json = actor_data.json()
-                    except JSONDecodeError:
-                        feed.instance.failures += 1
-                        session.commit()
+                        actor_data = get_request(feed.ap_public_url, headers={'Accept': 'application/activity+json'})
+                    except httpx.HTTPError:  # get_request has already retried once (D224)
                         return
-                    actor_data.close()
+                    except Exception:  # a peer that requires signed fetches, as for users (D221)
+                        try:
+                            site = session.get(Site, 1)
+                            actor_data = signed_get_request(feed.ap_public_url, site.private_key,
+                                                            f"{current_app.config['SERVER_URL']}/actor#main-key")
+                        except Exception:
+                            return
+                    if actor_data.status_code == 200:
+                        try:
+                            activity_json = actor_data.json()
+                        except JSONDecodeError:
+                            feed.instance.failures += 1
+                            session.commit()
+                            return
+                        actor_data.close()
 
+                if activity_json:
                     if 'attributedTo' in activity_json and isinstance(activity_json['attributedTo'], str):  # lemmy, mbin, and our feeds
                         owners_url = activity_json['attributedTo']
                     elif 'moderators' in activity_json and isinstance(activity_json['moderators'], str):  # kbin, and our feeds
@@ -1279,7 +1297,7 @@ def refresh_feed_profile_task(feed_id):
                             res.close()
 
                             # for each of those get the communities and make feeditems
-                            if isinstance(following_collection, dict) and isinstance(following_collection.get('items'), list):  # D234
+                            if isinstance(following_collection, dict) and following_collection.get('type') == 'Collection' and isinstance(following_collection.get('items'), list):  # D234, D228
                                 for fci in following_collection['items']:
                                     community_ap_id = fci
                                     community = find_actor_or_create(community_ap_id, community_only=True, retry=True,

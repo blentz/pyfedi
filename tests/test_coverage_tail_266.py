@@ -297,9 +297,9 @@ class TestHowARefreshIsDispatched:
 
         with patch.object(ap_util, 'refresh_feed_profile_task',
                           side_effect=lambda *args: called.append(args)):
-            refresh_feed_profile(9)
+            refresh_feed_profile(9, {'type': 'Feed'})
 
-        assert called == [(9,)]
+        assert called == [(9, {'type': 'Feed'})]  # D223: the document is passed on
 
     def test_a_feed_refresh_is_queued_with_a_countdown_otherwise(self, db_session, monkeypatch):
         monkeypatch.setattr(ap_util.current_app, 'debug', False, raising=False)
@@ -311,9 +311,9 @@ class TestHowARefreshIsDispatched:
                 queued.append((args, countdown))
 
         with patch.object(ap_util, 'refresh_feed_profile_task', Task):
-            refresh_feed_profile(9)
+            refresh_feed_profile(9, {'type': 'Feed'})
 
-        assert queued[0][0] == (9,)
+        assert queued[0][0] == (9, {'type': 'Feed'})  # D223
         assert 1 <= queued[0][1] <= 10
 
 

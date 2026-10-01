@@ -660,9 +660,7 @@ def test_refreshing_a_community_applies_a_fetched_document(app, db_session, http
 
 
 def test_refreshing_a_community_applies_a_supplied_document(app, db_session, http_mock):
-    """The no-fetch path. `refresh_community_profile_task` is the ONLY one of
-    the three that takes `activity_json`; the user and feed tasks take an id
-    alone and always fetch. That asymmetry is registered, not fixed.
+    """The no-fetch path, which all three tasks now share (D223).
 
     No route is registered, and `block_outbound_http` would raise if the task
     fetched anyway -- so the absence of a request is what this test proves.
@@ -673,6 +671,31 @@ def test_refreshing_a_community_applies_a_supplied_document(app, db_session, htt
 
     db.session.refresh(community)
     assert community.title == 'Memes, refreshed'
+
+
+def test_refreshing_a_user_applies_a_supplied_document(app, db_session, http_mock):
+    """D223, fixed (owner ruling): the user task takes the same optional
+    pre-fetched `activity_json` the community task does, so a caller already
+    holding the document does not pay for a second fetch that may return a
+    different one. No route is registered: the absence of a request is the
+    observable, as for the community test above.
+    """
+    user = _remote_user()
+
+    refresh_user_profile_task(user.id, _person_document(fields={'name': 'Supplied'}))
+
+    db.session.refresh(user)
+    assert user.title == 'Supplied'
+
+
+def test_refreshing_a_feed_applies_a_supplied_document(app, db_session, http_mock):
+    """D223, fixed (owner ruling): the feed task's twin of the user test above."""
+    feed = _remote_feed()
+
+    refresh_feed_profile_task(feed.id, _feed_document())
+
+    db.session.refresh(feed)
+    assert feed.title == 'News, refreshed'
 
 
 def test_a_community_with_no_instance_is_skipped(app, db_session, http_mock):
@@ -1195,7 +1218,7 @@ def test_refreshing_a_feed_applies_the_peers_document(app, db_session, http_mock
     feed.ap_following_url = f'https://{PEER}/f/news/following'
     db.session.commit()
     _serve(http_mock, feed.ap_public_url, _feed_document())
-    _serve(http_mock, feed.ap_following_url, {'items': []})
+    _serve(http_mock, feed.ap_following_url, {'type': 'Collection', 'items': []})
 
     refresh_feed_profile_task(feed.id)
 
@@ -1388,7 +1411,7 @@ def test_a_non_200_following_response_creates_no_feed_items(app, db_session, htt
     community = _following_community()
     _serve(http_mock, feed.ap_public_url, _feed_document())
     _serve(http_mock, feed.ap_following_url,
-           {'items': [community.ap_profile_id]}, status=502)
+           {'type': 'Collection', 'items': [community.ap_profile_id]}, status=502)
 
     refresh_feed_profile_task(feed.id)
 
@@ -1479,7 +1502,7 @@ def test_a_feed_owners_url_is_fetched_and_recorded(app, db_session, http_mock):
            _feed_document(fields={'attributedTo': owners_url}))
     _serve(http_mock, owners_url,
            {'type': 'OrderedCollection', 'orderedItems': [owner.ap_profile_id]})
-    _serve(http_mock, feed.ap_following_url, {'items': []})
+    _serve(http_mock, feed.ap_following_url, {'type': 'Collection', 'items': []})
 
     refresh_feed_profile_task(feed.id)
 
@@ -1520,7 +1543,7 @@ def test_a_typeless_owners_document_is_skipped(app, db_session, http_mock):
     _serve(http_mock, feed.ap_public_url,
            _feed_document(fields={'attributedTo': owners_url}))
     _serve(http_mock, owners_url, {'orderedItems': [owner.ap_profile_id]})
-    _serve(http_mock, feed.ap_following_url, {'items': []})
+    _serve(http_mock, feed.ap_following_url, {'type': 'Collection', 'items': []})
 
     refresh_feed_profile_task(feed.id)
 
@@ -1549,7 +1572,7 @@ def test_no_feed_owners_url_means_no_owners_fetch(app, db_session, http_mock):
     db.session.commit()
     existing_membership = make_feed_member(filler, feed, is_owner=True)
     _serve(http_mock, feed.ap_public_url, _feed_document())
-    _serve(http_mock, feed.ap_following_url, {'items': []})
+    _serve(http_mock, feed.ap_following_url, {'type': 'Collection', 'items': []})
 
     refresh_feed_profile_task(feed.id)
 
@@ -1653,20 +1676,13 @@ def test_a_failed_feed_fetch_is_not_retried(
 
 def test_a_user_fetch_failing_outside_httpx_falls_back_to_a_signed_get(
         app, db_session, http_mock, no_real_sleeping, monkeypatch):
-    """PINS AN ASYMMETRY. `refresh_user_profile_task` has a THIRD path its
-    siblings lack: an `except Exception:` that retries with `signed_get_request`
-    against the site's private key. A peer requiring HTTP signatures to serve
-    its actor document is therefore refreshable for users and not for
-    communities or feeds.
+    """`refresh_user_profile_task`'s `except Exception:` retries with
+    `signed_get_request` against the site's private key, so a peer requiring
+    HTTP signatures to serve its actor document is still refreshable. The
+    community and feed tasks now have the same path (D221, tests below).
 
-    That handler is what makes this path reachable from a non-httpx error.
     It was a bare `except:` until D220, which also caught SystemExit;
     test_a_worker_shutdown_during_a_user_fetch_propagates pins the fix.
-
-    `test_a_community_fetch_failing_outside_httpx_propagates` and
-    `test_a_feed_fetch_failing_outside_httpx_propagates` are the other half of
-    this asymmetry: the same non-httpx failure raises out of the two sibling
-    tasks. Task 10 did not close the gap; it left it registered, as here.
     """
     site = seed_signing_site()
     user = _remote_user()
@@ -1716,78 +1732,98 @@ def test_a_worker_shutdown_during_a_user_fetch_propagates(
     assert calls == []
 
 
-def test_a_community_fetch_failing_outside_httpx_propagates(
+def test_a_community_fetch_failing_outside_httpx_falls_back_to_a_signed_get(
         app, db_session, http_mock, monkeypatch):
-    """THE OTHER HALF OF `test_a_user_fetch_failing_outside_httpx_falls_back_to_a_signed_get`,
-    and the test that keeps `refresh_community_profile_task`'s
-    `except Exception: session.rollback(); raise` covered.
+    """D221, fixed (owner ruling): the community task used to let a non-httpx
+    fetch failure propagate, so a peer requiring HTTP signatures on actor
+    fetches left its communities' title, icon, moderators and key frozen at
+    first ingest. It now falls back to a signed GET as the user task does.
 
-    That handler used to be reached by
-    `test_a_community_with_no_instance_is_skipped` and
-    `test_a_malformed_community_document_counts_an_instance_failure` back when
-    both pinned crashes. Task 10 fixed both crashes, which vacated the
-    handler: with the guards in place no other test in this file makes this
-    task raise. This one does, deliberately, through the one remaining
-    reachable route.
-
-    That route is the asymmetry itself. The user task catches a non-httpx
-    fetch failure with `except Exception:` and retries with `signed_get_request`;
-    the community task's first `get_request` is wrapped only in
-    `except httpx.HTTPError:`, so anything else propagates straight out. A
-    peer requiring HTTP signatures is refreshable for users and raises for
-    communities -- registered, not fixed.
-
-    `RuntimeError` is raised rather than an `httpx.HTTPError` precisely
-    because an `httpx.HTTPError` would return quietly
-    (`test_a_failed_community_fetch_is_not_retried`) instead of reaching the
-    handler.
-
-    The seeded title is asserted after the raise because the rollback must not
-    leave a half-applied document behind. Note the rollback itself is not
-    independently observable here: nothing uncommitted is pending at the only
-    reachable raise point, so this test kills the `raise` and not the
-    `session.rollback()` beside it. That is registered rather than papered
-    over with an assertion that could not fail.
+    `RuntimeError` rather than `httpx.HTTPError`, which returns quietly
+    (`test_a_failed_community_fetch_is_not_retried`).
     """
+    site = seed_signing_site()
     community = _remote_community()
-    community.title = 'Before'
-    db.session.commit()
+    calls = []
 
     def exploding_get_request(uri, params=None, headers=None):
         raise RuntimeError('not an httpx error')
 
-    monkeypatch.setattr(ap_util, 'get_request', exploding_get_request)
+    def fake_signed_get(uri, private_key, key_id, **kwargs):
+        calls.append((uri, private_key))
+        return httpx.Response(200, json=_group_document())
 
-    with pytest.raises(RuntimeError, match='not an httpx error'):
+    monkeypatch.setattr(ap_util, 'get_request', exploding_get_request)
+    monkeypatch.setattr(ap_util, 'signed_get_request', fake_signed_get)
+
+    refresh_community_profile_task(community.id, None)
+
+    db.session.refresh(community)
+    assert calls == [(community.ap_public_url, site.private_key)]
+    assert community.title == 'Memes, refreshed'
+
+
+def test_a_feed_fetch_failing_outside_httpx_falls_back_to_a_signed_get(
+        app, db_session, http_mock, monkeypatch):
+    """D221, fixed (owner ruling): the feed task's twin of the community test
+    above."""
+    site = seed_signing_site()
+    feed = _remote_feed()
+    calls = []
+
+    def exploding_get_request(uri, params=None, headers=None):
+        raise RuntimeError('not an httpx error')
+
+    def fake_signed_get(uri, private_key, key_id, **kwargs):
+        calls.append((uri, private_key))
+        return httpx.Response(200, json=_feed_document())
+
+    monkeypatch.setattr(ap_util, 'get_request', exploding_get_request)
+    monkeypatch.setattr(ap_util, 'signed_get_request', fake_signed_get)
+
+    refresh_feed_profile_task(feed.id)
+
+    db.session.refresh(feed)
+    assert calls == [(feed.ap_public_url, site.private_key)]
+    assert feed.title == 'News, refreshed'
+
+
+def _fail_midway(*args, **kwargs):
+    raise RuntimeError('midway')
+
+
+def test_a_community_refresh_failing_midway_propagates(
+        app, db_session, http_mock, monkeypatch):
+    """What keeps `refresh_community_profile_task`'s `except Exception:
+    session.rollback(); raise` covered now that a non-httpx fetch failure falls
+    back to a signed GET (D221) instead of reaching it. The seeded title is
+    asserted after the raise because the rollback must not leave a
+    half-applied document behind; as before, the rollback itself is not
+    independently observable here, so this kills the `raise`.
+    """
+    community = _remote_community()
+    community.title = 'Before'
+    db.session.commit()
+    _serve(http_mock, community.ap_public_url, _group_document())
+    monkeypatch.setattr(ap_util, 'public_key_pem', _fail_midway)
+
+    with pytest.raises(RuntimeError, match='midway'):
         refresh_community_profile_task(community.id, None)
 
     db.session.refresh(community)
     assert community.title == 'Before'
 
 
-def test_a_feed_fetch_failing_outside_httpx_propagates(
+def test_a_feed_refresh_failing_midway_propagates(
         app, db_session, http_mock, monkeypatch):
-    """The feed task's twin of the community test above, and what keeps
-    `refresh_feed_profile_task`'s `except Exception: session.rollback(); raise`
-    covered after Task 10 fixed all three of the crashes that used to reach
-    it -- the NULL instance, the malformed document and the ungated following
-    fetch.
-
-    Same asymmetry, same reason for `RuntimeError` over `httpx.HTTPError`
-    (which would return quietly instead), and the same registered limit:
-    the `raise` is killed by this test, the `session.rollback()` beside it is
-    not observable at the only reachable raise point.
-    """
+    """The feed task's twin of the community test above."""
     feed = _remote_feed()
     feed.title = 'Before'
     db.session.commit()
+    _serve(http_mock, feed.ap_public_url, _feed_document())
+    monkeypatch.setattr(ap_util, 'public_key_pem', _fail_midway)
 
-    def exploding_get_request(uri, params=None, headers=None):
-        raise RuntimeError('not an httpx error')
-
-    monkeypatch.setattr(ap_util, 'get_request', exploding_get_request)
-
-    with pytest.raises(RuntimeError, match='not an httpx error'):
+    with pytest.raises(RuntimeError, match='midway'):
         refresh_feed_profile_task(feed.id)
 
     db.session.refresh(feed)
@@ -1835,7 +1871,7 @@ def test_a_following_collection_entry_becomes_a_feed_item(app, db_session, http_
     community = _following_community()
     _serve(http_mock, feed.ap_public_url, _feed_document())
     _serve(http_mock, feed.ap_following_url,
-           {'items': [community.ap_profile_id]})
+           {'type': 'Collection', 'items': [community.ap_profile_id]})
 
     refresh_feed_profile_task(feed.id)
 
@@ -1874,7 +1910,7 @@ def test_a_following_entry_that_resolves_to_nothing_is_skipped(app, db_session, 
     community = _following_community()
     _serve(http_mock, feed.ap_public_url, _feed_document())
     _serve(http_mock, feed.ap_following_url,
-           {'items': ['https://www.w3.org/ns/activitystreams#Public',
+           {'type': 'Collection', 'items': ['https://www.w3.org/ns/activitystreams#Public',
                       community.ap_profile_id]})
 
     refresh_feed_profile_task(feed.id)
@@ -1890,15 +1926,9 @@ def test_a_following_collection_with_no_items_key_is_skipped(app, db_session, ht
     could be `None` (a body of JSON `null`) or an object with no `items`, and
     either raised out of the task.
 
-    WHAT IS *NOT* ADDED HERE: a `type` check. The FOUR sibling guards test
-    `<data>['type'] == '<Collection kind>'` -- moderators
-    (`app/activitypub/util.py:947`), followers (`:984`), featured (`:993`) and
-    the feed's own owners (`:1121`) -- but this loop never has, and
-    every existing feed test in this file serves `{'items': []}` with NO
-    `type` key -- adding one would break them and would refuse documents the
-    task accepts today. The matched conjunct is the membership half only:
-    `following_collection and 'items' in following_collection`, which is the
-    featured guard's shape minus the type comparison the code never made.
+    The `type` check its four sibling guards make was added later (D228,
+    `test_a_typeless_following_collection_is_skipped`); this test serves a
+    `Collection` so only the missing `items` stops it.
 
     WHAT NOW TAKES THE SKIP PATH INSTEAD OF CRASHING: an empty collection
     serialised without the key -- `{"type": "Collection", "totalItems": 0}` is
@@ -1924,6 +1954,27 @@ def test_a_following_collection_with_no_items_key_is_skipped(app, db_session, ht
     db.session.refresh(feed)
     assert feed.title == 'News, refreshed'
     assert feed.public_key == '-----BEGIN PUBLIC KEY-----refreshed'
+    assert db.session.query(FeedItem).count() == 0
+
+
+def test_a_typeless_following_collection_is_skipped(app, db_session, http_mock):
+    """D228, fixed (owner ruling): the following loop's guard now makes the
+    `type == 'Collection'` check its four sibling guards make, so a document
+    that is not a Collection is not read for feed items -- the feed's own
+    refresh still applies. `/f/<name>/following` publishes `"type":
+    "Collection"`, which every other feed test here now serves.
+    """
+    feed = _remote_feed()
+    community = _following_community()
+    feed.ap_following_url = f'https://{PEER}/f/news/following'
+    db.session.commit()
+    _serve(http_mock, feed.ap_public_url, _feed_document())
+    _serve(http_mock, feed.ap_following_url, {'items': [community.ap_profile_id]})
+
+    refresh_feed_profile_task(feed.id)
+
+    db.session.refresh(feed)
+    assert feed.title == 'News, refreshed'
     assert db.session.query(FeedItem).count() == 0
 
 
@@ -2014,7 +2065,7 @@ def test_the_following_collection_fetch_asks_for_activity_json(app, db_session, 
     community = _following_community()
     _serve(http_mock, feed.ap_public_url, _feed_document())
     following_route = _serve(http_mock, feed.ap_following_url,
-                             {'items': [community.ap_profile_id]})
+                             {'type': 'Collection', 'items': [community.ap_profile_id]})
 
     refresh_feed_profile_task(feed.id)
 
@@ -2069,7 +2120,7 @@ def test_feed_owners_on_another_host_are_looked_up_but_not_created(app, db_sessi
            _feed_document(fields={'attributedTo': owners_url}))
     _serve(http_mock, owners_url, {'type': 'OrderedCollection', 'orderedItems': [
         f'https://{PEER}/u/samehost', 'https://elsewhere.example/u/otherhost']})
-    _serve(http_mock, feed.ap_following_url, {'items': []})
+    _serve(http_mock, feed.ap_following_url, {'type': 'Collection', 'items': []})
     calls = _spy_on_actor_lookups(monkeypatch)
 
     refresh_feed_profile_task(feed.id)
@@ -2087,7 +2138,7 @@ def test_followed_communities_on_another_host_are_looked_up_but_not_created(
     feed.ap_following_url = f'https://{PEER}/f/news/following'
     db.session.commit()
     _serve(http_mock, feed.ap_public_url, _feed_document())
-    _serve(http_mock, feed.ap_following_url, {'items': [
+    _serve(http_mock, feed.ap_following_url, {'type': 'Collection', 'items': [
         f'https://{PEER}/c/samehost', 'https://elsewhere.example/c/otherhost']})
     calls = _spy_on_actor_lookups(monkeypatch)
 
