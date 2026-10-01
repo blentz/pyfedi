@@ -172,7 +172,7 @@ def admin_site():
         # shape as D1047, fixed once in app/user/routes.py.
         uploaded_icon = request.files.get('icon')
         if uploaded_icon and uploaded_icon.filename != '':
-            allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.svg']
+            allowed_extensions = ['.jpg', '.jpeg', '.png', '.webp', '.svg']  # D918: no GIF site icons
             file_ext = os.path.splitext(uploaded_icon.filename)[1]
             if file_ext.lower() not in allowed_extensions:
                 abort(400)
