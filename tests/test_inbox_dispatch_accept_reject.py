@@ -937,12 +937,10 @@ def test_a_reject_of_a_pending_follow_leaves_num_following_alone(app, db_session
 
 # --- Step 5: the silently-ignored object types, :1151 ---
 
-def test_a_reject_of_a_non_follow_object_is_silently_ignored(app, db_session, monkeypatch):
-    """routes.py:1151 handles only `object['type'] == 'Follow'`; any other
-    object type falls straight out of the arm without logging anything.
-    Logging is enabled here specifically so a zero count proves nothing ran
-    -- with logging off the count would be zero for the wrong reason and this
-    test would be vacuous.
+def test_a_reject_of_a_non_follow_object_is_logged_as_ignored(app, db_session, monkeypatch):
+    """D69, fixed. The arm handles only `object['type'] == 'Follow'`; any
+    other object type fell out of it with no log row. It is still not acted
+    on, but now leaves an ignored row saying why.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance = make_instance('peer.example')
@@ -954,7 +952,9 @@ def test_a_reject_of_a_non_follow_object_is_silently_ignored(app, db_session, mo
 
     dispatch(activity)
 
-    assert ActivityPubLog.query.count() == 0
+    log = ActivityPubLog.query.one()
+    assert log.result == 'ignored'
+    assert log.exception_message == 'Reject of an object that is not a Follow'
 
 
 @pytest.mark.parametrize('activity_type', ['Accept', 'Reject'])
