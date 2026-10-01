@@ -14,14 +14,15 @@ all measured:
 * all three connect callbacks flashed **`str(e)`** from the OAuth client
   straight to the visitor (D1136).
 
-What a filled honeypot should itself do is recorded as D1134 and pinned as it
-stands: today it does nothing.
+A filled honeypot is itself refused (D1134, fixed by owner ruling).
 """
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from app import db
+from app.auth.forms import RegistrationForm
 from app.models import Instance, Site, User, UserRegistration
 from tests.factories import make_instance, make_user
 
@@ -74,7 +75,7 @@ def no_captcha():
 
 
 def register(client, **overrides):
-    data = {'user_name': 'newperson', 'email': '',
+    data = {'user_name': 'newperson', 'hp_field': '',
             'real_email': 'new@example.com', 'password': 'a-good-password',
             'password2': 'a-good-password', 'timezone': 'UTC',
             'submit': 'Register'}
@@ -98,33 +99,40 @@ def test_registering(app, env, no_captcha):
     assert User.query.filter_by(user_name='newperson').first() is not None
 
 
-@pytest.mark.parametrize('honeypot', ['', 'i-am-a-bot@example.com'])
+@pytest.mark.parametrize('honeypot, refusal', [
+    ('', 'cannot use that user name'),
+    ('i-am-a-bot@example.com', 'could not register you'),
+])
 def test_a_reserved_user_name_is_refused_either_way(app, env, no_captcha,
-                                                    honeypot):
+                                                    honeypot, refusal):
     """D1133. `is_invalid_email_or_username` used to open with `if
     form.email.data.strip(): return False` -- "not invalid" -- so filling the
     HONEYPOT skipped both checks below it. The field meant to catch bots was
     a bypass around the two gates. Measured: `PROBE at3 honeypot + reserved
     name "admin": users created=1 | admin exists=True`, against `PROBE at5
-    reserved name, NO honeypot: users created=0`."""
+    reserved name, NO honeypot: users created=0`. Since D1134 a filled
+    honeypot is refused before the name is looked at."""
     anon, person = env
 
     with patch('app.auth.util.send_email_verification'):
         with patch('app.auth.util.sync_user_with_ldap'):
             with patch('app.auth.util.flash') as flashed:
                 register(anon, user_name='admin',
-                         real_email='admin@example.com', email=honeypot)
+                         real_email='admin@example.com', hp_field=honeypot)
 
     assert User.query.filter_by(user_name='admin').first() is None
     messages = ' '.join(str(call.args[0]) for call in flashed.call_args_list)
-    assert 'cannot use that user name' in messages
+    assert refusal in messages
 
 
-@pytest.mark.parametrize('honeypot', ['', 'i-am-a-bot@example.com'])
+@pytest.mark.parametrize('honeypot, refusal', [
+    ('', 'cannot use that email address'),
+    ('i-am-a-bot@example.com', 'could not register you'),
+])
 @pytest.mark.parametrize('address', ['postmaster@example.com',
                                      'abuse@example.com', 'noc@example.com'])
 def test_a_role_address_is_refused_either_way(app, env, no_captcha, honeypot,
-                                              address):
+                                              refusal, address):
     """D1133's other half. A role address reaches whoever reads that mailbox,
     not one person, so it cannot own an account -- and the honeypot let it
     past. Measured: `PROBE at4 honeypot + role address: users created=1`."""
@@ -134,31 +142,43 @@ def test_a_role_address_is_refused_either_way(app, env, no_captcha, honeypot,
         with patch('app.auth.util.sync_user_with_ldap'):
             with patch('app.auth.util.flash') as flashed:
                 register(anon, user_name='roleaccount', real_email=address,
-                         email=honeypot)
+                         hp_field=honeypot)
 
     assert User.query.filter_by(user_name='roleaccount').first() is None
     messages = ' '.join(str(call.args[0]) for call in flashed.call_args_list)
-    assert 'cannot use that email address' in messages
+    assert refusal in messages
 
 
-def test_a_filled_honeypot_does_not_itself_refuse(app, env, no_captcha):
-    """**Pinned, not asserted as correct (D1134).** The hidden `email` field
-    is a honeypot -- a human never fills it -- and nothing acts on it: a
-    registration that fills it is created exactly like an honest one.
-    Measured: `PROBE at2 honeypot filled: 302 | users created=1`.
-
-    Making it refuse is a product decision rather than a coverage fix,
-    because a password manager that fills hidden fields would then lock out
-    real people. When that decision is made, update this test (D1134)."""
+def test_a_filled_honeypot_is_refused(app, env, no_captcha):
+    """D1134, fixed (owner ruling): a registration that fills the honeypot is
+    refused. The field was named `email`, exactly what an autofiller looks
+    for, so it is now `hp_field`, autocomplete="off", out of the tab order and
+    hidden from people and screen readers."""
     anon, person = env
 
     with patch('app.auth.util.send_email_verification'):
         with patch('app.auth.util.sync_user_with_ldap'):
             register(anon, user_name='botaccount',
                      real_email='bot@example.com',
-                     email='i-am-a-bot@example.com')
+                     hp_field='i-am-a-bot@example.com')
 
-    assert User.query.filter_by(user_name='botaccount').first() is not None
+    assert User.query.filter_by(user_name='botaccount').first() is None
+
+
+def test_the_honeypot_is_marked_up_so_autofill_and_people_skip_it(app, no_captcha):
+    """D1134: a non-semantic name, autocomplete off, tabindex -1, aria-hidden,
+    and positioned off-screen by CSS rather than an input type="hidden"."""
+    with app.test_request_context('/auth/register'):
+        field = str(RegistrationForm(meta={'csrf': False}).hp_field())
+    template = (Path(app.root_path) / 'templates/auth/register.html').read_text()
+
+    assert 'name="hp_field"' in field and 'type="text"' in field
+    assert 'autocomplete="off"' in field
+    assert 'tabindex="-1"' in field
+    assert 'aria-hidden="true"' in field
+    wrapper = template[:template.index('form.hp_field()')].rsplit('<div', 1)[1]
+    assert 'left: -10000px' in wrapper and 'aria-hidden="true"' in wrapper
+    assert 'form.email' not in template
 
 
 def test_a_user_name_containing_blocked_words_is_refused(app, env,

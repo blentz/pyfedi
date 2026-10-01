@@ -23,7 +23,9 @@ class LoginForm(FlaskForm):
 class RegistrationForm(FlaskForm):
     user_name = StringField(_l('User name'), validators=[DataRequired(), Length(min=3, max=50)],
                             render_kw={'autofocus': True, 'autocomplete': 'username'})
-    email = HiddenField(_l('Email'))
+    # D1134: the honeypot. Its name means nothing to an autofiller, and the template hides it from people, screen
+    # readers and the tab order; a registration that fills it is refused.
+    hp_field = StringField(render_kw={'autocomplete': 'off', 'tabindex': '-1', 'aria-hidden': 'true'})
     real_email = EmailField(_l('Email'), validators=[DataRequired(), Email(), Length(min=5, max=255)], render_kw={'autocomplete': 'email'})
     password = PasswordField(_l('Password'), validators=[DataRequired(), Length(min=8, max=129)],
                              render_kw={'autocomplete': 'new-password', 'title': _l('Minimum length 8, maximum 128')})

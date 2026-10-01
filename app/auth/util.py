@@ -236,7 +236,7 @@ def is_invalid_email_or_username(form, disallowed_usernames):
     #     if form.email.data.strip():
     #         return False
     #
-    # `email` is the HONEYPOT -- a HiddenField beside the real `real_email`,
+    # `email` was the HONEYPOT (now `hp_field`) beside the real `real_email`,
     # which a human never fills. Returning False means "not invalid", so
     # filling the honeypot SKIPPED both checks below it: the field meant to
     # catch bots was a bypass around the two gates that stop a registration
@@ -247,10 +247,12 @@ def is_invalid_email_or_username(form, disallowed_usernames):
     #     PROBE at5 reserved name, NO honeypot: users created=0
     #     PROBE at6 role address, NO honeypot: users created=0
     #
-    # The checks now run for every registration. What a filled honeypot
-    # should ITSELF do is a separate question, recorded as D1134: today it
-    # does nothing, and making it refuse would lock out anyone whose password
-    # manager fills hidden fields.
+    # The checks now run for every registration, and a filled honeypot is
+    # itself refused (D1134).
+    if form.hp_field.data:
+        flash(_("Sorry, we could not register you."), "error")
+        return True
+
     if form.real_email.data.lower().startswith(("postmaster@", "abuse@", "noc@")):
         flash(_("Sorry, you cannot use that email address"), "error")
         return True
