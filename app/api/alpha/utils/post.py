@@ -9,7 +9,9 @@ from app import db, plugins, cache
 from app.api.alpha.views import post_view, post_report_view, reply_view, community_view, user_view, flair_view
 from app.activitypub.util import normalise_actor_string
 from app.constants import *
-from app.feed.routes import get_all_child_feed_ids
+# The module, not the name: app.feed.routes reaches this file through
+# app.activitypub before get_all_child_feed_ids is defined (import cycle: feed.routes)
+import app.feed.routes as feed_routes
 from app.models import Post, Community, CommunityMember, utcnow, User, Feed, FeedItem, Topic, PostReply, PostVote, \
     CommunityFlair, read_posts, Poll, Report
 from app.shared.post import vote_for_post, bookmark_post, remove_bookmark_post, subscribe_post, make_post, edit_post, \
@@ -295,7 +297,7 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
             if not feed_readable_by(feed, user_id):
                 raise Exception('feed not found')
             if feed.show_posts_in_children:  # include posts from child feeds
-                feed_ids = get_all_child_feed_ids(feed)
+                feed_ids = feed_routes.get_all_child_feed_ids(feed)
             else:
                 feed_ids = [feed.id]
 
@@ -959,7 +961,7 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
             if not feed_readable_by(feed, user_id):
                 raise Exception('feed not found')
             if feed.show_posts_in_children:  # include posts from child feeds
-                feed_ids = get_all_child_feed_ids(feed)
+                feed_ids = feed_routes.get_all_child_feed_ids(feed)
             else:
                 feed_ids = [feed.id]
 

@@ -34,7 +34,9 @@ from app.activitypub.util import users_total, active_half_year, active_month, lo
 import app.community.routes as community_routes
 from app.community.util import send_to_remote_instance, send_to_remote_instance_fast
 from app.constants import *
-from app.feed.routes import show_feed
+# The module, not the name: app.feed.routes reaches this file through
+# app.activitypub before show_feed is defined (import cycle: feed.routes)
+import app.feed.routes as feed_routes
 from app.models import User, Community, CommunityJoinRequest, CommunityMember, CommunityBan, ActivityPubLog, Post, \
     PostReply, Instance, AllowedInstances, BannedInstances, utcnow, Site, Notification, \
     ChatMessage, Conversation, UserFollower, UserBlock, Poll, PollChoice, Feed, FeedItem, FeedMember, FeedJoinRequest, \
@@ -3006,7 +3008,7 @@ def feed_profile(actor, feed_owner=None):
                              f'<https://{current_app.config["SERVER_NAME"]}/f/{actor}>; rel="alternate"; type="text/html"')
             return resp
         else:  # browser request - return html
-            return show_feed(feed)
+            return feed_routes.show_feed(feed)
     else:
         abort(404)
 
