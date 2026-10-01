@@ -44,7 +44,7 @@ from app.utils import render_template, get_setting, request_etag_matches, return
     moderating_communities_ids, user_notes, login_required, safe_order_by, filtered_out_communities, \
     num_topics, referrer, block_honey_pot, user_pronouns, get_instance_stickies, \
     community_membership_private, favorite_communities, mimetype_from_url, check_anoobis, \
-    is_safe_redirect_target, feed_readable_by
+    is_safe_redirect_target, feed_readable_by, refuse_if_private_instance
 from app.models import Community, CommunityMember, Post, Site, User, utcnow, Topic, Instance, \
     Notification, Language, community_language, ModLog, Feed, FeedItem, CmsPage, BannedInstances, BotChallenge
 from app.ldap_utils import test_ldap_connection, sync_user_to_ldap, login_with_ldap
@@ -684,10 +684,12 @@ def security():
 
 
 @bp.route('/sitemap.xml')
+@refuse_if_private_instance
 @cache.cached(timeout=6000)
 def sitemap():
-    posts = Post.query.filter(Post.from_bot == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
-                              Post.instance_id == 1, Post.indexable == True)
+    posts = Post.query.join(Community, Post.community_id == Community.id).filter(
+        Post.from_bot == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
+        Post.instance_id == 1, Post.indexable == True, Community.private == False, Community.local_only == False)
     posts = posts.order_by(desc(Post.posted_at)).limit(500)
 
     resp = make_response(render_template('sitemap.xml', posts=posts, current_app=current_app))

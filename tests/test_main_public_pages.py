@@ -50,6 +50,9 @@ class TestWhatCrawlersAskFor:
         assert response.mimetype == 'text/plain'
 
     def test_the_sitemap(self, env):
+        # `Site.private_instance` defaults to True, and a private instance
+        # publishes no sitemap (R222).
+        env.site.private_instance = False
         community = make_community('probeland')
         post = make_post(community, env.reader,
                          ap_id='https://test.piefed.local/y/1')

@@ -121,6 +121,21 @@ class TestWhatACrawlerIsGiven:
         assert f'/post/{post.id}<'.encode() not in \
             env.client.get('/sitemap.xml').data
 
+    def test_an_unpublished_post_is_not_in_it(self, env):
+        post = self.a_post(env, 'draft', indexable=True, status=-1)
+        assert f'/post/{post.id}<'.encode() not in \
+            env.client.get('/sitemap.xml').data
+
+    @pytest.mark.parametrize('column', ['private', 'local_only'])
+    def test_a_post_in_a_private_or_local_only_community_is_not_in_it(self, env, column):
+        """R222, fixed. The sitemap filtered on the post alone, so a post in
+        a members-only or local-only community was listed for any crawler
+        (owner ruling 2026-09-30)."""
+        setattr(env.community, column, True)
+        post = self.a_post(env, column, indexable=True)
+        assert f'/post/{post.id}<'.encode() not in \
+            env.client.get('/sitemap.xml').data
+
 
 # --------------------------------------------------------------------------
 # the files a browser asks for
