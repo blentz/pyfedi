@@ -176,9 +176,8 @@ def test_a_local_community_with_a_non_null_ap_id_is_not_found(app, db_session, m
 
 def test_a_remote_community_refuses_an_activitypub_request(app, db_session, monkeypatch):
     """`'@' in actor` plus an AP Accept aborts 400 -- the comment says "don't
-    provide activitypub info for remote communities". `user_profile` has NO
-    equivalent guard, which the spec registers as an asymmetry; this test is
-    the community half of that comparison.
+    provide activitypub info for remote communities". `user_profile` has had
+    the same guard since D156 was fixed.
     """
     seed_actors()
     _double_the_renderers(monkeypatch)
@@ -1190,6 +1189,35 @@ def test_a_browser_request_for_a_user_reaches_show_profile(app, db_session, monk
 
     assert response.status_code == 200
     assert len(calls['show_profile']) == 1
+    assert calls['show_profile'][0].id == user_id
+
+
+def test_a_remote_user_refuses_an_activitypub_request(app, db_session, monkeypatch):
+    """D156, fixed (owner ruling 2026-09-30). `user_profile` used to serve a
+    REMOTE user's actor document to an AP request, carrying OUR sharedInbox and
+    attributionDomains. It now aborts 400 like `community_profile` and
+    `feed_profile` do for a remote handle, even though the user row exists.
+    """
+    site, instance = seed_actors()
+    make_user(instance, 'wakko')
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/u/wakko@peer.example', accept=AP_ACCEPT)
+
+    assert response.status_code == 400
+
+
+def test_a_remote_user_still_serves_html_to_a_browser(app, db_session, monkeypatch):
+    """D156's other half: a browser asking for the same remote handle is
+    unchanged and reaches `show_profile`.
+    """
+    site, instance = seed_actors()
+    user_id = make_user(instance, 'wakko').id
+    calls = _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/u/wakko@peer.example', accept='text/html')
+
+    assert response.status_code == 200
     assert calls['show_profile'][0].id == user_id
 
 

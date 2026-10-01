@@ -47,6 +47,9 @@ def test_activitypub_request_does_not_resolve(app, db_session, resolve_spy):
     A remote server sending Accept: application/activity+json to /u/foo@bar.example
     is asking whether we host that user. Resolving it would both answer the wrong
     question and let that server make us fetch a third host.
+
+    D156, fixed: an AP request for any remote handle is now refused 400 before
+    the lookup, like `community_profile`, rather than falling through to 404.
     """
     _, calls = resolve_spy
 
@@ -54,7 +57,7 @@ def test_activitypub_request_does_not_resolve(app, db_session, resolve_spy):
         response = client.get('/u/wakko@mastodon.cloud',
                               headers={'Accept': 'application/activity+json'})
 
-    assert response.status_code == 404
+    assert response.status_code == 400
     assert calls == [], 'no outbound lookup may happen for an ActivityPub request'
 
 
