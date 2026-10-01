@@ -24,7 +24,7 @@ from flask_babel import _, lazy_gettext as _l
 from app import db, cache, celery
 from app.activitypub.signature import post_request, default_context, send_post_request
 from app.activitypub.util import find_actor_or_create, actor_json_to_model, \
-    find_hashtag_or_create, create_post, remote_object_to_json, find_flair, activitypub_visibility
+    find_hashtag_or_create, create_post, remote_object_to_json, find_flair, activitypub_visibility, host_of
 from app.community.forms import CreateLinkForm
 from app.constants import SRC_WEB, POST_TYPE_LINK
 from app.models import Community, File, PostReply, Post, utcnow, CommunityMember, Site, _as_dict, \
@@ -135,7 +135,14 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
 
                 # get mods
                 if community.ap_moderators_url:
-                    mods_data = remote_object_to_json(community.ap_moderators_url)
+                    # PERM-5: moderator is a power on this instance, so only the
+                    # community's own host may say who holds it.
+                    if host_of(community.ap_moderators_url) != host_of(community.ap_profile_id):
+                        current_app.logger.warning(f'Not reading moderators of {community.ap_profile_id} '
+                                                   f'from another host: {community.ap_moderators_url}')
+                        mods_data = None
+                    else:
+                        mods_data = remote_object_to_json(community.ap_moderators_url)
                     # This is whatever the remote instance sent. A collection
                     # without a `type` was a KeyError that killed the backfill task
                     # -- the community was created and then never filled in -- and
@@ -183,6 +190,10 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                             else:
                                 continue
                             if not isinstance(actor, str) or not actor:
+                                continue
+                            if host_of(actor) != host_of(community.ap_profile_id):  # PERM-5, as above
+                                current_app.logger.warning(f'Not making {actor} a moderator of '
+                                                           f'{community.ap_profile_id}: another host')
                                 continue
                             mod = find_actor_or_create(actor, retry=True)
                             if mod:
