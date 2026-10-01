@@ -685,7 +685,7 @@ def monitor_healthy_instances():
                                                       category=emoji['custom_emoji']['category'],
                                                       aliases=' '.join(aliases))
                                     session.add(new_emoji)
-                                session.commit()
+                            session.commit()
                         cache.delete_memoized(get_emoji_replacements)
                 except Exception:
                     session.rollback()
