@@ -2496,7 +2496,7 @@ def delete_post_or_comment(deletor, to_delete, store_ap_json, request_json, reas
                 to_delete.author.post_reply_count -= 1
                 db.session.commit()
                 if not to_delete.author.bot:
-                    with redis_client.lock(f"lock:post:{to_delete.id}", timeout=10, blocking_timeout=6):
+                    with redis_client.lock(f"lock:post:{to_delete.post_id}", timeout=10, blocking_timeout=6):
                         to_delete.post.reply_count -= 1
                         if to_delete.post.reply_count_cross_posted:
                             to_delete.post.reply_count_cross_posted -= 1
