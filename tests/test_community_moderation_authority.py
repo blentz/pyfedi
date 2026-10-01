@@ -591,19 +591,30 @@ def test_a_moderator_can_still_find_and_ban(app, community_world,
 def test_a_handle_that_resolves_to_nothing_says_so(app, community_world,
                                                    moderator_client):
     """The `else` of `isinstance(user_to_ban, User)` -- a handle may resolve to
-    a community or to nothing at all, and neither can be banned."""
+    a community or to nothing at all, and neither can be banned.
+
+    D964, fixed: the handle was interpolated into the string before gettext
+    saw it, so no catalogue entry could match. The msgid is fixed now and the
+    handle is passed as a parameter."""
     community, moderator, second, member = community_world
     client, token = moderator_client
+    asked = []
+
+    def recording_gettext(message, **params):
+        asked.append(message)
+        return message % params if params else message
 
     with patch('app.community.routes.find_actor_or_create', return_value=None):
-        with patch('app.community.routes.flash') as flashed:
+        with patch('app.community.routes.flash') as flashed, \
+                patch('app.community.routes._', side_effect=recording_gettext):
             response = client.post(
                 url(app, 'community.community_moderate_subscribers',
                     actor=community.name),
                 data={'user_name': 'nobody@nowhere.example',
                       'submit': 'Find and ban', 'csrf_token': token})
 
-    assert 'unable to be found' in flashed.call_args.args[0]
+    assert 'User: %(name)s unable to be found' in asked
+    assert flashed.call_args.args[0] == 'User: nobody@nowhere.example unable to be found'
     assert response.status_code == 302
 
 

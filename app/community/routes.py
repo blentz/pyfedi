@@ -2198,7 +2198,7 @@ def community_moderate_subscribers(actor):
         if isinstance(user_to_ban, User):
             return redirect(url_for('community.community_ban_user', community_id=community.id, user_id=user_to_ban.id))
         else:
-            flash(_(f'User: {ban_user_form.user_name.data} unable to be found'))
+            flash(_('User: %(name)s unable to be found', name=ban_user_form.user_name.data))  # D964
             return redirect(url_for('community.community_moderate_subscribers', actor=actor))
 
     page = request.args.get('page', 1, type=int)
