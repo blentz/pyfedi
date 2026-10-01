@@ -731,7 +731,7 @@ def test_add_with_neither_community_nor_feed_resolvable_is_refused(app, db_sessi
 # re-derived from source rather than trusted from the brief.
 
 
-def test_a_remove_for_a_community_not_in_the_feed_is_a_no_op(app, db_session, monkeypatch):
+def test_a_remove_for_a_community_not_in_the_feed_is_a_logged_no_op(app, db_session, monkeypatch):
     """routes.py's current :1482-1486. The FeedItem lookup returns None when
     the community was never in the feed, and (pre-fix) session.delete(None)
     raises -- and num_communities would be decremented for a removal that
@@ -743,10 +743,8 @@ def test_a_remove_for_a_community_not_in_the_feed_is_a_no_op(app, db_session, mo
     `== 0` here would be indistinguishable from the column's own default.
 
     No FeedItem row is ever created for this feed/community pair -- that
-    omission is the whole point of the test. LOG_ACTIVITYPUB_TO_DB is turned
-    on so the ActivityPubLog assertion is load-bearing (the feed branch
-    calls log_incoming_ap on no path at all, same finding Task 6/7 already
-    pinned for Add's feed branch).
+    omission is the whole point of the test. D82, fixed: the feed branch's
+    own outcomes logged nothing; this no-op now writes an ignored row.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
 
@@ -783,7 +781,42 @@ def test_a_remove_for_a_community_not_in_the_feed_is_a_no_op(app, db_session, mo
 
     assert FeedItem.query.filter_by(feed_id=feed.id, community_id=community.id).count() == 0
     assert feed.num_communities == 3
-    assert ActivityPubLog.query.count() == 0
+    log = ActivityPubLog.query.one()
+    assert log.activity_type == 'Remove'
+    assert log.result == 'ignored'
+    assert log.exception_message == 'Community is not in feed'
+
+
+def test_a_remove_whose_community_cannot_be_resolved_is_logged(app, db_session, monkeypatch):
+    """D82, fixed. An unresolvable community fell out of the feed branch
+    with no log row; it is now a logged failure, as Add's is (D81).
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, feed, member = _seed_feed_with_local_auto_follow_member()
+    real_find_actor_or_create_cached = activitypub_routes.find_actor_or_create_cached
+
+    def _find(actor, create_if_not_found=True, community_only=False, feed_only=False):
+        if create_if_not_found:  # the Remove arm's re-lookup of an unresolvable id
+            return None
+        return real_find_actor_or_create_cached(
+            actor, create_if_not_found=create_if_not_found,
+            community_only=community_only, feed_only=feed_only)
+
+    monkeypatch.setattr(activitypub_routes, 'find_actor_or_create_cached', _find)
+
+    inner_remove = {
+        'id': f'{feed.ap_profile_id}/activities/remove-ghost',
+        'type': 'Remove',
+        'actor': feed.ap_profile_id,
+        'object': {'id': 'https://unresolvable.example/c/ghost'},
+        'target': feed.ap_profile_id,
+    }
+    dispatch(inbox_activity(feed, activity_type='Announce', object=inner_remove))
+
+    log = ActivityPubLog.query.one()
+    assert log.activity_type == 'Remove'
+    assert log.result == 'failure'
+    assert log.exception_message == 'Cannot find community to remove from feed'
 
 
 def test_a_remove_skips_a_feed_member_with_no_community_membership(
@@ -1100,7 +1133,7 @@ def test_remove_proceeds_for_a_local_community_and_sends_nothing(app, db_session
     assertions' rule -- Community.subscriptions_count defaults to 0, so a
     bare `== 0` afterward would be indistinguishable from that default), and
     SUCCESS is logged with the member's user_name and the community's
-    ap_public_url. LOG_ACTIVITYPUB_TO_DB is turned on so that last assertion
+    ap_public_url, after the removal's own success row. LOG_ACTIVITYPUB_TO_DB is turned on so that last assertion
     is load-bearing.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
@@ -1137,9 +1170,10 @@ def test_remove_proceeds_for_a_local_community_and_sends_nothing(app, db_session
         user_id=member.id, community_id=community.id).count() == 0
     assert community.subscriptions_count == 0
 
-    log = ActivityPubLog.query.one()
-    assert log.exception_message == (
-        f'{member.user_name} auto-unfollowed {community.ap_public_url} during a feed/remove')
+    # The removal's own success row (D82), then the member's auto-unfollow.
+    logs = ActivityPubLog.query.order_by(ActivityPubLog.id).all()
+    assert [log.exception_message for log in logs] == [
+        None, f'{member.user_name} auto-unfollowed {community.ap_public_url} during a feed/remove']
 
 
 def _seed_remote_removable_feed_community(host='peer.example', name='remoteproceedcomm',
