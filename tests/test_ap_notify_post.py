@@ -2103,6 +2103,38 @@ def test_a_failing_recipient_mid_fan_out_rolls_back_only_that_recipient(app, db_
     assert broken.unread_notifications == INT_MAX
 
 
+def test_a_retried_fan_out_skips_recipients_already_notified(app, db_session):
+    """D278, fixed (owner ruling): the fan-out commits per recipient, so a
+    failure part-way leaves earlier recipients notified, and Celery retries
+    the task from the top. The retry used to notify them a second time; a
+    recipient who already has a notification for this post's url is now
+    skipped, so the retry reaches only the ones the failed attempt missed.
+    """
+    community, post, author = _seed_scenario()
+    instance = _peer_instance()
+    notified = make_user(instance, 'notified', local=True)
+    notified.unread_notifications = 7
+    broken = make_user(instance, 'broken', local=True)
+    broken.unread_notifications = INT_MAX
+    _subscribe(notified, author.id, NOTIF_USER)
+    _subscribe(broken, community.id, NOTIF_COMMUNITY)
+    db.session.commit()
+    with pytest.raises(DataError):
+        notify_about_post_task(post.id)
+    db.session.rollback()
+    broken.unread_notifications = 0
+    db.session.commit()
+
+    notify_about_post_task(post.id)
+
+    assert len(_notifications_for(notified)) == 1
+    assert len(_notifications_for(broken)) == 1
+    db.session.refresh(notified)
+    db.session.refresh(broken)
+    assert notified.unread_notifications == 8
+    assert broken.unread_notifications == 1
+
+
 class _RecordingLockDouble:
     """An `app.redis_client` double whose `.lock(...)` records its key and
     returns a no-op context manager."""
