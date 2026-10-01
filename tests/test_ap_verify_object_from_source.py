@@ -90,8 +90,8 @@ the same row, which is why that helper is shared rather than restated here.
 
 test_a_404_refuses goes the other way and calls neither, so no Site row
 exists in it at all. That is the point: a `status_code == 401` mutation
-misrouting its 404 into the signed branch crashes on None.private_key
-instead of passing quietly. "No Site row exists" and "the Site row carries
+misrouting its 404 into the signed branch refuses with the no-Site-row
+reason (D6) instead of passing quietly. "No Site row exists" and "the Site row carries
 private_key=None" are statements about different tests, not a contradiction.
 
 THE TWO JSON PARSES. The `.json()` calls in the 200 branch and the 401
@@ -122,6 +122,7 @@ FETCH_FAILED = 'the object could not be fetched'
 NOT_JSON = 'the object response was not JSON'
 SIGNED_FETCH_FAILED = 'the object could not be fetched with a signed request'
 SIGNED_NOT_JSON = 'the signed object response was not JSON'
+NO_SIGNING_SITE = 'the object needs a signed fetch and there is no Site row to sign it'
 MISSING_KEYS = 'the fetched object has no id, type or attributedTo'
 UNUSABLE_ATTRIBUTED_TO = 'the fetched object has an attributedTo of an unusable type'
 ATTRIBUTED_ELSEWHERE = 'the fetched object is attributed to a different host than its URI'
@@ -474,7 +475,7 @@ class TestFetchOutcomes:
     def test_a_404_refuses_and_names_the_status(self, app, db_session, http_mock):
         """No Site row exists in this test, so a `status_code == 401`
         mutation that routed this response into the signed branch would
-        crash on Site.query.get(1) being None rather than pass quietly. The
+        refuse with the no-Site-row reason rather than this one. The
         status is carried in the reason because it is the one thing an
         operator needs and the response itself is not kept."""
         http_mock.get(URI).respond(404, json=note_document())
@@ -514,6 +515,16 @@ class TestFetchOutcomes:
         ])
 
         assert verify_object_from_source(announce_activity()) == (None, SIGNED_NOT_JSON)
+
+    def test_a_401_with_no_site_row_refuses(self, app, db_session, http_mock):
+        """D6, fixed: with no Site row there is no key to sign the retry
+        with, so the 401 branch refuses like every other failure path rather
+        than raising AttributeError on None.private_key."""
+        http_mock.get(URI).respond(401)
+        request_json = announce_activity()
+
+        assert verify_object_from_source(request_json) == (None, NO_SIGNING_SITE)
+        assert request_json['object'] == URI
 
     def test_a_signed_fetch_failure_then_a_successful_retry_returns_the_fetched_object(self, app, db_session,
                                                                                        http_mock):
