@@ -1245,6 +1245,25 @@ def test_an_event_note_carries_its_start_localised_to_the_event_timezone(db_sess
                                '<p>2030-06-01T09:00:00 (America/New_York)</p>')
 
 
+def test_an_event_with_no_timezone_is_localised_to_utc(db_session, http_mock):
+    """D307, fixed: a peer can store an event with a start and a null timezone
+    (Post.new writes it straight from the activity), and `ZoneInfo(None)`
+    raised TypeError mid-delivery. A missing timezone now reads as UTC, the
+    same default edit_post writes."""
+    from datetime import datetime
+    s = _seed(post_type=POST_TYPE_EVENT, local_community=False, with_keys=True)
+    _remote_inbox(s, http_mock)
+    follower_route = _inward_follower(s, http_mock)
+    db.session.add(Event(post_id=s.post.id, start=datetime(2030, 6, 1, 13, 0),
+                         end=None, timezone=None))
+    db.session.commit()
+
+    _send(s.post)
+
+    note = _sent_activity(follower_route)['object']
+    assert note['content'] == '<p>a post</p><p>2030-06-01T13:00:00 (UTC)</p>'
+
+
 # ---------------------------------------------------------------------------
 # The type dispatch and the tag/cc appends, :163-174
 # ---------------------------------------------------------------------------
