@@ -238,6 +238,20 @@ class TestWhichKindOfPostItIs:
         assert post.type == POST_TYPE_IMAGE
         assert post.image is None
 
+    def test_a_pixelfed_uno_post(self, env, http_mock):
+        """D478 residue, fixed (owner ruling): Post.new's pixelfed classifier
+        is the same host_of(url) in {'pixelfed.social', 'pixelfed.uno'} test as
+        edit_post's two (f525c8f41). It tested `startswith('pixelfed.uno')` --
+        with no scheme -- so an https pixelfed.uno link was never an image."""
+        http_mock.head('https://pixelfed.uno/p/someone/1').mock(
+            return_value=httpx.Response(200,
+                                        headers={'content-type': 'text/html'}))
+        with patch('app.utils.opengraph_parse', return_value=None):
+            post = new(env, attachment=[{
+                'type': 'Link',
+                'href': 'https://pixelfed.uno/p/someone/1'}])
+        assert post.type == POST_TYPE_IMAGE
+
     def test_a_loops_video(self, env, http_mock):
         opengraph = {'og:image': 'https://loops.video/storage/thumb.jpg',
                      'og:title': 'a clip'}
