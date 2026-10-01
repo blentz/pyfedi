@@ -2381,3 +2381,39 @@ def test_the_feed_owners_and_following_loops_act_on_fifty_entries_without_sleepi
 
     assert [actor for actor, _, _ in calls] == _sixty('u')[:50] + _sixty('c')[:50]
     assert slept == []
+
+
+# D225 residue: only the per-entry fetch/write loop is capped. The removal pass
+# compares the existing moderators and owners against the peer's full list, so
+# one listed after entry 50 keeps the role. Already correct; these prove it.
+
+def test_a_moderator_listed_after_the_fiftieth_entry_is_not_removed(app, db_session, http_mock, monkeypatch):
+    community = _remote_community()
+    mod = make_user(community.instance, 'latemod')
+    mod.ap_profile_id = _sixty('u')[55]
+    db.session.add(CommunityMember(user_id=mod.id, community_id=community.id, is_moderator=True))
+    db.session.commit()
+    mods_url = f'https://{PEER}/c/memes/moderators'
+    _serve(http_mock, mods_url, {'type': 'OrderedCollection', 'orderedItems': _sixty('u')})
+    _spy_on_actor_lookups(monkeypatch)
+
+    refresh_community_profile_task(community.id, _group_document(fields={'attributedTo': mods_url}))
+
+    assert db.session.query(CommunityMember).filter_by(
+        community_id=community.id, user_id=mod.id, is_moderator=True).count() == 1
+
+
+def test_a_feed_owner_listed_after_the_fiftieth_entry_is_not_removed(app, db_session, http_mock, monkeypatch):
+    feed = _remote_feed()
+    owner = make_user(feed.instance, 'lateowner')
+    owner.ap_profile_id = _sixty('u')[55]
+    db.session.add(FeedMember(user_id=owner.id, feed_id=feed.id, is_owner=True))
+    db.session.commit()
+    owners_url = f'https://{PEER}/f/news/owners'
+    _serve(http_mock, feed.ap_public_url, _feed_document(fields={'attributedTo': owners_url}))
+    _serve(http_mock, owners_url, {'type': 'OrderedCollection', 'orderedItems': _sixty('u')})
+    _spy_on_actor_lookups(monkeypatch)
+
+    refresh_feed_profile_task(feed.id)
+
+    assert db.session.query(FeedMember).filter_by(feed_id=feed.id, user_id=owner.id, is_owner=True).count() == 1
