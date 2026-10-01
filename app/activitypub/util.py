@@ -222,18 +222,20 @@ def post_to_page(post: Post):
             activity_data['startTime'] = ap_datetime(event.start)
             if event.end is not None:
                 activity_data['endTime'] = ap_datetime(event.end)
-            activity_data['timezone'] = event.timezone
-            activity_data['maximumAttendeeCapacity'] = event.max_attendees
-            activity_data['participantCount'] = event.participant_count
-            activity_data['onlineLink'] = event.online_link
-            activity_data['joinMode'] = event.join_mode
-            activity_data['externalParticipationUrl'] = event.external_participation_url
-            activity_data['anonymousParticipation'] = event.anonymous_participation
-            activity_data['isOnline'] = event.online
-            activity_data['buyTicketsLink'] = event.buy_tickets_link
-            activity_data['feeCurrency'] = event.event_fee_currency
-            activity_data['feeAmount'] = event.event_fee_amount
-            activity_data['location'] = event.location
+            # D306 (owner ruling): a property the event does not have is left out, not sent as a null
+            optional = {'timezone': event.timezone,
+                        'maximumAttendeeCapacity': event.max_attendees,
+                        'participantCount': event.participant_count,
+                        'onlineLink': event.online_link,
+                        'joinMode': event.join_mode,
+                        'externalParticipationUrl': event.external_participation_url,
+                        'anonymousParticipation': event.anonymous_participation,
+                        'isOnline': event.online,
+                        'buyTicketsLink': event.buy_tickets_link,
+                        'feeCurrency': event.event_fee_currency,
+                        'feeAmount': event.event_fee_amount,
+                        'location': event.location}
+            activity_data.update({key: value for key, value in optional.items() if value is not None})
 
     if post.indexable:
         activity_data['searchableBy'] = 'https://www.w3.org/ns/activitystreams#Public'

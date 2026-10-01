@@ -971,6 +971,31 @@ def test_an_event_with_both_times_still_emits_both_keys(db_session, http_mock):
     assert page['endTime'] == '2030-06-01T10:00:00+00:00'
 
 
+def test_an_event_omits_the_optional_properties_it_does_not_have(db_session, http_mock):
+    """D306, fixed (owner ruling). Nine optional Event properties went out as
+    JSON nulls where `startTime`/`endTime` are omitted (D298); an absent key
+    is unambiguous in ActivityStreams, a null is not. Now no Event key is
+    sent with a None value, and one the row does have is still sent.
+    """
+    from datetime import datetime
+    s = _seed(post_type=POST_TYPE_EVENT, local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    db.session.add(Event(post_id=s.post.id, start=datetime(2030, 6, 1, 9, 0),
+                         timezone='UTC', online_link='https://meet.example/1'))
+    db.session.commit()
+
+    _send(s.post)
+
+    page = _page_of(route)
+    event_keys = ('timezone', 'maximumAttendeeCapacity', 'participantCount', 'onlineLink', 'joinMode',
+                  'externalParticipationUrl', 'anonymousParticipation', 'isOnline', 'buyTicketsLink',
+                  'feeCurrency', 'feeAmount', 'location')
+    assert [key for key in event_keys if key in page and page[key] is None] == []
+    assert 'buyTicketsLink' not in page
+    assert page['onlineLink'] == 'https://meet.example/1'
+    assert page['timezone'] == 'UTC'
+
+
 def test_a_poll_typed_post_with_no_poll_row_still_sends(db_session, http_mock):
     """D490, fixed. A POLL-typed post with no `Poll` row used to raise
     AttributeError on `None.end_poll`; nothing enforces that the type implies

@@ -233,18 +233,20 @@ def send_post(post_id, edit=False, session=None):
             page['startTime'] = ap_datetime(event.start)
         if event.end is not None:
             page['endTime'] = ap_datetime(event.end)
-        page['timezone'] = event.timezone
-        page['maximumAttendeeCapacity'] = event.max_attendees
-        page['participantCount'] = event.participant_count
-        page['onlineLink'] = event.online_link
-        page['joinMode'] = event.join_mode
-        page['externalParticipationUrl'] = event.external_participation_url
-        page['anonymousParticipation'] = event.anonymous_participation
-        page['isOnline'] = event.online
-        page['buyTicketsLink'] = event.buy_tickets_link
-        page['feeCurrency'] = event.event_fee_currency
-        page['feeAmount'] = event.event_fee_amount
-        page['location'] = event.location
+        # D306 (owner ruling): a property the event does not have is left out, not sent as a null
+        optional = {'timezone': event.timezone,
+                    'maximumAttendeeCapacity': event.max_attendees,
+                    'participantCount': event.participant_count,
+                    'onlineLink': event.online_link,
+                    'joinMode': event.join_mode,
+                    'externalParticipationUrl': event.external_participation_url,
+                    'anonymousParticipation': event.anonymous_participation,
+                    'isOnline': event.online,
+                    'buyTicketsLink': event.buy_tickets_link,
+                    'feeCurrency': event.event_fee_currency,
+                    'feeAmount': event.event_fee_amount,
+                    'location': event.location}
+        page.update({key: value for key, value in optional.items() if value is not None})
 
     activity = 'create' if not edit else 'update'
     create_id = f"{current_app.config['SERVER_URL']}/activities/{activity}/{gibberish(15)}"
