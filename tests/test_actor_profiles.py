@@ -1162,6 +1162,27 @@ def test_a_head_request_from_a_browser_returns_an_empty_string(app, db_session, 
     assert calls['show_profile'] == []
 
 
+@pytest.mark.parametrize('flag', ['deleted', 'banned'])
+def test_a_browser_head_for_a_gone_remote_user_agrees_with_the_get(app, db_session, monkeypatch, flag):
+    """HEAD residue, owner ruling: an anonymous browser GET of a deleted or banned
+    remote user is a 404 (`show_profile`'s own guard), so the HEAD branch, which
+    never reaches `show_profile`, must answer the same rather than 200. The
+    anoobis cookie and a public site let the GET past its redirects to that guard."""
+    site, instance = seed_actors()
+    site.private_instance = False
+    remote = make_user(instance, 'bob')
+    setattr(remote, flag, True)
+    db.session.commit()
+    monkeypatch.setattr(activitypub_routes, 'resolve_remote_handle', lambda actor: None)
+
+    with app.test_client() as client:
+        client.set_cookie('anoobis', 'passed')
+        got = client.get('/u/bob@peer.example', headers={'Accept': 'text/html'})
+        head = client.head('/u/bob@peer.example', headers={'Accept': 'text/html'})
+
+    assert (got.status_code, head.status_code) == (404, 404)
+
+
 def test_a_user_is_resolved_by_ap_profile_id_when_the_name_does_not_match(app, db_session, monkeypatch):
     """The second local lookup, reached only when the `user_name` query returns
     None. The user's `user_name` deliberately differs from the path segment, so
