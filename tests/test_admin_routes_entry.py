@@ -447,6 +447,37 @@ def test_no_admin_route_answers_an_ordinary_account(app, db_session):
         + '; '.join(reachable))
 
 
+def test_every_admin_route_sends_an_anonymous_visitor_to_the_login_page(app, db_session):
+    """D943 (audit F14), fixed: on 55 admin routes `@permission_required` sat
+    outside `@login_required`, so it ran first and an anonymous visitor was sent
+    to `/auth/permission_denied` -- after a role query -- where the rest of the
+    blueprint sent them to log in. `@login_required` is outermost everywhere
+    now; this row asks every admin rule, as the one above does, and lists the
+    rules that answer otherwise."""
+    _seed()
+    client = app.test_client()
+
+    elsewhere = []
+    for rule in app.url_map.iter_rules():
+        if not rule.rule.startswith('/admin'):
+            continue
+        methods = rule.methods - {'HEAD', 'OPTIONS'}
+        path = rule.rule
+        for argument in rule.arguments:
+            path = path.replace(f'<int:{argument}>', '1').replace(f'<{argument}>', '1')
+        if '<' in path:
+            continue
+        method = 'GET' if 'GET' in methods else 'POST'
+        response = client.post(path) if method == 'POST' else client.get(path)
+        if response.status_code != 302 or '/auth/login' not in response.headers['Location']:
+            elsewhere.append(f'{method} {path} -> {response.status_code} '
+                             f'{response.headers.get("Location", "")}')
+
+    assert elsewhere == [], (
+        'these admin routes did not send an anonymous visitor to log in: '
+        + '; '.join(elsewhere))
+
+
 # --------------------------------------------------------------------------
 # admin_instance_chooser
 # --------------------------------------------------------------------------

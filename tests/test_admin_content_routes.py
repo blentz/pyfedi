@@ -132,10 +132,12 @@ class TestWhoMayOpenTheseScreens:
 
     @pytest.mark.parametrize('path,permission', GATES)
     def test_a_stranger_may_not_either(self, env, path, permission):
-        """`permission_required` is the OUTER decorator on these routes, so
-        it answers before `login_required` does -- a logged-out visitor is
-        told the permission is missing rather than asked to log in."""
-        assert_refused(env.client.get(path))
+        """D943, fixed: `permission_required` was the OUTER decorator on these
+        routes, so a logged-out visitor was told the permission was missing.
+        `login_required` is outermost now, and they are asked to log in."""
+        response = env.client.get(path)
+        assert response.status_code == 302
+        assert '/auth/login' in response.headers['Location']
 
 
 # --------------------------------------------------------------------------
