@@ -713,19 +713,15 @@ def test_an_unrecognised_address_gets_the_format_help(app, db_session):
     assert flash_stub.call_count == 2
 
 
-@pytest.mark.parametrize('message, expect_flash', [
-    ('remote.example is blocked.', 2),
-    ('the remote server exploded', 1),
+@pytest.mark.parametrize('message, expected', [
+    ('remote.example is blocked.', 'Sorry, that instance is blocked'),
+    ('the remote server exploded', "Couldn't reach that server, try again later."),
 ])
-def test_a_failed_search_flashes_once_or_twice(app, db_session, message, expect_flash):
-    """:106-110's except arm.
-
-    REGISTERED, NOT FIXED: an exception whose message does not contain
-    'is blocked.' is caught and then dropped -- not re-raised, not logged, not
-    shown -- and the user is told 'Feed not found.' The two rows are the two
-    outcomes: the blocked message adds its own flash on top of the not-found
-    one, and anything else is silent.
-    """
+def test_a_failed_search_flashes_one_message_saying_why(app, db_session, message, expected):
+    """:106-110's except arm. D720, fixed (owner ruling): a transport or parse
+    failure says the server could not be reached, and is logged; a blocked
+    instance gets only the blocked message. Neither adds 'Feed not found.' --
+    the failure used to be dropped and the user told the feed did not exist."""
     instance, owner = _seed()
 
     with app.test_client() as client:
@@ -737,7 +733,8 @@ def test_a_failed_search_flashes_once_or_twice(app, db_session, message, expect_
                 'csrf_token': csrf(app, client), 'address': '~remotefeed@remote.example'})
 
     assert response.status_code == 200
-    assert flash_stub.call_count == expect_flash
+    assert flash_stub.call_count == 1
+    assert expected in str(flash_stub.call_args.args[0])
 
 
 @pytest.mark.parametrize('enable_nsfw', [True, False])
@@ -926,8 +923,8 @@ def test_looking_up_a_feed_warns_when_it_is_banned_here(app, db_session, banned)
 
 
 def test_looking_up_a_blocked_instance_says_so(app, db_session):
-    """:705-707, lookup's copy of feed_add_remote's except arm -- and R4's
-    silent half lives here too: a message without 'is blocked.' is dropped."""
+    """:705-707, lookup's copy of feed_add_remote's except arm. D720, fixed
+    (owner ruling): only the blocked message, not also 'Feed not found.'."""
     instance, owner = _seed()
 
     with app.test_client() as client:
@@ -939,20 +936,14 @@ def test_looking_up_a_blocked_instance_says_so(app, db_session):
             response = client.get('/feed/lookup/unknown/remote.example')
 
     assert response.status_code == 200
-    assert flash_stub.call_count == 2
+    assert flash_stub.call_count == 1
+    assert 'blocked' in str(flash_stub.call_args.args[0])
 
 
-def test_a_lookup_search_that_fails_for_another_reason_says_nothing(app, db_session):
-    """:729's False arm -- lookup's half of R4, and the twin of the
-    add_remote test above.
-
-    An exception whose message does not contain 'is blocked.' is caught and
-    dropped: not re-raised, not logged, not shown. The user gets 'Feed not
-    found.' and nothing else, so a remote server that is timing out and one
-    that genuinely has no such feed are indistinguishable. Pinned in BOTH
-    copies, because that is what stops one of them being repaired while the
-    other is forgotten -- which is this round's whole theme.
-    """
+def test_a_lookup_search_that_fails_for_another_reason_says_the_server_was_unreachable(app, db_session):
+    """lookup's half of D720, fixed (owner ruling), the twin of the add_remote
+    test above: the failure is logged and the user told the server could not
+    be reached, rather than that the feed does not exist."""
     instance, owner = _seed()
 
     with app.test_client() as client:
@@ -960,12 +951,14 @@ def test_a_lookup_search_that_fails_for_another_reason_says_nothing(app, db_sess
         with patch('app.feed.routes.render_template', return_value='rendered'), \
                 patch('app.feed.routes.search_for_feed',
                       side_effect=Exception('the remote server exploded')), \
-                patch('app.feed.routes.flash') as flash_stub:
+                patch('app.feed.routes.flash') as flash_stub, \
+                patch.object(app.logger, 'warning') as logged:
             response = client.get('/feed/lookup/unknown/remote.example')
 
     assert response.status_code == 200
     assert flash_stub.call_count == 1
-    assert 'not found' in str(flash_stub.call_args.args[0]).lower()
+    assert str(flash_stub.call_args.args[0]) == "Couldn't reach that server, try again later."
+    assert 'the remote server exploded' in logged.call_args.args[0]
 
 
 def test_copying_a_feed_to_a_url_that_is_taken_is_refused_before_the_insert(app, db_session):

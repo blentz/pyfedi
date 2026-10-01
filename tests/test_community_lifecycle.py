@@ -772,6 +772,27 @@ def test_a_blocked_instance_says_so(app, searcher):
     assert 'that instance is blocked' in str(flashed.call_args_list[0].args[0])
 
 
+@pytest.mark.parametrize('error, expected', [
+    ('connection refused', "Couldn't reach that server, try again later."),
+    ('that instance is blocked.', 'Sorry, that instance is blocked'),
+])
+def test_a_search_that_fails_says_why_and_not_also_not_found(app, searcher, error, expected):
+    """D720, fixed (owner ruling): add_remote's except arm flashes one message
+    saying why -- unreachable (and logged) or blocked -- never followed by
+    'Community not found'."""
+    client, token, founder = searcher
+
+    with patch('app.community.routes.search_for_community', side_effect=Exception(error)):
+        with patch('app.community.routes.flash') as flashed:
+            with patch('app.community.routes.render_template', return_value='rendered'):
+                client.post(url(app, 'community.add_remote'),
+                            data={'address': '!x@far.example',
+                                  'submit': 'Search', 'csrf_token': token})
+
+    assert len(flashed.call_args_list) == 1
+    assert expected in str(flashed.call_args.args[0])
+
+
 @pytest.mark.parametrize('enable_nsfw, expected', [
     (True, 'Community not found.'),
     (False, 'Community not found. If you are searching for a nsfw community '

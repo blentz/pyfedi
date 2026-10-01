@@ -849,6 +849,23 @@ def test_a_blocked_instance_is_named_in_the_message(app, env):
     assert 'blocked' in messages
 
 
+def test_a_lookup_that_cannot_reach_the_server_says_so(app, env):
+    """D720, fixed (owner ruling): a transport or parse failure is logged and
+    flashed as unreachable, not swallowed into 'Community not found'; a
+    blocked instance gets only its own message."""
+    client, community, mod, member, outsider = env
+
+    for error, expected in (('connection refused', "Couldn't reach that server, try again later."),
+                            ('that instance is blocked.', 'Sorry, that instance is blocked')):
+        with patch('app.community.routes.search_for_community', side_effect=Exception(error)):
+            with patch('app.community.routes.flash') as flashed:
+                with patch('app.community.routes.render_template', return_value='rendered'):
+                    client.get('/community/lookup/somewhere/other.example')
+
+        assert len(flashed.call_args_list) == 1
+        assert expected in str(flashed.call_args.args[0])
+
+
 def test_a_banned_community_that_is_found_is_named_as_banned(app, env):
     client, community, mod, member, outsider = env
     found = make_community('found', host='other.example')
