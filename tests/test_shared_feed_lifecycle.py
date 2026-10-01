@@ -1242,9 +1242,10 @@ def test_join_feed_imports_the_remote_following_collection(app, db_session, auto
 
     do_subscribe is patched at app.community.routes -- the deferred import at
     :38 binds it into the function's locals, so an app.shared.feed rebind does
-    not take -- and the remote arm calls it SYNCHRONOUSLY, unlike the local arm
-    sixty lines above, which honours current_app.debug. That divergence is this
-    round's R3: registered, not fixed, and asserted here as current behaviour.
+    not take. D683, fixed: the remote arm used to call it synchronously, inside
+    the request, where the local arm honours current_app.debug and otherwise
+    dispatches with .delay. It now does the same, so outside debug it is
+    queued.
     """
     s = _seed()
     feed = _remote_feed()
@@ -1278,11 +1279,11 @@ def test_join_feed_imports_the_remote_following_collection(app, db_session, auto
     assert all(call.kwargs == {'community_only': True} for call in resolver.call_args_list)
     items = FeedItem.query.filter_by(feed_id=feed_id).all()
     assert [item.community_id for item in items] == [resolved_id]
-    assert subscribe.call_count == (1 if auto_follow else 0)
-    assert subscribe.delay.call_count == 0
+    assert subscribe.call_count == 0
+    assert subscribe.delay.call_count == (1 if auto_follow else 0)
     if auto_follow:
-        assert subscribe.call_args.args == ('fromcollection@far.piefed.local', member_id)
-        assert subscribe.call_args.kwargs == {'joined_via_feed': True}
+        assert subscribe.delay.call_args.args == ('fromcollection@far.piefed.local', member_id)
+        assert subscribe.delay.call_args.kwargs == {'joined_via_feed': True}
 
 
 def test_join_feed_reads_an_ordered_collection_s_ordered_items(app, db_session):
