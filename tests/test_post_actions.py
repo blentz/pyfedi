@@ -28,7 +28,7 @@ from app.constants import (POST_TYPE_ARTICLE, POST_TYPE_IMAGE, POST_TYPE_POLL,
                            SUBSCRIPTION_OWNER)
 from app import db
 from app.models import (BlockedImage, Emoji, File, Instance, Language,
-                        NotificationSubscription, Poll, PollChoice, Post,
+                        NotificationSubscription, Poll, PollChoice, PollChoiceVote, Post,
                         PostBookmark, PostReply, PostReplyBookmark,
                         PostReplyVote, PostVote, Reminder, Site, User)
 from app.utils import utcnow
@@ -546,6 +546,27 @@ def test_a_poll_vote_that_is_not_a_number(app, env):
 
     assert response.status_code == 302
     assert voted.call_args is None
+
+
+def test_a_poll_vote_for_an_unknown_choice_is_not_reported_as_cast(app, env):
+    """D415, fixed (owner ruling). An integer choice id that is not one of
+    this poll's choices reaches `vote_for_poll`, which refuses it; the route
+    then redirects without flashing 'Vote has been cast.' -- it used to flash
+    success for a vote nothing recorded."""
+    anon, community, post, mod, author, outsider = env
+    a_poll(post)
+    client = as_user(app, outsider)
+    token = csrf(app, client)
+
+    with patch('app.post.routes.flash') as flashed:
+        response = client.post(f'/poll/{post.id}/vote',
+                               data={'poll_choice': '999999',
+                                     'csrf_token': token})
+
+    assert response.status_code == 302
+    messages = ' '.join(str(call.args[0]) for call in flashed.call_args_list)
+    assert 'Vote has been cast' not in messages
+    assert PollChoiceVote.query.count() == 0
 
 
 def test_voting_in_a_poll_that_does_not_exist(app, env):
