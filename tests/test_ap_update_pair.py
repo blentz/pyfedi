@@ -2347,6 +2347,34 @@ def test_a_second_post_mention_does_not_duplicate_the_notification(app, db_sessi
     assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 1
 
 
+def test_a_post_mention_is_titled_in_the_recipients_language(app, db_session, redis_lock_only_double, monkeypatch):
+    """D248, fixed: the post path built its title under the request's locale
+    -- on an inbox request, the delivering peer's -- where the reply path
+    switches to the recipient's. It now uses the same force_locale block."""
+    post = _seed_post()
+    recipient = _seed_local_recipient()
+    language_calls = []
+    entered_locales = []
+
+    def fake_get_recipient_language(user_id):
+        language_calls.append(user_id)
+        return 'ca'
+
+    @contextlib.contextmanager
+    def fake_force_locale(locale):
+        entered_locales.append(locale)
+        yield
+
+    monkeypatch.setattr('app.activitypub.util.get_recipient_language', fake_get_recipient_language)
+    monkeypatch.setattr('app.activitypub.util.force_locale', fake_force_locale)
+
+    update_post_from_activity(post, _update(name='t', content='x', tag=[_mention()], type='Note'))
+
+    assert language_calls == [recipient.id]
+    assert entered_locales == ['ca']
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 1
+
+
 def test_the_same_post_mention_twice_in_one_update_notifies_once(app, db_session, redis_lock_only_double):
     """D242, fixed, on the post side: one notification for a repeated tag."""
     post = _seed_post()
