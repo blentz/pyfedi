@@ -421,44 +421,16 @@ def test_bot_challenge_user_continues_for_a_confirmed_bot(app, db_session):
     assert db.session.query(ChatMessage).count() == 1
 
 
-def test_bot_challenge_user_src_api_bare_call_crashes_on_none_current_user(app, db_session):
-    """PINS A DEFECT, under a condition this codebase never actually creates.
-
-    `:320` builds the Conversation from `user` -- the API-authorised caller
-    -- but `:322` appends `current_user` instead of the caller. That
-    disagreement is real regardless of caller: `grep -rn bot_challenge_user
-    app/` shows exactly one call site, `app/user/routes.py:2115`, and it
-    hardcodes `src=SRC_WEB`. Nothing in the current tree ever invokes this
-    function with `SRC_API`, so this test calls it bare -- directly, with no
-    Flask request context -- to exercise the branch at all. This round's
-    production budget is the backfill migration (Task 1) and ban_user's four
-    `if SRC_WEB:` lines (Task 6), so `:322` is registered rather than fixed
-    here.
-
-    OBSERVED, not predicted: outside a request context, flask_login's
-    `current_user` resolves to plain `None` here (not an anonymous-user
-    proxy), so `conversation.members.append(current_user)` at `:322` appends
-    None into the relationship, and the AttributeError below fires during the
-    `db.session.commit()` at `:324` -- before `send_message` (`:335`) is ever
-    reached. The brief's hypothesis was that the failure would surface inside
-    `send_message`'s `user: User = current_user` default; that is not what
-    happens: the flush at `:324` fails first. See this task's report for the
-    exact probe transcript.
-
-    What this test does NOT show: behaviour under a real request context. If
-    a future route wired `SRC_API` to this function, that call would run
-    inside an actual Flask request, where flask_login's `_load_user()` sets
-    `current_user` to an `AnonymousUserMixin` instance rather than `None` --
-    an object that plausibly satisfies `.id` access differently (or fails
-    differently) than this bare call's plain `None` does. This test pins the
-    bare-call crash it can actually produce; it does not establish what an
-    API caller with no session would experience in production, because no
-    such caller exists.
-    """
+def test_bot_challenge_user_src_api_uses_the_authorised_caller(app, db_session):
+    """D555, fixed: the conversation was built from the API-authorised
+    `user` but the second member appended, and the message sent, as
+    `current_user`, which is None outside a request (AttributeError at the
+    commit). Both now use the authorised caller."""
     s = _seed_blockers()
 
-    with pytest.raises(AttributeError, match="'NoneType' object has no attribute '_sa_instance_state'"):
-        bot_challenge_user(s.target.id, SRC_API, bearer(s.blocker))
+    bot_challenge_user(s.target.id, SRC_API, bearer(s.blocker))
 
-    assert db.session.query(BotChallenge).count() == 0
-    assert db.session.query(ChatMessage).count() == 0
+    message = db.session.query(ChatMessage).one()
+    assert message.sender_id == s.blocker.id
+    assert {m.id for m in message.conversation.members} == {s.blocker.id, s.target.id}
+    assert db.session.query(BotChallenge).filter_by(user_id=s.target.id, sent_by=s.blocker.id).count() == 1

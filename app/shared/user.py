@@ -319,7 +319,7 @@ def bot_challenge_user(user_id: int, src, auth=None):
 
     conversation = Conversation(user_id=user.id)
     conversation.members.append(recipient)
-    conversation.members.append(current_user)
+    conversation.members.append(user)
     db.session.add(conversation)
     db.session.commit()
 
@@ -332,7 +332,7 @@ If you are NOT using scripts, LLMs or other automation to create posts and comme
 """
     challenge_text += f"{current_app.config['SERVER_URL']}/bot_challenge/{uuid}\n\n"
     challenge_text += f"If this account is run by a bot, in part or fully, do nothing and we will automatically flag it as a bot.\n\nThank you"
-    send_message(challenge_text, conversation.id)
+    send_message(challenge_text, conversation.id, user)
 
     if existing_challenge is None:
         db.session.add(BotChallenge(user_id=recipient.id, sent_by=user.id, uuid=uuid))
