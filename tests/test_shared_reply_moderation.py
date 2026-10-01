@@ -543,6 +543,21 @@ class TestModRemoveReply:
         assert s.community.post_reply_count == 4
         assert s.author.post_reply_count == 2
 
+    @pytest.mark.parametrize('cross_posted', [0, None])
+    def test_a_zero_or_null_cross_posted_count_is_left_alone(self, db_session, cross_posted):
+        """D543 (code half), fixed: the mod removal decremented
+        `reply_count_cross_posted` unguarded, so 0 went to -1 and NULL raised
+        TypeError. It is now guarded the way the federated delete is."""
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+        s.post.reply_count_cross_posted = cross_posted
+        db.session.commit()
+
+        mod_remove_reply(s.reply.id, 'spam', SRC_API, auth=bearer(s.actor))
+
+        db.session.refresh(s.post)
+        assert s.post.reply_count_cross_posted == cross_posted
+
     def test_a_multi_element_path_decrements_the_ancestors_child_count(self, db_session):
         """`:434`'s true arm and the raw SQL at `:435-436`.
 
