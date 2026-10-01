@@ -28,7 +28,7 @@ from app.utils import render_template, authorise_api_user, shorten_string, gibbe
     is_image_url, add_to_modlog, store_files_in_s3, guess_mime_type, retrieve_image_hash, \
     hash_matches_blocked_image, can_upvote, can_downvote, get_recipient_language, to_srgb, can_upload_video, \
     is_video_url, sanitize_svg, user_ip_banned, ip_address, inspect_image_c2pa, \
-    community_membership_private, communities_banned_from, can_moderate
+    community_membership_private, communities_banned_from, can_moderate, can_create_post_reply
 
 
 def vote_for_post(post_id: int, vote_direction, federate: bool, emoji: str, src, auth=None):
@@ -1320,6 +1320,13 @@ def vote_for_poll(post_id, votes, src, auth=None):
         votes = [votes]
 
     poll = db.session.get(Poll, post_id) or abort(404)
+    # PERM-2: voting in a poll is allowed exactly when replying to its post is
+    if not can_create_post_reply(user, db.session.get(Post, post_id).community):
+        msg = 'You are not allowed to vote in this poll.'
+        if src == SRC_API:
+            raise Exception(msg)
+        flash(_(msg), 'error')
+        return False
     poll_choice_ids = {row.id for row in
                        db.session.query(PollChoice).filter_by(post_id=post_id)}
     foreign = [choice_id for choice_id in votes if _poll_choice_id(choice_id) not in poll_choice_ids]

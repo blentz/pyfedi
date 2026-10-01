@@ -1341,6 +1341,10 @@ def process_inbox_request(request_json, store_ap_json):
                             # D116 (owner ruling): a vote-shaped Note that matches no poll falls through to be
                             # processed as ordinary content
                             if poll_data:
+                                if not can_create_post_reply(user, post_being_replied_to.community):  # PERM-2
+                                    log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json,
+                                                    'Not allowed to vote in this poll')
+                                    return
                                 choice = session.query(PollChoice).filter_by(post_id=post_being_replied_to.id,
                                                                     choice_text=core_activity['object']['name']).first()
                                 if choice:
@@ -2759,6 +2763,9 @@ def process_poll_vote(user, store_ap_json, request_json, announced):
         log_incoming_ap(id, APLOG_RATE, APLOG_FAILURE, saved_json, 'Unfound object ' + ap_id)
         return
     if not instance_banned(user.instance.domain):
+        if not can_create_post_reply(user, post.community):  # PERM-2
+            log_incoming_ap(id, APLOG_RATE, APLOG_FAILURE, saved_json, 'Not allowed to vote in this poll')
+            return
         poll = db.session.get(Poll, post.id)
         choice = db.session.query(PollChoice).filter(PollChoice.choice_text == choice_text,
                                                      PollChoice.post_id == post.id).first()

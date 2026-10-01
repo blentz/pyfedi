@@ -102,6 +102,7 @@ def seed_poll_post(host='peer.example', choice_text='yes', local_author=False):
     else:
         author = make_user(instance, 'author')
     voter = make_user(instance, 'voter')
+    voter.ap_domain = host  # PERM-2: can_create_post_reply checks the voter's instance by ap_domain
     post = make_post(community, author, f'https://{host}/post/1')
     poll = make_poll(post)
     choice = make_poll_choice(post, choice_text)
@@ -280,6 +281,25 @@ def test_a_poll_vote_from_a_banned_instance_is_refused(app, db_session, monkeypa
     log = ActivityPubLog.query.one()
     assert log.result == 'ignored'
     assert log.exception_message == 'Cannot rate this'
+
+
+def test_a_note_poll_vote_from_a_user_who_may_not_reply_is_refused(app, db_session, monkeypatch):
+    """PERM-2, fixed (owner ruling). Voting in a poll is allowed only when
+    `can_create_post_reply(user, community)` passes; this Note-shaped vote path
+    consulted no permission at all. A voter banned from commenting is now
+    refused and logged as a failure, and no vote is recorded."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, voter, post, poll, choice = seed_poll_post()
+    voter.ban_comments = True
+    db.session.commit()
+
+    dispatch(create_activity(voter, poll_note(post.ap_id, 'yes')))
+
+    from app.models import PollChoiceVote
+    assert db_session.query(PollChoiceVote).count() == 0
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Not allowed to vote in this poll'
 
 
 def test_a_poll_vote_on_a_local_authors_post_stamps_it_and_schedules_an_edit(app, db_session, monkeypatch):
