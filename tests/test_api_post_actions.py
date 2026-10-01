@@ -234,6 +234,29 @@ class TestWriting:
         assert post.type == POST_TYPE_ARTICLE
         assert post.nsfw is False
 
+    def test_a_before_post_create_plugin_can_rewrite_the_title_and_body(self, env):
+        """D811, fixed (owner ruling 2026-09-30). The call site used to discard
+        `fire_hook`'s return, so a before-hook could not do what `fire_hook`
+        documents. The returned title and content now become the post's; the
+        identity and routing fields (user, community, type) are not the
+        plugin's to change and still come from the request.
+        """
+        def rewrite(hook_name, data=None, **kwargs):
+            if hook_name != 'before_post_create':
+                return data
+            return {**data, 'title': 'rewritten title', 'content': 'rewritten body',
+                    'community_id': -1, 'user_id': -1}
+
+        with patch('app.plugins.fire_hook', side_effect=rewrite):
+            res = post_post(token(env.author),
+                            {'title': 'hello', 'body': 'original', 'community_id': env.community.id})
+
+        post = db.session.get(Post, res['post_view']['post']['id'])
+        assert post.title == 'rewritten title'
+        assert post.body == 'rewritten body'
+        assert post.community_id == env.community.id
+        assert post.user_id == env.author.id
+
     def test_a_url_makes_it_a_link_post(self, env):
         # A link post asks the far end what it is: is_image_url sends a HEAD
         # request and opengraph_parse fetches the page for a thumbnail.

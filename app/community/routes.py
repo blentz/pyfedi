@@ -1182,7 +1182,11 @@ def add_post(actor, type=None):
                 'post_type': post_type,
                 'user_id': current_user.id
             }
-            plugins.fire_hook('before_post_create', post_data)
+            post_data = plugins.fire_hook('before_post_create', post_data)
+            # plugins may rewrite the title and content, but not who is posting, where, or what type of post
+            form.title.data = post_data.get('title', form.title.data)
+            if hasattr(form, 'body'):
+                form.body.data = post_data.get('content', form.body.data)
 
             if type == 'image' or type == 'event':
                 uploaded_file = request.files.get('image_file')

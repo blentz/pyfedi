@@ -1647,7 +1647,10 @@ def post_post(auth, data):
         "post_type": type,
         "user_id": user_id,
     }
-    plugins.fire_hook('before_post_create', post_data)
+    post_data = plugins.fire_hook('before_post_create', post_data)
+    # plugins may rewrite the title and content, but not who is posting, where, or what type of post
+    input['title'] = post_data.get('title', input['title'])
+    input['body'] = post_data.get('content', input['body'])
 
     user_id, post = make_post(input, community, type, SRC_API, auth)
 
