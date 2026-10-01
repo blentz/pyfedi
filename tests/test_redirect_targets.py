@@ -9,7 +9,8 @@ the one-line form of that decision, and the scan at the bottom of this file is
 what stops a new site being added without it.
 
 WHY THESE SITES EXISTED UNGUARDED. Three of them -- `redirect_next_page`,
-`determine_next_page` and `app/shared/auth.py:log_user_in` -- guarded with
+`determine_next_page` and `app/shared/auth.py:log_user_in` (its web arm since
+deleted, D582) -- guarded with
 `urlsplit(next_page).netloc != ''`. That test rejects `//evil.example` but
 ACCEPTS `///evil.example`, `/\evil.example` and `\\evil.example`, because
 urlsplit reports no netloc for any of them -- while a browser, per the WHATWG URL
@@ -42,9 +43,7 @@ from flask_wtf.csrf import generate_csrf
 
 from app import db
 from app.auth.util import determine_next_page, redirect_next_page
-from app.constants import SRC_WEB
 from app.models import CommunityFlair, Instance, InstanceBlock
-from app.shared.auth import log_user_in
 from app.utils import safe_redirect_target
 from tests.factories import make_community, make_instance, make_user
 
@@ -228,40 +227,6 @@ class TestLoginRouteEndToEnd:
         login(client, user)
         response = client.get('/auth/login', query_string={'next': '/somewhere'},
                               environ_base=from_a_fresh_ip(200))
-        assert response.headers['Location'] == '/somewhere'
-
-
-class TestSharedAuthNextPageIsChecked:
-    """app/shared/auth.py `log_user_in(..., SRC_WEB)`, the third site that had
-    the bypassable guard. Only the API path reaches this function today, and
-    only with SRC_API -- but the SRC_WEB arm is live code, so it is driven
-    directly with the duck-typed form it reads."""
-
-    class Field:
-        def __init__(self, data):
-            self.data = data
-
-    class Form:
-        def __init__(self, user_name, password):
-            self.user_name = TestSharedAuthNextPageIsChecked.Field(user_name)
-            self.password = TestSharedAuthNextPageIsChecked.Field(password)
-            self.low_bandwidth_mode = TestSharedAuthNextPageIsChecked.Field(False)
-
-    @pytest.mark.parametrize('candidate', OFF_ORIGIN)
-    def test_an_off_origin_next_is_refused(self, app, db_session, candidate):
-        user = local_user('shareduser')
-        user.set_password('correct horse battery')
-        db.session.commit()
-        with app.test_request_context('/auth/login', query_string={'next': candidate}):
-            response = log_user_in(self.Form('shareduser', 'correct horse battery'), SRC_WEB)
-        assert_not_off_site(response)
-
-    def test_an_on_origin_next_is_honoured(self, app, db_session):
-        user = local_user('shareduser')
-        user.set_password('correct horse battery')
-        db.session.commit()
-        with app.test_request_context('/auth/login', query_string={'next': '/somewhere'}):
-            response = log_user_in(self.Form('shareduser', 'correct horse battery'), SRC_WEB)
         assert response.headers['Location'] == '/somewhere'
 
 

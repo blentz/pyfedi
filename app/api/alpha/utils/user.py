@@ -926,7 +926,7 @@ def post_user_verify_credentials(data):
     else:
         user = User.query.filter(func.lower(User.user_name) == username, User.ap_id == None, User.deleted == False).first()
 
-    # D1179. The API's own login (`app/shared/auth.py`, SRC_API) refuses a
+    # D1179. The API's own login (`api_log_user_in`) refuses a
     # banned account with `incorrect_login`; this endpoint answered 200 for
     # one. A client that asks here whether a password is good was told yes for
     # an account that cannot log in -- and the pair of answers distinguished a

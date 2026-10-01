@@ -1291,11 +1291,11 @@ def get_alpha_user_details():
 @user_bp.alt_response(400, schema=DefaultError)
 @user_bp.alt_response(429, schema=DefaultError)
 def post_alpha_user_login(data):
-    from app.shared.auth import log_user_in
+    from app.shared.auth import api_log_user_in
     if not enable_api():
         return abort(400, message="alpha api is not enabled")
     with limiter.limit('20/hour', exempt_when=is_trusted_request):
-        resp = log_user_in(data, SRC_API)
+        resp = api_log_user_in(data)
         return UserLoginResponse().load(resp)
 
 
