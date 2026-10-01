@@ -873,6 +873,8 @@ def delete_post(post_id: int, federate_deletion, src, auth):
     from app import redis_client
     with redis_client.lock(f"lock:post:{post_id}", timeout=10, blocking_timeout=6):
         post = db.session.get(Post, post_id) or abort(404)
+        if post.deleted:  # already deleted: nothing to undo or federate
+            return (user_id, post) if src == SRC_API else None
         if post.url:
             post.calculate_cross_posts(delete_only=True)
 
@@ -912,6 +914,8 @@ def restore_post(post_id: int, src, auth):
     from app import redis_client
     with redis_client.lock(f"lock:post:{post_id}", timeout=10, blocking_timeout=6):
         post = db.session.get(Post, post_id) or abort(404)
+        if not post.deleted:  # not deleted: nothing to restore or federate
+            return (user_id, post) if src == SRC_API else None
         if post.url:
             post.calculate_cross_posts()
 

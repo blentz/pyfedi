@@ -392,6 +392,54 @@ def test_deleting_decrements_both_counters_and_touches_last_seen(db_session):
     assert s.post.author.last_seen is not None
 
 
+def test_deleting_an_already_deleted_post_is_a_no_op(db_session, monkeypatch):
+    """N2, fixed: a repeated delete decremented both counters again and
+    federated a second Delete. It is now an idempotent no-op, as D506 made
+    delete_reply."""
+    s = seed_post_context(community_name='lifecycle')
+    s.post.deleted = True
+    s.post.deleted_by = s.author.id
+    s.post.status = POST_STATUS_PUBLISHED
+    s.post.author.post_count = 5
+    s.community.post_count = 7
+    db.session.commit()
+    calls = []
+    monkeypatch.setattr('app.shared.post.task_selector',
+                        lambda task_key, **kwargs: calls.append(task_key))
+
+    user_id, post = delete_post(s.post.id, True, SRC_API, bearer(s.author))
+
+    assert (user_id, post.id) == (s.author.id, s.post.id)
+    db.session.refresh(s.post.author)
+    db.session.refresh(s.community)
+    assert s.post.author.post_count == 5
+    assert s.community.post_count == 7
+    assert calls == []
+
+
+def test_restoring_a_post_that_is_not_deleted_is_a_no_op(db_session, monkeypatch):
+    """N2, fixed: restoring a live post incremented both counters again and
+    federated a restore. It is now an idempotent no-op, as D506 made
+    restore_reply."""
+    s = seed_post_context(community_name='lifecycle')
+    s.post.status = POST_STATUS_PUBLISHED
+    s.post.author.post_count = 5
+    s.community.post_count = 7
+    db.session.commit()
+    calls = []
+    monkeypatch.setattr('app.shared.post.task_selector',
+                        lambda task_key, **kwargs: calls.append(task_key))
+
+    user_id, post = restore_post(s.post.id, SRC_API, bearer(s.author))
+
+    assert (user_id, post.id) == (s.author.id, s.post.id)
+    db.session.refresh(s.post.author)
+    db.session.refresh(s.community)
+    assert s.post.author.post_count == 5
+    assert s.community.post_count == 7
+    assert calls == []
+
+
 def test_the_celery_path_attributes_the_deletion_to_user_one(db_session):
     """`:760`'s FALSE arm and `:763`'s `user_id = 1`.
 
