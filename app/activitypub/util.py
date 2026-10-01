@@ -3595,12 +3595,14 @@ def update_post_from_activity(post: Post, request_json: dict):
                                                     'post_body': post.body,
                                                     'author_user_name': author.ap_id if author.ap_id else author.user_name
                                                     }
-                                    notification = Notification(user_id=recipient.id,
-                                                                title=_(f"You have been mentioned in post {post.id}"),
-                                                                url=f"{current_app.config['SERVER_URL']}/post/{post.id}",
-                                                                author_id=post.user_id, notif_type=NOTIF_MENTION,
-                                                                subtype='post_mention',
-                                                                targets=targets_data)
+                                    # in the recipient's language, as the reply path does (D248)
+                                    with force_locale(get_recipient_language(recipient.id)):
+                                        notification = Notification(user_id=recipient.id,
+                                                                    title=gettext(f"You have been mentioned in post {post.id}"),
+                                                                    url=f"{current_app.config['SERVER_URL']}/post/{post.id}",
+                                                                    author_id=post.user_id, notif_type=NOTIF_MENTION,
+                                                                    subtype='post_mention',
+                                                                    targets=targets_data)
                                     recipient.unread_notifications += 1
                                     db.session.add(notification)
             # remove when lemmy supports flairs
