@@ -516,7 +516,8 @@ class TestUpdateCommunityStats:
     `:289-291` selects communities that are not banned and were active in the
     last three days. `:304` writes `subscriptions_count` from a join that
     excludes banned members and bots; `:310` and `:314` write `post_count` and
-    `post_reply_count` from raw counts that exclude deleted rows.
+    `post_reply_count` from counts that exclude deleted rows, and for replies
+    bot authors too (D552).
 
     `:306-307` IS THREE CONDITIONS IN ONE ARC PAIR. Branch coverage reads 100%
     with two of them untested (fact 142), so each gets its own test:
@@ -562,6 +563,24 @@ class TestUpdateCommunityStats:
         db.session.expire_all()
         refreshed = db.session.get(Community, community.id)
         assert (refreshed.post_count, refreshed.post_reply_count) == (1, 1)
+
+    def test_reply_count_excludes_bot_replies(self, db_session):
+        """D552, fixed (owner ruling): bot replies are not counted. Creation and
+        both delete/restore paths already skipped a bot's reply, but this
+        recompute counted it, so the column changed meaning once a day. The
+        recompute now excludes replies whose author is a bot."""
+        instance, user, community, post = _seed()
+        bot = make_user(instance, 'botty', local=True)
+        bot.bot = True
+        db.session.commit()
+        make_post_reply(post, user)
+        make_post_reply(post, bot)
+        db.session.commit()
+
+        update_community_stats()
+
+        db.session.expire_all()
+        assert db.session.get(Community, community.id).post_reply_count == 1
 
     def test_a_banned_community_is_skipped(self, db_session):
         _, user, community, _ = _seed()

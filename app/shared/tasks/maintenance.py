@@ -311,8 +311,10 @@ def update_community_stats():
                 'SELECT COUNT(*) as c FROM post WHERE deleted is false and community_id = :community_id'
             ), {'community_id': community.id}).scalar()
 
+            # bot replies are not counted, as at creation (D552)
             community.post_reply_count = session.execute(text(
-                'SELECT COUNT(*) as c FROM post_reply WHERE deleted is false and community_id = :community_id'
+                'SELECT COUNT(*) as c FROM post_reply pr JOIN "user" u ON u.id = pr.user_id '
+                'WHERE pr.deleted is false and pr.community_id = :community_id and u.bot is not true'
             ), {'community_id': community.id}).scalar()
 
         session.commit()
