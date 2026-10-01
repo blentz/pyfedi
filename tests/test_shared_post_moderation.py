@@ -93,7 +93,7 @@ from app.shared.post import (
     move_post,
     sticky_post,
 )
-from tests.factories import bearer, make_community, make_community_member, \
+from tests.factories import bearer, grant_permission, make_community, make_community_member, \
     make_notification, make_post, make_user, seed_post_context, web_ctx
 
 
@@ -849,6 +849,23 @@ def test_a_site_admin_who_is_not_a_moderator_may_remove_a_post(db_session):
     assert user_id == s.voter.id
     db.session.refresh(s.post)
     assert s.post.deleted is True
+
+
+def test_an_administer_all_communities_holder_may_remove_and_restore(db_session):
+    """D421, fixed. `post_delete` admitted this permission and this gate did
+    not, so the web removal was a 500. Both now ask `can_mod_post`, which
+    treats the permission as an admin (owner ruling 2026-09-30). `s.voter` is
+    not id 1, for which `user_access` is True unconditionally."""
+    s = seed_post_context(community_name='moderation')
+    grant_permission(s.voter, 'administer all communities')
+
+    mod_remove_post(s.post.id, 'spam', SRC_API, bearer(s.voter))
+    db.session.refresh(s.post)
+    assert s.post.deleted is True
+
+    mod_restore_post(s.post.id, 'appealed', SRC_API, bearer(s.voter))
+    db.session.refresh(s.post)
+    assert s.post.deleted is False
 
 
 def test_an_unprivileged_user_is_refused_with_an_exception(db_session):

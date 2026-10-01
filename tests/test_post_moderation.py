@@ -27,7 +27,7 @@ from app.models import (CommunityBlock, DomainBlock, Instance, InstanceBlock,
                         Language, Post, PostReply, Report, Site, User,
                         UserBlock)
 from app.utils import utcnow
-from tests.factories import (make_community, make_community_member,
+from tests.factories import (grant_permission, make_community, make_community_member,
                              make_domain, make_instance, make_post,
                              make_post_reply, make_user)
 
@@ -347,6 +347,43 @@ def test_a_stranger_cannot_restore_a_post(app, env):
 
     assert restored.call_args is None
     assert mod_restored.call_args is None
+
+
+def test_an_author_may_not_undo_a_moderators_removal(app, env):
+    """D421, fixed. The author passed the route's gate, was routed to
+    `mod_restore_post` because a moderator did the removing, and that function's
+    own gate raised -- an unhandled 500 on an ordinary click. The author now
+    gets a 403 and the post stays removed (owner ruling 2026-09-30)."""
+    anon, community, post, mod, author, outsider = env
+    post.deleted = True
+    post.deleted_by = mod.id
+    db.session.commit()
+    client = as_user(app, author)
+    token = csrf(app, client)
+
+    response = client.post(f'/post/{post.id}/restore', data={'csrf_token': token})
+
+    assert response.status_code == 403
+    db.session.refresh(post)
+    assert post.deleted is True
+
+
+def test_an_administer_all_communities_holder_may_remove_a_post(app, env):
+    """D421, fixed. The route admitted the permission and `mod_remove_post`
+    did not, so the removal was a 500. Both now ask `can_mod_post`, and the
+    permission removes a post as an admin would (owner ruling 2026-09-30)."""
+    anon, community, post, mod, author, outsider = env
+    grant_permission(outsider, 'administer all communities')
+    client = as_user(app, outsider)
+    token = csrf(app, client)
+
+    response = client.post(f'/post/{post.id}/delete',
+                           data={'submit': 'Yes', 'reason': 'spam', 'csrf_token': token})
+
+    assert response.status_code == 302
+    db.session.refresh(post)
+    assert post.deleted is True
+    assert post.deleted_by == outsider.id
 
 
 def test_purging_a_deleted_post(app, env):
