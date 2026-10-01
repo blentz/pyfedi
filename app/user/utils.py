@@ -16,6 +16,7 @@ from app.utils import gibberish, get_request, get_task_session, patch_db_session
     intlist_to_strlist, community_membership_private, paginate_post_ids, post_ids_to_models
 
 import httpx
+import app as app_pkg
 
 
 def purge_user_then_delete(user_id, flush=True):
@@ -51,8 +52,7 @@ def purge_user_then_delete_task(user_id, flush):
                     # hard-deleted every post and reply instead of soft-deleting
                     # them, and purged the CDN anyway.
                     user.purge_content(flush=flush)
-                    from app import redis_client
-                    with redis_client.lock(f"lock:user:{user.id}", timeout=10, blocking_timeout=6):
+                    with app_pkg.redis_client.lock(f"lock:user:{user.id}", timeout=10, blocking_timeout=6):
                         user = session.get(User, user_id)
                         user.deleted = True
                         session.commit()

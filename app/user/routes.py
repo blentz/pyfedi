@@ -49,6 +49,9 @@ from app.utils import user_banned_from_community, back, render_template, markdow
     permission_required, check_anoobis, show_ban_message, \
     refuse_if_private_instance
 from app.rss_extras import RSSFeed
+import app.api.alpha.views as alpha_views
+from app.utils import user_filters_languages
+import app as app_pkg
 
 # D1042. A settings export is a few kilobytes; this is two orders of magnitude
 # above the largest real one, and the application sets no MAX_CONTENT_LENGTH of
@@ -351,8 +354,7 @@ def edit_profile(actor):
             current_app.logger.error(f"LDAP sync failed for user {current_user.user_name}: {e}")
 
         cache.delete_memoized(user_pronouns)
-        from app.api.alpha.views import user_view
-        cache.delete_memoized(user_view)
+        cache.delete_memoized(alpha_views.user_view)
         flash(_('Your changes have been saved.'), 'success')
 
         return redirect(url_for('user.edit_profile', actor=actor))
@@ -624,11 +626,9 @@ def user_settings():
             current_user.page_length = current_app.config['PAGE_LENGTH']
 
         db.session.commit()
-        from app.api.alpha.views import user_view
-        cache.delete_memoized(user_view)
+        cache.delete_memoized(alpha_views.user_view)
 
         if old_read_languages != current_user.read_language_ids:
-            from app.utils import user_filters_languages
             cache.delete_memoized(user_filters_languages, current_user.id)
 
         flash(_('Your changes have been saved.'), 'success')
@@ -788,7 +788,6 @@ def connect_oauth():
 @bp.route('/user/settings/import_export', methods=['GET', 'POST'])
 @login_required
 def user_settings_import_export():
-    from app import redis_client
     user = User.query.filter_by(id=current_user.id, deleted=False, banned=False, ap_id=None).first()
     if user is None:
         abort(404)
@@ -827,7 +826,7 @@ def user_settings_import_export():
                 flash(_('That file is too large to import.'), 'error')
                 return redirect(url_for('user.user_settings_import_export'))
 
-            redis_client.set(redis_key, imported_data, ex=3600)
+            app_pkg.redis_client.set(redis_key, imported_data, ex=3600)
 
             # import settings in background task
             import_settings(redis_key)
@@ -1467,13 +1466,12 @@ def import_settings(redis_key):
 
 @celery.task
 def import_settings_task(user_id, redis_key):
-    from app.api.alpha.utils.misc import get_resolve_object
+    from app.api.alpha.utils.misc import get_resolve_object  # cycle: app.api.alpha.utils.misc imports app.api.alpha.utils.community, mid-import when this module loads
 
     with current_app.app_context():
         session = get_task_session()
         try:
             with patch_db_session(session):
-                from app import redis_client
                 user = session.get(User, user_id)
                 # D1048. The task is queued and runs later, so the account can
                 # be gone by the time it does -- and every arm below
@@ -1482,7 +1480,7 @@ def import_settings_task(user_id, redis_key):
                 # D992's shape, in a background task rather than a route.
                 if user is None:
                     return
-                contents = redis_client.get(redis_key)
+                contents = app_pkg.redis_client.get(redis_key)
                 contents_json = json.loads(contents)
 
                 # Follow communities
@@ -1592,10 +1590,9 @@ def import_settings_task(user_id, redis_key):
                 cache.delete_memoized(blocked_or_banned_instances, user.id)
                 cache.delete_memoized(blocked_users, user.id)
                 cache.delete_memoized(blocked_domains, user.id)
-                from app.api.alpha.views import user_view
-                cache.delete_memoized(user_view)
+                cache.delete_memoized(alpha_views.user_view)
 
-                redis_client.delete(redis_key)
+                app_pkg.redis_client.delete(redis_key)
 
         except Exception:
             session.rollback()
@@ -2227,8 +2224,7 @@ def edit_user_note(actor):
                 insert_or_update_user_note(text, u)
         else:
             insert_or_update_user_note(text, user)
-        from app.api.alpha.views import user_view
-        cache.delete_memoized(user_view)
+        cache.delete_memoized(alpha_views.user_view)
         cache.delete_memoized(user_notes, current_user.id)
 
         flash(_('Your changes have been saved.'), 'success')
