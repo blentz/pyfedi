@@ -3188,9 +3188,10 @@ def _make_admin(user, role_id=ROLE_ADMIN):
     db.session.commit()
 
 
-def _make_moderator(post, name):
+def _make_moderator(post, name, local=True):
     """A new `User` who moderates `post`'s community, as `:3520`'s
-    `post.community.moderators()` counts them.
+    `post.community.moderators()` counts them. Local by default: only a local
+    moderator is notified (D288).
 
     `moderators()` (app/models.py:716-722) selects `CommunityMember` rows with
     `is_owner` or `is_moderator` and `is_banned == False`; `make_community`
@@ -3198,7 +3199,7 @@ def _make_moderator(post, name):
     one is made here. It is `@cache.memoize`d, which is inert under
     `CACHE_TYPE = 'NullCache'` (tests/conftest.py:68).
     """
-    moderator = make_user(post.author.instance, name)
+    moderator = make_user(None if local else post.author.instance, name, local=local)
     make_community_member(moderator, post.community, is_moderator=True)
     return moderator
 
@@ -3270,6 +3271,24 @@ class TestSuspiciousDomainNotifications:
     literal. `Notification.author_id` has no column default (app/models.py:3734),
     so 1 is not a value an unwritten row could hold.
     """
+
+    def test_a_remote_moderator_is_not_notified(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """D288, fixed (owner ruling). This loop notified every moderator,
+        where `edit_post`'s copy (app/shared/post.py) notifies local ones only
+        -- and a remote moderator can never see a Notification row here. The
+        federated Update now applies the same `is_local()` gate.
+        """
+        post = _seed_suspicious_post()
+        local_mod = _make_moderator(post, 'the_local_moderator')
+        remote_mod = _make_moderator(post, 'the_remote_moderator', local=False)
+        assert remote_mod.ap_id is not None
+        _suspicious_domain(notify_mods=True)
+        _taken(http_mock, SUSPICIOUS_URL)
+
+        update_post_from_activity(post, _linked_update(SUSPICIOUS_URL))
+
+        assert [n.user_id for n in Notification.query.all()] == [local_mod.id]
 
     def test_a_moderator_is_notified_when_the_new_domain_notifies_mods(
             self, app, db_session, http_mock, redis_lock_only_double):
