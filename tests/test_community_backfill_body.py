@@ -202,6 +202,73 @@ class TestTheOutbox:
                          'orderedItems': [an_announce()]}})
         assert titles(env.community) == {'a post'}
 
+    @pytest.fixture
+    def established(self, env):
+        """An author past the new-account limit of 3 posts in 24h (can_create_post)."""
+        from datetime import timedelta
+        env.author.created = env.author.created - timedelta(days=30)
+        db.session.commit()
+        return env
+
+    @staticmethod
+    def _pages(count, per_page, start=1):
+        """A chain of `count` outbox pages linked by `next`, `per_page` posts each."""
+        answers, index = {}, start
+        for number in range(1, count + 1):
+            url = f'{OUTBOX}?page={number}'
+            items = []
+            for _ in range(per_page):
+                items.append(an_announce(a_post(f'https://remote.test/p/{index}',
+                                                name=f'post {index}')))
+                index += 1
+            page = {'type': 'OrderedCollectionPage', 'orderedItems': items}
+            if number < count:
+                page['next'] = f'{OUTBOX}?page={number + 1}'
+            answers[url] = page
+        return answers
+
+    def test_a_paginated_outbox_is_followed_past_its_first_page(self, env, established):
+        """D173 follow-up. A PieFed outbox is now paged; backfill walks `next`
+        so it still reads as deep as it did from the unpaged outbox."""
+        answers = {MODS: EMPTY_MODS,
+                   OUTBOX: {'type': 'OrderedCollection', 'first': f'{OUTBOX}?page=1'}}
+        answers.update(self._pages(3, 4))
+        backfill(env.community, answers)
+        assert len(titles(env.community)) == 12
+
+    def test_a_paginated_outbox_gives_up_to_fifty(self, env, established):
+        answers = {MODS: EMPTY_MODS,
+                   OUTBOX: {'type': 'OrderedCollection', 'first': f'{OUTBOX}?page=1'}}
+        answers.update(self._pages(4, 20))
+        fetched = []
+
+        def fake(url, *args, **kwargs):
+            fetched.append(url)
+            return answers.get(url)
+
+        with patch('app.community.util.remote_object_to_json', side_effect=fake), \
+                patch('app.community.util.sleep', lambda seconds: None):
+            retrieve_mods_and_backfill(env.community.id, 'remote.test', 'faraway')
+        assert len(titles(env.community)) == 50
+        assert f'{OUTBOX}?page=4' not in fetched     # 60 items by page 3
+
+    def test_a_paginated_outbox_walk_is_bounded(self, env, established):
+        """A peer whose `next` never ends is read for at most ten pages."""
+        answers = {MODS: EMPTY_MODS,
+                   OUTBOX: {'type': 'OrderedCollection', 'first': f'{OUTBOX}?page=1'}}
+        answers.update(self._pages(15, 1))
+        backfill(env.community, answers)
+        assert len(titles(env.community)) == 10
+
+    def test_a_page_that_links_to_itself_is_read_once(self, env):
+        page = f'{OUTBOX}?page=1'
+        backfill(env.community,
+                 {MODS: EMPTY_MODS,
+                  OUTBOX: {'type': 'OrderedCollection', 'first': page},
+                  page: {'type': 'OrderedCollectionPage', 'next': page,
+                         'orderedItems': [an_announce()]}})
+        assert titles(env.community) == {'a post'}
+
     def test_a_collection_of_a_type_nobody_knows(self, env):
         backfill(env.community,
                  {MODS: EMPTY_MODS,

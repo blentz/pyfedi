@@ -115,6 +115,33 @@ def search_for_community(address: str, allow_fetch: bool = True) -> Community | 
         return None
 
 
+BACKFILL_ITEMS = 50
+BACKFILL_MAX_PAGES = 10
+
+
+def _walk_outbox_pages(first):
+    """Fetch outbox pages from `first` along `next` until BACKFILL_ITEMS items or
+    BACKFILL_MAX_PAGES pages, and return the first page with every page's items,
+    or None when the first page answers nothing."""
+    items, seen, url, first_page = [], set(), first, None
+    while isinstance(url, str) and url not in seen and len(seen) < BACKFILL_MAX_PAGES \
+            and len(items) < BACKFILL_ITEMS:
+        seen.add(url)
+        page = remote_object_to_json(url)
+        if not isinstance(page, dict):
+            break
+        if first_page is None:
+            first_page = page
+        page_items = page.get('orderedItems')
+        if not isinstance(page_items, list):
+            break
+        items.extend(page_items)
+        url = page.get('next')
+    if first_page is None or not isinstance(first_page.get('orderedItems'), list):
+        return first_page
+    return dict(first_page, orderedItems=items)
+
+
 @celery.task
 def retrieve_mods_and_backfill(community_id: int, server, name, community_json=None):
     with current_app.app_context():
@@ -215,18 +242,17 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                 if (community.nsfw and not site.enable_nsfw) or (community.nsfl and not site.enable_nsfl):
                     return
 
-                # download 50 old posts from unpaginated outboxes or 10 posts from page 1 if outbox is paginated (with Celery, or just 2 without)
+                # download 50 old posts (with Celery, or just 2 without). A paginated outbox is
+                # walked from `first` along `next` until 50 items or BACKFILL_MAX_PAGES pages (D173 follow-up)
                 if community.ap_outbox_url:
                     outbox_data = remote_object_to_json(community.ap_outbox_url)
                     if not outbox_data or ('totalItems' in outbox_data and outbox_data['totalItems'] == 0):
                         return
                     if 'first' in outbox_data:
-                        outbox_data = remote_object_to_json(outbox_data['first'])
+                        outbox_data = _walk_outbox_pages(outbox_data['first'])
                         if not outbox_data:
                             return
-                        max = 10
-                    else:
-                        max = 50
+                    max = 50
                     if current_app.debug:
                         max = 2
                     if 'type' in outbox_data and (outbox_data['type'] == 'OrderedCollection' or outbox_data['type'] == 'OrderedCollectionPage') and 'orderedItems' in outbox_data:
