@@ -695,16 +695,13 @@ def test_edit_feed_cannot_be_given_an_old_file_id_whose_row_has_vanished(app, db
 
 
 @pytest.mark.parametrize('site_nsfw, site_nsfl', [(True, True), (False, False)])
-def test_edit_feed_writes_the_nsfw_flags_only_when_the_site_allows_them(
+def test_edit_feed_clears_the_nsfw_flags_whatever_the_site_allows(
         app, db_session, site_nsfw, site_nsfl):
-    """:376-379. Both guards read g.site, and both are covered in both states.
-
-    REGISTERED, NOT FIXED (R5): the guards protect the SET direction and strand
-    the CLEAR direction. A feed flagged nsfw keeps the flag after an admin
-    turns NSFW off site-wide, and its owner cannot clear it -- the edit that
-    would clear it is exactly the edit the guard skips. Pinned here by starting
-    the feed at True and submitting False: with the site switch off the stored
-    value stays True.
+    """D698, fixed: the site switches guarded both directions, so a feed
+    flagged nsfw/nsfl before an admin turned the switch off could never be
+    cleared by its owner. Clearing is now always allowed; only setting the
+    flag needs the switch. Starting at True and submitting False clears it in
+    every site state.
     """
     s = _seed()
     s.feed.nsfw = True
@@ -718,8 +715,26 @@ def test_edit_feed_writes_the_nsfw_flags_only_when_the_site_allows_them(
             edit_feed(_form(nsfw=False, nsfl=False), s.feed, SRC_WEB)
 
     edited = db.session.get(Feed, s.feed.id)
-    assert edited.nsfw is (False if site_nsfw else True)
-    assert edited.nsfl is (False if site_nsfl else True)
+    assert edited.nsfw is False
+    assert edited.nsfl is False
+
+
+def test_edit_feed_cannot_set_the_nsfw_flags_while_the_site_disables_them(app, db_session):
+    """The other half of D698: the SET direction stays behind the switches."""
+    s = _seed()
+    s.feed.nsfw = False
+    s.feed.nsfl = False
+    db.session.commit()
+
+    with _site_ctx(app, s.owner):
+        g.site.enable_nsfw = False
+        g.site.enable_nsfl = False
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
+            edit_feed(_form(nsfw=True, nsfl=True), s.feed, SRC_WEB)
+
+    edited = db.session.get(Feed, s.feed.id)
+    assert edited.nsfw is False
+    assert edited.nsfl is False
 
 
 @pytest.mark.parametrize('was_public, now_public, expect_block', [
