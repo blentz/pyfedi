@@ -190,11 +190,10 @@ def test_an_empty_password_is_left_to_the_required_validator(app, db_session):
 
 
 def test_a_password_is_stripped_before_it_is_checked(app, db_session):
-    """R1's mechanism, pinned as current behaviour rather than endorsed: the
-    validator REWRITES the submitted value. A password typed with surrounding
-    spaces is stored without them, while LoginForm does not strip, so the
-    password that was set is not the one that can be used to log in.
-    Registered, not repaired -- see the design note.
+    """D862, fixed. The validator rewrites the submitted value, and it used to
+    be the only path that did, so a password set elsewhere kept its spaces.
+    `User.set_password` and `check_password` now strip as well, so every path
+    agrees (owner ruling 2026-09-30).
     """
     with app.test_request_context('/'):
         form = _form(app, password='  secretpw  ')

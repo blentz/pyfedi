@@ -1785,8 +1785,11 @@ class User(UserMixin, db.Model):
         the user has *just proved they know*. Nothing about the password changed
         there, only its encoding, so it is not a reason to sign that user's API
         clients out. Any genuine password change must leave the default alone.
+
+        D862: edge whitespace is stripped here and in check_password, so a
+        password means the same thing whichever form or API set or submits it.
         """
-        self.password_hash = generate_password_hash(password)
+        self.password_hash = generate_password_hash(password.strip())
         if revoke_sessions:
             self.password_updated_at = utcnow()
 
@@ -1803,6 +1806,8 @@ class User(UserMixin, db.Model):
         ValueError can also make bcrypt raise: a truncated column, a partial
         migration from another system, a hand-edited row.
         """
+        if isinstance(password, str):
+            password = password.strip()  # D862, as set_password stores it
         try:
             return check_password_hash(self.password_hash, password)
         except ValueError:
