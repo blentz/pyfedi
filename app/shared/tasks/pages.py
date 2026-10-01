@@ -320,9 +320,11 @@ def send_post(post_id, edit=False, session=None):
         note['content'] = '<p>' + post.title + '</p>'
     if post.type == POST_TYPE_EVENT and post.event is not None and post.event.start is not None:
         # Convert UTC time to event timezone
-        event_tz = ZoneInfo(post.event.timezone)
+        # A peer can store a null timezone; read it as UTC, edit_post's default
+        timezone = post.event.timezone or 'UTC'
+        event_tz = ZoneInfo(timezone)
         local_start = post.event.start.replace(tzinfo=ZoneInfo('UTC')).astimezone(event_tz)
-        note['content'] += '<p>' + local_start.strftime('%Y-%m-%dT%H:%M:%S') + f' ({post.event.timezone})</p>'
+        note['content'] += '<p>' + local_start.strftime('%Y-%m-%dT%H:%M:%S') + f' ({timezone})</p>'
     if post_body_html:
         note['content'] = note['content'] + post_body_html
     if post.language_id:
