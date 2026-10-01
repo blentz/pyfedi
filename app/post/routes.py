@@ -2348,11 +2348,13 @@ def post_reply_restore(post_id: int, comment_id: int):
     if post_reply.post_id != post.id:
         abort(404)
 
-    if post_reply.user_id == current_user.id or post.community.is_moderator() or current_user.is_admin() or user_access('administer all communities', current_user.get_id()):
+    if post_reply.user_id == current_user.id or can_mod_post(post, current_user):
         if post_reply.deleted_by == post_reply.user_id:
             was_mod_deletion = False
-        else:
+        elif can_mod_post(post, current_user):
             was_mod_deletion = True
+        else:
+            abort(403)  # D421: an author may not undo a moderator's removal
         post_reply.deleted = False
         post_reply.deleted_by = None
         if not post_reply.author.bot:
