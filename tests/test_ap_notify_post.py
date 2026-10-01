@@ -357,9 +357,11 @@ def test_a_subscriber_to_the_author_is_notified(app, db_session):
 
         user_send_notifs_to = notification_subscribers(post.user_id, NOTIF_USER)
         for notify_id in user_send_notifs_to:
+            blocked_senders = blocked_users(notify_id)  # D276
             blocked_comms = blocked_communities(notify_id)
             blocked_ints = blocked_or_banned_instances(notify_id)
             if notify_id != post.user_id and notify_id not in notifications_sent_to and \\
+                    post.user_id not in blocked_senders and \\
                     post.community_id not in blocked_comms and \\
                     post.instance_id not in blocked_ints:
 
@@ -519,6 +521,28 @@ def test_a_subscriber_who_blocked_the_community_is_not_notified(app, db_session)
     assert len(_notifications_for(subscriber)) == 1
 
 
+def test_a_subscriber_who_blocked_the_author_is_not_notified(app, db_session):
+    """D276, fixed (owner ruling): the NOTIF_USER arm checked community and
+    instance blocks but not `blocked_users`, so someone who subscribed to an
+    author and later blocked them -- the block path does not delete that
+    subscription -- still got every post. A blocked author is now suppressed,
+    as the topic and feed arms already did.
+    """
+    community, post, author = _seed_scenario()
+    instance = _peer_instance()
+    blocker = make_user(instance, 'author_blocker', local=True)
+    subscriber = make_user(instance, 'subscriber', local=True)
+    _subscribe(blocker, author.id, NOTIF_USER)
+    _subscribe(subscriber, author.id, NOTIF_USER)
+    make_user_block(blocker, author)
+    db.session.commit()
+
+    notify_about_post_task(post.id)
+
+    assert _notifications_for(blocker) == []
+    assert len(_notifications_for(subscriber)) == 1
+
+
 def test_a_subscriber_who_blocked_the_instance_is_not_notified(app, db_session):
     """`post.instance_id not in blocked_ints`, where
 
@@ -596,9 +620,11 @@ def test_a_subscriber_to_the_community_is_notified(app, db_session):
         community_send_notifs_to = notification_subscribers(post.community_id, NOTIF_COMMUNITY)
         for notify_id in community_send_notifs_to:
             blocked_senders = blocked_users(notify_id)
+            blocked_comms = blocked_communities(notify_id)  # D277
             blocked_ints = blocked_or_banned_instances(notify_id)
             if notify_id != post.user_id and notify_id not in notifications_sent_to and \\
-                    post.user_id not in blocked_senders and post.instance_id not in blocked_ints:
+                    post.user_id not in blocked_senders and post.community_id not in blocked_comms and \\
+                    post.instance_id not in blocked_ints:
 
     The entity_id the subscription has to name is `post.community_id`, not the
     author's user id -- that is the whole difference between this arm and the
@@ -763,13 +789,8 @@ def test_a_community_subscriber_who_blocked_the_author_is_not_notified(app, db_s
     author is the BLOCKED, which is the order `make_user_block(blocker,
     blocked)` writes.
 
-    This is the conjunct the NOTIF_USER arm does not have. The two arms'
-    per-recipient block lookups are mirror images: NOTIF_USER computes
-    `blocked_comms = blocked_communities(notify_id)` and this arm computes
-    `blocked_senders = blocked_users(notify_id)`, and neither computes both --
-    each arm's pair is that one plus `blocked_or_banned_instances(notify_id)`.
-    So a `UserBlock` on the author suppresses nothing in the arm above and
-    everything here.
+    The NOTIF_USER arm used to lack this conjunct, and this arm the
+    community one; both arms now check all three (D276, D277).
 
     A second subscriber who blocked nobody is notified in the same run, so
     "no rows for the blocker" is distinguishable from "no rows at all".
@@ -781,6 +802,27 @@ def test_a_community_subscriber_who_blocked_the_author_is_not_notified(app, db_s
     _subscribe(blocker, community.id, NOTIF_COMMUNITY)
     _subscribe(subscriber, community.id, NOTIF_COMMUNITY)
     make_user_block(blocker, author)
+    db.session.commit()
+
+    notify_about_post_task(post.id)
+
+    assert _notifications_for(blocker) == []
+    assert len(_notifications_for(subscriber)) == 1
+
+
+def test_a_community_subscriber_who_blocked_the_community_is_not_notified(app, db_session):
+    """D277, fixed (owner ruling): the NOTIF_COMMUNITY arm checked user and
+    instance blocks but not `blocked_communities`, and blocking a community
+    deletes no subscription, so a subscriber who blocked it still got every
+    post in it. A blocked community is now suppressed.
+    """
+    community, post, author = _seed_scenario()
+    instance = _peer_instance()
+    blocker = make_user(instance, 'community_blocker', local=True)
+    subscriber = make_user(instance, 'subscriber', local=True)
+    _subscribe(blocker, community.id, NOTIF_COMMUNITY)
+    _subscribe(subscriber, community.id, NOTIF_COMMUNITY)
+    make_community_block(blocker, community)
     db.session.commit()
 
     notify_about_post_task(post.id)
