@@ -38,8 +38,8 @@ THE `attributedTo` WALK has seven outcomes, and the loop's control flow is not
 symmetric between them:
 
 - the key is absent -- `actor` and `actor_domain` both stay None;
-- the key is present but is neither a string nor a list -- a bare embedded
-  object, which is ordinary ActivityStreams and which both arms miss;
+- a bare embedded object, ordinary ActivityStreams -- walked as a
+  one-element list (D38, fixed; both arms used to miss it);
 - a bare string -- parsed directly;
 - a list whose first usable element is a `Person` dict with a string `id`;
 - a list whose first usable element is a bare string;
@@ -315,6 +315,18 @@ class TestTheBreakIsAsymmetric:
 
         assert result.user_id == peer_author.id
 
+    def test_a_bare_person_object_is_used(self, app, peer_author):
+        """D38, fixed: a single embedded object -- `attributedTo: {'type':
+        'Person', 'id': ...}`, ordinary ActivityStreams -- used to match
+        neither the string nor the list arm and was refused for its container
+        type alone. It is now walked as a one-element list, so it is accepted
+        exactly when the same object inside a list is."""
+        community = make_community('news', host=PEER_OBJECT_HOST)
+
+        result = resolved(public_note({'type': 'Person', 'id': AUTHOR_URI}), community)
+
+        assert result.user_id == peer_author.id
+
 
 class TestTheWalkYieldsNoAuthor:
     """Three ways to reach the gate with actor_domain still None: the key
@@ -345,28 +357,6 @@ class TestTheWalkYieldsNoAuthor:
         community = make_community('news', host=PEER_OBJECT_HOST)
 
         assert resolved(public_note([]), community) is None
-        assert Post.query.filter_by(ap_id=URI).count() == 0
-
-    def test_a_bare_person_object_refuses(self, app, peer_author):
-        """The seventh outcome, which the branch arcs found and the reading did
-        not: `attributedTo` present but neither a string nor a list.
-
-        A single embedded object -- `attributedTo: {'type': 'Person', 'id':
-        ...}` -- is ordinary ActivityStreams, and the very same object inside a
-        one-element LIST is accepted two tests up. Here both the `if` and the
-        `elif` miss, the walk never runs, and actor_domain stays None, so a
-        document whose author is stated unambiguously and correctly is refused
-        for its container type alone.
-
-        Filed for Task 7 as a peer-triggerable availability defect, and pinned
-        here as today's behaviour rather than fixed.
-
-        Production change that fails this: adding a dict arm to the walk, which
-        is the fix.
-        """
-        community = make_community('news', host=PEER_OBJECT_HOST)
-
-        assert resolved(public_note({'type': 'Person', 'id': AUTHOR_URI}), community) is None
         assert Post.query.filter_by(ap_id=URI).count() == 0
 
 

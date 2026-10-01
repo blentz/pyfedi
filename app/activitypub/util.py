@@ -4752,6 +4752,8 @@ def create_resolved_object(uri, post_data, uri_domain, community, announce_id, s
     actor = None
     if 'attributedTo' in post_data:
         attributed_to = post_data['attributedTo']
+        if isinstance(attributed_to, dict):  # a single embedded actor is walked like a one-element list (D38)
+            attributed_to = [attributed_to]
         if isinstance(attributed_to, str):
             actor = attributed_to
             actor_domain = host_of(actor)
@@ -4939,6 +4941,8 @@ def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
     # find the author of the post. Make sure their domain matches the site hosting it to mitigate impersonation attempts
     if 'attributedTo' in post_data:
         attributed_to = post_data['attributedTo']
+        if isinstance(attributed_to, dict):  # a single embedded actor is walked like a one-element list (D38)
+            attributed_to = [attributed_to]
         if isinstance(attributed_to, str):
             actor = attributed_to
             actor_domain = host_of(actor)
