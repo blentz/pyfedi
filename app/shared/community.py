@@ -58,7 +58,9 @@ def join_community(community_id: int, src, auth=None, user_id=None):
 # function can be shared between WEB and API (only API calls it for now)
 def leave_community(community_id: int, src, auth=None, bulk_leave=False):
     user_id = authorise_api_user(auth) if src == SRC_API else current_user.id
-    cm = db.session.query(CommunityMember).filter_by(user_id=user_id, community_id=community_id).one()
+    cm = db.session.query(CommunityMember).filter_by(user_id=user_id, community_id=community_id).first()
+    if cm is None:  # D598: not a member, nothing to leave
+        return user_id if src == SRC_API else None
     if not cm.is_owner and not cm.is_moderator:
         task_selector('leave_community', user_id=user_id, community_id=community_id)
 

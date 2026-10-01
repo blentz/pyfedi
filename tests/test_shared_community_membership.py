@@ -317,18 +317,21 @@ def test_join_community_is_idempotent_for_an_existing_member(app, db_session, mo
         user_id=s.user.id, community_id=s.community.id).count() == 1
 
 
-def test_leave_community_missing_member_raises_NoResultFound_where_siblings_use_first(
+def test_leave_community_by_a_non_member_is_an_idempotent_success(
         app, db_session, monkeypatch):
-    """`:59`'s `.filter_by(...).one()` raises `NoResultFound` for a caller who
-    is not a member -- registering the divergence from join_community's
-    `:41-42`, which uses `.first()` on the identical filter and would get
-    None back rather than an exception.
+    """D598, fixed (owner ruling): a caller who is not a member has nothing to
+    leave, so the call succeeds without changing anything. It used `.one()`
+    and raised NoResultFound -- a 500 on the web arm -- where its siblings use
+    `.first()`.
     """
     s = _seed_member()
-    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
+    calls = []
+    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: calls.append(a))
 
-    with pytest.raises(NoResultFound):
-        leave_community(s.community.id, SRC_API, bearer(s.user))
+    returned = leave_community(s.community.id, SRC_API, bearer(s.user))
+
+    assert returned == s.user.id
+    assert calls == []
 
 
 def test_leave_community_neither_owner_nor_moderator_leaves_successfully(
