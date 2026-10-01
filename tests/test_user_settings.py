@@ -556,6 +556,24 @@ def test_blocking_a_domain_twice_says_so(app, env):
     assert 'already blocked' in messages
 
 
+def test_you_cannot_block_your_own_domain_from_the_settings(app, env):
+    """D581 residue, fixed (owner ruling): the settings page refuses this
+    instance's own domain, as `block_domain` and the instance form do, rather
+    than creating a row for it and hiding every local link."""
+    client, viewer, other = env
+    token = csrf(app, client)
+
+    with patch('app.user.routes.flash') as flashed:
+        with patch('app.user.routes.render_template', return_value='rendered'):
+            client.post('/user/settings/block/domain',
+                        data={'domain_name': 'https://Test.PieFed.local/',
+                              'submit': 'Block domain', 'csrf_token': token})
+
+    assert DomainBlock.query.count() == 0
+    messages = ' '.join(str(call.args[0]) for call in flashed.call_args_list)
+    assert "cannot block this instance's own domain" in messages
+
+
 def test_blocking_an_instance_from_the_settings(app, env):
     client, viewer, other = env
     make_instance('other.example', software='piefed')

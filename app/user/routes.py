@@ -1831,6 +1831,11 @@ def user_settings_block_domain():
         # Remove trailing slash if present
         domain_name = domain_name.rstrip('/')
 
+        # D581: nobody blocks this instance's own domain, as app.shared.domain.block_domain refuses it
+        if domain_name == current_app.config['SERVER_NAME'].lower():
+            flash(_('You cannot block this instance\'s own domain.'), 'error')
+            return render_template('user/block_domain.html', form=form, user=current_user)
+
         # Find or create the domain
         domain = Domain.query.filter_by(name=domain_name).first()
         if not domain:
