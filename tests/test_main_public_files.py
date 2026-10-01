@@ -519,7 +519,7 @@ class TestReplayingAnInboxRequest:
 
     def test_it_replays_what_it_is_given(self, env):
         login(env.client, env.member)
-        with patch('app.activitypub.routes.replay_inbox_request') as replay:
+        with patch('app.main.routes.replay_inbox_request') as replay:
             response = env.client.get('/replay_inbox')
         assert response.data == b'ok'
         replay.assert_called_once_with({})
