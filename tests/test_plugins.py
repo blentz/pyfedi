@@ -422,9 +422,9 @@ def test_asking_about_a_plugin_that_is_not_loaded_gives_nothing(app, clean_regis
 
 
 def test_the_loaded_plugin_list_is_handed_out_as_a_copy(app, clean_registry, tmp_path):
-    """get_loaded_plugins copies -- and load_plugins does NOT, which is D812.
-    Both halves are asserted here so the asymmetry is recorded rather than
-    inferred.
+    """D812, fixed: get_loaded_plugins copied but load_plugins handed out the
+    module global itself, so a caller could edit the registry through it. Both
+    now hand out a copy.
     """
     plugins = clean_registry
     _write_plugin(tmp_path, 'a_plugin', 'def plugin_info():\n    return {"name": "A"}\n')
@@ -432,14 +432,16 @@ def test_the_loaded_plugin_list_is_handed_out_as_a_copy(app, clean_registry, tmp
 
     copy = plugins.get_loaded_plugins()
     copy['tampered'] = {}
+    returned['tampered_too'] = {}
 
-    assert 'tampered' not in plugins.get_loaded_plugins()
-    assert returned is plugins._loaded_plugins
+    assert returned is not plugins._loaded_plugins
+    assert sorted(plugins.get_loaded_plugins()) == ['a_plugin']
 
 
 def test_loading_twice_accumulates_rather_than_replacing(app, clean_registry, tmp_path):
-    """D812's other half: the registry is added to, never reset, so a second
-    directory's plugins join the first's.
+    """The registry is added to, never reset, so a second directory's plugins
+    join the first's. D812 registered this beside the shared-object return; it
+    is kept as the registry's intended behaviour, and the returned copy shows it.
     """
     plugins = clean_registry
     first = tmp_path / 'first'
