@@ -682,6 +682,25 @@ def test_the_posts_page_shows_that_instances_posts(app, db_session):
     assert client.get('/instance/nosuch.example/posts').status_code == 404
 
 
+@pytest.mark.parametrize('signed_in', [False, True])
+def test_the_posts_page_leaves_out_private_posts(app, db_session, signed_in):
+    """D806, fixed (owner ruling): instance_posts excludes `Post.private`, the
+    same filter the search and domain listings apply; it filtered nothing."""
+    instance, alice, bob = _seed()
+    peer = _instance('peer.example')
+    community = make_community('microblogs')
+    _post_from(peer, community, alice, 'public')
+    _post_from(peer, community, alice, 'private', private=True)
+    client = app.test_client()
+    if signed_in:
+        login(client, alice)
+
+    with patch('app.instance.routes.render_template', return_value='rendered') as render:
+        client.get('/instance/peer.example/posts')
+
+    assert _post_titles(render) == ['public']
+
+
 def test_an_anonymous_reader_sees_no_bots_nsfw_nsfl_or_deleted_posts(app, db_session):
     instance, alice, bob = _seed()
     peer = _instance('peer.example')
