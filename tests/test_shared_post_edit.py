@@ -74,7 +74,7 @@ from app.constants import (
     NOTIF_REPORT, POST_TYPE_ARTICLE, POST_TYPE_EVENT, POST_TYPE_IMAGE,
     POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_VIDEO, SRC_API, SRC_WEB,
 )
-from app.constants import ROLE_ADMIN
+from app.constants import ROLE_ADMIN, ROLE_ADMIN_NAME
 from app.models import Event, File, Notification, Poll, PollChoice, Role
 from app.shared.post import edit_post
 from tests.factories import (
@@ -219,24 +219,15 @@ def _seed(url=None, domain_name=None, notify_mods=False, notify_admins=False):
 def _make_admin(user):
     """Make `user` an admin as `Site.admins()` counts them.
 
-    `Site.admins()` (app/models.py) takes its JOIN arm here:
-    tests/conftest.py clears `flask.g` before every test and nothing in this
-    file sets `admin_ids`, so `hasattr(g, 'admin_ids')` is False.
-
-    A ROLE ROW IS REQUIRED EVEN FOR USER 1. `.join(user_role)` is an INNER join,
-    so a user with no row there is dropped before the `or_` is evaluated --
-    `User.id == 1` cannot rescue a user the join already eliminated. That is
-    D295, and it is why `grant_permission` (which creates a Role with an AUTO
-    id) is not enough: the filter is on `user_role.c.role_id == ROLE_ADMIN`, so
-    the role's id must BE ROLE_ADMIN. The get-or-create below is the same shape
-    as tests/test_ap_update_post_tails.py:3051 (`def _make_admin`), whose
-    get-or-create body is at :3083-3087. (Both numbers were wrong before:
-    `:3039` is inside a different helper's docstring and `:3071-3075` is still
-    docstring prose. Re-derived with numbered output.)
+    `Site.admins()` (app/models.py) runs its query here: tests/conftest.py
+    clears `flask.g` before every test and nothing in this file sets
+    `admin_ids`. It matches a role by NAME (D481, as `is_admin()` does), so the
+    get-or-create below names the role ROLE_ADMIN_NAME. The id stays
+    ROLE_ADMIN so the row is shared with any other helper that made it.
     """
     role = db.session.get(Role, ROLE_ADMIN)
     if role is None:
-        role = Role(id=ROLE_ADMIN, name=f'role-{ROLE_ADMIN}', weight=0)
+        role = Role(id=ROLE_ADMIN, name=ROLE_ADMIN_NAME, weight=0)
         db.session.add(role)
         db.session.commit()
     user.roles.append(role)
@@ -1636,10 +1627,8 @@ def test_the_new_domain_gains_a_post_and_the_old_one_loses_one(db_session, http_
 
 
 def test_an_admin_of_a_notify_admins_domain_is_notified(db_session, http_mock):
-    """:590-598. Site.admins() joins user_role with an INNER join (D295), so a
-    roleless User.id == 1 is NOT an admin -- the `or_(..., User.id == 1)` never
-    sees a roleless user, and the filter is on role_id == ROLE_ADMIN, so the
-    role's id must BE ROLE_ADMIN -- which is what _make_admin arranges."""
+    """:590-598. Site.admins() matches a role named ROLE_ADMIN_NAME (D481),
+    which is what _make_admin arranges."""
     s = _seed(domain_name='suspicious.example', notify_admins=True)
     admin = make_user(s.instance, 'admin', local=True)
     _make_admin(admin)

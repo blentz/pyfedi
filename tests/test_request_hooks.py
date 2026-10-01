@@ -27,7 +27,7 @@ from flask import g, render_template_string
 from sqlalchemy import text
 
 from app import db
-from app.constants import ROLE_ADMIN
+from app.constants import ROLE_ADMIN, ROLE_ADMIN_NAME
 from app.models import Role, Settings, Site
 from tests.factories import make_community, make_instance, make_post, make_user
 
@@ -128,16 +128,19 @@ def test_static_path_does_not_get_g_site(app, db_session):
 
 def test_admin_ids_computed_and_persisted_when_setting_absent(app, db_session):
     """The admin_ids query is `WHERE u.id = 1 UNION SELECT ... JOIN user_role
-    ... WHERE role_id = ROLE_ADMIN`, so user id 1 is unconditionally included
+    ... JOIN role WHERE name = ROLE_ADMIN_NAME`, so user id 1 is unconditionally included
     regardless of role -- asserting an empty list would pass even against a
     completely broken query (an empty table also has no id-1 user). Create a
     non-admin user first, so it claims id 1, and a second, higher-id user with
     the admin role: only if the role-driven half of the query actually runs
-    does that second user's id show up in g.admin_ids."""
+    does that second user's id show up in g.admin_ids.
+
+    D481, fixed: the role is matched by NAME, as `is_admin()` matches it, so it
+    is created under an id other than ROLE_ADMIN; matching by id would miss it."""
     instance = make_instance('test.piefed.local', software='piefed')
     make_user(instance, 'notadmin', local=True)
     admin = make_user(instance, 'realadmin', local=True)
-    admin.roles.append(Role(id=ROLE_ADMIN, name='admin'))
+    admin.roles.append(Role(id=ROLE_ADMIN + 100, name=ROLE_ADMIN_NAME))
     db.session.commit()
     assert admin.id != 1
     assert Settings.query.filter_by(name='admin_ids').first() is None

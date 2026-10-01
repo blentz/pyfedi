@@ -1,4 +1,6 @@
-from app.models import Site
+from app import db
+from app.constants import ROLE_ADMIN, ROLE_ADMIN_NAME, ROLE_STAFF, ROLE_STAFF_NAME
+from app.models import Role, Site, user_role
 from app.utils import role_access, user_access
 from tests.factories import grant_permission, make_instance, make_user
 
@@ -106,3 +108,28 @@ class TestSiteAdmins:
         assert founder.id == 1 and founder.is_admin()
 
         assert [u.id for u in Site.admins()] == [founder.id]
+
+    def test_admins_and_staff_are_matched_by_role_name_like_is_admin(self, app, db_session):
+        """D481, fixed: `Site.admins()` and `Site.staff()` matched the role ID
+        (ROLE_ADMIN, ROLE_STAFF) while `is_admin()` and `is_staff()` match the
+        role NAME, and only the CLI's seeding order made the two coincide. Per
+        the ruling the name wins: a role called 'Admin' under any other id makes
+        an admin in both, and a role with id ROLE_ADMIN by another name in
+        neither."""
+        make_instance('test.piefed.local', software='piefed')  # user.instance_id FK target
+        make_user(None, 'founder', local=True)                 # user 1, listed regardless
+        named_admin = make_user(None, 'named-admin', local=True)
+        named_staff = make_user(None, 'named-staff', local=True)
+        id_only = make_user(None, 'id-only', local=True)
+        admin_role = Role(id=ROLE_ADMIN + 100, name=ROLE_ADMIN_NAME, weight=3)
+        staff_role = Role(id=ROLE_STAFF + 100, name=ROLE_STAFF_NAME, weight=2)
+        misnamed = Role(id=ROLE_ADMIN, name='role-4', weight=0)
+        db.session.add_all([admin_role, staff_role, misnamed])
+        db.session.commit()
+        for user, role in ((named_admin, admin_role), (named_staff, staff_role), (id_only, misnamed)):
+            db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+        db.session.commit()
+
+        assert (named_admin.is_admin(), id_only.is_admin()) == (True, False)
+        assert [u.id for u in Site.admins()] == [1, named_admin.id]
+        assert [u.id for u in Site.staff()] == [named_staff.id]

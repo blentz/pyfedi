@@ -103,11 +103,9 @@ def make_site_admin(s, name='site-admin'):
     ADDED BY TASK 8'S MUTATION PASS, which needed five more `notify_admins`
     tests and would otherwise have repeated this eight-line preamble in each
     of them. The mechanics are not incidental and are documented at length in
-    `test_a_csam_reason_notifies_site_admins`: the `Role` must be pinned at
-    `id=ROLE_ADMIN` because `Site.admins()` (app/models.py:4011-4012) joins
-    on `user_role.c.role_id == ROLE_ADMIN` BY VALUE, not by the role's name,
-    and `g.admin_ids` is never set in these tests so that inner-join branch
-    is always the one taken (register entry D442, live).
+    `test_a_csam_reason_notifies_site_admins`: `Site.admins()` matches the
+    role by its NAME, 'Admin' (D481), and `g.admin_ids` is never set in these
+    tests so its query branch is always the one taken.
 
     THIS DOCSTRING PREVIOUSLY OPENED "plus the `Site` row" AND THAT ADVERTISED
     A DECORATION AS A MECHANISM. `Site.admins()` (app/models.py:4006-4012)
@@ -624,23 +622,17 @@ class TestReportReply:
     def test_a_csam_reason_notifies_site_admins(self, db_session):
         """`:320`-`:321`'s substring test, `:380`'s true arm, `:381`-`:388`.
 
-        `Site.admins()` at `:381` IS REGISTER ENTRY D442, LIVE. Record what it
-        returns here rather than assuming; the entry says its behaviour
-        differs where `g.admin_ids` is unset.
+        `Site.admins()` at `:381` WAS REGISTER ENTRIES D442 AND D481, both
+        fixed. Record what it returns here rather than assuming.
 
         Probed directly: `db_session` only clears `flask.g`
         (tests/conftest.py:156) and calling `report_reply` here never goes
         through `request_hooks.py`'s `before_request` (the only place that
         sets `g.admin_ids`), so `g.admin_ids` stays unset for this whole test
-        and `Site.admins()` always takes the `else` branch at
-        app/models.py:4011-4012 -- the INNER JOIN to `user_role`. The role
-        row is pinned at `id=ROLE_ADMIN` (see tests/test_request_hooks.py's
-        `test_admin_ids_computed_and_persisted_when_setting_absent`) because
-        that join filters on `user_role.c.role_id == ROLE_ADMIN` by VALUE, not
-        by role name -- a `Role(name='Admin')` given whatever id the sequence
-        hands out would not match and this admin would silently vanish from
-        the result set. `reporter` (id 1, no role row at all) WAS dropped by
-        the same inner join (D442); since that fix `Site.admins()` agrees
+        and `Site.admins()` always takes its query branch. That query matches the role by NAME since D481,
+        as `is_admin()` does, so the `Role(name='Admin')` below is what makes
+        `admin` an admin. `reporter` (id 1, no role row at all) WAS dropped by
+        the old inner join (D442); since that fix `Site.admins()` agrees
         with `is_admin()` and lists it, so it is notified as well. Asserted
         as a SET of notified users rather than a single counter.
 
