@@ -228,6 +228,10 @@ def test_a_copied_feed_carries_the_same_five_urls_as_a_new_one(app, db_session):
 
     All five are asserted as exact strings rather than as non-None: the whole
     defect was one url missing from a block that built four correctly.
+
+    D722, fixed: ap_profile_id alone was lowercased. All five now come from one
+    base, as make_feed builds them. The split was latent -- the route lowercases
+    the url first -- so this row held before the fix too and pins the shape.
     """
     instance, owner = _seed()
     source = _feed(owner)

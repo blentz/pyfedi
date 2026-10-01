@@ -274,6 +274,8 @@ def feed_copy(feed_id: int):
             flash(_('A Feed with this url already exists.'), 'error')
             return redirect(url_for('feed.feed_copy', feed_id=feed_id))
 
+        # D722: every actor url from one base, as make_feed builds them; only ap_profile_id was lowercased
+        base = f"https://{current_app.config['SERVER_NAME']}/f/{copy_feed_form.url.data}"
         private_key, public_key = RsaKeys.generate_keypair()
         feed = Feed(user_id=current_user.id, title=copy_feed_form.title.data, name=copy_feed_form.url.data,
                     machine_name=copy_feed_form.url.data,
@@ -284,18 +286,14 @@ def feed_copy(feed_id: int):
                     private_key=private_key,
                     public_key=public_key,
                     public=copy_feed_form.public.data, is_instance_feed=copy_feed_form.is_instance_feed.data,
-                    ap_profile_id='https://' + current_app.config[
-                        'SERVER_NAME'] + '/f/' + copy_feed_form.url.data.lower(),
-                    ap_public_url='https://' + current_app.config['SERVER_NAME'] + '/f/' + copy_feed_form.url.data,
-                    ap_followers_url='https://' + current_app.config[
-                        'SERVER_NAME'] + '/f/' + copy_feed_form.url.data + '/followers',
-                    ap_following_url='https://' + current_app.config[
-                        'SERVER_NAME'] + '/f/' + copy_feed_form.url.data + '/following',
-                    # As make_feed:226 builds it. Without this the feed's outbox
+                    ap_profile_id=base,
+                    ap_public_url=base,
+                    ap_followers_url=f'{base}/followers',
+                    ap_following_url=f'{base}/following',
+                    # As make_feed builds it. Without this the feed's outbox
                     # document is served with a null id
                     # (app/activitypub/routes.py:2770).
-                    ap_outbox_url='https://' + current_app.config[
-                        'SERVER_NAME'] + '/f/' + copy_feed_form.url.data + '/outbox',
+                    ap_outbox_url=f'{base}/outbox',
                     ap_domain=current_app.config['SERVER_NAME'],
                     subscriptions_count=1, instance_id=1)
         if copy_feed_form.parent_feed_id.data:
