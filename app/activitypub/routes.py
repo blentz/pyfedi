@@ -56,6 +56,8 @@ from app.utils import user_banned_from_community, gibberish, get_setting, commun
     blocked_phrases, orjson_response, moderating_communities, joined_communities, moderating_communities_ids, \
     moderating_communities_ids_all_users, publish_sse_event, blocked_users, block_honey_pot, instance_allowed, \
     requestor_domain
+import urllib.parse
+import app as app_pkg
 
 # D160/D180/D195 (owner ruling): one Cache-Control policy for every ActivityPub document served here, by kind.
 # A miss (404 or 410) is never cached, so a peer asking before an object exists does not keep the answer.
@@ -691,7 +693,6 @@ def community_profile_subscribe(actor):
 
 @bp.route('/inbox', methods=['POST'])
 def shared_inbox():
-    from app import redis_client
     try:
         request_json = request.get_json(force=True)
     except werkzeug.exceptions.BadRequest as e:
@@ -705,7 +706,7 @@ def shared_inbox():
         log_incoming_ap('', APLOG_NOTYPE, APLOG_FAILURE, None, 'Empty JSON body ' + str(request.user_agent))
         return "", 400
 
-    pause_federation = redis_client.get('pause_federation')
+    pause_federation = app_pkg.redis_client.get('pause_federation')
     if pause_federation == '1': # temporary pause as this instance is overloaded
         return '', 429
     elif pause_federation == '666':
@@ -742,10 +743,10 @@ def shared_inbox():
         if not instance_allowed(furl(request_json['actor']).host):
             return '', 403
 
-    if redis_client.exists(id):  # Something is sending same activity multiple times
+    if app_pkg.redis_client.exists(id):  # Something is sending same activity multiple times
         log_incoming_ap(id, APLOG_DUPLICATE, APLOG_IGNORED, saved_json, 'Already aware of this activity')
         return '', 200
-    redis_client.set(id, 1, ex=90, nx=True)  # Save the activity ID into redis, to avoid duplicate activities
+    app_pkg.redis_client.set(id, 1, ex=90, nx=True)  # Save the activity ID into redis, to avoid duplicate activities
 
     # Ignore unutilised PeerTube activity
     if isinstance(request_json['actor'], str) and request_json['actor'].endswith('accounts/peertube'):
@@ -916,7 +917,6 @@ def process_inbox_request(request_json, store_ap_json):
             # patch_db_session makes all db.session.whatever() use the session created with get_task_session, to guarantee proper connection clean-up at the end of the task.
             # although process_inbox_request uses session instead of db.session, many of the functions it calls, like find_actor_or_create_cached, do not which makes this necessary.
             with patch_db_session(session):
-                from app import redis_client
                 # For an Announce, Accept, or Reject, we have the community/feed, and need to find the user
                 # For everything else, we have the user, and need to find the community/feed
                 # Benefits of always using request_json['actor']:
@@ -1614,9 +1614,8 @@ def process_inbox_request(request_json, store_ap_json):
                                     continue
                                 if fm_user.is_local() and fm_user.feed_auto_follow:
                                     # user is local so lets auto-subscribe them to the community
-                                    from app.community.routes import do_subscribe
                                     actor = community_to_add.ap_id if community_to_add.ap_id else community_to_add.name
-                                    do_subscribe(actor, fm_user.id, joined_via_feed=True)
+                                    community_routes.do_subscribe(actor, fm_user.id, joined_via_feed=True)
                             log_incoming_ap(id, APLOG_ADD, APLOG_SUCCESS, saved_json)
                         else:
                             log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json, 'Cannot find community to add to feed')
@@ -2094,7 +2093,7 @@ def process_inbox_request(request_json, store_ap_json):
                         target_ap_id = core_activity['object']['object']
                         post_reply = PostReply.get_by_ap_id(target_ap_id)
                         if post_reply:
-                            with redis_client.lock(f"lock:post_reply:{post_reply.id}", timeout=10, blocking_timeout=6):
+                            with app_pkg.redis_client.lock(f"lock:post_reply:{post_reply.id}", timeout=10, blocking_timeout=6):
                                 post_reply.answer = False
                                 session.commit()
                             log_incoming_ap(id, APLOG_LOCK, APLOG_SUCCESS, saved_json)
@@ -2170,7 +2169,6 @@ def process_delete_request(request_json, store_ap_json):
 # if is_flag is set, the report is just sent to any remote mods and the reported user's instance
 def announce_activity_to_followers(community: Community, creator: User, activity, can_batch=False,
                                    is_flag=False, admin_instance_id=1):
-    from app.activitypub.signature import default_context
 
     # avoid announcing activity sent to local users unless it is also in a local community
     if not community.is_local():
@@ -2228,9 +2226,8 @@ def announce_activity_to_followers(community: Community, creator: User, activity
                         send_to_remote_instance_fast(instance.inbox, community.private_key, community.ap_profile_id, announce_activity)
 
     if len(send_async):
-        from app import redis_client
         # send announce_activity via redis pub/sub to piefed_notifs service
-        redis_client.publish("http_posts:activity", json.dumps({'urls': [url[0] for url in send_async],
+        app_pkg.redis_client.publish("http_posts:activity", json.dumps({'urls': [url[0] for url in send_async],
                                                                 'headers': [url[1] for url in send_async],
                                                                 'data': send_async[0][2].decode('utf-8')}))
 
@@ -2801,8 +2798,7 @@ def process_question_answer(user, store_ap_json, request_json, announced):
         log_incoming_ap(id, APLOG_QA, APLOG_FAILURE, saved_json, 'Unfound object ' + ap_id)
         return
     if (not instance_banned(user.instance.domain)) and (post_reply.user_id == post_reply.post.user_id or post_reply.community.is_moderator(user) or post_reply.author.is_instance_admin()):
-        from app import redis_client
-        with redis_client.lock(f"lock:post_reply:{post_reply.id}", timeout=10, blocking_timeout=6):
+        with app_pkg.redis_client.lock(f"lock:post_reply:{post_reply.id}", timeout=10, blocking_timeout=6):
             post_reply.answer = True
             if post_reply.author.is_local():
                 targets_data = {'gen': '0',
@@ -3241,7 +3237,6 @@ def quote_boost_auth():
     records each QuoteRequest it Accepts as a QuoteAuthorization, and this answers only
     for a recorded one, so naming any local post beside any remote one is a 404.
     """
-    import urllib.parse
     stamp = request.args.get('stamp')
     # `not stamp`, not `stamp is None`: an empty parameter passed the old test and
     # reached `stamp.index(';')`.

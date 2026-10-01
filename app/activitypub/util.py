@@ -42,6 +42,10 @@ from app.utils import get_request, allowlist_html, get_setting, ap_datetime, mar
     patch_db_session, to_srgb, communities_banned_from_all_users, blocked_communities, blocked_or_banned_instances, \
     instance_community_ids, banned_instances, communities_run_by_inactive_mods, inspect_image_c2pa, \
     url_is_storable, can_create_post, can_create_post_reply
+import app.activitypub.actor as activitypub_actor
+import urllib.parse
+from app.utils import site_language_id
+import app as app_pkg
 
 
 def community_members(community_id):
@@ -314,29 +318,26 @@ def find_actor_or_create(actor: str, create_if_not_found=True, community_only=Fa
 
     Consider using find_actor_or_create_cached() for better performance
     """
-    from app.activitypub.actor import find_actor_by_url, validate_remote_actor
     if isinstance(actor, dict):
         actor = actor['id']
 
     actor_url = actor.strip()
-    if not validate_remote_actor(actor_url, allow_banned=allow_banned):
+    if not activitypub_actor.validate_remote_actor(actor_url, allow_banned=allow_banned):
         return None
 
     # Find the actor
-    actor_obj = find_actor_by_url(actor_url, community_only, feed_only, allow_banned=allow_banned)
+    actor_obj = activitypub_actor.find_actor_by_url(actor_url, community_only, feed_only, allow_banned=allow_banned)
 
     if actor_obj is False:  # banned or deleted actor was found
         return None
 
     if actor_obj:
         # Schedule a refresh if needed
-        from app.activitypub.actor import schedule_actor_refresh
-        schedule_actor_refresh(actor_obj)
+        activitypub_actor.schedule_actor_refresh(actor_obj)
         return actor_obj
     elif create_if_not_found:
         # Create the actor from remote data
-        from app.activitypub.actor import create_actor_from_remote
-        return create_actor_from_remote(actor_url, community_only, feed_only, retry=retry)
+        return activitypub_actor.create_actor_from_remote(actor_url, community_only, feed_only, retry=retry)
     else:
         return None
 
@@ -367,13 +368,12 @@ def find_actor_or_create_cached(actor: str, create_if_not_found=True, community_
     Returns:
         The actor model (User, Community, or Feed) or None if not found
     """
-    from app.activitypub.actor import validate_remote_actor, schedule_actor_refresh
 
     if isinstance(actor, dict):
         actor = actor['id']
 
     actor_url = actor.strip()
-    if not validate_remote_actor(actor_url):
+    if not activitypub_actor.validate_remote_actor(actor_url):
         return None
 
     # Try to get cached ID and type
@@ -396,11 +396,11 @@ def find_actor_or_create_cached(actor: str, create_if_not_found=True, community_
             if actor_obj.is_local():
                 if isinstance(actor_obj, User) and actor_obj.banned:
                     return None
-            elif not validate_remote_actor(actor_url, actor_obj):
+            elif not activitypub_actor.validate_remote_actor(actor_url, actor_obj):
                 return None
 
             # Schedule a refresh if needed
-            schedule_actor_refresh(actor_obj)
+            activitypub_actor.schedule_actor_refresh(actor_obj)
             return actor_obj
 
     # Not in cache - fall back to the original function
@@ -1994,7 +1994,7 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
                                     final_place_thumbnail = os.path.join(directory, new_filename + '_thumbnail.webp')
 
                                     if file_ext == '.avif':  # this is quite a big package so we'll only load it if necessary
-                                        import pillow_avif  # NOQA
+                                        import pillow_avif  # NOQA  # lazy: registers Pillow's AVIF plugin only on the AVIF path
 
                                     # Load image data into Pillow
                                     image = Image.open(BytesIO(source_image))
@@ -2034,7 +2034,7 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
                                     thumbnail_ext = file_ext.lower()
 
                                     if medium_image_format == 'AVIF' or thumbnail_image_format == 'AVIF':
-                                        import pillow_avif  # NOQA
+                                        import pillow_avif  # NOQA  # lazy: registers Pillow's AVIF plugin only on the AVIF path
 
                                     # Resize the image to medium
                                     if medium_width:
@@ -2470,7 +2470,6 @@ def is_activitypub_request():
 
 
 def delete_post_or_comment(deletor, to_delete, store_ap_json, request_json, reason):
-    from app import redis_client
     saved_json = request_json if store_ap_json else None
     id = request_json['id']
     community = to_delete.community
@@ -2479,16 +2478,16 @@ def delete_post_or_comment(deletor, to_delete, store_ap_json, request_json, reas
             community.is_moderator(deletor) or
             community.is_instance_admin(deletor)):
         if isinstance(to_delete, Post):
-            with redis_client.lock(f"lock:post:{to_delete.id}", timeout=10, blocking_timeout=6):
+            with app_pkg.redis_client.lock(f"lock:post:{to_delete.id}", timeout=10, blocking_timeout=6):
                 to_delete.deleted = True
                 to_delete.deleted_by = deletor.id
                 db.session.commit()
                 if to_delete.url and to_delete.cross_posts is not None:
                     to_delete.calculate_cross_posts(delete_only=True)
-            with redis_client.lock(f"lock:community:{community.id}", timeout=10, blocking_timeout=6):
+            with app_pkg.redis_client.lock(f"lock:community:{community.id}", timeout=10, blocking_timeout=6):
                 community.post_count -= 1
                 adjust_domain_post_count(to_delete, -1)  # D1362
-            with redis_client.lock(f"lock:user:{to_delete.user_id}", timeout=10, blocking_timeout=6):
+            with app_pkg.redis_client.lock(f"lock:user:{to_delete.user_id}", timeout=10, blocking_timeout=6):
                 to_delete.author.post_count -= 1
                 db.session.commit()
             if to_delete.author.id != deletor.id:
@@ -2504,18 +2503,18 @@ def delete_post_or_comment(deletor, to_delete, store_ap_json, request_json, reas
                 db.session.delete(notif)
             db.session.commit()
         elif isinstance(to_delete, PostReply):
-            with redis_client.lock(f"lock:post_reply:{to_delete.id}", timeout=10, blocking_timeout=6):
+            with app_pkg.redis_client.lock(f"lock:post_reply:{to_delete.id}", timeout=10, blocking_timeout=6):
                 to_delete.deleted = True
                 to_delete.deleted_by = deletor.id
                 if to_delete.path and len(to_delete.path) > 1:
                     db.session.execute(text('update post_reply set child_count = child_count - 1 where id in :parents'),
                                        {'parents': tuple(to_delete.path[:-1])})
                 db.session.commit()
-            with redis_client.lock(f"lock:user:{to_delete.user_id}", timeout=10, blocking_timeout=6):
+            with app_pkg.redis_client.lock(f"lock:user:{to_delete.user_id}", timeout=10, blocking_timeout=6):
                 to_delete.author.post_reply_count -= 1
                 db.session.commit()
                 if not to_delete.author.bot:
-                    with redis_client.lock(f"lock:post:{to_delete.post_id}", timeout=10, blocking_timeout=6):
+                    with app_pkg.redis_client.lock(f"lock:post:{to_delete.post_id}", timeout=10, blocking_timeout=6):
                         to_delete.post.reply_count -= 1
                         if to_delete.post.reply_count_cross_posted:
                             to_delete.post.reply_count_cross_posted -= 1
@@ -2527,7 +2526,7 @@ def delete_post_or_comment(deletor, to_delete, store_ap_json, request_json, reas
             # every bot reply deleted through federation took one off a count it had
             # never been added to. Measured: a community at 0 went to -1.
             if not to_delete.author.bot:
-                with redis_client.lock(f"lock:community:{community.id}", timeout=10, blocking_timeout=6):
+                with app_pkg.redis_client.lock(f"lock:community:{community.id}", timeout=10, blocking_timeout=6):
                     community.post_reply_count -= 1
                     db.session.commit()
 
@@ -2542,7 +2541,6 @@ def delete_post_or_comment(deletor, to_delete, store_ap_json, request_json, reas
 
 
 def restore_post_or_comment(restorer, to_restore, store_ap_json, request_json, reason):
-    from app import redis_client
     saved_json = request_json if store_ap_json else None
     id = request_json['id']
     community = to_restore.community
@@ -2552,16 +2550,16 @@ def restore_post_or_comment(restorer, to_restore, store_ap_json, request_json, r
             community.is_instance_admin(restorer)):
         # The same locks delete_post_or_comment takes around the same counters (D202)
         if isinstance(to_restore, Post):
-            with redis_client.lock(f"lock:post:{to_restore.id}", timeout=10, blocking_timeout=6):
+            with app_pkg.redis_client.lock(f"lock:post:{to_restore.id}", timeout=10, blocking_timeout=6):
                 to_restore.deleted = False
                 to_restore.deleted_by = None
                 if to_restore.url:
                     to_restore.calculate_cross_posts()
                 db.session.commit()
-            with redis_client.lock(f"lock:community:{community.id}", timeout=10, blocking_timeout=6):
+            with app_pkg.redis_client.lock(f"lock:community:{community.id}", timeout=10, blocking_timeout=6):
                 community.post_count += 1
                 adjust_domain_post_count(to_restore, 1)  # D1362
-            with redis_client.lock(f"lock:user:{to_restore.user_id}", timeout=10, blocking_timeout=6):
+            with app_pkg.redis_client.lock(f"lock:user:{to_restore.user_id}", timeout=10, blocking_timeout=6):
                 to_restore.author.post_count += 1
                 db.session.commit()
             if to_restore.author.id != restorer.id:
@@ -2570,23 +2568,23 @@ def restore_post_or_comment(restorer, to_restore, store_ap_json, request_json, r
                               link_text=shorten_string(to_restore.title), link=f'post/{to_restore.id}')
 
         elif isinstance(to_restore, PostReply):
-            with redis_client.lock(f"lock:post_reply:{to_restore.id}", timeout=10, blocking_timeout=6):
+            with app_pkg.redis_client.lock(f"lock:post_reply:{to_restore.id}", timeout=10, blocking_timeout=6):
                 to_restore.deleted = False
                 to_restore.deleted_by = None
                 if to_restore.path and len(to_restore.path) > 1:
                     db.session.execute(text('update post_reply set child_count = child_count + 1 where id in :parents'),
                                        {'parents': tuple(to_restore.path[:-1])})
                 db.session.commit()
-            with redis_client.lock(f"lock:user:{to_restore.user_id}", timeout=10, blocking_timeout=6):
+            with app_pkg.redis_client.lock(f"lock:user:{to_restore.user_id}", timeout=10, blocking_timeout=6):
                 to_restore.author.post_reply_count += 1
                 db.session.commit()
                 if not to_restore.author.bot:
-                    with redis_client.lock(f"lock:post:{to_restore.post_id}", timeout=10, blocking_timeout=6):
+                    with app_pkg.redis_client.lock(f"lock:post:{to_restore.post_id}", timeout=10, blocking_timeout=6):
                         to_restore.post.reply_count += 1
                         to_restore.post.reply_count_cross_posted += 1
                         db.session.commit()
             if not to_restore.author.bot:
-                with redis_client.lock(f"lock:community:{community.id}", timeout=10, blocking_timeout=6):
+                with app_pkg.redis_client.lock(f"lock:community:{community.id}", timeout=10, blocking_timeout=6):
                     community.post_reply_count += 1  # D1361, as in the delete above
                     db.session.commit()
             if to_restore.author.id != restorer.id:
@@ -2953,7 +2951,6 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
             language = find_language(next(iter(request_json['object']['contentMap'])))  # Combination of next and iter gets the first key in a dict
             language_id = language.id if language else None
         else:
-            from app.utils import site_language_id
             language_id = site_language_id()
 
         distinguished = request_json['object']['distinguished'] if 'distinguished' in request_json['object'] else False
@@ -3147,7 +3144,6 @@ def notify_about_post(post: Post):
 
 @celery.task
 def notify_about_post_task(post_id):
-    from app import redis_client
     session = get_task_session()
     try:
         with patch_db_session(session):
@@ -3186,7 +3182,7 @@ def notify_about_post_task(post_id):
                                                     notif_type=NOTIF_USER,
                                                     subtype='new_post_from_followed_user',
                                                     targets=targets_data)
-                    with redis_client.lock(f"lock:user:{notify_id}", timeout=10, blocking_timeout=6):  # D279
+                    with app_pkg.redis_client.lock(f"lock:user:{notify_id}", timeout=10, blocking_timeout=6):  # D279
                         session.add(new_notification)
                         user = session.get(User, notify_id)
                         user.unread_notifications += 1
@@ -3212,7 +3208,7 @@ def notify_about_post_task(post_id):
                                                     notif_type=NOTIF_COMMUNITY,
                                                     subtype='new_post_in_followed_community',
                                                     targets=targets_data)
-                    with redis_client.lock(f"lock:user:{notify_id}", timeout=10, blocking_timeout=6):  # D279
+                    with app_pkg.redis_client.lock(f"lock:user:{notify_id}", timeout=10, blocking_timeout=6):  # D279
                         session.add(new_notification)
                         user = session.get(User, notify_id)
                         user.unread_notifications += 1
@@ -3244,7 +3240,7 @@ def notify_about_post_task(post_id):
                                                     notif_type=NOTIF_TOPIC,
                                                     subtype='new_post_in_followed_topic',
                                                     targets=targets_data)
-                    with redis_client.lock(f"lock:user:{notify_id}", timeout=10, blocking_timeout=6):  # D279
+                    with app_pkg.redis_client.lock(f"lock:user:{notify_id}", timeout=10, blocking_timeout=6):  # D279
                         session.add(new_notification)
                         user = session.get(User, notify_id)
                         user.unread_notifications += 1
@@ -3279,7 +3275,7 @@ def notify_about_post_task(post_id):
                                                         notif_type=NOTIF_FEED,
                                                         subtype='new_post_in_followed_feed',
                                                         targets=targets_data)
-                        with redis_client.lock(f"lock:user:{notify_id}", timeout=10, blocking_timeout=6):  # D279
+                        with app_pkg.redis_client.lock(f"lock:user:{notify_id}", timeout=10, blocking_timeout=6):  # D279
                             session.add(new_notification)
                             user = session.get(User, notify_id)
                             user.unread_notifications += 1
@@ -3293,7 +3289,6 @@ def notify_about_post_task(post_id):
 
 
 def notify_about_post_reply(parent_reply: Union[PostReply, None], new_reply: PostReply):
-    from app import redis_client
     if parent_reply is None:  # This happens when a new_reply is a top-level comment, not a comment on a comment
         send_notifs_to = notification_subscribers(new_reply.post.id, NOTIF_POST)
         post = db.session.get(Post, new_reply.post.id)
@@ -3315,7 +3310,7 @@ def notify_about_post_reply(parent_reply: Union[PostReply, None], new_reply: Pos
                                                 notif_type=NOTIF_POST,
                                                 subtype='top_level_comment_on_followed_post',
                                                 targets=targets_data)
-                with redis_client.lock(f"lock:user:{notify_id}", timeout=10, blocking_timeout=6):
+                with app_pkg.redis_client.lock(f"lock:user:{notify_id}", timeout=10, blocking_timeout=6):
                     db.session.add(new_notification)
                     user = db.session.get(User, notify_id)
                     user.unread_notifications += 1
@@ -3330,7 +3325,7 @@ def notify_about_post_reply(parent_reply: Union[PostReply, None], new_reply: Pos
         )
         db.session.commit()
 
-        with redis_client.lock(f"lock:user:{new_reply.user_id}", timeout=10, blocking_timeout=6):
+        with app_pkg.redis_client.lock(f"lock:user:{new_reply.user_id}", timeout=10, blocking_timeout=6):
             user = db.session.get(User, new_reply.user_id)
             user.unread_notifications = Notification.query.filter_by(user_id=user.id, read=False).count()
             db.session.commit()
@@ -3358,16 +3353,15 @@ def notify_about_post_reply(parent_reply: Union[PostReply, None], new_reply: Pos
                         subtype='new_reply_on_followed_comment',
                         targets=targets_data)
                 db.session.add(new_notification)
-                with redis_client.lock(f"lock:user:{notify_id}", timeout=10, blocking_timeout=6):
+                with app_pkg.redis_client.lock(f"lock:user:{notify_id}", timeout=10, blocking_timeout=6):
                     user = db.session.get(User, notify_id)
                     user.unread_notifications += 1
                     db.session.commit()
 
 
 def update_post_reply_from_activity(reply: PostReply, request_json: dict):
-    from app import redis_client
     # the same lock, content and language rules as update_post_from_activity (D249, D250, D252, D253)
-    with redis_client.lock(f"lock:post_reply:{reply.id}", timeout=60, blocking_timeout=60):
+    with app_pkg.redis_client.lock(f"lock:post_reply:{reply.id}", timeout=60, blocking_timeout=60):
         if 'content' in request_json['object'] and request_json['object']['content'] is not None:   # Kbin, Mastodon, etc provide their posts as html
             # prefer Markdown in 'source' in provided
             source_markdown = markdown_source(request_json['object'])  # D1346
@@ -3526,8 +3520,7 @@ def _is_vote_count(value) -> bool:
 
 
 def update_post_from_activity(post: Post, request_json: dict):
-    from app import redis_client
-    with redis_client.lock(f"lock:post:{post.id}", timeout=60, blocking_timeout=60):
+    with app_pkg.redis_client.lock(f"lock:post:{post.id}", timeout=60, blocking_timeout=60):
         # redo body without checking if it's changed
         if 'content' in request_json['object'] and request_json['object']['content'] is not None:
             # prefer Markdown in 'source' in provided
@@ -4345,7 +4338,6 @@ def process_report(user, reported, request_json, session) -> bool:
 
 
 def process_quote_boost(core_activity: dict, post_ap: str, their_post_ap: str):
-    import urllib.parse
     post = Post.get_by_ap_id(post_ap)
     if post is None:
         post = PostReply.get_by_ap_id(post_ap)
@@ -4986,7 +4978,7 @@ def populate_child_feed(feed_id, child_feed):
 @celery.task
 def populate_child_feed_worker(feed_id, child_feed):
     try:
-        from app.feed.util import search_for_feed
+        from app.feed.util import search_for_feed  # cycle: importing app.feed runs app.feed.routes, which imports from this module
         server, feed = extract_domain_and_actor(child_feed)
         new_feed = search_for_feed('~' + feed + '@' + server, retry=True)
         new_feed.parent_feed_id = feed_id

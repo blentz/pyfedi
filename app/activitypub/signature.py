@@ -52,6 +52,7 @@ from app import celery, httpx_client
 from app.constants import DATETIME_MS_FORMAT
 from app.models import utcnow, ActivityPubLog, Community, Instance, CommunityMember, User, SendQueue
 from app.utils import get_task_session, is_invalid_get_request_uri
+import app.activitypub.util as activitypub_util
 
 
 def http_date(epoch_seconds=None):
@@ -137,13 +138,12 @@ def post_request(uri: str, body: dict | None, private_key: str, key_id: str,
                         # raise was caught below, but `result.close()` is after this
                         # branch, so the response leaked each time a peer chose to
                         # answer this way.
-                        from app.activitypub.util import process_banned_message
                         try:
                             banned_json = result.json()
                         except Exception:
                             banned_json = None
                         if banned_json is not None:
-                            process_banned_message(banned_json, furl(uri).host, session)
+                            activitypub_util.process_banned_message(banned_json, furl(uri).host, session)
                     elif result.status_code == 410 or result.status_code == 418:    # When an instance returns 410, never send to it again.
                         existing_instance = session.query(Instance).filter_by(domain=furl(uri).host).first()
                         if existing_instance:
