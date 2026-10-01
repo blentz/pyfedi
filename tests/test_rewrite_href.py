@@ -192,9 +192,7 @@ class TestFallthroughElseRule:
 
     Reached only when the URL matches none of the first three rules' shapes.
     Three cases: a PostReply match rewrites; no match of either kind returns
-    the url unchanged; and a Post match (branch-covering the `if post is
-    None:` guard's False arm) also returns the url unchanged, since this
-    branch's own body never rewrites when a Post is found.
+    the url unchanged; and a Post match rewrites to the local post.
     """
 
     FALLTHROUGH_URL = 'https://remote.example.com/users/alice/statuses/321'
@@ -217,30 +215,12 @@ class TestFallthroughElseRule:
 
         assert rewrite_href(self.FALLTHROUGH_URL) == self.FALLTHROUGH_URL
 
-    def test_a_post_match_in_the_fallthrough_does_not_rewrite(self, app, db_session):
-        """A Post row DOES have this ap_id (an unusual shape for a Post, but
-        the function does not validate shape against the entity it looked up)
-        -- the existence test is then True, so the reply lookup is skipped
-        entirely and the url returns unchanged. Branch-covers the False arm of
-        the `if post_id is None:` guard, distinct from the miss case above
-        where that arm is True.
-
-        NOT-REWRITING IS NOW DELIBERATE, and the waste that came with it is
-        gone. The reported defect was that this branch ran a full entity query
-        (`Post.get_by_ap_id`, all 56 columns including body and body_html) to
-        serve as a null check, then discarded the Post. It is now
-        `db.session.query(Post.id).filter(Post.ap_id == url).first()` -- an
-        indexed id lookup answering the same yes/no question, with identical
-        behaviour, which is why this test did not have to change.
-
-        The waste was safe to remove because it is the reading that preserves
-        behaviour. The other reading -- that a Post match here SHOULD rewrite
-        to post.slug / f'/post/{post.id}', mirroring the post rule, and its
-        omission is the real bug -- was NOT taken: it would change link
-        resolution across the site and needs product input, not a cleanup.
-        That question stays open; this test is what would have to change first
-        if it is ever answered the other way."""
+    def test_a_post_match_in_the_fallthrough_rewrites_to_the_local_post(self, app, db_session):
+        """U-rewrite-href-post, fixed (owner ruling): a Post with this ap_id
+        (a Mastodon-shaped status url) rewrites to its local url, as the post
+        rule and the reply and community matches do. It was looked up only as
+        an existence test and the url returned unchanged."""
         instance, owner, community = _base('k')
-        make_post(community, owner, ap_id=self.FALLTHROUGH_URL)
+        post = make_post(community, owner, ap_id=self.FALLTHROUGH_URL)
 
-        assert rewrite_href(self.FALLTHROUGH_URL) == self.FALLTHROUGH_URL
+        assert rewrite_href(self.FALLTHROUGH_URL) == (post.slug or f'/post/{post.id}')
