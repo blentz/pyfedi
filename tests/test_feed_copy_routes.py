@@ -531,8 +531,8 @@ def test_copying_a_feed_subscribes_to_communities_the_user_is_not_in(
 def test_copying_a_feed_makes_the_copier_its_owner_and_redirects(app, db_session):
     """:305-310. is_owner is asserted explicitly -- it is what feed_unsubscribe
     reads to refuse the owner -- and the redirect is asserted in full, because
-    it differs from feed_new's (that one goes to the owner's feed list; this one
-    goes to the index, registered as a divergence)."""
+    D721, fixed (owner ruling): it goes to the owner's feed list, as feed_new's
+    does; it went to the index."""
     instance, owner = _seed()
     source = _feed(owner)
 
@@ -549,13 +549,9 @@ def test_copying_a_feed_makes_the_copier_its_owner_and_redirects(app, db_session
     membership = FeedMember.query.filter_by(feed_id=made.id, user_id=owner.id).one()
     assert membership.is_owner is True
     assert flash_stub.call_count == 1
-    # main.index is '/home' in this app, not '/'. Asserted as the resolved url
-    # rather than a literal guess, and asserted at all because it DIFFERS from
-    # feed_new's redirect (the owner's feed list) -- a divergence between two
-    # routes that do the same job, registered rather than resolved.
     with app.test_request_context():
         from flask import url_for
-        assert response.headers['Location'] == url_for('main.index')
+        assert response.headers['Location'] == url_for('user.user_myfeeds', actor=owner.link())
 
 
 def test_the_copy_form_prefills_every_field_from_the_source_feed(app, db_session):
