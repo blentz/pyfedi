@@ -5,8 +5,8 @@ import time
 from datetime import datetime, timedelta
 
 from flask import current_app, g
-from sqlalchemy import text, func, or_
-from sqlalchemy.orm.exc import NoResultFound, DetachedInstanceError
+from sqlalchemy import text, func, or_, inspect
+from sqlalchemy.orm.exc import NoResultFound
 
 from app import cache, db
 from app.activitypub.util import active_month, normalise_actor_string
@@ -374,22 +374,25 @@ def user_view(user: User | int, variant, stub=False, user_id=None, flair_communi
             flair = user.community_flair(flair_community_id)
             if flair:
                 v1['flair'] = flair
-        if user.extra_fields:
-            v1['extra_fields'] = []
-            try:
-                extra_fields = user.extra_fields
-            except DetachedInstanceError:  # when loading archived posts and their replies, temporary detatched users are created. See convert_archived_replies_to_tree()
-                extra_fields = db.session.get(User, user.id).extra_fields
-            num_extra_fields = 0
-            for field in extra_fields:
-                user_field = {}
-                user_field['id'] = field.id
-                user_field['label'] = field.label
-                user_field['text'] = field.text
-                v1['extra_fields'].append(user_field)
-                num_extra_fields += 1
-                if num_extra_fields == 4:
-                    break
+        # D1437: archived threads build temporary User objects (convert_archived_replies_to_tree), and a dynamic
+        # relationship read off an object outside the session is empty, so read the fields off the attached author
+        if inspect(user).persistent:
+            author = user
+        else:
+            with db.session.no_autoflush:
+                author = db.session.get(User, user.id) if user.id is not None else None
+        extra_fields = author.extra_fields if author is not None else []
+        v1['extra_fields'] = []
+        num_extra_fields = 0
+        for field in extra_fields:
+            user_field = {}
+            user_field['id'] = field.id
+            user_field['label'] = field.label
+            user_field['text'] = field.text
+            v1['extra_fields'].append(user_field)
+            num_extra_fields += 1
+            if num_extra_fields == 4:
+                break
         if user_id:
             usernote_body = None
             if usernotes is not None:

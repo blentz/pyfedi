@@ -86,32 +86,32 @@ class TestACrossPostAppendedToAnExistingList:
 
 
 class TestAnActorThatIsNotInASession:
-    """D1437, REPORTED AND NOT FIXED. `user_view`'s
-
-        if user.extra_fields:
-            try:
-                extra_fields = user.extra_fields
-            except DetachedInstanceError:
-                extra_fields = db.session.get(User, user.id).extra_fields
-
-    cannot reach its handler on the installed SQLAlchemy (2.0.52). `User.extra_fields` is a DYNAMIC
-    relationship, and a detached instance does not raise for one -- measured:
-
-        SAWarning: Instance <User at 0x...> is detached, dynamic relationship cannot return a
-        correct result. This warning will become a DetachedInstanceError in a future release.
-
-    So the collection comes back EMPTY, the `if` above the try is falsy, and the try is never entered.
-    The comment names the caller -- `convert_archived_replies_to_tree` builds temporary `User`
-    objects -- which means an archived thread's authors silently lose their profile fields today, with
-    a warning in the log rather than an error.
-
-    Two ways to fix it, both a maintainer's call: test `inspect(user).detached` and re-read by id
-    before the `if`, or have the archived-thread path build attached users. Until then the handler is
-    future-proofing for the release that makes it an exception.
-
-    No row here drives the detached case, because doing so puts that SAWarning into the suite -- whose
-    warning count this campaign ratchets. The row below covers the arm that does run.
+    """D1437, fixed (owner ruling). `user_view` read `user.extra_fields` straight off the object it was
+    given, behind an `except DetachedInstanceError` that could not fire: `extra_fields` is a DYNAMIC
+    relationship, and an object outside the session reads it as empty rather than raising. The
+    archived-thread path (`convert_archived_replies_to_tree`) builds exactly such temporary `User`
+    objects, so their authors silently lost their profile fields. The view now reads the fields off the
+    author attached to the current session, and the dead handler is gone.
     """
+
+    def test_extra_fields_are_read_for_a_temporary_author(self, env):
+        """An archived thread's author is a fresh `User()` carrying only the real id; its profile
+        fields come from the attached row."""
+        from app.api.alpha.views import user_view
+
+        env.author.extra_fields.append(UserExtraField(label='Pronouns', text='they/them'))
+        db.session.commit()
+        ghost = User()
+        ghost.id = env.author.id
+        ghost.user_name = env.author.user_name
+        ghost.title = env.author.title
+        ghost.created = env.author.created
+        ghost.instance_id = env.author.instance_id
+        ghost.ap_profile_id = env.author.ap_profile_id
+
+        view = user_view(ghost, variant=1)
+
+        assert [field['label'] for field in view['extra_fields']] == ['Pronouns']
 
     def test_extra_fields_are_read_for_an_attached_user(self, env):
         from app.api.alpha.views import user_view
