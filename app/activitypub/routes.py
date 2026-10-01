@@ -37,7 +37,7 @@ from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
 # app.activitypub before show_feed is defined (import cycle: feed.routes)
 import app.feed.routes as feed_routes
-from app.models import User, Community, CommunityJoinRequest, CommunityMember, CommunityBan, ActivityPubLog, Post, \
+from app.models import User, Community, CommunityJoinRequest, CommunityMember, ActivityPubLog, Post, \
     PostReply, Instance, AllowedInstances, BannedInstances, utcnow, Site, Notification, \
     ChatMessage, Conversation, UserFollower, UserBlock, Poll, PollChoice, Feed, FeedItem, FeedMember, FeedJoinRequest, \
     IpBan, ActivityBatch, InstanceBan, UserFollowRequest, votes_cast_today
@@ -49,7 +49,7 @@ from app.shared.tasks import task_selector
 # app.activitypub.signature before show_profile is defined (import cycle: user.routes)
 import app.user.routes as user_routes
 from app.user.utils import search_for_user
-from app.utils import gibberish, get_setting, community_membership, ap_datetime, ip_address, can_downvote, \
+from app.utils import user_banned_from_community, gibberish, get_setting, community_membership, ap_datetime, ip_address, can_downvote, \
     can_upvote, can_create_post, awaken_dormant_instance, shorten_string, can_create_post_reply, sha256_digest, \
     community_moderators, html_to_text, add_to_modlog, instance_banned, get_redis_connection, \
     feed_membership, get_task_session, patch_db_session, \
@@ -1013,7 +1013,7 @@ def process_inbox_request(request_json, store_ap_json):
                             reject_follow = True
                         else:
                             # check if user is banned from this community
-                            user_banned = session.query(CommunityBan).filter_by(user_id=user.id, community_id=community.id).first()
+                            user_banned = user_banned_from_community(user.id, community.id)  # D995
                             if user_banned:
                                 log_incoming_ap(id, APLOG_FOLLOW, APLOG_FAILURE, saved_json, 'Remote user has been banned')
                                 reject_follow = True

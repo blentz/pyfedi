@@ -2,10 +2,10 @@ import json
 from app import cache, celery, db
 from app.activitypub.signature import default_context, post_request, send_post_request
 from app.constants import NOTIF_MENTION
-from app.models import Community, CommunityBan, CommunityJoinRequest, CommunityMember, Notification, Post, \
+from app.models import Community, CommunityJoinRequest, CommunityMember, Notification, Post, \
     PostReply, utcnow, User
 from app.user.utils import search_for_user
-from app.utils import community_membership, gibberish, joined_communities, instance_banned, ap_datetime, \
+from app.utils import user_banned_from_community, community_membership, gibberish, joined_communities, instance_banned, ap_datetime, \
     recently_upvoted_posts, recently_downvoted_posts, recently_upvoted_post_replies, \
     recently_downvoted_post_replies, get_recipient_language, get_task_session, patch_db_session
 
@@ -143,7 +143,7 @@ def send_reply(reply_id, parent_id, edit=False, session=None):
     if community.local_only or community.private or not (community.instance_id and community.instance.online()):
         return
 
-    banned = session.query(CommunityBan).filter_by(user_id=user.id, community_id=community.id).first()
+    banned = user_banned_from_community(user.id, community.id)  # D995
     if banned:
         return
     if not community.is_local():

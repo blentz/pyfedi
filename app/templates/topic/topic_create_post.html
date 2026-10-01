@@ -17,7 +17,7 @@
                         <table class="communities_table table table-hover w-100">
                             <tbody>
                                 {% for community in communities %}
-                                    {% if not community.user_is_banned(current_user) %}
+                                    {% if not user_banned_from_community(current_user.id, community.id) %}
                                         {% if not community.restricted_to_mods or (community.restricted_to_mods and community_membership(current_user, community) in [SUBSCRIPTION_MODERATOR, SUBSCRIPTION_OWNER]) %}
                                             <tr>
                                                 <th class="pl-2"><a class="choose_topic_for_post" data-id="{{ community.id }}" href="/community/{{ community.link() }}/submit" rel="nofollow" aria-label="{{ _('Post in %(name)s', name=community.display_name()) }}"><img src="{{ community.icon_image('tiny') }}" class="community_icon rounded-circle" loading="lazy" alt="" />
@@ -32,7 +32,7 @@
                                     {% endif %}
                                 {% endfor %}
                                 {% for community in sub_communities %}
-                                    {% if not community.user_is_banned(current_user) %}
+                                    {% if not user_banned_from_community(current_user.id, community.id) %}
                                         {% if not community.restricted_to_mods or (community.restricted_to_mods and community_membership(current_user, community) in [SUBSCRIPTION_MODERATOR, SUBSCRIPTION_OWNER]) %}
                                             <tr>
                                                 <th class="pl-2"><a class="choose_topic_for_post" data-id="{{ community.id }}" href="/community/{{ community.link() }}/submit" rel="nofollow" aria-label="{{ _('Post in %(name)s', name=community.display_name()) }}"><img src="{{ community.icon_image('tiny') }}" class="community_icon rounded-circle" loading="lazy" alt="" />

@@ -4,10 +4,10 @@ from app import celery, db
 from app.activitypub.signature import default_context, send_post_request
 from app.constants import POST_TYPE_LINK, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, POST_TYPE_VIDEO, \
     POST_TYPE_POLL, MICROBLOG_APPS, NOTIF_MENTION, POST_TYPE_EVENT
-from app.models import CommunityBan, Instance, Notification, Poll, PollChoice, Post, User, UserFollower, utcnow, Event, \
+from app.models import Instance, Notification, Poll, PollChoice, Post, User, UserFollower, utcnow, Event, \
     Community, more_info_link
 from app.user.utils import search_for_user
-from app.utils import gibberish, instance_banned, ap_datetime, get_recipient_language, get_task_session, \
+from app.utils import user_banned_from_community, gibberish, instance_banned, ap_datetime, get_recipient_language, get_task_session, \
     patch_db_session, TaskError
 
 from flask import current_app
@@ -153,7 +153,7 @@ def send_post(post_id, edit=False, session=None):
     if community.local_only or community.private:
         return
 
-    banned = session.query(CommunityBan).filter_by(user_id=user.id, community_id=community.id).first()
+    banned = user_banned_from_community(user.id, community.id)  # D995
     if banned:
         return
     if not community.is_local():

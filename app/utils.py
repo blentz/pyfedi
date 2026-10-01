@@ -1879,6 +1879,19 @@ def communities_banned_from(user_id: int) -> List[int]:
     return [cb.community_id for cb in community_bans] + [cb.id for cb in instance_bans]
 
 
+def user_banned_from_community(user_id: int, community_id: int) -> bool:
+    """D995: the one answer to "is this user banned from this community".
+
+    A community ban or a ban from the community's whole instance, through the
+    memoized `communities_banned_from` -- and, because that list is cached for a
+    day and a ban arriving by a path that does not invalidate it would leave it
+    stale, a fresh read of the CommunityBan row as well (D991).
+    """
+    if community_id in communities_banned_from(user_id):
+        return True
+    return db.session.query(CommunityBan).filter_by(user_id=user_id, community_id=community_id).first() is not None
+
+
 @cache.memoize(timeout=86400)
 def communities_banned_from_all_users() -> dict[int, List[int]]:
     """Returns dict mapping user_id to list of community_ids they are banned from."""

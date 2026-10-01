@@ -9,7 +9,7 @@ from app.auth.forms import ChooseTopicsForm, FilterSetupForm
 from app.auth.util import get_country
 from app.constants import SUBSCRIPTION_NONMEMBER
 from app.models import User, Topic, Community, CommunityJoinRequest, CommunityMember, Filter, InstanceChooser, Language
-from app.utils import render_template, joined_communities, community_membership, get_setting, num_topics, ip_address
+from app.utils import user_banned_from_community, render_template, joined_communities, community_membership, get_setting, num_topics, ip_address
 
 
 @bp.route('/instance_chooser')
@@ -120,7 +120,7 @@ def join_topic(topic_id):
     communities = Community.query.filter_by(topic_id=topic_id, banned=False,
                                             private=False).all()
     for community in communities:
-        if not community.user_is_banned(current_user) and community_membership(current_user, community) == SUBSCRIPTION_NONMEMBER:
+        if not user_banned_from_community(current_user.id, community.id) and community_membership(current_user, community) == SUBSCRIPTION_NONMEMBER:
             if not community.is_local():
                 join_request = CommunityJoinRequest(user_id=current_user.id, community_id=community.id)
                 db.session.add(join_request)

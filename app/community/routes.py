@@ -46,7 +46,7 @@ from app.community import bp
 from app.post.util import tags_to_string
 from app.shared.community import invite_with_chat, invite_with_email, subscribe_community, add_mod_to_community, \
     remove_mod_from_community, get_comm_flair_list, favorite_community, edit_community
-from app.utils import back, get_setting, render_template, markdown_to_html, validation_required, can_moderate, \
+from app.utils import user_banned_from_community, back, get_setting, render_template, markdown_to_html, validation_required, can_moderate, \
     shorten_string, gibberish, community_membership, \
     request_etag_matches, return_304, can_upvote, can_downvote, user_filters_posts, \
     joined_communities, moderating_communities, moderating_communities_ids, blocked_domains, \
@@ -931,7 +931,7 @@ def do_subscribe(actor, user_id, admin_preload=False, joined_via_feed=False):
                             pre_load_message['user_banned'] = True
                             return pre_load_message
                     if community_membership(user, community) != SUBSCRIPTION_MEMBER and community_membership(user, community) != SUBSCRIPTION_PENDING:
-                        banned = CommunityBan.query.filter_by(user_id=user.id, community_id=community.id).first()
+                        banned = user_banned_from_community(user.id, community.id)  # D995
                         if banned:
                             # RETURN, rather than flash and carry on. This
                             # branch used to fall through into the join, so a
@@ -1107,7 +1107,7 @@ def join_then_add(actor):
             db.session.commit()
         flash(Markup(_('You joined %(community_name)s',
                        community_name=community_link_markup(community))))
-    if not community.user_is_banned(current_user):
+    if not user_banned_from_community(current_user.id, community.id):  # D995
         return redirect(url_for('community.add_post', actor=community.link(), type='discussion'))
     else:
         abort(401)

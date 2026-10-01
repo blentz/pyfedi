@@ -1,8 +1,8 @@
 from app import cache, celery, db
 from app.constants import *
 from app.activitypub.signature import default_context, post_request, send_post_request
-from app.models import Community, CommunityBan, CommunityJoinRequest, User, Feed, FeedJoinRequest, UserFollowRequest
-from app.utils import community_membership, gibberish, joined_communities, instance_banned, get_task_session, \
+from app.models import Community, CommunityJoinRequest, User, Feed, FeedJoinRequest, UserFollowRequest
+from app.utils import user_banned_from_community, community_membership, gibberish, joined_communities, instance_banned, get_task_session, \
     feed_membership, menu_subscribed_feeds, patch_db_session, \
     community_link_markup
 
@@ -45,7 +45,7 @@ def join_community(send_async, user_id, community_id, src):
             community = session.query(Community).filter_by(id=community_id).one()
 
             pre_load_message = {}
-            banned = session.query(CommunityBan).filter_by(user_id=user_id, community_id=community_id).first()
+            banned = user_banned_from_community(user_id, community_id)  # D995
             if banned:
                 if not send_async:
                     if src == SRC_WEB:

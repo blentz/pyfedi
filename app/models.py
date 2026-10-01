@@ -1444,12 +1444,6 @@ class Community(db.Model):
     def is_admin_or_staff(self, user):
         return user.is_admin_or_staff()
 
-    def user_is_banned(self, user):
-        # use communities_banned_from() instead of this method, where possible. Redis caches the result of communities_banned_from()
-        # we cannot use communities_banned_from() in models.py because it causes a circular import
-        community_bans = CommunityBan.query.filter(CommunityBan.user_id == user.id).all()
-        return self.id in [cb.community_id for cb in community_bans]
-
     def profile_id(self):
         retval = self.ap_profile_id if self.ap_profile_id else f"{current_app.config['SERVER_URL']}/c/{self.name}"
         return retval.lower()

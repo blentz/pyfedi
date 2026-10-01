@@ -16,7 +16,7 @@ from app.shared.community import join_community, leave_community, block_communit
     remove_mod_from_community, COMMUNITY_SETTINGS
 from app.shared.feed import leave_feed
 from app.shared.tasks import task_selector
-from app.utils import authorise_api_user, communities_banned_from_all_users, moderating_communities_ids, \
+from app.utils import user_banned_from_community, authorise_api_user, communities_banned_from_all_users, moderating_communities_ids, \
     blocked_or_banned_instances
 from app.utils import communities_banned_from, blocked_instances, blocked_communities, shorten_string, \
     joined_communities, moderating_communities, expand_hex_color, community_membership, subscribed_feeds, \
@@ -254,8 +254,7 @@ def post_community_follow(auth, data):
         # from a community rejoined it by asking, and the membership row that
         # came back put the community into its subscribed feed.
         user = authorise_api_user(auth, return_type='model')
-        if CommunityBan.query.filter_by(user_id=user.id,
-                                        community_id=community.id).first():
+        if user_banned_from_community(user.id, community.id):  # D995
             raise Exception('You are banned from this community')
 
     user_id = join_community(community_id, SRC_API, auth) if follow else leave_community(community_id, SRC_API, auth)

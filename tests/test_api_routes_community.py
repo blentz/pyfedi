@@ -10,7 +10,7 @@ from flask import current_app, g
 
 from app import db
 from app.models import (Community, CommunityFlair, CommunityMember, Feed,
-                        FeedMember, Language, Site)
+                        FeedMember, InstanceBan, Language, Site)
 from tests.factories import (a_keypair, make_community, make_community_ban,
                              make_community_flair, make_community_member,
                              make_local_feed, make_post, make_user)
@@ -92,6 +92,23 @@ class TestJoiningAndLeaving:
         assert CommunityMember.query.filter_by(
             user_id=env.stranger.id,
             community_id=env.community.id).count() == 1
+
+    def test_joining_is_refused_to_a_user_banned_from_the_whole_instance(self, env):
+        """D995, owner ruling: the API's follow gate read only CommunityBan
+        rows, so an instance-banned user could join."""
+        db.session.add(InstanceBan(user_id=env.stranger.id,
+                                   instance_id=env.community.instance_id))
+        db.session.commit()
+
+        response = env.client.post('/api/alpha/community/follow',
+                                   headers=auth(env.stranger),
+                                   json={'community_id': env.community.id,
+                                         'follow': True})
+
+        assert response.status_code == 400
+        assert CommunityMember.query.filter_by(
+            user_id=env.stranger.id,
+            community_id=env.community.id).count() == 0
 
     def test_joining_a_community_nobody_holds(self, env):
         response = env.client.post('/api/alpha/community/follow',

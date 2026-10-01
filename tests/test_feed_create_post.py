@@ -26,7 +26,7 @@ import pytest
 from flask import g
 
 from app import db
-from app.models import Community, FeedItem, Language, Site
+from app.models import Community, FeedItem, InstanceBan, Language, Site, User
 from tests.factories import (make_community, make_community_member,
                              make_instance, make_local_feed, make_user)
 
@@ -154,6 +154,22 @@ class TestNoCommunityId:
 
         assert response.status_code == 200
         assert b'general' in response.data
+
+
+    def test_the_picker_leaves_out_a_community_on_an_instance_the_user_is_banned_from(
+            self, app, env):
+        """D995, owner ruling: the picker asked `Community.user_is_banned`,
+        which read only CommunityBan rows, so it offered a community the user
+        is banned from through an instance ban."""
+        client, in_feed, outside = env
+        alice = User.query.filter_by(user_name='alice').one()
+        db.session.add(InstanceBan(user_id=alice.id, instance_id=in_feed.instance_id))
+        db.session.commit()
+
+        response = client.get('/f/newsfeed/submit')
+
+        assert response.status_code == 200
+        assert f'/community/{in_feed.link()}/submit'.encode() not in response.data
 
 
 class TestTheFeedItself:
