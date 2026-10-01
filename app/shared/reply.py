@@ -572,6 +572,8 @@ def lock_post_reply(post_reply_id, locked, src, auth=None):
             task_selector('unlock_post_reply', user_id=user.id, post_reply_id=post_reply_id)
     elif src == SRC_API:
         raise Exception('Does not have permission')
+    else:
+        abort(403)
 
     if src == SRC_API:
         return user.id, post_reply
@@ -599,6 +601,8 @@ def set_collapse_post_reply(post_reply_id, collapsible, src, auth=None):
             #task_selector('unlock_post_reply', user_id=user.id, post_reply_id=post_reply_id)
     elif src == SRC_API:
         raise Exception('Does not have permission')
+    else:
+        abort(403)
 
     if src == SRC_API:
         return user.id, post_reply

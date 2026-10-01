@@ -260,6 +260,8 @@ import pytest
 from contextlib import contextmanager
 from types import SimpleNamespace
 
+from werkzeug.exceptions import HTTPException
+
 from app import db
 from app.api.alpha.utils.reply import post_reply_mark_as_answer
 from app.constants import NOTIF_ANSWER, SRC_API, SRC_WEB
@@ -1179,61 +1181,20 @@ class TestLockPostReply:
         assert s.reply.replies_enabled is True
         assert db.session.query(ModLog).count() == 0
 
-    def test_an_unprivileged_web_caller_is_ignored_rather_than_refused(self, db_session, app):
-        """`:524`'s FALSE arm -- the one arc Task 7's fix left uncovered.
-
-        Task 7 turned `:507`'s bare `if` into an `if`/`elif` pair so an
-        unauthorized API caller is refused instead of receiving the unchanged
-        object. That added two statements and two arcs, and the test above
-        covers `:524`'s true arm. ITS FALSE ARM WAS NEVER REACHED: Task 8's
-        coverage re-run over the 46 tests that existed then reported
-        `missing_branches` `[[518, 521], [545, 548]]` for this module, the
-        only two arcs left anywhere in these six functions.
-
-        WHAT THE ARC IS. The caller here is neither a moderator nor an instance
-        admin AND is on the web path, so `:507` is false and `:524` is false
-        too, and control falls to `:527`, which is also false: the call returns
-        None having done nothing, with no flash and no exception.
-
-        IT IS NOT A SECOND DEFECT BECAUSE IT IS THE REGISTERED ONE -- NOT
-        BECAUSE IT IS SAFE. An earlier wording of this docstring said the
-        silence was "deliberate rather than the silent fall-through Task 7
-        fixed -- the web routes guard before they dispatch, whereas the API
-        path reaches this function as its first check". THE "web routes guard
-        before they dispatch" CLAUSE IS FALSE, and the "deliberate rather than"
-        framing rested entirely on it; both are retracted. (The clause about the
-        API path is true and stands.) `post_reply_lock`
-        (`app/post/routes.py:1668-1671`)
-        carries `@login_required` and nothing else, and its body is one call to
-        `lock_post_reply` with `SRC_WEB`; `post_reply_collapse` (`:1675-1678`)
-        is the same shape. NO AUTHORIZATION RUNS BEFORE THIS FUNCTION ON THE WEB
-        PATH, so what this test drives is not a redundant no-op behind a guard
-        -- it is the route's only authorization, and it lets ANY LOGGED-IN USER
-        LOCK ANY COMMENT. It is the same defect Task 7 fixed for `SRC_API`, left
-        standing on the web half out of faithfulness to the twin
-        (`app/shared/post.py:968-969`), and it is registered OPEN as D524. The
-        class docstring above carries the full re-derivation and the contrast
-        with `post_reply_choose_answer`, which does guard.
-
-        WHAT THE TEST IS STILL FOR, unchanged by that retraction: asserting
-        `None` plus an unchanged row plus an empty flash queue is what
-        distinguishes "did nothing" from "did something and said nothing", and
-        it is what keeps D524 witnessed by a test rather than merely asserted in
-        a register. The test's NAME is the honest one --
-        `is_ignored_rather_than_refused` -- and it should stay that way until
-        the behaviour changes.
-        """
-        from flask import get_flashed_messages
+    def test_an_unprivileged_web_caller_is_refused_with_403(self, db_session, app):
+        """D524, fixed: the web arm had no refusal, and `post_reply_lock` has
+        no guard of its own, so any logged-in user's lock fell through to a
+        silent no-op 302. The web arm now aborts 403, as the choose-answer
+        routes do; the row and the modlog are untouched."""
         s = _seed_moderated_reply()
         s.reply.replies_enabled = True
         db.session.commit()
 
         with web_ctx(app, s.actor):
-            result = lock_post_reply(s.reply.id, True, SRC_WEB, auth=None)
-            messages = get_flashed_messages()
+            with pytest.raises(HTTPException) as exc:
+                lock_post_reply(s.reply.id, True, SRC_WEB, auth=None)
 
-        assert result is None
-        assert messages == []
+        assert exc.value.code == 403
         db.session.refresh(s.reply)
         assert s.reply.replies_enabled is True
         assert db.session.query(ModLog).count() == 0
@@ -1504,29 +1465,17 @@ class TestSetCollapsePostReply:
         db.session.refresh(s.reply)
         assert s.reply.collapsible is False
 
-    def test_an_unprivileged_web_caller_is_ignored_here_too(self, db_session, app):
-        """`:551`'s FALSE arm -- the second of the two arcs Task 7 left open.
-
-        The mirror of
-        `TestLockPostReply::test_an_unprivileged_web_caller_is_ignored_rather
-        _than_refused`, and uncovered for the same reason: `:551`'s true arm
-        has a test and its false arm had none, so Task 8's coverage run
-        reported `[[518, 521], [545, 548]]` as this module's only missing
-        arcs. `:539` is false for this caller and `src` is `SRC_WEB`, so
-        `:554` is false as well and the call returns None having written
-        nothing.
-        """
-        from flask import get_flashed_messages
+    def test_an_unprivileged_web_caller_is_refused_here_too(self, db_session, app):
+        """D524, fixed: the collapse twin of the lock refusal above."""
         s = _seed_moderated_reply()
         s.reply.collapsible = False
         db.session.commit()
 
         with web_ctx(app, s.actor):
-            result = set_collapse_post_reply(s.reply.id, True, SRC_WEB, auth=None)
-            messages = get_flashed_messages()
+            with pytest.raises(HTTPException) as exc:
+                set_collapse_post_reply(s.reply.id, True, SRC_WEB, auth=None)
 
-        assert result is None
-        assert messages == []
+        assert exc.value.code == 403
         db.session.refresh(s.reply)
         assert s.reply.collapsible is False
 
@@ -1581,7 +1530,7 @@ class TestSetCollapsePostReply:
 
         THE `user = None` KILL IS NOT THE UNIQUE ONE, and this paragraph says
         so rather than letting the reader infer otherwise.
-        `test_an_unprivileged_web_caller_is_ignored_here_too` kills that mutant
+        `test_an_unprivileged_web_caller_is_refused_here_too` kills that mutant
         as well, by crashing in `is_instance_admin`, and it also kills the
         non-crashing variant that binds some other real user -- but only by
         accident of Probe C above: `s.author` is user id 1, and
