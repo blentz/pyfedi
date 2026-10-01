@@ -130,7 +130,7 @@ def invite_with_chat(community_id: int, handle: str, src, auth=None):
     recipient = search_for_user(handle)
     if recipient and not recipient.banned and not instance_banned(recipient.instance.domain):
         community: Community = db.session.query(Community).filter_by(id=community_id).one()
-        if community.banned:
+        if community.banned or not community.can_invite(user):
             return 0
 
         conversation = Conversation(user_id=user.id)
@@ -196,7 +196,7 @@ def invite_with_email(community_id: int, to: str, src, auth=None):
         user = current_user
 
     community: Community = db.session.query(Community).filter_by(id=community_id).one()
-    if community.banned:
+    if community.banned or not community.can_invite(user):
         return 0
 
     subscribe = 'subscribe'

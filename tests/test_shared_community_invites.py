@@ -310,13 +310,13 @@ from flask import render_template
 from sqlalchemy.exc import NoResultFound
 
 from app import db
-from app.constants import INVITE_APPLY, SRC_API, SRC_WEB
+from app.constants import INVITE_APPLY, INVITE_MODS_ONLY, SRC_API, SRC_WEB
 from app.models import Community, CommunityFlair, CommunityInvitation, Conversation
 from app.shared.community import (comm_flair_ap_format, create_invite_token, get_comm_flair_list,
                                   invite_with_chat, invite_with_email)
 from app.utils import markdown_to_html
-from tests.factories import (bearer, make_community, make_community_flair, make_conversation,
-                             make_instance, make_user, web_ctx)
+from tests.factories import (bearer, make_community, make_community_flair, make_community_member,
+                             make_conversation, make_instance, make_user, web_ctx)
 
 
 def _burn_a_seed():
@@ -362,6 +362,8 @@ def _seed():
     user = make_user(instance, 'alice', local=True)
     bystander = make_community('bystander', host='bystander.example')
     community = make_community()
+    # a member, so can_invite() passes at INVITE_MEMBERS_ONLY (INVITE_APPLY + 1) since D632
+    make_community_member(user, community)
     return SimpleNamespace(instance=instance, user=user, community=community, bystander=bystander)
 
 
@@ -2645,3 +2647,35 @@ def test_comm_flair_ap_format_declares_that_it_can_return_none():
     hints = typing.get_type_hints(community_module.comm_flair_ap_format)
 
     assert type(None) in typing.get_args(hints['return'])
+
+
+def test_invite_with_email_refuses_a_user_the_community_does_not_let_invite(app, db_session, monkeypatch):
+    """D632, fixed: invite_with_email relied on the web route's can_invite()
+    alone, so its API arm (no caller yet) would have bypassed it. It now
+    checks can_invite(user) itself and sends nothing."""
+    s = _seed()
+    s.community.invitations = INVITE_MODS_ONLY
+    db.session.commit()
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_email',
+                        lambda *a, **kw: calls.append(a))
+
+    result = invite_with_email(s.community.id, 'invitee@example.com', SRC_API, auth=bearer(s.user))
+
+    assert result == 0
+    assert calls == []
+
+
+def test_invite_with_chat_refuses_a_user_the_community_does_not_let_invite(app, db_session, monkeypatch):
+    """D632, fixed: the chat twin of the test above."""
+    s = _seed()
+    s.community.invitations = INVITE_MODS_ONLY
+    recipient = make_user(s.instance, 'invitee', local=True)
+    db.session.commit()
+    monkeypatch.setattr('app.shared.community.search_for_user', lambda handle: recipient)
+    monkeypatch.setattr('app.shared.community.instance_banned', lambda domain: False)
+
+    result = invite_with_chat(s.community.id, 'invitee', SRC_API, auth=bearer(s.user))
+
+    assert result == 0
+    assert db.session.query(Conversation).count() == 0
