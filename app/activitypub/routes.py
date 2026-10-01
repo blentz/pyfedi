@@ -2241,7 +2241,7 @@ def user_followers(actor):
         # Get all followers, except those that are blocked by user by doing an outer join
         followers = db.session.query(User).join(UserFollower, User.id == UserFollower.remote_user_id) \
             .outerjoin(UserBlock,
-                       (User.id == UserBlock.blocker_id) & (UserFollower.local_user_id == UserBlock.blocked_id)) \
+                       (UserFollower.local_user_id == UserBlock.blocker_id) & (User.id == UserBlock.blocked_id)) \
             .filter((UserFollower.local_user_id == user.id) & (UserBlock.id == None)) \
             .filter(UserFollower.is_accepted == True) \
             .all()
