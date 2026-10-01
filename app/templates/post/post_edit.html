@@ -164,7 +164,7 @@
                 {% endif %}
             {% elif post_type == POST_TYPE_VIDEO %}
                 {{ render_field(form.video_url) }}
-                <p class="small field_hint">{{ _('Provide a URL ending with .mp4 or .webm.') }}</p>
+                <p class="small field_hint">{{ _('Provide a URL ending with .mp4, .webm or .mov.') }}</p>
                 {% if can_upload_video() -%}
                 {{ render_field(form.image_file) }}
                 <p class="small field_hint">{{ _('Either provide an url OR upload a file but not both. Use common codecs like h.264 and mp3.') }}</p>

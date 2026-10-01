@@ -458,10 +458,16 @@ And if you want to add your score to the database to help your fellow Bookworms 
         target_html = '<p>test <video class="responsive-video" controls="" loop="" muted="" playsinline="" preload="metadata"><source src="https://site.tld/video.webm" type="video/webm"/> Your browser does not support playing HTML5 video. <a href="https://site.tld/video.webm" rel="nofollow ugc" target="_blank">You can download a copy of the file instead.</a> Here is a description of the content: alt text here</video></p>\n'
         self.assertEqual(target_html, result)
 
-        # other, unsupported video, just treat it like any other image markdown
+        # mov video (D476, fixed: a supported video format, played like mp4)
         markdown = "test ![alt text here](https://site.tld/video.mov)"
         result = markdown_to_html(markdown, test_env={'fn_string': 'fn-test'})
-        target_html = '<p>test <img alt="alt text here" loading="lazy" src="https://site.tld/video.mov"/></p>\n'
+        target_html = '<p>test <video class="responsive-video" controls="" loop="" muted="" playsinline="" preload="metadata"><source src="https://site.tld/video.mov" type="video/mp4"/> Your browser does not support playing HTML5 video. <a href="https://site.tld/video.mov" rel="nofollow ugc" target="_blank">You can download a copy of the file instead.</a> Here is a description of the content: alt text here</video></p>\n'
+        self.assertEqual(target_html, result)
+
+        # other, unsupported video, just treat it like any other image markdown
+        markdown = "test ![alt text here](https://site.tld/video.avi)"
+        result = markdown_to_html(markdown, test_env={'fn_string': 'fn-test'})
+        target_html = '<p>test <img alt="alt text here" loading="lazy" src="https://site.tld/video.avi"/></p>\n'
         self.assertEqual(target_html, result)
 
         # make sure images still work right

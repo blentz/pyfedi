@@ -2525,12 +2525,9 @@ class TestGenericOpengraphArm:
     # nothing decodes the bytes and the only consequence is the wrong
     # `post.type`. Same missing equivalence class, second consequence.
     #
-    # RECORDED AGAINST D476, NOT FIXED: a missing equivalence class is
-    # invisible to both coverage and mutation, which is what made D476 worth
-    # registering, and fixing it would change app/ which this round may not do.
-    # No test here feeds a '.mov'; one would pin today's wrong answer as
-    # correct, and a test whose whole content is a defect is worse than the
-    # note.
+    # D476, FIXED (owner ruling 2026-09-30): '.mov' is a video extension
+    # everywhere '.mp4' and '.webm' are, so `is_video_url` and `:654` both
+    # admit it; `test_a_mov_url_is_typed_as_video` below witnesses it.
     #
     # d4 IS ISOLABLE BY VALUE BUT ITS ARGUMENT IS NOT. `is_video_hosting_site`
     # is the only operand reading `embed_url` rather than `url`, and
@@ -2605,6 +2602,12 @@ class TestGenericOpengraphArm:
         `type`, and `:661` is unreachable because `:565` is true here.
         """
         post = self._drive_video(http_mock, 'https://cdn.example.com/MOVIE.MP4')
+        assert post.type == POST_TYPE_VIDEO
+
+    def test_a_mov_url_is_typed_as_video(self, db_session, http_mock, chdir_upload):
+        """D476, fixed. A '.mov' url was typed POST_TYPE_LINK because no
+        disjunct of `:654` recognised it (owner ruling 2026-09-30)."""
+        post = self._drive_video(http_mock, 'https://cdn.example.com/clip.mov')
         assert post.type == POST_TYPE_VIDEO
 
     def test_a_raw_mp4_suffix_outside_the_path_is_typed_as_video(

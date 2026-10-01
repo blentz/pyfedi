@@ -522,6 +522,33 @@ def test_a_video_upload_is_accepted_when_video_uploads_are_enabled(db_session, c
     assert len(written) == 1
 
 
+def test_a_mov_upload_is_kept_as_a_video(db_session, chdir_upload, http_mock):
+    """D476, fixed. `.mov` was an allowed video upload that `is_video_url` did
+    not recognise, so the bytes went to `Image.open` and a QuickTime container
+    raised `UnidentifiedImageError` out of `edit_post` -- a 500. `.mov` is now a
+    video extension like `.mp4` and `.webm`, so the Pillow block is skipped
+    and the file is saved as uploaded (owner ruling 2026-09-30).
+
+    The bytes are a QuickTime `ftyp` header, not an image, so a regression
+    that sent them to Pillow again would raise rather than pass quietly.
+    """
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'video/quicktime'})
+    s = _seed()
+    upload = FileStorage(stream=BytesIO(b'\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  '),
+                         filename='clip.mov', content_type='video/quicktime')
+    original = get_setting('allow_video_file_uploads')
+    try:
+        set_setting('allow_video_file_uploads', 'yes')
+        edit_post(_api_input(), s.post, POST_TYPE_VIDEO, SRC_API, user=s.user,
+                  uploaded_file=upload)
+    finally:
+        set_setting('allow_video_file_uploads', original)
+
+    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+    assert [p.suffix for p in written] == ['.mov']
+    assert s.post.type == POST_TYPE_VIDEO
+
+
 def test_a_video_upload_is_judged_against_the_api_caller(db_session, chdir_upload, http_mock):
     """F12, fixed. `edit_post` called `can_upload_video()` with no user, so
     under the 'users' policy an API caller was judged as the anonymous web

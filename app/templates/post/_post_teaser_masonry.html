@@ -13,7 +13,7 @@
     {% set post_title = post.title.replace('`', "'") %}
     <div class="item{{ ' reported' if post.has_been_reported() }}{{ ' blocked' if content_blocked }}{{ ' blur' if blur_content }}"
         {% if content_blocked %} title="{{ _('Filtered: ') }}{{ content_blocked }}"{% endif %} id="post_{{ post.id }}">
-        {% if post.image_id and not (post.url and (post.url.endswith('.mp4') or post.url.endswith('.webm'))) %}
+        {% if post.image_id and not (post.url and (post.url.endswith('.mp4') or post.url.endswith('.webm') or post.url.endswith('.mov'))) %}
             <div class="masonry_thumb {{ 'reported' if post.has_been_reported() }}" title="{{ post_title }}">
                 {% if post.type == POST_TYPE_LINK or post.type == POST_TYPE_VIDEO %}
                     {% if post.image.medium_url() %}
@@ -62,10 +62,10 @@
                     </div>
 
                 </div>
-            {% elif post.url and (post.url.endswith('.mp4') or post.url.endswith('.webm')) -%}
+            {% elif post.url and (post.url.endswith('.mp4') or post.url.endswith('.webm') or post.url.endswith('.mov')) -%}
                 <div class="masonry_thumb" title="{{ post_title }}">
                     <video class="responsive-video {{ 'blur' if blur_content }}" controls preload="metadata" {{ 'autoplay muted' if autoplay }} {{ 'loop' if post.community.loop_videos() }}>
-                        {% if post.url.endswith('.mp4') -%}
+                        {% if post.url.endswith('.mp4') or post.url.endswith('.mov') -%}
                             <source src="{{ post.url }}" type="video/mp4" />
                         {% elif post.url.endswith('.webm') -%}
                             <source src="{{ post.url }}" type="video/webm" />

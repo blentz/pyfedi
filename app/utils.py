@@ -320,7 +320,7 @@ def is_local_image_url(url):
 
 
 def is_video_url(url: str) -> bool:
-    common_video_extensions = ['.mp4', '.webm']
+    common_video_extensions = ['.mp4', '.webm', '.mov']
     if not url:
         # See is_image_url above for why this is a conditional and not a wider
         # `except`. This is the site the guard's absence actually reached
@@ -1037,7 +1037,7 @@ def handle_video_embeds(text: str) -> str:
             download_text = _('You can download a copy of the file instead.')
             if link.endswith('.webm'):
                 output += f'<source type="video/webm" src="{link}"> '
-            elif link.endswith('.mp4'):
+            elif link.endswith('.mp4') or link.endswith('.mov'):
                 output += f'<source type="video/mp4" src="{link}"> '
 
             output += _('Your browser does not support playing HTML5 video.')
