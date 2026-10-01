@@ -241,21 +241,23 @@ class RsaKeys:
         return private_key_serialized, public_key_serialized
 
 
-# Get a piece of the signature string. Similar to parse_signature except unencumbered by needing to return a HttpSignatureDetails
-def signature_part(signature, key):
-    if not signature:
-        return ''
-    parts = signature.split(',')
-    for part in parts:
+def parse_signature_header(signature: str | None) -> dict[str, str]:
+    """The Signature header's parts, keyed by lowercased name -- the one parser for it (D768), read by
+    parse_signature for verification and by signature_part for the (created)/(expires) pseudo-headers."""
+    parts = {}
+    for part in (signature or '').split(','):
         # maxsplit=1, or a base64 value loses its padding and a keyId loses its
         # query string
-        part_parts = part.split('=', 1)
-        if len(part_parts) < 2:
+        name, equals, value = part.partition('=')
+        if not equals:
             continue
-        part_parts[0] = part_parts[0].strip()
-        if part_parts[0] == key:
-            return part_parts[1].strip().replace('"', '')
-    return ''
+        parts[name.strip().lower()] = value.strip().strip('"')
+    return parts
+
+
+# Get a piece of the signature string, '' when it is absent
+def signature_part(signature, key):
+    return parse_signature_header(signature).get(key, '')
 
 
 class HttpSignature:
@@ -343,7 +345,7 @@ class HttpSignature:
             if header_name == "(request-target)":
                 value = f"{request.method.lower()} {request.path}"
             elif header_name == '(created)':
-                value = signature_part(request.headers.get('Signature'), 'created')  # Don't use parse_signature because changing HttpSignatureDetails changes everything & I don't have the spoons for that ATM.
+                value = signature_part(request.headers.get('Signature'), 'created')
             elif header_name == '(expires)':
                 value = signature_part(request.headers.get('Signature'), 'expires')
             elif header_name == "content-type":
@@ -357,11 +359,7 @@ class HttpSignature:
 
     @classmethod
     def parse_signature(cls, signature: str) -> "HttpSignatureDetails":
-        bits = {}
-        for item in signature.split(","):
-            name, value = item.split("=", 1)
-            value = value.strip('"')
-            bits[name.lower()] = value
+        bits = parse_signature_header(signature)
         try:
             signature_details: HttpSignatureDetails = {
                 "headers": bits["headers"].split(),
