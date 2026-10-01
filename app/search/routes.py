@@ -97,13 +97,7 @@ def run_search():
             else:
                 posts = posts.filter(Post.from_bot == False)
                 posts = posts.filter(Post.nsfl == False)
-                if nsfw == 'exclude' or nsfw == '':
-                    posts = posts.filter(Post.nsfw == False)
-                elif nsfw == 'only':
-                    posts = posts.filter(Post.nsfw == True)
-                elif nsfw == 'include':
-                    pass
-                posts = posts.filter(Post.nsfw == False)
+                posts = posts.filter(Post.nsfw == False)  # D798: logged-out readers never see NSFW
 
             if minimum_upvote_value is not None:
                 posts = posts.filter(Post.up_votes - Post.down_votes >= minimum_upvote_value)
