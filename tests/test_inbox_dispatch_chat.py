@@ -627,6 +627,23 @@ def test_a_chat_message_with_no_id_is_refused_not_crashed(app, db_session, monke
     assert db_session.query(ChatMessage).count() == 0
 
 
+@pytest.mark.parametrize('ap_id', [['https://peer.example/pm/1'], 42, {'id': 'x'}],
+                         ids=['list', 'int', 'dict'])
+def test_a_chat_message_whose_id_is_not_a_string_is_refused(app, db_session, monkeypatch, ap_id):
+    """D129, fixed. The id guard checked presence only, so a non-string id
+    flowed into the ChatMessage lookup and the new row's ap_id. It is now
+    refused like a missing id.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair()
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id, content='hello', id=ap_id))
+
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'ChatMessage has no id'
+    assert db_session.query(ChatMessage).count() == 0
+
+
 def test_the_inner_is_local_check_can_never_be_false(app, db_session, monkeypatch):
     """PINS defect 3, an equivalent mutant that Task 9 (commit `d0c8d13f`)
     removed. The SSE event and notification used to sit under a second
