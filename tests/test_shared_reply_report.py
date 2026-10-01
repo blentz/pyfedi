@@ -1203,61 +1203,7 @@ class TestReportReply:
         instance_ids = report_calls[0][1]['instance_ids']
         assert set(instance_ids) == {s.remote_instance.id}
 
-    def test_the_two_arms_read_source_instance_from_different_columns(self, db_session, app):
-        """`:317` against `:326` -- AND IT PINS A REGISTERED DEFECT ON PURPOSE.
-
-        Register entry **D553**, the reply twin of **D440**. The API arm reads
-        `Instance.query.filter_by(id=reply.instance_id).one()` (`:317`); the
-        web arm reads `Instance.query.get(suspect_user.instance_id)` (`:326`).
-        Two different columns, and the value flows straight into
-        `targets_data['source_instance_id']` / `['source_instance_domain']`
-        (`:337`-`:338`) and out to remote instances in the Flag.
-
-        ADDED BY SUB-PROJECT 42'S FINAL FIX WAVE. Nine tasks and eleven
-        reviews walked past this, including the one that wrote D550 as
-        "`report_post`'s defect in the reply twin" -- the SAME pair of lines
-        carries a SECOND twin-transferred defect, which D440 has registered
-        for `report_post` since sub-project 34.
-
-        WHY NOTHING IN THIS FILE COULD SEE IT, AND WHY THE ANSWER WAS ALREADY
-        WRITTEN IN THIS FILE'S OWN DOCSTRINGS. `make_post_reply`
-        (tests/factories.py:467) copies the author's `instance_id` onto the
-        reply, so every other reply here satisfies
-        `reply.instance_id == suspect_user.instance_id` and the two arms are
-        indistinguishable -- false-witness mechanism (d), an input that takes
-        the same path under both readings. Mutating `:317` to the web arm's
-        operand left the final review's mutation jury at 191 passed, ZERO
-        failures, before this test existed.
-        `test_a_remote_suspect_is_named_by_its_ap_id` kills the REPORTER
-        substitution at `:353` and cannot see the SUSPECT one.
-
-        THE DIVERGENT STATE IS PRODUCTION-REACHABLE, NOT HYPOTHETICAL.
-        `Post.move_to` (app/models.py:2855-2860) rewrites every reply's
-        `instance_id` to the destination community's
-        (`UPDATE post_reply SET community_id = ..., instance_id = ...`),
-        leaving it different from the author's. The two hand-written
-        assignments below do exactly what that statement does.
-
-        PINNED IN BOTH DIRECTIONS, NOT FIXED. Which arm is correct is a
-        product question -- `Report.source_instance_id`'s own column comment
-        (app/models.py:3766) documents a THIRD meaning again, "the instance of
-        the reporter", which is what `:353` writes -- and this round's
-        production budget is spent. Whoever unifies the two arms must edit
-        this test, and that obligation is the point of it.
-        """
-        s = _seed_for_report()
-        third = make_instance('moved.example', software='lemmy')
-        remote_author = make_user(s.remote_instance, 'remote-author', local=False)
-        api_reply = make_post_reply(s.post, remote_author)
-        web_reply = make_post_reply(s.post, remote_author)
-        api_reply.instance_id = third.id
-        web_reply.instance_id = third.id
-        db.session.commit()
-        assert api_reply.instance_id != remote_author.instance_id, (
-            'the reply and its author must sit on different instances, or '
-            'both arms read the same number and this test witnesses nothing'
-        )
-
+    def _report_both_ways(self, s, app, api_reply, web_reply):
         report_reply(api_reply, {'reason': 'spam', 'description': 'd',
                                  'report_remote': False},
                      SRC_API, auth=bearer(s.reporter))
@@ -1273,16 +1219,50 @@ class TestReportReply:
 
         rows = {r.suspect_post_reply_id: r for r in db.session.query(Report).all()}
         assert set(rows) == {api_reply.id, web_reply.id}
-        api_targets = rows[api_reply.id].targets
-        web_targets = rows[web_reply.id].targets
+        return rows[api_reply.id].targets, rows[web_reply.id].targets
 
-        # `:317` -- the REPLY's instance.
-        assert api_targets['source_instance_id'] == third.id
-        assert api_targets['source_instance_domain'] == third.domain
-        # `:326` -- the SUSPECT USER's instance.
-        assert web_targets['source_instance_id'] == s.remote_instance.id
-        assert web_targets['source_instance_domain'] == s.remote_instance.domain
-        # The divergence itself, asserted rather than left implied by the two
-        # halves above: if a later round unifies the arms, this is the
-        # assertion that says so.
-        assert api_targets['source_instance_id'] != web_targets['source_instance_id']
+    def test_both_arms_name_the_reply_author_s_instance(self, db_session, app):
+        """D553, fixed (owner ruling 2026-09-30). The API arm used to read the
+        REPLY's instance (`reply.instance_id`, via `.one()`) and the web arm the
+        SUSPECT USER's, so the two arms sent different `source_instance` values
+        out in the Flag whenever they differed. Both now read the reply author's.
+
+        The divergent state is production-reachable: `Post.move_to` rewrites
+        every reply's `instance_id` to the destination community's, leaving it
+        different from the author's, which the two assignments below copy.
+        `make_post_reply` copies the author's instance onto the reply, so
+        without them both readings agree and this test witnesses nothing.
+        """
+        s = _seed_for_report()
+        third = make_instance('moved.example', software='lemmy')
+        remote_author = make_user(s.remote_instance, 'remote-author', local=False)
+        api_reply = make_post_reply(s.post, remote_author)
+        web_reply = make_post_reply(s.post, remote_author)
+        api_reply.instance_id = third.id
+        web_reply.instance_id = third.id
+        db.session.commit()
+
+        api_targets, web_targets = self._report_both_ways(s, app, api_reply, web_reply)
+
+        for targets in (api_targets, web_targets):
+            assert targets['source_instance_id'] == s.remote_instance.id
+            assert targets['source_instance_domain'] == s.remote_instance.domain
+
+    def test_an_author_with_no_instance_is_reported_without_one(self, db_session, app):
+        """D553, fixed: None-safe. The API arm's `.one()` raised
+        `NoResultFound` and the web arm's `.get()` deferred to an
+        `AttributeError`; an author with no instance now yields a report whose
+        source instance is None on both arms.
+        """
+        s = _seed_for_report()
+        author = make_user(s.remote_instance, 'instanceless', local=False)
+        api_reply = make_post_reply(s.post, author)
+        web_reply = make_post_reply(s.post, author)
+        author.instance_id = None
+        db.session.commit()
+
+        api_targets, web_targets = self._report_both_ways(s, app, api_reply, web_reply)
+
+        for targets in (api_targets, web_targets):
+            assert targets['source_instance_id'] is None
+            assert targets['source_instance_domain'] is None
