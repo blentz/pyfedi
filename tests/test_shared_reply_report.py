@@ -507,7 +507,7 @@ class TestReportReply:
         THE MODERATOR IS ON A FOURTH INSTANCE, and that number is not
         arbitrary. `_seed_for_report` consumes instance ids 1 (local) and 2
         (remote), and id 3 collides with `community.id`, which
-        `test_the_community_guard_false_arm_is_coincidence_not_correctness`
+        `test_a_colliding_community_id_no_longer_suppresses_the_community_instance`
         depends on and this test must stay clear of. One spare instance is
         created to consume id 3 and the moderator goes on id 4, so the
         collected set is unambiguous.
@@ -977,39 +977,13 @@ class TestReportReply:
         assert row.targets['source_instance_id'] == s.remote_instance.id
 
     def test_the_community_guard_compares_the_wrong_id_space(self, db_session):
-        """`:392`-`:394` -- AND IT PINS A REGISTERED DEFECT ON PURPOSE.
+        """D550, fixed: the guard tested `reply.community_id` against a set of
+        INSTANCE ids before adding `reply.community.instance_id`. It now tests
+        the instance id it adds, as the suspect_user block below it does and
+        as report_post does. Here the community's instance is collected once.
 
-        `:393` is `if reply.community_id not in remote_instance_ids:` and
-        `:394` adds `reply.community.instance_id`. Those are DIFFERENT ID
-        SPACES: the guard tests a community id against a set of instance ids,
-        so it cannot do what it is written to do. The `suspect_user` block at
-        `:395`-`:397` gets the identical pattern right, which is what makes
-        this a slip rather than a convention.
-
-        `Community.is_local()` (app/models.py:795-796) is `ap_id is None or
-        profile_id().startswith(SERVER_URL)` -- `make_community` never sets
-        `ap_id`, so moving `instance_id` alone leaves `is_local()` True and
-        `:392`'s guard would never fire. `ap_id` and `ap_profile_id` are set
-        here to a `remote.example` URL, alongside `instance_id`, so
-        `is_local()` is actually False.
-
-        THIS TEST RECORDS TODAY'S BEHAVIOUR AND THIS ROUND DOES NOT FIX IT --
-        the production budget is the counter fix, and a duplicate Flag to one
-        instance is a different blast radius from a permanently drifting
-        counter. IF A LATER ROUND REPAIRS `:393` TO GUARD ON
-        `reply.community.instance_id`, THE EDIT OWED HERE IS TO ASSERT THE
-        INSTANCE APPEARS EXACTLY ONCE rather than that the branch was taken.
-
-        Registered as this round's finding 1.
-
-        THE ASSERTION IS NOW THE COLLECTED SET, NOT 'A TASK FIRED', after
-        Task 8's mutation pass: `:394` adds `reply.community.instance_id`
-        (2 here) and swapping it for `reply.community_id` (3) still fired
-        the task, so M178 survived against the old `'report_reply' in
-        calls`. The two id spaces this test exists to distinguish are
-        exactly the two values that swap would confuse, so an assertion
-        blind to which one arrived defeated the pin's own purpose -- the
-        same correction the sibling coincidence test already carries.
+        `make_community` never sets `ap_id`, so `ap_id` and `ap_profile_id`
+        are set to a `remote.example` URL to make `is_local()` False.
         """
         s = _seed_for_report()
         s.community.instance_id = s.remote_instance.id
@@ -1147,29 +1121,12 @@ class TestReportReply:
         rows = db.session.query(Notification).filter_by(user_id=admin.id).all()
         assert len(rows) == 1
 
-    def test_the_community_guard_false_arm_is_coincidence_not_correctness(self, db_session):
-        """`:393`'s false arm, reached only because two unrelated id spaces
-        happen to collide -- continues finding 1
-        (`test_the_community_guard_compares_the_wrong_id_space`).
-
-        `community.id` is forced to 3 by `_seed_for_report`'s D533 guard. A
-        THIRD, otherwise-unrelated instance created here also lands on id 3
-        (the local and remote instances that fixture already made take 1 and
-        2). A moderator on that third instance is collected into
-        `remote_instance_ids` unconditionally (`report_remote=True`), so by
-        the time `:393` runs, `reply.community_id` (3) is already "in" a set
-        that is really a set of instance ids, purely because the two
-        sequences happened to reach the same integer. `:393` being False here
-        is not the guard working -- it is the exact coincidence the pinned
-        finding says the guard is exposed to. This test does not fix `:393`.
-
-        Asserts the FULL set of collected instance ids, not one element's
-        count: a bare `.count(third_instance.id) == 1` cannot see an extra,
-        wrong id leaking in alongside it (e.g. from an inverted `:393`
-        guard that starts adding `reply.community.instance_id` when it
-        should not) -- exactly the kind of confusion this pin exists to
-        catch, so an assertion blind to it would defeat the pin's own
-        purpose.
+    def test_a_colliding_community_id_no_longer_suppresses_the_community_instance(self, db_session):
+        """D550, fixed: an unrelated instance whose id equals the community's
+        id is collected first (a moderator there, `report_remote=True`). The
+        old guard saw `reply.community_id` "in" the set and skipped the
+        community's own instance, so its moderators got no Flag. The guard
+        now tests the instance id, so both instances are collected.
         """
         s = _seed_for_report()
         third_instance = make_instance('third.example', software='lemmy')
@@ -1190,7 +1147,7 @@ class TestReportReply:
         report_calls = [c for c in calls if c[0] == 'report_reply']
         assert len(report_calls) == 1
         instance_ids = report_calls[0][1]['instance_ids']
-        assert set(instance_ids) == {third_instance.id}
+        assert set(instance_ids) == {third_instance.id, s.community.instance_id}
 
     def test_the_suspect_guard_skips_an_instance_already_collected(self, db_session):
         """`:396`'s false arm -> `:399` directly, skipping a redundant add.
