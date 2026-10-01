@@ -314,6 +314,34 @@ def test_a_sticky_post_in_another_community_is_excluded(app, db_session, monkeyp
     assert response.json['orderedItems'] == []
 
 
+def test_the_outbox_counts_every_eligible_post_but_inlines_fifty(app, db_session, monkeypatch):
+    """D173, fixed (owner ruling). `totalItems` was `len(posts)`, the page
+    size, so a community with 4000 posts claimed a complete collection of 50.
+    It is now the count of every post the outbox would list -- the same
+    community, not deleted, past review -- while `orderedItems` still holds
+    the first 50 (paging is future work). The deleted, under-review and
+    foreign posts seeded alongside must not be counted.
+    """
+    seed_actors()
+    community = seed_local_community('books')
+    other = make_community(name='films', host='test.piefed.local')
+    user = make_user(None, 'author', local=True)
+    for n in range(51):
+        make_post(community, user, f'https://test.piefed.local/post/{n}')
+    make_post(community, user, 'https://test.piefed.local/post/deleted').deleted = True
+    make_post(community, user, 'https://test.piefed.local/post/review').status = 0
+    make_post(other, user, 'https://test.piefed.local/post/foreign')
+    db.session.commit()
+    monkeypatch.setattr(activitypub_routes, 'post_to_activity',
+                        lambda post, community: 'AP')
+
+    response = collection_get(app, '/c/books/outbox')
+
+    assert response.status_code == 200
+    assert response.json['totalItems'] == 51
+    assert len(response.json['orderedItems']) == 50
+
+
 def test_the_featured_collection_lists_sticky_posts(app, db_session, monkeypatch):
     """`community_featured` selects `sticky=True, deleted=False` and renders each
     with `post_to_page` -- a DIFFERENT delegate from `community_outbox`'s
