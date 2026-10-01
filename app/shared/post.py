@@ -911,18 +911,22 @@ def restore_post(post_id: int, src, auth):
     else:
         user_id = current_user.id
 
-    post = db.session.get(Post, post_id) or abort(404)
-    if post.url:
-        post.calculate_cross_posts()
+    from app import redis_client
+    with redis_client.lock(f"lock:post:{post_id}", timeout=10, blocking_timeout=6):
+        post = db.session.get(Post, post_id) or abort(404)
+        if post.url:
+            post.calculate_cross_posts()
 
-    post.deleted = False
-    post.deleted_by = None
-    post.author.post_count += 1
-    post.community.post_count += 1
-    adjust_domain_post_count(post, 1)  # D1362
-    db.session.commit()
+        post.deleted = False
+        post.deleted_by = None
+        post.author.post_count += 1
+        post.author.last_seen = utcnow()
+        post.community.post_count += 1
+        adjust_domain_post_count(post, 1)  # D1362
+        db.session.commit()
 
-    task_selector('restore_post', user_id=user_id, post_id=post.id)
+    if post.status == POST_STATUS_PUBLISHED:
+        task_selector('restore_post', user_id=user_id, post_id=post.id)
 
     if src == SRC_API:
         return user_id, post
