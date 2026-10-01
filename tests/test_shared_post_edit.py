@@ -1364,11 +1364,10 @@ def test_a_remote_moderator_of_a_notify_mods_domain_is_not_notified(db_session, 
     """:582, false arm -- and the reason D287's fix is `user.is_local()` rather
     than deleting the guard.
 
-    D288 records that the federated copy of this loop
-    (app/activitypub/util.py:3520-3527) has NO locality gate at all, so the two
-    editors disagree about remote moderators. This test pins THIS editor's
-    answer so that disagreement stays visible rather than being quietly
-    resolved by a later edit.
+    D288, fixed (owner ruling): the federated copy of this loop in
+    update_post_from_activity had no locality gate; it now has this one, so
+    both editors notify local moderators only
+    (test_ap_update_post_tails.py::test_a_remote_moderator_is_not_notified).
 
     DEVIATION FROM THE BRIEF: the brief built `peer` before `_seed()`. That
     ordering makes peer.example the id-1 Instance, and make_community hardcodes

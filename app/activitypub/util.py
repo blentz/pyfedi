@@ -3978,13 +3978,15 @@ def update_post_from_activity(post: Post, request_json: dict):
                                     }
                     if new_domain.notify_mods:
                         for community_member in post.community.moderators():
-                            notify = Notification(title='Suspicious content', url=post.ap_id,
-                                                  user_id=community_member.user_id,
-                                                  author_id=1, notif_type=NOTIF_REPORT,
-                                                  subtype='post_from_suspicious_domain',
-                                                  targets=targets_data)
-                            db.session.add(notify)
-                            already_notified.add(community_member.user_id)
+                            # local moderators only, as edit_post does: a remote one never sees the row (D288)
+                            if community_member.user.is_local():
+                                notify = Notification(title='Suspicious content', url=post.ap_id,
+                                                      user_id=community_member.user_id,
+                                                      author_id=1, notif_type=NOTIF_REPORT,
+                                                      subtype='post_from_suspicious_domain',
+                                                      targets=targets_data)
+                                db.session.add(notify)
+                                already_notified.add(community_member.user_id)
                     if new_domain.notify_admins:
                         for admin in Site.admins():
                             if admin.id not in already_notified:
