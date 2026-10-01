@@ -540,7 +540,7 @@ def refuse_if_banned(user, ip):
     either: `find_user` filters deleted rows out, and a deleted name is
     refused by `can_be_a_local_user_name`.
     """
-    if user.id != 1 and (user.banned or user_ip_banned() or user_cookie_banned()):
+    if not user.is_ban_exempt() and (user.banned or user_ip_banned() or user_cookie_banned()):
         handle_banned_user(user, ip)
         return False
 

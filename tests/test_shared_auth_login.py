@@ -313,15 +313,10 @@ def test_log_user_in_api_refuses_a_cookie_banned_user(app, db_session, monkeypat
 
 
 def test_log_user_in_exempts_the_id_1_account_from_every_ban_check(app, db_session, monkeypatch):
-    """PINS A DEFECT, registered not fixed. :57 begins `user.id != 1`.
-
-    The id-1 account logs in while banned AND ip-banned. This is the
-    production face of the id-1 trap this campaign keeps meeting in fixtures
-    (app/models.py:1259-1261 makes the same account an admin outright).
-
-    NOT inverted by the dedent: the dedent moves the refusal, it does not
-    touch :57's first conjunct. This test must keep passing unchanged, which
-    is what makes it evidence about :57 rather than about :59.
+    """D583, kept by owner ruling: the id-1 account logs in while banned AND
+    ip-banned, because it is the account that set the instance up. The
+    exemption is now named -- `User.is_ban_exempt()` -- rather than spelled
+    as a bare `user.id != 1` at each ban check.
     """
     if not db.session.get(Instance, 1):
         make_instance('test.piefed.local', software='piefed')
@@ -337,6 +332,20 @@ def test_log_user_in_exempts_the_id_1_account_from_every_ban_check(app, db_sessi
                                   'password': 'correct horse battery'}, SRC_API)
 
     assert result['jwt']
+
+
+def test_only_the_id_1_account_is_ban_exempt(app, db_session):
+    """D583, fixed (owner ruling): one named helper states the exemption every
+    ban check honours, so no ban check spells the literal `id != 1`."""
+    if not db.session.get(Instance, 1):
+        make_instance('test.piefed.local', software='piefed')
+    first = make_user(None, 'firstaccount', local=True)
+    second = make_user(None, 'secondaccount', local=True)
+    db.session.commit()
+
+    assert first.id == 1
+    assert first.is_ban_exempt() is True
+    assert second.is_ban_exempt() is False
 
 
 def test_log_user_in_stamps_last_seen_and_ip(app, db_session, monkeypatch):

@@ -312,7 +312,7 @@ def mastodon_authorize():
             ip = ip_address()
             country = get_country(ip)
             if user:
-                if user.id != 1 and (user.banned or user_ip_banned() or user_cookie_banned()):
+                if not user.is_ban_exempt() and (user.banned or user_ip_banned() or user_cookie_banned()):
                     return handle_banned_user(user, ip)
                 elif user.deleted:
                     flash(_('This account has been deleted.'), 'error')
