@@ -290,12 +290,17 @@ def edit_reply(input, reply, post, src, auth=None):
 
 # just for deletes by owner (mod deletes are classed as 'remove')
 def delete_reply(reply_id, src, auth):
+    reply = db.session.get(PostReply, reply_id) or abort(404)
     if src == SRC_API:
-        user_id = authorise_api_user(auth)
+        user_id = authorise_api_user(auth, id_match=reply.user_id)
     else:
         user_id = current_user.id
+        if reply.user_id != user_id:
+            abort(403)
 
-    reply = db.session.query(PostReply).filter_by(id=reply_id, user_id=user_id, deleted=False).one()
+    if reply.deleted:  # already deleted: nothing to undo or federate
+        return (user_id, reply) if src == SRC_API else None
+
     reply.deleted = True
     reply.deleted_by = user_id
 
@@ -318,12 +323,17 @@ def delete_reply(reply_id, src, auth):
 
 
 def restore_reply(reply_id, src, auth):
+    reply = db.session.get(PostReply, reply_id) or abort(404)
     if src == SRC_API:
-        user_id = authorise_api_user(auth)
+        user_id = authorise_api_user(auth, id_match=reply.user_id)
     else:
         user_id = current_user.id
+        if reply.user_id != user_id:
+            abort(403)
 
-    reply = db.session.query(PostReply).filter_by(id=reply_id, user_id=user_id, deleted=True).one()
+    if not reply.deleted:  # not deleted: nothing to restore or federate
+        return (user_id, reply) if src == SRC_API else None
+
     reply.deleted = False
     reply.deleted_by = None
 
