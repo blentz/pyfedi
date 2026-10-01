@@ -260,10 +260,10 @@ def test_refreshing_a_user_on_a_dormant_instance_does_nothing(app, db_session, m
 
     THE OBSERVABLE IS A SPY ON `get_request`, NOT `block_outbound_http`.
     Dropping this conjunct lets the task reach the fetch, where respx raises
-    `AllMockedAssertionError` -- not an `httpx.HTTPError`, so the task's bare
-    `except:` (the one guarding the `signed_get_request` fallback, below the
+    `AllMockedAssertionError` -- not an `httpx.HTTPError`, so the task's
+    `except Exception:` (the one guarding the `signed_get_request` fallback, below the
     `except httpx.HTTPError:` retry) catches it, `signed_get_request` fails
-    too, the inner bare `except:` around it catches that, and the task returns
+    too, the inner `except Exception:` around it catches that, and the task returns
     silently. Both are cited by content rather than by line number: line
     numbers in this file went stale once already when Task 10 inserted guards
     into the two sibling tasks.
@@ -1629,7 +1629,7 @@ def test_a_failed_community_fetch_is_retried_once(
     pins -- `except Exception:` swallows a non-httpx retry failure that the
     user task's narrower catch would let propagate.
 
-    THE USER TASK'S BARE `except:` IS NOT THIS HANDLER. It is a sibling
+    THE USER TASK'S `except Exception:` FALLBACK (bare until D220) IS NOT THIS HANDLER. It is a sibling
     handler on the OUTER `try` -- the one guarding the `signed_get_request`
     fallback, pinned by
     `test_a_user_fetch_failing_outside_httpx_falls_back_to_a_signed_get` --
@@ -1700,15 +1700,14 @@ def test_a_failed_feed_fetch_is_retried_once(
 def test_a_user_fetch_failing_outside_httpx_falls_back_to_a_signed_get(
         app, db_session, http_mock, no_real_sleeping, monkeypatch):
     """PINS AN ASYMMETRY. `refresh_user_profile_task` has a THIRD path its
-    siblings lack: a bare `except:` that retries with `signed_get_request`
+    siblings lack: an `except Exception:` that retries with `signed_get_request`
     against the site's private key. A peer requiring HTTP signatures to serve
     its actor document is therefore refreshable for users and not for
     communities or feeds.
 
-    The bare `except:` is what makes this path reachable from a non-httpx
-    error, and it is registered rather than fixed: a bare except also catches
-    KeyboardInterrupt and SystemExit, so changing it changes which failures
-    retry and which propagate.
+    That handler is what makes this path reachable from a non-httpx error.
+    It was a bare `except:` until D220, which also caught SystemExit;
+    test_a_worker_shutdown_during_a_user_fetch_propagates pins the fix.
 
     `test_a_community_fetch_failing_outside_httpx_propagates` and
     `test_a_feed_fetch_failing_outside_httpx_propagates` are the other half of
@@ -1737,6 +1736,32 @@ def test_a_user_fetch_failing_outside_httpx_falls_back_to_a_signed_get(
     assert user.title == 'Signed'
 
 
+def test_a_worker_shutdown_during_a_user_fetch_propagates(
+        app, db_session, http_mock, monkeypatch):
+    """D220, fixed: the user task's two fallback handlers were bare `except:`,
+    so a SystemExit from a worker being stopped mid-fetch was swallowed into
+    the signed-GET fallback and the task returned as if it had refreshed. They
+    are now `except Exception:`, like the sibling tasks', so it propagates."""
+    seed_signing_site()
+    user = _remote_user()
+    calls = []
+
+    def stopping_get_request(uri, params=None, headers=None):
+        raise SystemExit(1)
+
+    def fake_signed_get(uri, private_key, key_id, **kwargs):
+        calls.append(uri)
+        return httpx.Response(200, json=_person_document())
+
+    monkeypatch.setattr(ap_util, 'get_request', stopping_get_request)
+    monkeypatch.setattr(ap_util, 'signed_get_request', fake_signed_get)
+
+    with pytest.raises(SystemExit):
+        refresh_user_profile_task(user.id)
+
+    assert calls == []
+
+
 def test_a_community_fetch_failing_outside_httpx_propagates(
         app, db_session, http_mock, monkeypatch):
     """THE OTHER HALF OF `test_a_user_fetch_failing_outside_httpx_falls_back_to_a_signed_get`,
@@ -1752,7 +1777,7 @@ def test_a_community_fetch_failing_outside_httpx_propagates(
     reachable route.
 
     That route is the asymmetry itself. The user task catches a non-httpx
-    fetch failure with a bare `except:` and retries with `signed_get_request`;
+    fetch failure with `except Exception:` and retries with `signed_get_request`;
     the community task's first `get_request` is wrapped only in
     `except httpx.HTTPError:`, so anything else propagates straight out. A
     peer requiring HTTP signatures is refreshable for users and raises for

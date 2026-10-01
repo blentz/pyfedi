@@ -721,12 +721,12 @@ def refresh_user_profile_task(user_id):
                         actor_data = get_request(user.ap_public_url, headers={'Accept': 'application/activity+json'})
                     except httpx.HTTPError:
                         return
-                except:
+                except Exception:  # not bare: a worker shutdown must propagate (D220)
                     try:
                         site = session.get(Site, 1)
                         actor_data = signed_get_request(user.ap_public_url, site.private_key,
                                                         f"{current_app.config['SERVER_URL']}/actor#main-key")
-                    except:
+                    except Exception:
                         return
                 if actor_data.status_code == 200:
                     try:
