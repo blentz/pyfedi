@@ -2852,7 +2852,8 @@ def masquerade(user_id):
 def perf_test():
     import time
 
-    N = 100_000_000
+    # R237: a bounded run -- 1,000,000 iterations unless ?n= asks for fewer; never more
+    N = min(max(request.args.get('n', 1_000_000, type=int), 1), 1_000_000)
 
     start = time.perf_counter()
 
