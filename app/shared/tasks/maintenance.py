@@ -285,11 +285,15 @@ def delete_old_soft_deleted_content():
 def update_community_stats():
     """Ensure accurate community statistics"""
     session = get_task_session()
+    # D342: a commit per community, so one failing community does not starve the rest and at most one
+    # community row is locked at a time; nothing is expired by it, so no row is re-read. Taken in id
+    # order, as calculate_community_activity_stats takes them.
+    session.expire_on_commit = False
     try:
         communities = session.query(Community).filter(
             Community.banned == False,
             Community.last_active > utcnow() - timedelta(days=3)
-        ).all()
+        ).order_by(Community.id).all()
 
         for community in communities:
             stmt = (
@@ -317,8 +321,7 @@ def update_community_stats():
                 'SELECT COUNT(*) as c FROM post_reply pr JOIN "user" u ON u.id = pr.user_id '
                 'WHERE pr.deleted is false and pr.community_id = :community_id and u.bot is not true'
             ), {'community_id': community.id}).scalar()
-
-        session.commit()
+            session.commit()
 
     except Exception:
         session.rollback()
@@ -880,6 +883,7 @@ def calculate_community_activity_stats():
             WHERE c.banned = FALSE
                 AND c.last_active > :half_year
             GROUP BY c.id
+            ORDER BY c.id
         '''), {'day': day, 'week': week, 'month': month, 'half_year': half_year})
 
         # Update communities with the calculated stats
@@ -901,6 +905,14 @@ def calculate_community_activity_stats():
                 'six_monthly': row.active_6monthly
             })
             updated_count += 1
+
+        # D343: a community the counting above leaves out (banned, or inactive half a year) reads zero
+        session.execute(text('''
+            UPDATE "community"
+            SET active_daily = 0, active_weekly = 0, active_monthly = 0, active_6monthly = 0
+            WHERE (banned = TRUE OR last_active IS NULL OR last_active <= :half_year)
+                AND (active_daily != 0 OR active_weekly != 0 OR active_monthly != 0 OR active_6monthly != 0)
+        '''), {'half_year': half_year})
 
         session.commit()
         # print(f"Completed: Updated stats for {updated_count} communities")
