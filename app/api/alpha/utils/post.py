@@ -18,7 +18,9 @@ from app.shared.post import vote_for_post, bookmark_post, remove_bookmark_post, 
     delete_post, restore_post, report_post, lock_post, sticky_post, mod_remove_post, mod_restore_post, mark_post_read, \
     vote_for_poll, hide_post
 from app.post.util import post_replies, get_comment_branch, tags_to_string, flair_to_string
-from app.topic.routes import get_all_child_topic_ids
+# The module, not the name: app.topic.routes reaches this file through
+# app.activitypub before get_all_child_topic_ids is defined (import cycle: topic.routes)
+import app.topic.routes as topic_routes
 from app.utils import authorise_api_user, blocked_users, blocked_communities, blocked_or_banned_instances, \
     recently_upvoted_posts, \
     site_language_id, filtered_out_communities, joined_or_modding_communities, \
@@ -341,7 +343,7 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
             if not topic:
                 raise Exception('topic not found')
             if topic.show_posts_in_children:  # include posts from child feeds
-                topic_ids = get_all_child_topic_ids(topic)
+                topic_ids = topic_routes.get_all_child_topic_ids(topic)
             else:
                 topic_ids = [topic.id]
 
@@ -998,7 +1000,7 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
             if not topic:
                 raise Exception('topic not found')
             if topic.show_posts_in_children:  # include posts from child feeds
-                topic_ids = get_all_child_topic_ids(topic)
+                topic_ids = topic_routes.get_all_child_topic_ids(topic)
             else:
                 topic_ids = [topic.id]
 

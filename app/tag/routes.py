@@ -16,7 +16,9 @@ import app.feed.routes as feed_routes
 from app.inoculation import inoculation
 from app.models import Post, Community, Tag, post_tag, Topic, FeedItem, Feed
 from app.tag import bp
-from app.topic.routes import get_all_child_topic_ids
+# The module, not the name: app.topic.routes reaches this file through
+# app.activitypub before get_all_child_topic_ids is defined (import cycle: topic.routes)
+import app.topic.routes as topic_routes
 from app.utils import render_template, permission_required, user_filters_posts, blocked_or_banned_instances, \
     blocked_users, \
     blocked_domains, mimetype_from_url, \
@@ -70,7 +72,7 @@ def show_tag(tag):
             topic = db.session.get(Topic, category_id) or abort(404)
             # get posts from communities in that topic
             if topic.show_posts_in_children:  # include posts from child topics
-                topic_ids = get_all_child_topic_ids(topic)
+                topic_ids = topic_routes.get_all_child_topic_ids(topic)
             else:
                 topic_ids = [topic.id]
             
@@ -277,7 +279,7 @@ def tag_cloud(type, category_id: int):
         topic = db.session.get(Topic, category_id) or abort(404)
         # get posts from communities in that topic
         if topic.show_posts_in_children:  # include posts from child topics
-            topic_ids = get_all_child_topic_ids(topic)
+            topic_ids = topic_routes.get_all_child_topic_ids(topic)
         else:
             topic_ids = [topic.id]
         # list(), not the ScalarResult itself: it is a one-shot cursor, and this
@@ -451,7 +453,7 @@ def tag_posts(tag_id):
         topic = db.session.get(Topic, topic_id) or abort(404)
         # get posts from communities in that topic
         if topic.show_posts_in_children:  # include posts from child topics
-            topic_ids = get_all_child_topic_ids(topic)
+            topic_ids = topic_routes.get_all_child_topic_ids(topic)
         else:
             topic_ids = [topic.id]
         community_ids = db.session.execute(text('SELECT id FROM community WHERE banned is false AND topic_id IN :topic_ids'),
