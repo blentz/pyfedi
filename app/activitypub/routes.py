@@ -2450,17 +2450,15 @@ def post_nice(community_name, post_id, slug):
 
 @bp.route('/post/<int:post_id>/replies', methods=['GET'])
 def post_replies_ap(post_id):
-    if (request.method == 'GET' or request.method == 'HEAD') and is_activitypub_request():
+    # GET only: Flask answers a HEAD itself by running this and dropping the body (D192)
+    if is_activitypub_request():
         post = db.session.get(Post, post_id) or abort(404)
         refusal = post_ap_refusal(post)
         if refusal is not None:
             return refusal
 
-        if request.method == 'GET':
-            replies = post_replies_for_ap(post.id)
-            replies_collection = {"type": "OrderedCollection", "totalItems": len(replies), "orderedItems": replies}
-        else:
-            replies_collection = {}
+        replies = post_replies_for_ap(post.id)
+        replies_collection = {"type": "OrderedCollection", "totalItems": len(replies), "orderedItems": replies}
         replies_collection['@context'] = default_context()
         resp = jsonify(replies_collection)
         resp.content_type = 'application/activity+json'
@@ -2473,18 +2471,16 @@ def post_replies_ap(post_id):
 
 @bp.route('/post/<int:post_id>/context', methods=['GET'])
 def post_ap_context(post_id):
-    if (request.method == 'GET' or request.method == 'HEAD') and is_activitypub_request():
+    # D192, as post_replies_ap above
+    if is_activitypub_request():
         post = db.session.get(Post, post_id) or abort(404)
         refusal = post_ap_refusal(post)
         if refusal is not None:
             return refusal
-        if request.method == 'GET':
-            replies = PostReply.query.filter_by(post_id=post_id, deleted=False).order_by(PostReply.posted_at).limit(2000)
-            urls = [reply.ap_id for reply in replies]
-            urls = [post.ap_id] + urls
-            replies_collection = {"type": "OrderedCollection", "totalItems": len(urls), "orderedItems": urls}
-        else:
-            replies_collection = {}
+        replies = PostReply.query.filter_by(post_id=post_id, deleted=False).order_by(PostReply.posted_at).limit(2000)
+        urls = [reply.ap_id for reply in replies]
+        urls = [post.ap_id] + urls
+        replies_collection = {"type": "OrderedCollection", "totalItems": len(urls), "orderedItems": urls}
         replies_collection['@context'] = default_context()
         replies_collection['id'] = f'{post.public_url()}/context'
         replies_collection['name'] = post.title
