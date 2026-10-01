@@ -27,7 +27,7 @@ from app.utils import render_template, authorise_api_user, shorten_string, gibbe
     opengraph_parse, url_to_thumbnail_file, can_create_post, is_video_hosting_site, recently_upvoted_posts, \
     is_image_url, add_to_modlog, store_files_in_s3, guess_mime_type, retrieve_image_hash, \
     hash_matches_blocked_image, can_upvote, can_downvote, get_recipient_language, to_srgb, can_upload_video, \
-    is_video_url, sanitize_svg, user_ip_banned, ip_address, inspect_image_c2pa, \
+    is_video_url, sanitize_svg, user_ip_banned, ip_address, inspect_image_c2pa, user_access, \
     community_membership_private, communities_banned_from
 
 
@@ -1173,6 +1173,12 @@ def hide_post(post_id: int, hidden: bool, src: int, auth=None):
     return user.id, post
 
 
+def can_mod_post(post, user) -> bool:
+    # D421: the one gate for removing or restoring someone else's post, asked by the post routes and below
+    return post.community.is_moderator(user) or user.is_admin_or_staff() or \
+        user_access('administer all communities', user.id)
+
+
 # mod deletes
 def mod_remove_post(post_id: int, reason, src, auth):
     if src == SRC_API:
@@ -1184,7 +1190,7 @@ def mod_remove_post(post_id: int, reason, src, auth):
     with redis_client.lock(f"lock:post:{post_id}", timeout=10, blocking_timeout=6):
         post = db.session.get(Post, post_id) or abort(404)
 
-        if not post.community.is_moderator(user) and not user.is_admin_or_staff():
+        if not can_mod_post(post, user):
             raise Exception('Does not have permission')
 
         if post.url:
@@ -1227,7 +1233,7 @@ def mod_restore_post(post_id: int, reason, src, auth):
     from app import redis_client
     with redis_client.lock(f"lock:post:{post_id}", timeout=10, blocking_timeout=6):
         post = db.session.get(Post, post_id) or abort(404)
-        if not post.community.is_moderator(user) and not user.is_admin_or_staff():
+        if not can_mod_post(post, user):
             raise Exception('Does not have permission')
 
         if post.url:

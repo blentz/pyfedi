@@ -45,7 +45,7 @@ from app.post.util import post_replies, get_comment_branch, tags_to_string, url_
 from app.post.util import post_type_to_form_url_type
 from app.shared.post import edit_post, sticky_post, lock_post, bookmark_post, remove_bookmark_post, subscribe_post, \
     vote_for_post, mark_post_read, report_post, delete_post, mod_remove_post, restore_post, mod_restore_post, \
-    vote_for_poll, hide_post, move_post
+    vote_for_poll, hide_post, move_post, can_mod_post
 from app.shared.reply import make_reply, edit_reply, bookmark_reply, remove_bookmark_reply, subscribe_reply, \
     delete_reply, mod_remove_reply, vote_for_reply, lock_post_reply, report_reply, choose_answer, unchoose_answer, \
     set_collapse_post_reply
@@ -1352,7 +1352,7 @@ def post_edit(post_id: int):
 def post_delete(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
     community = post.community
-    if post.user_id == current_user.id or community.is_moderator() or current_user.is_admin() or user_access('administer all communities', current_user.get_id()):
+    if post.user_id == current_user.id or can_mod_post(post, current_user):
         if post.community.id in communities_banned_from(current_user.id) or user_ip_banned():
             abort(403)
         form = DeleteConfirmationForm()
@@ -1392,11 +1392,13 @@ def post_delete(post_id: int):
 @login_required
 def post_restore(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
-    if post.user_id == current_user.id or post.community.is_moderator() or post.community.is_owner() or current_user.is_admin():
+    if post.user_id == current_user.id or can_mod_post(post, current_user):
         if post.deleted_by == post.user_id:
             restore_post(post.id, SRC_WEB, None)
-        else:
+        elif can_mod_post(post, current_user):
             mod_restore_post(post.id, '', SRC_WEB, None)
+        else:
+            abort(403)  # D421: an author may not undo a moderator's removal
 
         flash(_('Post has been restored.'))
     return redirect(post.slug if post.slug else url_for('activitypub.post_ap', post_id=post.id))
