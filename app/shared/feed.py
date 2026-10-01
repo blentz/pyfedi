@@ -15,7 +15,9 @@ from app.constants import *
 from app.models import User, Feed, FeedMember, FeedItem, Community, FeedJoinRequest, CommunityMember, \
     CommunityJoinRequest, Instance, File, _as_url
 from app.shared.tasks import task_selector
-from app.shared.community import leave_community
+# The module, not the names: app.shared.community reaches this file through a blueprint
+# package before they are defined (import cycle: app.shared.community)
+import app.shared.community as shared_community
 from app.shared.upload import process_upload
 from app.utils import authorise_api_user, feed_membership, get_request, menu_subscribed_feeds, joined_communities, \
     community_membership, gibberish, get_task_session, instance_banned, menu_instance_feeds, \
@@ -173,7 +175,7 @@ def leave_feed(feed: int | Feed, src, auth=None, bulk_leave=False):
                         user_id=user_id, community_id=feed_item.community_id).first()
                     if membership and membership.joined_via_feed:
                         # Send the community unsub requests to celery - it will handle all the db commits and cache busting
-                        leave_community(community_id=feed_item.community_id, src=src, auth=auth,
+                        shared_community.leave_community(community_id=feed_item.community_id, src=src, auth=auth,
                                         bulk_leave=bulk_leave)
 
         if src == SRC_WEB and not bulk_leave:

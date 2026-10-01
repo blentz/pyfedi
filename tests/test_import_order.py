@@ -14,8 +14,16 @@ every such cycle from the rest of the suite, so these rows import each module in
 fresh interpreter instead. The same probe found six MORE cycles, not registered
 before; they were listed as strict xfails and are all fixed the same way, each
 importer taking the module and looking the name up when it is called.
+
+The blueprint list missed the service layer: `app.shared.post` (and community, feed,
+user) reaches every blueprint through `app.activitypub`, whose routes then import
+names from the half-loaded shared module, and `app.api.alpha` did the same through
+`app.community.routes`. tests/conftest.py no longer primes anything, so
+tests/test_shared_post_lifecycle.py run alone failed at collection. Every module
+under app/ is now probed, not a hand-kept list.
 """
 import os
+import pathlib
 import subprocess
 import sys
 
@@ -25,18 +33,13 @@ import pytest
 # auth.util, chat.util, feed.routes, topic.routes). A new one is a plain failure.
 STILL_CIRCULAR = {}
 
-MODULES = [
-    f'app.{package}.{name}'
-    for package, names in (
-        ('activitypub', ('routes', 'util')), ('admin', ('routes', 'util')),
-        ('auth', ('routes', 'util')), ('chat', ('routes', 'util')),
-        ('community', ('routes', 'util')), ('dev', ('routes',)), ('domain', ('routes',)),
-        ('feed', ('routes', 'util')), ('instance', ('routes', 'util')),
-        ('main', ('routes', 'util')), ('post', ('routes', 'util')), ('search', ('routes',)),
-        ('tag', ('routes',)), ('topic', ('routes',)), ('user', ('routes',)),
-    )
-    for name in names
-]
+APP = pathlib.Path(__file__).resolve().parent.parent / 'app'
+
+MODULES = sorted(
+    '.'.join(('app',) + path.relative_to(APP).with_suffix('').parts).removesuffix('.__init__')
+    for path in APP.rglob('*.py')
+    if '__pycache__' not in path.parts
+)
 
 
 @pytest.mark.parametrize('module', [

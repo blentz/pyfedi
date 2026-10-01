@@ -552,7 +552,7 @@ def test_following_somebody(app, env):
     client, viewer, other, community = env
     token = csrf(app, client)
 
-    with patch('app.user.routes.follow_user') as follow:
+    with patch('app.shared.user.follow_user') as follow:
         response = client.post('/u/other/follow', data={'csrf_token': token})
 
     assert response.status_code in (200, 302)
@@ -567,7 +567,7 @@ def test_following_answers_htmx_with_the_new_state(app, env):
     db.session.commit()
     token = csrf(app, client)
 
-    with patch('app.user.routes.follow_user'):
+    with patch('app.shared.user.follow_user'):
         response = client.post('/u/other/follow', data={'csrf_token': token},
                                headers={'HX-Request': 'true'})
 
@@ -580,7 +580,7 @@ def test_following_an_open_profile_answers_done(app, env):
     db.session.commit()
     token = csrf(app, client)
 
-    with patch('app.user.routes.follow_user'):
+    with patch('app.shared.user.follow_user'):
         response = client.post('/u/other/follow', data={'csrf_token': token},
                                headers={'HX-Request': 'true'})
 
@@ -591,7 +591,7 @@ def test_unfollowing_somebody(app, env):
     client, viewer, other, community = env
     token = csrf(app, client)
 
-    with patch('app.user.routes.unfollow_user') as unfollow:
+    with patch('app.shared.user.unfollow_user') as unfollow:
         response = client.post('/u/other/unfollow',
                                data={'csrf_token': token})
 
@@ -617,7 +617,7 @@ def test_sending_a_bot_challenge(app, env):
     db.session.commit()
     token = csrf(app, client)
 
-    with patch('app.user.routes.bot_challenge_user') as challenge:
+    with patch('app.shared.user.bot_challenge_user') as challenge:
         with patch('app.user.routes.flash') as flashed:
             response = client.post('/u/other/bot_challenge',
                                    data={'csrf_token': token})
@@ -634,7 +634,7 @@ def test_a_bot_challenge_answers_htmx(app, env):
     db.session.commit()
     token = csrf(app, client)
 
-    with patch('app.user.routes.bot_challenge_user'):
+    with patch('app.shared.user.bot_challenge_user'):
         response = client.post('/u/other/bot_challenge',
                                data={'csrf_token': token},
                                headers={'HX-Request': 'true'})
@@ -664,9 +664,9 @@ def test_these_routes_refuse_an_off_site_return(app, env, path):
     db.session.commit()
     token = csrf(app, client)
 
-    with patch('app.user.routes.follow_user'):
-        with patch('app.user.routes.unfollow_user'):
-            with patch('app.user.routes.bot_challenge_user'):
+    with patch('app.shared.user.follow_user'):
+        with patch('app.shared.user.unfollow_user'):
+            with patch('app.shared.user.bot_challenge_user'):
                 response = client.post(
                     f'/u/other/{path}?return_to=https://evil.example/',
                     data={'csrf_token': token})
@@ -840,7 +840,7 @@ def test_following_a_remote_account_by_handle(app, env, path, patched):
     remote = a_remote()
     token = csrf(app, client)
 
-    with patch(f'app.user.routes.{patched}') as action:
+    with patch(f'app.shared.user.{patched}') as action:
         response = client.post(f'/u/remote@other.example/{path}',
                                data={'csrf_token': token})
 
@@ -852,7 +852,7 @@ def test_unfollowing_answers_htmx(app, env):
     client, viewer, other, community = env
     token = csrf(app, client)
 
-    with patch('app.user.routes.unfollow_user'):
+    with patch('app.shared.user.unfollow_user'):
         response = client.post('/u/other/unfollow',
                                data={'csrf_token': token},
                                headers={'HX-Request': 'true'})
@@ -876,7 +876,7 @@ def test_challenging_a_remote_account_by_handle(app, env):
     db.session.commit()
     token = csrf(app, client)
 
-    with patch('app.user.routes.bot_challenge_user') as challenge:
+    with patch('app.shared.user.bot_challenge_user') as challenge:
         client.post('/u/remote@other.example/bot_challenge',
                     data={'csrf_token': token})
 
@@ -902,7 +902,7 @@ def test_toggling_notifications_for_a_user(app, env):
     client, viewer, other, community = env
     token = csrf(app, client)
 
-    with patch('app.user.routes.subscribe_user',
+    with patch('app.shared.user.subscribe_user',
                return_value='done') as subscribe:
         response = client.post(f'/user/{other.id}/notification',
                                data={'csrf_token': token})

@@ -967,7 +967,7 @@ def test_favouriting_a_community(app, env):
     client, community, mod, member, outsider = env
     token = csrf(app, client)
 
-    with patch('app.community.routes.favorite_community',
+    with patch('app.shared.community.favorite_community',
                return_value='done') as favourite:
         response = client.post(f'/community/{community.id}/fave',
                                data={'csrf_token': token})
@@ -982,7 +982,7 @@ def test_favouriting_an_unknown_community_is_a_404(app, env):
     client, community, mod, member, outsider = env
     token = csrf(app, client)
 
-    with patch('app.community.routes.favorite_community',
+    with patch('app.shared.community.favorite_community',
                side_effect=NoResultFound):
         response = client.post('/community/9999/fave',
                                data={'csrf_token': token})
@@ -994,7 +994,7 @@ def test_toggling_notifications_for_a_community(app, env):
     client, community, mod, member, outsider = env
     token = csrf(app, client)
 
-    with patch('app.community.routes.subscribe_community',
+    with patch('app.shared.community.subscribe_community',
                return_value='done') as subscribe:
         response = client.post(f'/community/{community.id}/notification',
                                data={'csrf_token': token})
@@ -1009,7 +1009,7 @@ def test_toggling_notifications_for_an_unknown_community_is_a_404(app, env):
     client, community, mod, member, outsider = env
     token = csrf(app, client)
 
-    with patch('app.community.routes.subscribe_community',
+    with patch('app.shared.community.subscribe_community',
                side_effect=NoResultFound):
         response = client.post('/community/9999/notification',
                                data={'csrf_token': token})

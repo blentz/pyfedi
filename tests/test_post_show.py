@@ -1110,7 +1110,7 @@ def test_a_reader_who_hides_read_posts_has_this_one_marked(app, env):
 
     with patch('app.post.routes.render_template',
                return_value=rendered(app)):
-        with patch('app.post.routes.mark_post_read') as marked:
+        with patch('app.shared.post.mark_post_read') as marked:
             as_user(app, outsider).get(f'/post/{post.id}')
 
     assert marked.call_args.args[0] == [post.id]
@@ -1131,7 +1131,7 @@ def test_a_read_mark_covers_the_cross_posts_too(app, env):
 
     with patch('app.post.routes.render_template',
                return_value=rendered(app)):
-        with patch('app.post.routes.mark_post_read') as marked:
+        with patch('app.shared.post.mark_post_read') as marked:
             as_user(app, outsider).get(f'/post/{post.id}')
 
     assert marked.call_args.args[0] == [post.id, cross.id]
@@ -1142,7 +1142,7 @@ def test_a_reader_who_does_not_hide_read_posts_is_not_marked(app, env):
 
     with patch('app.post.routes.render_template',
                return_value=rendered(app)):
-        with patch('app.post.routes.mark_post_read') as marked:
+        with patch('app.shared.post.mark_post_read') as marked:
             as_user(app, outsider).get(f'/post/{post.id}')
 
     assert marked.call_args is None

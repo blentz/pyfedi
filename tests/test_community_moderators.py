@@ -846,7 +846,7 @@ def test_a_moderator_can_still_sticky_a_post(app, env, a_post):
     client, first, second, owner, member = env
     token = csrf(app, client)
 
-    with patch('app.post.routes.sticky_post') as sticky:
+    with patch('app.shared.post.sticky_post') as sticky:
         response = client.post(f'/post/{a_post.id}/sticky/yes',
                                data={'csrf_token': token})
 
@@ -877,7 +877,7 @@ def test_voting_by_post_still_works(app, env, a_post):
     voter = as_user(app, member)
     token = csrf(app, voter)
 
-    with patch('app.post.routes.vote_for_post',
+    with patch('app.shared.post.vote_for_post',
                return_value='voted') as vote:
         response = voter.post(f'/post/{a_post.id}/upvote/default',
                               data={'csrf_token': token})

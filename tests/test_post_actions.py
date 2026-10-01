@@ -488,7 +488,7 @@ def test_voting_in_a_poll(app, env):
     client = as_user(app, outsider)
     token = csrf(app, client)
 
-    with patch('app.post.routes.vote_for_poll') as voted:
+    with patch('app.shared.post.vote_for_poll') as voted:
         response = client.post(f'/poll/{post.id}/vote',
                                data={'poll_choice': str(choice.id),
                                      'csrf_token': token})
@@ -504,7 +504,7 @@ def test_voting_in_a_multiple_choice_poll(app, env):
     client = as_user(app, outsider)
     token = csrf(app, client)
 
-    with patch('app.post.routes.vote_for_poll') as voted:
+    with patch('app.shared.post.vote_for_poll') as voted:
         client.post(f'/poll/{post.id}/vote',
                     data={'poll_choice[]': [str(c) for c in choices],
                           'csrf_token': token})
@@ -522,7 +522,7 @@ def test_a_poll_vote_with_nothing_ticked(app, env):
     client = as_user(app, outsider)
     token = csrf(app, client)
 
-    with patch('app.post.routes.vote_for_poll') as voted:
+    with patch('app.shared.post.vote_for_poll') as voted:
         with patch('app.post.routes.flash') as flashed:
             response = client.post(f'/poll/{post.id}/vote',
                                    data={'csrf_token': token})
@@ -539,7 +539,7 @@ def test_a_poll_vote_that_is_not_a_number(app, env):
     client = as_user(app, outsider)
     token = csrf(app, client)
 
-    with patch('app.post.routes.vote_for_poll') as voted:
+    with patch('app.shared.post.vote_for_poll') as voted:
         response = client.post(f'/poll/{post.id}/vote',
                                data={'poll_choice': 'banana',
                                      'csrf_token': token})
@@ -774,7 +774,7 @@ def test_voting_on_a_post(app, env):
     client = as_user(app, outsider)
     token = csrf(app, client)
 
-    with patch('app.post.routes.vote_for_post',
+    with patch('app.shared.post.vote_for_post',
                return_value='voted') as voted:
         response = client.post(f'/post/{post.id}/upvote/default',
                                data={'csrf_token': token})
@@ -793,7 +793,7 @@ def test_voting_privately(app, env):
     client = as_user(app, outsider)
     token = csrf(app, client)
 
-    with patch('app.post.routes.vote_for_post', return_value='voted') as voted:
+    with patch('app.shared.post.vote_for_post', return_value='voted') as voted:
         client.post(f'/post/{post.id}/upvote/default',
                     data={'csrf_token': token})
 
@@ -807,7 +807,7 @@ def test_a_public_vote_overrides_the_setting(app, env):
     client = as_user(app, outsider)
     token = csrf(app, client)
 
-    with patch('app.post.routes.vote_for_post', return_value='voted') as voted:
+    with patch('app.shared.post.vote_for_post', return_value='voted') as voted:
         client.post(f'/post/{post.id}/upvote/public',
                     data={'csrf_token': token})
 
@@ -954,7 +954,7 @@ def test_setting_an_emoji_on_a_post(app, env):
     client = as_user(app, outsider)
     token = csrf(app, client)
 
-    with patch('app.post.routes.vote_for_post') as voted:
+    with patch('app.shared.post.vote_for_post') as voted:
         with patch('app.post.routes.render_template',
                    return_value='rendered') as render:
             response = client.post(f'/post/{post.id}/emoji_set',
@@ -991,7 +991,7 @@ def test_an_unverified_account_cannot_set_an_emoji(app, env, target):
     client = as_user(app, outsider)
     token = csrf(app, client)
 
-    with patch('app.post.routes.vote_for_post') as voted_post, \
+    with patch('app.shared.post.vote_for_post') as voted_post, \
             patch('app.post.routes.vote_for_reply') as voted_reply:
         response = client.post(f'/{target}/{target_id}/emoji_set',
                                data={'emoji': ':tada:', 'csrf_token': token})
@@ -1365,7 +1365,7 @@ def test_locking_a_post(app, env, mode, expected):
     client = as_user(app, mod)
     token = csrf(app, client)
 
-    with patch('app.post.routes.lock_post') as locked:
+    with patch('app.shared.post.lock_post') as locked:
         response = client.post(f'/post/{post.id}/lock/{mode}',
                                data={'csrf_token': token})
 
@@ -1409,7 +1409,7 @@ def test_hiding_a_post(app, env, mode, expected):
     client = as_user(app, outsider)
     token = csrf(app, client)
 
-    with patch('app.post.routes.hide_post') as hidden:
+    with patch('app.shared.post.hide_post') as hidden:
         with patch('app.post.routes.flash') as flashed:
             response = client.post(f'/post/{post.id}/hide/{mode}',
                                    data={'csrf_token': token})
@@ -1435,7 +1435,7 @@ def test_stickying_a_post(app, env, mode, expected):
     client = as_user(app, mod)
     token = csrf(app, client)
 
-    with patch('app.post.routes.sticky_post') as stickied:
+    with patch('app.shared.post.sticky_post') as stickied:
         response = client.post(f'/post/{post.id}/sticky/{mode}',
                                data={'csrf_token': token})
 
@@ -1487,7 +1487,7 @@ def test_marking_a_post_read(app, env):
     client = as_user(app, outsider)
     token = csrf(app, client)
 
-    with patch('app.post.routes.mark_post_read') as marked:
+    with patch('app.shared.post.mark_post_read') as marked:
         response = client.post(f'/post/{post.id}/set_read',
                                data={'csrf_token': token})
 
@@ -1503,7 +1503,7 @@ def test_marking_a_post_read_is_one_way(app, env):
     client = as_user(app, outsider)
     token = csrf(app, client)
 
-    with patch('app.post.routes.mark_post_read') as marked:
+    with patch('app.shared.post.mark_post_read') as marked:
         client.post(f'/post/{post.id}/set_read?read=false',
                     data={'csrf_token': token})
 

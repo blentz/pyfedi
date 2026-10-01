@@ -11,10 +11,12 @@ from app.community.util import search_for_community
 from app.constants import *
 from app.models import Community, CommunityMember, User, CommunityBan, Notification, CommunityJoinRequest, \
     NotificationSubscription, Post, CommunityFlair, Feed, utcnow
-from app.shared.community import join_community, leave_community, block_community, unblock_community, make_community, \
-    edit_community, subscribe_community, delete_community, restore_community, add_mod_to_community, \
-    remove_mod_from_community, COMMUNITY_SETTINGS
-from app.shared.feed import leave_feed
+# The module, not the names: app.shared.community reaches this file through a blueprint
+# package before they are defined (import cycle: app.shared.community)
+import app.shared.community as shared_community
+# The module, not the names: app.shared.feed reaches this file through a blueprint
+# package before they are defined (import cycle: app.shared.feed)
+import app.shared.feed as shared_feed
 from app.shared.tasks import task_selector
 from app.utils import user_banned_from_community, authorise_api_user, communities_banned_from_all_users, moderating_communities_ids, \
     blocked_or_banned_instances
@@ -257,7 +259,7 @@ def post_community_follow(auth, data):
         if user_banned_from_community(user.id, community.id):  # D995
             raise Exception('You are banned from this community')
 
-    user_id = join_community(community_id, SRC_API, auth) if follow else leave_community(community_id, SRC_API, auth)
+    user_id = shared_community.join_community(community_id, SRC_API, auth) if follow else shared_community.leave_community(community_id, SRC_API, auth)
     community_json = community_view(community=community_id, variant=4, stub=False, user_id=user_id)
     return community_json
 
@@ -286,7 +288,7 @@ def post_community_leave_all(auth):
         subscription = community_membership(user, community)
         if subscription is not False and subscription < SUBSCRIPTION_MODERATOR:
             # send leave requests to celery - also handles db commits and cache busting, ignore returned value
-            user_id = leave_community(community_id=community.id, src=SRC_API, auth=auth, bulk_leave=True)
+            user_id = shared_community.leave_community(community_id=community.id, src=SRC_API, auth=auth, bulk_leave=True)
 
     joined_feed_ids = subscribed_feeds(user.id)
 
@@ -296,7 +298,7 @@ def post_community_leave_all(auth):
             subscription = feed_membership(user, feed)
             if subscription != SUBSCRIPTION_OWNER:
                 # send leave requests to celery - also handles db commits and cache busting, ignore returned value
-                user_id = leave_feed(feed=feed, src=SRC_API, auth=auth, bulk_leave=True)
+                user_id = shared_feed.leave_feed(feed=feed, src=SRC_API, auth=auth, bulk_leave=True)
 
     return user_view(user=user, variant=6, user_id=user_id)
 
@@ -306,7 +308,7 @@ def post_community_block(auth, data):
     block = data['block']
 
     a_community(community_id)
-    user_id = block_community(community_id, SRC_API, auth) if block else unblock_community(community_id, SRC_API, auth)
+    user_id = shared_community.block_community(community_id, SRC_API, auth) if block else shared_community.unblock_community(community_id, SRC_API, auth)
     community_json = community_view(community=community_id, variant=5, user_id=user_id)
     return community_json
 
@@ -329,7 +331,7 @@ def post_community(auth, data):
              'nsfw': nsfw, 'restricted_to_mods': restricted_to_mods, 'local_only': local_only,
              'discussion_languages': discussion_languages, 'question_answer': question_answer}
 
-    user_id, community_id = make_community(input, SRC_API, auth)
+    user_id, community_id = shared_community.make_community(input, SRC_API, auth)
     community_json = community_view(community=community_id, variant=4, user_id=user_id)
     return community_json
 
@@ -370,9 +372,9 @@ def put_community(auth, data):
              'discussion_languages': discussion_languages, 'question_answer': question_answer}
     # D641: the web form's settings are passed only when sent, so an edit that
     # omits one leaves it as it is.
-    input.update({key: data[key] for key in COMMUNITY_SETTINGS if key in data})
+    input.update({key: data[key] for key in shared_community.COMMUNITY_SETTINGS if key in data})
 
-    user_id = edit_community(input, community, SRC_API, auth)
+    user_id = shared_community.edit_community(input, community, SRC_API, auth)
     community_json = community_view(community=community, variant=4, user_id=user_id)
     return community_json
 
@@ -382,7 +384,7 @@ def put_community_subscribe(auth, data):
     subscribe = data['subscribe']
 
     a_community(community_id)
-    user_id = subscribe_community(community_id, subscribe, SRC_API, auth)
+    user_id = shared_community.subscribe_community(community_id, subscribe, SRC_API, auth)
     community_json = community_view(community=community_id, variant=4, user_id=user_id)
     return community_json
 
@@ -393,9 +395,9 @@ def post_community_delete(auth, data):
 
     a_community(community_id)
     if deleted:
-        user_id = delete_community(community_id, SRC_API, auth)
+        user_id = shared_community.delete_community(community_id, SRC_API, auth)
     else:
-        user_id = restore_community(community_id, SRC_API, auth)
+        user_id = shared_community.restore_community(community_id, SRC_API, auth)
     community_json = community_view(community=community_id, variant=4, user_id=user_id)
     return community_json
 
@@ -644,9 +646,9 @@ def post_community_mod(auth, data):
     added = data['added']
 
     if added:
-        add_mod_to_community(community_id, person_id, SRC_API, auth)
+        shared_community.add_mod_to_community(community_id, person_id, SRC_API, auth)
     else:
-        remove_mod_from_community(community_id, person_id, SRC_API, auth)
+        shared_community.remove_mod_from_community(community_id, person_id, SRC_API, auth)
     cache.delete_memoized(cached_modlist_for_community)
     community_json = {
         'moderators': cached_modlist_for_community(community_id)

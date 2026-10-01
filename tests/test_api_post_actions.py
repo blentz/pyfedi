@@ -736,7 +736,7 @@ class TestMarkAsRead:
 
     def test_a_row_that_is_already_there_is_reported_as_a_failure(self, env):
         from sqlalchemy.exc import IntegrityError
-        with patch('app.api.alpha.utils.post.mark_post_read',
+        with patch('app.shared.post.mark_post_read',
                    side_effect=IntegrityError('x', 'y', Exception('z'))):
             assert post_post_mark_as_read(
                 token(env.stranger),

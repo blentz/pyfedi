@@ -18,7 +18,9 @@ from app import db, cache, celery, httpx_client, limiter, plugins
 from app.activitypub.signature import RsaKeys, send_post_request
 from app.activitypub.util import extract_domain_and_actor, find_actor_or_create
 from app.activitypub.actor import schedule_actor_refresh
-from app.api.alpha.views import cached_modlist_for_community, cached_modlist_for_user
+# The module, not the names: app.api.alpha.views reaches this file through
+# app.activitypub before they are defined (import cycle: app.api.alpha)
+import app.api.alpha.views as alpha_views
 from app.community.forms import SearchRemoteCommunity, CreateDiscussionForm, CreateImageForm, CreateLinkForm, \
     ReportCommunityForm, \
     DeleteCommunityForm, AddCommunityForm, EditCommunityForm, AddModeratorForm, BanUserCommunityForm, \
@@ -46,8 +48,9 @@ from app.models import User, Community, CommunityMember, CommunityJoinRequest, C
     post_tag, Tag, hidden_posts, CommunityInvitation, CommunityFlairBlock, RssFeed, UserFollower
 from app.community import bp
 from app.post.util import tags_to_string
-from app.shared.community import invite_with_chat, invite_with_email, subscribe_community, add_mod_to_community, \
-    remove_mod_from_community, get_comm_flair_list, favorite_community, edit_community
+# The module, not the names: app.shared.community reaches this file through a blueprint
+# package before they are defined (import cycle: app.shared.community)
+import app.shared.community as shared_community
 from app.utils import user_banned_from_community, back, get_setting, render_template, markdown_to_html, validation_required, can_moderate, \
     shorten_string, gibberish, community_membership, \
     request_etag_matches, return_304, can_upvote, can_downvote, user_filters_posts, \
@@ -62,10 +65,13 @@ from app.utils import user_banned_from_community, back, get_setting, render_temp
     moderating_communities_ids_all_users, block_honey_pot, user_pronouns, community_membership_private, \
     show_reason_why_no_federation, can_upload_video, banned_instances, is_invalid_get_request_uri, user_ip_banned, \
     check_anoobis, calculate_rss_cache_timeout, opengraph_parse, community_link_markup, sanitise_posting_warning, refuse_if_private_instance
-from app.shared.post import make_post, sticky_post
+# The module, not the names: app.shared.post reaches this file through a blueprint
+# package before they are defined (import cycle: app.shared.post)
+import app.shared.post as shared_post
 from app.shared.tasks import task_selector
-from app.shared.community import leave_community
-from app.shared.feed import leave_feed
+# The module, not the names: app.shared.feed reaches this file through a blueprint
+# package before they are defined (import cycle: app.shared.feed)
+import app.shared.feed as shared_feed
 from app.utils import get_recipient_language, subscribed_feeds, feed_membership
 from app.rss_extras import RSSFeed
 from datetime import timezone, timedelta
@@ -748,7 +754,7 @@ def show_community(community: Community):
                                          etag=f"{community.id}{sort}{post_layout}_{hash(community.last_active)}",
                                          related_communities=related_communities,
                                          next_url=next_url, prev_url=prev_url, low_bandwidth=low_bandwidth, un_moderated=un_moderated,
-                                         community_flair=get_comm_flair_list(community),
+                                         community_flair=shared_community.get_comm_flair_list(community),
                                          recently_upvoted=recently_upvoted, recently_downvoted=recently_downvoted,
                                          community_feeds=community_feeds,
                                          user_pronouns=user_pronouns(), hide_community_actions=community.name == 'microblogs',
@@ -1245,7 +1251,7 @@ def add_post(actor, type=None):
                 if not uploaded_files:
                     flash(_('At least one image is required for a gallery post.'), 'error')
                     return redirect(url_for('community.add_post', actor=community.ap_id if community.ap_id else community.name, type='gallery'))
-                post = make_post(form, community, post_type, SRC_WEB, uploaded_files=uploaded_files, image_alt_texts=image_alt_texts)
+                post = shared_post.make_post(form, community, post_type, SRC_WEB, uploaded_files=uploaded_files, image_alt_texts=image_alt_texts)
             elif type == 'image' or type == 'event':
                 uploaded_file = request.files.get('image_file')
             elif type == 'video' and can_upload_video():
@@ -1254,7 +1260,7 @@ def add_post(actor, type=None):
                 uploaded_file = None
 
             if type != 'gallery':
-                post = make_post(form, community, post_type, SRC_WEB, uploaded_file=uploaded_file)
+                post = shared_post.make_post(form, community, post_type, SRC_WEB, uploaded_file=uploaded_file)
         except Exception as ex:
             # The exception text is LOGGED, not flashed. make_post reaches
             # image processing, remote fetches and the plugin hooks, so str(ex)
@@ -1276,7 +1282,7 @@ def add_post(actor, type=None):
             db.session.commit()
 
         if post.sticky:
-            sticky_post(post.id, True, SRC_WEB)  # federating post's stickiness is separate from creating it
+            shared_post.sticky_post(post.id, True, SRC_WEB)  # federating post's stickiness is separate from creating it
 
         if post.status == POST_STATUS_REVIEWING:
             flash(_('Because your account has not posted before we will review your post before allowing it to be published. Please wait.'), 'warning')
@@ -1463,7 +1469,7 @@ def community_edit(community_id: int):
             form.nsfl.render_kw = {'disabled': True}
         if form.validate_on_submit():
             # D641: one implementation, shared with the API.
-            edit_community(form, community, SRC_WEB, uploaded_icon_file=request.files.get('icon_file'),
+            shared_community.edit_community(form, community, SRC_WEB, uploaded_icon_file=request.files.get('icon_file'),
                            uploaded_banner_file=request.files.get('banner_file'))
             flash(_('Saved'))
             return redirect(url_for('activitypub.community_profile',
@@ -1640,8 +1646,8 @@ def community_make_owner(community_id: int, user_id: int):
         cache.delete_memoized(community_moderators, community_id)
         cache.delete_memoized(Community.moderators, community)
 
-        cache.delete_memoized(cached_modlist_for_community)
-        cache.delete_memoized(cached_modlist_for_user, user)
+        cache.delete_memoized(alpha_views.cached_modlist_for_community)
+        cache.delete_memoized(alpha_views.cached_modlist_for_user, user)
 
     else:
         abort(401)
@@ -1685,8 +1691,8 @@ def community_remove_owner(community_id: int, user_id: int):
             cache.delete_memoized(community_moderators, community_id)
             cache.delete_memoized(Community.moderators, community)
 
-            cache.delete_memoized(cached_modlist_for_community)
-            cache.delete_memoized(cached_modlist_for_user, user)
+            cache.delete_memoized(alpha_views.cached_modlist_for_community)
+            cache.delete_memoized(alpha_views.cached_modlist_for_user, user)
 
     else:
         abort(401)
@@ -1716,7 +1722,7 @@ def community_add_moderator(community_id: int, user_id: int):
     # `community_remove_moderator` answers 401. Its `.one()` calls raise the
     # same way for an unknown community or user.
     try:
-        add_mod_to_community(community_id, user_id, SRC_WEB)
+        shared_community.add_mod_to_community(community_id, user_id, SRC_WEB)
     except NoResultFound:
         abort(404)
     except Exception:
@@ -1751,7 +1757,7 @@ def community_remove_moderator(community_id: int, user_id: int):
         return show_ban_message()
 
     try:
-        remove_mod_from_community(community_id, user_id, SRC_WEB)
+        shared_community.remove_mod_from_community(community_id, user_id, SRC_WEB)
     except Exception:
         abort(401)
 
@@ -1938,7 +1944,7 @@ def community_unban_user(community_id: int, user_id: int):
 @login_required
 def community_notification(community_id: int):
     try:
-        return subscribe_community(community_id, None, SRC_WEB)
+        return shared_community.subscribe_community(community_id, None, SRC_WEB)
     except NoResultFound:
         abort(404)
 
@@ -1947,7 +1953,7 @@ def community_notification(community_id: int):
 @login_required
 def community_fave(community_id: int):
     try:
-        return favorite_community(community_id, current_user.id, SRC_WEB)
+        return shared_community.favorite_community(community_id, current_user.id, SRC_WEB)
     except NoResultFound:
         abort(404)
 
@@ -2816,7 +2822,7 @@ def community_flair(actor):
 
             low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
 
-            flairs = get_comm_flair_list(community)
+            flairs = shared_community.get_comm_flair_list(community)
 
             return render_template('community/community_flair.html', flairs=flairs,
                                    title=_('Flair in %(community)s', community=community.display_name()),
@@ -2933,8 +2939,8 @@ def community_leave_all():
         subscription = community_membership(current_user, community)
         if subscription is not False and subscription < SUBSCRIPTION_MODERATOR:
             # send leave requests to celery - also handles db commits and cache busting
-            leave_community(community_id=community.id, src=SRC_WEB, bulk_leave=True)
-
+            shared_community.leave_community(community_id=community.id, src=SRC_WEB, bulk_leave=True)
+    
     joined_feed_ids = subscribed_feeds(current_user.id)
 
     if joined_feed_ids:
@@ -2943,8 +2949,8 @@ def community_leave_all():
             subscription = feed_membership(current_user, feed)
             if subscription != SUBSCRIPTION_OWNER:
                 # send leave requests to celery - also handles db commits and cache busting
-                leave_feed(feed=feed, src=SRC_WEB, bulk_leave=True)
-
+                shared_feed.leave_feed(feed=feed, src=SRC_WEB, bulk_leave=True)
+    
     flash(_('You are being unsubscribed from all communities and feeds. '
             'Please allow a couple minutes for the process to complete.'))
 
@@ -2979,13 +2985,13 @@ def community_invite(actor):
                 line = line.strip()
                 if line != '':
                     if line.startswith('http'):
-                        chat_invites += invite_with_chat(community.id, line, SRC_WEB)
+                        chat_invites += shared_community.invite_with_chat(community.id, line, SRC_WEB)
                     elif '@' in line:
                         if line.startswith('@') or instance_software(domain_from_email(line)):
-                            chat_invites += invite_with_chat(community.id, line, SRC_WEB)
+                            chat_invites += shared_community.invite_with_chat(community.id, line, SRC_WEB)
                         else:
                             if line not in sent_to:
-                                email_invites += invite_with_email(community.id, line, SRC_WEB)
+                                email_invites += shared_community.invite_with_email(community.id, line, SRC_WEB)
                                 sent_to.add(line)
                         total_invites += 1
 

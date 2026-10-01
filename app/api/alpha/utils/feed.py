@@ -4,7 +4,9 @@ from app import db
 from app.api.alpha.views import feed_view
 from app.constants import *
 from app.models import User, Feed, FeedItem, Community
-from app.shared.feed import leave_feed, join_feed, make_feed, edit_feed, delete_feed
+# The module, not the names: app.shared.feed reaches this file through a blueprint
+# package before they are defined (import cycle: app.shared.feed)
+import app.shared.feed as shared_feed
 from app.utils import authorise_api_user, blocked_communities, blocked_or_banned_instances, filtered_out_communities, \
     communities_banned_from, moderating_communities_ids, joined_or_modding_communities, feed_tree_public, feed_tree, \
     subscribed_feeds
@@ -157,9 +159,9 @@ def post_feed_follow(auth, data):
         raise Exception('access_denied')
 
     if follow:
-        join_feed(feed.link(), user.id, SRC_API)
+        shared_feed.join_feed(feed.link(), user.id, SRC_API)
     else:
-        leave_feed(feed, SRC_API, auth)
+        shared_feed.leave_feed(feed, SRC_API, auth)
 
     return feed
 
@@ -193,7 +195,7 @@ def post_feed(auth, data):
                   'communities': communities, 'is_instance_feed': is_instance_feed,
                   'show_child_posts': show_child_posts, 'parent_feed_id': parent_feed_id}
 
-    feed = make_feed(input_data, SRC_API, auth)
+    feed = shared_feed.make_feed(input_data, SRC_API, auth)
 
     return get_feed(auth, {'id': feed.id})
 
@@ -228,7 +230,7 @@ def put_feed(auth, data):
                   'communities': communities, 'is_instance_feed': is_instance_feed,
                   'show_child_posts': show_child_posts, 'parent_feed_id': parent_feed_id}
 
-    edit_feed(input_data, feed, SRC_API, auth)
+    shared_feed.edit_feed(input_data, feed, SRC_API, auth)
     return get_feed(auth, {'id': feed_id})
 
 
@@ -245,6 +247,6 @@ def post_feed_delete(auth, data):
     feed_json = get_feed(auth, {'id': feed_id})
 
     if deleted:
-        delete_feed(feed_id, SRC_API, auth)
+        shared_feed.delete_feed(feed_id, SRC_API, auth)
 
     return feed_json
