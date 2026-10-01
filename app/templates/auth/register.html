@@ -38,7 +38,9 @@
                             <form method="post">
                                 {{ form.csrf_token() }}
                                 {{ render_field(form.user_name) }}
-                                {{ render_field(form.email) }}
+                                <div style="position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden;" aria-hidden="true">
+                                    {{ form.hp_field() }}
+                                </div>
                                 {{ render_field(form.real_email) }}
                                 <div class="password-container">
                                     {{ render_field(form.password) }}
