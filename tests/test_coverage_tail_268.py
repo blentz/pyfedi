@@ -189,6 +189,33 @@ class TestWhoTheModeratorsCollectionMakesAModerator:
         assert is_moderator(env.community.id, second.id)
 
 
+class TestAModeratorsCollectionOnAnotherHost:
+    """PERM-5, fixed (owner ruling). The moderators collection is read only when it is on the
+    community's own host. Moderator is a power on THIS instance, and a collection published by a
+    different server could name anyone; it is skipped with a log instead of being fetched."""
+
+    def test_it_is_not_read(self, env, caplog):
+        foreign_url = 'https://elsewhere.example/c/faraway/moderators'
+        env.community.ap_moderators_url = foreign_url
+        db.session.commit()
+        mod = a_remote_user('foreignmod')
+        fetched = []
+
+        def fake(url, *args, **kwargs):
+            fetched.append(url)
+            return {foreign_url: {'type': 'OrderedCollection',
+                                  'orderedItems': [f'https://{PEER}/u/foreignmod']}}.get(url)
+
+        with patch('app.community.util.remote_object_to_json', side_effect=fake), \
+                patch('app.community.util.sleep'), \
+                patch('app.community.util.find_actor_or_create', return_value=mod):
+            retrieve_mods_and_backfill(env.community.id, PEER, 'faraway')
+
+        assert foreign_url not in fetched
+        assert not is_moderator(env.community.id, mod.id)
+        assert 'elsewhere.example' in caplog.text
+
+
 class TestWhoTheAttributedToListMakesAModerator:
     """The second reader, used by servers that publish their moderators inline on the Group
     document rather than as a collection. Same two arms, a second copy of each -- so a fix applied
@@ -244,6 +271,27 @@ class TestWhoTheAttributedToListMakesAModerator:
                                                 f'https://{PEER}/u/goodlistmod'))
 
         assert is_moderator(env.community.id, good.id)
+
+    def test_an_actor_on_another_host_is_skipped(self, env, caplog):
+        """PERM-5, fixed (owner ruling). An `attributedTo` entry must be on the community's own
+        host; one naming an actor elsewhere is skipped with a log, and the rest of the list is
+        still read. It used to make whoever it named a moderator here."""
+        foreign = a_remote_user('foreignlistmod')
+        local = a_remote_user('locallistmod')
+        env.community.ap_moderators_url = None
+        db.session.commit()
+
+        def resolve(actor, *args, **kwargs):
+            return foreign if 'foreignlistmod' in actor else local
+
+        with patch('app.community.util.find_actor_or_create', side_effect=resolve):
+            backfill(env, {OUTBOX_URL: None},
+                     community_json=self._group('https://elsewhere.example/u/foreignlistmod',
+                                                f'https://{PEER}/u/locallistmod'))
+
+        assert not is_moderator(env.community.id, foreign.id)
+        assert is_moderator(env.community.id, local.id)
+        assert 'elsewhere.example' in caplog.text
 
     def test_the_collection_wins_when_both_are_published(self, env):
         """`elif`. A server publishing both is read ONCE, from the collection -- which is the

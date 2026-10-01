@@ -227,6 +227,8 @@ class TestWhenTheBackfillFails:
         """
         from app.community.util import retrieve_mods_and_backfill
 
+        # PERM-5: the moderators collection is read only from the community's own host
+        env.community.ap_profile_id = 'https://peer.example/c/x'
         env.community.ap_moderators_url = 'https://peer.example/c/x/moderators'
         db.session.commit()
 
@@ -250,6 +252,8 @@ class TestWhenTheBackfillFails:
         first = make_user(env.baseline.instance_remote, 'attrmod1')
         second = make_user(env.baseline.instance_remote, 'attrmod2')
         db.session.commit()
+        # PERM-5: attributedTo moderators must be on the community's own host
+        env.community.ap_profile_id = 'https://peer.example/c/x'
         env.community.ap_moderators_url = None
         db.session.commit()
         actors = iter([first, second])
