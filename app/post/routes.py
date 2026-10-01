@@ -2909,7 +2909,7 @@ def post_reply_choose_answer(post_reply_id):
     # reply id that does not exist. An anonymous caller never saw it, because
     # `current_user.is_authenticated` short-circuits first.
     post_reply = db.session.get(PostReply, post_reply_id) or abort(404)
-    if current_user.is_authenticated and (current_user.is_admin_or_staff() or post_reply.user_id == current_user.id or post_reply.community.is_moderator()):
+    if current_user.is_authenticated:
         choose_answer(post_reply_id, src=SRC_WEB)
         return _('Done')
     else:
@@ -2919,7 +2919,7 @@ def post_reply_choose_answer(post_reply_id):
 @bp.route('/post_reply/<int:post_reply_id>/unchoose_answer', methods=['POST'])
 def post_reply_unchoose_answer(post_reply_id):
     post_reply = db.session.get(PostReply, post_reply_id) or abort(404)  # D1357
-    if current_user.is_authenticated and (current_user.is_admin_or_staff() or post_reply.user_id == current_user.id or post_reply.community.is_moderator()):
+    if current_user.is_authenticated:
         unchoose_answer(post_reply_id, src=SRC_WEB)
         return _('Done')
     else:

@@ -7,7 +7,7 @@ from sqlalchemy.orm import aliased
 from app import db
 from app.api.alpha.views import reply_view, reply_report_view, post_view, community_view, user_view
 from app.constants import *
-from app.models import Notification, PostReply, Post, User, PostReplyVote, Report, Community, utcnow
+from app.models import Notification, PostReply, Post, PostReplyVote, Report, Community, utcnow
 from app.shared.reply import vote_for_reply, bookmark_reply, remove_bookmark_reply, subscribe_reply, make_reply, \
     edit_reply, \
     delete_reply, restore_reply, report_reply, mod_remove_reply, mod_restore_reply, lock_post_reply, choose_answer, \
@@ -765,11 +765,7 @@ def post_reply_mark_as_answer(auth, data):
     user_details = authorise_api_user(auth, return_type='dict')
     user_id = user_details['id']
 
-    reply = a_reply(reply_id)
-    user = db.session.get(User, user_id)
-    if not (user.is_admin_or_staff() or reply.user_id == user.id
-            or reply.community.is_moderator(user)):
-        raise Exception('Does not have permission')
+    a_reply(reply_id)
 
     if answer:
         choose_answer(reply_id, SRC_API, auth)

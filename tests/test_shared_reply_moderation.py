@@ -1574,30 +1574,12 @@ class TestChooseAnswer:
     lines into each of the two functions above them in the module; the extents
     read `:554-582` and `:585-598` through Task 6.
 
-    NEITHER FUNCTION CONTAINS A PERMISSION CHECK, AND THAT IS STILL TRUE AND
-    STILL DELIBERATE. Both establish `user` from the source fork and then act.
-    What changed at Task 7 is the API ENTRY POINT, not these two verbs.
-
-    THE PARAGRAPH THAT STOOD HERE THROUGH TASK 6 IS RETRACTED. It read: "but
-    the API path does not: app/api/alpha/routes.py:983 calls
-    `post_reply_mark_as_answer` (app/api/alpha/utils/reply.py:687-697), which
-    calls `authorise_api_user` and dispatches straight through." That was an
-    accurate trace of a live authorization hole. Task 7 closed it.
-    `post_reply_mark_as_answer` is now app/api/alpha/utils/reply.py:687-722,
-    and at `:694-698` it loads the reply and the caller and refuses unless
-    `user.is_admin_or_staff() or reply.user_id == user.id or
-    reply.community.is_moderator(user)` -- the web route's three-way guard at
-    app/post/routes.py:2443, mirrored. `is_moderator` is passed `user`
-    EXPLICITLY: its signature is `is_moderator(self, user=None)`
-    (app/models.py:736) and the `None` default reads `current_user`, which
-    does not exist on the API path.
-
-    WHAT REMAINS TRUE: `authorise_api_user` establishes WHO the caller is and
-    says nothing about what they may do, and `choose_answer` /
-    `unchoose_answer` remain plain verbs that check nothing. Calling either
-    one directly, as most tests in this class do, still bypasses all
-    authorization -- by design, so that both entry points guard in one place
-    each rather than the verb guarding twice.
+    WHO MAY CHOOSE, fixed (owner ruling): both verbs now refuse unless the
+    caller is the POST's author or `can_moderate(community, user)` -- raising
+    'Does not have permission' on the API arm, 403 on the web. The guard used
+    to live at each entry point and admitted the REPLY's author, so a commenter
+    could crown their own comment while the asker could not. Tests that call
+    the verbs directly make `s.actor` a moderator first.
 
     `force_locale(get_recipient_language(post_reply.user_id))` wraps the
     title at `:566`; no `Language` row is needed for that path -- Task 1's
@@ -1621,6 +1603,7 @@ class TestChooseAnswer:
         mutant swapping the two operands would break.
         """
         s = _seed_moderated_reply()
+        seed_moderator(s)
         s.author.unread_notifications = 4
         db.session.commit()
 
@@ -1671,6 +1654,7 @@ class TestChooseAnswer:
         silently.
         """
         s = _seed_moderated_reply()
+        seed_moderator(s)
         answer = make_post_reply(s.post, s.author)
         title = 'an unusually long question title that must be shortened ' + 'q' * 78
         assert len(title) == 134
@@ -1702,6 +1686,7 @@ class TestChooseAnswer:
         `unchoose_answer` not writing one rather than a broken seed.
         """
         s = _seed_moderated_reply()
+        seed_moderator(s)
         s.reply.answer = True
         db.session.commit()
 
@@ -1811,39 +1796,45 @@ class TestChooseAnswer:
         db.session.refresh(s.reply)
         assert s.reply.answer is True
 
-    def test_the_replys_own_author_may_mark_it_as_the_answer(self, db_session):
-        """THE POSITIVE CONTROL FOR `reply.user_id == user.id`, the second
-        disjunct of app/api/alpha/utils/reply.py:696.
+    def test_the_replys_own_author_may_not_mark_it_as_the_answer(self, db_session):
+        """Fixed (owner ruling). `reply.user_id == user.id` used to be enough:
+        a commenter could crown their own comment on somebody else's question.
+        `s.actor` (id 2, no role, not a moderator) authors the reply on
+        `s.author`'s post, so no disjunct of the new rule holds.
+        """
+        s = _seed_moderated_reply()
+        own_reply = make_post_reply(s.post, s.actor)
+        own_reply.answer = False
+        db.session.commit()
 
-        A SECOND DISJUNCT IS EXERCISED SEPARATELY so that a later change
-        dropping either one is visible. With only one positive control, a
-        guard narrowed from three disjuncts to one would still pass.
+        with pytest.raises(Exception, match='Does not have permission'):
+            post_reply_mark_as_answer(bearer(s.actor),
+                                      {'comment_reply_id': own_reply.id,
+                                       'answer': True})
 
-        THE REPLY IS AUTHORED BY `s.actor`, NOT BY `s.author`, and that is
-        load-bearing rather than incidental: `_seed_moderated_reply` mints
-        `author` first, so `s.author.id == 1` and `is_admin()` returns True
-        from its `self.id == 1` short-circuit (app/models.py:1260, the
-        module docstring's Probe C). Marking `s.reply` as its own author
-        would therefore satisfy disjunct 1 as well and witness neither
-        cleanly. `s.actor` is id 2, is not a moderator here (no
-        `seed_moderator` call) and holds no role, so ONLY disjunct 2 holds.
+        db.session.refresh(own_reply)
+        assert own_reply.answer is False
 
-        `g.admin_ids` is set for the reason the test above gives.
+    def test_the_posts_author_may_mark_a_comment_as_the_answer(self, db_session):
+        """The positive control for the post-author disjunct (owner ruling).
+        `s.actor` asks the question and `s.author` answers; `s.actor` is id 2,
+        holds no role and moderates nothing, so only that disjunct holds.
+        `g.admin_ids` is set for the reason the moderator test gives.
         """
         from flask import g
         s = _seed_moderated_reply()
-        own_reply = make_post_reply(s.post, s.actor)
-        db.session.commit()
-        own_reply.answer = False
+        question = make_post(s.community, s.actor, 'https://local.example/p/2')
+        answer = make_post_reply(question, s.author)
+        answer.answer = False
         db.session.commit()
         g.admin_ids = []
 
         post_reply_mark_as_answer(bearer(s.actor),
-                                  {'comment_reply_id': own_reply.id,
+                                  {'comment_reply_id': answer.id,
                                    'answer': True})
 
-        db.session.refresh(own_reply)
-        assert own_reply.answer is True
+        db.session.refresh(answer)
+        assert answer.answer is True
 
     def test_the_web_arm_reads_current_user(self, db_session, app):
         """`:559`'s false arm and `:562`, for both functions.
@@ -1852,6 +1843,7 @@ class TestChooseAnswer:
         `make_site()` HERE -- see the class docstring.
         """
         s = _seed_moderated_reply()
+        seed_moderator(s)
 
         with web_ctx(app, s.actor):
             result = choose_answer(s.reply.id, SRC_WEB, auth=None)
@@ -1863,6 +1855,7 @@ class TestChooseAnswer:
     def test_the_web_arm_of_unchoose_reads_current_user(self, db_session, app):
         """`:590`'s false arm and `:593`, and `:601`'s guarded return."""
         s = _seed_moderated_reply()
+        seed_moderator(s)
         s.reply.answer = True
         db.session.commit()
 
@@ -1881,6 +1874,7 @@ class TestChooseAnswer:
         witness.
         """
         s = _seed_moderated_reply()
+        seed_moderator(s)
 
         with recording_task_selector() as calls:
             choose_answer(s.reply.id, SRC_API, auth=bearer(s.actor))

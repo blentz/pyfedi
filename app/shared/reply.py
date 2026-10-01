@@ -613,6 +613,15 @@ def set_collapse_post_reply(post_reply_id, collapsible, src, auth=None):
         return user.id, post_reply
 
 
+def _refuse_unless_answer_chooser(post_reply, user, src):
+    # The question's author or a moderator chooses its answer, not the reply's author (owner ruling)
+    if post_reply.post.user_id == user.id or can_moderate(post_reply.community, user):
+        return
+    if src == SRC_API:
+        raise Exception('Does not have permission')
+    abort(403)
+
+
 def choose_answer(post_reply_id, src, auth=None):
     if src == SRC_API:
         user = authorise_api_user(auth, return_type='model')
@@ -620,6 +629,7 @@ def choose_answer(post_reply_id, src, auth=None):
         user = current_user
 
     post_reply = db.session.get(PostReply, post_reply_id) or abort(404)
+    _refuse_unless_answer_chooser(post_reply, user, src)
     post_reply.answer = True
     with force_locale(get_recipient_language(post_reply.user_id)):
         title = _('Your answer was chosen as an answer to %(post_title)s',
@@ -651,6 +661,7 @@ def unchoose_answer(post_reply_id, src, auth=None):
         user = current_user
 
     post_reply = db.session.get(PostReply, post_reply_id) or abort(404)
+    _refuse_unless_answer_chooser(post_reply, user, src)
     post_reply.answer = False
     db.session.commit()
 

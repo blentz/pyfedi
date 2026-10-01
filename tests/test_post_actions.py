@@ -1492,7 +1492,7 @@ def test_choosing_an_answer(app, env):
     answer."""
     anon, community, post, mod, author, outsider = env
     reply = a_reply(post, outsider)
-    client = as_user(app, outsider)
+    client = as_user(app, author)  # the question's author, not the reply's (owner ruling)
     token = csrf(app, client)
 
     with patch('app.post.routes.choose_answer') as chosen:
@@ -1506,7 +1506,7 @@ def test_choosing_an_answer(app, env):
 def test_unchoosing_an_answer(app, env):
     anon, community, post, mod, author, outsider = env
     reply = a_reply(post, outsider, answer=True)
-    client = as_user(app, outsider)
+    client = as_user(app, author)  # the question's author, not the reply's (owner ruling)
     token = csrf(app, client)
 
     with patch('app.post.routes.unchoose_answer') as unchosen:
@@ -1523,12 +1523,12 @@ def test_a_stranger_cannot_choose_an_answer(app, env):
     client = as_user(app, outsider)
     token = csrf(app, client)
 
-    with patch('app.post.routes.choose_answer') as chosen:
-        response = client.post(f'/post_reply/{reply.id}/choose_answer',
-                               data={'csrf_token': token})
+    response = client.post(f'/post_reply/{reply.id}/choose_answer',
+                           data={'csrf_token': token})
 
     assert response.status_code == 403
-    assert chosen.call_args is None
+    db.session.refresh(reply)
+    assert reply.answer is False
 
 
 def test_a_stranger_cannot_unchoose_an_answer(app, env):
@@ -1537,12 +1537,12 @@ def test_a_stranger_cannot_unchoose_an_answer(app, env):
     client = as_user(app, outsider)
     token = csrf(app, client)
 
-    with patch('app.post.routes.unchoose_answer') as unchosen:
-        response = client.post(f'/post_reply/{reply.id}/unchoose_answer',
-                               data={'csrf_token': token})
+    response = client.post(f'/post_reply/{reply.id}/unchoose_answer',
+                           data={'csrf_token': token})
 
     assert response.status_code == 403
-    assert unchosen.call_args is None
+    db.session.refresh(reply)
+    assert reply.answer is True
 
 
 def test_cancelling_an_inline_reply(app, env):

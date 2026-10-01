@@ -216,6 +216,32 @@ class TestModeratingComments:
                                          'answer': True})
         assert response.status_code == 200
 
+    def test_the_replys_own_author_may_not_mark_it_as_the_answer(self, env):
+        """Fixed (owner ruling): the post's author or a moderator chooses the
+        answer, not the person who wrote the comment."""
+        env.post.question_answer = True
+        readers_comment = make_post_reply(env.post, env.reader, body='an answer')
+        readers_comment.path = [0, readers_comment.id]
+        db.session.commit()
+        response = env.client.post('/api/alpha/comment/mark_as_answer',
+                                   headers=auth(env.reader),
+                                   json={'comment_reply_id': readers_comment.id,
+                                         'answer': True})
+        assert response.status_code == 400
+        assert db.session.get(PostReply, readers_comment.id).answer is False
+
+    def test_the_posts_author_may_mark_anothers_comment(self, env):
+        env.post.question_answer = True
+        readers_comment = make_post_reply(env.post, env.reader, body='an answer')
+        readers_comment.path = [0, readers_comment.id]
+        db.session.commit()
+        response = env.client.post('/api/alpha/comment/mark_as_answer',
+                                   headers=auth(env.author),
+                                   json={'comment_reply_id': readers_comment.id,
+                                         'answer': True})
+        assert response.status_code == 200
+        assert db.session.get(PostReply, readers_comment.id).answer is True
+
     def test_distinguishing_a_comment(self, env):
         moderators_comment = make_post_reply(env.post, env.moderator,
                                              body='from a moderator')
