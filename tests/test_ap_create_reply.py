@@ -523,42 +523,13 @@ def test_a_reply_missing_the_content_key_is_created_with_an_empty_body(app, db_s
 
 def _make_language(code, name):
     """Seed and commit a `Language` row directly, bypassing
-    `find_language_or_create`.
+    `find_language_or_create`, so its "already exists" branch runs and the
+    row has a known, committed id to assert against.
 
-    `find_language_or_create` (app/activitypub/util.py) reads:
-
-        new_language = Language(code=code, name=name)
-        if session:
-            session.add(new_language)
-        else:
-            db.session.add(new_language)
-        return new_language
-
-    -- no `flush()` on either path, and `app/__init__.py` constructs
-    `db = SQLAlchemy(session_options={"autoflush": False}, ...)`, so a
-    `Language` created through the "not found" branch has `.id is None` at
-    the moment `create_post_reply` reads `language.id` for
-    `PostReply.language_id`. Every language test below therefore pre-seeds
-    and commits the `Language` row itself, so `find_language_or_create`'s
-    "already exists" branch (`existing_language = Language.query.filter(
-    Language.code == code).first()`, returned directly) runs instead --
-    that row has a real, committed id. This is a workaround for a LIVE
-    defect, not ordinary setup: left to itself, the create branch hands back
-    an unflushed, id-less `Language`, and `PostReply.language_id` is set to
-    `None` regardless of which `code`/`name` the document carried.
-
-    Task 9 was briefed to fix that defect and DECLINED, registering it as
-    D260 instead; `test_an_unseeded_language_is_created_but_not_applied`
-    below pins the live behaviour. The reason is that the repair
-    sub-project 14 used on the same read in both update functions --
-    assigning through the relationship, `reply.language = language`, and
-    letting SQLAlchemy resolve the id at flush -- has no spelling here:
-    `create_post_reply` has no ORM instance at that point, because the value
-    is an `int` passed as `PostReply.new(..., language_id=..., ...)` and
-    `PostReply.new` (app/models.py) forwards it straight into the
-    `PostReply(...)` constructor. Every alternative repair chooses new
-    behaviour rather than copying an existing one, which is what this
-    campaign's fix rule forbids. Task 9's report carries the full reasoning.
+    This used to be a workaround for D260: the "not found" branch only
+    `add()`s the row, and under autoflush=False its id was None when
+    `create_post_reply` read it. That arm now flushes first, which
+    `test_an_unseeded_language_is_created_and_applied` pins.
     """
     language = Language(code=code, name=name)
     db.session.add(language)
@@ -581,31 +552,12 @@ def test_a_language_dict_is_applied(app, db_session, redis_lock_only_double):
     assert reply.language_id == spanish.id
 
 
-def test_an_unseeded_language_is_created_but_not_applied(app, db_session, redis_lock_only_double):
-    """D260, pinned as CURRENT behaviour, not endorsed -- the other branch of
-    `find_language_or_create`, which every other test in this section avoids
-    (see `_make_language`'s docstring for why, and for why Task 9 declined to
-    fix it).
-
-    With no `Language` row for the document's code, `find_language_or_create`
-    takes its `else`: `db.session.add(Language(...))` and returns the row
-    with no flush. `app/__init__.py` builds the session with
-    `autoflush=False`, so `language.id` is still `None` when
-    `create_post_reply` reads it into `language_id`, and the reply is
-    created carrying no language at all.
-
-    Both halves are asserted because either alone would be ambiguous: a
-    `Language` row DOES appear (`PostReply.new`'s own `session.commit()`
-    flushes the pending add, which is why the id exists by the time the test
-    reads it), and the reply's `language_id` is `None` anyway. Asserting only
-    the `None` could not tell "the row was never created" from "the row was
-    created and the id was read too early"; asserting only the row's
-    existence would say nothing about the reply.
-
-    Measured, not inferred: run against this suite's Postgres before Task 9
-    declined the fix, the created row's id was 1 and the persisted reply's
-    `language_id` was `None`.
-    """
+def test_an_unseeded_language_is_created_and_applied(app, db_session, redis_lock_only_double):
+    """D260, fixed: with no `Language` row for the document's code,
+    `find_language_or_create` returns a row it has only `add()`ed, and under
+    autoflush=False its id was still None when read, so the reply was created
+    with no language. The language arm now flushes a new row before reading
+    its id."""
     community, post, replier = _seed_scenario()
     assert Language.query.filter_by(code='xh').first() is None
     document = _reply_doc(content='hello',
@@ -615,9 +567,8 @@ def test_an_unseeded_language_is_created_but_not_applied(app, db_session, redis_
 
     assert reply is not None
     created = Language.query.filter_by(code='xh').one()
-    assert created.id is not None
     persisted = PostReply.query.filter_by(ap_id=f'https://{PEER}/comment/1').one()
-    assert persisted.language_id is None
+    assert persisted.language_id == created.id
 
 
 def test_a_non_dict_language_is_ignored_in_favour_of_content_map(app, db_session, redis_lock_only_double):
