@@ -665,6 +665,29 @@ def test_send_answer_closes_the_session_on_the_happy_path(
     assert record.calls == ['close']
 
 
+def test_send_answer_runs_under_its_task_session(db_session, http_mock, monkeypatch):
+    """D312, fixed: send_answer opened a task session but never entered
+    `patch_db_session`, so the `db.session` reads it reaches
+    (`following_instances`, `has_blocked_instance`) used the process-wide
+    session instead. It now wraps its body like make_reply and edit_reply."""
+    import app.shared.tasks.notes as notes_module
+    s = _seed(local_community=False, with_keys=True)
+    _remote_inbox(s, http_mock)
+    real_patch = notes_module.patch_db_session
+    entered = []
+
+    def recording_patch(session):
+        entered.append(session)
+        return real_patch(session)
+
+    monkeypatch.setattr(notes_module, 'patch_db_session', recording_patch)
+
+    _send(s)
+
+    assert len(entered) == 1
+    assert entered[0] is not db.session
+
+
 # ---------------------------------------------------------------------------
 # Sub-project 21, Task 6: mutation-testing record for send_answer's guards
 # ---------------------------------------------------------------------------
