@@ -18,12 +18,10 @@ So this file defines its own narrow `redis_lock_only_double` fixture
 (same pattern as test_inbox_dispatch_votes.py's) and uses it in place of
 `redis_double` for every test that reaches `delete_post_or_comment`'s
 success path. Of the six moderation functions this sub-project covers, only
-delete_post_or_comment calls `redis_client.lock(...)`
-(`restore_post_or_comment`, `site_ban_remove_data`,
-`community_ban_remove_data`, `ban_user` and `unban_user` do not -- verified
-by grep over app/activitypub/util.py:2268-2560), so this workaround is
-scoped to this file's Post-deletion tests and is not expected to recur for
-Tasks 2-9.
+delete_post_or_comment called `redis_client.lock(...)`; restore_post_or_comment
+does too since D202, and its tests request the same double
+(`site_ban_remove_data`, `community_ban_remove_data`, `ban_user` and
+`unban_user` do not).
 """
 import contextlib
 
@@ -54,6 +52,24 @@ class _RedisLockOnlyDouble:
 @pytest.fixture
 def redis_lock_only_double(monkeypatch):
     monkeypatch.setattr('app.redis_client', _RedisLockOnlyDouble())
+
+
+class _RecordingLockDouble(_RedisLockOnlyDouble):
+    """_RedisLockOnlyDouble that also records each lock key taken."""
+
+    def __init__(self):
+        self.keys = []
+
+    def lock(self, key, *args, **kwargs):
+        self.keys.append(key)
+        return super().lock(key, *args, **kwargs)
+
+
+@pytest.fixture
+def recording_lock_double(monkeypatch):
+    double = _RecordingLockDouble()
+    monkeypatch.setattr('app.redis_client', double)
+    return double
 
 
 def seed_moderation_scene(community_name='books'):
@@ -498,11 +514,8 @@ def test_deleting_a_post_removes_its_notifications_but_keeps_report_notifs(
 
 def test_restoring_a_post_clears_deleted_and_restores_counters(
         app, db_session, monkeypatch, redis_lock_only_double):
-    """`restore_post_or_comment`'s Post branch. Note it takes NO redis locks
-    where `delete_post_or_comment` wraps every one of these same counter
-    mutations in one -- a registered asymmetry, not something this test
-    fixes. `redis_lock_only_double` is still requested so the test is safe if that
-    changes.
+    """`restore_post_or_comment`'s Post branch. It takes the same redis locks
+    as `delete_post_or_comment` (D202), hence `redis_lock_only_double`.
 
     Counters are seeded to 4 and asserted at 5, the mirror of Task 1's
     deletion test.
@@ -522,6 +535,39 @@ def test_restoring_a_post_clears_deleted_and_restores_counters(
     assert post.deleted_by is None
     assert community.post_count == 5
     assert author.post_count == 5
+
+
+def test_restoring_a_post_takes_the_locks_the_delete_takes(app, db_session, recording_lock_double):
+    """D202, fixed: the restore used to mutate these counters under no lock,
+    where the delete serialises each one. It now takes the same post,
+    community and user locks."""
+    site, instance, community, author, moderator = seed_moderation_scene()
+    post = make_post(community, author, None, title='a post')
+    post.deleted = True
+    db.session.commit()
+
+    ap_util.restore_post_or_comment(moderator, post, False,
+                                    {'id': 'https://peer.example/activities/undo/1'}, 'appeal')
+
+    assert recording_lock_double.keys == [f'lock:post:{post.id}', f'lock:community:{community.id}',
+                                          f'lock:user:{author.id}']
+
+
+def test_restoring_a_reply_takes_the_locks_the_delete_takes(app, db_session, recording_lock_double):
+    """D202, fixed, for the PostReply branch: reply, user, post and community
+    locks, the post one keyed by the reply's post."""
+    site, instance, community, author, moderator = seed_moderation_scene()
+    post = make_post(community, author, None, title='a post')
+    reply = make_post_reply(post, author)
+    reply.deleted = True
+    author.bot = False
+    db.session.commit()
+
+    ap_util.restore_post_or_comment(moderator, reply, False,
+                                    {'id': 'https://peer.example/activities/undo/1'}, '')
+
+    assert recording_lock_double.keys == [f'lock:post_reply:{reply.id}', f'lock:user:{author.id}',
+                                          f'lock:post:{post.id}', f'lock:community:{community.id}']
 
 
 def test_restoring_a_reply_restores_every_counter_the_delete_moved(
