@@ -2774,7 +2774,7 @@ def process_chat(user, store_ap_json, core_activity, session):
         elif recipient.accept_private_messages == 1:
             log_incoming_ap(id, APLOG_CHATMESSAGE, APLOG_FAILURE, saved_json, 'Recipient only accepts local PMs')
             return True
-        elif recipient.accept_private_messages == 2 and not sender.instance.trusted:
+        elif recipient.accept_private_messages == 2 and (sender.instance is None or not sender.instance.trusted):
             log_incoming_ap(id, APLOG_CHATMESSAGE, APLOG_FAILURE, saved_json, 'Sender from untrusted instance')
             return True
         else:

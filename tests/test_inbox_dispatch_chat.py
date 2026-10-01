@@ -207,6 +207,25 @@ def test_a_trusted_instances_recipient_refuses_an_untrusted_sender(app, db_sessi
     assert log.exception_message == 'Sender from untrusted instance'
 
 
+def test_a_trusted_instances_recipient_refuses_a_sender_with_no_instance(app, db_session, monkeypatch):
+    """D124, fixed. `sender.instance.trusted` was read with no check that the
+    nullable `instance` exists, so such a sender raised AttributeError. A
+    sender with no instance is not from a trusted one, and is refused.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair(accept=2, trusted=True)
+    activity = chat_activity(sender, to=recipient.ap_profile_id,
+                             content='hello', id='https://peer.example/pm/1')
+    sender.instance_id = None
+    db.session.commit()
+
+    dispatch(activity)
+
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Sender from untrusted instance'
+    assert db_session.query(ChatMessage).count() == 0
+
+
 def test_a_trusted_instances_recipient_accepts_a_trusted_sender(app, db_session, monkeypatch):
     """The other side of that conjunct: `Instance.trusted` seeded True (its
     column default is False, so the True is this test's own choice). Paired with
