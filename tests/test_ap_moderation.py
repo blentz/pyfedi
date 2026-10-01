@@ -1223,25 +1223,29 @@ def test_an_instance_ban_creates_an_instance_ban_row_and_a_modlog_entry(
     assert db.session.query(ModLog).filter_by(action='ban_user').count() == 1
 
 
-def test_re_banning_instance_wide_still_writes_a_second_modlog_entry(
+def test_re_banning_instance_wide_is_a_no_op(
         app, db_session, monkeypatch):
-    """The twin of the community test above, and the finding. Here
-    `if not existing_ban:` guards ONLY the InstanceBan creation: the modlog
-    entry sits outside it, so a duplicate ban writes a second entry where the
-    community branch writes none.
+    """D205 and D94, fixed (owner ruling). `if not existing_ban:` guarded ONLY
+    the InstanceBan creation, so a peer retransmitting a Block for a user
+    already banned re-notified them, bumped their unread count and wrote a
+    second modlog entry. The instance branch now matches the community branch
+    above: the ban is recorded once and the repeat does nothing at all.
 
-    One ban row, two modlog entries -- both asserted, because either alone
-    would be consistent with the other branch's behaviour.
+    `author` is local, so the notification block is reachable.
     """
     site, instance, community, author, moderator = seed_moderation_scene()
     activity = {'id': 'https://peer.example/activities/block/1',
                 'target': 'https://peer.example/', 'summary': 'spam'}
 
     ap_util.ban_user(moderator, author, None, activity)
+    unread = author.unread_notifications
     ap_util.ban_user(moderator, author, None, activity)
 
     assert db.session.query(InstanceBan).filter_by(user_id=author.id).count() == 1
-    assert db.session.query(ModLog).filter_by(action='ban_user').count() == 2
+    assert db.session.query(ModLog).filter_by(action='ban_user').count() == 1
+    assert db.session.query(Notification).filter_by(
+        user_id=author.id, subtype='user_banned_from_instance').count() == 1
+    assert author.unread_notifications == unread
 
 
 def test_a_ban_reason_longer_than_255_characters_is_shortened(
