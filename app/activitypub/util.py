@@ -5078,9 +5078,14 @@ def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
         # not really what this function is intended for, but get comment or fail if comment URL is searched for
         if 'inReplyTo' in post_data and post_data['inReplyTo'] is not None:
             in_reply_to = post_data['inReplyTo']
+            # PERM-4: the gate an inbound Create passes (process_new_content), as in create_resolved_object
+            if not can_create_post_reply(user, community):
+                return None
             object = create_post_reply(False, community, in_reply_to, request_json, user)
         else:
             in_reply_to = None
+            if not can_create_post(user, community):  # PERM-4
+                return None
             object = create_post(False, community, request_json, user)
         if object:
             if 'published' in post_data:

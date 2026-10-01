@@ -233,9 +233,10 @@ from datetime import datetime
 
 import pytest
 
+from app import db
 from app.activitypub.util import (create_resolved_object,
                                   resolve_remote_post_from_search)
-from app.models import ActivityPubLog, Post, PostReply
+from app.models import ActivityPubLog, CommunityBan, Post, PostReply
 from tests.factories import (AS_PUBLIC_URI, PEER_OBJECT_HOST, PEER_OBJECT_URI, make_community,
                              make_post, make_site, note_document, resolvable_remote_author,
                              seed_community_owner, serve_remote_object)
@@ -837,6 +838,36 @@ class TestTheReplyPathWorksHereToo:
 
         assert PostReply.query.filter_by(ap_id=URI).count() == 1
         assert result.id == post.id
+
+
+class TestTheInboundCreateGate:
+    """PERM-4, fixed (owner ruling). The fetched document's author must pass the
+    checks an inbound Create does in `process_new_content`: `can_create_post`
+    for a post and `can_create_post_reply` for a reply (instance ban or
+    allowlist, community ban, the author's own bans). Both entry points --
+    search and an inbox Move -- gate only the requester, if anyone; this
+    function stored the content regardless of who wrote it. A refused object is
+    not stored and the caller sees not-found (None).
+    """
+
+    def test_a_post_by_an_author_banned_from_the_community_is_not_stored(self, app, peer_author, http_mock):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        db.session.add(CommunityBan(community_id=community.id, user_id=peer_author.id))
+        db.session.commit()
+        serve_remote_object(http_mock, URI, resolvable(public_note(), community))
+
+        assert resolve_remote_post_from_search(URI) is None
+        assert Post.query.filter_by(ap_id=URI).count() == 0
+
+    def test_a_reply_by_an_author_banned_from_the_community_is_not_stored(self, app, peer_author, http_mock):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        make_post(community, peer_author, ap_id=PARENT_URI)
+        db.session.add(CommunityBan(community_id=community.id, user_id=peer_author.id))
+        db.session.commit()
+        serve_remote_object(http_mock, URI, resolvable(public_note(), community, inReplyTo=PARENT_URI))
+
+        assert resolve_remote_post_from_search(URI) is None
+        assert PostReply.query.filter_by(ap_id=URI).count() == 0
 
 
 class TestTheEnrichment:
