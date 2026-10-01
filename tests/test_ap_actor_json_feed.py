@@ -91,7 +91,6 @@ The nine conditional expressions are all inside the Feed() constructor call:
     'updated' in activity_json       -> last_edit, else utcnow()
     address.startswith('~')          -> ap_id drops the '~', else not
     'followers' in activity_json     -> ap_followers_url, else None
-    'following' in activity_json     -> ap_following_url, else None
     'endpoints' in activity_json     -> ap_inbox_url from endpoints.sharedInbox,
                                         else activity_json['inbox'], else ''
 
@@ -182,9 +181,10 @@ to record the defect can be traced back to it:
      moderators used to reach get_request(None), and what came out depended on
      DEBUG -- httpx.HTTPError with it off, TypeError with it on. The None is
      now refused before the call, identically in both modes. TestOwnersUrl.
-  5. `ap_following_url=... if 'following' in activity_json else None` can never
-     take its else arm: the same key is read unconditionally, earlier, by the
-     get_request that fetches the /following collection. TestScalarOptionalFields.
+  5. FIXED (D18): `ap_following_url=... if 'following' in activity_json else
+     None` could never take its else arm, because the same key is read
+     unconditionally, earlier, by the /following fetch. The dead arm is gone
+     and the key is read directly. TestScalarOptionalFields.
   6. FIXED, and so no longer a finding: `for child_feed in
      activity_json['childFeeds']` was guarded only by the `in` test, and three
      shapes of value got through it. `null` (or any other scalar) raised
@@ -1157,13 +1157,11 @@ class TestScalarOptionalFields:
     by TestApIdFromAddress and TestInboxResolution above, which need more than
     one document each.
 
-    FINDING (5) -- `ap_following_url=activity_json['following'] if 'following'
-    in activity_json else None` can NEVER take its else arm. The same key is
-    read unconditionally, earlier in the branch, by the get_request that
-    fetches the /following collection, so a document without it has already
-    been refused by the time the constructor runs (pinned by
-    TestRequiredFieldsMissing). The `else None` is dead code. No test here can
-    reach it, and none pretends to.
+    FINDING (5), D18, fixed -- `ap_following_url` used to carry an `if
+    'following' in activity_json else None` that could never take its else
+    arm: the same key is read unconditionally, earlier, by the /following
+    fetch, so a document without it is refused before the constructor runs
+    (pinned by TestRequiredFieldsMissing). The dead arm was removed.
 
     Mutation pair on one optional-field guard, `'published' in activity_json`:
       - replaced with `True`: test_every_scalar_optional_absent_takes_its_default
