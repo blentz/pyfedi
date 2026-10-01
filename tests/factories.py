@@ -1124,6 +1124,9 @@ def resolvable_remote_author(instance: Instance, name: str = 'alice') -> User:
     """
     user = make_user(instance, name)
     user.ap_fetched_at = utcnow()
+    # The domain a fetched actor carries, and what can_create_post /
+    # can_create_post_reply check for an instance ban (PERM-3/4).
+    user.ap_domain = instance.domain
     db.session.commit()
     return user
 

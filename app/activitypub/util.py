@@ -41,7 +41,7 @@ from app.utils import get_request, allowlist_html, get_setting, ap_datetime, mar
     blocked_users, piefed_markdown_to_lemmy_markdown, store_files_in_s3, guess_mime_type, get_recipient_language, \
     patch_db_session, to_srgb, communities_banned_from_all_users, blocked_communities, blocked_or_banned_instances, \
     instance_community_ids, banned_instances, communities_run_by_inactive_mods, inspect_image_c2pa, \
-    url_is_storable
+    url_is_storable, can_create_post, can_create_post_reply
 
 
 def community_members(community_id):
@@ -4876,6 +4876,9 @@ def create_resolved_object(uri, post_data, uri_domain, community, announce_id, s
         activity = 'update' if 'updated' in post_data else 'create'
         request_json = {'id': f"https://{uri_domain}/activities/{activity}/{gibberish(15)}", 'object': post_data}
         if 'inReplyTo' in request_json['object'] and request_json['object']['inReplyTo']:
+            # PERM-3: the gate an inbound Create or Update of a reply passes (process_new_content)
+            if not can_create_post_reply(user, community):
+                return None
             if activity == 'update':
                 post_reply = PostReply.get_by_ap_id(uri)
                 if post_reply:
@@ -4899,6 +4902,8 @@ def create_resolved_object(uri, post_data, uri_domain, community, announce_id, s
             if post_reply:
                 return post_reply
         else:
+            if not can_create_post(user, community):  # PERM-3, as for a reply above
+                return None
             if activity == 'update':
                 post = Post.get_by_ap_id(uri)
                 if post:

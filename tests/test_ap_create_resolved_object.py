@@ -186,7 +186,7 @@ import pytest
 from app import db
 from app.activitypub import util
 from app.activitypub.util import create_resolved_object
-from app.models import ActivityPubLog, Post, PostReply
+from app.models import ActivityPubLog, BannedInstances, CommunityBan, Post, PostReply
 from tests.factories import (AS_PUBLIC_URI, PEER_OBJECT_HOST, PEER_OBJECT_URI, make_community,
                              make_post, make_post_reply, make_site, note_document,
                              resolvable_remote_author, seed_community_owner)
@@ -953,3 +953,60 @@ class TestTheReplyCreatePathWorks:
         result = resolved(public_note(), community)
 
         assert result.id == Post.query.filter_by(ap_id=URI).one().id
+
+
+class TestTheInboundCreateGate:
+    """PERM-3, fixed (owner ruling). Fetched content is stored only if its author
+    passes the checks an inbound Create does in `process_new_content`:
+    `can_create_post` for a post and `can_create_post_reply` for a reply, which
+    between them cover an instance ban or allowlist, a community ban, and the
+    author's own bans. This function used to store the document with none of
+    them. A refused object is not stored and the caller sees not-found (None).
+    """
+
+    def test_a_post_by_an_author_banned_from_the_community_is_not_stored(self, app, peer_author):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        db.session.add(CommunityBan(community_id=community.id, user_id=peer_author.id))
+        db.session.commit()
+
+        assert resolved(public_note(), community) is None
+        assert Post.query.filter_by(ap_id=URI).count() == 0
+
+    def test_a_post_by_an_author_banned_from_posting_is_not_stored(self, app, peer_author):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        peer_author.ban_posts = True
+        db.session.commit()
+
+        assert resolved(public_note(), community) is None
+        assert Post.query.filter_by(ap_id=URI).count() == 0
+
+    def test_a_post_from_a_banned_instance_is_not_stored(self, app, peer_author):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        db.session.add(BannedInstances(domain=PEER_OBJECT_HOST))
+        db.session.commit()
+
+        assert resolved(public_note(), community) is None
+        assert Post.query.filter_by(ap_id=URI).count() == 0
+
+    def test_a_reply_by_an_author_banned_from_commenting_is_not_stored(self, app, peer_author):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        parent_post(community, peer_author)
+        peer_author.ban_comments = True
+        db.session.commit()
+
+        assert resolved(reply_note(), community) is None
+        assert PostReply.query.filter_by(ap_id=URI).count() == 0
+
+    def test_an_update_by_an_author_banned_from_the_community_is_not_applied(self, app, peer_author):
+        """The inbox gates an Update of existing content with the same check."""
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        post = make_post(community, peer_author, ap_id=URI)
+        post.body = 'original'
+        db.session.add(CommunityBan(community_id=community.id, user_id=peer_author.id))
+        db.session.commit()
+        document = public_note()
+        document['updated'] = '2026-01-01T00:00:00Z'
+        document['content'] = 'rewritten'
+
+        assert resolved(document, community) is None
+        assert db.session.get(Post, post.id).body == 'original'

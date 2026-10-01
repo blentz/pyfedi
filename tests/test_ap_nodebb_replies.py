@@ -201,6 +201,7 @@ class TestThePublishedTimeAPeerPutsOnAPost:
         author.ap_profile_id = author_uri
         author.ap_public_url = author_uri
         author.ap_fetched_at = db.func.now()
+        author.ap_domain = PEER_OBJECT_HOST  # PERM-3: can_create_post checks the author's instance by it
         community = make_community('news', host=PEER_OBJECT_HOST)
         db.session.commit()
         return SimpleNamespace(
