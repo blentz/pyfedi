@@ -217,6 +217,20 @@ class TestAPostFromAFlaggedDomain:
         assert notification.notif_type == NOTIF_REPORT
         assert notification.url == post.ap_id
 
+    def test_a_remote_moderator_is_not_told(self, flagged):
+        """D288, fixed (owner ruling): the third copy of this loop gets the same
+        `is_local()` gate as `edit_post`'s and the federated Update's -- a remote
+        moderator can never see a Notification row on this instance."""
+        remote_mod = make_user(flagged.author.instance, 'remotemod')
+        make_community_member(remote_mod, flagged.community, is_moderator=True)
+        flagged.domain.notify_mods = True
+        db.session.commit()
+        assert remote_mod.ap_id is not None
+
+        self._ingest(flagged)
+
+        assert {user_id for user_id, _ in self._notified()} == {flagged.moderator.id}
+
     def test_the_admins_are_told(self, flagged):
         """`Site.admins()` -- a separate loop with its own flag, so an instance can watch a
         domain site-wide without telling every community's moderators.
