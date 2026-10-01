@@ -1073,6 +1073,8 @@ def refresh_community_profile_task(community_id, activity_json=None):
                             if mods_data and 'type' in mods_data and mods_data['type'] == 'OrderedCollection' and isinstance(mods_data.get('orderedItems'), list):
                                 for actor in mods_data['orderedItems']:
                                     time.sleep(0.5)
+                                    if not isinstance(actor.get('id') if isinstance(actor, dict) else actor, str):
+                                        continue  # a malformed entry is skipped, not fatal to the rest (D219)
                                     user = find_actor_or_create(actor, create_if_not_found=on_owner_host(actor, community.ap_profile_id),
                                                                 retry=True)
                                     if user:
@@ -1093,8 +1095,8 @@ def refresh_community_profile_task(community_id, activity_json=None):
                                     is_mod = False
                                     for actor in mods_data['orderedItems']:
                                         if isinstance(actor, dict):
-                                            actor = actor['id']
-                                        if actor.lower() == member_user.profile_id().lower():
+                                            actor = actor.get('id')
+                                        if isinstance(actor, str) and actor.lower() == member_user.profile_id().lower():  # D219
                                             is_mod = True
                                             break
                                     if not is_mod:
@@ -1122,6 +1124,9 @@ def refresh_community_profile_task(community_id, activity_json=None):
                                                 {'community_id': community.id})
                                 session.commit()
                                 for item in featured_data['orderedItems']:
+                                    # a malformed entry is skipped, so it cannot leave every sticky cleared (D219)
+                                    if not isinstance(item, dict) or not isinstance(item.get('id'), str):
+                                        continue
                                     post = Post.get_by_ap_id(item['id'])
                                     if post:
                                         post.sticky = True

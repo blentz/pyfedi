@@ -798,6 +798,33 @@ def test_the_moderators_url_is_taken_from_attributed_to(app, db_session, http_mo
     assert membership.is_moderator is True
 
 
+def test_a_malformed_moderator_entry_is_skipped(app, db_session, http_mock):
+    """D219, fixed (owner ruling): a moderators entry that is an object with
+    no `id`, or neither a string nor an object, used to raise -- `KeyError`
+    in `find_actor_or_create` or the removal loop, `AttributeError` on
+    `.strip()`/`.lower()` -- and abort the whole refresh. It is now skipped:
+    the well-formed entry after it is still a moderator, and the removal pass
+    does not drop them for the bad entries beside them.
+    """
+    community = _remote_community()
+    mod = make_user(community.instance, 'fauxmod')
+    mod.ap_fetched_at = utcnow()
+    db.session.add(CommunityMember(community_id=community.id, user_id=mod.id, is_moderator=True))
+    db.session.commit()
+    mods_url = f'https://{PEER}/c/memes/moderators'
+    _serve(http_mock, mods_url, {'type': 'OrderedCollection',
+                                 'orderedItems': [{'type': 'Person'}, 42, mod.ap_profile_id]})
+
+    refresh_community_profile_task(
+        community.id, _group_document(fields={'attributedTo': mods_url}))
+
+    db.session.refresh(community)
+    membership = db.session.query(CommunityMember).filter_by(
+        community_id=community.id, user_id=mod.id).one()
+    assert membership.is_moderator is True
+    assert community.title == 'Memes, refreshed'
+
+
 def test_a_typeless_moderators_document_is_skipped(app, db_session, http_mock):
     """`'type' in mods_data`, checked before `mods_data['type']` is read --
     the same missing conjunct as the followers guard, in the same function.
@@ -1036,6 +1063,35 @@ def test_a_featured_url_is_fetched_and_restickied(app, db_session, http_mock):
     db.session.refresh(newly_featured)
     assert stale_sticky.sticky is False
     assert newly_featured.sticky is True
+
+
+def test_a_malformed_featured_item_is_skipped_and_the_rest_restickied(
+        app, db_session, http_mock):
+    """D219, fixed (owner ruling): `item['id']` on an entry with no id -- or a
+    bare string, or a non-string id -- used to raise out of the walk AFTER the
+    `UPDATE post SET sticky = false` had committed, so one bad entry left the
+    community with no stickies at all. A malformed entry is now skipped and
+    the entries after it are still restickied.
+    """
+    community = _remote_community()
+    featured_url = f'https://{PEER}/c/memes/featured'
+    community.ap_featured_url = featured_url
+    db.session.commit()
+    poster = make_user(community.instance, 'poster')
+    db.session.commit()
+    featured = make_post(community, poster, f'https://{PEER}/p/new')
+    featured.sticky = True
+    db.session.commit()
+    _serve(http_mock, featured_url, {
+        'type': 'OrderedCollection',
+        'orderedItems': [{'type': 'Page'}, f'https://{PEER}/p/bare', {'id': 42},
+                         {'id': featured.ap_id}],
+    })
+
+    refresh_community_profile_task(community.id, _group_document())
+
+    db.session.refresh(featured)
+    assert featured.sticky is True
 
 
 def test_no_featured_url_means_no_featured_fetch(app, db_session, http_mock):
