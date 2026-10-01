@@ -798,6 +798,11 @@ def community_inbox(actor):
     return shared_inbox()
 
 
+# The messages shared_inbox logs when an activity fails signature checking. replay_inbox_request skips those
+# checks, so the admin replay refuses to re-run a row logged with one of these.
+SIGNATURE_FAILURE_MESSAGES = ('Precheck failed', 'Could not verify LD signature', 'Could not verify HTTP signature')
+
+
 def replay_inbox_request(request_json):
     if not 'id' in request_json or not 'type' in request_json or not 'actor' in request_json or not 'object' in request_json:
         log_incoming_ap('', APLOG_NOTYPE, APLOG_FAILURE, request_json, 'REPLAY: Missing minimum expected fields in JSON')

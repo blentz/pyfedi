@@ -108,6 +108,45 @@ class TestReplayingAStoredActivity:
                              'type': 'Create',
                              'actor': 'https://peer.example/u/someone'}]
 
+    @pytest.mark.parametrize('message', [
+        'Could not verify HTTP signature: Invalid signature',
+        'Could not verify LD signature: Invalid signature',
+        'Precheck failed: Digest is incorrect',
+    ])
+    def test_an_activity_that_failed_signature_verification_is_not_replayed(self, stored, message):
+        """D45, fixed (owner ruling 2026-09-30). Replay skips every signature check
+        `shared_inbox` performs, so re-running a row the inbox logged as a signature
+        failure would process unverified peer content as though it had passed. Such a
+        row is now refused with a message saying why; the three messages are the ones
+        `shared_inbox` logs at its precheck, HTTP-signature and LD-signature refusals."""
+        stored.activity.exception_message = message
+        db.session.commit()
+        replayed = []
+
+        with patch('app.admin.routes.replay_inbox_request',
+                   side_effect=lambda payload: replayed.append(payload)):
+            response = stored.client.get(
+                f'/admin/activity_json/{stored.activity.id}/replay')
+
+        assert response.status_code == 400
+        assert 'signature' in response.get_data(as_text=True)
+        assert replayed == []
+
+    def test_an_activity_that_failed_for_another_reason_is_still_replayed(self, stored):
+        """D45's boundary: only signature failures are refused; any other failure
+        replays as before."""
+        stored.activity.exception_message = 'Actor could not be found 1 - : x, actor object: None'
+        db.session.commit()
+        replayed = []
+
+        with patch('app.admin.routes.replay_inbox_request',
+                   side_effect=lambda payload: replayed.append(payload)):
+            response = stored.client.get(
+                f'/admin/activity_json/{stored.activity.id}/replay')
+
+        assert response.status_code == 200
+        assert len(replayed) == 1
+
     def test_an_activity_that_does_not_exist_is_a_404(self, stored):
         """`or abort(404)`. The id comes from the URL, and the line below it would be
         `AttributeError: 'NoneType' object has no attribute 'activity_json'`."""

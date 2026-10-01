@@ -18,7 +18,8 @@ from urllib.parse import urlparse
 from furl import furl
 
 from app import db, celery, cache
-from app.activitypub.routes import process_inbox_request, process_delete_request, replay_inbox_request
+from app.activitypub.routes import process_inbox_request, process_delete_request, replay_inbox_request, \
+    SIGNATURE_FAILURE_MESSAGES
 from app.activitypub.signature import post_request, default_context, RsaKeys
 from app.activitypub.util import extract_domain_and_actor
 from app.admin.constants import ReportTypes
@@ -1428,6 +1429,9 @@ def activity_json(activity_id):
 @login_required
 def activity_replay(activity_id):
     activity = db.session.get(ActivityPubLog, activity_id) or abort(404)
+    # replaying skips signature verification, so never replay something that failed it
+    if activity.exception_message and activity.exception_message.startswith(SIGNATURE_FAILURE_MESSAGES):
+        return _('Not replayed: this activity failed signature verification when it arrived.'), 400
     request_json = json.loads(activity.activity_json)
     replay_inbox_request(request_json)
 
