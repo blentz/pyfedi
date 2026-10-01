@@ -98,6 +98,8 @@ def add_local():
     # never actually rescue a request. Using the local makes it mean something.
     if site.enable_nsfw is False:
         form.nsfw.render_kw = {'disabled': True}
+    if site.enable_nsfl is False:
+        form.nsfl.render_kw = {'disabled': True}
 
     form.languages.choices = languages_for_form(all_languages=True)
     form.theme.choices = community_theme_list()
@@ -126,6 +128,7 @@ def add_local():
                               description=piefed_markdown_to_lemmy_markdown(form.description.data),
                               theme=form.theme.data,
                               nsfw=form.nsfw.data, private_key=private_key,
+                              nsfl=form.nsfl.data and site.enable_nsfl is not False,  # R203: the site's switch wins
                               public_key=public_key, description_html=markdown_to_html(form.description.data),
                               local_only=form.local_only.data, posting_warning=sanitise_posting_warning(form.posting_warning.data),
                               private=private, invitations=form.invitations.data,
@@ -1389,6 +1392,8 @@ def community_edit(community_id: int):
         form.languages.choices = languages_for_form(all_languages=True)
         if g.site.enable_nsfw is False:
             form.nsfw.render_kw = {'disabled': True}
+        if g.site.enable_nsfl is False:
+            form.nsfl.render_kw = {'disabled': True}
         if form.validate_on_submit():
             if form.private.data:
                 form.local_only.data = True
@@ -1404,6 +1409,7 @@ def community_edit(community_id: int):
             community.theme = form.theme.data
             community.posting_warning = sanitise_posting_warning(form.posting_warning.data)  # D1377
             community.nsfw = form.nsfw.data
+            community.nsfl = form.nsfl.data and g.site.enable_nsfl is not False  # R203: the site's switch wins
             community.ai_generated = form.ai_generated.data
             community.local_only = form.local_only.data
             community.invitations = form.invitations.data
@@ -1487,6 +1493,7 @@ def community_edit(community_id: int):
             form.theme.data = community.theme
             form.posting_warning.data = community.posting_warning
             form.nsfw.data = community.nsfw
+            form.nsfl.data = community.nsfl
             form.ai_generated.data = community.ai_generated
             form.local_only.data = community.local_only
             form.private.data = community.private

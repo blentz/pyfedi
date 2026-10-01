@@ -47,6 +47,7 @@ class AddCommunityForm(FlaskForm):
     banner_file = FileField(_l('Banner image'), render_kw={'accept': 'image/*'})
     theme = SelectField(_l('Community theme'), coerce=str, render_kw={'class': 'form-select'})
     nsfw = BooleanField(_l('NSFW'))
+    nsfl = BooleanField(_l('NSFL'))  # R203
     ai_generated = BooleanField(_l('Only AI-generated content'))
     local_only = BooleanField(_l('Local only'))
     private = BooleanField(_l('Private'))
@@ -136,6 +137,7 @@ class EditCommunityForm(FlaskForm):
     banner_file = FileField(_l('Banner image'), render_kw={'accept': 'image/*'})
     theme = SelectField(_l('Community theme'), coerce=str, render_kw={'class': 'form-select'})
     nsfw = BooleanField(_l('NSFW community'))
+    nsfl = BooleanField(_l('NSFL community'))  # R203
     ai_generated = BooleanField('Only AI-generated content')
     local_only = BooleanField(_l('Only accept posts from current instance'))
     private = BooleanField(_l('Private'))

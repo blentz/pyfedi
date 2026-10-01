@@ -395,6 +395,21 @@ def test_a_banned_user_cannot_create_a_community(app, db_session):
     assert Community.query.count() == 0
 
 
+@pytest.mark.parametrize('enable_nsfl, expected', [(True, True), (False, False)])
+def test_a_local_community_can_be_created_nsfl_where_the_site_allows_it(app, creator, enable_nsfl, expected):
+    """R203, fixed (owner ruling): the create form has an NSFL checkbox, which
+    Community.nsfl already had a column for and nothing set. The site's own
+    switch wins over the box, which is only disabled in the browser."""
+    client, token, founder = creator
+    site = db.session.get(Site, 1)
+    site.enable_nsfl = enable_nsfl
+    db.session.commit()
+
+    _add(app, client, token, url='gory', nsfl='y')
+
+    assert Community.query.one().nsfl is expected
+
+
 def test_the_add_form_renders_on_a_get(app, creator):
     client, token, founder = creator
 
@@ -460,6 +475,29 @@ def _edit(app, client, token, community, english, **overrides):
                                    data=_edit_payload(token, english, **overrides),
                                    content_type='multipart/form-data')
     return response, render
+
+
+@pytest.mark.parametrize('enable_nsfl, submitted, expected', [
+    (True, 'y', True), (True, None, False), (False, 'y', False)])
+def test_the_edit_form_sets_and_clears_nsfl(app, owned_community, owner_client,
+                                            enable_nsfl, submitted, expected):
+    """R203, fixed (owner ruling): the edit form has an NSFL checkbox too, its
+    GET pre-fills it from the column, and the site's switch wins."""
+    community, owner, ordinary, english = owned_community
+    client, token = owner_client
+    site = db.session.get(Site, 1)
+    site.enable_nsfl = enable_nsfl
+    community.nsfl = not expected
+    db.session.commit()
+
+    overrides = {'nsfl': submitted} if submitted else {}
+    _edit(app, client, token, community, english, **overrides)
+
+    db.session.expire_all()
+    assert db.session.get(Community, community.id).nsfl is expected
+    with patch('app.community.routes.render_template', return_value='rendered') as render:
+        client.get(url(app, 'community.community_edit', community_id=community.id))
+    assert render.call_args.kwargs['form'].nsfl.data is expected
 
 
 def test_a_refused_edit_keeps_what_the_owner_typed(app, owned_community,
