@@ -56,7 +56,7 @@ def edit_community(send_async, user_id, community_id):
             with patch_db_session(session):
                 user = session.get(User, user_id)
                 community = session.query(Community).filter_by(id=community_id).one()
-                if community.local_only or community.private or not community.instance.online():
+                if community.local_only or community.private or not (community.instance_id and community.instance.online()):
                     return
 
                 if not community.is_moderator(user):

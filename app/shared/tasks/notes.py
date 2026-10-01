@@ -140,7 +140,7 @@ def send_reply(reply_id, parent_id, edit=False, session=None):
                     session.add(notification)
                     session.commit()
 
-    if community.local_only or community.private or not community.instance.online():
+    if community.local_only or community.private or not (community.instance_id and community.instance.online()):
         return
 
     banned = session.query(CommunityBan).filter_by(user_id=user.id, community_id=community.id).first()
@@ -246,7 +246,7 @@ def send_answer(post_reply_id, user_id, is_undo):
             user = session.get(User, user_id)
             post_reply = session.get(PostReply, post_reply_id)
 
-            if post_reply.community.local_only or post_reply.community.private or not post_reply.community.instance.online():
+            if post_reply.community.local_only or post_reply.community.private or not (post_reply.community.instance_id and post_reply.community.instance.online()):
                 return
 
             answer_ap_id = f"{current_app.config['SERVER_URL']}/activities/answer/{gibberish(15)}"
