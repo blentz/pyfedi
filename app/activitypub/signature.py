@@ -105,6 +105,7 @@ def post_request(uri: str, body: dict | None, private_key: str, key_id: str,
         session.add(log)
 
         http_status_code = None
+        transport_failure = False
 
         if uri is None or uri == '':
             log.result = 'failure'
@@ -157,6 +158,8 @@ def post_request(uri: str, body: dict | None, private_key: str, key_id: str,
                 if current_app.debug:
                     current_app.logger.error(f'Exception while sending post to {uri}')
                 http_status_code = 404
+                # couldn't connect, DNS, timeout etc - signed_request re-raises all of these as httpx.HTTPError
+                transport_failure = isinstance(e, httpx.HTTPError)
         if log.result == 'processing':
             log.result = 'success'
         session.commit()
@@ -164,7 +167,7 @@ def post_request(uri: str, body: dict | None, private_key: str, key_id: str,
         if log.result != 'failure':
             return
         else:
-            if http_status_code is not None and (http_status_code == 429 or http_status_code >= 500):
+            if transport_failure or (http_status_code is not None and (http_status_code == 429 or http_status_code >= 500)):
                 if content_type == "application/activity+json":
                     # Calculate retry delay with exponential backoff. 1 min, 2 mins, 4 mins, 8 mins, up to 4h
                     backoff = 60 * (2 ** retries)
