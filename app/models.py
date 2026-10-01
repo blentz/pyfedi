@@ -2872,13 +2872,15 @@ class Post(db.Model):
                     # discarded every incoming post linking to that domain. The community
                     # is already an argument to this function; it is the same object.
                     for community_member in community.moderators():
-                        notify = Notification(title='Suspicious content', url=post.ap_id,
-                                              user_id=community_member.user_id,
-                                              author_id=user.id, notif_type=NOTIF_REPORT,
-                                              subtype='post_from_suspicious_domain',
-                                              targets=targets_data)
-                        db.session.add(notify)
-                        already_notified.add(community_member.user_id)
+                        # local moderators only, as edit_post and update_post_from_activity do (D288)
+                        if community_member.user.is_local():
+                            notify = Notification(title='Suspicious content', url=post.ap_id,
+                                                  user_id=community_member.user_id,
+                                                  author_id=user.id, notif_type=NOTIF_REPORT,
+                                                  subtype='post_from_suspicious_domain',
+                                                  targets=targets_data)
+                            db.session.add(notify)
+                            already_notified.add(community_member.user_id)
                 if domain.notify_admins:
                     # D1391. This reassigned `targets_data` to two keys, so an
                     # admin's notification lost the title, the body and the
