@@ -1030,15 +1030,17 @@ def process_inbox_request(request_json, store_ap_json):
                                 user.last_seen = utcnow()
                                 session.commit()
                                 cache.delete_memoized(community_membership, user, community)
-                                # send accept message to acknowledge the follow
-                                accept = {"@context": default_context(), "actor": community.public_url(),
-                                          "to": [user.public_url()],
-                                          "object": {"actor": user.public_url(), "to": None,
-                                                     "object": community.public_url(), "type": "Follow", "id": follow_id},
-                                          "type": "Accept",
-                                          "id": f"{current_app.config['SERVER_URL']}/activities/accept/" + gibberish(32)}
-                                send_post_request(user.ap_inbox_url, accept, community.private_key, f"{community.public_url()}#main-key")
-                                log_incoming_ap(id, APLOG_FOLLOW, APLOG_SUCCESS, saved_json)
+                            # send accept message to acknowledge the follow - again, if they are already a member, as
+                            # a peer that lost our Accept retries the Follow (D66, owner ruling)
+                            accept = {"@context": default_context(), "actor": community.public_url(),
+                                      "to": [user.public_url()],
+                                      "object": {"actor": user.public_url(), "to": None,
+                                                 "object": community.public_url(), "type": "Follow", "id": follow_id},
+                                      "type": "Accept",
+                                      "id": f"{current_app.config['SERVER_URL']}/activities/accept/" + gibberish(32)}
+                            send_post_request(user.ap_inbox_url, accept, community.private_key, f"{community.public_url()}#main-key")
+                            log_incoming_ap(id, APLOG_FOLLOW, APLOG_SUCCESS, saved_json,
+                                            'Already a member, Accept re-sent' if existing_member else None)
                         return
                     elif isinstance(target, Feed):
                         feed = target
@@ -1059,22 +1061,24 @@ def process_inbox_request(request_json, store_ap_json):
                                       "id": f"{current_app.config['SERVER_URL']}/activities/reject/" + gibberish(32)}
                             send_post_request(user.ap_inbox_url, reject, feed.private_key, f"{feed.public_url()}#main-key")
                         else:
-                            if feed_membership(user, feed) != SUBSCRIPTION_MEMBER:
+                            already_member = feed_membership(user, feed) == SUBSCRIPTION_MEMBER
+                            if not already_member:
                                 member = FeedMember(user_id=user.id, feed_id=feed.id)
                                 session.add(member)
                                 feed.subscriptions_count += 1
                                 session.commit()
                                 cache.delete_memoized(feed_membership, user, feed)
-                                # send accept message to acknowledge the follow
-                                accept = {"@context": default_context(), "actor": feed.public_url(),
-                                          "to": [user.public_url()],
-                                          "object": {"actor": user.public_url(), "to": None, "object": feed.public_url(),
-                                                     "type": "Follow", "id": follow_id},
-                                          "type": "Accept",
-                                          "id": f"{current_app.config['SERVER_URL']}/activities/accept/" + gibberish(32)}
-                                send_post_request(user.ap_inbox_url, accept, feed.private_key,
-                                                  f"{feed.public_url()}#main-key")
-                                log_incoming_ap(id, APLOG_FOLLOW, APLOG_SUCCESS, saved_json)
+                            # send accept message to acknowledge the follow - again for an existing member (D66)
+                            accept = {"@context": default_context(), "actor": feed.public_url(),
+                                      "to": [user.public_url()],
+                                      "object": {"actor": user.public_url(), "to": None, "object": feed.public_url(),
+                                                 "type": "Follow", "id": follow_id},
+                                      "type": "Accept",
+                                      "id": f"{current_app.config['SERVER_URL']}/activities/accept/" + gibberish(32)}
+                            send_post_request(user.ap_inbox_url, accept, feed.private_key,
+                                              f"{feed.public_url()}#main-key")
+                            log_incoming_ap(id, APLOG_FOLLOW, APLOG_SUCCESS, saved_json,
+                                            'Already a member, Accept re-sent' if already_member else None)
                         return
                     elif isinstance(target, User):
                         local_user = target
@@ -1130,6 +1134,21 @@ def process_inbox_request(request_json, store_ap_json):
                             db.session.commit()
 
                             log_incoming_ap(id, APLOG_FOLLOW, APLOG_SUCCESS, saved_json)
+                        elif existing_follower.is_accepted:
+                            # D66 (owner ruling): a peer that lost our Accept retries the Follow, so send it again
+                            accept = {"@context": default_context(), "actor": local_user.public_url(),
+                                      "to": [remote_user.public_url()],
+                                      "object": {"actor": remote_user.public_url(), "to": None,
+                                                 "object": local_user.public_url(), "type": "Follow", "id": follow_id},
+                                      "type": "Accept",
+                                      "id": f"{current_app.config['SERVER_URL']}/activities/accept/" + gibberish(32)}
+                            send_post_request(remote_user.ap_inbox_url, accept, local_user.private_key,
+                                              f"{local_user.public_url()}#main-key")
+                            log_incoming_ap(id, APLOG_FOLLOW, APLOG_SUCCESS, saved_json, 'Already following, Accept re-sent')
+                        elif existing_follower.is_accepted is None:
+                            log_incoming_ap(id, APLOG_FOLLOW, APLOG_IGNORED, saved_json, 'Follow is still awaiting approval')
+                        else:
+                            log_incoming_ap(id, APLOG_FOLLOW, APLOG_IGNORED, saved_json, 'Follow was rejected')
                     return
 
                 # Accept: remote server is accepting our previous follow request
