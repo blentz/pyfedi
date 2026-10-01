@@ -627,13 +627,19 @@ def post_oembed(post_id):
         refuse_private_community(post)
         refuse_unpublished_post(post)
 
+        # D1085: the page's placeholder title for a post its author deleted, with the same exception for its viewers
+        title = post.title
+        if post.deleted and post.deleted_by == post.user_id and not (
+                post.community.is_moderator() or post.community.is_owner() or current_user.get_id() in g.admin_ids):
+            title = _('deleted by author')
+
         iframe_url = url_for('post.post_embed', post_id=post.id, _external=True)
         oembed = {
             "version": "1.0",
             "type": "rich",
             "provider_name": g.site.name,
             "provider_url": f"{current_app.config['SERVER_URL']}",
-            "title": post.title,
+            "title": title,
             "html": f"<p><iframe src='{iframe_url}' class='piefed-embed' style='max-width: 100%; border: 0' width='400' allowfullscreen='allowfullscreen'></iframe><script src='https://{current_app.config['SERVER_NAME']}/static/js/embed.js' async='async'></script></p>",
             "width": 400,
             "height": 300,

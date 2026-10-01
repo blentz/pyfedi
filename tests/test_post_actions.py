@@ -142,6 +142,34 @@ def test_the_oembed_document(app, env):
     assert f'/post/{post.id}/embed' in body['html']
 
 
+def test_the_oembed_of_a_post_its_author_deleted_carries_the_placeholder_title(app, env):
+    """D1085 residue, fixed (owner ruling): the page shows 'deleted by author'
+    for such a post, and its oEmbed -- what a link preview shows -- now does
+    too instead of the original title."""
+    anon, community, post, mod, author, outsider = env
+    post.deleted = True
+    post.deleted_by = author.id
+    db.session.commit()
+
+    response = anon.get(f'/post/{post.id}/oembed')
+
+    assert response.status_code == 200
+    assert response.get_json()['title'] == 'deleted by author'
+    assert b'THETITLE' not in response.data
+
+
+def test_a_moderator_gets_the_original_title_in_the_oembed(app, env):
+    """The same exception the page makes (D1085): moderators see the original."""
+    anon, community, post, mod, author, outsider = env
+    post.deleted = True
+    post.deleted_by = author.id
+    db.session.commit()
+
+    response = as_user(app, mod).get(f'/post/{post.id}/oembed')
+
+    assert response.get_json()['title'] == 'THETITLE'
+
+
 def test_a_private_communitys_post_has_no_oembed(app, env):
     """D1119. oEmbed is what a chat client or a link preview fetches, so this
     JSON is the widest audience any of these routes has. Measured: `PROBE aq1
