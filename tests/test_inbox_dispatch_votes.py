@@ -415,23 +415,13 @@ def test_upvote_unwraps_a_dict_object_with_an_id_key(app, db_session, monkeypatc
 
 # --- Step 3: the upvote/downvote asymmetry, routes.py:2404-2410 vs :2413-2433 ---
 
-def test_an_upvote_blocked_by_the_vote_quota_logs_nothing(app, db_session, monkeypatch):
-    """process_upvote, routes.py:2404-2408 -- there is no `else` on the inner
-    `if`, so this path is silent. The equivalent downvote (routes.py:2431)
-    logs IGNORED. Asserted as `ActivityPubLog.query.count() == 0` WITH logging
-    enabled, which is the assertion that would fail if a log call were ever
-    added.
+def test_an_upvote_blocked_by_the_vote_quota_logs_ignored(app, db_session, monkeypatch):
+    """D57, fixed. process_upvote's inner `if` had no `else`, so an upvote it
+    refused was silent while the same downvote logged IGNORED. It now logs
+    'Cannot upvote this' as the downvote does.
 
-    Registered by Task 9 as an asymmetry, not fixed here.
-
-    VOTE_QUOTA is dropped to -1 (rather than writing a Redis
-    `votes_cast_{today}_{user_id}` key) so that votes_cast_today's default
-    (0, no key set) already exceeds it -- `0 <= -1` is False, which is all
-    the inner conjunction's third clause needs to fail. This is also this
-    guard's MUTATION killer for Step 4: dropping
-    `votes_cast_today(user.id) <= current_app.config['VOTE_QUOTA'] and`
-    from the inner conjunction would let this vote through, which this
-    test's `PostVote.query.count() == 0` assertion would catch.
+    VOTE_QUOTA is dropped to -1 so votes_cast_today's default (0, no Redis
+    key) already exceeds it and the inner conjunction's quota clause fails.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     monkeypatch.setitem(app.config, 'VOTE_QUOTA', -1)
@@ -442,7 +432,9 @@ def test_an_upvote_blocked_by_the_vote_quota_logs_nothing(app, db_session, monke
     process_upvote(voter, True, request_json, False)
 
     assert PostVote.query.count() == 0
-    assert ActivityPubLog.query.count() == 0
+    row = ActivityPubLog.query.one()
+    assert row.result == 'ignored'
+    assert row.exception_message == 'Cannot upvote this'
 
 
 def test_a_downvote_blocked_by_the_vote_quota_logs_ignored(app, db_session, monkeypatch):
