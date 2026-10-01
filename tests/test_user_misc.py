@@ -1,15 +1,15 @@
 """The rest of `app/user/routes.py`: reading history, OAuth, feeds, follows.
 
 Sub-project 81, slice H -- the last slice of this module. One finding
-registered rather than fixed:
+registered then, since fixed:
 
 * an account created through OAuth never gets a password (`initialize_new_user`
   in `app/auth/oauth_util.py` does not call `set_password`), and
   `connect_oauth` will disconnect its only provider -- leaving an account with
   no password and no provider, reachable only through an emailed password
   reset. Measured: `PROBE ab1 google id now: None | password_hash: None`.
-  Registered as D1073 and PINNED BELOW as today's behaviour, because refusing
-  the disconnect is a decision about login flow rather than a coverage fix.
+  D1073, fixed (owner ruling): the last login method can no longer be
+  disconnected.
 """
 from datetime import timedelta
 from unittest.mock import patch
@@ -656,7 +656,7 @@ def test_these_routes_refuse_an_off_site_return(app, env, path):
 
 
 # --------------------------------------------------------------------------
-# OAuth connections -- and D1073, pinned as it stands
+# OAuth connections -- and D1073, the last login method kept
 # --------------------------------------------------------------------------
 
 
@@ -736,20 +736,10 @@ def test_an_unknown_provider_disconnects_nothing(app, env):
     assert viewer.google_oauth_id == 'google-123'
 
 
-def test_an_oauth_only_account_can_disconnect_its_last_provider(app, env):
-    """D1073, PINNED AS IT STANDS rather than fixed.
-
-    `initialize_new_user` (`app/auth/oauth_util.py:52`) never calls
-    `set_password`, so an account created through OAuth has
-    `password_hash = None`. This route will then disconnect its only provider,
-    leaving an account with no password and no provider -- reachable only
-    through an emailed password reset, which works because OAuth signups store
-    a verified address. Measured: `PROBE ab1 google id now: None |
-    password_hash: None`.
-
-    Refusing the disconnect is a decision about the login flow rather than a
-    coverage fix, so this row records today's behaviour. **Update it when the
-    refusal lands** -- the assertion below is what will fail.
+def test_an_oauth_only_account_cannot_disconnect_its_last_provider(app, env):
+    """D1073, fixed (owner ruling): an account created through OAuth has no
+    password, so disconnecting its only provider would leave it no way to log
+    in. The disconnect is refused and the flash says to set a password first.
     """
     client, viewer, other, community = env
     viewer.password_hash = None
@@ -757,13 +747,32 @@ def test_an_oauth_only_account_can_disconnect_its_last_provider(app, env):
     db.session.commit()
     token = csrf(app, client)
 
+    response = client.post('/user/connect_oauth',
+                           data={'disconnect_provider': 'google', 'csrf_token': token})
+
+    assert response.status_code == 302
+    db.session.refresh(viewer)
+    assert viewer.google_oauth_id == 'google-123'
+    with client.session_transaction() as session:
+        messages = [message for _category, message in session.get('_flashes', [])]
+    assert any('Set a password first' in message for message in messages)
+
+
+def test_an_oauth_only_account_may_disconnect_one_of_two_providers(app, env):
+    """D1073: another provider is still a way to log in, so this one may go."""
+    client, viewer, other, community = env
+    viewer.password_hash = None
+    viewer.google_oauth_id = 'google-123'
+    viewer.discord_oauth_id = 'discord-123'
+    db.session.commit()
+    token = csrf(app, client)
+
     client.post('/user/connect_oauth',
                 data={'disconnect_provider': 'google', 'csrf_token': token})
 
     db.session.refresh(viewer)
-    assert viewer.google_oauth_id is None, \
-        'the last provider is now refused -- update this test (D1073)'
-    assert viewer.password_hash is None
+    assert viewer.google_oauth_id is None
+    assert viewer.discord_oauth_id == 'discord-123'
 
 
 def test_a_deleted_account_has_no_oauth_page(app, env):
