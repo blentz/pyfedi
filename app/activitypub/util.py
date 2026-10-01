@@ -1385,7 +1385,7 @@ def actor_json_to_model(activity_json, address, server):
                         ap_preferred_username=actor_name,
                         ap_manually_approves_followers=activity_json['manuallyApprovesFollowers'] if 'manuallyApprovesFollowers' in activity_json else False,
                         ap_fetched_at=utcnow(),
-                        ap_domain=server,
+                        ap_domain=server.lower(),
                         public_key=actor_pem,
                         bot=True if activity_json['type'] == 'Service' else False,
                         instance_id=find_instance_id(server),

@@ -162,9 +162,9 @@ class TestNullColumnsAreNotReported:
 
 
 class TestCaseFoldedDomainIsNotReported:
-    """A real, pre-existing defect in `actor_json_to_model`, found while
-    building this audit and reported rather than fixed (out of scope for this
-    task): the `User` branch stores `ap_domain=server` -- unlowered -- while
+    """A defect in `actor_json_to_model` found while building this audit
+    (D25, since fixed, but rows written before the fix remain): the `User`
+    branch stored `ap_domain=server` -- unlowered -- while
     the `Community` and `Feed` branches both store `ap_domain=server.lower()`.
     `server` itself is not guaranteed lowercase: on the ordinary `https://`
     fetch path, `extract_domain_and_actor` returns `urlparse(...).netloc`

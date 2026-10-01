@@ -2288,16 +2288,12 @@ def find_cross_host_actors(session=None):
     report useless.
 
     ap_domain is compared case-insensitively. actor_json_to_model always
-    lowercases ap_profile_id, but only lowercases ap_domain on the Community
-    and Feed branches -- the User branch stores ap_domain as the `server`
-    argument it was given, unlowered. When that argument reaches
-    actor_json_to_model already mixed-case (extract_domain_and_actor returns
-    urlparse's `netloc` verbatim, without lowercasing it, on the ordinary
-    https:// fetch path), the stored User.ap_domain can differ from
-    ap_profile_id's host only in case. That is a pre-existing casing
-    inconsistency in actor_json_to_model, not a cross-host mismatch, and is
-    reported separately rather than fixed here; folding case in this
-    comparison is what keeps it from being reported as a false positive.
+    lowercases ap_profile_id, and its User branch used to store ap_domain as
+    the `server` argument it was given, unlowered (D25, since fixed). User
+    rows created before that fix can still have an ap_domain differing from
+    ap_profile_id's host only in case, which is not a cross-host mismatch;
+    folding case in this comparison keeps them from being reported as false
+    positives.
 
     Returns a list of (model_name, row_id, ap_profile_id, ap_domain) tuples,
     ordered by table (User, Community, Feed) then primary key.
