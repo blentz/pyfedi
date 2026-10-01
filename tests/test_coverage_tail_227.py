@@ -105,47 +105,20 @@ class TestTheInteractedAtBatch:
 
 
 class TestADetachedUsersExtraFields:
-    """`app/api/alpha/views.py:381-382` cannot run, and what happens instead is worth
-    recording.
-
-    The code reads a user's extra fields behind a `DetachedInstanceError` handler:
-
-        if user.extra_fields:
-            v1['extra_fields'] = []
-            try:
-                extra_fields = user.extra_fields
-            except DetachedInstanceError:   # ... temporary detatched users ...
-                extra_fields = db.session.get(User, user.id).extra_fields
-
-    `User.extra_fields` is `lazy='dynamic'` (`app/models.py:1749`), so the attribute
-    answers an AppenderQuery and the assignment touches no database -- it cannot raise. And
-    the query itself does not raise either once the instance is detached. Measured, on a
-    user expunged from the session with one extra field committed first:
-
-        bool(user.extra_fields)   -> True      (an AppenderQuery is always truthy)
-        list(user.extra_fields)   -> []        (no exception)
-        user.extra_fields.count() -> 0
-
-    So the handler is unreachable, and a detached user's extra fields come back EMPTY
-    rather than raising. The guard above is no help: it is truthy whatever the session
-    state, which is why `v1['extra_fields']` is set to `[]` for every user who has any.
-
-    THIS IS RECORDED, NOT FIXED. Serving nothing is not obviously worse than serving a
-    re-fetch, the scenario the comment names
-    (`convert_archived_replies_to_tree`) is not exercised by any route these rows can
-    reach, and a change here is a decision about what an archived thread's author should
-    look like in the API. The rows below pin today's behaviour so that decision is taken
-    deliberately.
+    """D1437, fixed (owner ruling). `user_view` read a user's extra fields straight off the
+    object it was handed, behind an `except DetachedInstanceError` that could not fire:
+    `User.extra_fields` is `lazy='dynamic'`, and a detached instance's query answered EMPTY
+    with an SAWarning instead of raising. `convert_archived_replies_to_tree` hands it such
+    temporaries, so their fields were lost. The view now reads them off the author attached
+    to the current session, and the handler is gone.
     """
 
     @pytest.fixture
     def detached(self, env):
-        """A user in the state `convert_archived_replies_to_tree` leaves its temporaries
-        in: expunged from the session, with its already-loaded columns intact.
+        """A user expunged from the session, its already-loaded columns intact.
 
         NOT expired as well -- `user_view` passes the user to memoized helpers and
-        flask-caching builds their key from `repr(user)`, which reads columns, so expiring
-        first raises one layer above the code under test.
+        flask-caching builds their key from `repr(user)`, which reads columns.
         """
         from app.models import UserExtraField
 
@@ -157,41 +130,16 @@ class TestADetachedUsersExtraFields:
         db.session.expunge(user)
         return user, user_id
 
-    def test_the_view_answers_rather_than_raising(self, detached):
-        """SQLAlchemy warns on the way past -- see the row below, which is about the
-        warning itself. Asserted here as well because this suite runs at zero warnings and
-        an unasserted one would fail the whole run."""
-        from sqlalchemy.exc import SAWarning
-
+    def test_a_detached_users_fields_are_read_from_the_attached_row(self, detached):
+        """No SAWarning (the suite runs at zero warnings), and the field is served."""
         from app.api.alpha.views import user_view
 
         user, user_id = detached
 
-        with pytest.warns(SAWarning, match='dynamic relationship cannot return'):
-            view = user_view(user, variant=1)
+        view = user_view(user, variant=1)
 
         assert view['id'] == user_id
-
-    def test_the_fields_come_back_empty(self, detached):
-        """The behaviour the dead handler was meant to prevent, pinned as it is -- and
-        SQLAlchemy's own warning about it, which says the arm will stop being dead:
-
-            SAWarning: Instance <User ...> is detached, dynamic relationship cannot return
-            a correct result. This warning will become a DetachedInstanceError in a future
-            release.
-
-        Asserted rather than filtered, so the day that becomes an error this row fails and
-        the handler three lines above has to be reconsidered on purpose."""
-        from sqlalchemy.exc import SAWarning
-
-        from app.api.alpha.views import user_view
-
-        user, _ = detached
-
-        with pytest.warns(SAWarning, match='dynamic relationship cannot return'):
-            view = user_view(user, variant=1)
-
-        assert view['extra_fields'] == []
+        assert [f['label'] for f in view['extra_fields']] == ['site']
 
     def test_an_attached_user_gets_them(self, env):
         """The control, and what makes the row above a statement about DETACHMENT rather
