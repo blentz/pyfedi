@@ -162,6 +162,26 @@ class TestTheDashboardsWarning:
         assert 'have not been run recently' in warning
         assert 'send_queue' in warning
 
+    def test_the_catalogue_is_asked_for_a_fixed_message(self, env):
+        """D910, fixed: the overdue-task list was interpolated into the string
+        before gettext saw it, so the catalogue was asked for a message holding
+        this instance's task names and could never match. The msgid is fixed
+        now and the list is passed as a parameter."""
+        db.session.add(CronJobLog(name='send_queue',
+                                  last_run=utcnow() - timedelta(days=1)))
+        db.session.commit()
+        asked = []
+
+        def recording_gettext(message, **params):
+            asked.append(message)
+            return message % params if params else message
+
+        with patch('app.admin.routes._', side_effect=recording_gettext):
+            warning = ' '.join(flashes(env))
+
+        assert 'Some cron tasks have not been run recently: %(tasks)s' in asked
+        assert 'send_queue' in warning
+
     def test_a_task_with_a_name_the_model_does_not_know(self, env):
         """D1334 itself: this was a 500, and the page carries the host's load
         averages, disk usage and plugin list, so the admin lost all of it."""
