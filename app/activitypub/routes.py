@@ -532,6 +532,10 @@ def resolve_remote_handle(actor: str):
 
 @bp.route('/u/<actor>/outbox', methods=['GET'])
 def user_outbox(actor):
+    # D177 (owner ruling): a browser asking for a collection is sent to the page of the actor it belongs to,
+    # as the actor endpoints negotiate
+    if not is_activitypub_request():
+        return redirect(url_for('activitypub.user_profile', actor=actor))
     outbox = {
         "@context": default_context(),
         'type': 'OrderedCollection',
@@ -2190,6 +2194,9 @@ def announce_activity_to_followers(community: Community, creator: User, activity
 @bp.route('/c/<actor>/outbox', methods=['GET'])
 def community_outbox(actor):
     actor = actor.strip()
+    # D177, as user_outbox above
+    if not is_activitypub_request():
+        return redirect(url_for('activitypub.community_profile', actor=actor))
     community: Community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first()
     if community is not None:
         if community.local_only or community.private:
@@ -2215,6 +2222,7 @@ def community_outbox(actor):
         resp = jsonify(community_data)
         resp.content_type = 'application/activity+json'
         resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
+        resp.headers.set('Vary', 'Accept')
         return resp
     else:
         abort(404)
@@ -2223,6 +2231,9 @@ def community_outbox(actor):
 @bp.route('/c/<actor>/featured', methods=['GET'])
 def community_featured(actor):
     actor = actor.strip()
+    # D177, as user_outbox above
+    if not is_activitypub_request():
+        return redirect(url_for('activitypub.community_profile', actor=actor))
     community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first()
     if community is not None:
         if community.local_only or community.private:
@@ -2244,6 +2255,7 @@ def community_featured(actor):
         resp = jsonify(community_data)
         resp.content_type = 'application/activity+json'
         resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
+        resp.headers.set('Vary', 'Accept')
         return resp
     else:
         abort(404)
@@ -2252,6 +2264,9 @@ def community_featured(actor):
 @bp.route('/c/<actor>/moderators', methods=['GET'])
 def community_moderators_route(actor):
     actor = actor.strip()
+    # D177, as user_outbox above
+    if not is_activitypub_request():
+        return redirect(url_for('activitypub.community_profile', actor=actor))
     community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first()
     if community is not None:
         moderator_ids = community_moderators(community.id)
@@ -2270,6 +2285,7 @@ def community_moderators_route(actor):
         resp = jsonify(community_data)
         resp.content_type = 'application/activity+json'
         resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
+        resp.headers.set('Vary', 'Accept')
         return resp
     else:
         abort(404)
@@ -2278,6 +2294,9 @@ def community_moderators_route(actor):
 @bp.route('/c/<actor>/followers', methods=['GET'])
 def community_followers(actor):
     actor = actor.strip()
+    # D177, as user_outbox above
+    if not is_activitypub_request():
+        return redirect(url_for('activitypub.community_profile', actor=actor))
     community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first()
     if community is not None:
         result = {
@@ -2290,6 +2309,7 @@ def community_followers(actor):
         resp = jsonify(result)
         resp.content_type = 'application/activity+json'
         resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
+        resp.headers.set('Vary', 'Accept')
         return resp
     else:
         abort(404)
@@ -2298,6 +2318,9 @@ def community_followers(actor):
 @bp.route('/u/<actor>/followers', methods=['GET'])
 def user_followers(actor):
     actor = actor.strip()
+    # D177, as user_outbox above
+    if not is_activitypub_request():
+        return redirect(url_for('activitypub.user_profile', actor=actor))
     user = db.session.query(User).filter_by(user_name=actor, banned=False, ap_id=None).first()
     if user is not None:
         # Get all followers, except those that are blocked by user by doing an outer join
@@ -2991,6 +3014,9 @@ def feed_outbox(actor):
     # but I dont think it makes sense to have the Add/Remove activities in a list
     # for a Feed, so for now this will just be the same as the /following collection
     actor = actor.strip()
+    # D177, as user_outbox above
+    if not is_activitypub_request():
+        return redirect(url_for('activitypub.feed_profile', actor=actor))
     if '@' in actor:
         # don't provide activitypub info for remote feeds
         abort(400)
@@ -3025,12 +3051,16 @@ def feed_outbox(actor):
     resp = jsonify(result)
     resp.content_type = 'application/activity+json'
     resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
+    resp.headers.set('Vary', 'Accept')
     return resp
 
 
 @bp.route('/f/<actor>/following', methods=['GET'])
 def feed_following(actor):
     actor = actor.strip()
+    # D177, as user_outbox above
+    if not is_activitypub_request():
+        return redirect(url_for('activitypub.feed_profile', actor=actor))
     if '@' in actor:
         # don't provide activitypub info for remote feeds
         abort(400)
@@ -3065,12 +3095,16 @@ def feed_following(actor):
     resp = jsonify(result)
     resp.content_type = 'application/activity+json'
     resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
+    resp.headers.set('Vary', 'Accept')
     return resp
 
 
 @bp.route('/f/<actor>/moderators', methods=['GET'])
 def feed_moderators_route(actor):
     actor = actor.strip()
+    # D177, as user_outbox above
+    if not is_activitypub_request():
+        return redirect(url_for('activitypub.feed_profile', actor=actor))
     if '@' in actor:
         # don't provide activitypub info for remote feeds
         abort(400)
@@ -3100,6 +3134,7 @@ def feed_moderators_route(actor):
         resp = jsonify(moderators_data)
         resp.content_type = 'application/activity+json'
         resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
+        resp.headers.set('Vary', 'Accept')
         return resp
     else:
         abort(404)
@@ -3108,6 +3143,9 @@ def feed_moderators_route(actor):
 @bp.route('/f/<actor>/followers', methods=['GET'])
 def feed_followers(actor):
     actor = actor.strip()
+    # D177, as user_outbox above
+    if not is_activitypub_request():
+        return redirect(url_for('activitypub.feed_profile', actor=actor))
     if '@' in actor:
         # don't provide activitypub info for remote feeds
         abort(400)
@@ -3127,6 +3165,7 @@ def feed_followers(actor):
             resp = jsonify(result)
             resp.content_type = 'application/activity+json'
             resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
+            resp.headers.set('Vary', 'Accept')
             return resp
         else:
             abort(404)

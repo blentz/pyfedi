@@ -157,7 +157,7 @@ class TestTheUserOutbox:
         author = make_user(env.baseline.instance_local, 'outboxowner', local=True)
         db.session.commit()
 
-        response = env.client.get(f'/u/{author.user_name}/outbox')
+        response = env.client.get(f'/u/{author.user_name}/outbox', headers={'Accept': 'application/activity+json'})
 
         assert response.status_code == 200
         body = response.get_json()
@@ -169,7 +169,7 @@ class TestTheUserOutbox:
         """The three headers. `Vary: Accept` is what stops a cache handing an HTML answer
         to a peer asking for JSON, and this endpoint is cacheable for the collection
         max-age (D180, fixed by owner ruling: ten seconds before)."""
-        response = env.client.get('/u/anybody/outbox')
+        response = env.client.get('/u/anybody/outbox', headers={'Accept': 'application/activity+json'})
 
         assert response.content_type == 'application/activity+json'
         # `Accept` as a whole entry: Flask appends `Accept-Encoding` to Vary on its own, so
@@ -183,7 +183,7 @@ class TestTheUserOutbox:
         the same empty collection for an account nobody holds. That is a disclosure
         decision -- it means the endpoint cannot be used to test whether a username
         exists."""
-        response = env.client.get('/u/nobody-at-all/outbox')
+        response = env.client.get('/u/nobody-at-all/outbox', headers={'Accept': 'application/activity+json'})
 
         assert response.status_code == 200
         assert response.get_json()['totalItems'] == 0
