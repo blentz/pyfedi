@@ -1777,7 +1777,9 @@ def actor_json_to_model(activity_json, address, server):
                         ap_public_url=activity_json['id'],
                         ap_profile_id=activity_json['id'].lower(),
                         ap_followers_url=activity_json['followers'] if 'followers' in activity_json else None,
-                        ap_following_url=activity_json['following'] if 'following' in activity_json else None,
+                        # Read unconditionally by the /following fetch above, so
+                        # it is always present here (D18).
+                        ap_following_url=activity_json['following'],
                         ap_inbox_url=activity_json['endpoints']['sharedInbox'] if 'endpoints' in activity_json else activity_json['inbox'] if 'inbox' in activity_json else '',
                         ap_outbox_url=activity_json['outbox'],
                         ap_moderators_url=owners_url,
