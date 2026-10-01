@@ -3926,15 +3926,15 @@ def update_post_from_activity(post: Post, request_json: dict):
         if new_url and not url_is_storable(new_url):
             # A peer-supplied attachment url urlparse refuses, or one naming a
             # scheme an href may not carry -- D1404, where an Update replaced an
-            # already-stored https url with javascript:. Treat it as no
-            # url at all -- the same None this block starts new_url at (above)
-            # -- rather than rejecting the Update, which would hand peers a way
-            # to make us drop their content. Also the only thing standing
-            # between here and an AttributeError two lines down: since the
-            # urlparse guard landed, domain_from_url returns None for these
+            # already-stored https url with javascript:. Keep the url the post
+            # already has (R213): clearing it would let a peer wipe a link by
+            # naming a scheme we will not store, and rejecting the Update would
+            # hand peers a way to make us drop their content. Also the only thing
+            # standing between here and an AttributeError two lines down: since
+            # the urlparse guard landed, domain_from_url returns None for these
             # rather than raising, and `new_domain.banned` would then be
             # 'NoneType' object has no attribute 'banned'.
-            new_url = old_url if post.type == POST_TYPE_EVENT else None  # exactly what new_url was initialised to
+            new_url = old_url
         new_domain = None
         if new_url:
             # `if new_domain and` for the same reason app/models.py's Post.new and
