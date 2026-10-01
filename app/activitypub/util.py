@@ -1971,7 +1971,6 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
                                     final_place_thumbnail = os.path.join(directory, new_filename + '_thumbnail.webp')
 
                                     # Load image data into Pillow
-                                    Image.MAX_IMAGE_PIXELS = 89478485
                                     image = Image.open(BytesIO(source_image))
                                     image = ImageOps.exif_transpose(image)
                                     img_width = image.width
