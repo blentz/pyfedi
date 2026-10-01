@@ -106,7 +106,7 @@ Against the FIXED copy, four differences, of which three carry behaviour:
 | difference | unfixed pair | verify_object_from_source | behaviour? |
 |---|---|---|---|
 | host comparison | `urlparse(...).netloc` | `host_of(...)` | **yes** -- D22/D24 |
-| a bare embedded object | no arm; falls through with actor_domain None | `elif isinstance(..., dict) and 'id' in ...` | **yes** -- refused here, accepted there |
+| a bare embedded object | walked as a one-element list (D38, fixed) | `elif isinstance(..., dict) and 'id' in ...` | no longer -- accepted by both, though here only a `Person` dict counts |
 | an unusable attributedTo type | silent fall-through | `else: return None, '<reason>'` | **yes** -- diagnosis |
 | arm order | Person-dict arm first | string arm first | no -- one element can match only one arm |
 
@@ -648,23 +648,16 @@ class TestThisCopysAttributedToWalk:
         assert resolve_remote_post_from_search(URI) is None
         assert Post.query.filter_by(ap_id=URI).count() == 0
 
-    def test_a_bare_embedded_object_is_refused_here_but_accepted_by_the_fixed_copy(self, app, peer_author, http_mock):
-        """The drift row with the sharpest consequence. This copy has a string
-        arm and a list arm and nothing else, so a single embedded Person object
-        -- ordinary ActivityStreams -- matches neither and the author is never
-        found. verify_object_from_source, the copy 2b fixed, grew a dict arm
-        (`elif isinstance(..., dict) and 'id' in ...`) that handles exactly
-        this.
-
-        So the shape is already fixed once in this file. Two copies still
-        refuse it. Pinned as today's behaviour.
-        """
+    def test_a_bare_embedded_object_is_used(self, app, peer_author, http_mock):
+        """D38, fixed: a single embedded Person object -- ordinary
+        ActivityStreams -- used to match neither the string nor the list arm,
+        so the author was never found. It is now walked as a one-element list,
+        as create_resolved_object does."""
         community = make_community('news', host=PEER_OBJECT_HOST)
         attributed_to = {'type': 'Person', 'id': AUTHOR_URI}
         serve_remote_object(http_mock, URI, resolvable(public_note(attributed_to=attributed_to), community))
 
-        assert resolve_remote_post_from_search(URI) is None
-        assert Post.query.filter_by(ap_id=URI).count() == 0
+        assert resolve_remote_post_from_search(URI).author.id == peer_author.id
 
     def test_a_list_of_neither_shape_runs_off_the_end_and_refuses(self, app, peer_author, http_mock):
         """The loop's exhaust arc: no element matches either arm, so it ends
