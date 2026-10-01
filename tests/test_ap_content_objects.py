@@ -67,11 +67,12 @@ def seed_local_post(community=None, user=None, title='a post'):
 def _double_the_delegates(monkeypatch):
     """Stop the six delegates from running, and record what they were passed.
 
-    All six are imported INTO `app.activitypub.routes` -- `post_to_page`,
+    Four are imported INTO `app.activitypub.routes` -- `post_to_page`,
     `comment_model_to_json` and `post_replies_for_ap` from
-    `app.activitypub.util`, `continue_discussion` and `show_post` from
-    `app.post.routes`, and `block_honey_pot` from `app.utils` -- so they are
-    patched on that module, following this campaign's binding-site convention.
+    `app.activitypub.util`, and `block_honey_pot` from `app.utils` -- so they
+    are patched on that module, following this campaign's binding-site
+    convention. `continue_discussion` and `show_post` are looked up on
+    `app.post.routes` at call time, so they are patched there.
     `show_post` and `continue_discussion` render templates and must not run.
     """
     calls = {}
@@ -83,7 +84,9 @@ def _double_the_delegates(monkeypatch):
                             lambda obj, _n=name, _r=result: calls[_n].append(obj) or dict(_r) if isinstance(_r, dict) else calls[_n].append(obj) or list(_r))
     for name in ('continue_discussion', 'show_post'):
         calls[name] = []
-        monkeypatch.setattr(activitypub_routes, name,
+        # Reached through the module since the import cycle fix (post.routes),
+        # so they are doubled there.
+        monkeypatch.setattr(activitypub_routes.post_routes, name,
                             lambda *a, _n=name, **kw: calls[_n].append((a, kw)) or f'HTML:{_n}')
     calls['block_honey_pot'] = []
     monkeypatch.setattr(activitypub_routes, 'block_honey_pot',

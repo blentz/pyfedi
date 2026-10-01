@@ -39,7 +39,9 @@ from app.models import User, Community, CommunityJoinRequest, CommunityMember, C
     PostReply, Instance, AllowedInstances, BannedInstances, utcnow, Site, Notification, \
     ChatMessage, Conversation, UserFollower, UserBlock, Poll, PollChoice, Feed, FeedItem, FeedMember, FeedJoinRequest, \
     IpBan, ActivityBatch, InstanceBan, UserFollowRequest, votes_cast_today
-from app.post.routes import continue_discussion, show_post
+# The module, not the names: app.post.routes reaches this file through
+# app.activitypub.signature before they are defined (import cycle: post.routes)
+import app.post.routes as post_routes
 from app.shared.tasks import task_selector
 from app.user.routes import show_profile
 from app.user.utils import search_for_user
@@ -2388,7 +2390,7 @@ def comment_ap(comment_id):
                          f'<https://{current_app.config["SERVER_NAME"]}/comment/{reply.id}>; rel="alternate"; type="text/html"')
         return resp
     else:
-        return continue_discussion(reply.post.id, comment_id)
+        return post_routes.continue_discussion(reply.post.id, comment_id)
 
 
 def tombstone_response(ap_id: str, former_type: str):
@@ -2467,7 +2469,7 @@ def post_ap(post_id):
             return redirect(post.ap_id, code=301)
     else:
         block_honey_pot()
-        return show_post(post_id,
+        return post_routes.show_post(post_id,
                          low_bandwidth=request.cookies.get('low_bandwidth', '0') == '1',
                          sort=request.args.get('sort', 'hot' if current_user.is_anonymous else current_user.default_comment_sort or 'hot'),
                          autoplay=request.args.get('autoplay', False))

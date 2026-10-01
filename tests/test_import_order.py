@@ -26,8 +26,6 @@ STILL_CIRCULAR = {
     'app.chat.routes': 'chat.util <-> send_message', 'app.chat.util': 'chat.util <-> send_message',
     'app.feed.routes': 'feed.routes <-> get_all_child_feed_ids',
     'app.feed.util': 'feed.routes <-> get_all_child_feed_ids',
-    'app.post.routes': 'post.routes <-> continue_discussion',
-    'app.post.util': 'post.routes <-> continue_discussion',
     'app.tag.routes': 'topic.routes <-> get_all_child_topic_ids',
     'app.topic.routes': 'topic.routes <-> get_all_child_topic_ids',
     'app.user.routes': 'user.routes <-> show_profile',
