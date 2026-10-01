@@ -12,10 +12,9 @@ check missing here is missing on every one of those URLs.
   POST_STATUS_PUBLISHED`. Ids are sequential, so an embargoed post was
   readable ahead of its time by walking them. Measured: `PROBE af2 scheduled
   status: 200 | body visible: True`.
-* **D1085 (pinned, not fixed).** A post its AUTHOR deleted still renders --
-  title and the whole comment thread, with only the body withheld by the
-  template -- while a post a MODERATOR deleted is 404, and
-  `continue_discussion` answers 404 for both.
+* **D1085 (fixed, owner ruling).** A post its AUTHOR deleted renders a
+  'deleted by author' placeholder for its title and body, its comments still
+  shown; moderators and admins see the original.
 """
 from unittest.mock import patch
 
@@ -189,18 +188,15 @@ def test_a_published_post_is_shown(app, env):
 
 
 # --------------------------------------------------------------------------
-# D1085 -- deletion, pinned as it stands
+# D1085 -- deletion
 # --------------------------------------------------------------------------
 
 
-def test_a_post_deleted_by_its_author_still_renders(app, env):
-    """**Pinned, not asserted as correct (D1085).** A post its AUTHOR deleted
-    answers 200 with its title and its whole comment thread; only the body is
-    withheld, and that is the template's doing. A post a MODERATOR deleted is
-    404 for the same visitor, and `continue_discussion` answers 404 for both,
-    so the two ends of the same feature disagree. Which end is right is a
-    decision about what deletion means -- when it is made, update this test
-    (D1085)."""
+def test_a_post_deleted_by_its_author_shows_a_placeholder_and_keeps_its_comments(app, env):
+    """D1085, fixed (owner ruling): a post its author deleted still answers
+    200 with its comment thread, but a 'deleted by author' placeholder stands
+    in place of its title and body -- the page, its <title> and its link
+    preview. The title used to stay on show."""
     anon, community, post, mod, author, outsider = env
     a_reply(post, author, body='THEREPLY')
     post.deleted = True
@@ -211,10 +207,29 @@ def test_a_post_deleted_by_its_author_still_renders(app, env):
         response = anon.get(f'/post/{post.id}')
 
     assert response.status_code == 200
-    assert b'THETITLE' in response.data
+    assert b'THETITLE' not in response.data
+    assert b'THEBODY' not in response.data
+    assert b'deleted by author' in response.data
     assert b'THEREPLY' in response.data
     messages = ' '.join(str(call.args[0]) for call in flashed.call_args_list)
     assert 'deleted by the author' in messages
+
+
+def test_a_moderator_sees_the_original_of_a_post_its_author_deleted(app, env):
+    """D1085: moderators and admins still see what the author deleted."""
+    anon, community, post, mod, author, outsider = env
+    post.deleted = True
+    post.deleted_by = author.id
+    db.session.commit()
+
+    # The signed-in page renders the reply form's csrf_token, which the test
+    # config turns off; turned on here for this GET, which needs no token.
+    with patch.dict(app.config, {'WTF_CSRF_ENABLED': True}):
+        response = as_user(app, mod).get(f'/post/{post.id}')
+
+    assert response.status_code == 200
+    assert b'THETITLE' in response.data
+    assert b'THEBODY' in response.data
 
 
 def test_a_post_deleted_by_a_moderator_is_not_found(app, env):

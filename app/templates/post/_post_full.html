@@ -1,3 +1,6 @@
+{# D1085: moderators and admins see a deleted post's original; anyone else sees a placeholder where its author deleted it #}
+{% set sees_deleted_original = not post.deleted or post.community.is_moderator() or post.community.is_owner() or current_user.get_id() in admin_ids -%}
+{% set deleted_by_author_placeholder = post.deleted and post.deleted_by == post.user_id and not sees_deleted_original -%}
 <div class="row position-relative post_full {{ ' my_post' if current_user.get_id() == post.user_id }}">
     <div class="col post_col {% if post.type == POST_TYPE_IMAGE %}post_col post_type_image{% else %}post_type_normal{% endif %} {{ 'reported' if post.has_been_reported() }}">
         {% if post.type != POST_TYPE_EVENT or (post.type == POST_TYPE_EVENT and post.image_id is none) -%}
@@ -35,7 +38,7 @@
             </div>
         {%- else -%}
             <h1 class="post_title" lang="{{ post.language_code() }}">
-                {{ post.title if post.title != '(content in post body)' else '' }}
+                {% if deleted_by_author_placeholder %}{{ _('deleted by author') }}{% else %}{{ post.title if post.title != '(content in post body)' else '' }}{% endif %}
                 {% if post.nsfw -%}
                     <span class="warning_badge nsfw" title="{{ _('Not safe for work') }}">
                         {{ _('nsfw') }}
@@ -252,7 +255,7 @@
             {% endif -%}
         {% endif -%}
         <div class="post_body" lang="{{ post.language_code() }}">
-            {{ post.body_html | community_links | feed_links| person_links | safe if post.body_html and not post.deleted else '' }}
+            {{ post.body_html | community_links | feed_links| person_links | safe if post.body_html and sees_deleted_original else '' }}
             {% if archive_link -%}
                 <p>
                     <a href="{{ archive_link }}" rel="nofollow ucg noindex" target="_blank">
@@ -517,12 +520,12 @@
                 <ul class="dropdown-menu" style="width: 320px" aria-labelledby="post_share_link_{{ post.id }}">
                     <li><a href="/post/290/share_mastodon" style="white-space: normal" class="dropdown-item no-underline" rel="nofollow noindex">
                             <img src="/static/images/mastodon_ico.png"> {{ _('Share on Mastodon') }}</a></li>
-                    <li><a href="https://www.reddit.com/submit?url={{ post.public_url() | urlencode }}&title={{ post.title | urlencode }}" target="_blank"
+                    <li><a href="https://www.reddit.com/submit?url={{ post.public_url() | urlencode }}&title={{ (_('deleted by author') if deleted_by_author_placeholder else post.title) | urlencode }}" target="_blank"
                            class="dropdown-item no-underline" rel="nofollow noindex noopener"><img src="/static/images/reddit.svg"> {{ _('Share on Reddit') }}</a></li>
                     <li><a href="https://www.facebook.com/sharer/sharer.php?u={{ post.public_url() | urlencode }}" target="_blank"
                            class="dropdown-item no-underline" rel="nofollow noindex noopener">
                             <span class="fe fe-facebook"></span> {{ _('Share on Facebook') }}</a></li>
-                    <li><a href="https://api.whatsapp.com/send?text={{ (post.title ~ ' ' ~ post.public_url()) | urlencode }}" target="_blank"
+                    <li><a href="https://api.whatsapp.com/send?text={{ ((_('deleted by author') if deleted_by_author_placeholder else post.title) ~ ' ' ~ post.public_url()) | urlencode }}" target="_blank"
                            class="dropdown-item no-underline" rel="nofollow noindex noopener">
                             <img src="/static/images/whatsapp.svg"></span> {{ _('Share on WhatsApp') }}</a></li>
                 </ul>

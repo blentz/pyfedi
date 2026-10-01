@@ -238,6 +238,13 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
 
         og_image = post.image.source_url if post.image_id else None
         description = shorten_string(markdown_to_text(post.body), 150) if post.body else None
+        # D1085: a post its author deleted keeps its comments, but its title and body are a placeholder for anyone
+        # but its moderators and the admins -- here for the page title and link previews, in _post_full.html for the page
+        page_title = post.title
+        if post.deleted and post.deleted_by == post.user_id and not (
+                is_moderator or community.is_owner() or current_user.get_id() in g.admin_ids):
+            page_title = _('deleted by author')
+            og_image = description = None
 
         # Breadcrumbs
         breadcrumbs = []
@@ -365,7 +372,7 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
         else:
             is_dead = False
 
-        response = render_template('post/post.html', title=post.title, post=post, is_moderator=is_moderator,
+        response = render_template('post/post.html', title=page_title, post=post, is_moderator=is_moderator,
                                    is_owner=community.is_owner(), is_dead=is_dead,
                                    community=post.community, community_flair=get_comm_flair_list(community),
                                    breadcrumbs=breadcrumbs, related_communities=related_communities, mods=mod_list,

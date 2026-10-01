@@ -101,7 +101,7 @@
         {% if noindex -%}
             <meta name="robots" content="noindex">
         {% endif -%}
-        {% if post -%}
+        {% if post and not post.deleted -%}
             <link rel="alternate" type="application/json+oembed" href="{{ url_for('post.post_oembed', post_id=post.id, _external=True) }}" title="{{ post.title }}" />
         {% endif -%}
       {% if preconnect and not low_bandwidth -%}
