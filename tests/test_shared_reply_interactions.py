@@ -2446,43 +2446,57 @@ class TestDeleteReply:
         assert s.reply.child_count == 6
 
     def test_a_non_author_cannot_delete_another_users_reply(self, db_session):
-        """CLOSES NO STATEMENT AND NO ARC -- a `.one()` miss adds neither. It
-        earns its place by a unique kill against the mutant task 7's brief made
-        MANDATORY, `247s/, user_id=user_id,/, /`, which left all 27 tests green.
-
-        THIS OVERTURNS THE CLASS DOCSTRING'S ROUTING DECISION, AND THE
-        MEASUREMENT IS WHY. That paragraph reasoned that no test need assert
-        "the wrong user got nothing" because `.one()` would raise, and routed
-        the miss-path to the register. The reasoning describes the UNMUTATED
-        function: with `user_id=user_id` deleted from the filter there is no
-        miss and no raise, the interloper's call finds the author's reply and
-        soft-deletes it, and every assertion in this class still passes because
-        no test in it ever calls `delete_reply` as anybody but the author. An
-        unexecuted guard is not a guarded one.
-
-        THE WITNESS IS NOT THE RAISE. A crash is a weak kill, so the assertions
-        that carry this test are the ones about state: after the refusal the
-        reply is still undeleted and `deleted_by` is still None. Under the
-        mutant both are false -- `:248`-`:249` have run -- and they would remain
-        the discriminator even against a variant that swallowed the exception.
-        `pytest.raises` is kept as the outer frame only because the unmutated
-        function does raise and a test that let a `NoResultFound` escape would
-        error rather than fail.
-
-        `interloper` is minted local and verified so that `authorise_api_user`
-        (app/utils.py:3628) accepts its bearer token -- the refusal under test
-        must come from `:247`, not from the token check at `:243`.
-        """
+        """D506, fixed: the lookup filtered on the caller's id and called
+        `.one()`, so another user's reply was an unhandled NoResultFound (a
+        500). The API arm now refuses it through `authorise_api_user`'s
+        id_match, as delete_post does; the reply is untouched."""
         s = _seed_reply()
         interloper = make_user(s.instance, 'interloper', local=True)
         db.session.commit()
 
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match='incorrect_login'):
             delete_reply(s.reply.id, SRC_API, auth=bearer(interloper))
 
         db.session.refresh(s.reply)
         assert s.reply.deleted is False
         assert s.reply.deleted_by is None
+
+    def test_a_non_author_web_delete_is_a_403(self, db_session, app):
+        """D506, fixed: the web arm's non-author miss is a 403, not a 500."""
+        s = _seed_reply()
+        interloper = make_user(s.instance, 'interloper', local=True)
+        db.session.commit()
+
+        with web_ctx(app, interloper):
+            with pytest.raises(HTTPException) as exc:
+                delete_reply(s.reply.id, SRC_WEB, None)
+
+        assert exc.value.code == 403
+        db.session.refresh(s.reply)
+        assert s.reply.deleted is False
+
+    def test_deleting_a_missing_reply_is_a_404(self, db_session):
+        """D506, fixed: an unknown id is a 404, not NoResultFound."""
+        s = _seed_reply()
+
+        with pytest.raises(HTTPException) as exc:
+            delete_reply(s.reply.id + 1000, SRC_API, auth=bearer(s.user))
+
+        assert exc.value.code == 404
+
+    def test_deleting_an_already_deleted_reply_is_a_no_op(self, db_session):
+        """D506, fixed: a repeat delete was NoResultFound; it is now an
+        idempotent no-op that moves no counter and federates nothing."""
+        s = _seed_reply()
+        delete_reply(s.reply.id, SRC_API, auth=bearer(s.user))
+        db.session.refresh(s.reply.author)
+        before = s.reply.author.post_reply_count
+
+        user_id, reply = delete_reply(s.reply.id, SRC_API, auth=bearer(s.user))
+
+        assert (user_id, reply.id) == (s.user.id, s.reply.id)
+        db.session.refresh(s.reply.author)
+        assert s.reply.author.post_reply_count == before
 
     def test_deleting_a_one_element_path_reply_does_not_reach_the_empty_in_operand(self, db_session):
         """The cli-imported one-element path must not raise.
@@ -2993,39 +3007,39 @@ class TestRestoreReply:
         assert s.community.post_reply_count == before[2]
 
     def test_a_non_author_cannot_restore_another_users_reply(self, db_session):
-        """CLOSES NO STATEMENT AND NO ARC. It earns its place by a unique kill
-        against `275s/, user_id=user_id,/, /`, which left all 27 tests green in
-        the task-7 pass -- the mirror of the mutant task 7's brief made
-        mandatory against `delete_reply:247`, and it survived for the mirror
-        reason: no test in this class ever calls `restore_reply` as anybody but
-        the author, so the `user_id` conjunct was never executed against a
-        mismatch.
-
-        THE CLASS DOCSTRING'S ROUTING OF THIS MISS-PATH TO THE REGISTER IS
-        OVERTURNED HERE, exactly as `TestDeleteReply`'s is by its own
-        non-author test, and for the same reason: "the `.one()` would raise"
-        describes the unmutated function and says nothing about whether any
-        test would notice if it stopped raising.
-
-        THE WITNESS IS `deleted` STILL TRUE, not the raise. Under the mutant the
-        interloper's call finds the author's deleted reply, `:276`-`:277` clear
-        the flags and the guarded block below them moves four counters (two
-        until D496 was fixed, which is what this sentence used to say), so
-        `deleted is True` is
-        false and the test fails on state rather than on a missing exception.
-        `_deleted()` is used so the reply arrives deleted through the production
-        path, which is also what makes `deleted_by` non-None going in.
-        """
+        """D506, fixed: as for delete, another user's reply was a 500. The API
+        arm now refuses it through id_match; the reply stays deleted."""
         s = self._deleted()
         interloper = make_user(s.instance, 'interloper', local=True)
         db.session.commit()
 
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match='incorrect_login'):
             restore_reply(s.reply.id, SRC_API, auth=bearer(interloper))
 
         db.session.refresh(s.reply)
         assert s.reply.deleted is True
         assert s.reply.deleted_by == s.user.id
+
+    def test_restoring_a_missing_reply_is_a_404(self, db_session):
+        """D506, fixed: an unknown id is a 404, not NoResultFound."""
+        s = self._deleted()
+
+        with pytest.raises(HTTPException) as exc:
+            restore_reply(s.reply.id + 1000, SRC_API, auth=bearer(s.user))
+
+        assert exc.value.code == 404
+
+    def test_restoring_a_live_reply_is_a_no_op(self, db_session):
+        """D506, fixed: restoring a reply that is not deleted was
+        NoResultFound; it is now a no-op that moves no counter."""
+        s = _seed_reply()
+        db.session.refresh(s.reply.author)
+        before = s.reply.author.post_reply_count
+
+        restore_reply(s.reply.id, SRC_API, auth=bearer(s.user))
+
+        db.session.refresh(s.reply.author)
+        assert s.reply.author.post_reply_count == before
 
     def test_restoring_a_one_element_path_reply_does_not_reach_the_empty_in_operand(self, db_session):
         """`restore_reply`'s half of the cli-imported one-element path.
