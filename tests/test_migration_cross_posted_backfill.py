@@ -11,14 +11,15 @@ WHAT THIS MIGRATION DOES NOT DO. It repairs existing data. It does not make
 those five sites None-safe, and a row explicitly set to NULL after the
 migration still raises. So the pair below is not "the crash goes away" -- it
 is "the crash is real, and the revision's own SQL repairs the row that causes
-it". The residual is registered rather than fixed; the production budget for
-this round is the migration and `ban_user`'s source test, nothing else.
+it". Since D543's code half the two local decrements are guarded like the
+federated one, so the crash below is now the restore increments' alone.
 """
 import pytest
 from sqlalchemy import text
 
 from app import db
 from app.constants import SRC_API
+from app.models import PostReply
 from app.shared.reply import mod_remove_reply
 from tests.factories import (bearer, make_community, make_community_member,
                              make_instance, make_post, make_post_reply,
@@ -59,21 +60,21 @@ def _seed_removable_reply():
     return moderator, post, reply
 
 
-def test_a_null_cross_posted_count_makes_mod_remove_reply_raise(app, db_session):
-    """THE DEFECT, demonstrated rather than described.
-
-    This is the observation the migration exists for. It stays true after the
-    migration -- the column is still nullable and the arithmetic is still
-    unguarded -- which is why the assertion below is not inverted by Task 1.
-    """
+def test_a_null_cross_posted_count_no_longer_makes_mod_remove_reply_raise(app, db_session):
+    """The row the migration exists for. A NULL left after it (an explicit
+    UPDATE; the server default only covers INSERT) used to raise TypeError in
+    mod_remove_reply; since D543's code half the decrement is guarded, so the
+    removal succeeds and the NULL is left for the backfill."""
     moderator, post, reply = _seed_removable_reply()
     db.session.execute(text('UPDATE post SET reply_count_cross_posted = NULL '
                             'WHERE id = :id'), {'id': post.id})
     db.session.commit()
     db.session.expire_all()
 
-    with pytest.raises(TypeError):
-        mod_remove_reply(reply.id, 'spam', SRC_API, bearer(moderator))
+    mod_remove_reply(reply.id, 'spam', SRC_API, bearer(moderator))
+
+    db.session.expire_all()
+    assert db.session.get(PostReply, reply.id).deleted is True
 
 
 def test_the_backfill_sql_repairs_a_null_row_to_reply_count(app, db_session):

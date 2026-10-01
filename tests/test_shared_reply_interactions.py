@@ -2445,6 +2445,21 @@ class TestDeleteReply:
         assert bystander.child_count == 1
         assert s.reply.child_count == 6
 
+    @pytest.mark.parametrize('cross_posted', [0, None])
+    def test_a_delete_leaves_a_zero_or_null_cross_posted_count_alone(self, db_session, cross_posted):
+        """D543 (code half), fixed: the local delete decremented
+        `reply_count_cross_posted` unguarded, so 0 went to -1 and NULL raised
+        TypeError. It is now guarded the way the federated delete is."""
+        s = _seed_reply()
+        s.reply.post.reply_count_cross_posted = cross_posted
+        db.session.commit()
+
+        delete_reply(s.reply.id, SRC_API, auth=bearer(s.user))
+
+        db.session.refresh(s.reply.post)
+        assert s.reply.post.reply_count_cross_posted == cross_posted
+        assert s.reply.deleted is True
+
     def test_a_non_author_cannot_delete_another_users_reply(self, db_session):
         """D506, fixed: the lookup filtered on the caller's id and called
         `.one()`, so another user's reply was an unhandled NoResultFound (a
