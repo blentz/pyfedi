@@ -40,12 +40,14 @@ def check_user_application(application_id, send_async=True):
                     timeout=5
                 )
 
-                if ip_response.status_code == 200:
-                    ip_results = ip_response.json()
-                    # Check the result at the index where real IP was inserted
-                    if ip_results and len(ip_results) > ip_index and ip_results[ip_index]:
-                        num_banned += 1
-                ip_response.close()
+                try:
+                    if ip_response.status_code == 200:
+                        ip_results = ip_response.json()
+                        # Check the result at the index where real IP was inserted
+                        if ip_results and len(ip_results) > ip_index and ip_results[ip_index]:
+                            num_banned += 1
+                finally:
+                    ip_response.close()
 
                 sleep(random.randint(1, 30))
 
@@ -66,12 +68,14 @@ def check_user_application(application_id, send_async=True):
                     timeout=5
                 )
 
-                if email_response.status_code == 200:
-                    email_results = email_response.json()
-                    # Check the result at the index where real email was inserted
-                    if email_results and len(email_results) > email_index and email_results[email_index]:
-                        num_banned += 1
-                email_response.close()
+                try:
+                    if email_response.status_code == 200:
+                        email_results = email_response.json()
+                        # Check the result at the index where real email was inserted
+                        if email_results and len(email_results) > email_index and email_results[email_index]:
+                            num_banned += 1
+                finally:
+                    email_response.close()
 
             except Exception as e:
                 current_app.logger.error(f"Error checking bans on {domain}: {str(e)}")

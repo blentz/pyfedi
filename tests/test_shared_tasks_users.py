@@ -644,6 +644,26 @@ def test_both_responses_are_closed(db_session, monkeypatch):
     assert len(client.closed) == 2
 
 
+def test_a_response_whose_json_raises_is_still_closed(db_session, monkeypatch):
+    """D322, fixed: a leg whose `.json()` raised went straight to the
+    per-domain handler and skipped that leg's `close()`. Each response is now
+    closed in a `finally`, so broken.example's IP response is closed too."""
+    s = _seed()
+    set_setting('ban_check_servers', 'broken.example\nworking.example')
+    _no_sleep(monkeypatch)
+    _lowest_randint(monkeypatch)
+    client = _recording_client(
+        monkeypatch,
+        (200, _RAISING_PAYLOAD),   # broken.example IP leg: json() raises
+        (200, [False]),            # working.example IP leg
+        (200, [False]),            # working.example email leg
+    )
+
+    check_user_application(s.application.id)
+
+    assert len(client.closed) == 3
+
+
 def test_a_database_failure_rolls_back_and_re_raises(db_session, monkeypatch):
     """`:84-86`'s except arm and `:87-88`'s finally, reached WITHOUT a faked
     exception anywhere in the task's own logic.
