@@ -12,8 +12,8 @@ is called.
 tests/conftest.py primes `app.activitypub.signature` for the session, which hides
 every such cycle from the rest of the suite, so these rows import each module in a
 fresh interpreter instead. The same probe found six MORE cycles, not registered
-before; they are listed as strict xfails, so fixing one turns its row red until the
-mark is removed.
+before; they were listed as strict xfails and are all fixed the same way, each
+importer taking the module and looking the name up when it is called.
 """
 import os
 import subprocess
@@ -21,9 +21,9 @@ import sys
 
 import pytest
 
-STILL_CIRCULAR = {
-    'app.topic.routes': 'topic.routes <-> get_all_child_topic_ids',
-}
+# Every cycle the probe found is fixed (owner ruling: post.routes, user.routes,
+# auth.util, chat.util, feed.routes, topic.routes). A new one is a plain failure.
+STILL_CIRCULAR = {}
 
 MODULES = [
     f'app.{package}.{name}'
