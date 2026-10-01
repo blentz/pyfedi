@@ -136,7 +136,9 @@ def leave_feed(feed: int | Feed, src, auth=None, bulk_leave=False):
     
     user_id = authorise_api_user(auth) if src == SRC_API else current_user.id
 
-    fm = db.session.query(FeedMember).filter_by(user_id=user_id, feed_id=feed_id).one()
+    fm = db.session.query(FeedMember).filter_by(user_id=user_id, feed_id=feed_id).first()
+    if fm is None:  # not a member: nothing to leave
+        return user_id if src == SRC_API else None
 
     if not fm.is_owner:
         task_selector('leave_feed', user_id=user_id, feed_id=feed_id)

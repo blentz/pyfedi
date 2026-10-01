@@ -683,6 +683,26 @@ def test_leave_feed_refuses_the_owner_on_the_web_path_without_raising(app, db_se
     assert db.session.get(Feed, s.feed.id).subscriptions_count == 7
 
 
+@pytest.mark.parametrize('src', [SRC_API, SRC_WEB])
+def test_leave_feed_by_a_non_member_is_an_idempotent_success(app, db_session, src):
+    """N2, fixed: the membership lookup used .one(), so leaving a feed the
+    caller had not joined (or leaving twice) raised NoResultFound, a 500. It
+    now succeeds without touching anything, as D598 rules for leave_community."""
+    s = _seed()
+    s.feed.subscriptions_count = 7
+    db.session.commit()
+    calls = []
+
+    with web_ctx(app, s.member):
+        with patch('app.shared.feed.authorise_api_user', return_value=s.member.id), \
+                patch('app.shared.feed.task_selector', side_effect=lambda *a, **k: calls.append(a)):
+            result = leave_feed(s.feed, src, auth='Bearer x')
+
+    assert result == (s.member.id if src == SRC_API else None)
+    assert calls == []
+    assert db.session.get(Feed, s.feed.id).subscriptions_count == 7
+
+
 @pytest.mark.parametrize('bulk_leave', [True, False])
 def test_leave_feed_skips_the_community_sweep_during_a_bulk_leave(app, db_session, bulk_leave):
     """`if not bulk_leave:` at :136 guards the whole community sweep; the
