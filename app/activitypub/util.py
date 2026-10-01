@@ -653,6 +653,16 @@ def host_of(url_string: str) -> str:
         return ''
 
 
+def on_owner_host(entry, owner_url: str) -> bool:
+    """Whether a collection entry (a URL, or an object carrying one as 'id') is on the collection owner's host.
+
+    Refresh tasks create unseen actors only for entries that pass this, so a peer's collection cannot make us fetch
+    actors from other hosts. An owner whose host does not parse matches nothing, rather than '' matching ''."""
+    entry_id = entry.get('id') if isinstance(entry, dict) else entry
+    owner_host = host_of(owner_url)
+    return bool(owner_host) and isinstance(entry_id, str) and host_of(entry_id) == owner_host
+
+
 def extract_domain_and_actor(url_string: str):
     # Parse the URL
     if url_string.endswith('/'):  # WordPress
@@ -1048,7 +1058,8 @@ def refresh_community_profile_task(community_id, activity_json):
                             if mods_data and 'type' in mods_data and mods_data['type'] == 'OrderedCollection' and 'orderedItems' in mods_data:
                                 for actor in mods_data['orderedItems']:
                                     time.sleep(0.5)
-                                    user = find_actor_or_create(actor, retry=True)
+                                    user = find_actor_or_create(actor, create_if_not_found=on_owner_host(actor, community.ap_profile_id),
+                                                                retry=True)
                                     if user:
                                         existing_membership = session.query(CommunityMember).\
                                             filter_by(community_id=community.id, user_id=user.id).first()
@@ -1220,7 +1231,8 @@ def refresh_feed_profile_task(feed_id):
                             if owners_data and 'type' in owners_data and owners_data['type'] == 'OrderedCollection' and 'orderedItems' in owners_data:
                                 for actor in owners_data['orderedItems']:
                                     time.sleep(0.5)
-                                    user = find_actor_or_create(actor, retry=True)
+                                    user = find_actor_or_create(actor, create_if_not_found=on_owner_host(actor, feed.ap_profile_id),
+                                                                retry=True)
                                     if user:
                                         existing_membership = session.query(FeedMember).filter_by(feed_id=feed.id,
                                                                                          user_id=user.id).first()
@@ -1268,7 +1280,8 @@ def refresh_feed_profile_task(feed_id):
                             if following_collection and 'items' in following_collection:
                                 for fci in following_collection['items']:
                                     community_ap_id = fci
-                                    community = find_actor_or_create(community_ap_id, community_only=True, retry=True)
+                                    community = find_actor_or_create(community_ap_id, community_only=True, retry=True,
+                                                                     create_if_not_found=on_owner_host(community_ap_id, feed.ap_profile_id))
                                     if community and isinstance(community, Community):
                                         feed_item = FeedItem(feed_id=feed.id, community_id=community.id)
                                         session.add(feed_item)
