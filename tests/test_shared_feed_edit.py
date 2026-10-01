@@ -492,6 +492,37 @@ def _api_ctx(app, user):
             yield
 
 
+def test_edit_feed_api_refuses_to_rename_a_feed_with_subscribers(app, db_session):
+    """D696, fixed (owner ruling): renaming a feed that has subscribers is
+    refused by the server on the API arm too, before anything is written."""
+    s = _seed()
+    s.feed.subscriptions_count = 2
+    db.session.commit()
+
+    with _api_ctx(app, s.owner):
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
+            with pytest.raises(Exception, match='feed_has_subscribers'):
+                edit_feed(_api_payload(url='renamedfeed', title='Not saved'), s.feed, SRC_API, auth='Bearer x')
+
+    db.session.expire_all()
+    edited = db.session.get(Feed, s.feed.id)
+    assert edited.name == 'editablefeed'
+    assert edited.title != 'Not saved'
+
+
+def test_edit_feed_keeping_the_name_of_a_feed_with_subscribers_is_allowed(app, db_session):
+    """D696's control: the same url is not a rename, so the edit lands."""
+    s = _seed()
+    s.feed.subscriptions_count = 2
+    db.session.commit()
+
+    with _api_ctx(app, s.owner):
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
+            edit_feed(_api_payload(title='Saved'), s.feed, SRC_API, auth='Bearer x')
+
+    assert db.session.get(Feed, s.feed.id).title == 'Saved'
+
+
 @pytest.mark.parametrize('attach, incoming, expect_replaced', [
     (None, 'https://example.test/new-icon.png', True),
     ('source', 'https://example.test/old-icon.png', False),
