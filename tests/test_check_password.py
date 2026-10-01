@@ -39,7 +39,7 @@ tests/test_utils_api_auth.py).
 from datetime import datetime
 
 import pytest
-from werkzeug.security import check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from app import app_bcrypt, db
 from app.models import User
@@ -136,6 +136,23 @@ class TestTheBehaviourThatMustNotChange:
         user.set_password('the-right-password')
 
         assert user.check_password('the-wrong-password') is False
+
+    def test_edge_whitespace_is_stripped_when_a_password_is_set_and_checked(self, user):
+        """D862, fixed. Registration stripped the password while the reset, settings
+        and admin paths stored it as typed, so whether `'  pw  '` and `'pw'` were the
+        same password depended on where it was set. Both methods now strip, so every
+        path agrees (owner ruling 2026-09-30)."""
+        user.set_password('  the-right-password  ')
+
+        assert user.check_password('the-right-password') is True
+        assert user.check_password('  the-right-password\t') is True
+
+    def test_a_hash_of_an_unstripped_password_no_longer_matches(self, user):
+        """The cost the ruling accepts: a password stored with edge whitespace by a
+        path that did not strip cannot be typed any more, and needs a reset."""
+        user.password_hash = generate_password_hash(' the-old-password ')
+
+        assert user.check_password(' the-old-password ') is False
 
     def test_an_absent_hash_returns_false(self, user):
         """A row that has never had a password set -- every remote user, and
