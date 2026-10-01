@@ -2623,7 +2623,7 @@ class Post(db.Model):
     def new(cls, user: User, community: Community, request_json: dict, announce_id=None):
         from app.activitypub.util import find_language_or_create, find_language, \
             find_hashtag_or_create, \
-            find_licence_or_create, make_image_sizes, notify_about_post, find_flair_or_create
+            find_licence_or_create, make_image_sizes, notify_about_post, find_flair_or_create, host_of
         from app.utils import allowlist_html, markdown_to_html, html_to_text, microblog_content_to_title, \
             microblog_content_to_link, blocked_phrases, get_setting, \
             is_image_url, is_video_url, domain_from_url, opengraph_parse, shorten_string, fixup_url, \
@@ -2813,7 +2813,7 @@ class Post(db.Model):
                 post.image = image
             elif is_video_url(post.url) or is_video_hosting_site(post.url):
                 post.type = constants.POST_TYPE_VIDEO
-            elif post.url.startswith('https://pixelfed.social') or post.url.startswith('pixelfed.uno'):
+            elif host_of(post.url) in {'pixelfed.social', 'pixelfed.uno'}:  # as edit_post's two (D478)
                 post.type = constants.POST_TYPE_IMAGE
                 opengraph = opengraph_parse(thumbnail_url)
                 if opengraph and (opengraph.get('og:image', '') != '' or opengraph.get('og:image:url', '') != ''):
