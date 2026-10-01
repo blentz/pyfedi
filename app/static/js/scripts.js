@@ -2558,7 +2558,8 @@ function setupReactionDialog() {
                     method: 'POST',
                     body: formData,
                     headers: {
-                        'X-Requested-With': 'XMLHttpRequest'
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'x-csrftoken': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
                     }
                 })
                 .then(function(response) {

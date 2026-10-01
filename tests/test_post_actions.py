@@ -918,10 +918,40 @@ def test_setting_an_emoji_on_a_post(app, env):
 
 
 def test_setting_an_emoji_on_a_post_needs_an_account(app, env):
+    """F10, fixed: the route now carries its vote siblings' decorators, so an
+    anonymous visitor is sent to log in rather than answered 403."""
     anon, community, post, mod, author, outsider = env
 
-    assert anon.post(f'/post/{post.id}/emoji_set',
-                     data={'emoji': ':tada:'}).status_code == 403
+    response = anon.post(f'/post/{post.id}/emoji_set', data={'emoji': ':tada:'})
+
+    assert response.status_code == 302
+    assert '/auth/login' in response.headers['Location']
+
+
+@pytest.mark.parametrize('target', ['post', 'comment'])
+def test_an_unverified_account_cannot_set_an_emoji(app, env, target):
+    """F10 (permission audit), fixed: post_emoji_set and comment_emoji_set had
+    no decorators, so an account that had not verified its email -- refused by
+    the four ordinary vote routes -- could still cast an emoji upvote. They now
+    carry @login_required @validation_required @approval_required like those
+    routes; @login_required also CSRF-checks the POST."""
+    anon, community, post, mod, author, outsider = env
+    outsider.verified = False
+    db.session.commit()
+    target_id = post.id if target == 'post' else a_reply(post, author).id
+    client = as_user(app, outsider)
+    token = csrf(app, client)
+
+    with patch('app.post.routes.vote_for_post') as voted_post, \
+            patch('app.post.routes.vote_for_reply') as voted_reply:
+        response = client.post(f'/{target}/{target_id}/emoji_set',
+                               data={'emoji': ':tada:', 'csrf_token': token})
+
+    assert response.status_code == 302
+    assert '/validation_required' in response.headers['Location']
+    assert (voted_post.call_args, voted_reply.call_args) == (None, None)
+    assert client.post(f'/{target}/{target_id}/emoji_set',
+                       data={'emoji': ':tada:'}).status_code == 400
 
 
 def test_setting_an_emoji_on_a_comment(app, env):
@@ -943,11 +973,14 @@ def test_setting_an_emoji_on_a_comment(app, env):
 
 
 def test_setting_an_emoji_on_a_comment_needs_an_account(app, env):
+    """F10, fixed: as for a post, an anonymous visitor is sent to log in."""
     anon, community, post, mod, author, outsider = env
     reply = a_reply(post, author)
 
-    assert anon.post(f'/comment/{reply.id}/emoji_set',
-                     data={'emoji': ':tada:'}).status_code == 403
+    response = anon.post(f'/comment/{reply.id}/emoji_set', data={'emoji': ':tada:'})
+
+    assert response.status_code == 302
+    assert '/auth/login' in response.headers['Location']
 
 
 def test_the_voting_activity_of_a_post(app, env):
