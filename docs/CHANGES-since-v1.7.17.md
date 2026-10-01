@@ -608,6 +608,36 @@ now used, and a handler returning `None` no longer nulls the data (D811,
 `b0757c60`); `FLASK_DEBUG=true` stopped every plugin from loading
 (`2598a37c`); `/webhook` requires `WEBHOOK_SECRET` (see 2.2, `298301cb`).
 
+### Late fixes
+
+Residues of earlier fixes, found after the register was closed:
+
+- A defederation-list download that fails (unreachable, not 200, not a
+  usable list) is logged and leaves that subscription's bans untouched;
+  only a genuinely empty list clears them (D378 residue, `0b39bba7`).
+- A remote feed join that fails after its Follow was sent also sends the
+  Undo{Follow}, so the peer does not keep us subscribed (D682 residue,
+  `b75aac27`).
+- Following a user you already follow, or have asked to follow, is a no-op:
+  no second row, count or Follow (R265 residue, `ad3fab15`).
+- On a private instance a member with no RSS token gets one wherever a
+  page renders its RSS link, not only on the front page (R219 residue,
+  `4a045d98`).
+- A moderator or feed owner listed after the 50th collection entry keeps
+  the role on refresh; already correct, now pinned by tests (D225 residue,
+  `109681e2`).
+- Passkey login options give an unknown name, or an account with no
+  passkey, one stable decoy credential, so they cannot be told apart from
+  an account with one (D888 residue, `34c6da47`).
+- The community page and `do_subscribe` check bans through
+  `user_banned_from_community` alone; the bulk-import result reports every
+  ban as `user_banned` (D995 residue, `0c68500a`).
+- Inbound activity log labels: a Page arriving through the chat fallback is
+  logged as Create (D130 residue, `e9bb345b`); a Mastodon-style Block is
+  logged as User Block, a new `APLOG_USERBLOCK` (D83 residue, `9e404a38`).
+- Closed, not a defect: R223 residue (an Update omitting the More info Link
+  clears it), because an Update replaces the object.
+
 ---
 
 ## 5. New features
