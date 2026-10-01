@@ -19,8 +19,9 @@ instances are collected. Witnessing both arms needs at least one LOCAL and one
 REMOTE moderator on the same community, which is what `_seed_for_report`
 builds.
 
-`Site.admins()` AT `:381` IS REGISTER ENTRY D442, LIVE. Its behaviour differs
-where `g.admin_ids` is unset. Record what it does here; do not fix it.
+`Site.admins()` AT `:381` WAS REGISTER ENTRY D442. Since its fix it lists user
+1 with no role row, so `reporter` -- id 1 in `_seed_for_report` -- is a site
+admin here and is told about its own admin-level report.
 
 `notify_admins` AT `:320`-`:321` IS A SUBSTRING TEST over two lists, so 'dox'
 matches any word containing it. Recorded, not fixed.
@@ -638,14 +639,10 @@ class TestReportReply:
         that join filters on `user_role.c.role_id == ROLE_ADMIN` by VALUE, not
         by role name -- a `Role(name='Admin')` given whatever id the sequence
         hands out would not match and this admin would silently vanish from
-        the result set. `reporter` (id 1, no role row at all) is dropped by
-        the same inner join even though `User.id == 1` is one of the OR's
-        disjuncts, because an inner join requires a `user_role` row to exist
-        before that disjunct is ever consulted -- so `is_admin()`
-        (app/models.py:1259-1261, id==1 with no join) and `Site.admins()`
-        disagree about `reporter` here. Asserted as a SET of notified users
-        rather than a single counter so a mutant that notified the reporter
-        as well would be caught.
+        the result set. `reporter` (id 1, no role row at all) WAS dropped by
+        the same inner join (D442); since that fix `Site.admins()` agrees
+        with `is_admin()` and lists it, so it is notified as well. Asserted
+        as a SET of notified users rather than a single counter.
 
         `unread_notifications` is asserted as well as the Notification row,
         because `:388` is a separate statement a mutant can delete on its
@@ -684,9 +681,9 @@ class TestReportReply:
         db.session.refresh(admin)
         assert admin.unread_notifications == 4
         rows = db.session.query(Notification).all()
-        assert {n.user_id for n in rows} == {admin.id}
-        assert len(rows) == 1
-        notify = rows[0]
+        assert {n.user_id for n in rows} == {admin.id, s.reporter.id}  # D442: user 1 is an admin
+        assert len(rows) == 2
+        notify = next(n for n in rows if n.user_id == admin.id)
         assert notify.title == 'Suspicious content'
         assert notify.url == '/admin/reports'
         assert notify.author_id == s.reporter.id
@@ -728,7 +725,7 @@ class TestReportReply:
 
         db.session.refresh(admin)
         assert admin.unread_notifications == 4
-        assert {n.user_id for n in db.session.query(Notification).all()} == {admin.id}
+        assert {n.user_id for n in db.session.query(Notification).all()} == {admin.id, s.reporter.id}
 
     def test_an_uppercase_dox_description_notifies_site_admins(self, db_session):
         """`:321`'s SECOND disjunct -- the description half of `notify_admins`.
@@ -761,7 +758,7 @@ class TestReportReply:
 
         db.session.refresh(admin)
         assert admin.unread_notifications == 4
-        assert {n.user_id for n in db.session.query(Notification).all()} == {admin.id}
+        assert {n.user_id for n in db.session.query(Notification).all()} == {admin.id, s.reporter.id}
 
     def test_the_web_arm_notifies_admins_on_reason_five(self, db_session, app):
         """`:329`'s FIRST disjunct, `'5' in input.reasons.data`.

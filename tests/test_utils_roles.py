@@ -1,3 +1,4 @@
+from app.models import Site
 from app.utils import role_access, user_access
 from tests.factories import grant_permission, make_instance, make_user
 
@@ -91,3 +92,17 @@ class TestRoleAccess:
 
     def test_an_unknown_role(self, app, db_session):
         assert role_access('ban users', 999999) is False
+
+
+class TestSiteAdmins:
+    def test_user_one_with_no_role_row_is_an_admin(self, app, db_session):
+        """D442, fixed: `Site.admins()` inner-joined `user_role` before its
+        `User.id == 1` disjunct, so the founding account with no role row --
+        an admin by `is_admin()` and by `g.admin_ids` -- was dropped. It is now
+        listed, and a role-less ordinary user still is not."""
+        make_instance('test.piefed.local', software='piefed')  # user.instance_id FK target
+        founder = make_user(None, 'founder', local=True)
+        make_user(None, 'ordinary', local=True)
+        assert founder.id == 1 and founder.is_admin()
+
+        assert [u.id for u in Site.admins()] == [founder.id]
