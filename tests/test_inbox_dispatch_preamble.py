@@ -483,6 +483,28 @@ def test_an_announce_from_a_user_falls_through_to_the_user_lookup(
     assert calls[0][1] is None
 
 
+@pytest.mark.parametrize('activity_type', ['Announce', 'Accept', 'Reject'])
+def test_an_unknown_actor_refusal_is_logged_as_the_activity_received(
+        app, db_session, monkeypatch, activity_type):
+    """D63, fixed. The actor-not-found refusal always logged APLOG_ANNOUNCE,
+    so a refused Accept or Reject read as an Announce. It now names the
+    activity type that arrived.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    make_site()
+    instance = make_instance('peer.example')
+    actor = make_user(instance, 'alice')
+
+    activity = inbox_activity(actor, activity_type=activity_type)
+    activity['actor'] = 'https://peer.example/u/nobody'
+
+    dispatch(activity)
+
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Actor was not a user, feed or a community'
+    assert log.activity_type == activity_type
+
+
 # --- Task 3: the preamble's other branch, routes.py:871-892 ---
 #
 # Everything that is NOT Announce/Accept/Reject resolves exactly one actor
