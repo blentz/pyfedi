@@ -71,7 +71,7 @@ def vote_for_reply(reply_id: int, vote_direction, federate: bool, emoji: str | N
                                    recently_upvoted_replies=[], recently_downvoted_replies=[],
                                    community=reply.community)
 
-    if votes_cast_today(user.id) > current_app.config['VOTE_QUOTA']:
+    if votes_cast_today(user.id) >= current_app.config['VOTE_QUOTA']:
         abort(429)
 
     undo = reply.vote(user, vote_direction, emoji)

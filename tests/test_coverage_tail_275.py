@@ -253,7 +253,7 @@ class TestADownvoteThisInstanceWillNotApply:
     def test_a_voter_over_the_daily_quota_is_refused(self, voted, monkeypatch):
         """The INNER `else`, which is a different line with the same message -- the quota is what
         stops one account burying a community's posts in an afternoon."""
-        # `votes_cast_today(...) <= VOTE_QUOTA`, so a quota of 0 still allows the first vote.
+        # `votes_cast_today(...) < VOTE_QUOTA` (D501), so a quota of -1 refuses the first vote.
         monkeypatch.setitem(current_app.config, 'VOTE_QUOTA', -1)
         before = voted.post.down_votes
 
