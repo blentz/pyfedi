@@ -25516,5 +25516,23 @@ Every defect this register left open was fixed, closed or deferred over these tw
 
 **Closed as not defects:** D203 (restore's cross-post recompute from NULL is correct) and D599 (nothing memoizes community notification subscriptions).
 
-**Deferred by owner ruling:** D768 part 3 (merge the two Signature-header parsers), outbox paging for D173, chat-report federation (D761), the ~217 inline imports, and the permission audit's 14 deferred rows plus the rest of the original group C (DNS rebinding past the SSRF guard, the quote-authorisation table, D170, the D342/D343 leftovers, D415). Won't fix stays as ruled: D157, D354, D450, and the unanchored `peertube_embed` replace.
+**Deferred items, then resolved (2026-10-01, owner lifted the deferrals):**
 
+| Item | Fix |
+|---|---|
+| Permission audit items 1-5 (PERM-1..5) | `390b958f`, `f5f10da2`, `1db0afcc`, `fe13b0b6`, `dfdd961e`, `5bdc5935`, `af1d878f` (see the audit doc's Status section) |
+| Round 162 — DNS rebinding past the SSRF guard | `edee89f0` (`app/pinned_http.py`: connect to the checked address, Host/SNI kept, redirects re-checked); NNTP image fetch routed through it `b678e44e` |
+| Round 205 — quote authorisation table | `8e83df63` (`QuoteAuthorization`, migration `8c1d4e7f2a90`) |
+| D170 — feed moderators with a null/dangling owner | `bea245d2` |
+| D342 / D343 residues — stats task commits and stale active counts | `bd3d62c1` |
+| D415 — uncast single-choice poll vote | `f2bf6173` |
+| D173 — outbox paging | `64831764`; backfill walks pages to 50 items `818a53ee` |
+| D761 — chat reports federated as a Flag | `4275f499`, `0d0f3353` |
+| D768 part 3 — two Signature-header parsers | `041f8d94` |
+| Inline imports (216) | 131 hoisted, 16 kept `# lazy:`, 69 kept `# cycle:`; ratchet `tests/test_no_inline_imports.py` (`278a0065`) |
+| Import cycles under `app.shared` and `config` | `2c67f718`, `23dfdc71`; the fresh-interpreter probe now covers every module under `app/` |
+| D157 (won't-fix) | confirmed unreachable over ActivityPub since D156, pinned `d72d8ec0` |
+| D450 (won't-fix) | dead guard removed `5484a9a1` |
+| Round 251 (won't-fix) — unanchored `peertube_embed` replace | `a15a281f` |
+
+**Still deliberate:** D354 (per-row commits in loops) stays as ruled.
