@@ -169,7 +169,7 @@ def invite_with_chat(community_id: int, handle: str, src, auth=None):
                 message = flask.render_template('email/invite_to_community.txt', user=user, community=community,
                                           host=current_app.config['SERVER_NAME'])
 
-        reply = send_message(message, conversation.id)
+        reply = send_message(message, conversation.id, user)
 
         return 1 if reply else 0
     return 0
