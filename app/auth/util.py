@@ -26,6 +26,7 @@ from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addre
     finalize_user_setup, get_request, get_setting, gibberish, \
     ip_address, is_safe_redirect_target, markdown_to_html, render_template, safe_redirect_target, user_cookie_banned, \
     user_ip_banned, role_access, actor_contains_blocked_words, get_site_as_dict, user_name_is_taken
+from app.shared.tasks import task_selector
 
 
 ALPHABET = string.ascii_letters + string.digits
@@ -408,7 +409,6 @@ def handle_user_application(user, form):
     db.session.commit()
 
     if get_setting("ban_check_servers", ""):
-        from app.shared.tasks import task_selector
 
         task_selector("check_application", application_id=application.id)
 
