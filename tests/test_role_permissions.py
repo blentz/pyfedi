@@ -28,7 +28,7 @@ import pytest
 from sqlalchemy import text
 
 from app import cache, db
-from app.constants import EDITABLE_ROLE_IDS, ROLE_PERMISSIONS
+from app.constants import EDITABLE_ROLE_IDS, ROLE_ADMIN_NAME, ROLE_PERMISSIONS, ROLE_STAFF_NAME
 from app.models import Role, RolePermission, user_role
 from app.utils import role_access, user_access
 from tests.factories import make_instance, make_user
@@ -94,6 +94,37 @@ def test_the_vocabulary_has_no_duplicates():
     """A duplicate would render two checkboxes with the same `name`, and the
     second would silently win."""
     assert len(ROLE_PERMISSIONS) == len(set(ROLE_PERMISSIONS))
+
+
+def _role_name_literals_in_source():
+    """Every `'Admin'`/`'Staff'` literal used as a role name in `app/`: compared
+    against something (`role.name == 'Admin'`) or passed as `name=` (`Role(name=
+    'Admin')`, `filter_by(name='Admin')`). Display strings like `_('Admin')` are
+    neither, so they are not collected."""
+    names = {'Admin', 'Staff'}
+    found = []
+    for path in sorted(APP_ROOT.rglob('*.py')):
+        for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
+            if isinstance(node, ast.Compare):
+                operands = [node.left, *node.comparators]
+            elif isinstance(node, ast.Call):
+                operands = [k.value for k in node.keywords if k.arg == 'name']
+            else:
+                continue
+            for operand in operands:
+                if isinstance(operand, ast.Constant) and operand.value in names:
+                    found.append(f'{path.relative_to(APP_ROOT.parent)}:{node.lineno}')
+    return found
+
+
+def test_role_names_are_spelled_only_through_their_constants():
+    """D965, fixed: `is_admin()` and `is_staff()` matched the role NAMES 'Admin'
+    and 'Staff' as bare literals, and the CLI seeded and looked them up the same
+    way, with no constant behind them -- one rename away from every admin
+    silently losing `is_admin()`. They now go through ROLE_ADMIN_NAME and
+    ROLE_STAFF_NAME, and this ratchet keeps a new literal from creeping back."""
+    assert (ROLE_ADMIN_NAME, ROLE_STAFF_NAME) == ('Admin', 'Staff')
+    assert _role_name_literals_in_source() == []
 
 
 # --------------------------------------------------------------------------

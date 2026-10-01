@@ -38,7 +38,7 @@ from app.constants import SUBSCRIPTION_NONMEMBER, SUBSCRIPTION_MEMBER, SUBSCRIPT
     SUBSCRIPTION_BANNED, SUBSCRIPTION_PENDING, NOTIF_USER, NOTIF_COMMUNITY, NOTIF_TOPIC, NOTIF_POST, NOTIF_REPLY, \
     ROLE_ADMIN, ROLE_STAFF, NOTIF_FEED, NOTIF_DEFAULT, NOTIF_REPORT, NOTIF_MENTION, POST_STATUS_REVIEWING, \
     POST_STATUS_PUBLISHED, POST_TYPE_VIDEO, INVITE_MEMBERS_ONLY, INVITE_MODS_ONLY, INVITE_OWNER_ONLY, POST_TYPE_GALLERY, \
-    POST_TYPE_IMAGE
+    POST_TYPE_IMAGE, ROLE_ADMIN_NAME, ROLE_STAFF_NAME
 
 
 def utcnow(naive=True):
@@ -1961,14 +1961,14 @@ class User(UserMixin, db.Model):
         if self.id == 1:
             return True
         for role in self.roles:
-            if role.name == 'Admin':
+            if role.name == ROLE_ADMIN_NAME:
                 return True
         return False
 
     @cache.memoize(timeout=30)
     def is_staff(self):
         for role in self.roles:
-            if role.name == 'Staff':
+            if role.name == ROLE_STAFF_NAME:
                 return True
         return False
 
