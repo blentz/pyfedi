@@ -699,11 +699,11 @@ def feed_unsubscribe(actor):
                 if '@' in actor:  # this is a remote feed, so activitypub is needed
                     if not feed.instance.gone_forever:
                         follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{gibberish(15)}"
-                        if feed.instance.domain == 'ovo.st':
-                            join_request = FeedJoinRequest.query.filter_by(user_id=current_user.id,
-                                                                           feed_id=feed.id).first()
-                            if join_request:
-                                follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{join_request.uuid}"
+                        # D89 (owner ruling): the original Follow's id, for every peer rather than only ovo.st
+                        join_request = FeedJoinRequest.query.filter_by(user_id=current_user.id,
+                                                                       feed_id=feed.id).first()
+                        if join_request:
+                            follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{join_request.uuid}"
                         undo_id = f"{current_app.config['SERVER_URL']}/activities/undo/" + gibberish(15)
                         follow = {
                             "actor": current_user.public_url(),

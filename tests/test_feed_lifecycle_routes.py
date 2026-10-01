@@ -906,10 +906,9 @@ def test_unsubscribing_from_a_remote_feed_sends_a_signed_undo(app, db_session):
     """
     instance, owner, member = _seed()
     feed, remote_instance = _remote_feed_membership(member)
-    # A stored join request on an instance that is NOT ovo.st. Its uuid must be
-    # ignored: only ovo.st reuses it (:623-627), and without this row a mutant
-    # that ran the ovo.st branch for everyone behaves identically, because
-    # there is no row for it to find.
+    # A stored join request on an instance that is NOT ovo.st. D89, fixed
+    # (owner ruling): its uuid, the original Follow's id, is reused for every
+    # peer, where only ovo.st used to get it.
     stored = FeedJoinRequest(user_id=member.id, feed_id=feed.id)
     db.session.add(stored)
     db.session.commit()
@@ -922,7 +921,7 @@ def test_unsubscribing_from_a_remote_feed_sends_a_signed_undo(app, db_session):
 
     assert response.status_code == 302
     assert send.call_count == 1
-    assert str(stored_uuid) not in send.call_args.args[1]['object']['id']
+    assert send.call_args.args[1]['object']['id'].endswith(f'/activities/follow/{stored_uuid}')
     url, activity, private_key, key_id = send.call_args.args
     assert url == 'https://remote.example/f/remotefeed/inbox'
     assert private_key == 'the-members-private-key'
@@ -953,18 +952,16 @@ def test_unsubscribing_from_a_dead_remote_instance_sends_nothing(app, db_session
 
 
 @pytest.mark.parametrize('with_join_request', [True, False])
-def test_unsubscribing_from_ovo_st_reuses_the_stored_follow_id(app, db_session,
-                                                               with_join_request):
-    """:623-627, the one instance singled out by domain.
-
-    ovo.st matches Follow activities by the id we first sent, so the Undo has
-    to carry that id rather than a fresh one -- and only when the row is still
-    there. The two rows are the stored uuid and the fallback, and the uuid is
-    read from the database before the call, because the row is deleted by the
-    time the assertions run.
+def test_unsubscribing_reuses_the_stored_follow_id(app, db_session, with_join_request):
+    """D89, fixed (owner ruling): this was ovo.st alone, singled out by
+    domain. A peer that matches an Undo to the Follow by the id we first sent
+    needs that id rather than a fresh one, so every peer now gets it whenever
+    the row is still there. The two rows are the stored uuid and the
+    fallback, and the uuid is read from the database before the call, because
+    the row is deleted by the time the assertions run.
     """
     instance, owner, member = _seed()
-    feed, remote_instance = _remote_feed_membership(member, domain='ovo.st')
+    feed, remote_instance = _remote_feed_membership(member)
     stored_uuid = None
     if with_join_request:
         request_row = FeedJoinRequest(user_id=member.id, feed_id=feed.id)

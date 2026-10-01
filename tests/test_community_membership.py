@@ -1130,18 +1130,18 @@ def test_an_owner_is_told_to_hand_over_first(app, world):
     assert 'make someone else the owner' in flashed.call_args.args[0]
 
 
-def test_ovo_st_reuses_the_original_follow_id(app, world):
-    """A named-instance workaround: ovo.st matches an Undo to the Follow by id,
-    so the Undo has to carry the ORIGINAL request's uuid rather than a fresh
-    one. Pinned because it is the kind of special case that looks like dead
-    code and is not."""
+def test_unsubscribing_reuses_the_original_follow_id(app, world):
+    """D89, fixed (owner ruling). A peer that matches an Undo to the Follow by
+    id needs the ORIGINAL request's uuid rather than a fresh one; that was a
+    workaround for ovo.st alone, named by domain. Every peer now gets it
+    whenever the join request exists -- this one is not ovo.st."""
     community, joiner, founder = world
-    ovo = instance('ovo.st', 'lemmy')
-    ovo.gone_forever = False
-    remote = make_community('theirs', host='ovo.st')
-    remote.ap_id = 'theirs@ovo.st'
-    remote.instance_id = ovo.id
-    remote.ap_inbox_url = 'https://ovo.st/c/theirs/inbox'
+    peer = instance('remote.example', 'lemmy')
+    peer.gone_forever = False
+    remote = make_community('theirs', host='remote.example')
+    remote.ap_id = 'theirs@remote.example'
+    remote.instance_id = peer.id
+    remote.ap_inbox_url = 'https://remote.example/c/theirs/inbox'
     joiner.private_key = 'a private key'
     db.session.commit()
     make_community_member(joiner, remote)

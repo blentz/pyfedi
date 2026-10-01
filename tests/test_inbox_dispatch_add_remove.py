@@ -1267,24 +1267,20 @@ def test_remove_sends_nothing_when_the_remote_instance_is_gone_forever(app, db_s
     assert community.subscriptions_count == 0
 
 
-def test_remove_ovo_st_uses_the_join_requests_uuid_as_the_follow_id(app, db_session, monkeypatch):
-    """routes.py's current :1505-1509: when `community_to_remove.instance.
-    domain == 'ovo.st'`, the generated `follow_id` is replaced with one built
-    from the member's CommunityJoinRequest.uuid, if such a row exists.
+def test_remove_uses_the_join_requests_uuid_as_the_follow_id(app, db_session, monkeypatch):
+    """D89, fixed (owner ruling). The Undo's Follow id was the member's
+    CommunityJoinRequest.uuid -- the id the original Follow was sent with --
+    only when `community_to_remove.instance.domain == 'ovo.st'`, a hardcoded
+    peer. Every peer now gets it whenever the join request exists.
 
-    'ovo.st' is a hardcoded literal naming one specific peer instance --
-    registered here as a finding, per this task's instructions, NOT fixed.
-
-    The Instance row for 'ovo.st' is created FIRST (occupying id=1, which
-    make_community() hardcodes Community.instance_id to), independently of
-    the host the community's own AP identity is published on
-    (`_seed_remote_removable_feed_community`'s `instance_domain` parameter) --
-    otherwise `community_to_remove.instance.domain` would read back
-    whatever `host` was, not 'ovo.st'.
+    The community's instance is deliberately not ovo.st: the Instance row
+    is created FIRST (occupying id=1, which make_community() hardcodes
+    Community.instance_id to) under a different domain from the host the
+    community's AP identity is published on.
     """
     instance, community, feed = _seed_remote_removable_feed_community(
-        host='peer.example', name='ovostjoincomm', instance_domain='ovo.st')
-    assert community.instance.domain == 'ovo.st'
+        host='peer.example', name='ovostjoincomm', instance_domain='other-peer.example')
+    assert community.instance.domain == 'other-peer.example'
 
     owner = make_user(instance, 'feedowner', local=True)
     feed.user_id = owner.id
@@ -1311,19 +1307,19 @@ def test_remove_ovo_st_uses_the_join_requests_uuid_as_the_follow_id(app, db_sess
     assert body['object']['id'] == expected_follow_id
 
 
-def test_remove_ovo_st_keeps_the_generated_follow_id_when_no_join_request_exists(
+def test_remove_keeps_the_generated_follow_id_when_no_join_request_exists(
         app, db_session, monkeypatch):
-    """routes.py's current :1505-1509, the other half: 'ovo.st' with NO
-    CommunityJoinRequest row for this user/community pair -- the generated
-    `follow_id` (routes.py's current :1504, `gibberish(15)`) is kept.
+    """D89's other half: with NO CommunityJoinRequest row for this
+    user/community pair there is no original id to reuse, so the generated
+    `follow_id` (`gibberish(15)`) is kept.
     `gibberish` is patched at its `activitypub_routes` binding site (the
     module imports it by name, `from app.utils import gibberish, ...`) to a
     fixed value so the generated id is a known, assertable string rather
     than an unpredictable random one.
     """
     instance, community, feed = _seed_remote_removable_feed_community(
-        host='peer.example', name='ovostnojoincomm', instance_domain='ovo.st')
-    assert community.instance.domain == 'ovo.st'
+        host='peer.example', name='ovostnojoincomm', instance_domain='other-peer.example')
+    assert community.instance.domain == 'other-peer.example'
 
     owner = make_user(instance, 'feedowner', local=True)
     feed.user_id = owner.id

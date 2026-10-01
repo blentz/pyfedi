@@ -1103,12 +1103,11 @@ def test_feed_remove_community_sends_an_undo_follow_for_a_remote_community(app, 
     assert send.call_args.args[3] == member.public_url() + '#main-key'
 
 
-def test_feed_remove_community_reuses_the_join_request_uuid_for_one_named_instance(app, db_session):
-    """:464-468. A hardcoded instance-domain special case, registered as a hazard.
-
-    The control is the test above, whose instance is not ovo.st and whose
-    follow_id is therefore generated. Here the stored join request's uuid is
-    reused instead, which is the only observable difference between the arms.
+def test_feed_remove_community_reuses_the_join_request_uuid(app, db_session):
+    """D89, fixed (owner ruling). The stored join request's uuid -- the id the
+    original Follow was sent with -- was reused only when the instance was
+    the hardcoded 'ovo.st'. Every peer now gets it whenever the row exists;
+    the instance here is the ordinary one `_seed` makes.
 
     CommunityJoinRequest.uuid is a UUID(as_uuid=True) column defaulting to
     uuid.uuid4 (app/models.py:3631), NOT a string -- so the row is built by
@@ -1120,16 +1119,15 @@ def test_feed_remove_community_reuses_the_join_request_uuid_for_one_named_instan
     :489 deletes this same CommunityJoinRequest row inside
     _feed_remove_community, so reading `jr.uuid` post-call touches an expired
     ORM object and raises sqlalchemy.orm.exc.ObjectDeletedError instead of
-    ever reaching the comparison -- a crash, not a kill, for a mutant on
-    :464's 'ovo.st' literal. Capturing the value first lets that mutant die
-    by a clean AssertionError on the endswith check below.
+    ever reaching the comparison -- a crash, not a kill, for a mutant that
+    skips the lookup. Capturing the value first lets that mutant die by a
+    clean AssertionError on the endswith check below.
     """
     s = _seed()
-    s.instance.domain = 'ovo.st'
-    s.community.ap_id = 'wiring@ovo.st'
-    s.community.ap_profile_id = 'https://ovo.st/c/wiring'
-    s.community.ap_public_url = 'https://ovo.st/c/wiring'
-    s.community.ap_inbox_url = 'https://ovo.st/inbox'
+    s.community.ap_id = 'wiring@remote.example'
+    s.community.ap_profile_id = 'https://remote.example/c/wiring'
+    s.community.ap_public_url = 'https://remote.example/c/wiring'
+    s.community.ap_inbox_url = 'https://remote.example/inbox'
     s.instance.gone_forever = False
     make_feed_item(s.feed, s.community)
     s.feed.num_communities = 1
@@ -1151,21 +1149,17 @@ def test_feed_remove_community_reuses_the_join_request_uuid_for_one_named_instan
     assert 'NOTTHEUUID' not in undo['object']['id']
 
 
-def test_feed_remove_community_generates_a_follow_id_on_ovo_st_with_no_stored_join_request(app, db_session):
-    """:467's False arm -- ovo.st's own special case, but with no row to reuse.
-
-    Same ovo.st setup as the test above, minus the CommunityJoinRequest row.
-    :465-466's lookup then returns None, :467 is False, and :464's generated
-    follow_id (built from the patched gibberish) is what actually reaches the
-    Follow/Undo -- the mirror image of the row-4 test's positive case, and
-    the only way to observe :467's guard rather than just :464's assignment.
+def test_feed_remove_community_generates_a_follow_id_with_no_stored_join_request(app, db_session):
+    """D89's other half: the same setup as the test above, minus the
+    CommunityJoinRequest row. The lookup returns None and the generated
+    follow_id (built from the patched gibberish) is what reaches the
+    Follow/Undo.
     """
     s = _seed()
-    s.instance.domain = 'ovo.st'
-    s.community.ap_id = 'wiring@ovo.st'
-    s.community.ap_profile_id = 'https://ovo.st/c/wiring'
-    s.community.ap_public_url = 'https://ovo.st/c/wiring'
-    s.community.ap_inbox_url = 'https://ovo.st/inbox'
+    s.community.ap_id = 'wiring@remote.example'
+    s.community.ap_profile_id = 'https://remote.example/c/wiring'
+    s.community.ap_public_url = 'https://remote.example/c/wiring'
+    s.community.ap_inbox_url = 'https://remote.example/inbox'
     s.instance.gone_forever = False
     make_feed_item(s.feed, s.community)
     s.feed.num_communities = 1
