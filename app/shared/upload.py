@@ -37,7 +37,6 @@ def process_upload(image_file, destination='posts', user: User | None = None):
     final_place = os.path.join(directory, new_filename + file_ext)
     image_file.seek(0)
     image_file.save(final_place)
-    file_size = os.path.getsize(final_place)
 
     final_ext = file_ext.lower()  # track file extension for conversion
 
