@@ -364,6 +364,18 @@ def test_bare_content_is_wrapped_and_allowlisted(app, db_session, redis_lock_onl
     assert reply.body == 'hello there'
 
 
+def test_wrapping_content_leaves_the_callers_document_unchanged(app, db_session, redis_lock_only_double):
+    """D139, fixed: the wrap used to be written back into
+    request_json['object']['content'], the nested dict the caller still
+    holds. It is now built in a local."""
+    community, post, replier = _seed_scenario()
+    document = _reply_doc(content='hello there')
+
+    _create(community, post, replier, document=document)
+
+    assert document['object']['content'] == 'hello there'
+
+
 def test_already_wrapped_content_is_not_double_wrapped(app, db_session, redis_lock_only_double):
     """The `startswith('<p>')` disjunct of the wrap guard."""
     community, post, replier = _seed_scenario()

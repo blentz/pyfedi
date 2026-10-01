@@ -2885,9 +2885,11 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
 
         body = body_html = ''
         if 'content' in request_json['object'] and request_json['object']['content'] is not None:  # Kbin, Mastodon, etc provide their posts as html
-            if not (request_json['object']['content'].startswith('<p>') or request_json['object']['content'].startswith('<blockquote>')):
-                request_json['object']['content'] = '<p>' + request_json['object']['content'] + '</p>'
-            body_html = allowlist_html(request_json['object']['content'])
+            # A local, not request_json['object']['content']: that dict is the caller's (D139)
+            content = request_json['object']['content']
+            if not (content.startswith('<p>') or content.startswith('<blockquote>')):
+                content = '<p>' + content + '</p>'
+            body_html = allowlist_html(content)
             source_markdown = markdown_source(request_json['object'])  # D1346
             if source_markdown is not None:
                 body = source_markdown
@@ -3302,9 +3304,11 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
     from app import redis_client
     with redis_client.lock(f"lock:post_reply:{reply.id}", timeout=10, blocking_timeout=6):
         if 'content' in request_json['object'] and request_json['object']['content'] is not None:   # Kbin, Mastodon, etc provide their posts as html
-            if not (request_json['object']['content'].startswith('<p>') or request_json['object']['content'].startswith('<blockquote>')):
-                request_json['object']['content'] = '<p>' + request_json['object']['content'] + '</p>'
-            reply.body_html = allowlist_html(request_json['object']['content'])
+            # A local, not request_json['object']['content']: that dict is the caller's (D139)
+            content = request_json['object']['content']
+            if not (content.startswith('<p>') or content.startswith('<blockquote>')):
+                content = '<p>' + content + '</p>'
+            reply.body_html = allowlist_html(content)
             source_markdown = markdown_source(request_json['object'])  # D1346
             if source_markdown is not None:
                 reply.body = source_markdown
@@ -3456,9 +3460,11 @@ def update_post_from_activity(post: Post, request_json: dict):
                 post.body = request_json['object']['content']
                 post.body_html = markdown_to_html(post.body)
             else:
-                if not (request_json['object']['content'].startswith('<p>') or request_json['object']['content'].startswith('<blockquote>')):
-                    request_json['object']['content'] = '<p>' + request_json['object']['content'] + '</p>'
-                post.body_html = allowlist_html(request_json['object']['content'])
+                # A local, not request_json['object']['content']: that dict is the caller's (D139)
+                content = request_json['object']['content']
+                if not (content.startswith('<p>') or content.startswith('<blockquote>')):
+                    content = '<p>' + content + '</p>'
+                post.body_html = allowlist_html(content)
                 post.body = html_to_text(post.body_html)
 
         # title

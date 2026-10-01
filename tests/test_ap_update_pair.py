@@ -120,6 +120,17 @@ def test_a_reply_html_content_is_wrapped_and_converted(app, db_session, redis_lo
     assert reply.body == 'hello there'
 
 
+def test_a_reply_wrap_leaves_the_callers_document_unchanged(app, db_session, redis_lock_only_double):
+    """D139, fixed: the wrap is built in a local rather than written back into
+    the caller's request_json['object']['content']."""
+    reply = _seed_reply()
+    request_json = _update(content='hello there')
+
+    update_post_reply_from_activity(reply, request_json)
+
+    assert request_json['object']['content'] == 'hello there'
+
+
 def test_a_reply_already_wrapped_content_is_not_double_wrapped(app, db_session, redis_lock_only_double):
     """The `startswith('<p>')` half of the wrap guard. Its sibling half is
     `startswith('<blockquote>')`, covered by the next test -- two disjuncts,
@@ -1557,6 +1568,17 @@ def test_a_post_bare_content_is_wrapped_and_allowlisted(app, db_session, redis_l
     update_post_from_activity(post, _update(content='bare words', type='Note'))
 
     assert post.body_html == '<p>bare words</p>'
+
+
+def test_a_post_wrap_leaves_the_callers_document_unchanged(app, db_session, redis_lock_only_double):
+    """D139, fixed: the wrap is built in a local rather than written back into
+    the caller's request_json['object']['content']."""
+    post = _seed_post()
+    request_json = _update(content='bare words', type='Note')
+
+    update_post_from_activity(post, request_json)
+
+    assert request_json['object']['content'] == 'bare words'
 
 
 def test_a_post_blockquote_content_is_not_wrapped(app, db_session, redis_lock_only_double):
