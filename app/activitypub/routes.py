@@ -29,7 +29,9 @@ from app.activitypub.util import users_total, active_half_year, active_month, lo
     post_replies_for_ap, is_vote, known_instance_id, resolve_remote_post_from_search, proactively_delete_content, \
     process_quote_boost, object_has_missing_fields, find_microblogging_community, process_announce_of_uri, \
     announce_target_uri, undo_boost
-from app.community.routes import show_community
+# The module, not the name: app.community.routes reaches this file through
+# app.activitypub.signature before show_community is defined (U-circular-import)
+import app.community.routes as community_routes
 from app.community.util import send_to_remote_instance, send_to_remote_instance_fast
 from app.constants import *
 from app.feed.routes import show_feed
@@ -621,7 +623,7 @@ def community_profile(actor):
                              f'<https://{current_app.config["SERVER_NAME"]}/c/{actor}>; rel="alternate"; type="text/html"')
             return resp
         else:  # browser request - return html
-            return show_community(community)
+            return community_routes.show_community(community)
     else:
         if is_activitypub_request():
             abort(404)

@@ -73,7 +73,10 @@ def _double_the_renderers(monkeypatch):
     calls = {}
     for name in ('show_profile', 'show_community', 'show_feed'):
         calls[name] = []
-        monkeypatch.setattr(activitypub_routes, name,
+        # show_community is reached through the module since the import cycle
+        # fix (U-circular-import), so it is doubled there.
+        owner = activitypub_routes.community_routes if name == 'show_community' else activitypub_routes
+        monkeypatch.setattr(owner, name,
                             lambda obj, _n=name: calls[_n].append(obj) or f'HTML:{_n}')
     monkeypatch.setattr(activitypub_routes, 'resolve_remote_handle', lambda actor: None)
     return calls
