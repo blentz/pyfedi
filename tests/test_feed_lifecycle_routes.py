@@ -588,9 +588,8 @@ def test_editing_a_feed_that_is_not_there_is_a_404(app, db_session):
 @pytest.mark.parametrize('subscriptions_count, expect_disabled', [(2, True), (1, False)])
 def test_the_edit_form_disables_the_url_box_once_a_feed_has_subscribers(
         app, db_session, subscriptions_count, expect_disabled):
-    """:157-158, and D696's register entry is the reason this is worth a test:
-    the guard exists only in the browser. A crafted POST renames a feed with
-    subscribers anyway, and D695 then leaves its actor url on the old name.
+    """:157-158, the browser half of D696's rule; the server half is
+    test_a_crafted_post_cannot_rename_a_feed_with_subscribers.
 
     Both rows are needed: with one, a mutant deleting the guard is invisible.
     """
@@ -721,6 +720,26 @@ def test_renaming_a_feed_on_the_web_moves_its_activitypub_urls(app, db_session):
     assert (edited.name, edited.machine_name) == ('renamedfeed', 'renamedfeed')
     assert edited.ap_profile_id == 'https://test.piefed.local/f/renamedfeed'
     assert edited.ap_outbox_url == 'https://test.piefed.local/f/renamedfeed/outbox'
+
+
+def test_a_crafted_post_cannot_rename_a_feed_with_subscribers(app, db_session):
+    """D696, fixed (owner ruling): the url box is disabled once a feed has
+    subscribers, and the server now enforces it -- a crafted POST carrying a
+    new url is refused and the feed keeps its name and actor urls."""
+    instance, owner, stranger = _seed()
+    feed = _feed(owner, subscriptions_count=2)
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()), \
+                patch('app.shared.feed.existing_communities', return_value=[]):
+            response = client.post(f'/feed/{feed.id}/edit',
+                                   data=_edit_payload(app, client, url='renamedfeed'))
+
+    assert response.status_code == 400
+    edited = db.session.get(Feed, feed.id)
+    assert edited.name == 'lifecyclefeed'
+    assert edited.ap_profile_id == 'https://test.piefed.local/f/lifecyclefeed'
 
 
 # --------------------------------------------------------------------------
