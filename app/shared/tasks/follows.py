@@ -187,6 +187,8 @@ def leave_feed(send_async, user_id, feed_id):
             join_request = session.query(FeedJoinRequest).filter_by(user_id=user_id, feed_id=feed_id).first()
             if join_request:
                 uuid = join_request.uuid
+            else:
+                uuid = gibberish(15)
             session.query(FeedJoinRequest).filter_by(user_id=user_id, feed_id=feed_id).delete()
             session.commit()
 
