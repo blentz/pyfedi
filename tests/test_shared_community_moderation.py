@@ -758,10 +758,9 @@ def test_add_mod_to_community_remote_moderator_creates_a_conversation(
     creates a fresh row regardless of `:579`'s outcome passes this test (0 ->
     1 either way) but fails the reuse test (1 -> 2 instead of staying at 1).
 
-    `send_message` is patched on `app.shared.community` -- the `from
-    app.chat.util import send_message` at this module's own top rebinds the
-    name into `app.shared.community`'s globals, so patching
-    `app.chat.util.send_message` would never be observed here. The capture
+    `send_message` is patched on `app.chat.util`: since the import cycle fix
+    (chat.util) `app.shared.community` imports that module and looks
+    `send_message` up on it at call time. The capture
     asserts the community's name appears in the message body (`:586`) and
     that the call carries the newly created conversation's id.
     """
@@ -777,7 +776,7 @@ def test_add_mod_to_community_remote_moderator_creates_a_conversation(
                          lambda task_key, **kw: task_calls.append((task_key, kw)))
     send_calls = []
     monkeypatch.setattr(
-        'app.shared.community.send_message',
+        'app.chat.util.send_message',
         lambda message, conversation_id, user=None: send_calls.append(
             (message, conversation_id, user)))
 
@@ -818,7 +817,7 @@ def test_add_mod_to_community_remote_moderator_reuses_an_existing_conversation(
                          lambda task_key, **kw: task_calls.append((task_key, kw)))
     send_calls = []
     monkeypatch.setattr(
-        'app.shared.community.send_message',
+        'app.chat.util.send_message',
         lambda message, conversation_id, user=None: send_calls.append(
             (message, conversation_id, user)))
 
