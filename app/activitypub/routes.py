@@ -138,11 +138,11 @@ def process_webfinger_request(resource):
                                                banned=False, ap_deleted_at=None).first()
             type = 'Group'
             if object is None:
-                object = Feed.query.filter_by(name=actor.strip(), ap_id=None, public=True,
+                object = Feed.query.filter_by(name=actor.strip().lower(), ap_id=None, public=True,
                                               banned=False, ap_deleted_at=None).first()
                 type = 'Feed'
     else:
-        object = Feed.query.filter_by(name=actor.strip(), ap_id=None, public=True,
+        object = Feed.query.filter_by(name=actor.strip().lower(), ap_id=None, public=True,
                                       banned=False, ap_deleted_at=None).first()
         type = 'Feed'
 

@@ -1,4 +1,6 @@
 """tests/test_webfinger.py"""
+import pytest
+
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.models import utcnow
@@ -614,17 +616,18 @@ def test_a_deleted_feed_is_not_served(app, db_session):
     assert response.status_code == 404
 
 
-def test_a_feed_name_lookup_is_case_sensitive(app, db_session):
-    """`Feed.query.filter_by(name=actor.strip(), ...)` -- no `.lower()`, unlike
-    the Community lookup's `actor.strip().lower()`. A mixed-case query against
-    a lowercase-named feed must NOT match.
+@pytest.mark.parametrize('resource', ['acct:NEWS@test.piefed.local', 'acct:~NEWS@test.piefed.local'])
+def test_a_feed_name_lookup_is_case_insensitive(app, db_session, resource):
+    """D148, fixed. Both Feed lookups compared `name=actor.strip()` with no
+    `.lower()`, unlike the User and Community lookups and feed_profile's own,
+    so a mixed-case query missed a lowercase feed. It now matches.
     """
     seed_local_actors()
     make_local_feed('news', public=True)
 
-    response = webfinger_get(app, resource='acct:NEWS@test.piefed.local')
+    response = webfinger_get(app, resource=resource)
 
-    assert response.status_code == 404
+    assert response.status_code == 200
 
 
 def test_a_tilde_resource_for_a_nonexistent_feed_is_404(app, db_session):
