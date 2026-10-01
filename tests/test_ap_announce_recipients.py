@@ -471,10 +471,9 @@ class TestTheAnnounceItself:
         return payloads[0]
 
     def test_the_inner_object_loses_its_context(self, env):
-        """`del activity['@context']`. The inner object of an Announce must not carry
-        its own context -- the envelope supplies one -- and the deletion mutates the
-        caller's dict, which is why the dispatcher passes `request_json` and not a
-        copy."""
+        """The inner object of an Announce must not carry its own context -- the
+        envelope supplies one. D138, fixed: it used to be deleted from the caller's
+        dict in place; the caller's activity is now left as it was."""
         activity = {'@context': ['https://www.w3.org/ns/activitystreams'],
                     'id': 'https://creator-host.test/activities/3',
                     'type': 'Create', 'actor': 'https://creator-host.test/u/acreator',
@@ -484,7 +483,7 @@ class TestTheAnnounceItself:
 
         assert '@context' not in announce['object']
         assert '@context' in announce
-        assert '@context' not in activity
+        assert activity['@context'] == ['https://www.w3.org/ns/activitystreams']
 
     def test_an_activity_with_no_context_is_announced_unchanged(self, env):
         """The `if '@context' in activity` guard: a peer that sent none is not a
