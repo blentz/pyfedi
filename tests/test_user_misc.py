@@ -884,14 +884,14 @@ def test_toggling_notifications_for_a_user(app, env):
 
 
 def test_toggling_notifications_for_an_unknown_user_is_a_404(app, env):
-    from sqlalchemy.orm.exc import NoResultFound
-
+    """N4, fixed: the 404 now comes from subscribe_user itself (D559), so the
+    route's `except NoResultFound` was dead and is gone; the real call is
+    made here rather than a patched one raising what it no longer raises."""
     client, viewer, other, community = env
     token = csrf(app, client)
 
-    with patch('app.user.routes.subscribe_user', side_effect=NoResultFound):
-        response = client.post('/user/9999/notification',
-                               data={'csrf_token': token})
+    response = client.post('/user/9999/notification',
+                           data={'csrf_token': token})
 
     assert response.status_code == 404
 
