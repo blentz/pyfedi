@@ -3,7 +3,7 @@ import pytest
 
 from app import db
 from app.activitypub import routes as activitypub_routes
-from app.models import Post
+from app.models import Post, UserBlock
 from tests.factories import make_community, make_post, make_user
 from tests.test_actor_profiles import seed_actors
 
@@ -636,21 +636,11 @@ def test_an_unaccepted_follow_is_not_listed(app, db_session):
     assert response.json['totalItems'] == 0
 
 
-def test_a_blocked_follower_is_not_listed(app, db_session):
-    """The outer join against UserBlock excludes a follower who has blocked the
-    ACCOUNT OWNER -- the REVERSE of what the route's own comment claims
-    ("except those that are blocked by user", which reads as the owner
-    blocking the follower).
-
-    Traced from the query: `User` is joined via `UserFollower.remote_user_id`,
-    so in each row `User` is the FOLLOWER, not the account owner. The
-    UserBlock outer-join condition is
-    `(User.id == UserBlock.blocker_id) & (UserFollower.local_user_id == UserBlock.blocked_id)`,
-    i.e. `blocker_id == follower.id` and `blocked_id == owner.id`. The
-    `UserBlock.id == None` filter then excludes exactly the rows where such a
-    block exists -- so a follower is hidden when THEY blocked the owner, not
-    when the owner blocked them. This is a genuine comment/code disagreement,
-    seeded here to match the CODE, not the comment.
+def test_a_follower_the_owner_blocked_is_not_listed(app, db_session):
+    """D182, fixed (owner ruling 2026-09-30). The outer join used to match
+    `blocker_id == follower.id`, hiding a follower who had blocked the OWNER --
+    the reverse of the route's own comment ("except those that are blocked by
+    user"). It now hides a follower the owner has blocked, as the comment says.
     """
     site, instance = seed_actors()
     alice = make_user(instance, 'alice', local=True)
@@ -658,14 +648,32 @@ def test_a_blocked_follower_is_not_listed(app, db_session):
     bob = make_user(instance, 'bob')
     db.session.commit()
     _follow(alice, bob)
-    from app.models import UserBlock
-    db.session.add(UserBlock(blocker_id=bob.id, blocked_id=alice.id))
+    db.session.add(UserBlock(blocker_id=alice.id, blocked_id=bob.id))
     db.session.commit()
 
     response = collection_get(app, '/u/alice/followers')
 
     assert response.status_code == 200
     assert response.json['totalItems'] == 0
+
+
+def test_a_follower_who_blocked_the_owner_is_still_listed(app, db_session):
+    """D182's other direction: a block the FOLLOWER made no longer hides them,
+    so the test above is sensitive to direction rather than passing either way.
+    """
+    site, instance = seed_actors()
+    alice = make_user(instance, 'alice', local=True)
+    alice.ap_followers_url = 'https://test.piefed.local/u/alice/followers'
+    bob = make_user(instance, 'bob')
+    db.session.commit()
+    _follow(alice, bob)
+    db.session.add(UserBlock(blocker_id=bob.id, blocked_id=alice.id))
+    db.session.commit()
+
+    response = collection_get(app, '/u/alice/followers')
+
+    assert response.status_code == 200
+    assert response.json['totalItems'] == 1
 
 
 def test_the_followers_collection_sets_cache_and_vary(app, db_session):
