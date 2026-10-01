@@ -3603,7 +3603,7 @@ class Post(db.Model):
 
     def peertube_embed(self):
         if self.url:
-            return self.url.replace('watch', 'embed')
+            return self.url.replace('/videos/watch/', '/videos/embed/', 1)
 
     def is_microblog(self):
         return self.microblog and self.community.name == 'microblogs'
