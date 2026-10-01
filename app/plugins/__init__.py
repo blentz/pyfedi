@@ -12,6 +12,7 @@ import traceback
 
 from .hooks import (debug_logging_enabled, fire_hook, get_registered_hooks,
                     register_plugin_hook, get_plugin_hooks)
+from .hooks import _hooks, _plugin_hooks
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,6 @@ def reload_plugin(plugin_name: str) -> bool:
         plugin_path = _loaded_plugins[plugin_name]['path']
         
         # Clean up old hooks for this plugin
-        from .hooks import _hooks, _plugin_hooks
         if plugin_name in _plugin_hooks:
             # Remove old hook registrations
             for hook_name, function_names in _plugin_hooks[plugin_name].items():
