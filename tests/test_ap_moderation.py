@@ -1018,6 +1018,32 @@ def test_a_site_ban_skips_replies_already_deleted(app, db_session, monkeypatch):
     assert post.reply_count == 5
 
 
+@pytest.mark.parametrize('ban', ['site', 'community'])
+def test_a_ban_decrements_the_posts_cross_posted_reply_count(app, db_session, monkeypatch, ban):
+    """D206, fixed: both ban-removal loops soft-delete replies and used to
+    leave post.reply_count_cross_posted alone, where delete_post_or_comment
+    decrements it for the same reply. They now decrement it too, under the
+    same bot gate and the same never-below-zero guard."""
+    _double_file_deletion(monkeypatch)
+    site, instance, community, author, moderator = seed_moderation_scene()
+    post = make_post(community, author, None, title='a post')
+    other_post = make_post(community, moderator, None, title='no count left')
+    make_post_reply(post, author)
+    make_post_reply(other_post, author)
+    post.reply_count_cross_posted = 5
+    other_post.reply_count_cross_posted = 0
+    author.bot = False
+    db.session.commit()
+
+    if ban == 'site':
+        ap_util.site_ban_remove_data(moderator.id, author)
+    else:
+        ap_util.community_ban_remove_data(moderator.id, community.id, author)
+
+    assert post.reply_count_cross_posted == 4
+    assert other_post.reply_count_cross_posted == 0
+
+
 def test_a_community_ban_deletes_only_that_communitys_content(
         app, db_session, monkeypatch):
     """`community_ban_remove_data` filters on `user_id` AND `community_id`,
