@@ -740,11 +740,12 @@ def announce_feed_add_remove_to_subscribers(action: str, feed_id: int, community
             fm_user = db.session.get(User, fm.user_id)
             if fm_user.id == feed.user_id:
                 continue
-            if fm_user.is_local() and fm_user.feed_auto_follow:
-                # user is local so lets auto-subscribe them to the community
-                from app.community.routes import do_subscribe
-                actor = community.ap_id if community.ap_id else community.name
-                do_subscribe(actor, fm_user.id, joined_via_feed=True)
+            if fm_user.is_local():
+                # user is local so lets auto-subscribe them to the community, if they opted in
+                if fm_user.feed_auto_follow:
+                    from app.community.routes import do_subscribe
+                    actor = community.ap_id if community.ap_id else community.name
+                    do_subscribe(actor, fm_user.id, joined_via_feed=True)
                 continue
 
             # if we get here the feedmember is a remote user

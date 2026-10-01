@@ -1318,52 +1318,14 @@ def test_feed_remove_community_dispatches_the_announce_asynchronously_when_not_d
     assert announce.call_count == 0
 
 
-def test_announce_add_remove_delivers_to_an_opted_out_local_member(app, db_session):
-    """PINS CURRENT BEHAVIOUR, NOT DESIRED BEHAVIOUR. Read this before
-    "fixing" anything it asserts.
-
-    WHAT THIS RECORDS. :556's `continue` sits INSIDE :551's body. Before this
-    round's P2 fix (D656) :551 read `if fm_user.is_local():`, so EVERY local
-    member hit the `continue` and no local member could reach the
-    remote-delivery block. P2 narrowed the condition to
-    `is_local() and feed_auto_follow`, which suppresses the unwanted
-    do_subscribe for an opted-out local member -- and also routes that member
-    PAST the `continue` and into :559-561, so the task attempts a federated
-    Announce POST aimed at a local user's own instance. This test asserts
-    that fall-through happens, because it does.
-
-    DESIRED BEHAVIOUR IS THE OPPOSITE, and the remedy is structural rather
-    than another condition: hoist the skip, so that
-    `if fm_user.is_local(): <consent gate around do_subscribe>; continue` --
-    every local member skips remote delivery unconditionally while the
-    feed_auto_follow gate P2 added stays exactly where it is. That shape is
-    what the federated twin implies: app/activitypub/routes.py:1436-1444
-    carries the SAME condition but its loop body simply ENDS at :1444, with
-    no `continue` and no delivery block, so there is nothing to fall into.
-
-    THE REMEDY WAS DEFERRED DELIBERATELY, NOT OVERLOOKED. It was found by the
-    final whole-branch review, after the round's three production changes had
-    each been pinned, inverted, reviewed and measured. A fourth production
-    edit at that point reopens both the coverage measurement and the 105-mutant
-    pass with no review budget left, on a host that could not run the full
-    suite. Registered at D670 for the module's rounds B and C to act on;
-    change this test's assertions only together with that repair.
-
-    IT IS LATENT IN PRODUCTION, WHICH IS WHY DEFERRING IT IS AFFORDABLE.
-    app/cli.py:142-143 creates the local instance as
-    `Instance(domain=app.config['SERVER_NAME'], software='PieFed')` with no
-    `inbox`, and the only writers of Instance.inbox sit inside
-    new_instance_profile_task, which runs only for a newly-discovered REMOTE
-    server. So instance.inbox is NULL for instance 1 and :560 short-circuits
-    before send_post_request. This test sets `inbox` BY HAND -- that
-    assignment is the whole reason the path is visible here and invisible
-    everywhere else in this file, including
-    test_announce_add_remove_honours_feed_auto_follow_for_local_members,
-    whose members sit on a make_instance(...) row that leaves inbox NULL.
-
-    The do_subscribe assertion is the control that keeps this from being an
-    emptiness claim: the member is genuinely opted out (subscribe is never
-    called), and the delivery still happens.
+def test_announce_add_remove_does_not_deliver_to_an_opted_out_local_member(app, db_session):
+    """D670, fixed: the local-member `continue` sat inside the
+    `is_local() and feed_auto_follow` branch, so a local member who had opted
+    out of auto-follow fell through into the remote-delivery block and was
+    sent a federated Announce at their own instance (latent: the local
+    instance normally has no inbox, set by hand here). The skip is now hoisted
+    so every local member skips delivery; the consent gate on do_subscribe is
+    unchanged, so the member is still not subscribed.
     """
     s = _seed()
     optout = make_user(s.instance, 'optoutlocal', local=True)
@@ -1380,8 +1342,7 @@ def test_announce_add_remove_delivers_to_an_opted_out_local_member(app, db_sessi
                 announce_feed_add_remove_to_subscribers('Add', s.feed.id, s.community.id)
 
     assert subscribe.call_count == 0
-    assert send.call_count == 1
-    assert send.call_args.args[0] == 'https://optout.piefed.local/inbox'
+    assert send.call_count == 0
 
 
 # ==========================================================================
