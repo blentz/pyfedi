@@ -8,7 +8,6 @@ from flask import redirect, url_for, flash, request, make_response, session, cur
 from flask_babel import _, lazy_gettext as _l
 from flask_login import logout_user, current_user
 from sqlalchemy import desc, or_, text, asc
-from sqlalchemy.orm.exc import NoResultFound
 
 from app import db, cache, celery
 from app.activitypub.signature import default_context, send_post_request
@@ -836,10 +835,7 @@ def user_settings_import_export():
 @bp.route('/user/<int:user_id>/notification', methods=['GET', 'POST'])
 @login_required
 def user_notification(user_id: int):
-    try:
-        return subscribe_user(user_id, None, SRC_WEB)
-    except NoResultFound:
-        abort(404)
+    return subscribe_user(user_id, None, SRC_WEB)
 
 
 @bp.route('/u/<actor>/ban', methods=['GET', 'POST'])
