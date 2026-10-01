@@ -38,6 +38,7 @@ from app.constants import SUBSCRIPTION_NONMEMBER, SUBSCRIPTION_MEMBER, SUBSCRIPT
     NOTIF_FEED, NOTIF_DEFAULT, NOTIF_REPORT, NOTIF_MENTION, POST_STATUS_REVIEWING, \
     POST_STATUS_PUBLISHED, POST_TYPE_VIDEO, INVITE_MEMBERS_ONLY, INVITE_MODS_ONLY, INVITE_OWNER_ONLY, ROLE_ADMIN_NAME, \
     ROLE_STAFF_NAME
+import app as app_pkg
 
 
 def utcnow(naive=True):
@@ -47,8 +48,7 @@ def utcnow(naive=True):
 
 
 def votes_cast_today(user_id: int) -> int:
-    from app import redis_client
-    num = redis_client.get(f'votes_cast_{date.today()}_{user_id}')
+    num = app_pkg.redis_client.get(f'votes_cast_{date.today()}_{user_id}')
     if num is None:
         return 0
     return int(num)
@@ -355,7 +355,7 @@ def property_value_fields(attachment, limit=1024):
     """
     if not isinstance(attachment, list):
         return []
-    from app.utils import mastodon_extra_field_link
+    from app.utils import mastodon_extra_field_link  # cycle: app.utils imports from this module
 
     fields = []
     for entry in attachment:
@@ -1002,7 +1002,7 @@ class File(db.Model):
         # client supplied -- and an extension sniffed off `urlparse(url).path` is the
         # sender's to choose, because for a `javascript:` url the whole string after the
         # colon IS the path. `admin/media.html:34` gates a link on this method.
-        from app.utils import has_unsafe_url_scheme
+        from app.utils import has_unsafe_url_scheme  # cycle: app.utils imports from this module
         common_image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp', '.avif', '.svg+xml',
                                    '.svg+xml; charset=utf-8']
         url = self.thumbnail_url()
@@ -1117,7 +1117,7 @@ class File(db.Model):
                     purge_from_cache.append(self.source_url)
 
         if len(s3_files_to_delete) > 0:
-            from app.shared.tasks.maintenance import delete_from_s3
+            from app.shared.tasks.maintenance import delete_from_s3  # cycle: app.shared.tasks.maintenance imports from this module
             if current_app.debug:
                 delete_from_s3(s3_files_to_delete)
             else:
@@ -1463,7 +1463,7 @@ class Community(db.Model):
 
     def humanize_subscribers(self, total=True, **kwargs):
         """Return an abbreviated, human readable number of followers (e.g. 1.2k instead of 1215)"""
-        from app.utils import humanize_number
+        from app.utils import humanize_number  # cycle: app.utils imports from this module
 
         if "value" in kwargs:
             subscribers = kwargs.get("value")
@@ -1587,7 +1587,6 @@ class Community(db.Model):
         return result
 
     def delete_dependencies(self):
-        from app import redis_client
         # One flush for every post in the community rather than one per file, which
         # is what `purge_cdn=False` was standing in for (D1350).
         cache_urls = []
@@ -1596,7 +1595,7 @@ class Community(db.Model):
             db.session.delete(rss_feed)
             db.session.commit()
         for post in db.session.query(Post).filter_by(community_id=self.id):
-            with redis_client.lock(f"lock:post:{post.id}", timeout=30, blocking_timeout=30):
+            with app_pkg.redis_client.lock(f"lock:post:{post.id}", timeout=30, blocking_timeout=30):
                 post.delete_dependencies(cache_urls=cache_urls)
                 db.session.delete(post)
                 db.session.commit()
@@ -1899,7 +1898,7 @@ class User(UserMixin, db.Model):
         return ''
 
     def community_theme_allowed(self,community_id:int) ->bool:
-        from app.community.util import get_community_theme_allowed
+        from app.community.util import get_community_theme_allowed  # cycle: app.community.util imports from this module
         return get_community_theme_allowed(community_id,self.id)
 
     def filesize(self):
@@ -2618,9 +2617,11 @@ class Post(db.Model):
 
     @classmethod
     def new(cls, user: User, community: Community, request_json: dict, announce_id=None):
+        # cycle: app.activitypub.util imports from this module
         from app.activitypub.util import find_language_or_create, find_language, \
             find_hashtag_or_create, \
             find_licence_or_create, make_image_sizes, notify_about_post, find_flair_or_create, host_of
+        # cycle: app.utils imports from this module
         from app.utils import allowlist_html, markdown_to_html, html_to_text, microblog_content_to_title, \
             microblog_content_to_link, blocked_phrases, get_setting, \
             is_image_url, is_video_url, domain_from_url, opengraph_parse, shorten_string, fixup_url, \
@@ -2796,7 +2797,7 @@ class Post(db.Model):
                 # PDQ hash of image
                 image_hash = None
                 if current_app.config['IMAGE_HASHING_ENDPOINT']:
-                    from app.utils import retrieve_image_hash, hash_matches_blocked_image
+                    from app.utils import retrieve_image_hash, hash_matches_blocked_image  # cycle: app.utils imports from this module
                     image_hash = retrieve_image_hash(post.url)
                     if image_hash and hash_matches_blocked_image(image_hash):
                         return None
@@ -2984,7 +2985,7 @@ class Post(db.Model):
                 language = find_language(next(iter(request_json['object']['contentMap'])))
                 post.language_id = language.id if language else None
             else:
-                from app.utils import site_language_id
+                from app.utils import site_language_id  # cycle: app.utils imports from this module
                 post.language_id = site_language_id()
             if 'licence' in request_json['object'] and isinstance(request_json['object']['licence'], dict) \
                     and 'name' in request_json['object']['licence']:
@@ -3055,7 +3056,7 @@ class Post(db.Model):
                                                     'author_user_name': author.ap_id if author.ap_id else author.user_name,
                                                     }
                                     # import here to avoid circular import errors
-                                    from app.utils import get_recipient_language
+                                    from app.utils import get_recipient_language  # cycle: app.utils imports from this module
                                     with force_locale(get_recipient_language(recipient.id)):
                                         notification = Notification(user_id=recipient.id, title=gettext(f"You have been mentioned in post {post.id}"),
                                                                     url=f"{current_app.config['SERVER_URL']}/post/{post.id}",
@@ -3213,7 +3214,7 @@ class Post(db.Model):
             # instance reaches this line, which is why it survived.
             if current_app.config['DETECT_AI_ENDPOINT'] and user.created_very_recently() \
                     and len(post.body or '') > 250:
-                from app.utils import get_request, notify_admin
+                from app.utils import get_request, notify_admin  # cycle: app.utils imports from this module
                 try:
                     is_ai = get_request(f"{current_app.config['DETECT_AI_ENDPOINT']}?url={post.ap_id}")
                 except Exception:
@@ -3229,7 +3230,6 @@ class Post(db.Model):
                             post.ai_generated = True
                             db.session.commit()
                         # use redis to keep track of the posts this person has done in the last day and whether each is AI-generated
-                        from app import redis_client
 
                         redis_key = f"ai_detection:user:{user.id}"
                         now = time()
@@ -3242,13 +3242,13 @@ class Post(db.Model):
                         }
 
                         # Add with timestamp as score
-                        redis_client.zadd(redis_key, {json.dumps(detection_data): now})
+                        app_pkg.redis_client.zadd(redis_key, {json.dumps(detection_data): now})
 
                         # Remove entries older than 24h
-                        redis_client.zremrangebyscore(redis_key, 0, now - 86400)
+                        app_pkg.redis_client.zremrangebyscore(redis_key, 0, now - 86400)
 
                         # Get all recent detections
-                        detections = redis_client.zrange(redis_key, 0, -1)
+                        detections = app_pkg.redis_client.zrange(redis_key, 0, -1)
                         if len(detections) >= 3:
                             ai_count = sum(1 for d in detections if json.loads(d)['detection'] != 'human')
                             ai_percentage = ai_count / len(detections)
@@ -3360,7 +3360,7 @@ class Post(db.Model):
             s3_key = s3_key_from_url(self.url)
             if s3_key and not s3_object_is_referenced_elsewhere(self.url,
                                                                 post_id=self.id):
-                from app.shared.tasks.maintenance import delete_from_s3
+                from app.shared.tasks.maintenance import delete_from_s3  # cycle: app.shared.tasks.maintenance imports from this module
                 if current_app.debug:
                     delete_from_s3([s3_key])
                 else:
@@ -3378,7 +3378,7 @@ class Post(db.Model):
             db.session.query(ArchivedPostReply).filter(ArchivedPostReply.post_id == self.id).delete()
             s3_key = s3_key_from_url(self.archived) if _store_files_in_s3() else None
             if s3_key:
-                from app.shared.tasks.maintenance import delete_from_s3
+                from app.shared.tasks.maintenance import delete_from_s3  # cycle: app.shared.tasks.maintenance imports from this module
                 s3_files_to_delete = [s3_key]
                 if current_app.debug:
                     delete_from_s3(s3_files_to_delete)
@@ -3629,7 +3629,7 @@ class Post(db.Model):
 
         # include emojis used in body text
         if self.body and ':' in self.body:
-            from app.utils import guess_mime_type
+            from app.utils import guess_mime_type  # cycle: app.utils imports from this module
             EMOJI_RE = re.compile(r':([a-z0-9_+-]{1,20}):', re.IGNORECASE)
             tokens = {
                 f':{m.group(1).lower()}:'
@@ -3691,11 +3691,10 @@ class Post(db.Model):
         return round(sign * order + seconds / 45000, 7)
 
     def vote(self, user: User, vote_direction: str, emoji: str | None):
-        from app import redis_client
         if vote_direction == 'downvote':
             if self.author.has_blocked_user(user.id) or self.author.has_blocked_instance(user.instance_id):
                 return None
-        with redis_client.lock(f"lock:post:{self.id}", timeout=10, blocking_timeout=6):
+        with app_pkg.redis_client.lock(f"lock:post:{self.id}", timeout=10, blocking_timeout=6):
             existing_vote = PostVote.query.filter_by(user_id=user.id, post_id=self.id).first()
             if vote_direction == 'reversal':
                 if existing_vote:  # api receives '1' for upvote, '-1' for downvote, and '0' for reversal
@@ -3724,7 +3723,7 @@ class Post(db.Model):
                     db.session.commit()
                     return None  # No undo, vote stays as-is with new emoji
 
-                with redis_client.lock(f"lock:vote:{existing_vote.id}", timeout=10, blocking_timeout=6):
+                with app_pkg.redis_client.lock(f"lock:vote:{existing_vote.id}", timeout=10, blocking_timeout=6):
                     # D1302. This subtracted the old vote's effect and stopped there,
                     # so a reversal moved the score by 2 and the reputation by 1: an
                     # author's reputation depended on the order a voter clicked in
@@ -3734,7 +3733,7 @@ class Post(db.Model):
                     # there kept costing the author forever (D1303).
                     same_direction = (existing_vote.effect > 0) == (vote_direction == 'upvote')
                     new_effect = 0.0 if same_direction else -existing_vote.effect
-                    with redis_client.lock(f"lock:user:{self.user_id}", timeout=10, blocking_timeout=6):
+                    with app_pkg.redis_client.lock(f"lock:user:{self.user_id}", timeout=10, blocking_timeout=6):
                         db.session.execute(
                             text('UPDATE "user" SET reputation = reputation + :effect WHERE id = :user_id'),
                             {'effect': reputation_delta(existing_vote.effect, new_effect,
@@ -3796,7 +3795,7 @@ class Post(db.Model):
                 vote = PostVote(user_id=user.id, post_id=self.id, author_id=self.author.id,
                                 effect=effect, emoji=emoji)
                 # upvotes do not increase reputation in low quality communities
-                with redis_client.lock(f"lock:user:{self.user_id}", timeout=10, blocking_timeout=6):
+                with app_pkg.redis_client.lock(f"lock:user:{self.user_id}", timeout=10, blocking_timeout=6):
                     db.session.execute(text('UPDATE "user" SET reputation = reputation + :effect WHERE id = :user_id'),
                                        {'effect': reputation_delta(0.0, effect,
                                                                    self.community.low_quality),
@@ -3807,9 +3806,9 @@ class Post(db.Model):
                 # keep track of how many votes this user has cast today
                 votes_cast = votes_cast_today(user.id)
                 if votes_cast == 0:
-                    redis_client.set(f'votes_cast_{date.today()}_{user.id}', 1, ex=86400)
+                    app_pkg.redis_client.set(f'votes_cast_{date.today()}_{user.id}', 1, ex=86400)
                 else:
-                    redis_client.incr(f'votes_cast_{date.today()}_{user.id}')
+                    app_pkg.redis_client.incr(f'votes_cast_{date.today()}_{user.id}')
 
             if emoji or emoji == '-1':
                 db.session.commit()
@@ -3822,10 +3821,10 @@ class Post(db.Model):
             db.session.commit()
 
             if user.is_local():
-                with redis_client.lock(f"lock:user:{user.id}", timeout=10, blocking_timeout=6):
+                with app_pkg.redis_client.lock(f"lock:user:{user.id}", timeout=10, blocking_timeout=6):
                     user.last_seen = utcnow()
                     db.session.commit()
-                from app.utils import recently_upvoted_posts, recently_downvoted_posts
+                from app.utils import recently_upvoted_posts, recently_downvoted_posts  # cycle: app.utils imports from this module
                 cache.delete_memoized(recently_upvoted_posts, user.id)
                 cache.delete_memoized(recently_downvoted_posts, user.id)
         return undo
@@ -3859,7 +3858,7 @@ class Post(db.Model):
         ]
 
     def update_boost_cache(self):
-        from app.utils import boost_cache_entries
+        from app.utils import boost_cache_entries  # cycle: app.utils imports from this module
         rows = db.session.query(PostBoost.user_id, User.ap_id, User.user_name, PostBoost.created_at). \
             join(User, User.id == PostBoost.user_id). \
             filter(PostBoost.post_id == self.id). \
@@ -3949,10 +3948,10 @@ class PostReply(db.Model):
     @classmethod
     def new(cls, user: User, post: Post, in_reply_to, body, body_html, notify_author, language_id, distinguished, answer,
             request_json: dict = None, announce_id=None, session=None):
+        # cycle: app.utils imports from this module
         from app.utils import shorten_string, blocked_phrases, recently_upvoted_post_replies, reply_already_exists, \
             reply_is_just_link_to_gif_reaction, reply_is_low_effort, wilson_confidence_lower_bound, get_setting
-        from app.activitypub.util import notify_about_post_reply
-        from app import redis_client
+        from app.activitypub.util import notify_about_post_reply  # cycle: app.activitypub.util imports from this module
 
         if session is None:
             session = db.session
@@ -4064,7 +4063,7 @@ class PostReply(db.Model):
 
         reply.ap_id = reply.profile_id()
 
-        with redis_client.lock(f"lock:post:{post.id}", timeout=10, blocking_timeout=6):
+        with app_pkg.redis_client.lock(f"lock:post:{post.id}", timeout=10, blocking_timeout=6):
             if not user.bot:
                 post.reply_count += 1
                 post.community.post_reply_count += 1
@@ -4098,7 +4097,7 @@ class PostReply(db.Model):
 
             if not previous_report:
                 # usage of em-dash is highly suspect.
-                from app.utils import notify_admin
+                from app.utils import notify_admin  # cycle: app.utils imports from this module
                 # notify admin
                 targets_data = {'gen': '0',
                                 'suspect_user_id': user.id,
@@ -4117,7 +4116,7 @@ class PostReply(db.Model):
         elif current_app.config['DETECT_AI_ENDPOINT'] and user.created_very_recently() \
                 and len(reply.body or '') >= 250:
             # Use API to check new accounts to see if their comments are AI generated
-            from app.utils import get_request, notify_admin
+            from app.utils import get_request, notify_admin  # cycle: app.utils imports from this module
             try:
                 is_ai = get_request(f"{current_app.config['DETECT_AI_ENDPOINT']}?url={reply.ap_id}")
             except Exception:
@@ -4128,7 +4127,6 @@ class PostReply(db.Model):
                 detection_result, confidence = verdict
                 if confidence > 0.8:
                     # use redis to keep track of the posts this person has done in the last day and whether each is AI-generated
-                    from app import redis_client
 
                     redis_key = f"ai_detection:user:{user.id}"
                     now = time()
@@ -4142,13 +4140,13 @@ class PostReply(db.Model):
                     }
 
                     # Add with timestamp as score
-                    redis_client.zadd(redis_key, {json.dumps(detection_data): now})
+                    app_pkg.redis_client.zadd(redis_key, {json.dumps(detection_data): now})
 
                     # Remove entries older than 24h
-                    redis_client.zremrangebyscore(redis_key, 0, now - 86400)
+                    app_pkg.redis_client.zremrangebyscore(redis_key, 0, now - 86400)
 
                     # Get all recent detections
-                    detections = redis_client.zrange(redis_key, 0, -1)
+                    detections = app_pkg.redis_client.zrange(redis_key, 0, -1)
                     if len(detections) >= 3:
                         ai_count = sum(1 for d in detections if json.loads(d)['detection'] != 'human')
                         ai_percentage = ai_count / len(detections)
@@ -4226,7 +4224,7 @@ class PostReply(db.Model):
         return_value = []
         # include emojis used in body text
         if self.body and ':' in self.body:
-            from app.utils import guess_mime_type
+            from app.utils import guess_mime_type  # cycle: app.utils imports from this module
             EMOJI_RE = re.compile(r':([a-z0-9_+-]{1,20}):', re.IGNORECASE)
             tokens = {
                 f':{m.group(1).lower()}:'
@@ -4344,8 +4342,7 @@ class PostReply(db.Model):
         return existing_notification is not None
 
     def vote(self, user: User, vote_direction: str, emoji: str):
-        from app import redis_client
-        from app.utils import wilson_confidence_lower_bound
+        from app.utils import wilson_confidence_lower_bound  # cycle: app.utils imports from this module
         # D1304. `Post.vote` has had this refusal all along and this method had
         # none, so blocking someone stopped them downvoting your POSTS and left
         # them free to downvote every COMMENT you wrote -- which is where a
@@ -4353,7 +4350,7 @@ class PostReply(db.Model):
         if vote_direction == 'downvote':
             if self.author.has_blocked_user(user.id) or self.author.has_blocked_instance(user.instance_id):
                 return None
-        with redis_client.lock(f"lock:post_reply:{self.id}", timeout=10, blocking_timeout=6):
+        with app_pkg.redis_client.lock(f"lock:post_reply:{self.id}", timeout=10, blocking_timeout=6):
             existing_vote = db.session.query(PostReplyVote).filter_by(user_id=user.id, post_reply_id=self.id).first()
             # D1196. This used to read `if existing_vote and vote_direction ==
             # 'reversal':`, so a reversal with NOTHING TO REVERSE fell through
@@ -4401,7 +4398,7 @@ class PostReply(db.Model):
                 # community from earning reputation on an upvote at all (D1305).
                 same_direction = (existing_vote.effect > 0) == (vote_direction == 'upvote')
                 new_effect = 0.0 if same_direction else -existing_vote.effect
-                with redis_client.lock(f"lock:user:{self.user_id}", timeout=10, blocking_timeout=6):
+                with app_pkg.redis_client.lock(f"lock:user:{self.user_id}", timeout=10, blocking_timeout=6):
                     db.session.execute(text('UPDATE "user" SET reputation = reputation + :effect WHERE id = :user_id'),
                                        {'effect': reputation_delta(existing_vote.effect, new_effect,
                                                                    self.community.low_quality),
@@ -4446,7 +4443,7 @@ class PostReply(db.Model):
                 vote = PostReplyVote(user_id=user.id, post_reply_id=self.id, author_id=self.author.id,
                                      effect=effect, emoji=emoji)
                 # upvotes do not increase reputation in low quality communities
-                with redis_client.lock(f"lock:user:{self.user_id}", timeout=10, blocking_timeout=6):
+                with app_pkg.redis_client.lock(f"lock:user:{self.user_id}", timeout=10, blocking_timeout=6):
                     db.session.execute(text('UPDATE "user" SET reputation = reputation + :effect WHERE id = :user_id'),
                                        {'effect': reputation_delta(0.0, effect,
                                                                    self.community.low_quality),
@@ -4457,9 +4454,9 @@ class PostReply(db.Model):
                 # keep track of how many votes this user has cast today
                 votes_cast = votes_cast_today(user.id)
                 if votes_cast == 0:
-                    redis_client.set(f'votes_cast_{date.today()}_{user.id}', 1, ex=86400)
+                    app_pkg.redis_client.set(f'votes_cast_{date.today()}_{user.id}', 1, ex=86400)
                 else:
-                    redis_client.incr(f'votes_cast_{date.today()}_{user.id}')
+                    app_pkg.redis_client.incr(f'votes_cast_{date.today()}_{user.id}')
 
             if emoji or emoji == '-1':
                 db.session.commit()
@@ -4469,10 +4466,10 @@ class PostReply(db.Model):
             self.ranking = wilson_confidence_lower_bound(self.up_votes, self.down_votes)
             db.session.commit()
             if user.is_local():
-                with redis_client.lock(f"lock:user:{user.id}", timeout=10, blocking_timeout=6):
+                with app_pkg.redis_client.lock(f"lock:user:{user.id}", timeout=10, blocking_timeout=6):
                     user.last_seen = utcnow()
                     db.session.commit()
-                from app.utils import recently_upvoted_post_replies, recently_downvoted_post_replies
+                from app.utils import recently_upvoted_post_replies, recently_downvoted_post_replies  # cycle: app.utils imports from this module
                 cache.delete_memoized(recently_upvoted_post_replies, user.id)
                 cache.delete_memoized(recently_downvoted_post_replies, user.id)
         return undo
@@ -5130,19 +5127,19 @@ class Site(db.Model):
             "SELECT COUNT(*) as c FROM \"user\" WHERE last_seen >= CURRENT_DATE - INTERVAL '5 minutes' AND ap_id is null AND verified is true AND banned is false AND deleted is false")).scalar()
 
     def active_daily(self):
-        from app.activitypub.util import active_day
+        from app.activitypub.util import active_day  # cycle: app.activitypub.util imports from this module
         return active_day()
 
     def active_weekly(self):
-        from app.activitypub.util import active_week
+        from app.activitypub.util import active_week  # cycle: app.activitypub.util imports from this module
         return active_week()
 
     def active_monthly(self):
-        from app.activitypub.util import active_month
+        from app.activitypub.util import active_month  # cycle: app.activitypub.util imports from this module
         return active_month()
 
     def active_6monthly(self):
-        from app.activitypub.util import active_half_year
+        from app.activitypub.util import active_half_year  # cycle: app.activitypub.util imports from this module
         return active_half_year()
 
     def all_active_6monthly(self):
@@ -5604,7 +5601,6 @@ class RssFeedItem(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
 
     def delete_dependencies(self):
-        from app import redis_client
         # D1422. `db.session.get(Post, None)` is a real state here -- the RSS importer
         # records an item with `post_id=None` when it decides not to create a post
         # (app/cli.py) -- and SQLAlchemy answers it with
@@ -5613,7 +5609,7 @@ class RssFeedItem(db.Model):
         # treats it as nothing to delete; asking the question at all is what warns.
         post = db.session.get(Post, self.post_id) if self.post_id else None
         if post:
-            with redis_client.lock(f"lock:post:{post.id}", timeout=30, blocking_timeout=30):
+            with app_pkg.redis_client.lock(f"lock:post:{post.id}", timeout=30, blocking_timeout=30):
                 post.delete_dependencies()
                 db.session.delete(post)
                 db.session.commit()
