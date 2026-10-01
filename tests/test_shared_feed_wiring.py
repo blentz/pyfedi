@@ -167,6 +167,33 @@ def test_announce_add_remove_honours_feed_auto_follow_for_local_members(app, db_
     assert [c.kwargs['joined_via_feed'] for c in subscribe.call_args_list] == [True]
 
 
+def test_announce_add_remove_reads_through_its_own_task_session(app, db_session):
+    """D663, fixed (owner ruling): the task opened a session of its own and
+    then read the feed, the community, the members and each member's user off
+    the request-scoped db.session -- which a celery worker does not own. Every
+    lookup now goes through the task session; this spies on its `get`."""
+    from sqlalchemy.orm import Session
+
+    s = _seed()
+    member = make_user(s.instance, 'member', local=True)
+    db.session.commit()
+    make_feed_member(member, s.feed)
+    task_session = Session(bind=db.engine)
+    real_get = task_session.get
+    looked_up = []
+
+    def spy_get(model, ident, **kwargs):
+        looked_up.append(model)
+        return real_get(model, ident, **kwargs)
+
+    task_session.get = spy_get
+    with patch('app.shared.feed.get_task_session', return_value=task_session), \
+            patch('app.community.routes.do_subscribe'):
+        announce_feed_add_remove_to_subscribers('Add', s.feed.id, s.community.id)
+
+    assert {Feed, Community, User} <= set(looked_up)
+
+
 def test_feed_add_community_route_acts_only_as_the_signed_in_user(app, db_session):
     """Was a PIN; INVERTED once the ownership check was added.
 
@@ -267,6 +294,36 @@ def test_form_communities_to_ids_skips_names_that_resolve_to_nothing(app, db_ses
     assert result == {s.community.id}
 
 
+def test_feed_auto_leave_defaults_off_in_the_model_and_the_settings_form(app, db_session):
+    """D663, fixed (owner ruling): the model said True and the settings form
+    False, so an account made outside the form auto-left feed communities
+    while the form showed the option off. Both now say False."""
+    from app.user.forms import SettingsForm
+
+    s = _seed()
+    fresh = make_user(s.instance, 'fresh', local=True)
+    db.session.commit()
+    db.session.refresh(fresh)
+
+    assert fresh.feed_auto_leave is False
+    assert SettingsForm.feed_auto_leave.kwargs['default'] is False
+
+
+@pytest.mark.parametrize('raw', ['', '\n', 'found\n\n'])
+def test_form_communities_to_ids_searches_for_no_blank_line(app, db_session, raw):
+    """D663, fixed (owner ruling): an empty box, or a blank line in it, used to
+    become the handle '!@<SERVER_NAME>' and a real community search. A blank
+    line now names nothing and is skipped."""
+    s = _seed()
+    lookups = {'!found@test.piefed.local': s.community}
+    with patch('app.community.util.search_for_community', side_effect=lambda x: lookups[x]) as search:
+        with app.test_request_context('/'):
+            result = form_communities_to_ids(raw)
+
+    assert [c.args[0] for c in search.call_args_list] == (['!found@test.piefed.local'] if 'found' in raw else [])
+    assert result == ({s.community.id} if 'found' in raw else set())
+
+
 def test_form_communities_to_ids_reads_every_line_and_returns_a_set(app, db_session):
     """:619 splits on newlines; :618/:627 accumulate into a set.
 
@@ -283,21 +340,6 @@ def test_form_communities_to_ids_reads_every_line_and_returns_a_set(app, db_sess
 
     assert result == {s.community.id, s.bystander_community.id}
     assert s.community.id != s.bystander_community.id
-
-
-def test_form_communities_to_ids_on_empty_input_searches_for_a_bare_host(app, db_session):
-    """:619 on '' yields [''], not [], so the loop runs once.
-
-    ''.strip().split('\\n') is [''], which :621 turns into '!' and :623 into
-    '!@test.piefed.local'. This is not obviously intended; it is registered as a
-    finding rather than repaired, and this test records the behaviour as it is.
-    """
-    with patch('app.community.util.search_for_community', return_value=None) as search:
-        with app.test_request_context('/'):
-            result = form_communities_to_ids('')
-
-    assert search.call_args.args[0] == '!@test.piefed.local'
-    assert result == set()
 
 
 def test_existing_communities_returns_the_feed_s_community_ids(app, db_session):
@@ -478,6 +520,7 @@ def test_announce_add_remove_rolls_back_and_re_raises_on_failure(app, db_session
     """
     s = _seed()
     remote = make_user(s.instance, 'remotemember', local=False)
+    s.instance.inbox = 'https://test.piefed.local/inbox'  # read for real now, through the task session
     db.session.commit()
     make_feed_member(remote, s.feed)
     # NOT patch(...).start() + patch.stopall(): stopall() stops EVERY patcher in
@@ -488,8 +531,16 @@ def test_announce_add_remove_rolls_back_and_re_raises_on_failure(app, db_session
     # test_the_domain_block_is_skipped_for_a_hostless_url then failed with
     # "DID NOT RAISE Exception" and cascaded into 130 failures and 209 errors,
     # every one of which passed in isolation. Stop only what this test started.
-    _task_session_patcher = patch('app.shared.feed.get_task_session')
-    fake_session = _task_session_patcher.start()
+    #
+    # A REAL task session with its rollback and close spied, not a MagicMock:
+    # since D663 the task reads the feed and its members through this session,
+    # so a mock would find no members and never reach send_post_request.
+    from sqlalchemy.orm import Session
+    task_session = Session(bind=db.engine)
+    task_session.rollback = MagicMock(wraps=task_session.rollback)
+    task_session.close = MagicMock(wraps=task_session.close)
+    _task_session_patcher = patch('app.shared.feed.get_task_session', return_value=task_session)
+    _task_session_patcher.start()
 
     try:
         with patch('app.shared.feed.instance_banned', return_value=False):
@@ -499,8 +550,8 @@ def test_announce_add_remove_rolls_back_and_re_raises_on_failure(app, db_session
     finally:
         _task_session_patcher.stop()
 
-    assert fake_session.return_value.rollback.call_count == 1
-    assert fake_session.return_value.close.call_count == 1
+    assert task_session.rollback.call_count == 1
+    assert task_session.close.call_count == 1
 
 
 def test_announce_add_remove_closes_the_task_session_on_success(app, db_session):
@@ -1023,6 +1074,7 @@ def test_feed_remove_community_never_unsubscribes_a_community_owner(app, db_sess
     s.feed.num_communities = 1
     owner_member = make_user(s.instance, 'commowner', local=True)
     plain_member = make_user(s.instance, 'plainmember', local=True)
+    owner_member.feed_auto_leave = plain_member.feed_auto_leave = True  # opted in; defaults False (D663)
     db.session.commit()
     for u in (owner_member, plain_member):
         cm = make_community_member(u, s.community)
@@ -1079,6 +1131,7 @@ def test_feed_remove_community_sends_an_undo_follow_for_a_remote_community(app, 
     make_feed_item(s.feed, s.community)
     s.feed.num_communities = 1
     member = make_user(s.instance, 'member', local=True, with_keys=True)
+    member.feed_auto_leave = True  # opted in; the column defaults False (D663)
     db.session.commit()
     cm = make_community_member(member, s.community)
     cm.joined_via_feed = True
@@ -1132,6 +1185,7 @@ def test_feed_remove_community_reuses_the_join_request_uuid(app, db_session):
     make_feed_item(s.feed, s.community)
     s.feed.num_communities = 1
     member = make_user(s.instance, 'member', local=True, with_keys=True)
+    member.feed_auto_leave = True  # opted in; the column defaults False (D663)
     db.session.commit()
     cm = make_community_member(member, s.community)
     cm.joined_via_feed = True
@@ -1164,6 +1218,7 @@ def test_feed_remove_community_generates_a_follow_id_with_no_stored_join_request
     make_feed_item(s.feed, s.community)
     s.feed.num_communities = 1
     member = make_user(s.instance, 'member', local=True, with_keys=True)
+    member.feed_auto_leave = True  # opted in; the column defaults False (D663)
     db.session.commit()
     cm = make_community_member(member, s.community)
     cm.joined_via_feed = True
@@ -1204,6 +1259,7 @@ def test_feed_remove_community_skips_delivery_to_a_dead_instance(app, db_session
     make_feed_item(s.feed, s.community)
     s.feed.num_communities = 1
     member = make_user(s.instance, 'member', local=True)
+    member.feed_auto_leave = True  # opted in; the column defaults False (D663)
     db.session.commit()
     cm = make_community_member(member, s.community)
     cm.joined_via_feed = True
@@ -1248,6 +1304,7 @@ def test_feed_remove_community_removes_membership_without_federating_for_a_local
     make_feed_item(s.feed, s.community)
     s.feed.num_communities = 1
     member = make_user(s.instance, 'member', local=True)
+    member.feed_auto_leave = True  # opted in; the column defaults False (D663)
     db.session.commit()
     cm = make_community_member(member, s.community)
     cm.joined_via_feed = True
