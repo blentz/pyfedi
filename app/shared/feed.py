@@ -150,10 +150,14 @@ def leave_feed(feed: int | Feed, src, auth=None, bulk_leave=False):
         feed.subscriptions_count -= 1
         db.session.commit()
 
+        user = db.session.get(User, user_id)
+        cache.delete_memoized(feed_membership, user, feed)
+        cache.delete_memoized(menu_subscribed_feeds, user.id)
+        cache.delete_memoized(joined_communities, user.id)
+
         if not bulk_leave:
             # Need to unsub from every community in the feed if the user has that option set
             # During bulk_leave, community memberships handled separately
-            user = db.session.get(User, user_id)
             if user.feed_auto_leave:
                 feed_items = db.session.query(FeedItem).filter_by(feed_id=feed_id).all()
                 for feed_item in feed_items:
