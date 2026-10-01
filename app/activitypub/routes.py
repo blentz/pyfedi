@@ -1319,27 +1319,23 @@ def process_inbox_request(request_json, store_ap_json):
                                 log_incoming_ap(id, APLOG_CREATE, APLOG_IGNORED, saved_json, 'Cannot rate this')
                                 return
                             post_being_replied_to =Post.get_by_ap_id(core_activity['object']['inReplyTo'])
-                            if post_being_replied_to:
-                                poll_data = session.get(Poll, post_being_replied_to.id)
+                            poll_data = session.get(Poll, post_being_replied_to.id) if post_being_replied_to else None
+                            # D116 (owner ruling): a vote-shaped Note that matches no poll falls through to be
+                            # processed as ordinary content
+                            if poll_data:
                                 choice = session.query(PollChoice).filter_by(post_id=post_being_replied_to.id,
                                                                     choice_text=core_activity['object']['name']).first()
-                                if poll_data and choice:
+                                if choice:
                                     poll_data.vote_for_choice(choice.id, user.id)
                                     log_incoming_ap(id, APLOG_CREATE, APLOG_SUCCESS, saved_json)
                                     if post_being_replied_to.author.is_local():
                                         post_being_replied_to.edited_at = utcnow()
                                         session.commit()
                                         task_selector('edit_post', post_id=post_being_replied_to.id)
-                                elif not poll_data:
-                                    log_incoming_ap(id, APLOG_CREATE, APLOG_IGNORED, saved_json,
-                                                    'Poll vote for a post with no poll')
                                 else:
                                     log_incoming_ap(id, APLOG_CREATE, APLOG_IGNORED, saved_json,
                                                     'Poll vote for an unknown choice')
-                            else:
-                                log_incoming_ap(id, APLOG_CREATE, APLOG_IGNORED, saved_json,
-                                                'Poll vote for an unknown post')
-                            return
+                                return
                         if not announced and not community:
                             community = find_community(request_json)
                             if not community:

@@ -182,39 +182,31 @@ def test_breaking_any_one_conjunct_leaves_the_poll_path(app, db_session, monkeyp
     assert len(calls['process_new_content']) == 1, description
 
 
-def test_a_poll_vote_for_an_unknown_post_is_now_logged(app, db_session, monkeypatch):
-    """Was `test_a_poll_vote_for_an_unknown_post_is_dropped_silently`.
-    `post_being_replied_to` is None, so the block falls to its unconditional
-    `return` -- but now with a log naming this specific outcome, distinct from
-    the other two silent branches. `LOG_ACTIVITYPUB_TO_DB` is explicit True so
-    the log is real evidence, not logging switched off producing a false zero.
-
-    It still does NOT fall through to content handling: `process_new_content`
-    is doubled and must not be called. The unconditional `return` at the end
-    of the poll block is unchanged and is not this test's concern -- only that
-    the outcome is now logged.
+def test_a_poll_shaped_note_for_an_unknown_post_falls_through_to_content(app, db_session, monkeypatch):
+    """D116, fixed (owner ruling). Was `..._is_now_logged`: a poll-vote-shaped
+    Note whose `inReplyTo` names no post here matched no poll, yet the poll
+    block's unconditional `return` dropped it. It is now processed as ordinary
+    content -- `process_new_content` is doubled and must be called once, and
+    no 'Poll vote for an unknown post' outcome is logged.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, voter, post, poll, choice = seed_poll_post()
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: None)
+    monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
     calls = record_moderation(monkeypatch, 'process_new_content')
 
     dispatch(create_activity(voter, poll_note('https://peer.example/post/404', 'yes')))
 
-    assert calls['process_new_content'] == []
-    log = ActivityPubLog.query.one()
-    assert log.result == 'ignored'
-    assert log.exception_message == 'Poll vote for an unknown post'
+    assert len(calls['process_new_content']) == 1
+    assert ActivityPubLog.query.filter_by(exception_message='Poll vote for an unknown post').count() == 0
 
 
-def test_a_poll_vote_on_a_post_with_no_poll_is_now_logged(app, db_session, monkeypatch):
-    """Was `test_a_poll_vote_on_a_post_with_no_poll_is_dropped_silently`.
-    `poll_data` is None: the post exists but carries no Poll row -- the FIRST
-    conjunct of `if poll_data and choice:`. This is distinct from the
-    unknown-choice case (the OTHER conjunct of the same `if`) and from the
-    unknown-post case (which never reaches `if poll_data and choice:` at all;
-    it fails the separate, outer `if post_being_replied_to:`) -- which is why
-    all three tests are separate, and why the message must differ across all
-    three.
+def test_a_poll_shaped_note_on_a_post_with_no_poll_falls_through_to_content(app, db_session, monkeypatch):
+    """D116, fixed (owner ruling). Was `..._is_now_logged`: the post exists
+    but carries no Poll row, so the Note matched no poll and is processed as
+    ordinary content (a reply to that post) rather than dropped. The
+    unknown-choice case below is different: a poll was matched, so it stays a
+    refused vote.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance = seed_community_owner('peer.example')
@@ -223,12 +215,14 @@ def test_a_poll_vote_on_a_post_with_no_poll_is_now_logged(app, db_session, monke
     voter = make_user(instance, 'voter')
     post = make_post(community, author, 'https://peer.example/post/1')
     db.session.commit()
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: None)
+    monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
+    calls = record_moderation(monkeypatch, 'process_new_content')
 
     dispatch(create_activity(voter, poll_note(post.ap_id, 'yes')))
 
-    log = ActivityPubLog.query.one()
-    assert log.result == 'ignored'
-    assert log.exception_message == 'Poll vote for a post with no poll'
+    assert len(calls['process_new_content']) == 1
+    assert ActivityPubLog.query.filter_by(exception_message='Poll vote for a post with no poll').count() == 0
 
 
 def test_a_poll_vote_for_an_unknown_choice_is_now_logged(app, db_session, monkeypatch):
