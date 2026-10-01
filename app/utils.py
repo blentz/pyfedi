@@ -4260,6 +4260,11 @@ def download_defeds_worker(defederation_subscription_id: int, domain: str, repla
     try:
         allowed_instances = [instance.domain for instance in session.query(AllowedInstances).all()]
         defederation_list = retrieve_defederation_list(domain)
+        if defederation_list is None:
+            # Could not fetch the list: that is not an empty list, so the
+            # subscription's existing bans stay as they are.
+            current_app.logger.warning(f'Could not download the defederation list from {domain}')
+            return
         # The periodic sync replaces the subscription's bans. The old rows go in
         # the same transaction the new ones arrive in, and only once the new
         # list is in hand, so a failed download never leaves instances unbanned.
@@ -4280,7 +4285,9 @@ def download_defeds_worker(defederation_subscription_id: int, domain: str, repla
         session.close()
 
 
-def retrieve_defederation_list(domain: str) -> List[str]:
+def retrieve_defederation_list(domain: str) -> Optional[List[str]]:
+    """The domains `domain` blocks, or None when the list could not be fetched
+    (unreachable, not 200, not JSON, or not the expected shape)."""
     result = []
     software = instance_software(domain)
     if software == 'lemmy' or software == 'piefed' or software == 'pylova':
@@ -4288,33 +4295,37 @@ def retrieve_defederation_list(domain: str) -> List[str]:
             response = get_request(f'https://{domain}/api/v3/federated_instances')
         except:
             response = None
-        if response and response.status_code == 200:
-            # Everything below is another instance's answer, and this runs in a
-            # Celery worker: a missing key was a KeyError that stopped the
-            # subscription updating and left the task session open.
-            try:
-                instance_data = response.json()
-            except ValueError:
-                instance_data = {}
-            blocked = (instance_data or {}).get('federated_instances') or {}
-            for row in blocked.get('blocked') or []:
-                if isinstance(row, dict) and row.get('domain'):
-                    result.append(row['domain'])
+        if not response or response.status_code != 200:
+            return None
+        # Everything below is another instance's answer, and this runs in a
+        # Celery worker: a missing key was a KeyError that stopped the
+        # subscription updating and left the task session open.
+        try:
+            instance_data = response.json()
+        except ValueError:
+            return None
+        if not isinstance(instance_data, dict):
+            return None
+        blocked = instance_data.get('federated_instances') or {}
+        for row in blocked.get('blocked') or []:
+            if isinstance(row, dict) and row.get('domain'):
+                result.append(row['domain'])
     else:  # Assume mastodon-compatible API
         try:
             response = get_request(f'https://{domain}/api/v1/instance/domain_blocks')
         except:
             response = None
-        if response and response.status_code == 200:
-            try:
-                instance_data = response.json()
-            except ValueError:
-                instance_data = []
-            if not isinstance(instance_data, list):
-                instance_data = []
-            for row in instance_data:
-                if isinstance(row, dict) and row.get('domain'):
-                    result.append(row['domain'])
+        if not response or response.status_code != 200:
+            return None
+        try:
+            instance_data = response.json()
+        except ValueError:
+            return None
+        if not isinstance(instance_data, list):
+            return None
+        for row in instance_data:
+            if isinstance(row, dict) and row.get('domain'):
+                result.append(row['domain'])
 
     return result
 

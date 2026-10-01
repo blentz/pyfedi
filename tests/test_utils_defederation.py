@@ -118,16 +118,16 @@ class TestReadingALemmyCompatibleList:
     def test_an_answer_that_is_not_json(self, env, http_mock):
         http_mock.get(LEMMY_URL).mock(
             return_value=httpx.Response(200, text='<html>no api</html>'))
-        assert retrieve_defederation_list(DOMAIN) == []
+        assert retrieve_defederation_list(DOMAIN) is None
 
     def test_an_endpoint_that_is_not_there(self, env, http_mock):
         http_mock.get(LEMMY_URL).mock(return_value=httpx.Response(404))
-        assert retrieve_defederation_list(DOMAIN) == []
+        assert retrieve_defederation_list(DOMAIN) is None
 
     def test_an_endpoint_that_cannot_be_reached(self, env, http_mock):
         http_mock.get(LEMMY_URL).mock(
             side_effect=httpx.ConnectError('no route'))
-        assert retrieve_defederation_list(DOMAIN) == []
+        assert retrieve_defederation_list(DOMAIN) is None
 
     @pytest.mark.parametrize('software', ['lemmy', 'piefed', 'pylova'])
     def test_each_software_that_answers_this_way(self, env, http_mock,
@@ -159,17 +159,17 @@ class TestReadingAMastodonCompatibleList:
         """D1295. This was `TypeError: string indices must be integers`."""
         http_mock.get(MASTODON_URL).mock(return_value=httpx.Response(
             200, json={'error': 'not available'}))
-        assert retrieve_defederation_list(DOMAIN) == []
+        assert retrieve_defederation_list(DOMAIN) is None
 
     def test_an_answer_that_is_not_json(self, env, http_mock):
         http_mock.get(MASTODON_URL).mock(
             return_value=httpx.Response(200, text='<html>no api</html>'))
-        assert retrieve_defederation_list(DOMAIN) == []
+        assert retrieve_defederation_list(DOMAIN) is None
 
     def test_an_endpoint_that_cannot_be_reached(self, env, http_mock):
         http_mock.get(MASTODON_URL).mock(
             side_effect=httpx.ConnectError('no route'))
-        assert retrieve_defederation_list(DOMAIN) == []
+        assert retrieve_defederation_list(DOMAIN) is None
 
     def test_an_instance_this_one_knows_nothing_about(self, env, http_mock):
         """An unknown software falls to the Mastodon-compatible endpoint."""
@@ -259,6 +259,29 @@ class TestWhatTheSubscriptionWrites:
             with pytest.raises(RuntimeError):
                 download_defeds_worker(subscription.id, DOMAIN, replace=True)
         assert self.banned(subscription) == {'old.test'}
+
+    def test_a_replacing_download_that_could_not_fetch_keeps_the_old_bans(
+            self, env, subscription, caplog):
+        """D378 residue. A download that could not be fetched (None) is not
+        an empty list: the subscription's bans stay and the failure is
+        logged."""
+        with patch('app.utils.retrieve_defederation_list',
+                   return_value=['old.test']):
+            download_defeds_worker(subscription.id, DOMAIN)
+        with patch('app.utils.retrieve_defederation_list', return_value=None):
+            download_defeds_worker(subscription.id, DOMAIN, replace=True)
+        assert self.banned(subscription) == {'old.test'}
+        assert DOMAIN in caplog.text
+
+    def test_a_replacing_download_of_an_empty_list_clears_the_bans(
+            self, env, subscription):
+        """D378 residue. A list that is genuinely empty still replaces."""
+        with patch('app.utils.retrieve_defederation_list',
+                   return_value=['old.test']):
+            download_defeds_worker(subscription.id, DOMAIN)
+        with patch('app.utils.retrieve_defederation_list', return_value=[]):
+            download_defeds_worker(subscription.id, DOMAIN, replace=True)
+        assert self.banned(subscription) == set()
 
     def test_in_debug_the_download_runs_here_and_now(self, env, monkeypatch):
         monkeypatch.setattr(current_app, 'debug', True)
