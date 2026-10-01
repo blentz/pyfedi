@@ -26,15 +26,15 @@ below runs is decided entirely by what that lookup returns.
 | Community, local_only (945-947, 954-962)           | `community.local_only` is True                                                                                 | nothing                                                                                                                     | Reject                           | APLOG_FOLLOW/APLOG_FAILURE 'Local only cannot be followed by remote users' -- BEFORE the send |
 | Community, banned (949-953, 954-962)               | `community.local_only` is False AND a `CommunityBan(user_id, community_id)` row exists -- checked only when NOT local_only; this is if/elif, not two independently-evaluated alternatives | nothing                                                                                                                     | Reject                           | APLOG_FOLLOW/APLOG_FAILURE 'Remote user has been banned' -- BEFORE the send |
 | Community, new member (964-981)                    | not rejected, and no existing `CommunityMember(user_id, community_id)`                                          | `CommunityMember` row; `community.subscriptions_count` +1; `community.last_active` and `user.last_seen` stamped            | Accept                           | APLOG_FOLLOW/APLOG_SUCCESS -- AFTER the send |
-| Community, already a member (964-965, silent)      | `existing_member` truthy                                                                                        | nothing                                                                                                                     | nothing                           | nothing at all |
+| Community, already a member (D66, fixed)           | `existing_member` truthy                                                                                        | nothing                                                                                                                     | Accept, again                     | APLOG_FOLLOW/APLOG_SUCCESS 'Already a member, Accept re-sent' |
 | Feed, non-public (989-999)                         | `not feed.public`                                                                                               | nothing                                                                                                                     | Reject                           | NOTHING -- no `log_incoming_ap` call anywhere on this path, unlike either Community reject reason above |
 | Feed, new subscriber (1001-1016)                   | `feed_membership(user, feed) != SUBSCRIPTION_MEMBER`                                                            | `FeedMember` row; `feed.subscriptions_count` +1 (no `last_active`/`last_seen`-equivalent stamp -- Feed has no such column touched here) | Accept                           | APLOG_FOLLOW/APLOG_SUCCESS |
-| Feed, already subscribed (1001, silent)            | `feed_membership(user, feed) == SUBSCRIPTION_MEMBER`                                                            | nothing                                                                                                                     | nothing                           | nothing |
+| Feed, already subscribed (D66, fixed)              | `feed_membership(user, feed) == SUBSCRIPTION_MEMBER`                                                            | nothing                                                                                                                     | Accept, again                     | APLOG_FOLLOW/APLOG_SUCCESS 'Already a member, Accept re-sent' |
 | User, remote target (1021-1024)                    | `not local_user.is_local()`                                                                                     | nothing                                                                                                                     | nothing -- no Reject; this branch never sends a federated reply on any refusal | APLOG_FOLLOW/APLOG_FAILURE 'Follow request for remote user received' |
 | User, blocked (1025-1027)                          | `has_blocked_user(...) or has_blocked_instance(...) or instance_banned(...)` -- a single plain `or`, all three checked unconditionally (short-circuited) and sharing ONE log message, unlike Community's if/elif with a distinct message per reason | nothing                                                                                                                     | nothing                           | APLOG_FOLLOW/APLOG_FAILURE 'Attempt to follow denied due to block' |
 | User, auto-accept (1030-1071, `auto_accept` True)  | not `existing_follower`, and `local_user.ap_manually_approves_followers is False`                              | `UserFollower(is_accepted=True, is_inward=True)` via the task-local `session`; `ap_followers_url` backfilled if empty; `Notification(notif_type=NOTIF_FOLLOW)` added via `db.session` and committed separately -- a different session object than the `UserFollower` write, in the same logical write (D60's divergence made concrete); `unread_notifications` +1 | Accept                           | APLOG_FOLLOW/APLOG_SUCCESS -- the SAME log call as the manual-approval row below |
 | User, manual approval (1030-1071, `auto_accept` False) | not `existing_follower`, and `ap_manually_approves_followers` anything other than the literal `False`      | `UserFollower(is_accepted=None, is_inward=True)` via `session`; `Notification(notif_type=NOTIF_FOLLOW_REQUEST)` via `db.session`; `unread_notifications` +1 | nothing                           | APLOG_FOLLOW/APLOG_SUCCESS -- logged as SUCCESS the moment the pending request is recorded, not when a human later approves it |
-| User, already following (1030, silent)             | `existing_follower` truthy                                                                                      | nothing                                                                                                                     | nothing                           | nothing |
+| User, already following (D66, fixed)               | `existing_follower` truthy                                                                                      | nothing                                                                                                                     | Accept, again, if accepted; else nothing | APLOG_FOLLOW/APLOG_SUCCESS 'Already following, Accept re-sent'; pending or rejected: APLOG_IGNORED |
 
 Asymmetries worth carrying into the tests that cover them:
 
@@ -43,10 +43,11 @@ Asymmetries worth carrying into the tests that cover them:
     though the surrounding shape (guard sets `reject_follow`, then sends a
     Reject) is otherwise identical. Registered by the design spec at
     routes.py:989-999; independently confirmed here.
-  - Three "already-done" paths are uniformly silent: an existing
-    `CommunityMember` (:964-965), an already-subscribed `FeedMember`
-    (:1001), and an existing `UserFollower` (:1030) each write nothing,
-    send nothing, and log nothing.
+  - Three "already-done" paths were uniformly silent: an existing
+    `CommunityMember`, an already-subscribed `FeedMember`, and an existing
+    `UserFollower` each wrote nothing, sent nothing, and logged nothing.
+    D66, fixed (owner ruling): an accepted relationship re-sends the Accept
+    and logs it; a pending one is logged as ignored.
   - The User branch's refusals send no federated reply at all, on either
     refusal reason -- Community and Feed both notify the remote actor with
     a Reject on their own refusal paths. This asymmetry is not called out
@@ -268,17 +269,12 @@ def test_a_follow_of_a_local_community_creates_membership_and_accepts(app, db_se
     assert log.result == 'success'
 
 
-def test_a_follow_from_an_existing_member_writes_nothing_and_stays_silent(
+def test_a_follow_from_an_existing_member_re_sends_the_accept(
         app, db_session, monkeypatch):
-    """routes.py:964-965 with `existing_member` truthy: nothing is written
-    (subscriptions_count unchanged), nothing is sent, and -- unlike every
-    other branch this task covers -- nothing is logged at all, not even a
-    failure. `ActivityPubLog.query.count() == 0` is asserted WITH logging
-    enabled precisely so this assertion would fail the moment a log call
-    were ever added to this path; `sends == []` covers the federation side.
-    Registered as a finding by Task 9 (a silent no-op on the wire, with zero
-    audit trail, is easy to mistake for the request never having arrived at
-    all), not fixed here.
+    """D66, fixed (owner ruling). With `existing_member` truthy nothing was
+    written, sent or logged, so a peer that lost our Accept and retried could
+    never get one. Nothing is written still (subscriptions_count unchanged),
+    but the Accept is sent again, for the retried Follow's id, and logged.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     sends = record_sends(monkeypatch)
@@ -292,8 +288,13 @@ def test_a_follow_from_an_existing_member_writes_nothing_and_stays_silent(
     db.session.expire_all()
     refreshed_community = db.session.get(type(community), community.id)
     assert refreshed_community.subscriptions_count == 0
-    assert ActivityPubLog.query.count() == 0
-    assert sends == []
+    assert len(sends) == 1
+    uri, body, key_id = sends[0]
+    assert body['type'] == 'Accept'
+    assert body['object']['id'] == activity['id']
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+    assert log.exception_message == 'Already a member, Accept re-sent'
 
 
 # --- Task 3: Follow, Feed target -- routes.py:983-1017 ---
@@ -401,18 +402,17 @@ def test_a_follow_of_a_public_feed_creates_membership_and_accepts(app, db_sessio
     assert log.result == 'success'
 
 
-def test_a_follow_from_an_existing_feed_member_writes_nothing_and_stays_silent(
+def test_a_follow_from_an_existing_feed_member_re_sends_the_accept(
         app, db_session, monkeypatch):
-    """routes.py:1001, `feed_membership(user, feed) == SUBSCRIPTION_MEMBER`:
-    nothing is written (subscriptions_count unchanged), nothing is sent, and
-    nothing is logged -- the Feed analogue of the Community
-    already-a-member silence covered above.
+    """D66, fixed (owner ruling), the Feed analogue of the Community case
+    above: `feed_membership(user, feed) == SUBSCRIPTION_MEMBER`, so nothing
+    is written (subscriptions_count unchanged), but the Accept is sent again
+    and logged where before the retry met silence.
 
-    `feed_membership` (app/utils.py:1661) delegates to `feed.subscribed`,
-    which queries FeedMember/FeedJoinRequest directly; the test config's
-    `CACHE_TYPE='NullCache'` (tests/conftest.py:68) means the function's own
-    `@cache.memoize` decorator does not memoize a stale answer here, so
-    seeding the FeedMember row below is enough for the guard to see it.
+    `feed_membership` (app/utils.py) delegates to `feed.subscribed`, which
+    queries FeedMember/FeedJoinRequest directly; the test config's
+    `CACHE_TYPE='NullCache'` means its `@cache.memoize` does not hold a stale
+    answer, so seeding the FeedMember row below is enough.
 
     The feed is public=True so this exercises the already-subscribed guard
     specifically, not the non-public reject guard above it.
@@ -430,8 +430,13 @@ def test_a_follow_from_an_existing_feed_member_writes_nothing_and_stays_silent(
     db.session.expire_all()
     refreshed_feed = db.session.get(type(feed), feed.id)
     assert refreshed_feed.subscriptions_count == 0
-    assert ActivityPubLog.query.count() == 0
-    assert sends == []
+    assert len(sends) == 1
+    uri, body, key_id = sends[0]
+    assert body['type'] == 'Accept'
+    assert body['object']['id'] == activity['id']
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+    assert log.exception_message == 'Already a member, Accept re-sent'
 
 
 # --- Task 4: Follow, User target -- routes.py:1018-1072 ---
@@ -757,16 +762,12 @@ def test_a_follow_never_records_is_accepted_false(app, db_session, monkeypatch, 
     assert follower_row.is_accepted is not False
 
 
-def test_a_follow_from_an_existing_inward_follower_writes_nothing_and_stays_silent(
+def test_a_follow_from_an_accepted_inward_follower_re_sends_the_accept(
         app, db_session, monkeypatch):
-    """routes.py:1030 with `existing_follower` truthy (a `UserFollower(
-    is_inward=True)` row already linking this pair). Nothing is written
-    (the row count does not change), nothing is sent, and nothing is logged
-    -- the User analogue of the Community/Feed already-a-member silences
-    covered by Tasks 2-3, and the third row in this file's module docstring
-    table's "uniformly silent" list. `ActivityPubLog.query.count() == 0` is
-    asserted WITH logging enabled for the identical reason those two tests
-    give: it would fail the moment a log call were ever added to this path.
+    """D66, fixed (owner ruling), the User analogue of the Community/Feed
+    cases: an accepted `UserFollower(is_inward=True)` row already links the
+    pair. No second row is written and no second notification raised, but the
+    Accept is sent again and logged where before the retry met silence.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     sends = record_sends(monkeypatch)
@@ -779,8 +780,56 @@ def test_a_follow_from_an_existing_inward_follower_writes_nothing_and_stays_sile
 
     assert UserFollower.query.filter_by(
         local_user_id=local_user.id, remote_user_id=remote_user.id, is_inward=True).count() == 1
-    assert ActivityPubLog.query.count() == 0
+    assert len(sends) == 1
+    uri, body, key_id = sends[0]
+    assert body['type'] == 'Accept'
+    assert body['object']['id'] == activity['id']
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+    assert log.exception_message == 'Already following, Accept re-sent'
+
+
+def test_a_follow_from_a_pending_inward_follower_is_logged_and_ignored(
+        app, db_session, monkeypatch):
+    """D66, fixed (owner ruling). The follow is still awaiting the local
+    user's approval (`is_accepted` None), so there is no Accept to repeat:
+    nothing is written or sent, and the retry is logged as ignored.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    sends = record_sends(monkeypatch)
+    remote_user, local_user = _seed_follow_of_local_user(manually_approves=True)
+    make_follow(local_user, remote_user, is_accepted=None, is_inward=True)
+
+    activity = inbox_activity(remote_user, activity_type='Follow', object_uri=local_user.public_url())
+
+    dispatch(activity)
+
+    assert UserFollower.query.filter_by(
+        local_user_id=local_user.id, remote_user_id=remote_user.id, is_inward=True).count() == 1
     assert sends == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'ignored'
+    assert log.exception_message == 'Follow is still awaiting approval'
+
+
+def test_a_follow_from_a_rejected_inward_follower_is_logged_and_ignored(
+        app, db_session, monkeypatch):
+    """D66's third case, which the ruling does not name: the local user
+    rejected this follow (`is_accepted` False). Behaviour is unchanged --
+    nothing written or sent -- but the retry is logged as ignored rather than
+    leaving no trace.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    sends = record_sends(monkeypatch)
+    remote_user, local_user = _seed_follow_of_local_user(manually_approves=True)
+    make_follow(local_user, remote_user, is_accepted=False, is_inward=True)
+
+    dispatch(inbox_activity(remote_user, activity_type='Follow', object_uri=local_user.public_url()))
+
+    assert sends == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'ignored'
+    assert log.exception_message == 'Follow was rejected'
 
 
 def test_the_follower_row_and_its_notification_both_land_under_a_direct_dispatch(
