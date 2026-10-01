@@ -17,8 +17,8 @@ Five defects, all measured:
   and both utils were `...` stubs whose route then loads a schema from None
   (D1181).
 
-Registered and pinned: a token carrying no `jti` cannot be revoked, while
-logout answers success (D1182). An account with `ban users` could ban an
+A token carrying no `jti` cannot be revoked, and logout now refuses it
+(D1182, fixed by owner ruling). An account with `ban users` could ban an
 administrator, including the founder (D1178); fixed, owner ruling 2026-09-30.
 """
 import jwt
@@ -560,13 +560,10 @@ def test_logging_out_without_a_usable_token(app, env, auth):
     assert str(refused.value) == 'incorrect_login'
 
 
-def test_a_token_with_no_jti_cannot_be_revoked(app, env):
-    """D1182, PINNED as it stands. `encode_jwt_token` always mints a `jti`,
-    so this is only reachable for a token made elsewhere -- but the endpoint
-    answers success while revoking nothing, which is a claim it cannot keep.
-    Measured: `PROBE bf7 answer: {'success': True} | revoked rows: 0`.
-    Update this test if the endpoint is made to refuse (D1182).
-    """
+def test_a_token_with_no_jti_is_refused_at_logout(app, env):
+    """D1182, fixed (owner ruling): a token carrying no `jti` cannot be
+    revoked, so logout refuses it with the API's 400 instead of answering
+    success while revoking nothing."""
     from app.api.alpha.utils.user import post_user_logout
 
     actor, target = env
@@ -574,8 +571,22 @@ def test_a_token_with_no_jti_cannot_be_revoked(app, env):
                              current_app.config['SECRET_KEY'],
                              algorithm='HS256')
 
-    assert post_user_logout(f'Bearer {without_jti}') == {'success': True}
+    with pytest.raises(Exception) as refused:
+        post_user_logout(f'Bearer {without_jti}')
+
+    assert str(refused.value) == 'incorrect_login'
     assert RevokedToken.query.count() == 0
+
+
+def test_every_login_token_carries_a_jti(app, env):
+    """D1182: the only login token minter, `encode_jwt_token`, always sets a
+    `jti`, so every token this instance issues can be revoked at logout."""
+    actor, target = env
+
+    decoded = jwt.decode(actor.encode_jwt_token(), current_app.config['SECRET_KEY'],
+                         algorithms=['HS256'])
+
+    assert decoded['jti']
 
 
 # --------------------------------------------------------------------------
