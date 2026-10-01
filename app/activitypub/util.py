@@ -1261,6 +1261,8 @@ def refresh_feed_profile_task(feed_id, activity_json=None):
                             owners_request.close()
                             if owners_data and 'type' in owners_data and owners_data['type'] == 'OrderedCollection' and isinstance(owners_data.get('orderedItems'), list):  # D234
                                 for actor in owners_data['orderedItems'][:REFRESH_COLLECTION_LIMIT]:
+                                    if not isinstance(actor.get('id') if isinstance(actor, dict) else actor, str):
+                                        continue  # a malformed entry is skipped, not fatal to the rest (D219)
                                     user = find_actor_or_create(actor, create_if_not_found=on_owner_host(actor, feed.ap_profile_id),
                                                                 retry=True)
                                     if user:
@@ -1284,8 +1286,8 @@ def refresh_feed_profile_task(feed_id, activity_json=None):
                                     is_owner = False
                                     for actor in owners_data['orderedItems']:
                                         if isinstance(actor, dict):
-                                            actor = actor['id']
-                                        if actor.lower() == member_user.profile_id().lower():
+                                            actor = actor.get('id')
+                                        if isinstance(actor, str) and actor.lower() == member_user.profile_id().lower():  # D219
                                             is_owner = True
                                             break
                                     if not is_owner:

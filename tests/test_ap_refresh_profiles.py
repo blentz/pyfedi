@@ -1568,6 +1568,36 @@ def test_a_feed_owners_url_is_fetched_and_recorded(app, db_session, http_mock):
     assert membership.is_owner is True
 
 
+def test_a_malformed_feed_owner_entry_is_skipped(app, db_session, http_mock):
+    """D219 residue, fixed (owner ruling): the feed refresh's owners loop
+    skips an entry with no string id and processes the rest, as e32fec1bf made
+    the community moderators loop do. An object with no `id`, or a number,
+    used to raise out of the task -- in `find_actor_or_create` or in the
+    removal pass's `actor['id']` / `.lower()` -- and abort the refresh."""
+    feed = _remote_feed()
+    feed.ap_following_url = f'https://{PEER}/f/news/following'
+    db.session.commit()
+    owner = make_user(feed.instance, 'fauxowner')
+    owner.ap_fetched_at = utcnow()
+    db.session.commit()
+    db.session.add(FeedMember(feed_id=feed.id, user_id=owner.id, is_owner=True))
+    db.session.commit()
+    owners_url = f'https://{PEER}/f/news/owners'
+    _serve(http_mock, feed.ap_public_url,
+           _feed_document(fields={'attributedTo': owners_url}))
+    _serve(http_mock, owners_url,
+           {'type': 'OrderedCollection', 'orderedItems': [{'type': 'Person'}, 42, owner.ap_profile_id]})
+    _serve(http_mock, feed.ap_following_url, {'type': 'Collection', 'items': []})
+
+    refresh_feed_profile_task(feed.id)
+
+    membership = db.session.query(FeedMember).filter_by(
+        feed_id=feed.id, user_id=owner.id).one()
+    assert membership.is_owner is True
+    db.session.refresh(feed)
+    assert feed.title == 'News, refreshed'
+
+
 def test_a_typeless_owners_document_is_skipped(app, db_session, http_mock):
     """`'type' in owners_data`, checked before `owners_data['type']` is read.
 
