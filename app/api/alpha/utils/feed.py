@@ -182,6 +182,12 @@ def post_feed(auth, data):
     show_child_posts = data['show_child_posts'] if 'show_child_posts' in data else False
     parent_feed_id = data['parent_feed_id'] if 'parent_feed_id' in data else None
 
+    # D708: the site's NSFW/NSFL switches apply here as on the web, refused out loud rather than quietly dropped
+    if nsfw and g.site.enable_nsfw is False:
+        raise Exception('nsfw_not_allowed')
+    if nsfl and g.site.enable_nsfl is False:
+        raise Exception('nsfl_not_allowed')
+
     input_data = {'url': url, 'title': title, 'public': public, 'description': description,
                   'icon_url': icon_url, 'banner_url': banner_url, 'nsfw': nsfw, 'nsfl': nsfl,
                   'communities': communities, 'is_instance_feed': is_instance_feed,
