@@ -52,6 +52,17 @@ from app.utils import retrieve_block_list, blocked_domains, retrieve_peertube_bl
     guess_mime_type, ensure_directory_exists, \
     render_from_tpl, get_task_session, patch_db_session, get_setting, get_recipient_language, \
     log_cron_task_to_db, allowlist_html, markdown_to_html, html_to_text, site_language_id, sql_file, can_create_post
+import boto3
+import email
+from app.shared.tasks.maintenance import (
+    cleanup_old_notifications, cleanup_send_queue, process_expired_bans, remove_old_community_content,
+    update_hashtag_counts, delete_old_soft_deleted_content, update_community_stats, cleanup_old_voting_data,
+    unban_expired_users, sync_defederation_subscriptions, check_instance_health, monitor_healthy_instances,
+    recalculate_user_attitudes, calculate_community_activity_stats, cleanup_old_activitypub_logs,
+    archive_old_posts, archive_old_users, cleanup_old_read_posts, refresh_instance_chooser, clean_up_tmp
+)
+from app.utils import move_file_to_s3
+import app as app_pkg
 
 logger = logging.getLogger(__name__)
 
@@ -827,15 +838,6 @@ def register(app):
     def daily_maintenance_celery():
         """Schedule daily maintenance tasks via Celery background queue"""
         with app.app_context():
-            from app.shared.tasks.maintenance import (
-                cleanup_old_notifications, cleanup_send_queue, process_expired_bans,
-                remove_old_community_content, update_hashtag_counts, delete_old_soft_deleted_content,
-                update_community_stats, cleanup_old_voting_data, unban_expired_users,
-                sync_defederation_subscriptions, check_instance_health, monitor_healthy_instances,
-                recalculate_user_attitudes, calculate_community_activity_stats, cleanup_old_activitypub_logs,
-                archive_old_posts, archive_old_users, cleanup_old_read_posts, refresh_instance_chooser,
-                clean_up_tmp
-            )
 
             print(f'Scheduling daily maintenance tasks via Celery at {datetime.now()}')
 
@@ -901,15 +903,6 @@ def register(app):
 
     @app.cli.command('daily-maintenance')
     def daily_maintenance():
-        from app.shared.tasks.maintenance import (
-            cleanup_old_notifications, cleanup_send_queue, process_expired_bans,
-            remove_old_community_content, update_hashtag_counts, delete_old_soft_deleted_content,
-            update_community_stats, cleanup_old_voting_data, unban_expired_users,
-            sync_defederation_subscriptions, check_instance_health, monitor_healthy_instances,
-            recalculate_user_attitudes, calculate_community_activity_stats, cleanup_old_activitypub_logs,
-            archive_old_posts, archive_old_users, cleanup_old_read_posts, refresh_instance_chooser,
-            clean_up_tmp
-        )
 
         if not current_app.debug:
             sleep(uniform(0, 10))  # Cron jobs are not very granular so there is a danger all instances will send in the same instant. A random delay avoids this.
@@ -967,7 +960,6 @@ def register(app):
     @app.cli.command('archive-old-posts')
     def archive_old_p():
         with app.app_context():
-            from app.shared.tasks.maintenance import archive_old_posts
 
             archive_old_posts()
             print('Done')
@@ -976,18 +968,17 @@ def register(app):
     def send_queue():
         with app.app_context():
             try:
-                from app import redis_client
                 try:  # avoid parallel runs of this task using Redis lock
-                    with redis_client.lock("lock:send-queue", timeout=300, blocking_timeout=1):
+                    with app_pkg.redis_client.lock("lock:send-queue", timeout=300, blocking_timeout=1):
                         # Check size of redis memory. Abort if > 200 MB used
                         try:
-                            if redis_client and current_app.config['REDIS_MEMORY_LIMIT'] != -1 and \
-                                    redis_client.memory_stats()['total.allocated'] > current_app.config['REDIS_MEMORY_LIMIT']:
+                            if app_pkg.redis_client and current_app.config['REDIS_MEMORY_LIMIT'] != -1 and \
+                                    app_pkg.redis_client.memory_stats()['total.allocated'] > current_app.config['REDIS_MEMORY_LIMIT']:
                                 print('Redis memory is quite full - stopping send queue to avoid making it worse.')
-                                redis_client.set("pause_federation", "1", ex=600)   # this also stops incoming federation
+                                app_pkg.redis_client.set("pause_federation", "1", ex=600)   # this also stops incoming federation
                                 return
                             else:
-                                redis_client.set("pause_federation", "0", ex=600)
+                                app_pkg.redis_client.set("pause_federation", "0", ex=600)
                         except:  # retrieving memory stats fails on recent versions of redis. Once the redis package is fixed this problem should go away.
                             ...
                         if not current_app.debug:
@@ -1036,8 +1027,7 @@ def register(app):
 
     @app.cli.command('reopen')
     def reopen():
-        from app import redis_client
-        redis_client.set('pause_federation', '666', ex=1)
+        app_pkg.redis_client.set('pause_federation', '666', ex=1)
         print('Done')
 
     @app.cli.command('publish-scheduled-posts')
@@ -1208,7 +1198,6 @@ def register(app):
         feed_bot = User.query.filter_by(user_name='feed_bot', ap_id=None).first()
         if not feed_bot:
             # Create the feed_bot user
-            from app.auth.util import random_token
             private_key, public_key = RsaKeys.generate_keypair()
             feed_bot = User(
                 user_name='feed_bot',
@@ -1424,8 +1413,6 @@ def register(app):
     @app.cli.command('move-files-to-s3')
     def move_files_to_s3():
         with app.app_context():
-            from app.utils import move_file_to_s3
-            import boto3
 
             print('This will run for a long time, you should run it in a tmux session. Hit Ctrl+C now if not using tmux.')
             sleep(5.0)
@@ -1465,8 +1452,6 @@ def register(app):
     @app.cli.command('move-post-images-to-s3')
     def move_post_images_to_s3():
         with app.app_context():
-            from app.utils import move_file_to_s3
-            import boto3
             processed = 0
             print('Beginning move of post images... this could take a long time. Use tmux.')
             local_post_image_ids = list(db.session.execute(text(
@@ -1499,7 +1484,6 @@ def register(app):
     @app.cli.command('move-more-post-images-to-s3')
     def move_more_post_images_to_s3():
         with app.app_context():
-            import boto3
             server_name = current_app.config['SERVER_NAME']
             boto3_session = boto3.session.Session()
             s3 = boto3_session.client(
@@ -1640,7 +1624,6 @@ def register(app):
             session = get_task_session()
             try:
                 with patch_db_session(session):
-                    import email
 
                     bounce_host = current_app.config['BOUNCE_HOST']
                     host_type = current_app.config['BOUNCE_HOST_TYPE']
@@ -1892,7 +1875,6 @@ def register(app):
         # link posts only need a thumbnail but for a long time we have been generating both a thumbnail and a medium-sized image
         # AS OF JUN 2025 link posts DO need a medium-sized version, as some mobile apps need larger images. DO NOT RUN THIS.
         with app.app_context():
-            import boto3
             sql = '''select file_path from "file" as f
                     inner join "post" as p on p.image_id  = f.id
                     where p.type = :type and f.file_path  is not null'''
