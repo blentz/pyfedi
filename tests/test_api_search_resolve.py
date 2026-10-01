@@ -303,27 +303,23 @@ def test_a_query_that_names_no_server_is_not_found(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_an_anonymous_caller_may_not_reach_off_the_instance(app, env):
-    """Fetching from a remote server is what an account is needed for; a
-    local lookup is not."""
+@pytest.mark.parametrize('remote', [True, False])
+def test_an_anonymous_caller_may_not_resolve_anything(app, env, remote):
+    """PERM-1, fixed (owner ruling). Resolving can fetch and store remote
+    content, so it requires an authenticated caller: with no Authorization
+    header the API's standard `incorrect_login` refusal (a 400) is raised,
+    for a local lookup as well as a remote one. Anonymous callers used to be
+    allowed through, the only credential-free path to `create_resolved_object`
+    in the permission audit."""
     from app.api.alpha.utils.misc import get_resolve_object
 
     user, author, community, post, reply, baseline = env
 
     with pytest.raises(Exception) as refused:
-        get_resolve_object(None, {'q': 'https://remote.example/c/general'})
+        get_resolve_object(None, {'q': 'https://remote.example/c/general' if remote
+                                  else local_url('/c/general')})
 
-    assert str(refused.value) == 'No object found.'
-
-
-def test_an_anonymous_caller_may_still_resolve_something_local(app, env):
-    from app.api.alpha.utils.misc import get_resolve_object
-
-    user, author, community, post, reply, baseline = env
-
-    answer = get_resolve_object(None, {'q': local_url('/c/general')})
-
-    assert answer['community']['community']['id'] == community.id
+    assert str(refused.value) == 'incorrect_login'
 
 
 def test_a_banned_instance_is_not_resolved_from(app, env):
