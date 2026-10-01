@@ -2697,17 +2697,17 @@ class Post(db.Model):
         # that is not a dict; this pre-check, which decides whether the loop runs
         # at all, was a membership test over whatever element 0 happens to be --
         # `TypeError: argument of type 'int' is not iterable` for a number, and
-        # true for any string containing 'type'.
+        # true for any string containing 'type'. It now scans every element, so a
+        # junk first entry cannot hide the attachments behind it (R202).
         if ('attachment' in request_json['object'] and
                 isinstance(request_json['object']['attachment'], list) and
                 len(request_json['object']['attachment']) > 0 and
-                'type' in _as_dict(request_json['object']['attachment'][0])):
+                any('type' in _as_dict(attachment) for attachment in request_json['object']['attachment'])):
             for attachment in request_json['object']['attachment']:
                 alt_text = None
-                # Only the FIRST attachment's `type` is checked in the
-                # condition above, and every one of them is read here -- so a
-                # list whose second entry was shaped differently was a
-                # KeyError, and the post never arrived.
+                # Every entry is read here, whatever its shape, so one that is not
+                # a typed object is skipped -- it was a KeyError, and the post
+                # never arrived.
                 if not isinstance(attachment, dict) or 'type' not in attachment:
                     continue
                 if attachment['type'] == 'Link':

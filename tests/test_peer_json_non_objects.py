@@ -417,23 +417,18 @@ class TestTheAttachmentArray:
 
         assert ingest.post.url == 'https://example.test/an-article'
 
-    def test_a_junk_first_element_hides_the_attachments_behind_it(self, ingest):
-        """THE ROUND'S RESIDUAL, and an inverted claim: this row was written
-        asserting that the real Link behind a junk first element is still found,
-        and it is not.
-
-        The pre-check is `'type' in <element 0>` -- ONE element, deciding whether
-        the loop runs at all. Coercing element 0 stops the TypeError; it does not
-        make element 1 reachable. So a peer can still suppress a post's url by
-        prefixing one entry that is not a typed object.
-
-        Left as it is, deliberately. `app/models.py`'s `Post.new` carries the same
-        element-0 pre-check over the same list, so the two twins agree, and making
-        the pre-check scan the whole list changes WHICH attachment a post takes its
-        url from -- a behaviour change, not a crash fix. Recorded here so the next
-        reader finds the decision rather than the surprise.
+    def test_a_junk_first_element_no_longer_hides_the_attachments_behind_it(
+            self, ingest, http_mock):
+        """R202, fixed (owner ruling): the pre-check was `'type' in <element 0>`
+        -- ONE element deciding whether the loop ran at all -- so a peer could
+        suppress a post's url by prefixing one entry that is not a typed object.
+        The pre-check now scans every element, so the Link behind the junk entry
+        is found. `http_mock` because a changed url is HEADed for its content
+        type.
         """
         from app.activitypub.util import update_post_from_activity
+        http_mock.head('https://example.test/an-article').respond(
+            200, headers={'Content-Type': 'text/html'})
 
         update_post_from_activity(ingest.post, {'object': {
             'id': ingest.post.ap_id, 'name': 'a new title',
@@ -442,7 +437,22 @@ class TestTheAttachmentArray:
                             'href': 'https://example.test/an-article'}]}})
 
         assert ingest.post.title == 'a new title'
-        assert ingest.post.url is None
+        assert ingest.post.url == 'https://example.test/an-article'
+
+    def test_an_image_behind_a_junk_first_element_does_not_crash_the_alt_text_read(
+            self, ingest, http_mock):
+        """R202's consequence: element 0 no longer gates the loop, so the image
+        alt-text read of element 0 can now meet a non-object and must not
+        subscript it."""
+        from app.activitypub.util import update_post_from_activity
+        http_mock.head('https://example.test/pic.png').respond(
+            200, headers={'Content-Type': 'image/png'})
+
+        update_post_from_activity(ingest.post, {'object': {
+            'id': ingest.post.ap_id, 'name': 'a new title',
+            'attachment': [42, {'type': 'Image', 'url': 'https://example.test/pic.png'}]}})
+
+        assert ingest.post.url == 'https://example.test/pic.png'
 
     def test_a_single_dict_attachment_with_no_url(self, ingest):
         """The Mastodon / a.gup.pe arm, which read `['url']` outright."""
@@ -668,6 +678,20 @@ class TestPostNew:
 
         assert post.url == 'https://example.test/a'
 
+    def test_a_link_after_a_junk_entry_is_found(self, ingest, http_mock):
+        """R202, fixed (owner ruling): `Post.new`'s attachment pre-check scans
+        every element, as the Update twin's now does, so a junk first entry no
+        longer hides the Link behind it."""
+        http_mock.head('https://example.test/a').respond(
+            200, headers={'Content-Type': 'text/html'})
+
+        post = Post.new(ingest.author, ingest.community,
+                        self._activity(ingest.community, ingest.author,
+                                       attachment=[42, {'type': 'Link',
+                                                        'href': 'https://example.test/a'}]))
+
+        assert post.url == 'https://example.test/a'
+
     @pytest.mark.parametrize('element', BAD_ATTACHMENTS)
     def test_an_events_attachment_entry_that_is_not_an_object(self, ingest,
                                                              element):
@@ -690,10 +714,10 @@ class TestPostNew:
                                                               http_mock):
         """The control for that loop.
 
-        `http_mock` here and NOT in the row below it, which measurement decided
-        rather than guesswork. The HEAD comes from the FIRST attachment block, the
-        one gated on element 0 being a typed object -- so a `Link` in element 0
-        reaches it, and a junk element 0 skips the whole block and makes no
+        `http_mock` here and NOT in the junk-only row above it, which measurement
+        decided rather than guesswork. The HEAD comes from the FIRST attachment
+        block, the one gated on some element being a typed object -- so a `Link`
+        reaches it, and an all-junk list skips the whole block and makes no
         outbound call. respx's `assert_all_called` caught each mistake in turn:
         the route unused when the element was junk, then the request unmocked when
         it was not.
@@ -710,10 +734,12 @@ class TestPostNew:
 
         assert post.url == 'https://example.test/an-event'
 
-    def test_an_events_link_after_a_junk_entry_is_still_found(self, ingest):
-        """This loop has no element-0 pre-check, so unlike the Page path the entry
-        behind a junk one IS reachable -- which is the difference the residual
-        recorded in TestTheAttachmentArray is about."""
+    def test_an_events_link_after_a_junk_entry_is_still_found(self, ingest, http_mock):
+        """This loop has no element-0 pre-check. Since R202 the first block's
+        pre-check scans every element too, so it now reaches the Link as well and
+        HEADs it, which is why `http_mock` is here."""
+        http_mock.head('https://example.test/an-event').respond(
+            200, headers={'Content-Type': 'text/html'})
         post = Post.new(ingest.author, ingest.community,
                         self._activity(ingest.community, ingest.author,
                                        type='Event',

@@ -3886,11 +3886,12 @@ def update_post_from_activity(post: Post, request_json: dict):
         # containing 'type' passed it -- and then every element was subscripted
         # unguarded: `attachment['type']` is a KeyError for a dict without it and a
         # TypeError for a string. `_as_dict(...).get('type')` answers None for both,
-        # which matches none of the arms.
+        # which matches none of the arms. Every element is scanned, not only the
+        # first, so a junk first entry cannot hide the attachments behind it (R202).
         if ('attachment' in request_json['object'] and
                 isinstance(request_json['object']['attachment'], list) and
                 len(request_json['object']['attachment']) > 0 and
-                'type' in _as_dict(request_json['object']['attachment'][0])):
+                any('type' in _as_dict(attachment) for attachment in request_json['object']['attachment'])):
 
             for attachment in request_json['object']['attachment']:
                 attachment = _as_dict(attachment)
@@ -3957,8 +3958,9 @@ def update_post_from_activity(post: Post, request_json: dict):
                 if is_image_url(new_url):
                     post.type = POST_TYPE_IMAGE
                     image = File(source_url=new_url)
+                    # _as_dict: element 0 may be a junk entry now that it does not gate the loop above (R202)
                     if isinstance(request_json['object']['attachment'], list) and \
-                            'name' in request_json['object']['attachment'][0] and request_json['object']['attachment'][0]['name'] is not None:
+                            _as_dict(request_json['object']['attachment'][0]).get('name') is not None:
                         image.alt_text = request_json['object']['attachment'][0]['name']
                 else:
                     image_url = image_url_from(request_json['object'].get('image'))  # D1352
