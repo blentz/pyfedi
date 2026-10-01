@@ -303,6 +303,35 @@ def test_unsubscribing_by_get_is_refused(app, db_session):
     assert FeedMember.query.filter_by(user_id=member.id, feed_id=feed.id).count() == 1
 
 
+def test_subscribing_by_get_is_refused(app, db_session):
+    """Owner ruling, the same idiom: /feed/<name>/subscribe joined a feed on a
+    GET, so any page could make a signed-in user join one. It is POST-only
+    now, and a POST without the token is refused; no membership is made."""
+    instance, owner, member = _seed()
+    feed = _feed(owner, name='joinable')
+    member.feed_auto_follow = False
+    db.session.commit()
+
+    with app.test_client() as client:
+        login(client, member)
+        assert client.get(f'/feed/{feed.name}/subscribe').status_code == 405
+        assert client.post(f'/feed/{feed.name}/subscribe').status_code == 400
+
+    assert FeedMember.query.filter_by(user_id=member.id, feed_id=feed.id).count() == 0
+
+
+def test_every_feed_subscribe_control_is_a_form_carrying_the_token():
+    """The templates that offered the GET link now post a form with the token."""
+    import pathlib
+    templates = pathlib.Path(__file__).resolve().parent.parent / 'app' / 'templates' / 'feed'
+    for name in ('add_remote.html', 'lookup_remote.html', 'public_feeds.html',
+                 '_feed_table_row.html', 'show_feed.html', '_feed_nav.html'):
+        html = (templates / name).read_text()
+        assert 'href="/feed/{{ new_feed.link() }}/subscribe"' not in html
+        assert 'href="/feed/{{ feed.link() }}/subscribe"' not in html
+        assert "href=\"{{ url_for('feed.subscribe'" not in html, name
+
+
 def test_every_feed_unsubscribe_control_is_a_form_carrying_the_token():
     """The templates that offered the GET link now post a form with the token."""
     import pathlib

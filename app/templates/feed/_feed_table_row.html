@@ -4,7 +4,7 @@
             {% if feed.subscribed(current_user.id) >= 1 %}
                 <form method="post" action="{{ url_for('feed.feed_unsubscribe', actor=feed.ap_id if feed.ap_id else feed.name) }}" class="d-inline"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-warning btn-sm" aria-label="{{ _('Unsubscribe %(name)s', name=feed.title) }}">{{ _('Unsubscribe') }}</button></form>
             {% else %}
-                <a class="btn btn-primary btn-sm" href="{{ url_for('feed.subscribe', actor=feed.ap_id if feed.ap_id else feed.name) }}" rel="nofollow" aria-label="{{ _('Join %(name)s', name=feed.title) }}">{{ _('Subscribe') }}</a>
+                <form method="post" action="{{ url_for('feed.subscribe', actor=feed.ap_id if feed.ap_id else feed.name) }}" class="d-inline"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-primary btn-sm" aria-label="{{ _('Join %(name)s', name=feed.title) }}">{{ _('Subscribe') }}</button></form>
             {% endif %}
         {% else %}
             <a class="btn btn-primary btn-sm" href="{{ url_for('auth.login') }}" rel="nofollow" aria-label="{{ _('Join %(name)s', name=feed.title) }}">{{ _('Subscribe') }}</a>

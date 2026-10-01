@@ -169,9 +169,9 @@
                         </li>
                     {% else -%}
                         <li>
-                            <a class="dropdown-item" href="/feed/{{ feed.link() }}/subscribe" rel="nofollow">
-                                {{ _('Subscribe') }}
-                            </a>
+                            <form method="post" action="/feed/{{ feed.link() }}/subscribe"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit" class="dropdown-item">{{ _('Subscribe') }}</button>
+                            </form>
                         </li>
                         <div class="dropdown-divider"></div>
                         <li>

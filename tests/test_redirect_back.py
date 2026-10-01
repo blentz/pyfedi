@@ -350,7 +350,10 @@ class TestCommunityLookupRemote(BackSiteContract):
 
 
 class TestFeedSubscribe(BackSiteContract):
-    """app/feed/routes.py subscribe -- no origin check at all before this change."""
+    """app/feed/routes.py subscribe -- no origin check at all before this change.
+    POST-only now, like feed_unsubscribe."""
+
+    method = 'post'
 
     def prepare(self):
         instance = make_instance('test.piefed.local', software='piefed')
