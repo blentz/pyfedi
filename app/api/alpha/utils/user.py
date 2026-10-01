@@ -932,10 +932,10 @@ def post_user_verify_credentials(data):
     # an account that cannot log in -- and the pair of answers distinguished a
     # banned account from a wrong password, which is the account-state oracle
     # D1131 closed on the web arm. Measured: `PROBE bf6 outcome: accepted`.
-    # `user.id != 1` matches the login's own carve-out for whoever set the
+    # `is_ban_exempt()` matches the login's own carve-out for whoever set the
     # instance up.
     if user is None or not user.check_password(password) or \
-            (user.id != 1 and user.banned):
+            (not user.is_ban_exempt() and user.banned):
         raise BlockingIOError
 
     return {}
@@ -1042,7 +1042,7 @@ def post_user_ban(auth, data):
         if target is None:
             raise Exception('person not found')
         # D1178: only an admin may ban an admin, and nobody may ban user 1.
-        if target.id == 1 or (target.is_admin() and not user.is_admin()):
+        if target.is_ban_exempt() or (target.is_admin() and not user.is_admin()):
             raise Exception('cannot_ban_admin')
 
         ban_user({'person_id': target_user_id,

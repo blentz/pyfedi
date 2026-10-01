@@ -1933,6 +1933,11 @@ class User(UserMixin, db.Model):
     def is_admin_or_staff(self):
         return self.is_admin() or self.is_staff()
 
+    def is_ban_exempt(self):
+        # D583: user 1 is the account that set the instance up. No ban -- account, IP or cookie -- stops it logging
+        # in, and nobody may ban it, so an instance can never lock out its founder. Every ban check asks this.
+        return self.id == 1
+
     def is_instance_admin(self):
         if self.instance_id:
             instance_role = InstanceRole.query.filter(InstanceRole.instance_id == self.instance_id,

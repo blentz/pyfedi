@@ -856,7 +856,7 @@ def ban_profile(actor):
             goto = safe_redirect_target(request.args.get('redirect'), f'/u/{actor}')
             return redirect(goto)
         # D1178: only an admin may ban an admin, and nobody may ban user 1.
-        elif user.id == 1 or (user.is_admin() and not current_user.is_admin()):
+        elif user.is_ban_exempt() or (user.is_admin() and not current_user.is_admin()):
             flash(_('You cannot ban an administrator.'), 'error')
             goto = safe_redirect_target(request.args.get('redirect'), f'/u/{actor}')
             return redirect(goto)
