@@ -737,6 +737,20 @@ class EditCommunityRequest(DefaultSchema):
     restricted_to_mods = fields.Boolean()
     question_answer = fields.Boolean()
     rules = fields.String()
+    # D641: the settings the web edit form has always set. Each must be one of
+    # the values that form offers.
+    private = fields.Boolean()
+    topic_id = fields.Integer(allow_none=True)
+    theme = fields.String()
+    posting_warning = fields.String(allow_none=True)
+    nsfl = fields.Boolean()
+    ai_generated = fields.Boolean()
+    invitations = fields.Integer()
+    new_mods_wanted = fields.Boolean()
+    default_layout = fields.String()
+    default_post_type = fields.String()
+    downvote_accept_mode = fields.Integer()
+    post_url_type = fields.String()
 
 
 class DeleteCommunityRequest(DefaultSchema):
