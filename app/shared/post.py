@@ -15,7 +15,7 @@ from sqlalchemy import text, Integer
 from sqlalchemy.orm.exc import NoResultFound
 
 from app import db, cache, plugins, limiter
-from app.activitypub.util import make_image_sizes, notify_about_post
+from app.activitypub.util import make_image_sizes, notify_about_post, host_of
 from app.community.util import tags_from_string_old, end_poll_date, flair_from_form, flairs_from_string
 from app.constants import *
 from app.models import File, Notification, NotificationSubscription, Poll, PollChoice, PollChoiceVote, Post, \
@@ -474,7 +474,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
     post.timezone = timezone
 
     if post.url:
-        if post.url.startswith('https://pixelfed.social/') or post.url.startswith('https://pixelfed.uno/'):
+        if host_of(post.url) in {'pixelfed.social', 'pixelfed.uno'}:  # one pixelfed test, as below (D478)
             post.type = POST_TYPE_IMAGE
         elif post.url.startswith('https://loops.video/'):
             post.type = POST_TYPE_VIDEO
@@ -703,7 +703,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
                 make_image_sizes(post.image_id, 512, 1200, 'posts', post.community.low_quality)
                 post.type = POST_TYPE_IMAGE
                 post.url = url
-        elif url.startswith('https://pixelfed.social') or url.startswith('pixelfed.uno'):
+        elif host_of(url) in {'pixelfed.social', 'pixelfed.uno'}:  # one pixelfed test, as above (D478)
             post.type = POST_TYPE_IMAGE
             opengraph = opengraph_parse(thumbnail_url)
             if opengraph and (opengraph.get('og:image', '') != '' or opengraph.get('og:image:url', '') != ''):

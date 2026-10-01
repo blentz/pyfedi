@@ -199,6 +199,20 @@ class TestExistingUrlTypeDispatch:
         db.session.refresh(s.post)
         assert s.post.type == POST_TYPE_IMAGE
 
+    def test_an_existing_bare_pixelfed_domain_retypes_the_post_as_image(self, db_session):
+        """D478, fixed (owner ruling): both pixelfed classifiers compare
+        `host_of(url)` against {'pixelfed.social', 'pixelfed.uno'}. This one
+        used to require 'https://pixelfed.social/' with a trailing slash, so a
+        bare domain was not recognised here though the submitted-url classifier
+        recognised it."""
+        s = _seed(url='https://pixelfed.social')
+
+        edit_post(_api_input(), s.post, POST_TYPE_ARTICLE, SRC_API,
+                  user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.type == POST_TYPE_IMAGE
+
     def test_an_existing_loops_url_retypes_the_post_as_video(self, db_session):
         """`:404` false, `:406` true -> `:407`. Arc 406->407, statement 407.
 
@@ -1271,33 +1285,10 @@ class TestPixelfedArm:
     ONE measured exception, the scheme-less test at the bottom, whose GET never
     leaves `app/utils.py` at all.
 
-    A REGISTERED DIVERGENCE, PINNED HERE AND DELIBERATELY NOT FIXED. The two
-    lines were read off the file rather than recalled::
-
-        404	        if post.url.startswith('https://pixelfed.social/') or post.url.startswith('https://pixelfed.uno/'):
-        619	        elif url.startswith('https://pixelfed.social') or url.startswith('pixelfed.uno'):
-
-    `:404` matches `'https://pixelfed.social/'` and `'https://pixelfed.uno/'`
-    -- both with a scheme and a trailing slash. `:619` matches
-    `'https://pixelfed.social'` (no trailing slash) and `'pixelfed.uno'` (NO
-    SCHEME AT ALL). The scheme-less disjunct is REACHABLE, not dead:
-    `is_image_url('pixelfed.uno/p/bob/2')` is False, measured in this container
-    twice over -- once with respx absent, where httpx itself raises
-    `httpx.UnsupportedProtocol` (a subclass of `httpx.TransportError` ->
-    `httpx.RequestError` -> `httpx.HTTPError`, printed from `__mro__`) so
-    `mime_type_using_head`'s handler at app/utils.py:345 returns `''`; and once
-    with respx present and that same exception installed as the route's
-    side effect. Either way `is_image_url` falls through to extension sniffing
-    and finds no image extension.
-
-    The two sites also read DIFFERENT VALUES: `:404` tests `post.url`, the url
-    the post already has, while `:619` tests `url`, the newly submitted one,
-    which `:618`/`:628`/`:640`/`:652` have not yet written. So this is not one
-    value checked twice with different strictness; it is two classifiers of the
-    same kind of thing applied at different points, disagreeing. Whether
-    scheme-less input should be accepted at all is a product question, and this
-    round has no standing to answer it. Both branches are pinned as they behave
-    today; the divergence is registered, not endorsed and not condemned.
+    D478, fixed (owner ruling): the two pixelfed classifiers used to disagree --
+    one required 'https://pixelfed.social/' and 'https://pixelfed.uno/', the
+    other matched 'https://pixelfed.social' and a scheme-less 'pixelfed.uno'.
+    Both now compare `host_of(url)` against {'pixelfed.social', 'pixelfed.uno'}.
 
     WHY RESPX HAS TO BE TOLD TO RAISE, for the scheme-less test only. This is a
     CORRECTION to the brief, which predicted respx would never see the request.
@@ -1584,53 +1575,22 @@ class TestPixelfedArm:
         assert File.query.count() == 0
         assert s.post.url == PIXELFED_URL
 
-    def test_a_scheme_less_pixelfed_uno_url_takes_the_same_arm(
+    def test_a_scheme_less_pixelfed_uno_url_is_not_a_pixelfed_url(
             self, db_session, http_mock):
-        """`:619`'s SECOND disjunct, which carries no scheme at all.
+        """D478, fixed (owner ruling): this arm used to match
+        `startswith('pixelfed.uno')` with no scheme, where the existing-url
+        classifier required 'https://pixelfed.uno/', so one input was typed
+        differently by the two. Both now compare `host_of(url)`, and a
+        scheme-less string has no host, so it is not a pixelfed url: it takes the
+        generic link arm, with no 'Source: ' suffix.
 
-        PINS A REGISTERED DIVERGENCE. `:404` would NOT match this string --
-        it requires 'https://pixelfed.uno/' -- so the same input is classified
-        differently depending on which of the two dispatches sees it. The test
-        records today's behaviour; it does not endorse it. See the class
-        docstring.
+        The HEAD route must RAISE, the exception unmocked httpx raises for this
+        url, because a mocked 200 kills httpx's cookie jar with `ValueError:
+        unknown url type` (see the class docstring). There is no GET route:
+        `get_request` refuses a scheme-less uri before any transport, so
+        `opengraph_parse` returns None.
 
-        THE ROUTING IS MEASURED, AND BOTH HALVES CORRECT THE BRIEF.
-
-        The HEAD: with a respx router active the request DOES reach respx (as
-        `HEAD /pixelfed.uno/p/bob/2`), so a route is required rather than
-        forbidden -- but it must RAISE, because a mocked 200 kills httpx's
-        cookie jar with `ValueError: unknown url type`. The side effect is the
-        exception unmocked httpx raises for this very url, so `:601`'s
-        `is_image_url` is False by the same mechanism as in production. See the
-        class docstring for the two measurements.
-
-        The GET: there is NO GET route, and that is not an oversight.
-        `opengraph_parse` at `:621` DOES run, but `get_request`
-        (app/utils.py:131-134) rejects the uri through
-        `is_invalid_get_request_uri` (app/utils.py:5494-5501: `furl(uri).host`
-        is empty for a scheme-less string, so it returns True) and raises
-        `httpx.HTTPError` before any transport is reached. `opengraph_parse`'s
-        `except Exception` (app/utils.py:3006-3007) swallows it and returns
-        None. Measured: the router recorded 0 calls and logged
-        'invalid get request pixelfed.uno/p/bob/2'. So `:622` is FALSE here and
-        this test travels 622->628, the same arc as
-        `test_a_pixelfed_url_with_an_unreadable_page_still_keeps_its_url` --
-        by a different mechanism (a refused uri rather than a 404 page), which
-        is why it cannot substitute for that test and does not try to.
-
-        `http_mock`'s `assert_all_called=True` is load-bearing twice over: it
-        proves the HEAD was issued, and, with only one route registered, a GET
-        that ever did escape to the transport would raise
-        `AllMockedAssertionError` instead of passing unnoticed.
-
-        DRIVEN THROUGH SRC_WEB, NOT SRC_API, SINCE D1407. That round gave the API's
-        `url` an http(s) check (`app/shared/post.py:315`), so a scheme-less string is
-        refused there and can no longer reach `:619` at all. The web branch reads
-        `input.link_url.data` without re-validating -- `CreateLinkForm` carries the
-        `Regexp(r'^https?://')` that a real submission would have satisfied -- so a form
-        double is now the only local driver for this arm. Federated ingest can still
-        produce a scheme-less `post.url`: `url_is_storable` blocks named SCHEMES and a
-        string with no scheme has none to block, which is why the arm is not dead code.
+        Driven through SRC_WEB, since D1407 the API refuses a scheme-less `url`.
         """
         bare = 'pixelfed.uno/p/bob/2'
         http_mock.head(url__regex=r'.*').mock(
@@ -1642,9 +1602,8 @@ class TestPixelfedArm:
                   SRC_WEB, user=s.user, from_scratch=True)
 
         db.session.refresh(s.post)
-        assert s.post.type == POST_TYPE_IMAGE
-        assert s.post.url == bare
-        assert s.post.body.endswith('\n\nSource: ')
+        assert s.post.type == POST_TYPE_LINK
+        assert not s.post.body.endswith('\n\nSource: ')
 
 
 LOOPS_URL = 'https://loops.video/v/clip9'
