@@ -104,6 +104,19 @@ def test_logging_in_by_email(app, env):
         assert str(session['_user_id']) == str(person.id)
 
 
+def test_logging_in_by_email_ignores_its_case(app, env):
+    """D584, fixed (owner ruling). `find_user` matched the address exactly, so
+    an address typed with different capitals did not log in on the web while
+    the API, which lowered both sides, accepted it. One finder now serves both."""
+    anon, person = env
+
+    response = login_with(anon, 'Person@Example.COM', 'a-good-password')
+
+    assert response.status_code == 302
+    with anon.session_transaction() as session:
+        assert str(session['_user_id']) == str(person.id)
+
+
 @pytest.mark.parametrize('name, password', [
     ('person', 'the-wrong-password'),
     ('nobody-at-all', 'a-good-password'),
