@@ -353,7 +353,7 @@ def show_community(community: Community):
 
     mods = community_moderators(community.id)
 
-    if current_user.is_authenticated and community.id not in communities_banned_from(current_user.id):
+    if current_user.is_authenticated and not user_banned_from_community(current_user.id, community.id):  # D995
         is_moderator = any(mod.user_id == current_user.id for mod in mods)
         is_owner = any(mod.user_id == current_user.id and mod.is_owner == True for mod in mods)
         is_admin = current_user.id in g.admin_ids
@@ -363,7 +363,7 @@ def show_community(community: Community):
         is_admin = False
 
     banned_from_community = False
-    if current_user.is_authenticated and community.id in communities_banned_from(current_user.id):
+    if current_user.is_authenticated and user_banned_from_community(current_user.id, community.id):  # D995
         ban_details = CommunityBan.query.filter(CommunityBan.user_id == current_user.id,
                                                 CommunityBan.community_id == community.id).first()
         banned_from_community = True
@@ -923,42 +923,19 @@ def do_subscribe(actor, user_id, admin_preload=False, joined_via_feed=False):
 
                 if community is not None:
                     pre_load_message['community'] = community.ap_id
-                    if community.id in communities_banned_from(user.id):
+                    # One gate (D995): a community or instance ban, through the cached
+                    # list, or a fresh CommunityBan row the cached list has not seen yet
+                    # (D991). It RETURNs: both arms used to record the refusal and fall
+                    # through into the join.
+                    if user_banned_from_community(user.id, community.id):
                         if not admin_preload:
+                            if current_user and current_user.is_authenticated and current_user.id == user_id:
+                                flash(_('You cannot join this community'))
                             abort(401)
                         else:
-                            # RETURN, as the direct-read check below now does.
-                            # This arm recorded the refusal and then fell
-                            # through into the join, so a bulk importer
-                            # subscribed the account to a community it is
-                            # banned from while reporting that it could not --
-                            # D991's shape at the first gate as well as the
-                            # second.
                             pre_load_message['user_banned'] = True
                             return pre_load_message
                     if community_membership(user, community) != SUBSCRIPTION_MEMBER and community_membership(user, community) != SUBSCRIPTION_PENDING:
-                        banned = user_banned_from_community(user.id, community.id)  # D995
-                        if banned:
-                            # RETURN, rather than flash and carry on. This
-                            # branch used to fall through into the join, so a
-                            # user with a CommunityBan row became a member
-                            # anyway while being told they could not.
-                            #
-                            # The check above it -- `community.id in
-                            # communities_banned_from(user.id)` -- is the one
-                            # that normally refuses, and it reads a list
-                            # memoized for 86400 seconds. community_ban_user
-                            # invalidates it, but a ban arriving any other way
-                            # (federated in, or written by a tool that does not
-                            # know to) leaves that gate stale for a day, and
-                            # this direct read is what should have caught it.
-                            if not admin_preload:
-                                if current_user and current_user.is_authenticated and current_user.id == user_id:
-                                    flash(_('You cannot join this community'))
-                                abort(401)
-                            else:
-                                pre_load_message['community_banned_by_local_instance'] = True
-                                return pre_load_message
                         # for local communities, joining is instant
                         existing_membership = CommunityMember.query.filter_by(user_id=user.id, community_id=community.id).first()
                         if not existing_membership:
