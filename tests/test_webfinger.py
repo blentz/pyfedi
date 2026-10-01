@@ -850,28 +850,41 @@ def test_an_unknown_actor_is_404(app, db_session):
     assert response.status_code == 404
 
 
-def test_a_query_for_another_domain_is_answered_with_our_own_user(app, db_session):
-    """Documents accepted behaviour, not a bug awaiting a fix: the resource's
-    domain is split off and discarded --
-
-        actor = query.split(':')[1].split('@')[0]
-
-    so `acct:alice@evil.example` is answered with THIS instance's `alice`, and
-    the reply asserts the subject is alice@test.piefed.local -- a handle the
-    query never asked about.
-
-    RFC 7033 has a server answer only for resources it is authoritative for.
-    The assertion below is on the subject as well as the status, because a
-    status alone does not say WHICH actor was served: what makes this worth
-    pinning is the identity the response claims. This is registered as D145
-    rather than fixed: rejecting a foreign domain changes who this instance
-    will answer for and could break federation with software that queries
-    loosely, so this test's expectations stay as they are permanently.
+def test_a_query_for_another_domain_is_404(app, db_session):
+    """D145, fixed (owner ruling 2026-09-30). The resource's domain used to be
+    split off and discarded, so `acct:alice@evil.example` was answered with THIS
+    instance's `alice`, asserting a handle the query never asked about. RFC 7033
+    has a server answer only for resources it is authoritative for, so a
+    domain other than SERVER_NAME is now 404 even though a local alice exists.
     """
     site, instance = seed_local_actors()
     make_user(instance, 'alice', local=True)
 
     response = webfinger_get(app, resource='acct:alice@evil.example')
+
+    assert response.status_code == 404
+
+
+def test_a_url_resource_on_another_domain_is_404(app, db_session):
+    """D145, fixed: the URL form's host is held to the same rule as the acct
+    form's domain.
+    """
+    site, instance = seed_local_actors()
+    make_user(instance, 'alice', local=True)
+
+    response = webfinger_get(app, resource='https://evil.example/u/alice')
+
+    assert response.status_code == 404
+
+
+def test_the_domain_comparison_is_case_insensitive(app, db_session):
+    """D145, fixed: domains are case-insensitive, so an upper-cased
+    SERVER_NAME is still ours.
+    """
+    site, instance = seed_local_actors()
+    make_user(instance, 'alice', local=True)
+
+    response = webfinger_get(app, resource='acct:alice@TEST.PieFed.local')
 
     assert response.status_code == 200
     assert response.json['subject'] == 'acct:alice@test.piefed.local'

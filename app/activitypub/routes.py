@@ -85,13 +85,19 @@ def process_webfinger_request(resource):
     query = resource  # acct:alice@tada.club
     if 'acct:' in query:
         actor = query.split(':')[1].split('@')[0]  # alice
+        domain = query.split(':')[1].partition('@')[2]  # tada.club
         if actor.startswith('~'):
             feed = True
             actor = actor[1:]
     elif 'https:' in query or 'http:' in query:
         actor = query.split('/')[-1]
+        domain = furl(query).host or ''
     else:
         abort(400, description='Webfinger regex failed to match')
+
+    # only answer for resources on this instance, not for a same-named actor elsewhere
+    if domain.lower() != current_app.config['SERVER_NAME'].lower():
+        abort(404)
 
     # special case: instance actor
     if actor == current_app.config['SERVER_NAME']:
