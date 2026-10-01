@@ -3130,7 +3130,9 @@ def feed_moderators_route(actor):
     if feed is not None:
         # currently feeds only have the one owner, but lets make this a list in case we want to 
         # expand that in the future
-        moderators = [db.session.get(User, feed.user_id)]
+        # D170: a feed whose user_id is null or dangling has no owner to list
+        owner = db.session.get(User, feed.user_id) if feed.user_id is not None else None
+        moderators = [owner] if owner is not None else []
         moderators_data = {
             "@context": default_context(),
             "type": "OrderedCollection",
