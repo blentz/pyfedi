@@ -3156,9 +3156,11 @@ def notify_about_post_task(post_id):
             # NOTIF_USER 
             user_send_notifs_to = notification_subscribers(post.user_id, NOTIF_USER)
             for notify_id in user_send_notifs_to:
+                blocked_senders = blocked_users(notify_id)  # D276
                 blocked_comms = blocked_communities(notify_id)
                 blocked_ints = blocked_or_banned_instances(notify_id)
                 if notify_id != post.user_id and notify_id not in notifications_sent_to and \
+                        post.user_id not in blocked_senders and \
                         post.community_id not in blocked_comms and \
                         post.instance_id not in blocked_ints:
                     targets_data = {'gen': '0',
@@ -3183,9 +3185,11 @@ def notify_about_post_task(post_id):
             community_send_notifs_to = notification_subscribers(post.community_id, NOTIF_COMMUNITY)
             for notify_id in community_send_notifs_to:
                 blocked_senders = blocked_users(notify_id)
+                blocked_comms = blocked_communities(notify_id)  # D277
                 blocked_ints = blocked_or_banned_instances(notify_id)
                 if notify_id != post.user_id and notify_id not in notifications_sent_to and \
-                        post.user_id not in blocked_senders and post.instance_id not in blocked_ints:
+                        post.user_id not in blocked_senders and post.community_id not in blocked_comms and \
+                        post.instance_id not in blocked_ints:
                     targets_data = {'gen': '0',
                                     'post_id': post.id,
                                     'post_title': post.title,
