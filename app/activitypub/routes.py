@@ -2425,9 +2425,11 @@ def activities_json(type, id):
             activity_json = {}
         resp = jsonify(activity_json)
         resp.content_type = 'application/activity+json'
+        resp.headers['Cache-Control'] = 'public, max-age=2400'
     else:
+        # don't let a peer polling before the activity is logged cache the miss
         resp = make_response('', 404)
-    resp.headers['Cache-Control'] = 'public, max-age=2400'
+        resp.headers['Cache-Control'] = 'no-store'
     return resp
 
 
