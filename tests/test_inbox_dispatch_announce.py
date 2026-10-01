@@ -187,6 +187,49 @@ def test_an_announce_of_an_ordered_collection_processes_every_item(
         'Blocked or unfound user for Announce object actor ' + carol.ap_profile_id}
 
 
+@pytest.mark.parametrize('nested', [[{}], {'type': 'OrderedCollection', 'orderedItems': [{}]},
+                                    {'type': 'Collection', 'items': [{}]}])
+@pytest.mark.parametrize('shape', ['list', 'OrderedCollection'])
+def test_an_announced_list_with_a_nested_list_or_collection_is_refused(
+        app, db_session, monkeypatch, nested, shape):
+    """D54, fixed (owner ruling). Each element was handed back to
+    process_inbox_request, so a nested list or collection recursed with no
+    depth bound. Nesting is now refused outright, logged as one failure,
+    before any element is processed -- the sibling `{}` would otherwise log
+    its own 'no actor' refusal.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community = _seed_announcing_community()
+    objects = [{}, nested]
+    obj = objects if shape == 'list' else {'type': 'OrderedCollection', 'orderedItems': objects}
+
+    dispatch(inbox_activity(community, activity_type='Announce', object=obj))
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Announced list contains a nested list or collection'
+
+
+@pytest.mark.parametrize('shape', ['list', 'OrderedCollection'])
+def test_an_announced_list_processes_at_most_100_objects(app, db_session, monkeypatch, shape):
+    """D54, fixed (owner ruling). The list was processed with no bound on its
+    length. Now the first 100 objects are processed and the excess is logged.
+    Each `{}` element logs its own 'no actor' refusal, which is what counts
+    the elements processed.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community = _seed_announcing_community()
+    objects = [{} for _ in range(101)]
+    obj = objects if shape == 'list' else {'type': 'OrderedCollection', 'orderedItems': objects}
+
+    dispatch(inbox_activity(community, activity_type='Announce', object=obj))
+
+    assert ActivityPubLog.query.filter_by(exception_message='Announce object has no actor').count() == 100
+    excess = ActivityPubLog.query.filter(ActivityPubLog.exception_message.like('Announced list has%')).one()
+    assert excess.result == 'ignored'
+    assert excess.exception_message == 'Announced list has 101 objects; only the first 100 were processed'
+
+
 # --- Step 3: the two formerly unguarded reads (D51, D52, fixed) ---
 
 
