@@ -421,6 +421,22 @@ def test_a_feed_is_created_with_what_it_was_given(app, env):
     assert answer['show_posts_from_children'] is True
 
 
+@pytest.mark.parametrize('flag, switch', [('nsfw', 'enable_nsfw'), ('nsfl', 'enable_nsfl')])
+def test_creating_a_flagged_feed_where_the_site_forbids_it_is_refused(app, env, flag, switch):
+    """D708, fixed (owner ruling): the API create path applies the site's
+    NSFW/NSFL policy as the web does, with a clear error -- it reached
+    make_feed without consulting the site at all."""
+    from app.api.alpha.utils.feed import post_feed
+
+    owner, stranger, public, private = env
+    setattr(g.site, switch, False)
+
+    with pytest.raises(Exception, match=f'{flag}_not_allowed'):
+        post_feed(token(stranger), {'name': 'flagged', 'title': 'Flagged', flag: True})
+
+    assert Feed.query.filter_by(name='flagged').first() is None
+
+
 def test_a_feed_is_edited(app, env):
     from app.api.alpha.utils.feed import put_feed
 
