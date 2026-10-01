@@ -709,7 +709,7 @@ def get_comm_flair_list(community: Community | int | str) -> list:
     return CommunityFlair.query.filter_by(community_id=community_id).order_by(CommunityFlair.flair).all()
 
 
-def comm_flair_ap_format(flair: CommunityFlair | int | str) -> dict:
+def comm_flair_ap_format(flair: CommunityFlair | int | str) -> dict | None:
     if isinstance(flair, int):
         flair = db.session.get(CommunityFlair, flair)
     elif isinstance(flair, str):
