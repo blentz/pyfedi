@@ -136,6 +136,9 @@ APLOG_MOVE = (True, 'Move')
 APLOG_ANNOUNCE = (True, 'Announce')
 APLOG_PT_VIEW = (True, 'PeerTube View')
 
+# D54: the most objects one Announce of a list carries, inbound or in our own batches
+ANNOUNCE_MAX_OBJECTS = 100
+
 INVITE_APPLY = 1
 INVITE_MEMBERS_ONLY = 2
 INVITE_MODS_ONLY = 3

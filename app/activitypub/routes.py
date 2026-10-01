@@ -947,21 +947,14 @@ def process_inbox_request(request_json, store_ap_json):
                         # (see its docstring), so there is nothing left to log here.
                         process_announce_of_uri(request_json, community, id, store_ap_json)
                         return
-                    elif isinstance(request_json['object'], list):  # PieFed can Announce an unlimited amount of objects at once, as long as they are all from the same community.
-                        for obj in request_json['object']:
-                            # Convert each object into the list into an identical Announce activity containing just that object
-                            fake_activity = request_json.copy()
-                            fake_activity['object'] = obj
-                            process_inbox_request(fake_activity, store_ap_json)  # Process the Announce (with single object) as normal
+                    elif isinstance(request_json['object'], list):  # PieFed can Announce many objects at once, as long as they are all from the same community.
+                        process_announced_objects(request_json, request_json['object'], id, saved_json, store_ap_json)
                         return
                     elif 'type' in request_json['object'] and request_json['object']['type'] == 'OrderedCollection':
                         if not isinstance(request_json['object'].get('orderedItems'), list):
                             log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json, 'Announced OrderedCollection has no orderedItems list')
                             return
-                        for obj in request_json['object']['orderedItems']:
-                            fake_activity = request_json.copy()
-                            fake_activity['object'] = obj
-                            process_inbox_request(fake_activity, store_ap_json)  # Process the Announce (with single object) as normal
+                        process_announced_objects(request_json, request_json['object']['orderedItems'], id, saved_json, store_ap_json)
                         return
                     if not feed:
                         if 'actor' not in request_json['object']:
@@ -2079,6 +2072,25 @@ def process_inbox_request(request_json, store_ap_json):
 
 
 @celery.task
+def process_announced_objects(request_json, objects, id, saved_json, store_ap_json):
+    """Process each object of an Announce of a list or OrderedCollection as its own single-object Announce.
+
+    D54 (owner ruling): a nested list or collection is refused rather than recursed into, and at most
+    ANNOUNCE_MAX_OBJECTS objects are processed, the excess logged."""
+    if any(isinstance(obj, list) or (isinstance(obj, dict) and obj.get('type') in ('Collection', 'OrderedCollection'))
+           for obj in objects):
+        log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json, 'Announced list contains a nested list or collection')
+        return
+    if len(objects) > ANNOUNCE_MAX_OBJECTS:
+        log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json,
+                        f'Announced list has {len(objects)} objects; only the first {ANNOUNCE_MAX_OBJECTS} were processed')
+    for obj in objects[:ANNOUNCE_MAX_OBJECTS]:
+        # Convert each object into an identical Announce activity containing just that object
+        fake_activity = request_json.copy()
+        fake_activity['object'] = obj
+        process_inbox_request(fake_activity, store_ap_json)  # Process the Announce (with single object) as normal
+
+
 def process_delete_request(request_json, store_ap_json):
     with current_app.app_context():
         session = get_task_session()
