@@ -1735,6 +1735,8 @@ def process_inbox_request(request_json, store_ap_json):
                                 announce_activity_to_followers(origin_community, user, request_json)
                             log_incoming_ap(id, APLOG_MOVE, APLOG_SUCCESS, saved_json,
                                             f'{user.user_name} moved post to {target_community.link()}')
+                        else:
+                            log_incoming_ap(id, APLOG_MOVE, APLOG_FAILURE, saved_json, 'Move attempt denied')
                 if core_activity['type'] == 'Block':  # User Ban
                     """
                     Sent directly (not Announced) if a remote Admin is banning one of their own users from their site
