@@ -99,11 +99,20 @@ def new_message(to):
     form = AddReply()
     form.submit.label.text = _('Send')
     if form.validate_on_submit():
-        conversation = Conversation(user_id=current_user.id)
-        conversation.members.append(recipient)
-        conversation.members.append(current_user)
-        db.session.add(conversation)
-        db.session.commit()
+        if existing_conversation:
+            # D748: one thread per pair - whoever left rejoins it, and its history is kept
+            db.session.execute(text("UPDATE conversation_member SET joined = :state WHERE conversation_id = :conversation_id "
+                                    "AND user_id IN (:sender_id, :recipient_id)"),
+                               {"state": True, "conversation_id": existing_conversation.id,
+                                "sender_id": current_user.id, "recipient_id": recipient.id})
+            db.session.commit()
+            conversation = existing_conversation
+        else:
+            conversation = Conversation(user_id=current_user.id)
+            conversation.members.append(recipient)
+            conversation.members.append(current_user)
+            db.session.add(conversation)
+            db.session.commit()
         send_message(form.message.data, conversation.id)
         return redirect(url_for('chat.chat_home', conversation_id=conversation.id, _anchor='message'))
     else:

@@ -644,9 +644,8 @@ def test_a_recipient_who_has_left_still_takes_the_redirect(app, db_session):
     that DOES filter on it -- so a conversation the recipient has left is found
     but its member set holds only the sender, and the guard at :97 is false.
 
-    The route therefore falls through to the form and a SECOND conversation is
-    created for the pair. Recorded as behaviour rather than asserted as
-    correct: see D748.
+    The route therefore falls through to the form. Sending from it rejoins the
+    existing conversation rather than creating a second one (D748, below).
     """
     instance, alice, bob, carol = _seed()
     _aged(alice)
@@ -691,6 +690,43 @@ def test_a_sender_who_has_left_gets_the_form_not_the_redirect(app, db_session):
 
     assert response.status_code == 200
     assert render.call_args.args[0] == 'chat/new_message.html'
+
+
+@pytest.mark.parametrize('who_left', ['recipient', 'sender'])
+def test_messaging_again_after_one_left_reuses_the_conversation(app, db_session, who_left):
+    """D748, fixed. Once either member had left, sending from the new-message
+    form created a SECOND conversation for the pair. It now reuses the existing
+    one and rejoins whoever left, so there is one thread per pair and its
+    history is kept (owner ruling 2026-09-30)."""
+    instance, alice, bob, carol = _seed()
+    _aged(alice)
+    conversation = make_conversation(alice, bob)
+    leaver = bob if who_left == 'recipient' else alice
+    db.session.execute(db.text(
+        "UPDATE conversation_member SET joined = :state WHERE user_id = :person_id "
+        "AND conversation_id = :conversation_id"),
+        {"state": False, "person_id": leaver.id, "conversation_id": conversation.id})
+    db.session.commit()
+    conversation_id = conversation.id
+    client = app.test_client()
+    login(client, alice)
+    token = csrf(app, client)
+
+    with patch('app.chat.routes.render_template', return_value='rendered'), \
+         patch('app.chat.util.publish_sse_event'):
+        response = client.post(f'/chat/{bob.id}/new',
+                               data={'message': 'hello again',
+                                     'csrf_token': token, 'submit': 'Send'})
+
+    assert response.status_code == 302
+    assert response.headers['Location'] == f'/chat/{conversation_id}#message'
+    assert [c.id for c in Conversation.query.all()] == [conversation_id]
+    joined = db.session.execute(db.text(
+        "SELECT user_id, joined FROM conversation_member WHERE conversation_id = :conversation_id"),
+        {"conversation_id": conversation_id}).all()
+    assert sorted(joined) == sorted([(alice.id, True), (bob.id, True)])
+    assert [(m.conversation_id, m.body) for m in ChatMessage.query.all()] == \
+        [(conversation_id, 'hello again')]
 
 
 def test_a_new_message_to_an_unknown_user_is_a_404(app, db_session):
