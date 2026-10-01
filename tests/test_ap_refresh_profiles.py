@@ -1930,8 +1930,9 @@ def test_a_following_entry_that_resolves_to_nothing_is_skipped(app, db_session, 
 
 
 def test_a_following_collection_with_no_items_key_is_skipped(app, db_session, http_mock):
-    """`'items' in following_collection`, checked before the loop subscripts
-    it. The following loop had no guard of any kind: `following_collection`
+    """`'items' in following_collection` -- since D234 `isinstance(
+    following_collection.get('items'), list)` -- checked before the loop
+    subscripts it. The following loop had no guard of any kind: `following_collection`
     could be `None` (a body of JSON `null`) or an object with no `items`, and
     either raised out of the task.
 
@@ -1975,6 +1976,8 @@ def test_a_following_collection_with_no_items_key_is_skipped(app, db_session, ht
 def test_a_null_following_collection_is_skipped(app, db_session, http_mock):
     """The FIRST conjunct of `if following_collection and 'items' in
     following_collection:` -- `following_collection` itself must be truthy.
+    Since D234 that conjunct is `isinstance(following_collection, dict)`,
+    which None fails just the same; the mutant analysis below predates it.
     Mirrors `test_a_null_featured_document_does_nothing`, which pins the same
     conjunct in the featured guard.
 
@@ -2138,3 +2141,84 @@ def test_followed_communities_on_another_host_are_looked_up_but_not_created(
 
     assert calls == [(f'https://{PEER}/c/samehost', True, True),
                      ('https://elsewhere.example/c/otherhost', False, True)]
+
+
+# D234, fixed: the moderators, featured, owners and following guards checked
+# that the collection's key was present, not that its value was a list, so a
+# string was iterated one character at a time. A non-list value now skips the
+# whole collection, which leaves existing moderators, owners and stickies alone.
+
+def _spy_on_find_actor_or_create(monkeypatch):
+    seen = []
+    monkeypatch.setattr(ap_util, 'find_actor_or_create', lambda actor, *a, **kw: seen.append(actor))
+    return seen
+
+
+def test_a_string_moderators_collection_is_skipped(app, db_session, http_mock, monkeypatch, no_real_sleeping):
+    """D234, fixed: a string orderedItems used to reach find_actor_or_create
+    per character, and then the removal walk matched no character to the
+    existing moderator and removed them."""
+    community = _remote_community()
+    mod = make_user(community.instance, 'fauxmod')
+    db.session.add(CommunityMember(user_id=mod.id, community_id=community.id, is_moderator=True))
+    db.session.commit()
+    mods_url = f'https://{PEER}/c/memes/moderators'
+    _serve(http_mock, mods_url, {'type': 'OrderedCollection', 'orderedItems': mod.ap_profile_id})
+    seen = _spy_on_find_actor_or_create(monkeypatch)
+
+    refresh_community_profile_task(community.id, _group_document(fields={'attributedTo': mods_url}))
+
+    assert seen == []
+    assert db.session.query(CommunityMember).filter_by(
+        community_id=community.id, user_id=mod.id, is_moderator=True).count() == 1
+
+
+def test_a_string_featured_collection_is_skipped(app, db_session, http_mock):
+    """D234, fixed: a string orderedItems used to clear every sticky and then
+    raise TypeError at `item['id']` on the first character."""
+    community = _remote_community()
+    featured_url = f'https://{PEER}/c/memes/featured'
+    community.ap_featured_url = featured_url
+    poster = make_user(community.instance, 'poster')
+    db.session.commit()
+    sticky = make_post(community, poster, f'https://{PEER}/p/sticky')
+    sticky.sticky = True
+    db.session.commit()
+    _serve(http_mock, featured_url, {'type': 'OrderedCollection', 'orderedItems': sticky.ap_id})
+
+    refresh_community_profile_task(community.id, _group_document())
+
+    db.session.refresh(sticky)
+    assert sticky.sticky is True
+
+
+def test_a_string_owners_collection_is_skipped(app, db_session, http_mock, monkeypatch, no_real_sleeping):
+    """D234, fixed, on the feed task's owners guard."""
+    feed = _remote_feed()
+    owner = make_user(feed.instance, 'fauxowner')
+    db.session.commit()
+    make_feed_member(owner, feed, is_owner=True)
+    owners_url = f'https://{PEER}/f/news/owners'
+    _serve(http_mock, feed.ap_public_url, _feed_document(fields={'attributedTo': owners_url}))
+    _serve(http_mock, owners_url, {'type': 'OrderedCollection', 'orderedItems': owner.ap_profile_id})
+    seen = _spy_on_find_actor_or_create(monkeypatch)
+
+    refresh_feed_profile_task(feed.id)
+
+    assert seen == []
+    assert db.session.query(FeedMember).filter_by(feed_id=feed.id, user_id=owner.id, is_owner=True).count() == 1
+
+
+def test_a_string_following_collection_is_skipped(app, db_session, http_mock, monkeypatch):
+    """D234, fixed, on the feed task's following guard."""
+    feed = _remote_feed()
+    feed.ap_following_url = f'https://{PEER}/f/news/following'
+    db.session.commit()
+    _serve(http_mock, feed.ap_public_url, _feed_document())
+    _serve(http_mock, feed.ap_following_url, {'items': f'https://{PEER}/c/memes'})
+    seen = _spy_on_find_actor_or_create(monkeypatch)
+
+    refresh_feed_profile_task(feed.id)
+
+    assert seen == []
+    assert db.session.query(FeedItem).count() == 0
