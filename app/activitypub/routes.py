@@ -1430,6 +1430,8 @@ def process_inbox_request(request_json, store_ap_json):
                             session.commit()
                             log_incoming_ap(id, APLOG_DELETE, APLOG_SUCCESS, saved_json,
                                             f"Delete: PM {ap_id} deleted")
+                        else:
+                            log_incoming_ap(id, APLOG_DELETE, APLOG_IGNORED, saved_json, f"Delete: cannot find {ap_id}")
                     return
 
                 if core_activity['type'] == 'Like' or core_activity['type'] == 'EmojiReact':  # Upvote
