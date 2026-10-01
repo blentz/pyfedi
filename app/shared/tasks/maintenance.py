@@ -607,6 +607,8 @@ def monitor_healthy_instances():
                         if instance.failures > 5:
                             instance.dormant = True
                             instance.start_trying_again = utcnow() + timedelta(days=5)
+                        if instance.failures > 12:
+                            instance.gone_forever = True
                 except Exception:
                     session.rollback()
                     instance.failures += 1
