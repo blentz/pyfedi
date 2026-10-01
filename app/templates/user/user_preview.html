@@ -61,6 +61,9 @@
                         <a class="btn btn-primary btn-sm send_post" href="#" data-url="{{ url_for('user.user_follow', actor=user.link(), return_to=return_to) }}" rel="nofollow">{{ _('Follow') }}</a>
                     {% elif follow_state == 'pending' -%}
                         <a class="btn btn-primary btn-sm send_post" href="#" data-url="{{ url_for('user.user_unfollow', actor=user.link(), return_to=return_to) }}" rel="nofollow">{{ _('Cancel follow request') }}</a>
+                    {% elif follow_state == 'refused' -%}
+                        <span class="btn btn-outline-secondary btn-sm disabled">{{ _('Request declined') }}</span>
+                        <a class="btn btn-primary btn-sm send_post" href="#" data-url="{{ url_for('user.user_follow', actor=user.link(), return_to=return_to) }}" rel="nofollow">{{ _('Follow') }}</a>
                     {% else -%}
                         <a class="btn btn-primary btn-sm send_post" href="#" data-url="{{ url_for('user.user_unfollow', actor=user.link(), return_to=return_to) }}" rel="nofollow">{{ _('Unfollow') }}</a>
                     {% endif -%}
