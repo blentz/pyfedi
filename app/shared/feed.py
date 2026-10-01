@@ -422,14 +422,13 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
     else:
         feed.parent_feed_id = None
 
-    old_banner_id = 0
+    # Store the old banner id before processing new URLs. The icon has no
+    # equivalent any more: since the new icon is attached through the
+    # relationship, the delete-orphan cascade removes the old row and there
+    # is nothing left to look up by id.
+    old_banner_id = feed.image_id
 
     if not from_scratch:
-        # Store the old banner id before processing new URLs. The icon has no
-        # equivalent any more: since the new icon is attached through the
-        # relationship, the delete-orphan cascade removes the old row and there
-        # is nothing left to look up by id.
-        old_banner_id = feed.image_id
         icon_url_changed = banner_url_changed = False
 
         if feed.icon_id and icon_url != feed.icon.source_url:
@@ -473,8 +472,8 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
         db.session.commit()
         feed.image_id = file.id
         make_image_sizes(feed.image_id, 878, 1600, 'feeds', False)
-        # Only delete old banner after new one is successfully saved
-        if not from_scratch and old_banner_id and old_banner_id != feed.image_id:
+        # Only delete old banner after new one is successfully saved, from_scratch or not (D699)
+        if old_banner_id and old_banner_id != feed.image_id:
             remove_file = db.session.get(File, old_banner_id)
             if remove_file:
                 remove_file.delete_from_disk()
