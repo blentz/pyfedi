@@ -134,7 +134,7 @@ from flask import get_flashed_messages
 
 from app import db
 from app.constants import SRC_API, SRC_PLD, SRC_WEB
-from app.models import Poll, PollChoice, PollChoiceVote, PostBookmark, \
+from app.models import CommunityBan, Poll, PollChoice, PollChoiceVote, PostBookmark, \
     NotificationSubscription, PostVote, read_posts
 from app.shared.post import (
     bookmark_post,
@@ -146,7 +146,7 @@ from app.shared.post import (
     vote_for_poll,
     vote_for_post,
 )
-from tests.factories import bearer, make_community, make_instance, make_post, \
+from tests.factories import a_keypair, bearer, make_community, make_instance, make_post, \
     make_post_flair, make_site, make_user, seed_post_context, web_ctx
 
 
@@ -1464,6 +1464,9 @@ def _seed_poll(s, mode='single', choices=('a', 'b')):
     from datetime import timedelta
     from app.models import utcnow
 
+    # PERM-2: voting needs can_create_post_reply, which refuses a local user
+    # with no private key -- a state no real account is in after registration.
+    s.voter.private_key, s.voter.public_key = a_keypair()
     poll = Poll(post_id=s.post.id, mode=mode, local_only=False,
                end_poll=utcnow() + timedelta(days=1))
     db.session.add(poll)
@@ -1979,6 +1982,43 @@ def test_an_api_single_mode_vote_for_a_non_integer_choice_is_refused(db_session)
 
     with pytest.raises(Exception, match='does not belong to this poll'):
         vote_for_poll(s.post.id, ['banana'], SRC_API, auth=bearer(s.voter))
+
+    assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 0
+
+
+def test_a_web_poll_vote_from_a_user_banned_from_the_community_is_refused(db_session, app):
+    """PERM-2, fixed (owner ruling). Voting in a poll is allowed only when
+    `can_create_post_reply(user, community)` passes; `vote_for_poll` checked
+    only site-level bans. A user banned from the poll's community is refused
+    with an error flash and a False return, and no vote is recorded."""
+    s = seed_post_context()
+    _seed_poll(s, mode='single')
+    db.session.add(CommunityBan(community_id=s.community.id, user_id=s.voter.id))
+    db.session.commit()
+    first = db.session.query(PollChoice).filter_by(
+        post_id=s.post.id).order_by(PollChoice.sort_order).first()
+
+    with web_ctx(app, s.voter):
+        result = vote_for_poll(s.post.id, first.id, SRC_WEB)
+        flashed = get_flashed_messages(with_categories=True)
+
+    assert result is False
+    assert [category for category, _ in flashed] == ['error']
+    assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 0
+
+
+def test_an_api_poll_vote_from_a_user_banned_from_commenting_is_refused(db_session):
+    """PERM-2, fixed (owner ruling). The API arm of the same rule: the
+    standard refusal, an Exception the route answers 400."""
+    s = seed_post_context()
+    _seed_poll(s, mode='single')
+    s.voter.ban_comments = True
+    db.session.commit()
+    first = db.session.query(PollChoice).filter_by(
+        post_id=s.post.id).order_by(PollChoice.sort_order).first()
+
+    with pytest.raises(Exception, match='not allowed to vote'):
+        vote_for_poll(s.post.id, [first.id], SRC_API, auth=bearer(s.voter))
 
     assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 0
 
