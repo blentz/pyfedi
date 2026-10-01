@@ -251,6 +251,28 @@ def test_saving_the_form_invalidates_the_phrase_caches(admin_client):
     assert (get_setting, 'actor_blocked_words') in invalidated
 
 
+def test_each_domain_is_normalised_once_for_its_row_and_its_cache_key(admin_client):
+    """D929, fixed (owner ruling): a ban or allow entry is normalised by the
+    same helper the lookups use -- strip, lower-case, a pasted url reduced to
+    its host -- before it is stored AND before its memoized lookup is
+    invalidated. The invalidation used the raw text the admin typed, so it
+    missed the entry the lookup had cached."""
+    from app.utils import instance_allowed, instance_banned
+
+    client, token = admin_client
+
+    with patch('app.admin.routes.cache.delete_memoized') as delete_memoized:
+        _post(client, token, blocklist='  Evil.COM \nhttps://Spam.Example/\n',
+              allowlist=' Friendly.EXAMPLE\n')
+
+    invalidated = [call.args for call in delete_memoized.call_args_list]
+    assert (instance_banned, 'evil.com') in invalidated
+    assert (instance_banned, 'spam.example') in invalidated
+    assert (instance_allowed, 'friendly.example') in invalidated
+    assert sorted(row.domain for row in BannedInstances.query.all()) == ['evil.com', 'spam.example']
+    assert [row.domain for row in AllowedInstances.query.all()] == ['friendly.example']
+
+
 def test_the_form_is_prefilled_from_what_is_stored(admin_client):
     """`elif request.method == 'GET':`. The blocklist box must show only the
     admin's own bans -- a subscribed ban appearing there would be re-saved as a

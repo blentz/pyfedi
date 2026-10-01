@@ -52,7 +52,7 @@ from app.utils import render_template, permission_required, set_setting, get_set
     community_membership, retrieve_image_hash, posts_with_blocked_images, user_access, reported_posts, user_notes, \
     decrement_unread_counts, \
     safe_order_by, get_task_session, patch_db_session, low_value_reposters, moderating_communities_ids, \
-    instance_allowed, trusted_instance_ids, get_emoji_replacements, get_site_as_dict, sanitize_svg, \
+    instance_allowed, trusted_instance_ids, get_emoji_replacements, get_site_as_dict, sanitize_svg, inbox_domain, \
     REDIRECT_POLICY_SETTING, REDIRECT_POLICY_SAME_ORIGIN, \
     sanitise_posting_warning, roles_with
 from app.admin import bp
@@ -477,15 +477,18 @@ def admin_federation():
     if form.validate_on_submit():
         set_setting('use_allowlist', form.federation_mode.data == 'allowlist')
         db.session.execute(text('DELETE FROM allowed_instances'))
+        # D929: each domain normalised as the lookups normalise it, for its row and for its cache key alike
         for allow in form.allowlist.data.split('\n'):
             if allow.strip():
-                db.session.add(AllowedInstances(domain=allow.strip().lower()))
-                cache.delete_memoized(instance_allowed, allow.strip())
+                domain = inbox_domain(allow.strip())
+                db.session.add(AllowedInstances(domain=domain))
+                cache.delete_memoized(instance_allowed, domain)
         db.session.execute(text('DELETE FROM banned_instances WHERE subscription_id is null'))
         for banned in form.blocklist.data.split('\n'):
             if banned.strip():
-                db.session.add(BannedInstances(domain=banned.strip().lower()))
-                cache.delete_memoized(instance_banned, banned.strip())
+                domain = inbox_domain(banned.strip())
+                db.session.add(BannedInstances(domain=domain))
+                cache.delete_memoized(instance_banned, domain)
 
         # update and sync defederation subscriptions
         db.session.execute(text('DELETE FROM banned_instances WHERE subscription_id is not null'))
