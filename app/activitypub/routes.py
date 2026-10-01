@@ -1558,6 +1558,9 @@ def process_inbox_request(request_json, store_ap_json):
                                     from app.community.routes import do_subscribe
                                     actor = community_to_add.ap_id if community_to_add.ap_id else community_to_add.name
                                     do_subscribe(actor, fm_user.id, joined_via_feed=True)
+                            log_incoming_ap(id, APLOG_ADD, APLOG_SUCCESS, saved_json)
+                        else:
+                            log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json, 'Cannot find community to add to feed')
                     elif community:
                         if not community.is_moderator(mod) and not community.is_instance_admin(mod):
                             log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json, 'Does not have permission')
