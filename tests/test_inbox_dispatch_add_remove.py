@@ -180,10 +180,9 @@ def test_an_add_whose_community_cannot_be_resolved_does_not_touch_feed_members(
 
     Asserts the corrected behaviour: no FeedItem is created, do_subscribe is
     never called, and no exception escapes. LOG_ACTIVITYPUB_TO_DB is turned
-    on so the ActivityPubLog assertion is load-bearing (it defaults False,
-    under which log_incoming_ap writes nothing regardless of the fix,
-    making the same assertion vacuous) -- this branch of the Add arm calls
-    no log_incoming_ap on any path, a registered finding this pins.
+    on so the ActivityPubLog assertion is load-bearing. D81, fixed: this
+    branch logged nothing on any path; the unresolvable community is now a
+    logged failure.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, feed, member = _seed_feed_with_local_auto_follow_member()
@@ -228,7 +227,10 @@ def test_an_add_whose_community_cannot_be_resolved_does_not_touch_feed_members(
 
     assert FeedItem.query.count() == 0
     assert do_subscribe_calls == []
-    assert ActivityPubLog.query.count() == 0
+    log = ActivityPubLog.query.one()
+    assert log.activity_type == 'Add'
+    assert log.result == 'failure'
+    assert log.exception_message == 'Cannot find community to add to feed'
 
 
 # --- Task 7: the rest of the Add arm ---
@@ -237,7 +239,7 @@ def test_an_add_whose_community_cannot_be_resolved_does_not_touch_feed_members(
 # source, and for exactly why the brief's line numbers needed re-deriving.
 
 
-def test_the_feed_branchs_success_path_subscribes_non_owners_and_logs_nothing(
+def test_the_feed_branchs_success_path_subscribes_non_owners_and_logs_success(
         app, db_session, monkeypatch):
     """routes.py:1405-1423 -- the success path Task 6's test does not cover
     (that test's community is deliberately UNRESOLVABLE). Here
@@ -266,11 +268,8 @@ def test_the_feed_branchs_success_path_subscribes_non_owners_and_logs_nothing(
     do_subscribe receives is `community_to_add.name` (the `ap_id if ap_id
     else name` fallback at routes.py's current :1422).
 
-    Finally, pins the SUCCESS-path half of the finding Task 6 already pinned
-    the failure-path half of: the whole feed branch calls log_incoming_ap on
-    NO path at all. LOG_ACTIVITYPUB_TO_DB is turned on so the
-    ActivityPubLog assertion is load-bearing (see Task 6's docstring for why
-    the default-False config makes the same assertion vacuous).
+    D81, fixed: the feed branch logged nothing on any path; its success is
+    now logged like the community branch's.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
 
@@ -322,7 +321,9 @@ def test_the_feed_branchs_success_path_subscribes_non_owners_and_logs_nothing(
     assert feed.num_communities == 4
     assert community.ap_id is None
     assert do_subscribe_calls == [((community.name, nonowner.id), {'joined_via_feed': True})]
-    assert ActivityPubLog.query.count() == 0
+    log = ActivityPubLog.query.one()
+    assert log.activity_type == 'Add'
+    assert log.result == 'success'
 
 
 def _seed_community_with_mod_and_admin(host='peer.example', name='modcomm'):
