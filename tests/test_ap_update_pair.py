@@ -638,7 +638,7 @@ def _mention(name='localuser'):
 
 
 def test_a_reply_mention_of_a_local_user_notifies_them(app, db_session, redis_lock_only_double):
-    """The simple path: two tags so the `len(...) > 1` gate is satisfied, a
+    """The simple path: two tags (the `len(...) > 1` gate this once needed is gone, D244), a
     Mention naming a local user, a non-microblog instance so the
     de-duplication block is skipped.
 
@@ -677,22 +677,36 @@ def test_a_reply_mention_increments_the_recipients_unread_count(app, db_session,
     assert recipient.unread_notifications == 4
 
 
-def test_a_lone_reply_mention_is_ignored(app, db_session, redis_lock_only_double):
-    """THE ASYMMETRY. The reply function's tag gate requires
-    `len(request_json['object']['tag']) > 1`, so a document carrying exactly
-    one tag -- a single Mention -- is skipped entirely. The post function's
-    gate has no length condition.
-
-    This test PINS the current behaviour rather than asserting it is correct.
-    The spec registers it rather than fixing it, because changing the gate
-    changes which notifications this instance generates.
+def test_a_lone_reply_mention_notifies(app, db_session, redis_lock_only_double):
+    """D244, fixed (owner ruling 2026-09-30). The reply function's tag gate
+    used to require `len(request_json['object']['tag']) > 1`, so a single
+    Mention -- the ordinary shape of a Mastodon reply naming one person -- was
+    skipped and nobody was notified. The length condition is gone, matching the
+    post function's gate.
     """
     reply = _seed_reply()
     recipient = _seed_local_recipient()
 
     update_post_reply_from_activity(reply, _update(content='hello', tag=[_mention()]))
 
-    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 1
+
+
+def test_an_edit_does_not_renotify_a_user_mentioned_at_creation(app, db_session, redis_lock_only_double):
+    """D244's dedupe check: `create_post_reply` notifies a mention with the same
+    `/comment/<id>` url the edit path's `existing_notification` looks for, so a
+    user already told about this comment is not told again by an edit.
+    """
+    reply = _seed_reply()
+    recipient = _seed_local_recipient()
+    db.session.add(Notification(user_id=recipient.id, title='mentioned', notif_type=NOTIF_MENTION,
+                                subtype='comment_mention', author_id=reply.user_id,
+                                url=f'https://test.piefed.local/comment/{reply.id}'))
+    db.session.commit()
+
+    update_post_reply_from_activity(reply, _update(content='hello', tag=[_mention()]))
+
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 1
 
 
 def test_a_reply_mention_of_a_remote_user_notifies_nobody(app, db_session, redis_lock_only_double):
@@ -2238,9 +2252,8 @@ def test_a_post_tag_that_is_not_a_list_leaves_existing_tags_untouched(app, db_se
 
 def test_a_post_mention_of_a_local_user_notifies_them(app, db_session, redis_lock_only_double):
     """The post path's Mention arm. Unlike the reply path there is NO
-    de-duplication block and no `len(tag) > 1` gate, so a lone Mention
-    notifies -- which is the pair's asymmetry, pinned here from the side that
-    allows it.
+    de-duplication block, and like the reply path since D244 no `len(tag) > 1`
+    gate, so a lone Mention notifies.
     """
     post = _seed_post()
     recipient = _seed_local_recipient()
