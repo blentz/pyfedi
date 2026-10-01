@@ -85,6 +85,10 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
         raise Exception('missing q parameter for resolve_object')
     if auth:
         user_id = authorise_api_user(auth)
+    elif user_id is None:
+        # PERM-1: resolving can fetch and store remote content, so the API
+        # requires an authenticated caller; in-app callers pass user_id.
+        raise Exception('incorrect_login')
 
     query = data['q']
 

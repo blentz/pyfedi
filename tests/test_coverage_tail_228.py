@@ -287,6 +287,15 @@ class TestTheSuccessReturns:
         assert response.status_code == 200
         assert response.get_json()['post']['post']['id'] == post.id
 
+    def test_resolving_without_a_token_is_refused_400(self, signed_in):
+        """PERM-1, fixed (owner ruling). The same request with no Authorization header
+        gets the API's standard `incorrect_login` 400; it used to be served anonymously."""
+        response = signed_in.client.get('/api/alpha/resolve_object',
+                                        query_string={'q': signed_in.baseline.post1.ap_id})
+
+        assert response.status_code == 400
+        assert response.get_json()['message'] == 'incorrect_login'
+
     @pytest.mark.parametrize('path', UPLOAD_PATHS)
     def test_an_upload_returns_the_url_of_the_stored_file(self, signed_in, monkeypatch,
                                                           path):
