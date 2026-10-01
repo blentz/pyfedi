@@ -2158,11 +2158,27 @@ def refuse_if_private_instance(func):
 
     @wraps(func)
     def decorated_view(*args, **kwargs):
-        if g.site.private_instance:
+        if g.site.private_instance and rss_token_user() is None:  # R219: a member's RSS token opens the feed
             abort(404)
         return func(*args, **kwargs)
 
     return decorated_view
+
+
+def rss_token_user():
+    """The local account whose RSS token this request's `?token=` carries, or None.
+
+    R219 (owner ruling): an RSS reader presents no session, so on a private instance the
+    token in the url is how a member's reader gets in; anonymous readers still get 404.
+    D1356's rules for the token: a banned or deleted account's token no longer works.
+    """
+    rss_token = request.args.get('token')
+    if not rss_token:
+        return None
+    return User.query.filter(User.rss_token == rss_token.strip(),
+                             User.ap_id == None,  # noqa: E711 -- a local account
+                             User.banned == False,  # noqa: E712
+                             User.deleted == False).first()  # noqa: E712
 
 
 def check_anoobis(func):

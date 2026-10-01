@@ -33,7 +33,7 @@ from app.main.forms import ShareLinkForm
 from app.main.util import sidebar_active_communities, sidebar_new_instances, sidebar_upcoming_events, \
     sidebar_new_communities, _base_list_communities_context, reload_url
 from app.translation import LibreTranslateAPI
-from app.utils import render_template, get_setting, request_etag_matches, return_304, blocked_domains, \
+from app.utils import render_template, get_setting, request_etag_matches, return_304, blocked_domains, rss_token_user, \
     ap_datetime, shorten_string, user_filters_home, \
     joined_communities, moderating_communities, markdown_to_html, \
     blocked_or_banned_instances, communities_banned_from, topic_tree, recently_upvoted_posts, recently_downvoted_posts, \
@@ -1348,7 +1348,9 @@ def index_rss(feed_type=None):
     # -- got `304 Not Modified` where a fresh request got 404. That is an
     # access check a conditional request walks past, and it is the same defect
     # this campaign fixed in app/community/routes.py's community feed.
-    if g.site.private_instance:
+    # R219: on a private instance a member's RSS token opens the feed; anyone else still gets 404
+    user = rss_token_user()
+    if g.site.private_instance and user is None:
         abort(404)
 
     # If nothing has changed since their last visit, return HTTP 304
@@ -1356,26 +1358,11 @@ def index_rss(feed_type=None):
     if request_etag_matches(current_etag):
         return return_304(current_etag, 'application/rss+xml')
 
-    current_user_is_authenticated = False
-    user = None
-    if rss_token := request.args.get('token'):
-        # D1356. The token used to be matched on its own, so an account that had
-        # been BANNED or DELETED kept a working feed -- and `feed_type=subscribed`
-        # reads `community_membership_private`, so the token went on delivering
-        # posts from the PRIVATE communities that account belonged to. Measured:
-        # `deleted = True` and `banned = True` both still authenticated.
-        #
-        # These are three of the four conditions `authorise_api_user`
-        # (app/utils.py) already applies to a JWT, which is the same class of
-        # pre-issued credential. `verified` is deliberately not among them: an
-        # instance with email verification turned off has legitimate accounts with
-        # `verified = False`, and requiring it here would silently stop their feeds.
-        user = User.query.filter(User.rss_token == rss_token.strip(),
-                                 User.ap_id == None,  # noqa: E711 -- a local account
-                                 User.banned == False,  # noqa: E712
-                                 User.deleted == False).first()  # noqa: E712
-        if user:
-            current_user_is_authenticated = True
+    # D1356: `rss_token_user` refuses a banned or deleted account's token -- three of the four
+    # conditions `authorise_api_user` applies to a JWT; `verified` is deliberately not one,
+    # since an instance with email verification off has legitimate unverified accounts.
+    current_user_is_authenticated = user is not None
+    rss_token = request.args.get('token')
 
     community_ids = [-1]
     low_quality_filter = 'AND c.low_quality is false' if current_user_is_authenticated and user.hide_low_quality else ''
