@@ -230,12 +230,15 @@ def chat_report(conversation_id):
 
     if form.validate_on_submit():
         targets_data = {'gen': '0', 'suspect_conversation_id': conversation.id, 'reporter_id': current_user.id}
+        # D761: the source is the reported member's instance -- the member who is not the reporter -- None-safe
+        reported = next((member for member in sorted(conversation.members, key=lambda m: m.id)
+                         if member.id != current_user.id), None)
         report = Report(reasons=form.reasons_to_string(form.reasons.data),
                         description=form.description.data,
                         type=REPORT_TYPE_MESSAGE,
                         reporter_id=current_user.id,
                         suspect_conversation_id=conversation_id,
-                        source_instance_id=1,
+                        source_instance_id=reported.instance_id if reported else None,
                         targets=targets_data)
         db.session.add(report)
 

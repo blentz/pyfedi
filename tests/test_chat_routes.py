@@ -1168,6 +1168,39 @@ def test_ticking_the_remote_box_changes_nothing_yet(app, db_session):
     assert Notification.query.filter_by(subtype='chat_conversation_reported').count() == 2
 
 
+def test_a_report_names_the_reported_members_instance_as_its_source(app, db_session):
+    """D761 part 3, fixed (owner ruling): chat_report hard-coded
+    source_instance_id=1. It is now the reported member's instance -- the
+    member who is not the reporter -- as D553 made report_reply's."""
+    from app.models import Report
+    instance, alice, bob, carol = _seed()
+    peer = make_instance('peer.example')
+    remote = make_user(peer, 'remotebob')
+    conversation = make_conversation(alice, remote)
+    client = app.test_client()
+    login(client, alice)
+
+    _report_post(app, client, conversation.id)
+
+    assert Report.query.one().source_instance_id == peer.id
+
+
+def test_a_report_tolerates_a_reported_member_with_no_instance(app, db_session):
+    """None-safe, as D553: a member with no instance leaves the source empty
+    rather than raising."""
+    from app.models import Report
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    bob.instance_id = None
+    db.session.commit()
+    client = app.test_client()
+    login(client, alice)
+
+    _report_post(app, client, conversation.id)
+
+    assert Report.query.one().source_instance_id is None
+
+
 def test_an_admin_may_report_a_conversation_they_are_not_in(app, db_session):
     from app.models import Report
     instance, alice, bob, carol = _seed()
