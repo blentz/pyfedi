@@ -18,13 +18,11 @@ MODERATOR passes on the FIRST disjunct, so the None travelled into
 -- a 500 for a reply id that does not exist. Measured with `api_baseline`'s user1,
 who is an admin.
 
-The permission rule itself is left exactly as it was and is pinned below, including
-the part worth questioning: `post_reply.user_id == current_user.id` lets the
-REPLY'S OWN AUTHOR mark their comment as the accepted answer to somebody else's
-question. `post_reply_mark_as_answer` in `app/api/alpha/utils/reply.py` applies the
-same rule, so it is consistent across both entry points rather than a slip in one
-of them, and changing a product policy is not this campaign's business. The tests
-say what it does today so that a change to it has to be deliberate.
+Who may choose: fixed (owner ruling). The rule was `post_reply.user_id ==
+current_user.id`, which let the REPLY'S OWN AUTHOR mark their comment as the
+accepted answer to somebody else's question while the asker could not. Now the
+post's author or `can_moderate(community, user)` may, enforced once in
+`choose_answer`/`unchoose_answer` (app/shared/reply.py) for web and API alike.
 """
 import pytest
 from flask import g
@@ -142,7 +140,7 @@ class TestAReplyIdThatDoesNotExist:
 
 
 class TestWhoMayChooseAnAnswer:
-    """The rule as it stands, pinned rather than changed."""
+    """The post's author or `can_moderate` (owner ruling)."""
 
     def test_an_anonymous_caller_is_refused(self, env):
         post, reply = a_question_and_answer(env)
@@ -185,36 +183,31 @@ class TestWhoMayChooseAnAnswer:
         db.session.refresh(reply)
         assert reply.answer is True
 
-    def test_the_replys_own_author_may(self, env):
-        """Worth reading twice: the person who WROTE the comment may mark it as
-        the accepted answer to somebody else's question, and the notification
-        `choose_answer` sends says "Your answer was chosen as an answer to ...".
-
-        `post_reply_mark_as_answer` in the API applies the same rule, so this is
-        the product's policy in two places rather than a slip in one. Asserted as
-        it is; a change to it should be somebody's decision, not a side effect.
-        """
+    def test_the_replys_own_author_is_refused(self, env):
+        """Fixed (owner ruling). The person who WROTE the comment could mark it
+        as the accepted answer to somebody else's question; the choice belongs
+        to the asker and the community's moderators."""
         post, reply = a_question_and_answer(env)
         assert reply.user_id != post.user_id
         login(env.client, db.session.get(User, reply.user_id))
 
         response = env.client.post(f'/post_reply/{reply.id}/choose_answer')
 
-        assert response.status_code == 200
+        assert response.status_code == 403
         db.session.refresh(reply)
-        assert reply.answer is True
+        assert reply.answer is False
 
-    def test_the_asker_is_refused_unless_they_moderate(self, env):
-        """The other half of the same surprise: the person whose question it is
-        has no say, unless they happen to be a moderator or an admin."""
+    def test_the_asker_may(self, env):
+        """Fixed (owner ruling). The person whose question it is had no say
+        unless they happened to moderate; the post's author now may choose."""
         post, reply = a_question_and_answer(env)
         login(env.client, db.session.get(User, post.user_id))
 
         response = env.client.post(f'/post_reply/{reply.id}/choose_answer')
 
-        assert response.status_code == 403
+        assert response.status_code == 200
         db.session.refresh(reply)
-        assert reply.answer is False
+        assert reply.answer is True
 
 
 class TestUnchoosing:
@@ -235,6 +228,31 @@ class TestUnchoosing:
         reply.answer = True
         db.session.commit()
         login(env.client, env.baseline.user4)
+
+        response = env.client.post(f'/post_reply/{reply.id}/unchoose_answer')
+
+        assert response.status_code == 403
+        db.session.refresh(reply)
+        assert reply.answer is True
+
+    def test_the_asker_may_unchoose(self, env):
+        post, reply = a_question_and_answer(env)
+        reply.answer = True
+        db.session.commit()
+        login(env.client, db.session.get(User, post.user_id))
+
+        response = env.client.post(f'/post_reply/{reply.id}/unchoose_answer')
+
+        assert response.status_code == 200
+        db.session.refresh(reply)
+        assert reply.answer is False
+
+    def test_the_replys_own_author_may_not(self, env):
+        """Fixed (owner ruling), the unchoose half of the same rule."""
+        post, reply = a_question_and_answer(env)
+        reply.answer = True
+        db.session.commit()
+        login(env.client, db.session.get(User, reply.user_id))
 
         response = env.client.post(f'/post_reply/{reply.id}/unchoose_answer')
 
