@@ -517,7 +517,7 @@ def test_an_application_is_checked_against_the_ban_lists(app, env):
 
     with app.test_request_context('/'):
         with patch('app.auth.util.get_setting', return_value='ban.example'):
-            with patch('app.shared.tasks.task_selector') as task:
+            with patch('app.auth.util.task_selector') as task:
                 response = handle_user_application(applicant, form)
 
     assert response.headers['Location'] == '/auth/please_wait'
@@ -536,7 +536,7 @@ def test_an_instance_with_no_ban_lists_asks_nobody(app, env):
         with patch('app.auth.util.get_setting') as setting:
             setting.side_effect = lambda name, default=None: (
                 '' if name == 'ban_check_servers' else default)
-            with patch('app.shared.tasks.task_selector') as task:
+            with patch('app.auth.util.task_selector') as task:
                 handle_user_application(applicant, form)
 
     task.assert_not_called()
