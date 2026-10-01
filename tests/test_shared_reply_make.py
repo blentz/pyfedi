@@ -492,35 +492,27 @@ class TestEditReply:
         db.session.refresh(s.reply)
         assert s.reply.distinguished is False
 
-    def test_a_non_moderator_changing_distinguished_is_refused_by_the_api(self, db_session):
-        """`:224`'s true arm and `:225`'s raise.
+    def test_a_non_moderator_changing_distinguished_is_ignored_by_the_api(self, db_session):
+        """D551, fixed (owner ruling): a non-moderator's `distinguished` is
+        ignored on both arms and the existing value kept; the rest of the
+        edit lands. The API arm used to raise 'Not a moderator' where the web
+        arm dropped the value silently.
 
-        THE RAISE IS NOT THE ONLY WITNESS. A crash is a weak kill, so this
-        also asserts the body was NOT written: `:233` runs after the guard, so
-        a mutant that performed the edit and then raised would pass a bare
-        `pytest.raises`.
-
-        `_burn_a_seed()` runs first: `_seed_for_reply` mints `author` first
-        every single test (tests/conftest.py's teardown resets every
-        sequence to 1 -- see `_burn_a_seed`'s docstring), and `User.is_admin`
-        special-cases id 1 as an admin outright (app/models.py:1259-1261).
-        Without the burn `author` is id 1 EVERY time this test runs, not
-        occasionally, so `:224` would deterministically be False (admin) and
-        nothing would ever raise.
+        `_burn_a_seed()` runs first so `author` is not id 1, whom
+        `User.is_admin` treats as an admin.
         """
         _burn_a_seed()
         s = _seed_for_reply()
         s.reply.distinguished = False
         db.session.commit()
-        original_body = s.reply.body
-        payload = {'body': 'should not be saved', 'notify_author': False,
+        payload = {'body': 'saved anyway', 'notify_author': False,
                    'language_id': None, 'distinguished': True}
 
-        with pytest.raises(Exception, match='Not a moderator'):
-            edit_reply(payload, s.reply, s.post, SRC_API, auth=bearer(s.author))
+        edit_reply(payload, s.reply, s.post, SRC_API, auth=bearer(s.author))
 
         db.session.refresh(s.reply)
-        assert s.reply.body == original_body
+        assert 'saved anyway' in s.reply.body
+        assert s.reply.distinguished is False
 
     def test_leaving_distinguished_unchanged_skips_the_moderator_check(self, db_session):
         """`:223`'s false arm -- both disjuncts false, so `:224` never runs.
@@ -598,39 +590,22 @@ class TestEditReply:
         assert 'still distinguished' in s.reply.body
         assert s.reply.distinguished is True
 
-    def test_a_non_moderator_undistinguishing_is_refused_by_the_api(self, db_session):
-        """`:223`'s SECOND disjunct reaching `:224`'s raise.
-
-        ADDED BY TASK 8'S MUTATION PASS: deleting the second disjunct from
-        `:223` outright (M067) left every test green.
-        `test_a_non_moderator_changing_distinguished_is_refused_by_the_api`
-        drives the refusal through the FIRST disjunct (undistinguished ->
-        distinguished), and `test_undistinguishing_takes_the_second_
-        disjunct` drives the second disjunct with a MODERATOR, who is not
-        refused -- so no test made the second disjunct's refusal happen, and
-        a `:223` that had lost it entirely still refused everything the
-        suite asked it to refuse.
-
-        As in the first-disjunct refusal test, the raise is not the only
-        witness: `:233` runs after the guard, so the body is asserted
-        unchanged as well.
-
-        `_burn_a_seed()` is load-bearing here exactly as it is there -- an
-        id-1 `s.author` is an admin and `:224` would not refuse.
+    def test_a_non_moderator_undistinguishing_is_ignored_by_the_api(self, db_session):
+        """D551, fixed (owner ruling): asking to UNdistinguish is ignored for
+        a non-moderator just as distinguishing is -- the edit lands and the
+        existing True is kept. `_burn_a_seed()` keeps `author` off id 1.
         """
         _burn_a_seed()
         s = _seed_for_reply()
         s.reply.distinguished = True
         db.session.commit()
-        original_body = s.reply.body
-        payload = {'body': 'should not be saved', 'notify_author': False,
+        payload = {'body': 'saved anyway', 'notify_author': False,
                    'language_id': None, 'distinguished': False}
 
-        with pytest.raises(Exception, match='Not a moderator'):
-            edit_reply(payload, s.reply, s.post, SRC_API, auth=bearer(s.author))
+        edit_reply(payload, s.reply, s.post, SRC_API, auth=bearer(s.author))
 
         db.session.refresh(s.reply)
-        assert s.reply.body == original_body
+        assert 'saved anyway' in s.reply.body
         assert s.reply.distinguished is True
 
     def test_a_staff_author_may_distinguish_their_own_reply(self, db_session):
@@ -829,36 +804,14 @@ class TestEditReply:
         assert calls == [('edit_reply', child.id, s.reply.id)]
 
     def test_the_web_arm_silently_declines_distinguished(self, db_session, app):
-        """`:239`'s false arm -- AND IT ASSERTS A REGISTERED DEFECT ON PURPOSE.
-
-        `edit_reply` checks one permission TWICE, in two spellings, fifteen
-        lines apart. `:224` is
-        `not is_moderator and not is_owner and not is_staff() and not
-        is_admin()`; `:239` is `is_moderator or is_owner or
-        is_admin_or_staff()`. `is_admin_or_staff()` is exactly
-        `is_admin() or is_staff()` (app/models.py:1274-1275), so the two are
-        De Morgan twins over the same set.
-
-        The API arm RAISES at `:225`. The web arm has no equivalent, so a
-        non-moderator's `distinguished` is silently dropped at `:239` and the
-        caller is told nothing -- the same silent-failure shape sub-project 41
-        fixed twice in this module.
-
-        THIS TEST IS NOT INVERTED BY THIS ROUND. The finding is registered,
-        not fixed: this round's production budget is the counter fix. If a
-        later round adds the refusal, THE EDIT OWED HERE IS TO INVERT THIS
-        TEST -- the call must then raise and `distinguished` must stay False.
+        """D551, fixed (owner ruling): the web arm ignores a non-moderator's
+        `distinguished` and keeps the existing value, as the API arm now does
+        too -- one `can_moderate` gate for both.
 
         The witness is `distinguished` still False AFTER a successful edit, so
         the body assertion is what proves the call was not refused outright.
-
-        `_burn_a_seed()` runs first for the same reason as the API-arm
-        refusal test above: `author` is id 1 EVERY time this test runs
-        without the burn, deterministically (see `_burn_a_seed`'s
-        docstring), which would make `user.is_admin_or_staff()` True at
-        `:239`, applying `distinguished` instead of silently dropping it --
-        this test would pass for the wrong reason every single time, not
-        occasionally.
+        `_burn_a_seed()` keeps `author` off id 1, an admin by `User.is_admin`'s
+        id shortcut.
         """
         _burn_a_seed()
         s = _seed_for_reply()
