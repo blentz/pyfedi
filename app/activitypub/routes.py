@@ -892,7 +892,8 @@ def process_inbox_request(request_json, store_ap_json):
                         if not feed:
                             user = find_actor_or_create_cached(actor_id, create_if_not_found=False)
                     if not community and not feed and not user:
-                        log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json, 'Actor was not a user, feed or a community')
+                        aplog_type = {'Announce': APLOG_ANNOUNCE, 'Accept': APLOG_ACCEPT, 'Reject': APLOG_REJECT}[request_json['type']]
+                        log_incoming_ap(id, aplog_type, APLOG_FAILURE, saved_json, 'Actor was not a user, feed or a community')
                         return
                 else:
                     actor = find_actor_or_create_cached(actor_id)
