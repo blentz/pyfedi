@@ -584,6 +584,25 @@ def test_a_chat_message_with_no_content_is_refused_not_crashed(app, db_session, 
     assert db_session.query(ChatMessage).count() == 0
 
 
+@pytest.mark.parametrize('content', [{'x': 1}, ['hello'], 0, False],
+                         ids=['dict', 'list', 'zero', 'false'])
+def test_a_chat_message_whose_content_is_not_a_string_is_refused(app, db_session, monkeypatch, content):
+    """D128 and D131, fixed. The content guard checked presence only, so a
+    truthy non-string reached html_to_text and raised, and a falsy one
+    skipped the blocked-phrase filter and was stored. Both are now refused
+    like a missing content.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair()
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id,
+                           content=content, id='https://peer.example/pm/1'))
+
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'ChatMessage has no content'
+    assert db_session.query(ChatMessage).count() == 0
+
+
 def test_a_chat_message_with_no_id_is_refused_not_crashed(app, db_session, monkeypatch):
     """Task 9 fix for defect 2, the sibling unguarded read.
     `core_activity['object']['id']` used to be read with no membership check,
