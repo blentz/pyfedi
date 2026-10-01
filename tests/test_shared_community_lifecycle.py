@@ -1040,6 +1040,8 @@ def test_edit_community_icon_block_icon_url_matches_neither_clears_and_deletes(
     assert image_url_calls == ['https://icon.example/totally-different.png']
     assert delete_calls == [icon_file.id]
     assert s.community.icon_id is None
+    # D699, fixed: the old File row used to be left behind, orphaned
+    assert db.session.get(File, icon_file.id) is None
 
 
 def test_edit_community_icon_block_orphaned_icon_id_clears_without_delete(
@@ -1250,6 +1252,8 @@ def test_edit_community_banner_block_banner_url_matches_neither_clears_and_delet
     assert image_url_calls == ['https://banner.example/totally-different.png']
     assert delete_calls == [banner_file.id]
     assert s.community.image_id is None
+    # D699, fixed: the old File row used to be left behind, orphaned
+    assert db.session.get(File, banner_file.id) is None
 
 
 def test_edit_community_banner_block_orphaned_image_id_clears_without_delete(

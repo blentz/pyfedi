@@ -349,18 +349,20 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
             if icon_url != community.icon.medium_url():
                 icon_url_changed = True
                 remove_file = db.session.get(File, community.icon_id)
+                community.icon_id = None
                 if remove_file:
                     remove_file.delete_from_disk()
-                community.icon_id = None
+                    db.session.delete(remove_file)
         if not community.icon_id:
             icon_url_changed = True
         if community.image_id and banner_url != community.image.source_url:
             if banner_url != community.image.medium_url():
                 banner_url_changed = True
                 remove_file = db.session.get(File, community.image_id)
+                community.image_id = None
                 if remove_file:
                     remove_file.delete_from_disk()
-                community.image_id = None
+                    db.session.delete(remove_file)
                 cache.delete_memoized(Community.header_image, community)
         if not community.image_id:
             cache.delete_memoized(Community.header_image, community)

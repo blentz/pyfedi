@@ -861,15 +861,11 @@ def test_edit_feed_stores_a_banner_only_when_the_url_is_one(app, db_session, is_
     assert (db.session.get(Feed, s.feed.id).image_id is not None) is is_image
 
 
-def test_edit_feed_from_scratch_keeps_the_old_banner_row(app, db_session):
-    """:369's `not from_scratch` operand, isolated.
-
-    The banner block still deletes its old row by id, so from_scratch is the
-    only thing keeping the previous File alive on this path -- unlike the icon
-    block, where the cascade removes it whatever from_scratch says. That
-    asymmetry is this round's R6 and is asserted here rather than smoothed
-    over: after a from_scratch banner replacement the old row survives,
-    unreferenced, and nothing ever deletes it.
+def test_edit_feed_from_scratch_removes_the_old_banner_row(app, db_session):
+    """D699, fixed: the banner block deleted its old row only when not
+    from_scratch, so a from_scratch replacement left the previous File
+    orphaned, where the icon block's cascade removes it on every path. The
+    banner's old row and disk file are now removed whatever from_scratch is.
     """
     s = _seed()
     existing = _attach_banner(s.feed)
@@ -885,5 +881,5 @@ def test_edit_feed_from_scratch_keeps_the_old_banner_row(app, db_session):
 
     edited = db.session.get(Feed, s.feed.id)
     assert edited.image_id != old_id
-    assert db.session.get(File, old_id) is not None
-    assert unlink.call_count == 0
+    assert db.session.get(File, old_id) is None
+    assert unlink.call_count == 1
