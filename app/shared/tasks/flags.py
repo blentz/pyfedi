@@ -80,7 +80,8 @@ def report_object(session, user_id, object, summary, instance_ids):
 @celery.task
 def report_chat(send_async, user_id, reported_id, message_ap_ids, summary):
     """D761: a reported conversation is flagged to the reported member's instance, the object being that
-    member's messages, in the Flag shape report_object sends for a post or reply."""
+    member's messages, in the Flag shape report_object sends for a post or reply. The object is the reported
+    account's actor followed by the message ids, as Mastodon and Lemmy send and read a report (D761 follow-up)."""
     with current_app.app_context():
         session = get_task_session()
         try:
@@ -95,7 +96,7 @@ def report_chat(send_async, user_id, reported_id, message_ap_ids, summary):
                     'id': f"{current_app.config['SERVER_URL']}/activities/flag/{gibberish(15)}",
                     'type': 'Flag',
                     'actor': user.public_url(),
-                    'object': message_ap_ids,
+                    'object': [reported.ap_profile_id or reported.public_url(), *message_ap_ids],
                     '@context': default_context(),
                     'to': [reported.public_url()],
                     'summary': summary

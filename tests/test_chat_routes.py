@@ -1185,7 +1185,9 @@ def test_ticking_the_remote_box_flags_the_messages_to_the_reported_members_insta
     assert inbox == 'https://peer.example/inbox'
     assert flag['type'] == 'Flag'
     assert flag['actor'] == alice.public_url()
-    assert sorted(flag['object']) == ['https://peer.example/m/1', 'https://peer.example/m/2']
+    # D761 follow-up: Mastodon/Lemmy-compatible, the reported account's actor first, then its messages
+    assert flag['object'][0] == remote.ap_profile_id
+    assert sorted(flag['object'][1:]) == ['https://peer.example/m/1', 'https://peer.example/m/2']
     assert flag['to'] == [remote.public_url()]
     assert flag['summary'] == 'Spam - they will not stop'
     assert flag['id'].startswith('https://test.piefed.local/activities/flag/')
