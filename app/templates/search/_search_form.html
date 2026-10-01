@@ -66,6 +66,7 @@
                 {% endfor %}
             </select>
         </div>
+        {% if current_user.is_authenticated -%}
         <div class="form-group"><label class="form-control-label" for="nsfw" aria-label="{{ _('NSFW') }}">{{ _('NSFW') }}</label>
             <select class="form-control form-select" id="nsfw" name="nsfw">
                 <option value="" {{ 'selected' if nsfw | default('') == '' else '' }}>{{ _('Use my profile settings') }}</option>
@@ -74,6 +75,7 @@
                 <option value="exclude" {{ 'selected' if nsfw | default('') == 'exclude' else '' }}>{{ _('No NSFW') }}</option>
             </select>
         </div>
+        {% endif -%}
         <div class="form-group"><label class="form-control-label" for="minimum_upvote" aria-label="{{ _('Minimum score') }}">{{ _('Minimum score') }} ({{ _('optional') }})</label>
             <input class="form-control" id="minimum_upvote" name="minimum_upvote" type="text" inputmode="numeric" pattern="\d+" value="{{ minimum_upvote | default('') }}">
         </div>

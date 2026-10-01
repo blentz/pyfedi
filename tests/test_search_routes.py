@@ -18,6 +18,7 @@ Three defects are pinned here and repaired together:
       injected its own parameters into them.
 """
 import pytest
+from flask import g
 from unittest.mock import patch
 
 from app import db
@@ -346,21 +347,16 @@ def test_an_anonymous_search_never_returns_bot_or_nsfl_posts(app, db_session):
 @pytest.mark.parametrize('nsfw, expected', [
     ('', ['plain article']),
     ('exclude', ['plain article']),
-    # `only` asks for nsfw = true AND nsfw = false, so it returns NOTHING --
-    # not even the safe post. That is the defect, recorded exactly.
-    ('only', []),
+    ('only', ['plain article']),
     ('include', ['plain article']),
 ])
 def test_an_anonymous_search_never_returns_nsfw_posts_whatever_is_asked(app, db_session,
                                                                         nsfw, expected):
-    """D798: the anonymous block builds the same exclude/only/include chain the
-    authenticated arm has and then appends `filter(Post.nsfw == False)`
-    UNCONDITIONALLY -- so `only` asks for `nsfw = true AND nsfw = false` and can
-    only ever return nothing, and `include` is silently overridden.
-
-    Recorded as behaviour: either the chain is dead or the trailing filter is
-    wrong, and which one is a product decision about what a logged-out reader
-    may see.
+    """D798, fixed. The anonymous block built the authenticated arm's
+    exclude/only/include chain and then filtered `nsfw == False` regardless, so
+    `only` returned nothing at all. A logged-out reader never sees NSFW: the
+    dead chain is gone and every value gets the safe posts (owner ruling
+    2026-09-30).
     """
     instance, alice, bob = _seed()
     community = make_community('microblogs')
@@ -372,6 +368,23 @@ def test_an_anonymous_search_never_returns_nsfw_posts_whatever_is_asked(app, db_
         client.get(f'/search?q=article&nsfw={nsfw}')
 
     assert _titles(render) == expected
+
+
+def test_the_search_form_offers_nsfw_options_only_to_a_logged_in_reader(app, db_session):
+    """D798, fixed. A logged-out reader is never shown NSFW, so the form no
+    longer offers them options that cannot change anything (owner ruling
+    2026-09-30)."""
+    instance, alice, bob = _seed()
+    client = app.test_client()
+
+    assert 'name="nsfw"' not in client.get('/search').get_data(as_text=True)
+
+    # The session-scoped app keeps one `g`, so the anonymous request's cached
+    # `_login_user` must go before the reader logs in.
+    g.pop('_login_user', None)
+    login(client, alice)
+    assert 'name="nsfw"' in client.get('/search').get_data(as_text=True)
+    g.pop('_login_user', None)
 
 
 @pytest.mark.parametrize('nsfw, expected', [
@@ -1038,10 +1051,9 @@ def test_the_query_can_never_be_none(app, db_session):
         assert (request.args.get('q') or '').strip() == ''
 
 
-def test_an_nsfw_parameter_nobody_defined_falls_through_the_chain(app, db_session):
-    """The anonymous chain is exclude / only / include and has no else, so a
-    value naming none of them falls past all three -- and then meets the
-    unconditional filter that makes D798 what it is.
+def test_an_nsfw_parameter_nobody_defined_is_ignored_too(app, db_session):
+    """A logged-out search ignores the parameter entirely (D798), so a value
+    naming nothing still gets only the safe posts.
     """
     instance, alice, bob = _seed()
     community = make_community('microblogs')
