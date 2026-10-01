@@ -81,9 +81,8 @@ class TestSendingANewsletter:
                 'csrf_token': csrf(env.app, env.client)}
         data.update(fields)
         sent = []
-        # `send_email` is imported INSIDE `send_newsletter`, so the name to replace is the
-        # one in `app.email`, not a module-level binding in `app.admin.util`.
-        with patch('app.email.send_email',
+        # `send_newsletter` calls the `send_email` bound in `app.admin.util`.
+        with patch('app.admin.util.send_email',
                    side_effect=lambda **kwargs: sent.append(kwargs)):
             response = env.client.post('/admin/newsletter', data=data)
         return response, sent

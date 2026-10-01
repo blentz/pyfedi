@@ -57,6 +57,9 @@ from app.utils import render_template, permission_required, set_setting, get_set
     safe_order_by, get_task_session, patch_db_session, low_value_reposters, moderating_communities_ids, \
     instance_allowed, trusted_instance_ids, get_emoji_replacements, get_site_as_dict, roles_with, sql_file, sanitize_svg, REDIRECT_POLICY_SETTING, REDIRECT_POLICY_SAME_ORIGIN, sanitise_posting_warning, inbox_domain
 from app.admin import bp
+import app as app_pkg
+import time
+from app.plugins import get_loaded_plugins, get_plugin_hooks
 
 
 @cache.memoize(timeout=3600, cache_none=True)
@@ -103,7 +106,6 @@ def admin_home():
         disk_usage = f"{storage_used}: {percent_used:.2f}%"
     
     # Get plugin information
-    from app.plugins import get_loaded_plugins, get_plugin_hooks
     plugins = get_loaded_plugins()
     plugin_hooks = get_plugin_hooks()
 
@@ -331,8 +333,7 @@ def admin_misc():
     form.default_theme.choices = theme_list()
     form.language_id.choices = languages_for_form(all_languages=True)
     if close_form.close_submit.data and close_form.validate():
-        from app import redis_client
-        redis_client.set('pause_federation', '666', ex=86400 * 365 * 10)
+        app_pkg.redis_client.set('pause_federation', '666', ex=86400 * 365 * 10)
         site.registration_mode = 'Closed'
         # No `if close_form.announcement.data:` guard -- announcement carries
         # DataRequired(), so validate() above has already refused an empty one.
@@ -2933,7 +2934,6 @@ def masquerade(user_id):
 @login_required
 @permission_required('change instance settings')
 def perf_test():
-    import time
 
     # R237: a bounded run -- 1,000,000 iterations unless ?n= asks for fewer; never more
     N = min(max(request.args.get('n', 1_000_000, type=int), 1), 1_000_000)
