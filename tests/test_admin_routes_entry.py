@@ -421,6 +421,32 @@ def test_the_translation_status_is_cached_for_an_hour_with_a_3s_timeout(app, db_
     assert translation_service_languages.cache_timeout == 3600
 
 
+@pytest.mark.parametrize('query, iterations', [
+    ('', '1,000,000'),                 # the default
+    ('?n=5000', '5,000'),              # a smaller run on request
+    ('?n=999999999999', '1,000,000'),  # clamped
+])
+def test_the_perf_test_is_bounded(app, db_session, query, iterations):
+    """R237, fixed (owner ruling): /admin/perf_test ran a hundred million
+    iterations in the request. It now defaults to 1,000,000 and takes ?n=,
+    clamped to 1,000,000. The clock is pinned so the reported rate is the
+    iteration count."""
+    instance, ordinary = _seed()
+    admin = make_user(instance, 'perfadmin', local=True)
+    admin.verified = True
+    db.session.commit()
+    grant_permission(admin, 'change instance settings')
+    client = app.test_client()
+    login(client, admin)
+    clock = iter([0.0, 1.0])
+
+    with patch('time.perf_counter', side_effect=lambda: next(clock)):
+        response = client.post('/admin/perf_test' + query, data={'csrf_token': csrf(app, client)})
+
+    assert response.status_code == 200
+    assert f'Iterations per second: {iterations}' in response.get_data(as_text=True)
+
+
 # --------------------------------------------------------------------------
 # Every route on the blueprint, refused
 # --------------------------------------------------------------------------
