@@ -46,7 +46,7 @@ from app.utils import retrieve_block_list, blocked_domains, retrieve_peertube_bl
     get_redis_connection, instance_online, instance_gone_forever, find_next_occurrence, \
     guess_mime_type, ensure_directory_exists, \
     render_from_tpl, get_task_session, patch_db_session, get_setting, get_recipient_language, \
-    log_cron_task_to_db, allowlist_html, markdown_to_html, html_to_text, site_language_id
+    log_cron_task_to_db, allowlist_html, markdown_to_html, html_to_text, site_language_id, can_create_post
 
 logger = logging.getLogger(__name__)
 
@@ -1054,6 +1054,15 @@ def register(app):
                         next_occurrence = post.scheduled_for + find_next_occurrence(post)
                     else:
                         next_occurrence = None
+                    # F7: the author may have lost the right to post here since scheduling. Skip this occurrence;
+                    # a repeating schedule moves on to its next one
+                    if not can_create_post(post.author, post.community):
+                        logger.info(f'Scheduled post {post.id} not published: its author may not post in '
+                                    f'community {post.community_id}')
+                        if next_occurrence:
+                            post.scheduled_for = next_occurrence
+                            db.session.commit()
+                        continue
                     # One shot scheduled post
                     if not next_occurrence:
                         post.status = POST_STATUS_PUBLISHED
