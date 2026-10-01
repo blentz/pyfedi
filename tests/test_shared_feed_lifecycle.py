@@ -1439,6 +1439,56 @@ def test_join_feed_rolls_back_and_re_raises_what_the_remote_call_raised(app, db_
     assert FeedJoinRequest.query.filter_by(user_id=member_id).count() == 0
 
 
+def test_a_join_that_fails_after_the_follow_was_sent_undoes_the_follow(app, db_session):
+    """D682 residue. The Follow had already gone to the peer when the local
+    rows were rolled back, so the peer kept us subscribed. The failure now
+    sends the leave path's Undo{Follow}, naming the Follow that was sent.
+    """
+    s = _seed()
+    feed = _remote_feed()
+    s.member.feed_auto_follow = False
+    db.session.commit()
+    member_id = s.member.id
+
+    with app.test_request_context('/'):
+        with patch('app.shared.feed.send_post_request') as follow_send, \
+                patch('app.shared.tasks.follows.send_post_request') as undo_send, \
+                patch('app.shared.feed.get_request') as get:
+            get.return_value = SimpleNamespace(json=lambda: {'type': 'OrderedCollection'})
+            with pytest.raises(ValueError):
+                join_feed('remotefeed@remote.piefed.local', member_id, SRC_API)
+
+    follow = follow_send.call_args.args[1]
+    assert undo_send.call_count == 1
+    inbox, undo = undo_send.call_args.args[:2]
+    assert inbox == 'https://remote.piefed.local/f/remotefeed/inbox'
+    assert undo['type'] == 'Undo'
+    assert undo['object']['id'] == follow['id']
+    assert FeedMember.query.filter_by(user_id=member_id).count() == 0
+    assert FeedJoinRequest.query.filter_by(user_id=member_id).count() == 0
+
+
+def test_a_join_whose_follow_was_never_sent_sends_no_undo(app, db_session):
+    """D682 residue: nothing reached the peer, so there is nothing to undo."""
+    class RemoteExploded(Exception):
+        pass
+
+    s = _seed()
+    _remote_feed()
+    s.member.feed_auto_follow = False
+    db.session.commit()
+    member_id = s.member.id
+
+    with app.test_request_context('/'):
+        with patch('app.shared.feed.send_post_request', side_effect=RemoteExploded('down')), \
+                patch('app.shared.tasks.follows.send_post_request') as undo_send:
+            with pytest.raises(RemoteExploded):
+                join_feed('remotefeed@remote.piefed.local', member_id, SRC_API)
+
+    assert undo_send.call_count == 0
+    assert FeedMember.query.filter_by(user_id=member_id).count() == 0
+
+
 def test_join_feed_does_not_flash_to_an_api_caller_who_is_already_subscribed(app, db_session):
     """:98's False arm -- the already-subscribed message is web-only. Without
     this row the else arm is covered only on the SRC_WEB path and `if src ==
