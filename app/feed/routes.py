@@ -148,12 +148,13 @@ def feed_edit(feed_id: int):
         return show_ban_message()
     # load the feed
     feed_to_edit: Feed = db.session.get(Feed, feed_id) or abort(404)
-    # make sure the user owns this feed
-    if feed_to_edit.user_id != current_user.id:
+    # make sure the user owns this feed, or is an admin (D697: as the API allows)
+    if feed_to_edit.user_id != current_user.id and not current_user.is_admin():
         abort(404)
     edit_feed_form = EditFeedForm()
-    edit_feed_form.parent_feed_id.choices = feeds_for_form(feed_id, current_user.id)
+    edit_feed_form.parent_feed_id.choices = feeds_for_form(feed_id, feed_to_edit.user_id)
     edit_feed_form.feed_id = feed_id
+    edit_feed_form.owner_user_name = db.session.get(User, feed_to_edit.user_id).user_name
 
     if not current_user.is_admin():
         edit_feed_form.is_instance_feed.render_kw = {'disabled': True}

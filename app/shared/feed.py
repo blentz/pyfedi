@@ -395,7 +395,9 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
         raise Exception('incorrect_login')
 
     if url:
-        url = feed_machine_name(url, public, user)
+        # D697: an admin may edit someone else's feed, and a private feed's name carries its owner's suffix
+        owner = user if feed.user_id == user.id else db.session.get(User, feed.user_id)
+        url = feed_machine_name(url, public, owner)
         # D696: subscribers follow the feed by its name, so once it has any (the owner is one) it is not renamed
         if url != feed.name and feed.subscriptions_count > 1:
             if src == SRC_API:

@@ -5314,8 +5314,10 @@ def apply_feed_url_rules(self):
         self.url.errors.append(_l('- cannot be in Url. Use _ instead?'))
         return False
 
+    # D697: an admin editing someone else's feed sets owner_user_name; a private feed's suffix is its owner's
+    owner_user_name = getattr(self, 'owner_user_name', current_user.user_name).lower()
     if not self.public.data and not '/' in self.url.data.strip():
-        self.url.data = self.url.data.strip().lower() + '/' + current_user.user_name.lower()
+        self.url.data = self.url.data.strip().lower() + '/' + owner_user_name
     elif self.public.data and '/' in self.url.data.strip():
         self.url.data = self.url.data.strip().split('/', 1)[0]
     else:
@@ -5332,7 +5334,7 @@ def apply_feed_url_rules(self):
         # raised re.error out of this function. This is the defence that
         # holds for names ALREADY in the database; USER_NAME_CHARSET_RE
         # above only governs names created from now on.
-        regex = r'^[a-zA-Z0-9_]+(?:/' + re.escape(current_user.user_name.lower()) + ')?$'
+        regex = r'^[a-zA-Z0-9_]+(?:/' + re.escape(owner_user_name) + ')?$'
     if not re.match(regex, self.url.data):
         self.url.errors.append(_l('Feed urls can only contain letters, numbers, and underscores.'))
         return False
