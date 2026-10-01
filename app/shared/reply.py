@@ -257,9 +257,6 @@ def edit_reply(input, reply, post, src, auth=None):
         notify_author = input['notify_author']
         language_id = input['language_id']
         distinguished = input['distinguished']
-        if (not reply.distinguished and distinguished == True) or (reply.distinguished == True and distinguished == False):
-            if not reply.community.is_moderator(user) and not reply.community.is_owner(user) and not user.is_staff() and not user.is_admin():
-                raise Exception('Not a moderator')
     else:
         user = current_user
         content = input.body.data
@@ -273,7 +270,8 @@ def edit_reply(input, reply, post, src, auth=None):
     reply.community.last_active = utcnow()
     reply.edited_at = utcnow()
     reply.language_id = language_id
-    if reply.community.is_moderator(user) or reply.community.is_owner(user) or user.is_admin_or_staff():
+    # D551: on both arms a non-moderator's distinguished value is ignored and the existing one kept
+    if can_moderate(reply.community, user):
         reply.distinguished = distinguished
     db.session.commit()
 
