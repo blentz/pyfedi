@@ -398,16 +398,13 @@ class TestAddRemoteCommunityFromPost:
     instance, and `:1116-1117`'s bare `except Exception: pass` swallows
     whatever `search_for_community` raises.
 
-    `search_for_community` IS IMPORTED INSIDE THE FUNCTION at `:1111`, so it
-    never enters this module's namespace and `app.shared.tasks.maintenance.
-    search_for_community` does not exist to patch. These tests patch
-    `app.community.util.search_for_community` at its source -- the one helper
-    in this round the namespace idiom cannot reach.
+    These tests patch `app.shared.tasks.maintenance.search_for_community`, the
+    binding the task calls.
     """
 
     def test_a_post_with_a_url_yields_one_lookup(self, db_session, monkeypatch):
         recorder = _Recorder()
-        monkeypatch.setattr('app.community.util.search_for_community', recorder)
+        monkeypatch.setattr('app.shared.tasks.maintenance.search_for_community', recorder)
 
         add_remote_community_from_post({'url': 'https://peer.example/c/books'})
 
@@ -416,7 +413,7 @@ class TestAddRemoteCommunityFromPost:
     def test_a_post_without_a_url_scans_the_body(self, db_session, monkeypatch):
         """`:1102`'s false arm and `:1108`'s regex."""
         recorder = _Recorder()
-        monkeypatch.setattr('app.community.util.search_for_community', recorder)
+        monkeypatch.setattr('app.shared.tasks.maintenance.search_for_community', recorder)
 
         add_remote_community_from_post(
             {'body': 'try !books@peer.example and !film@other.example'})
@@ -435,7 +432,7 @@ class TestAddRemoteCommunityFromPost:
         a mutation of it.
         """
         recorder = _Recorder()
-        monkeypatch.setattr('app.community.util.search_for_community', recorder)
+        monkeypatch.setattr('app.shared.tasks.maintenance.search_for_community', recorder)
 
         add_remote_community_from_post({'body': 'nothing here'})
 
@@ -444,7 +441,7 @@ class TestAddRemoteCommunityFromPost:
     def test_a_community_on_this_instance_is_skipped(self, db_session, monkeypatch, app):
         """`:1113`'s guard against looking up our own communities."""
         recorder = _Recorder()
-        monkeypatch.setattr('app.community.util.search_for_community', recorder)
+        monkeypatch.setattr('app.shared.tasks.maintenance.search_for_community', recorder)
         local = f"!books@{app.config['SERVER_NAME']}"
 
         add_remote_community_from_post({'body': f'see {local}'})
@@ -470,7 +467,7 @@ class TestAddRemoteCommunityFromPost:
             called.append(args[0])
             raise RuntimeError('lookup exploded')
 
-        monkeypatch.setattr('app.community.util.search_for_community', _raise)
+        monkeypatch.setattr('app.shared.tasks.maintenance.search_for_community', _raise)
 
         add_remote_community_from_post({'body': '!books@peer.example'})
 

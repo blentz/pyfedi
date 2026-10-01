@@ -963,7 +963,7 @@ class TestArchiveUser:
         monkeypatch.setitem(current_app.config, 'CLOUDFLARE_ZONE_ID', 'zone')
         monkeypatch.setitem(current_app.config, 'CLOUDFLARE_API_TOKEN', 'token')
         flushed = []
-        monkeypatch.setattr('app.models.flush_cdn_cache',
+        monkeypatch.setattr('app.shared.tasks.maintenance.flush_cdn_cache',
                             lambda urls: flushed.append(urls))
 
         archive_user(user.id, db.session)
@@ -985,7 +985,7 @@ class TestArchiveUser:
         monkeypatch.setitem(current_app.config, 'CLOUDFLARE_ZONE_ID', 'zone')
         monkeypatch.setitem(current_app.config, 'CLOUDFLARE_API_TOKEN', 'token')
         flushed = []
-        monkeypatch.setattr('app.models.flush_cdn_cache',
+        monkeypatch.setattr('app.shared.tasks.maintenance.flush_cdn_cache',
                             lambda urls: flushed.append(urls))
         server = current_app.config['SERVER_URL']
 

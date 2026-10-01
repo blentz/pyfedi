@@ -29,6 +29,7 @@ from app.utils import render_template, authorise_api_user, shorten_string, gibbe
     is_image_url, add_to_modlog, store_files_in_s3, guess_mime_type, retrieve_image_hash, \
     hash_matches_blocked_image, can_upvote, can_downvote, get_recipient_language, to_srgb, can_upload_video, \
     is_video_url, sanitize_svg, user_ip_banned, ip_address, inspect_image_c2pa, make_gallery_thumbnail, get_request, community_membership_private, communities_banned_from, can_moderate, can_create_post_reply
+import app as app_pkg
 
 
 def vote_for_post(post_id: int, vote_direction, federate: bool, emoji: str, src, auth=None):
@@ -543,7 +544,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
                 if domain:
                     domain.post_count -= 1
                 if post.type == POST_TYPE_VIDEO and store_files_in_s3() and post.url.startswith(f'https://{current_app.config["S3_PUBLIC_URL"]}'):
-                    from app.shared.tasks.maintenance import delete_from_s3
+                    from app.shared.tasks.maintenance import delete_from_s3  # cycle: app.shared.tasks.maintenance imports delete_post from this module
                     if current_app.debug:
                         delete_from_s3([post.url])
                     else:
@@ -1060,8 +1061,7 @@ def delete_post(post_id: int, federate_deletion, src, auth):
         else:
             user_id = 1     # for remove_old_community_content()
 
-    from app import redis_client
-    with redis_client.lock(f"lock:post:{post_id}", timeout=10, blocking_timeout=6):
+    with app_pkg.redis_client.lock(f"lock:post:{post_id}", timeout=10, blocking_timeout=6):
         post = db.session.get(Post, post_id) or abort(404)
         if post.deleted:  # already deleted: nothing to undo or federate
             return (user_id, post) if src == SRC_API else None
@@ -1101,8 +1101,7 @@ def restore_post(post_id: int, src, auth):
     else:
         user_id = current_user.id
 
-    from app import redis_client
-    with redis_client.lock(f"lock:post:{post_id}", timeout=10, blocking_timeout=6):
+    with app_pkg.redis_client.lock(f"lock:post:{post_id}", timeout=10, blocking_timeout=6):
         post = db.session.get(Post, post_id) or abort(404)
         if not post.deleted:  # not deleted: nothing to restore or federate
             return (user_id, post) if src == SRC_API else None
@@ -1393,8 +1392,7 @@ def mod_remove_post(post_id: int, reason, src, auth):
     else:
         user = current_user
 
-    from app import redis_client
-    with redis_client.lock(f"lock:post:{post_id}", timeout=10, blocking_timeout=6):
+    with app_pkg.redis_client.lock(f"lock:post:{post_id}", timeout=10, blocking_timeout=6):
         post = db.session.get(Post, post_id) or abort(404)
 
         if not can_mod_post(post, user):
@@ -1438,8 +1436,7 @@ def mod_restore_post(post_id: int, reason, src, auth):
     else:
         user = current_user
 
-    from app import redis_client
-    with redis_client.lock(f"lock:post:{post_id}", timeout=10, blocking_timeout=6):
+    with app_pkg.redis_client.lock(f"lock:post:{post_id}", timeout=10, blocking_timeout=6):
         post = db.session.get(Post, post_id) or abort(404)
         if not can_mod_post(post, user):
             raise Exception('Does not have permission')
@@ -1477,8 +1474,7 @@ def mark_post_read(post_ids: List[int], read: bool, user_id: int):
             db.session.execute(
                 text('DELETE FROM "read_posts" WHERE user_id = :user_id AND read_post_id = :post_id'),
                 {"user_id": user_id, "post_id": post_id})
-    from app import redis_client
-    with redis_client.lock(f"lock:user:{user_id}", timeout=10, blocking_timeout=6):
+    with app_pkg.redis_client.lock(f"lock:user:{user_id}", timeout=10, blocking_timeout=6):
         db.session.execute(text('UPDATE "user" SET last_seen = now() WHERE id = :user_id'),
                            {'user_id': user_id})
         db.session.commit()

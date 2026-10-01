@@ -21,6 +21,10 @@ from app.shared.post import delete_post
 from app.utils import get_task_session, download_defeds, instance_banned, get_request_instance, get_request, \
     shorten_string, patch_db_session, archive_post, get_setting, set_setting, communities_banned_from_all_users, \
     banned_instances, blocked_or_banned_instances, get_emoji_replacements, store_files_in_s3, ensure_directory_exists
+from app.utils import communities_banned_from, joined_communities, moderating_communities
+from app.models import flush_cdn_cache
+from app.activitypub.util import extract_domain_and_actor
+from app.community.util import search_for_community
 
 
 @celery.task
@@ -109,7 +113,6 @@ def process_expired_bans():
                 blocked.unread_notifications += 1
 
                 # Clear relevant caches
-                from app.utils import communities_banned_from, joined_communities, moderating_communities
                 cache.delete_memoized(communities_banned_from, blocked.id)
                 cache.delete_memoized(communities_banned_from_all_users)
                 cache.delete_memoized(joined_communities, blocked.id)
@@ -243,7 +246,6 @@ def delete_old_soft_deleted_content():
         session = get_task_session()
         try:
             with patch_db_session(session):
-                from app import redis_client
                 cutoff = utcnow() - timedelta(days=7)
 
                 # Delete old posts only when no replies, mod-deleted or forced by community retention policy (deleted_by = 1)
@@ -1073,7 +1075,6 @@ def archive_user(user_id, session):
         cover_file.delete_from_disk(cache_urls=cache_urls)
         session.delete(cover_file)
     if cache_urls:
-        from app.models import flush_cdn_cache
         flush_cdn_cache(cache_urls)
 
     session.commit()
@@ -1281,7 +1282,6 @@ def add_remote_communities():
 
 def add_remote_community_from_post(post_data):
     if 'url' in post_data:
-        from app.activitypub.util import extract_domain_and_actor
         server, community = extract_domain_and_actor(post_data['url'])
         community_lookup = ['!' + community + '@' + server]
     else:
@@ -1291,7 +1291,6 @@ def add_remote_community_from_post(post_data):
         community_lookup = re.findall(pattern, post_data['body'])
 
     if len(community_lookup):
-        from app.community.util import search_for_community
         for cl in set(community_lookup):
             if f"@{current_app.config['SERVER_NAME']}" not in cl:
                 try:
