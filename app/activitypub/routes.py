@@ -1628,6 +1628,9 @@ def process_inbox_request(request_json, store_ap_json):
                                 session.delete(feed_item)
                                 feed.num_communities -= 1
                                 session.commit()
+                                log_incoming_ap(id, APLOG_REMOVE, APLOG_SUCCESS, saved_json)
+                            else:
+                                log_incoming_ap(id, APLOG_REMOVE, APLOG_IGNORED, saved_json, 'Community is not in feed')
                             # also auto-unsubscribe any feedmembers from the community
                             # who have feed_auto_leave enabled
                             feed_members = session.query(FeedMember).filter_by(feed_id=feed.id).all()
@@ -1671,6 +1674,8 @@ def process_inbox_request(request_json, store_ap_json):
                                             session.commit()
                                             log_incoming_ap(id, APLOG_REMOVE, APLOG_SUCCESS, saved_json,
                                                             f'{fm_user.user_name} auto-unfollowed {community_to_remove.ap_public_url} during a feed/remove')
+                        else:
+                            log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json, 'Cannot find community to remove from feed')
                     elif community:
                         if not community.is_moderator(mod) and not community.is_instance_admin(mod):
                             log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json, 'Does not have permission')
