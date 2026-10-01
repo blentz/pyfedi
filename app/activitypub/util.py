@@ -717,12 +717,8 @@ def refresh_user_profile_task(user_id):
             if user and user.instance_id and user.instance.online():
                 try:
                     actor_data = get_request(user.ap_public_url, headers={'Accept': 'application/activity+json'})
-                except httpx.HTTPError:
-                    time.sleep(randint(3, 10))
-                    try:
-                        actor_data = get_request(user.ap_public_url, headers={'Accept': 'application/activity+json'})
-                    except httpx.HTTPError:
-                        return
+                except httpx.HTTPError:  # get_request has already retried once (D224)
+                    return
                 except Exception:  # not bare: a worker shutdown must propagate (D220)
                     try:
                         site = session.get(Site, 1)
@@ -889,12 +885,8 @@ def refresh_community_profile_task(community_id, activity_json):
                 if not activity_json:
                     try:
                         actor_data = get_request(community.ap_public_url, headers={'Accept': 'application/activity+json'})
-                    except httpx.HTTPError:
-                        time.sleep(randint(3, 10))
-                        try:
-                            actor_data = get_request(community.ap_public_url, headers={'Accept': 'application/activity+json'})
-                        except Exception:
-                            return
+                    except httpx.HTTPError:  # get_request has already retried once (D224)
+                        return
                     if actor_data.status_code == 200:
                         try:
                             activity_json = actor_data.json()
@@ -1152,12 +1144,8 @@ def refresh_feed_profile_task(feed_id):
             if feed and feed.instance_id and feed.instance.online() and not feed.is_local():
                 try:
                     actor_data = get_request(feed.ap_public_url, headers={'Accept': 'application/activity+json'})
-                except httpx.HTTPError:
-                    time.sleep(randint(3, 10))
-                    try:
-                        actor_data = get_request(feed.ap_public_url, headers={'Accept': 'application/activity+json'})
-                    except Exception:
-                        return
+                except httpx.HTTPError:  # get_request has already retried once (D224)
+                    return
                 if actor_data.status_code == 200:
                     try:
                         activity_json = actor_data.json()

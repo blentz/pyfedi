@@ -4,7 +4,7 @@
 `refresh_community_profile_task` in detail, and it covers `refresh_feed_profile_task`'s own
 guards. What it does not cover is the FEED task's body past the fetch:
 
-    1131-1135   the retry -- one sleep and one second attempt -- and giving up after it
+    the fetch   one failure gives up quietly, with no sleep and no second attempt (D224)
     1177        the PeerTube `<p>` wrap for a summary that is not HTML
     1181-1184   the markdown-source preference, D1346's shape applied to a feed
     1191-1205   replacing the feed's icon and cover, which DELETES the old file from disk
@@ -72,37 +72,19 @@ def reread(feed_id):
 
 class TestWhenThePeerDoesNotAnswerTheFirstTime:
 
-    def test_a_failed_fetch_is_retried_once_and_applied(self, env, http_mock,
-                                                        no_real_sleeping):
-        """`except httpx.HTTPError: sleep(...); try again`. One retry, after a random 3-10
-        second wait, because a peer that refused one connection is usually still there --
-        and the sleep is why the fixture neutralising it is required."""
-        answers = [httpx.ConnectError('refused'),
-                   httpx.Response(200, json=feed_document())]
-
-        def flaky(request, route):
-            answer = answers.pop(0)
-            if isinstance(answer, Exception):
-                raise answer
-            return answer
-
-        http_mock.get(env.feed.ap_public_url).mock(side_effect=flaky)
-
-        refresh_feed_profile_task(env.feed.id)
-
-        assert answers == []
-        assert reread(env.feed.id).title == 'News, refreshed'
-
-    def test_a_second_failure_gives_up_quietly(self, env, http_mock, no_real_sleeping):
-        """`except Exception: return`. The second handler is WIDER than the first -- the
-        retry can fail differently -- and the task returns rather than raising, because a
-        peer being unreachable is not this instance's error."""
-        http_mock.get(env.feed.ap_public_url).mock(
-            side_effect=httpx.ConnectError('still refused'))
+    def test_a_failed_fetch_is_not_retried(self, env, http_mock, no_real_sleeping):
+        """D224, fixed (owner ruling): the task used to sleep 3-10 seconds inline in the
+        worker and fetch again. `get_request` already retries a read error itself, so one
+        `httpx.HTTPError` now ends the refresh -- and the task returns rather than raising,
+        because a peer being unreachable is not this instance's error. Two transport calls
+        are `get_request`'s own attempts; the task's retry made it four."""
+        route = http_mock.get(env.feed.ap_public_url).mock(
+            side_effect=httpx.ConnectError('refused'))
         before = env.feed.title
 
         refresh_feed_profile_task(env.feed.id)
 
+        assert route.call_count == 2
         assert reread(env.feed.id).title == before
 
 

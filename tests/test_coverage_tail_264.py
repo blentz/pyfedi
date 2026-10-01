@@ -6,10 +6,9 @@ instance, so an arm that returns early or raises is an actor whose key, bio, ava
 flag all stop being picked up. `tests/test_ap_refresh_profiles.py` covers the document-reading; the
 arms here are the ones around it:
 
-    the retry        one `httpx.HTTPError`, a sleep, and one more attempt. A peer that is briefly
-                     unreachable is not a peer that has gone away.
-    the second failure   `return`, with nothing written -- NOT an exception, because this task
-                     re-raises and a raised task is retried by celery.
+    the failure      one `httpx.HTTPError` is `return`, with nothing written and no second
+                     attempt (D224) -- NOT an exception, because this task re-raises and a raised
+                     task is retried by celery.
     the old file     an avatar or cover whose url CHANGED deletes the bytes it replaces. Without
                      it every refresh of every actor leaves another orphan under `app/static`.
     the rollback     `except: session.rollback(); raise`. This task runs on its own session, and a
@@ -79,7 +78,7 @@ def a_document(**fields):
 
 @pytest.fixture(autouse=True)
 def no_sleeping():
-    """The retry sleeps `randint(3, 10)` seconds, which is real time in a test."""
+    """A sleep in the task would be real time in a test, and D224 asserts there is none."""
     with patch.object(ap_util.time, 'sleep') as sleeping:
         yield sleeping
 
@@ -91,45 +90,23 @@ def no_sleeping():
 
 class TestWhenTheFirstFetchFails:
 
-    def test_one_failure_is_retried_and_the_refresh_completes(self, remote_user, no_sleeping):
-        """`except httpx.HTTPError: time.sleep(...); actor_data = get_request(...)`.
-
-        A single timeout is the ordinary condition of a federated network, and the profile this
-        instance holds is the one every signature check reads -- so one failure must not be the end
-        of it. The witness is the refreshed key.
-        """
-        with answered_with(httpx.HTTPError('first attempt timed out'),
-                           a_document()) as fetching:
-            refresh_user_profile_task(remote_user.id)
-
-        assert fetching.call_count == 2
-        assert no_sleeping.called
-        db.session.expire_all()
-        assert db.session.get(User, remote_user.id).public_key == \
-            '-----BEGIN PUBLIC KEY-----refreshed'
-
-    def test_the_sleep_is_between_the_two_attempts(self, remote_user, no_sleeping):
-        """The delay is the point of the retry: an instance that answered a moment ago and
-        answers again immediately is being hammered, not retried. Seconds, and randomised."""
-        with answered_with(httpx.HTTPError('nope'), a_document()):
-            refresh_user_profile_task(remote_user.id)
-
-        seconds = no_sleeping.call_args[0][0]
-        assert 3 <= seconds <= 10
-
-    def test_two_failures_leave_the_profile_alone(self, remote_user):
-        """`except httpx.HTTPError: return`. Not a raise: this task re-raises from its outer
-        handler, and celery would retry a raised task -- so an unreachable peer would be fetched
-        again and again. The profile this instance holds is kept as it stands.
+    def test_one_failure_leaves_the_profile_alone(self, remote_user, no_sleeping):
+        """D224, fixed (owner ruling): `except httpx.HTTPError: return`, with no inline
+        `time.sleep(randint(3, 10))` and no second fetch -- `get_request` already retries a read
+        error itself, and the sleep parked a celery worker. Not a raise: this task re-raises from
+        its outer handler, and celery would retry a raised task. The profile this instance holds
+        is kept as it stands.
         """
         remote_user.public_key = '-----BEGIN PUBLIC KEY-----the one we hold'
         remote_user.ap_fetched_at = None
         db.session.commit()
 
-        with answered_with(httpx.HTTPError('first'), httpx.HTTPError('second')) as fetching:
+        with answered_with(httpx.HTTPError('first attempt timed out'),
+                           a_document()) as fetching:
             refresh_user_profile_task(remote_user.id)
 
-        assert fetching.call_count == 2
+        assert fetching.call_count == 1
+        assert not no_sleeping.called
         db.session.expire_all()
         refreshed = db.session.get(User, remote_user.id)
         assert refreshed.public_key == '-----BEGIN PUBLIC KEY-----the one we hold'
