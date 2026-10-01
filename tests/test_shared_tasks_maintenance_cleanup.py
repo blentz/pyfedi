@@ -524,12 +524,10 @@ class TestUpdateCommunityStats:
     `is_local()`, `total_subscriptions_count is None`, and
     `total_subscriptions_count < subscriptions_count`.
 
-    `:318`'s `session.commit()` used to sit inside the `for` loop opened at
-    `:293`, committing once per community rather than once after the loop.
     Every test below only ever seeds one eligible community, so none of them
     can distinguish a commit-per-iteration from a single commit after the
-    loop -- `TestUpdateCommunityStatsIsAtomic`, below, is what tests that
-    distinction, and `:318` is now dedented to commit once after the loop.
+    loop -- `TestUpdateCommunityStatsCommitsEachCommunity`, below, is what
+    tests that distinction (D342: a commit per community, owner ruling).
     """
 
     def test_subscriptions_count_excludes_bots_and_banned_members(self, db_session):
@@ -674,17 +672,16 @@ class TestUpdateCommunityStats:
             update_community_stats()
 
 
-class TestUpdateCommunityStatsIsAtomic:
-    """PC2: `:318`'s commit used to sit inside the loop opened at `:293`.
-
-    Before this task's fix, a failure at community N left communities 1..N-1
-    committed, because `:320-322`'s handler rolls back only the current unit
-    of work -- it did not protect the task's whole effect, despite reading as
-    though it did. `:318` now runs once after the loop, so the two tests below
-    fail if the commit is ever moved back inside it.
+class TestUpdateCommunityStatsCommitsEachCommunity:
+    """D342, owner ruling: the task commits once per community again, so one
+    community that keeps failing no longer starves every other of its recount,
+    and it holds at most one community row lock at a time. `expire_on_commit` is
+    off on its session, so the per-community commit does not bring back the
+    re-SELECT the single commit had removed; communities are taken in id order,
+    the order calculate_community_activity_stats also uses.
     """
 
-    def test_a_failure_partway_through_leaves_no_partial_writes(self, db_session, monkeypatch):
+    def test_a_failure_partway_through_keeps_the_communities_already_done(self, db_session, monkeypatch):
         import app.shared.tasks.maintenance as maintenance
 
         _, user, first, _ = _seed()
@@ -715,7 +712,25 @@ class TestUpdateCommunityStatsIsAtomic:
         db.session.expire_all()
         counts = {c.name: c.subscriptions_count
                   for c in db.session.query(Community).all()}
-        assert counts == {'microblogs': 0, 'second': 0}
+        assert counts == {'microblogs': 1, 'second': 0}
+
+    def test_the_communities_are_taken_in_id_order(self, db_session):
+        from sqlalchemy import event
+
+        _seed()
+        statements = []
+
+        def _record(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+
+        event.listen(db.engine, 'before_cursor_execute', _record)
+        try:
+            update_community_stats()
+        finally:
+            event.remove(db.engine, 'before_cursor_execute', _record)
+
+        eligibility = [s for s in statements if 'community.last_active >' in s]
+        assert len(eligibility) == 1 and 'ORDER BY community.id' in eligibility[0]
 
     def test_the_number_of_community_selects_does_not_scale_with_the_loop(self, db_session):
         """PC2's second consequence: `expire_on_commit` forced a re-SELECT.
@@ -957,8 +972,11 @@ class TestCalculateCommunityActivityStats:
         db.session.expire_all()
         assert db.session.get(Community, community.id).active_daily == 0
 
-    def test_a_banned_community_is_not_updated(self, db_session):
-        """`:835`'s `c.banned = FALSE`."""
+    def test_a_banned_community_reads_zero_not_its_activity(self, db_session):
+        """`c.banned = FALSE` keeps a banned community out of the counting, and
+        D343's owner ruling zeroes it rather than leaving what it last held: its
+        recent activity is not counted (that would read 1) and its stale 77 is
+        not kept."""
         community, _ = self._community_with_one_activity_of_each_kind(
             utcnow() - timedelta(hours=1))
         community.banned = True
@@ -968,7 +986,7 @@ class TestCalculateCommunityActivityStats:
         calculate_community_activity_stats()
 
         db.session.expire_all()
-        assert db.session.get(Community, community.id).active_daily == 77
+        assert db.session.get(Community, community.id).active_daily == 0
 
     def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch):
         monkeypatch.setattr('app.shared.tasks.maintenance.utcnow', _boom)
@@ -1011,15 +1029,12 @@ class TestCommunityActivityStatsAreNotStale:
         assert (refreshed.active_daily, refreshed.active_weekly,
                 refreshed.active_monthly, refreshed.active_6monthly) == (0, 0, 0, 0)
 
-    def test_a_community_dormant_beyond_the_window_keeps_its_stale_numbers(self, db_session):
-        """`:836`'s `c.last_active > :half_year` -- the other half of the filter.
+    def test_a_community_dormant_beyond_the_window_reads_zero(self, db_session):
+        """`c.last_active > :half_year` -- the other half of the filter.
 
-        Before this rewrite, a community six months dormant was dropped by the
-        old INNER JOIN regardless of this clause, so it was belt-and-braces.
-        Now it is the only thing stopping such a community's stats from being
-        zeroed by the new outer join. This pins the scope limit: a community
-        the eligibility filter excludes keeps whatever it last held, same as
-        a banned one does in `test_a_banned_community_is_not_updated` above.
+        D343, owner ruling: a community the eligibility filter excludes no longer
+        keeps whatever it last held; it reads zero, as a banned one does in
+        `test_a_banned_community_reads_zero_not_its_activity` above.
         """
         _, user, community, post = _seed()
         post.posted_at = utcnow() - timedelta(weeks=40)
@@ -1035,4 +1050,24 @@ class TestCommunityActivityStatsAreNotStale:
         db.session.expire_all()
         refreshed = db.session.get(Community, community.id)
         assert (refreshed.active_daily, refreshed.active_weekly,
-                refreshed.active_monthly, refreshed.active_6monthly) == (5, 5, 5, 5)
+                refreshed.active_monthly, refreshed.active_6monthly) == (0, 0, 0, 0)
+
+    def test_the_communities_are_locked_in_id_order(self, db_session):
+        """D342/D343, owner ruling: both stats tasks take community rows in id
+        order, so the two cannot lock the same rows in opposite orders."""
+        from sqlalchemy import event
+
+        _seed()
+        statements = []
+
+        def _record(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+
+        event.listen(db.engine, 'before_cursor_execute', _record)
+        try:
+            calculate_community_activity_stats()
+        finally:
+            event.remove(db.engine, 'before_cursor_execute', _record)
+
+        counting = [s for s in statements if 'LEFT JOIN temp_community_activity' in s]
+        assert len(counting) == 1 and 'ORDER BY c.id' in counting[0]
