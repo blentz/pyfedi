@@ -287,6 +287,35 @@ def _subscribed_feed_with_community(owner, member, joined_via_feed=True,
     return feed, community
 
 
+def test_unsubscribing_by_get_is_refused(app, db_session):
+    """Owner ruling, the D994 idiom: /feed/<name>/unsubscribe changed state on
+    a GET, which login_required never CSRF-checks, so any page could make a
+    signed-in user leave a feed. It is POST-only now, and a POST without the
+    token is refused; the membership survives both."""
+    instance, owner, member = _seed()
+    feed, community = _subscribed_feed_with_community(owner, member)
+
+    with app.test_client() as client:
+        login(client, member)
+        assert client.get(f'/feed/{feed.name}/unsubscribe').status_code == 405
+        assert client.post(f'/feed/{feed.name}/unsubscribe').status_code == 400
+
+    assert FeedMember.query.filter_by(user_id=member.id, feed_id=feed.id).count() == 1
+
+
+def test_every_feed_unsubscribe_control_is_a_form_carrying_the_token():
+    """The templates that offered the GET link now post a form with the token."""
+    import pathlib
+    templates = pathlib.Path(__file__).resolve().parent.parent / 'app' / 'templates' / 'feed'
+    for name in ('add_remote.html', 'lookup_remote.html', 'public_feeds.html',
+                 '_feed_table_row.html', 'show_feed.html', '_feed_nav.html'):
+        html = (templates / name).read_text()
+        assert 'href="/feed/{{ new_feed.link() }}/unsubscribe"' not in html
+        assert 'href="/feed/{{ feed.link() }}/unsubscribe"' not in html
+        assert "href=\"{{ url_for('feed.feed_unsubscribe'" not in html
+        assert 'unsubscribe' in html and 'name="csrf_token"' in html, name
+
+
 def test_unsubscribing_leaves_each_community_through_the_shared_function(app, db_session):
     """Was a PIN; INVERTED once the route called leave_community.
 
@@ -305,7 +334,7 @@ def test_unsubscribing_leaves_each_community_through_the_shared_function(app, db
     with app.test_client() as client:
         login(client, member)
         with patch('app.feed.routes.leave_community') as leave:
-            response = client.get(f'/feed/{feed.name}/unsubscribe')
+            response = client.post(f'/feed/{feed.name}/unsubscribe', data={'csrf_token': csrf(app, client)})
 
     assert response.status_code == 302
     assert leave.call_count == 1
@@ -328,7 +357,7 @@ def test_unsubscribing_never_drives_the_feeds_counter_negative(app, db_session):
     with app.test_client() as client:
         login(client, member)
         with patch('app.feed.routes.leave_community'):
-            client.get(f'/feed/{feed.name}/unsubscribe')
+            client.post(f'/feed/{feed.name}/unsubscribe', data={'csrf_token': csrf(app, client)})
 
     assert FeedMember.query.filter_by(user_id=member.id, feed_id=feed.id).count() == 0
     assert db.session.get(Feed, feed.id).subscriptions_count == 0
@@ -349,7 +378,7 @@ def test_unsubscribing_leaves_alone_a_community_the_user_joined_themselves(app, 
     with app.test_client() as client:
         login(client, member)
         with patch('app.feed.routes.leave_community') as leave:
-            client.get(f'/feed/{feed.name}/unsubscribe')
+            client.post(f'/feed/{feed.name}/unsubscribe', data={'csrf_token': csrf(app, client)})
 
     assert leave.call_count == 0
     assert CommunityMember.query.filter_by(user_id=member.id,
@@ -369,7 +398,7 @@ def test_unsubscribing_with_auto_leave_off_keeps_every_community(app, db_session
     with app.test_client() as client:
         login(client, member)
         with patch('app.feed.routes.leave_community') as leave:
-            client.get(f'/feed/{feed.name}/unsubscribe')
+            client.post(f'/feed/{feed.name}/unsubscribe', data={'csrf_token': csrf(app, client)})
 
     assert leave.call_count == 0
     assert CommunityMember.query.filter_by(user_id=member.id,
@@ -389,7 +418,7 @@ def test_unsubscribing_busts_the_three_memoized_entries(app, db_session):
         login(client, member)
         with patch('app.feed.routes.leave_community'), \
                 patch('app.feed.routes.cache.delete_memoized') as bust:
-            client.get(f'/feed/{feed.name}/unsubscribe')
+            client.post(f'/feed/{feed.name}/unsubscribe', data={'csrf_token': csrf(app, client)})
 
     busted = [call.args[0] for call in bust.call_args_list]
     assert feed_membership in busted
@@ -969,7 +998,7 @@ def test_unsubscribing_from_a_remote_feed_sends_a_signed_undo(app, db_session):
     with app.test_client() as client:
         login(client, member)
         with patch('app.feed.routes.send_post_request') as send:
-            response = client.get(f'/feed/{feed.ap_id}/unsubscribe')
+            response = client.post(f'/feed/{feed.ap_id}/unsubscribe', data={'csrf_token': csrf(app, client)})
 
     assert response.status_code == 302
     assert send.call_count == 1
@@ -996,7 +1025,7 @@ def test_unsubscribing_from_a_dead_remote_instance_sends_nothing(app, db_session
     with app.test_client() as client:
         login(client, member)
         with patch('app.feed.routes.send_post_request') as send:
-            response = client.get(f'/feed/{feed.ap_id}/unsubscribe')
+            response = client.post(f'/feed/{feed.ap_id}/unsubscribe', data={'csrf_token': csrf(app, client)})
 
     assert response.status_code == 302
     assert send.call_count == 0
@@ -1024,7 +1053,7 @@ def test_unsubscribing_reuses_the_stored_follow_id(app, db_session, with_join_re
     with app.test_client() as client:
         login(client, member)
         with patch('app.feed.routes.send_post_request') as send:
-            client.get(f'/feed/{feed.ap_id}/unsubscribe')
+            client.post(f'/feed/{feed.ap_id}/unsubscribe', data={'csrf_token': csrf(app, client)})
 
     follow_id = send.call_args.args[1]['object']['id']
     if with_join_request:
@@ -1046,7 +1075,7 @@ def test_a_feed_owner_is_refused_and_keeps_their_membership(app, db_session):
     with app.test_client() as client:
         login(client, owner)
         with patch('app.feed.routes.flash') as flash_stub:
-            response = client.get(f'/feed/{feed.name}/unsubscribe')
+            response = client.post(f'/feed/{feed.name}/unsubscribe', data={'csrf_token': csrf(app, client)})
 
     assert response.status_code == 302
     assert flash_stub.call_count == 1
@@ -1059,7 +1088,7 @@ def test_unsubscribing_from_a_feed_that_is_not_there_is_a_404(app, db_session):
     instance, owner, stranger = _seed()
     with app.test_client() as client:
         login(client, stranger)
-        response = client.get('/feed/nosuchfeed/unsubscribe')
+        response = client.post('/feed/nosuchfeed/unsubscribe', data={'csrf_token': csrf(app, client)})
     assert response.status_code == 404
 
 
@@ -1128,7 +1157,7 @@ def test_unsubscribing_when_you_were_never_subscribed_does_nothing(app, db_sessi
 
     with app.test_client() as client:
         login(client, stranger)
-        response = client.get(f'/feed/{feed.name}/unsubscribe')
+        response = client.post(f'/feed/{feed.name}/unsubscribe', data={'csrf_token': csrf(app, client)})
 
     assert response.status_code == 302
     assert db.session.get(Feed, feed.id).subscriptions_count == 4

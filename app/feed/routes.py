@@ -688,9 +688,10 @@ def subscribe(actor):
     return back('/f/' + actor)
 
 
-@bp.route('/feed/<actor>/unsubscribe', methods=['GET'])
+@bp.route('/feed/<actor>/unsubscribe', methods=['POST'])
 @login_required
 def feed_unsubscribe(actor):
+    # POST only, so login_required checks the CSRF token; it changed state on a GET
     feed = actor_to_feed(actor)
 
     if feed is not None:
