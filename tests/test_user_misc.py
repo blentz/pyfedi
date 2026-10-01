@@ -529,6 +529,22 @@ def test_an_anonymous_lookup_is_sent_to_log_in(app, env):
 # --------------------------------------------------------------------------
 
 
+def test_a_refused_follow_says_so_and_offers_to_follow_again(app, env):
+    """R265, fixed (owner ruling): a follow the other side refused drew the
+    "Cancel follow request" button of a pending one. It now says the request
+    was declined and offers the follow button again."""
+    client, viewer, other, community = env
+    db.session.add(UserFollower(local_user_id=viewer.id, remote_user_id=other.id,
+                                is_inward=False, is_accepted=False))
+    db.session.commit()
+
+    html = client.get('/u/other').get_data(as_text=True)
+
+    assert 'Request declined' in html
+    assert 'Cancel follow request' not in html
+    assert '/u/other/follow' in html
+
+
 def test_following_somebody(app, env):
     client, viewer, other, community = env
     token = csrf(app, client)

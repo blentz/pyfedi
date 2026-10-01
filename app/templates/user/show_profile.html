@@ -107,6 +107,9 @@
                     <a class="btn btn-primary send_post" href="#" data-url="{{ url_for('user.user_follow', actor=user.link()) }}" rel="nofollow">{% if user.ap_manually_approves_followers %}{{ _('Request to follow') }}{% else %}{{ _('Follow') }}{% endif %}</a>
                 {% elif follow_state == 'pending' -%}
                     <a class="btn btn-primary send_post" href="#" data-url="{{ url_for('user.user_unfollow', actor=user.link()) }}" rel="nofollow">{{ _('Cancel follow request') }}</a>
+                {% elif follow_state == 'refused' -%}
+                    <span class="btn btn-outline-secondary disabled">{{ _('Request declined') }}</span>
+                    <a class="btn btn-primary send_post" href="#" data-url="{{ url_for('user.user_follow', actor=user.link()) }}" rel="nofollow">{% if user.ap_manually_approves_followers %}{{ _('Request to follow') }}{% else %}{{ _('Follow') }}{% endif %}</a>
                 {% else -%}
                     <a class="btn btn-primary send_post" href="#" data-url="{{ url_for('user.user_unfollow', actor=user.link()) }}" rel="nofollow">{{ _('Unfollow') }}</a>
                 {% endif -%}

@@ -86,14 +86,18 @@ What each test below closes:
   original "structurally unreachable" claim above.
 """
 import contextlib
+import importlib.util
+import pathlib
 from types import SimpleNamespace
 
 import pytest
 from flask import get_flashed_messages
+from sqlalchemy import text
 
 from app import db
 from app.constants import SRC_API, SRC_PLD, SRC_WEB
-from app.models import Notification, NotificationSubscription, User, UserFollower
+from app.activitypub.util import announcer_is_followed
+from app.models import Notification, NotificationSubscription, User, UserFollower, UserFollowRequest
 from app.shared.user import follow_user, subscribe_user, unfollow_user
 from tests.factories import bearer, make_instance, make_site, make_user, web_ctx
 
@@ -274,6 +278,64 @@ def test_unfollow_user_dispatches_a_task_for_a_remote_target(app, db_session):
     with _recording_task_selector() as unfollow_calls:
         unfollow_user(s.target.id, SRC_API, bearer(s.follower))
     assert ('unfollow_user', {'to_follow_id': s.target.id, 'user_id': s.follower.id}) in unfollow_calls
+
+
+def test_a_follow_of_a_remote_user_is_stored_pending(app, db_session):
+    """R265, fixed (owner ruling). follow_user stored a remote follow as
+    `is_accepted = False`, the column's REFUSED value, until the peer's Accept
+    arrived -- so every unanswered remote follow read as refused, and
+    `announcer_is_followed`, which lets pending follows through by its own
+    docstring, shut them out. It is stored as None, as the column comment says.
+    """
+    s = _seed_followers(target_local=False)
+
+    with _recording_task_selector():
+        follow_user(s.target.id, SRC_API, bearer(s.follower))
+
+    row = UserFollower.query.filter_by(local_user_id=s.follower.id, remote_user_id=s.target.id).one()
+    assert row.is_accepted is None
+    assert announcer_is_followed(s.target.id) is True
+
+
+def test_following_again_after_a_refusal_replaces_the_refused_row(app, db_session):
+    """R265 (owner ruling): a refused follow can be retried. The refused row
+    is replaced by the new pending one rather than left beside it, where
+    `is_following`'s `.first()` could keep reading the refusal."""
+    s = _seed_followers(target_local=False)
+    db.session.add(UserFollower(local_user_id=s.follower.id, remote_user_id=s.target.id,
+                                is_inward=False, is_accepted=False))
+    db.session.commit()
+
+    with _recording_task_selector():
+        follow_user(s.target.id, SRC_API, bearer(s.follower))
+
+    rows = UserFollower.query.filter_by(local_user_id=s.follower.id, remote_user_id=s.target.id).all()
+    assert [row.is_accepted for row in rows] == [None]
+
+
+def test_the_migration_turns_pending_false_rows_into_null_and_keeps_refusals(app, db_session):
+    """R265's data migration (owner ruling). A False row whose follow request
+    still exists was never refused -- a Reject deletes the request -- so it
+    becomes NULL; a False row with no request left is a refusal and stays."""
+    path = pathlib.Path(__file__).resolve().parent.parent / 'migrations' / 'versions' / \
+        '23d65cdb8207_pending_follows_are_null.py'
+    spec = importlib.util.spec_from_file_location('pending_follows_are_null', path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    s = _seed_followers(target_local=False)
+    refuser = make_user(s.instance, 'refuser', local=False)
+    db.session.add_all([
+        UserFollower(local_user_id=s.follower.id, remote_user_id=s.target.id, is_inward=False, is_accepted=False),
+        UserFollower(local_user_id=s.follower.id, remote_user_id=refuser.id, is_inward=False, is_accepted=False),
+        UserFollowRequest(user_id=s.follower.id, follow_id=s.target.id),
+    ])
+    db.session.commit()
+
+    db.session.execute(text(migration.PENDING_FOLLOWS_SQL))
+    db.session.commit()
+
+    assert s.follower.is_following(s.target) == 'pending'
+    assert s.follower.is_following(refuser) == 'refused'
 
 
 # --- subscribe_user, :98-115's two flash statements ---

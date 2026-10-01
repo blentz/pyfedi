@@ -238,15 +238,16 @@ def follow_user(follow_id: int, src, auth=None):
 
     to_follow: User = db.session.get(User, follow_id)
 
-    is_accepted = False
-    if to_follow.is_local():
-        if to_follow.ap_manually_approves_followers is True:
-            is_accepted = None
-        else:
-            is_accepted = True
-            user.num_following += 1
-            to_follow.num_followers += 1
+    # R265: pending is None, as the column says -- a remote follow until its Accept arrives, or a manual approval
+    is_accepted = None
+    if to_follow.is_local() and to_follow.ap_manually_approves_followers is not True:
+        is_accepted = True
+        user.num_following += 1
+        to_follow.num_followers += 1
 
+    # A refused follow may be retried; the new request replaces the refusal
+    db.session.query(UserFollower).filter_by(local_user_id=user.id, remote_user_id=follow_id, is_inward=False,
+                                             is_accepted=False).delete()
     db.session.add(UserFollower(local_user_id=user.id, remote_user_id=follow_id, is_accepted=is_accepted, is_inward=False))
     db.session.commit()
 

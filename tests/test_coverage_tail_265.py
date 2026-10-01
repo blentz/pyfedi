@@ -238,7 +238,7 @@ class TestWhatAMembershipIs:
 
 
 class TestWhoFollowsWhom:
-    """Three strings, read by the Follow button. `is_accepted` is a nullable Boolean, so True,
+    """Four strings, read by the Follow button. `is_accepted` is a nullable Boolean, so True,
     None and False exhaust it -- which is why D1431 deleted the fourth arm.
     """
 
@@ -260,14 +260,13 @@ class TestWhoFollowsWhom:
 
         assert env.author.is_following(env.reader) == 'pending'
 
-    def test_a_refused_follow_is_pending_too(self, env):
-        """Recorded as OBSERVED rather than as wanted: `is_accepted is False` shares the arm with
-        None, so a follow the other side REFUSED draws the same "pending" button as one it has not
-        answered. The row says so plainly, because the alternative is the button offering to
-        follow again."""
+    def test_a_refused_follow_is_refused(self, env):
+        """R265, fixed (owner ruling). `is_accepted is False` shared the arm with None, so a
+        follow the other side REFUSED drew the same "pending" button as one it had not answered.
+        Pending follows are now stored as None, so False means refused and has its own state."""
         self._follow(env.author, env.reader, False)
 
-        assert env.author.is_following(env.reader) == 'pending'
+        assert env.author.is_following(env.reader) == 'refused'
 
     def test_no_follow_row_is_no(self, env):
         assert env.author.is_following(env.reader) == 'no'
