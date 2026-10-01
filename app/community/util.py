@@ -35,6 +35,9 @@ from app.utils import get_request, gibberish, ensure_directory_exists, ap_dateti
     sanitize_svg, can_create_post, can_create_post_reply
 from sqlalchemy import func, desc, text
 import os
+import boto3
+from app.utils import allowlist_html, markdown_to_html, html_to_text
+from app.activitypub.util import find_language_or_create
 
 
 allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.mpo', '.avif', '.svg']
@@ -351,7 +354,6 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                                                 if 'content' in reply_data:
                                                     if not (reply_data['content'].startswith('<p>') or reply_data['content'].startswith('<blockquote>')):
                                                         reply_data['content'] = '<p>' + reply_data['content'] + '</p>'
-                                                    from app.utils import allowlist_html, markdown_to_html, html_to_text
                                                     body_html = allowlist_html(reply_data['content'])
                                                     source_markdown = markdown_source(reply_data)  # D1346
                                                     if source_markdown is not None:
@@ -376,7 +378,6 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                                                 language_id = None
                                                 ap_language = language_from_ap(reply_data.get('language'))  # D1355
                                                 if ap_language is not None:
-                                                    from app.activitypub.util import find_language_or_create
                                                     language = find_language_or_create(*ap_language,
                                                                                        session=session)
                                                     # A language this instance
@@ -721,7 +722,7 @@ def save_icon_file(icon_file, directory='communities') -> File:
     if file_ext.lower() in ('.heic', '.heif'):  # D579: two names for one format
         register_heif_opener()
     elif file_ext.lower() == '.avif':
-        import pillow_avif  # NOQA
+        import pillow_avif  # NOQA  # lazy: registers Pillow's AVIF plugin only on the AVIF path
 
     # resize if necessary or if using MEDIA_IMAGE_FORMAT
     if file_ext.lower() in allowed_extensions:
@@ -769,7 +770,7 @@ def save_icon_file(icon_file, directory='communities') -> File:
             thumbnail_ext = file_ext.lower()
 
             if image_format == 'AVIF' or thumbnail_image_format == 'AVIF':
-                import pillow_avif  # NOQA
+                import pillow_avif  # NOQA  # lazy: registers Pillow's AVIF plugin only on the AVIF path
 
             if img.width > 250 or img.height > 250 or image_format or thumbnail_image_format:
                 img = img.convert('RGB' if (image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg']) else 'RGBA')
@@ -810,7 +811,6 @@ def save_icon_file(icon_file, directory='communities') -> File:
 
         # Move uploaded files to S3 if needed
         if store_files_in_s3():
-            import boto3
             session = boto3.session.Session()
             s3 = session.client(
                 service_name='s3',
@@ -887,7 +887,7 @@ def save_banner_file(banner_file, directory='communities') -> File:
     if file_ext.lower() in ('.heic', '.heif'):  # D579: two names for one format
         register_heif_opener()
     elif file_ext.lower() == '.avif':
-        import pillow_avif  # NOQA
+        import pillow_avif  # NOQA  # lazy: registers Pillow's AVIF plugin only on the AVIF path
 
     # resize if necessary
     img = Image.open(final_place)
@@ -909,7 +909,7 @@ def save_banner_file(banner_file, directory='communities') -> File:
         img_height = img.height
 
         if image_format == 'AVIF' or thumbnail_image_format == 'AVIF':
-            import pillow_avif  # NOQA
+            import pillow_avif  # NOQA  # lazy: registers Pillow's AVIF plugin only on the AVIF path
 
         if img.width > 1600 or img.height > 600 or image_format or thumbnail_image_format:
             img = img.convert('RGB' if (image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg']) else 'RGBA')
@@ -950,7 +950,6 @@ def save_banner_file(banner_file, directory='communities') -> File:
         
         # Move uploaded files to S3 if needed
         if store_files_in_s3():
-            import boto3
             session = boto3.session.Session()
             s3 = session.client(
                 service_name='s3',
@@ -1129,7 +1128,7 @@ def normalize_font_size(tags: List[dict], min_size=12, max_size=24):
 
 
 def publicize_community(community: Community):
-    from app.shared.post import make_post
+    from app.shared.post import make_post  # cycle: app.shared.post imports tags_from_string_old from this module
     form = CreateLinkForm()
     form.title.data = community.title
     form.link_url.data = community.public_url()

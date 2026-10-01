@@ -77,6 +77,7 @@ import app.shared.feed as shared_feed
 from app.utils import get_recipient_language, subscribed_feeds, feed_membership
 from app.rss_extras import RSSFeed
 from datetime import timezone, timedelta
+from flask import render_template as flask_render_template
 
 
 @bp.route('/add_local', methods=['GET', 'POST'])
@@ -181,7 +182,7 @@ def add_local():
         cache.delete_memoized(joined_communities, current_user.id)
         cache.delete_memoized(moderating_communities, current_user.id)
         cache.delete_memoized(community_membership_private, current_user.id)
-        from app.main.util import sidebar_new_communities
+        from app.main.util import sidebar_new_communities  # cycle: importing app.main runs app.main.routes, which reaches app.activitypub.routes, which imports this module
         cache.delete_memoized(sidebar_new_communities, current_user.id)
         return redirect('/c/' + community.name)
     else:
@@ -235,7 +236,7 @@ def add_remote():
                 flash(_('Community not found. If you are searching for a nsfw community it is blocked by this instance.'),
                       'warning')
         elif new_community is not None:
-            from app.main.util import sidebar_new_communities
+            from app.main.util import sidebar_new_communities  # cycle: importing app.main runs app.main.routes, which reaches app.activitypub.routes, which imports this module
             cache.delete_memoized(sidebar_new_communities, current_user.id)
             if new_community.banned:
                 flash(_('That community is banned from %(site)s.', site=g.site.name), 'warning')
@@ -282,7 +283,6 @@ def _make_community_results_datalist_html(community_name):
     # `app/static/tmp/all_communities.json`, which is fetched rather than written
     # here, and this string never goes through Jinja -- so it is escaped where it is
     # built. htmx swaps the result into add_remote.html as HTML.
-    from markupsafe import escape
     return f'<option value="{escape(community_name)}"></option>'
 
 
@@ -1386,7 +1386,7 @@ def community_report(community_id: int):
 @bp.route('/<int:community_id>/edit', methods=['GET', 'POST'])
 @login_required
 def community_edit(community_id: int):
-    from app.admin.util import topics_for_form
+    from app.admin.util import topics_for_form  # cycle: importing app.admin runs app.admin.routes, which reaches app.activitypub.routes, which imports this module
     if current_user.banned:
         return show_ban_message()
     community = db.session.get(Community, community_id) or abort(404)
@@ -1917,7 +1917,6 @@ def community_move(actor):
     if community is not None and not community.is_local():
         form = MoveCommunityForm()
         if form.validate_on_submit():
-            from flask import render_template as flask_render_template
 
             # Notify admin
             text_body = flask_render_template('email/move_community.txt', current_user=current_user,
