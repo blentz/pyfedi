@@ -2926,7 +2926,7 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
         # Check for Mentions of local users
         reply_parent = parent_comment if parent_comment else post
         local_users_to_notify = []
-        if 'tag' in request_json['object'] and isinstance(request_json['object']['tag'], list) and len(request_json['object']['tag']) > 1:
+        if 'tag' in request_json['object'] and isinstance(request_json['object']['tag'], list):
             for json_tag in request_json['object']['tag']:
                 # D1397. `'type' in json_tag` over a STRING element is a substring
                 # test, and `json_tag['type']` then raises -- one `tag` entry of

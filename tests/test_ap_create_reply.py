@@ -1208,10 +1208,9 @@ def test_a_mention_of_a_local_user_produces_a_notification(app, db_session, redi
     `Notification` row in the loop after `PostReply.new`.
 
     A second, typeless tag (`{'name': 'decoy'}`) rides along in the list --
-    needed only to get the list past `len(request_json['object']['tag']) >
-    1` (see `test_the_tag_length_gate_skips_a_lone_mention` below), and, as a
-    side effect, it also kills a mutant that drops the `'type' in json_tag`
-    conjunct: with that conjunct forced true, `json_tag['type']` would raise
+    once needed to clear a `len(...) > 1` gate since removed (D244 sibling,
+    below), and still the row that kills a mutant dropping the `'type' in
+    json_tag` conjunct: with that conjunct forced true, `json_tag['type']` would raise
     `KeyError` on this decoy (it carries no `'type'` key at all), and that
     raise sits outside `create_post_reply`'s `try`/`except`, so it would
     surface as an uncaught exception here instead of a clean `reply`.
@@ -1233,24 +1232,14 @@ def test_a_mention_of_a_local_user_produces_a_notification(app, db_session, redi
     assert refreshed.unread_notifications == 1
 
 
-def test_the_tag_length_gate_skips_a_lone_mention(app, db_session, redis_lock_only_double):
-    """`len(request_json['object']['tag']) > 1`. Pinning CURRENT behaviour,
-    not endorsing it: read directly off `create_post_reply`
-    (app/activitypub/util.py), a genuine single `Mention` -- the ordinary
-    "@user, thanks" case -- is silently dropped and notifies no one, purely
-    because the tag list has exactly one entry. Nothing here argues that is
-    the right behaviour; it only pins what the code does today.
+def test_a_lone_mention_notifies(app, db_session, redis_lock_only_double):
+    """D244 sibling, fixed (owner ruling 2026-09-30). The tag gate required
+    `len(request_json['object']['tag']) > 1`, so a single `Mention` -- the
+    ordinary "@user, thanks" reply -- notified no one on creation. The length
+    condition is gone, as it is from the edit path (29ff5068b).
 
-    Calls `_use_a_non_microblog_instance` to keep the reply off the
-    microblog side of the gate, so that with this conjunct forced true the
-    lone Mention reaches the notify loop and creates a real Notification
-    without any of the four suppression rules having a say. Until Task 9
-    fixed D243 the call was strictly necessary, because the gated branch
-    crashed on an empty `ids` and returned zero Notifications for a reason
-    unrelated to this guard; it is now a defence against those rules rather
-    than against a crash, and the recipient seeded here is neither the post's
-    author nor an ancestor's, so none of them would in fact fire. See the
-    helper's docstring for the measurement.
+    `_use_a_non_microblog_instance` keeps the reply off the microblog side of
+    the notify loop, so none of the suppression rules has a say.
     """
     community, post, replier = _seed_scenario()
     _use_a_non_microblog_instance(replier)
@@ -1260,7 +1249,7 @@ def test_the_tag_length_gate_skips_a_lone_mention(app, db_session, redis_lock_on
     reply = _create(community, post, replier, document=document)
 
     assert reply is not None
-    assert Notification.query.count() == 0
+    assert Notification.query.count() == 1
 
 
 def test_a_mention_of_a_remote_user_produces_no_notification(app, db_session, redis_lock_only_double):
@@ -1376,10 +1365,8 @@ def test_a_non_mention_tag_type_is_not_treated_as_a_mention(app, db_session, red
 
 
 def test_a_non_list_tag_is_not_scanned_for_mentions(app, db_session, redis_lock_only_double):
-    """`isinstance(request_json['object']['tag'], list)`. A bare dict here
-    has two keys, so a dropped `isinstance` conjunct would still clear the
-    following `len(...) > 1` (a 2-key dict's `len` is 2), then `for json_tag
-    in request_json['object']['tag']:` would iterate the dict's KEYS as bare
+    """`isinstance(request_json['object']['tag'], list)`. With that conjunct
+    dropped, `for json_tag in request_json['object']['tag']:` would iterate the dict's KEYS as bare
     strings ('type', then 'href'). `'type' in 'type'` is a true substring
     test, so the loop would go on to evaluate `'type'['type']` -- indexing a
     string with a string -- which raises `TypeError`. That raise sits
