@@ -784,6 +784,25 @@ def test_an_api_report_notifies_a_local_moderator(db_session):
     assert {n.user_id for n in notifs} == {mod.id}
 
 
+def test_an_api_report_bumps_the_local_moderators_unread_count(db_session):
+    """D443, fixed: the moderator's report notification never bumped
+    `unread_notifications`, where the admin one does. It now does."""
+    s = seed_post_context(community_name='lifecycle')
+    mod = seed_local_moderator(s)
+    mod.unread_notifications = 0
+    db.session.commit()
+
+    report_post(
+        s.post,
+        {'reason': 'spam', 'description': 'x', 'report_remote': False},
+        SRC_API,
+        auth=bearer(s.voter),
+    )
+
+    db.session.refresh(mod)
+    assert mod.unread_notifications == 1
+
+
 def test_an_api_report_gives_a_remote_moderator_no_local_notification(db_session):
     """`:876`'s false arm.
 

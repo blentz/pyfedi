@@ -412,6 +412,7 @@ def report_reply(reply, input, src, auth=None):
                                                 subtype='comment_reported',
                                                 targets=targets_data)
                     db.session.add(notification)
+                    moderator.unread_notifications += 1
                     already_notified.add(mod.user_id)
             else:
                 if not report_remote:

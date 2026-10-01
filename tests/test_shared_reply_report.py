@@ -359,6 +359,20 @@ class TestReportReply:
         assert notification.subtype == 'comment_reported'
         assert notification.targets == expected_targets(s)
 
+    def test_a_local_moderators_unread_count_is_bumped(self, db_session):
+        """D443, fixed: the moderator's report notification never bumped
+        `unread_notifications`, where the admin one does. It now does."""
+        s = _seed_for_report()
+        add_moderator(s, s.local_mod)
+        s.local_mod.unread_notifications = 0
+        db.session.commit()
+        payload = {'reason': 'spam', 'description': 'd', 'report_remote': False}
+
+        report_reply(s.reply, payload, SRC_API, auth=bearer(s.reporter))
+
+        db.session.refresh(s.local_mod)
+        assert s.local_mod.unread_notifications == 1
+
     def test_the_notification_locale_is_the_recipients_not_the_reporters(self, db_session):
         """`:365`'s `get_recipient_language(moderator.id)`.
 
@@ -1108,7 +1122,8 @@ class TestReportReply:
         `already_notified` by the moderator loop (`:372`) before the admin
         loop ever runs, so `:382` must skip the second Notification and the
         `unread_notifications` increment -- both stay at their single,
-        moderator-loop-caused value, not double it.
+        moderator-loop-caused value, not double it. (Since D443 the moderator
+        loop bumps the count too, so 3 becomes 4, not 5.)
         """
         s = _seed_for_report()
         make_site()
@@ -1128,7 +1143,7 @@ class TestReportReply:
         report_reply(s.reply, payload, SRC_API, auth=bearer(s.reporter))
 
         db.session.refresh(admin)
-        assert admin.unread_notifications == 3
+        assert admin.unread_notifications == 4
         rows = db.session.query(Notification).filter_by(user_id=admin.id).all()
         assert len(rows) == 1
 
