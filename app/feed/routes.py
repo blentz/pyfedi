@@ -338,7 +338,7 @@ def feed_copy(feed_id: int):
         db.session.commit()
 
         flash(_('Your new Feed has been created.'))
-        return redirect(url_for('main.index'))
+        return redirect(url_for('user.user_myfeeds', actor=current_user.link()))  # D721: as feed_new does
 
         # add the current data to the form
     copy_feed_form.title.data = feed_to_copy.title
