@@ -82,7 +82,7 @@ def load_plugins(plugins_dir: str = None) -> Dict[str, Any]:
             logger.error(f"Failed to load plugin {plugin_name}: {e}\n{traceback.format_exc()}")
     if debug_logging_enabled():
         logger.info(f"Successfully loaded {loaded_count} plugins")
-    return _loaded_plugins
+    return _loaded_plugins.copy()  # D812: a copy, as get_loaded_plugins hands out
 
 
 def get_loaded_plugins() -> Dict[str, Any]:
@@ -112,10 +112,11 @@ def reload_plugin(plugin_name: str) -> bool:
             # Remove old hook registrations
             for hook_name, function_names in _plugin_hooks[plugin_name].items():
                 if hook_name in _hooks:
-                    # Remove functions that belong to this plugin
+                    # Remove functions that belong to this plugin: the module
+                    # load_plugins actually loaded, not a name rebuilt here (D812)
                     _hooks[hook_name] = [
                         func for func in _hooks[hook_name] 
-                        if func.__module__ != f"app.plugins.{plugin_name}"
+                        if func.__module__ != _loaded_plugins[plugin_name]['module'].__name__
                     ]
                     # Clean up empty hook lists
                     if not _hooks[hook_name]:
