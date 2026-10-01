@@ -96,17 +96,17 @@ def test_log_user_in_api_matches_the_username_case_insensitively(app, db_session
 
 
 def test_log_user_in_api_falls_back_to_the_email_address(app, db_session, monkeypatch):
-    """:31-33's second lookup, reached only when :29 found nothing.
+    """`find_user`'s second lookup, reached only when the name found nothing.
 
-    make_user sets email to f'{name}@example.com'. The web arm has no such
-    fallback -- :24 matches user_name exactly -- so the two arms accept
-    different credentials. Registered, not fixed.
+    make_user sets email to f'{name}@example.com'. D584, fixed (owner
+    ruling): the API and the web now share `find_user`, so both accept the
+    name or the address, the address case-insensitively.
     """
     s = _seed_login_user()
 
     with app.test_request_context('/'):
         with _ban_state(monkeypatch):
-            result = api_log_user_in({'username': 'loginuser@example.com',
+            result = api_log_user_in({'username': 'LoginUser@Example.com',
                                       'password': s.password})
 
     assert result['jwt']

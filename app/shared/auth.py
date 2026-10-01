@@ -1,9 +1,7 @@
-from sqlalchemy import func
-
 from app import db, cache
-from app.auth.util import get_country
+from app.auth.util import find_user, get_country
 from app.ldap_utils import sync_user_to_ldap
-from app.models import IpBan, User, utcnow
+from app.models import IpBan, utcnow
 from app.utils import ip_address, user_ip_banned, user_cookie_banned, banned_ip_addresses
 
 
@@ -14,14 +12,11 @@ def api_log_user_in(input):
     username = input['username'].lower().strip()
     password = input['password'].strip()
 
-    user = db.session.query(User).filter(func.lower(User.user_name) == func.lower(username)).filter_by(ap_id=None, deleted=False).first()
+    # D584: the web login's finder, so both accept the same forms
+    user = find_user(username)
 
     if not user:
-        # user is None if no match was found
-        user = db.session.query(User).filter(func.lower(User.email) == func.lower(username)).filter_by(ap_id=None, deleted=False).first()
-
-    if not user:
-        # No match for username or email was found
+        # No match for username, email or profile url was found
         raise Exception('incorrect_login')
 
     if not user.check_password(password):
