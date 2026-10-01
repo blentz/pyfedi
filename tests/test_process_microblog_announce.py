@@ -171,7 +171,6 @@ def test_successful_boost_creates_post_and_records_boost(db_session, fetch_spy, 
 
     make_site()  # Post.new() -> blocked_phrases() looks up Site id 1 unconditionally
     author = make_user(make_instance('other.example'), 'alice')
-    author.ap_domain = 'other.example'  # PERM-3: can_create_post checks the author's instance by it
     note_uri = 'https://other.example/notes/42'
     fake_fetch.result = {
         'id': note_uri,

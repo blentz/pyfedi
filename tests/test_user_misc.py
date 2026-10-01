@@ -487,7 +487,6 @@ def test_looking_up_a_known_remote_account_redirects_to_it(app, env):
     client, viewer, other, community = env
     remote = make_user(make_instance('other.example', software='piefed'),
                        'remote')
-    remote.ap_domain = 'other.example'
     db.session.commit()
 
     with patch('app.user.routes.search_for_user') as search:
