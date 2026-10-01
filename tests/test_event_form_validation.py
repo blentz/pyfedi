@@ -11,24 +11,9 @@ no test. It decides four things, and each has both arms here:
 * whether an uploaded banner is under 10 MB;
 * whether images may be posted to a local community at all -- D1001's third site.
 
-TWO DIVERGENCES FOUND AND NOT REPAIRED, each with the history that settles it.
-
-**The size cap is general here and GIF-only on image posts.** `CreateEventForm`
-refuses any banner over 10 MB; `CreateImageForm.validate` applies the identical block
--- same constant, same message, same `isinstance(self.image_file.errors, list)` dance
--- only `if uploaded_file.filename.endswith('.gif')`. Nothing else limits an image
-post's size: `process_upload` records `file_size` for per-user accounting
-(`app/shared/upload.py:117`) and enforces nothing, and no `MAX_CONTENT_LENGTH` is
-configured. So a 500 MB PNG passes the image form and a 12 MB one is refused by the
-event form.
-
-`git log -S` settles which drifted. The GIF check arrived in `068c7047e`, "Animated
-gif support through webp conversion" -- it was written FOR gifs, because the webp
-conversion is what costs, and was never a general limit that got narrowed. The event
-form's copy came later, in `1ff89088e` "event posts, finish ui", and dropped the
-`.gif` condition. Widening the image form to match would start refusing uploads that
-work today, which is a product decision about a limit, not a repair. Recorded, with
-both behaviours pinned below so neither can drift further unnoticed.
+**The size cap was general here and GIF-only on image posts** -- R207, since fixed:
+both forms now share one check capping every image upload at 10 MB, and
+`MAX_CONTENT_LENGTH` refuses an oversized body before any form sees it.
 
 **`if self.communities:` is a truthiness test on the FIELD OBJECT**, which is always
 truthy -- a guard that cannot discriminate (fact 75 CAUSE 9). It appears in both
@@ -442,39 +427,24 @@ class TestTheBanner:
 
 
 # --------------------------------------------------------------------------
-# The two divergences, pinned rather than repaired
+# The two divergences: the size cap (fixed) and the communities guard
 # --------------------------------------------------------------------------
 
 
-def test_the_image_form_limits_only_gifs(app, post_env):
-    """RECORDED, NOT REPAIRED. The identical ten-megabyte block is general on the
-    event form and `.gif`-only on the image form, and nothing else limits an image
-    post: `process_upload` records `file_size` for per-user accounting and enforces
-    nothing, and no `MAX_CONTENT_LENGTH` is configured.
-
-    `git log -S` says which drifted. The GIF check arrived in `068c7047e`, "Animated
-    gif support through webp conversion" -- written FOR gifs, because the conversion
-    is what costs -- and the event form's copy came later in `1ff89088e`, "event posts,
-    finish ui", without the `.gif` condition. Widening the image form would start
-    refusing uploads that work today, which is a decision about a limit rather than a
-    repair.
-
-    Both behaviours are asserted so that neither can drift further without a failure.
+@pytest.mark.parametrize('name', ['big.png', 'big.gif'])
+def test_the_image_form_limits_every_image(app, post_env, name):
+    """R207, fixed. The identical ten-megabyte block was general on the event form
+    and `.gif`-only on the image form, so a 500 MB PNG passed the image form while a
+    12 MB banner was refused. Both forms now share one check capping every image at
+    10 MB (owner ruling 2026-09-30).
     """
-    oversized = 10 * 1024 * 1024 + 1
-
     with submitted(app, post_env, form_cls=CreateImageForm,
-                   files=_image(oversized, name='big.png')) as form:
-            png_valid = form.validate()
+                   files=_image(10 * 1024 * 1024 + 1, name=name)) as form:
+        valid = form.validate()
+        messages = form.image_file.errors
 
-    with submitted(app, post_env, form_cls=CreateImageForm,
-                   files=_image(oversized, name='big.gif')) as form:
-        gif_valid = form.validate()
-        gif_messages = form.image_file.errors
-
-    assert png_valid is True, _errors(form)
-    assert gif_valid is False
-    assert 'This image filesize is too large.' in gif_messages
+    assert valid is False
+    assert 'This image filesize is too large.' in messages
 
 
 def test_the_communities_guard_cannot_discriminate(app, post_env):

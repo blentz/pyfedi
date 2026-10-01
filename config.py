@@ -164,6 +164,9 @@ class Config(object):
 
     PAGE_LENGTH = int(os.environ.get('PAGE_LENGTH') or 100)
 
+    # Largest request body accepted, in bytes; anything bigger is refused with 413 before it is read
+    MAX_CONTENT_LENGTH = int(os.environ.get('MAX_CONTENT_LENGTH') or 100 * 1024 * 1024)
+
     # Image formats
     MEDIA_IMAGE_MAX_DIMENSION = int(os.environ.get('MEDIA_IMAGE_MAX_DIMENSION') or 2000)
 

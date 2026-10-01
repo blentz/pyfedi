@@ -1,0 +1,21 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+
+{% block app_content %}
+    <div class="row">
+        <div class="col">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">{{ _('That upload is too large') }}</h3>
+                </div>
+                <div class="card-body">
+                    <p>{{ _('The file or form you sent is bigger than this instance accepts.') }}</p>
+                    <p><a href="#" class="go_back">{{ _('Back') }}</a></p>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endblock %}

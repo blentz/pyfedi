@@ -21,6 +21,22 @@ from app.constants import DOWNVOTE_ACCEPT_ALL, DOWNVOTE_ACCEPT_MEMBERS, DOWNVOTE
 from app.models import Community, Site, utcnow, User, Feed
 from app.utils import domain_from_url, MultiCheckboxField, get_timezones, url_is_parseable
 
+MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
+def image_upload_too_large(field, uploaded_file) -> bool:
+    # R207: the one size check every image upload form shares. Records the error on `field`.
+    uploaded_file.seek(0)
+    too_large = len(uploaded_file.read()) > MAX_IMAGE_UPLOAD_BYTES
+    uploaded_file.seek(0)
+    if too_large:
+        error_message = "This image filesize is too large."
+        if not isinstance(field.errors, list):
+            field.errors = [error_message]
+        else:
+            field.errors.append(error_message)
+    return too_large
+
 
 class AddCommunityForm(FlaskForm):
     community_name = StringField(_l('Name'), validators=[DataRequired()])
@@ -425,16 +441,8 @@ class CreateImageForm(CreatePostForm):
                     self.image_file.errors.append("This image is from 4chan.")
                     db.session.commit()
                     return False
-        if uploaded_file and uploaded_file.filename.endswith('.gif'):
-            max_size_in_mb = 10 * 1024 * 1024  # 10 MB
-            if len(uploaded_file.read()) > max_size_in_mb:
-                error_message = "This image filesize is too large."
-                if not isinstance(self.image_file.errors, list):
-                    self.image_file.errors = [error_message]
-                else:
-                    self.image_file.errors.append(error_message)
-                return False
-            uploaded_file.seek(0)
+        if uploaded_file and image_upload_too_large(self.image_file, uploaded_file):
+            return False
         if self.communities:
             community = db.session.get(Community, self.communities.data)
             if community.is_local() and g.site.allow_local_image_posts is False:
@@ -560,15 +568,8 @@ class CreateEventForm(SubmittedUrlMixin, CreatePostForm):
 
         if 'image_file' in request.files:
             uploaded_file = request.files['image_file']
-            max_size_in_mb = 10 * 1024 * 1024  # 10 MB
-            if len(uploaded_file.read()) > max_size_in_mb:
-                error_message = "This image filesize is too large."
-                if not isinstance(self.image_file.errors, list):
-                    self.image_file.errors = [error_message]
-                else:
-                    self.image_file.errors.append(error_message)
+            if image_upload_too_large(self.image_file, uploaded_file):
                 return False
-            uploaded_file.seek(0)
             if self.communities:
                 community = db.session.get(Community, self.communities.data)
                 if community.is_local() and g.site.allow_local_image_posts is False:
