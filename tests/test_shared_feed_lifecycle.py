@@ -31,6 +31,7 @@ from app.constants import SRC_API, SRC_WEB, SUBSCRIPTION_PENDING
 from app.models import (Community, CommunityMember, Feed, FeedItem, FeedJoinRequest,
                         FeedMember, Role, User, user_role)
 from app.shared.feed import delete_feed, join_feed, leave_feed, make_feed
+from app.utils import feed_membership, joined_communities, menu_subscribed_feeds
 from tests.factories import (make_community, make_community_member, make_feed_item,
                              make_feed_join_request, make_feed_member, make_instance,
                              make_local_feed, make_user, web_ctx)
@@ -416,6 +417,26 @@ def test_leave_feed_still_returns_nothing_on_the_web_path(app, db_session):
     with web_ctx(app, s.member):
         with patch('app.shared.feed.task_selector'):
             assert leave_feed(s.feed, SRC_WEB) is None
+
+
+def test_leave_feed_busts_the_membership_caches(app, db_session):
+    """D686, fixed: the web unsubscribe route busts feed_membership,
+    menu_subscribed_feeds and joined_communities, and join_feed busts all
+    three, but leave_feed busted none, so an API unsubscribe left the feed in
+    the user's menus until the entries expired. It now busts the same three.
+    Asserted as calls: the suite's NullCache makes the effect unobservable."""
+    s = _seed()
+    make_feed_member(s.member, s.feed)
+    s.member.feed_auto_leave = False
+    db.session.commit()
+
+    with web_ctx(app, s.member):
+        with patch('app.shared.feed.task_selector'), \
+                patch('app.shared.feed.cache.delete_memoized') as bust:
+            leave_feed(s.feed, SRC_WEB)
+
+    busted = [call.args[0] for call in bust.call_args_list]
+    assert busted == [feed_membership, menu_subscribed_feeds, joined_communities]
 
 
 # --------------------------------------------------------------------------
