@@ -9,6 +9,8 @@ from flask_babel import _, lazy_gettext as _l
 from app import get_locale
 from app.models import utcnow
 from app.utils import MultiCheckboxField
+import dateparser
+import pendulum
 
 
 class NewReplyForm(FlaskForm):
@@ -103,8 +105,6 @@ class NewReminderForm(FlaskForm):
     submit = SubmitField(_l('Save'))
 
     def validate_remind_at(self, remind_at):
-        import dateparser
-        import pendulum
         try:
             x = dateparser.parse(remind_at.data, settings={'RELATIVE_BASE': datetime.now(),
                                                            "RETURN_AS_TIMEZONE_AWARE": True,
