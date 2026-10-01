@@ -421,6 +421,20 @@ class TestHeicAndAvifLazyImports:
             finally:
                 _cleanup(before)
 
+    def test_a_heif_named_upload_registers_the_heif_opener_and_succeeds(self, app):
+        """D579 residue, fixed: '.heif' is an allowed extension too, and registers
+        the HEIF opener as '.heic' does (owner ruling 2026-09-30)."""
+        before = files_under(MEDIA_ROOT)
+        buffer = io.BytesIO()
+        pillow_heif.from_pillow(Image.new('RGB', (8, 8), color=(4, 5, 6))).save(buffer, format='HEIF')
+        buffer.seek(0)
+        heif = FileStorage(stream=buffer, filename='probe.heif')
+        with app.app_context():
+            try:
+                assert process_upload(heif)
+            finally:
+                _cleanup(before)
+
     def test_an_avif_upload_imports_pillow_avif_and_succeeds(self, app):
         """:54-55 -- `if file_ext.lower() == '.avif': import pillow_avif`."""
         before = files_under(MEDIA_ROOT)
