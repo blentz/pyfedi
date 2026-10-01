@@ -40,7 +40,7 @@ import pytest
 from flask import g
 
 from app import db
-from app.models import Domain, Post, Site, Tag, Topic
+from app.models import Domain, Post, Site, Tag, Topic, User
 from tests.factories import (make_community, make_feed, make_feed_item, make_instance,
                              make_post, make_site, make_user)
 
@@ -195,6 +195,23 @@ class TestThePagesRssLinks:
 
         domain_id = Domain.query.filter_by(name='example.com').one().id
         assert PAGES[name][1].format(domain_id=domain_id) + '?token=a-members-rss-token"' in html
+
+    def test_a_member_with_no_token_yet_gets_one_on_the_page(self, app, seeded):
+        """R219 residue. The token was only created on the front page, so a
+        member who had not visited it got a bare link that 404s. It is now
+        created wherever the link is rendered."""
+        seeded.site.private_instance = True
+        seeded.author.rss_token = None
+        db.session.commit()
+        client = app.test_client()
+        with client.session_transaction() as session:
+            session['_user_id'] = str(seeded.author.id)
+            session['_fresh'] = True
+        html = client.get('/c/general').get_data(as_text=True)
+
+        token = db.session.get(User, seeded.author.id).rss_token
+        assert token
+        assert f'/community/general/feed?token={token}"' in html
 
     @pytest.mark.parametrize('name', list(PAGES))
     def test_a_public_instances_rss_link_does_not(self, app, seeded, name):
