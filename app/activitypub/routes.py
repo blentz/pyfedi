@@ -2268,7 +2268,7 @@ def community_followers(actor):
             "id": f'{current_app.config["SERVER_URL"]}/c/{actor}/followers',
             "type": "Collection",
             "totalItems": community_members(community.id),
-            "items": []
+            "items": []  # D175: intended (owner ruling) - a real count, but the member list is private
         }
         resp = jsonify(result)
         resp.content_type = 'application/activity+json'
@@ -3100,7 +3100,7 @@ def feed_followers(actor):
                 "id": f'{current_app.config["SERVER_URL"]}/f/{actor}/followers',
                 "type": "Collection",
                 "totalItems": db.session.query(FeedMember).filter_by(feed_id=feed.id).count(),
-                "items": []
+                "items": []  # D175: intended (owner ruling) - a real count, but the member list is private
             }
             resp = jsonify(result)
             resp.content_type = 'application/activity+json'
