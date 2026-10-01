@@ -1020,10 +1020,11 @@ def test_a_logged_activity_with_no_json_serves_an_empty_document(app, db_session
     assert response.json == {}
 
 
-def test_an_unlogged_activity_is_404_with_a_cache_header(app, db_session):
-    """`else: resp = make_response('', 404)`. The `Cache-Control` header is set
-    AFTER the if/else, so the 404 carries it too -- asserted because a
-    2400-second cache on a 404 is a real behaviour and not obviously intended.
+def test_an_unlogged_activity_is_404_and_not_cached(app, db_session):
+    """D196, fixed (owner ruling 2026-09-30). The 404 used to carry the found
+    arm's `public, max-age=2400`, so a peer polling fractionally before the row
+    was written had the miss held for forty minutes. A miss is now `no-store`;
+    only a logged activity, which is immutable, is cached.
     """
     seed_actors()
 
@@ -1031,7 +1032,7 @@ def test_an_unlogged_activity_is_404_with_a_cache_header(app, db_session):
         response = client.get('/activities/announce/missing')
 
     assert response.status_code == 404
-    assert response.headers['Cache-Control'] == 'public, max-age=2400'
+    assert response.headers['Cache-Control'] == 'no-store'
 
 
 def test_a_successful_activity_result_is_ok(app, db_session):
