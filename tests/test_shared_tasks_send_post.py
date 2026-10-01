@@ -786,6 +786,21 @@ def test_a_link_post_with_no_url_gets_no_link_attachment(db_session, http_mock):
     assert _attachment_of(route) == []
 
 
+def test_an_event_post_with_a_url_gets_its_link_attachment(db_session, http_mock):
+    """D300, fixed (the event half, owner ruling): post_to_page attaches an
+    EVENT post's url as a Link but send_post did not, so a peer that took the
+    push saw a different document from one that fetched it. Both attach it
+    now.
+    """
+    s = _seed(post_type=POST_TYPE_EVENT, url='https://events.example/1', local_community=False,
+              with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    _send(s.post)
+
+    assert _attachment_of(route) == [{'href': 'https://events.example/1', 'type': 'Link'}]
+
+
 def test_a_non_image_post_with_an_image_row_gets_no_image_attachment(db_session, http_mock):
     """:180's TYPE test, isolated from its image_id test.
 
