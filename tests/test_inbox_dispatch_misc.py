@@ -104,7 +104,7 @@ its own:
     `respx.models.AllMockedAssertionError`.
   - Dropping ` and origin_community.is_instance_admin(user)` (leaving bare
     `origin_community.instance_id == user.instance_id`) is killed by the
-    PRE-EXISTING test_a_move_by_an_unrelated_user_does_nothing: `1 failed, 5
+    PRE-EXISTING test_a_move_by_an_unrelated_user_is_refused_and_logged: `1 failed, 5
     passed` -- also a behavioural `assert 2 == 1`. That test's stranger
     already shares origin_community's own instance (see
     `_seed_move_scenario`'s seeding) and holds no admin role at all, which
@@ -114,12 +114,9 @@ its own:
 Both mutations were restored immediately after, verified via `git diff
 --stat app/` producing no output.
 
-This arm has NO `else`: when every alternative is false, nothing is logged
-and nothing happens (routes.py:1579-1589's `if` has no matching `else`
-clause at all -- the whole block simply falls through to the next `if`).
-test_a_move_by_an_unrelated_user_does_nothing asserts
-`ActivityPubLog.query.count() == 0` WITH logging enabled (the assertion that
-would fail if a refusal log were ever added) and that the post did not move.
+When every alternative is false the post does not move and, since D58's
+fix, a 'Move attempt denied' failure is logged;
+test_a_move_by_an_unrelated_user_is_refused_and_logged asserts both.
 
 Step 3 -- QuoteRequest, routes.py:1880-1884, and a probe of its unguarded
 read. `process_quote_boost` (a real outbound-signing side effect) is doubled;
@@ -447,9 +444,9 @@ def test_a_move_by_an_admin_role_scoped_to_the_origin_instance_but_whose_own_acc
     conjunct is False (this user's account instance differs from
     origin_community's), so the third alternative is False overall, and --
     this user being neither the post's author nor a moderator of either
-    community -- every alternative is False. Same silent no-op shape as
-    test_a_move_by_an_unrelated_user_does_nothing: no log row, post
-    unmoved.
+    community -- every alternative is False. Refused as in
+    test_a_move_by_an_unrelated_user_is_refused_and_logged (D58, fixed): a
+    failure row, post unmoved.
 
     MUTATION killer: dropping `origin_community.instance_id ==
     user.instance_id and` from the guard (leaving bare
@@ -459,7 +456,7 @@ def test_a_move_by_an_admin_role_scoped_to_the_origin_instance_but_whose_own_acc
     test's own assertions. See the module docstring's addendum for the
     confirmed mutation run and for why the OTHER half
     (`is_instance_admin(user)`) is already killed by
-    test_a_move_by_an_unrelated_user_does_nothing without needing a test of
+    test_a_move_by_an_unrelated_user_is_refused_and_logged without needing a test of
     its own here.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
@@ -484,17 +481,14 @@ def test_a_move_by_an_admin_role_scoped_to_the_origin_instance_but_whose_own_acc
 
     db.session.expire_all()
     assert db.session.get(Post, post.id).community_id == origin_community.id
-    assert ActivityPubLog.query.count() == 0
+    assert ActivityPubLog.query.one().exception_message == 'Move attempt denied'
 
 
-def test_a_move_by_an_unrelated_user_does_nothing(app, db_session, monkeypatch):
-    """routes.py:1579 with every alternative false: the mover is not the
-    post's author, not a moderator of origin_community, and not an instance
-    admin anywhere. There is no `else` on this `if` (see the module
-    docstring), so NOTHING is logged -- asserted as
-    `ActivityPubLog.query.count() == 0` WITH logging enabled, which is the
-    assertion that would fail if a refusal log were ever added -- and the
-    post does not move.
+def test_a_move_by_an_unrelated_user_is_refused_and_logged(app, db_session, monkeypatch):
+    """D58, fixed. With every alternative of the permission check false (not
+    the author, not an origin moderator, not an instance admin) the `if` had
+    no `else`, so the refused Move left no trace. The post still does not
+    move, and a failure row now records the refusal.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, origin_community, target_community, post, author = _seed_move_scenario()
@@ -510,7 +504,9 @@ def test_a_move_by_an_unrelated_user_does_nothing(app, db_session, monkeypatch):
 
     db.session.expire_all()
     assert db.session.get(Post, post.id).community_id == origin_community.id
-    assert ActivityPubLog.query.count() == 0
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Move attempt denied'
 
 
 def test_a_move_whose_post_is_unknown_locally_is_resolved_remotely(app, db_session, monkeypatch):
