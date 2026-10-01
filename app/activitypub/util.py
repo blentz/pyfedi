@@ -2976,11 +2976,12 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
                         if profile_id != reply_parent.author.ap_profile_id:
                             local_users_to_notify.append(profile_id)
 
-        if 'flair' in request_json['object'] and request_json['object']['flair']:
+        # A non-string flair is skipped, and both branches strip (D273)
+        if isinstance(request_json['object'].get('flair'), str) and request_json['object']['flair'].strip():
             existing_flair = UserFlair.query.filter(UserFlair.user_id == user.id,
                                                     UserFlair.community_id == community.id).first()
             if existing_flair:
-                existing_flair.flair = request_json['object']['flair']
+                existing_flair.flair = request_json['object']['flair'].strip()
             else:
                 db.session.add(UserFlair(user_id=user.id, community_id=community.id,
                                          flair=request_json['object']['flair'].strip()))

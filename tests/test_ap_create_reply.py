@@ -1616,14 +1616,8 @@ def test_the_recipient_language_wrapper_is_reached(app, db_session, redis_lock_o
 
 
 def test_a_flair_on_a_user_with_none_creates_a_user_flair_row(app, db_session, redis_lock_only_double):
-    """Both conjuncts of `'flair' in request_json['object'] and request_json[
-    'object']['flair']` true, and the `UserFlair.query.filter(...).first()`
-    lookup finds nothing, so the `else:` branch creates. Only the CREATE
-    branch calls `.strip()` on the value (read directly off
-    app/activitypub/util.py: `flair=request_json['object']['flair'].strip()`)
-    -- padding the fixture value proves that, and distinguishes this branch
-    from the update branch below, which assigns the raw string.
-    """
+    """A string flair and no existing `UserFlair`, so the `else:` branch
+    creates, storing the value stripped."""
     community, post, replier = _seed_scenario()
     document = _reply_doc(content='hello', flair='  gold  ')
 
@@ -1635,11 +1629,10 @@ def test_a_flair_on_a_user_with_none_creates_a_user_flair_row(app, db_session, r
 
 
 def test_a_flair_on_a_user_with_an_existing_flair_updates_it(app, db_session, redis_lock_only_double):
-    """The `if existing_flair:` branch. Unlike the create branch above, this
-    one assigns the raw value with no `.strip()` call (read directly off
-    app/activitypub/util.py: `existing_flair.flair = request_json['object'][
-    'flair']`) -- the fixture value below carries no padding, so this test
-    cannot be confused with the create branch's stripped assertion.
+    """The `if existing_flair:` branch. D273, fixed: it used to assign the
+    raw value where the create branch strips, so a padded flair was stored
+    as 'gold' on first arrival and '  gold  ' on every later one. Both
+    branches now strip.
 
     Asserted by a row count of exactly one, not merely that some row carries
     the new value -- a create-instead-of-update bug would leave two rows,
@@ -1650,7 +1643,7 @@ def test_a_flair_on_a_user_with_an_existing_flair_updates_it(app, db_session, re
     existing = UserFlair(user_id=replier.id, community_id=community.id, flair='bronze')
     db.session.add(existing)
     db.session.commit()
-    document = _reply_doc(content='hello', flair='gold')
+    document = _reply_doc(content='hello', flair='  gold  ')
 
     reply = _create(community, post, replier, document=document)
 
@@ -1660,9 +1653,29 @@ def test_a_flair_on_a_user_with_an_existing_flair_updates_it(app, db_session, re
     assert rows[0].flair == 'gold'
 
 
+@pytest.mark.parametrize('flair', [123, True, ['gold'], {'name': 'gold'}])
+@pytest.mark.parametrize('seeded', [False, True])
+def test_a_non_string_flair_is_skipped(app, db_session, redis_lock_only_double, flair, seeded):
+    """D273, fixed: a truthy non-string flair used to raise AttributeError on
+    `.strip()` in the create branch, losing the whole reply, and be stored
+    raw in the update branch. It is now skipped in both, and the reply is
+    still created."""
+    community, post, replier = _seed_scenario()
+    if seeded:
+        db.session.add(UserFlair(user_id=replier.id, community_id=community.id, flair='bronze'))
+        db.session.commit()
+    document = _reply_doc(content='hello', flair=flair)
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    rows = UserFlair.query.filter_by(user_id=replier.id, community_id=community.id).all()
+    assert [row.flair for row in rows] == (['bronze'] if seeded else [])
+
+
 def test_an_absent_flair_key_leaves_an_existing_flair_unchanged(app, db_session, redis_lock_only_double):
-    """The `'flair' in request_json['object']` conjunct: no `flair` key at
-    all in the document. A non-zero baseline is seeded first, so a guard
+    """No `flair` key at all in the document (the guard's isinstance
+    conjunct since D273). A non-zero baseline is seeded first, so a guard
     that fired anyway (deleting a UserFlair row, say, or blanking its value)
     would be caught, not just a guard that failed to CREATE one.
     """
@@ -1681,8 +1694,8 @@ def test_an_absent_flair_key_leaves_an_existing_flair_unchanged(app, db_session,
 
 
 def test_a_falsy_flair_value_leaves_an_existing_flair_unchanged(app, db_session, redis_lock_only_double):
-    """The truthiness half of `'flair' in request_json['object'] and
-    request_json['object']['flair']` -- the key is present but empty, unlike
+    """The `.strip()` truthiness half of the flair guard (D273) -- the key is
+    present but empty, unlike
     the test above where the key is absent entirely. A non-zero baseline is
     seeded first for the same reason.
     """
