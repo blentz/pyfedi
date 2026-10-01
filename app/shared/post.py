@@ -916,6 +916,10 @@ def restore_post(post_id: int, src, auth):
         post = db.session.get(Post, post_id) or abort(404)
         if not post.deleted:  # not deleted: nothing to restore or federate
             return (user_id, post) if src == SRC_API else None
+        if post.deleted_by != post.user_id:  # D421: an author may not undo a moderator's removal
+            if src == SRC_API:
+                raise Exception('Does not have permission')
+            abort(403)
         if post.url:
             post.calculate_cross_posts()
 

@@ -75,6 +75,7 @@ tests/factories.py; the rules are tests/README.md facts 206-219. Four bind here:
 
 import pytest
 from sqlalchemy import text
+from werkzeug.exceptions import HTTPException
 
 from app import db
 from app.constants import (
@@ -156,7 +157,7 @@ def test_restoring_a_deleted_post_clears_the_flag(db_session):
     """
     s = seed_post_context(community_name='lifecycle')
     s.post.deleted = True
-    s.post.deleted_by = s.voter.id
+    s.post.deleted_by = s.author.id  # the author's own delete; D421 refuses any other
     db.session.commit()
 
     user_id, post = restore_post(s.post.id, SRC_API, bearer(s.author))
@@ -175,6 +176,7 @@ def test_restoring_increments_both_counters(db_session):
     """
     s = seed_post_context(community_name='lifecycle')
     s.post.deleted = True
+    s.post.deleted_by = s.author.id  # the author's own delete; D421 refuses any other
     s.post.author.post_count = 4
     s.community.post_count = 6
     db.session.commit()
@@ -206,6 +208,7 @@ def test_restoring_a_post_with_a_url_links_it_to_its_cross_posts(db_session):
     sibling.url = 'https://example.com/article'
     s.post.url = 'https://example.com/article'
     s.post.deleted = True
+    s.post.deleted_by = s.author.id  # the author's own delete; D421 refuses any other
     db.session.commit()
 
     user_id, post = restore_post(s.post.id, SRC_API, bearer(s.author))
@@ -227,6 +230,7 @@ def test_the_web_arm_reads_current_user_and_returns_none(db_session, app):
     """
     s = seed_post_context(community_name='lifecycle')
     s.post.deleted = True
+    s.post.deleted_by = s.author.id  # the author's own delete; D421 refuses any other
     db.session.commit()
 
     with web_ctx(app, s.author):
@@ -235,6 +239,31 @@ def test_the_web_arm_reads_current_user_and_returns_none(db_session, app):
     assert result is None
     db.session.refresh(s.post)
     assert s.post.deleted is False
+
+
+def test_the_author_cannot_undo_a_moderators_removal(db_session, app):
+    """NEW, fixed (D421 owner ruling, as N3 did for restore_reply):
+    restore_post checked only that the API caller wrote the post, so an author
+    could restore through the API a post a moderator had removed. That is now
+    refused -- the API arm raises its permission refusal, the web arm is a
+    403 -- and the post stays removed.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    moderator = make_user(s.instance, 'remover', local=True)
+    s.post.deleted = True
+    s.post.deleted_by = moderator.id
+    db.session.commit()
+
+    with pytest.raises(Exception, match='Does not have permission'):
+        restore_post(s.post.id, SRC_API, bearer(s.author))
+    with web_ctx(app, s.author):
+        with pytest.raises(HTTPException) as exc:
+            restore_post(s.post.id, SRC_WEB, None)
+
+    assert exc.value.code == 403
+    db.session.refresh(s.post)
+    assert s.post.deleted is True
+    assert s.post.deleted_by == moderator.id
 
 
 def _restore_recording_tasks(s):
@@ -260,6 +289,7 @@ def test_an_unpublished_post_does_not_federate_its_restore(db_session):
     `post.status == POST_STATUS_PUBLISHED`."""
     s = seed_post_context(community_name='lifecycle')
     s.post.deleted = True
+    s.post.deleted_by = s.author.id  # the author's own delete; D421 refuses any other
     s.post.status = 0
     db.session.commit()
 
@@ -270,6 +300,7 @@ def test_a_published_post_federates_its_restore(db_session):
     """The other side of the D439 guard."""
     s = seed_post_context(community_name='lifecycle')
     s.post.deleted = True
+    s.post.deleted_by = s.author.id  # the author's own delete; D421 refuses any other
     s.post.status = POST_STATUS_PUBLISHED
     db.session.commit()
 
@@ -281,6 +312,7 @@ def test_restoring_touches_the_authors_last_seen(db_session):
     did not. It now does."""
     s = seed_post_context(community_name='lifecycle')
     s.post.deleted = True
+    s.post.deleted_by = s.author.id  # the author's own delete; D421 refuses any other
     s.post.author.last_seen = None
     db.session.commit()
 
@@ -306,6 +338,7 @@ def test_restoring_takes_the_post_lock_the_delete_takes(db_session, monkeypatch)
     monkeypatch.setattr(app, 'redis_client', _Recording())
     s = seed_post_context(community_name='lifecycle')
     s.post.deleted = True
+    s.post.deleted_by = s.author.id  # the author's own delete; D421 refuses any other
     db.session.commit()
 
     restore_post(s.post.id, SRC_API, bearer(s.author))
