@@ -440,7 +440,7 @@ def report_reply(reply, input, src, auth=None):
     # Lemmy doesn't process or generate Announce / Flag, so Flags also have to be sent from here to user's and community's instances
     if report_remote:
         if not reply.community.is_local():
-            if reply.community_id not in remote_instance_ids: # very unlikely, since it will typically have mods on same instance.
+            if reply.community.instance_id not in remote_instance_ids: # very unlikely, since it will typically have mods on same instance.
                 remote_instance_ids.add(reply.community.instance_id)
         if not suspect_user.is_local():
             if suspect_user.instance_id not in remote_instance_ids:
