@@ -84,7 +84,7 @@ def process_webfinger_request(resource):
 
     feed = False
     query = resource  # acct:alice@tada.club
-    if 'acct:' in query:
+    if query.startswith('acct:'):
         actor = query.split(':')[1].split('@')[0]  # alice
         domain = query.split(':')[1].partition('@')[2]  # tada.club
         if actor.startswith('~'):
