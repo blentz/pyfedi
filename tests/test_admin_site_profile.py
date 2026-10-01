@@ -693,10 +693,9 @@ def test_the_profile_creates_a_site_row_when_there_is_none(app, db_session):
     """`if site is None: site = Site()` and `if site.id is None:
     db.session.add(site)`.
 
-    Called directly rather than over HTTP, for the reason registered as D911:
-    with no Site row the request lifecycle cannot run at all, because
-    `get_site_as_dict` dereferences `site.__table__` with no nil check before
-    any view is reached. Fact 354 is why `g.site` is supplied to a context that
+    Called directly rather than over HTTP: over HTTP, `get_site_as_dict` runs
+    before any view and creates the missing row itself (D911), so the view
+    would never see the None this test is about. Fact 354 is why `g.site` is supplied to a context that
     is entered once rather than nested inside another.
     """
     from flask import g, session as flask_session
