@@ -393,6 +393,25 @@ def test_deleting_a_reply_decrements_every_counter_it_maintains(
     assert community.post_reply_count == 4
 
 
+def test_deleting_a_reply_keys_its_post_lock_by_the_replys_post(app, db_session, recording_lock_double):
+    """Fixed: the PostReply branch took `lock:post:<reply id>` for the post's
+    counters, so it never serialised with anything else holding that post's
+    lock. It is now keyed by the reply's post_id, as the restore is."""
+    site, instance, community, author, moderator = seed_moderation_scene()
+    post = make_post(community, author, None, title='a post')
+    make_post_reply(post, author)
+    reply = make_post_reply(post, author)
+    author.bot = False
+    db.session.commit()
+    assert reply.id != post.id
+
+    ap_util.delete_post_or_comment(moderator, reply, False,
+                                   {'id': 'https://peer.example/activities/delete/1'}, '')
+
+    assert f'lock:post:{post.id}' in recording_lock_double.keys
+    assert f'lock:post:{reply.id}' not in recording_lock_double.keys
+
+
 def test_deleting_a_bots_reply_leaves_the_posts_reply_count_alone(
         app, db_session, monkeypatch, redis_lock_only_double):
     """`if not to_delete.author.bot:` guards `post.reply_count`,
