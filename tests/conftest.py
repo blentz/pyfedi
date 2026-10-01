@@ -97,18 +97,13 @@ from werkzeug.http import http_date
 # config module.
 import app  # noqa: F401
 
-# app.community.routes and app.activitypub.routes import from each other
-# (community.routes needs RsaKeys/send_post_request from activitypub.signature;
-# activitypub.routes needs show_community from community.routes). Whichever
-# package's __init__.py starts running first finishes cleanly; if
-# app.community starts first, it is still mid-import (show_community not yet
-# defined) when app.activitypub.routes asks for it, raising a circular
-# ImportError. Priming app.activitypub here, before pytest collects any test
-# module, fixes the winning order once for the whole session -- otherwise it
-# depends on which test file pytest happens to alphabetically collect first
-# (e.g. a bare `from app.instance.util import ...` at module level hits this,
-# because app.instance.routes reaches app.community before app.activitypub
-# does).
+# Several blueprint modules import names from each other, so whichever package's
+# __init__.py starts first decides whether a `from x import name` finds `name`
+# defined yet. The community <-> activitypub cycle this prime was written for is
+# fixed (U-circular-import); tests/test_import_order.py lists the ones that are
+# not. Priming app.activitypub here, before pytest collects any test module,
+# fixes the winning order once for the whole session -- otherwise it depends on
+# which test file pytest happens to alphabetically collect first.
 import app.activitypub.signature  # noqa: F401
 from app import celery
 from config import Config
