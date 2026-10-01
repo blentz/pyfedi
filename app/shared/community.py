@@ -283,7 +283,7 @@ def make_community(input, src, auth=None, uploaded_icon_file=None, uploaded_bann
             community.languages.append(language)
     # Always include the undetermined language, so posts with no language will be accepted
     undetermined = Language.query.filter(Language.code == 'und').first()
-    if undetermined.id not in discussion_languages:
+    if undetermined and undetermined.id not in discussion_languages:  # 'und' is seeded by cli init
         community.languages.append(undetermined)
     db.session.commit()
 
@@ -398,7 +398,7 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
                 community.languages.append(language)
         # Always include the undetermined language, so posts with no language will be accepted
         undetermined = Language.query.filter(Language.code == 'und').first()
-        if undetermined.id not in discussion_languages:
+        if undetermined and undetermined.id not in discussion_languages:  # 'und' is seeded by cli init
             community.languages.append(undetermined)
         db.session.commit()
 

@@ -1776,27 +1776,15 @@ def test_edit_community_task_selector_and_return_use_distinct_user_and_community
     assert result == moderator.id
 
 
-def test_edit_community_undetermined_language_missing_raises_attributeerror_registered_defect(
+def test_edit_community_with_no_undetermined_language_row_still_saves(
         app, db_session, monkeypatch):
-    """REGISTERED, NOT FIXED: `:378`'s `undetermined.id` dereferences
-    `:377`'s `Language.query.filter(Language.code == 'und').first()` result
-    UNCONDITIONALLY -- if that lookup returns `None`, this raises
-    `AttributeError: 'NoneType' object has no attribute 'id'`. Latent in
-    production because `app/cli.py:181` seeds the 'und' row once at
-    instance setup; this test does NOT delete that seed (every sibling test
-    in this file shares `_seed_und_language` and deleting the row for real
-    would break them within the same session) and does NOT even call
-    `_seed_und_language` itself, so no 'und' row exists in this test's own
-    database at all -- reflecting the genuinely-missing-row state directly
-    rather than needing to fake it.
+    """D643, fixed: `edit_community` dereferenced `undetermined.id` with no
+    check, so a database without the 'und' row (seeded once by
+    app/cli.py) raised AttributeError. A missing row is now skipped.
 
-    `Language.query` is replaced on the class (matching Task 2's `File.
-    query` stand-in technique, not a rebound `from ... import` name) with an
-    object whose `.get` still delegates to the real query object (so
-    `:373`'s loop, which runs first in the same call, is unaffected) and
-    whose `.filter(...).first()` always returns `None`, so this test proves
-    the crash from the row's absence specifically, not merely from an
-    unpatched attribute error somewhere else in the call.
+    `Language.query` is replaced on the class so `.filter(...).first()`
+    returns None while `.get` still delegates, keeping the language loop
+    that runs first unaffected.
     """
     s = _seed()
     make_community_member(s.user, s.community, is_moderator=True)
@@ -1815,8 +1803,9 @@ def test_edit_community_undetermined_language_missing_raises_attributeerror_regi
     monkeypatch.setattr(Language, 'query', _NoUndeterminedQuery())
     api_input = _api_input()
 
-    with pytest.raises(AttributeError):
-        edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+    edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    assert 'und' not in [language.code for language in s.community.languages]
 
 
 # `make_community` (app/shared/community.py:213-251), the source fork, the
