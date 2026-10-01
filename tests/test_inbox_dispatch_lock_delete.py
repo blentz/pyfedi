@@ -53,7 +53,7 @@ looks the target up as content, then as a private message.
 | shared: content found, already deleted (1308-1311)              | `find_liked_object(ap_id)` truthy and `to_delete.deleted` is True                                                               | nothing                                                                                                                                                        | nothing                                                                                                    | APLOG_DELETE/APLOG_IGNORED 'Activity about local content which is already deleted' |
 | shared: content found, deletes it (1312-1316)                   | `find_liked_object(ap_id)` truthy and not yet deleted                                                                           | none directly in this arm -- the mutation happens inside the delegate                                                                                          | `delete_post_or_comment(user, to_delete, store_ap_json, request_json, reason)` unconditionally; `announce_activity_to_followers(to_delete.community, user, request_json)` only when `not announced` | **NOTHING.** No `log_incoming_ap` call anywhere on this path -- the one path in this arm that does real, successful work and logs none of it. |
 | shared: nothing found, PM found (1319-1325)                     | `find_liked_object` falsy; `ChatMessage` row matches `ap_id` and `sender_id == user.id`                                         | `updated_message.read = True`, `.deleted = True`, commit                                                                                                       | nothing                                                                                                    | APLOG_DELETE/APLOG_SUCCESS 'Delete: PM {ap_id} deleted' |
-| shared: nothing found at all (1317-1326)                        | neither `find_liked_object` nor the `ChatMessage` lookup found anything                                                         | nothing                                                                                                                                                        | nothing                                                                                                    | **NOTHING.** Falls straight through to the bare `return` at `:1326` -- the arm's only fully-silent no-op. |
+| shared: nothing found at all (1317-1326)                        | neither `find_liked_object` nor the `ChatMessage` lookup found anything                                                         | nothing                                                                                                                                                        | nothing                                                                                                    | APLOG_DELETE/APLOG_IGNORED `Delete: cannot find <ap_id>` (D86, fixed; was the arm's only fully-silent no-op). |
 
 ### Lock (routes.py:1356-1395)
 
@@ -974,18 +974,10 @@ def test_delete_of_a_chat_message_marks_it_read_and_deleted(app, db_session, mon
     assert log.exception_message == f'Delete: PM {ap_id} deleted'
 
 
-def test_delete_of_an_unmatched_ap_id_logs_nothing(app, db_session, monkeypatch):
-    """routes.py: falls through to the bare `return` at :1330 -- neither
-    find_liked_object nor the ChatMessage lookup matches anything at all.
-    REGISTERED, not fixed: this is the arm's only fully-silent no-op, per
-    Task 1's module docstring table ('shared: nothing found at all').
-
-    LOG_ACTIVITYPUB_TO_DB is explicitly enabled here (unlike this suite's
-    usual default of leaving it off) specifically so that
-    ActivityPubLog.query.count() == 0 proves the silence, rather than
-    merely reflecting logging being disabled for an unrelated reason --
-    with logging off, the count would be 0 regardless of what this arm
-    does, making the assertion vacuous.
+def test_delete_of_an_unmatched_ap_id_is_logged_as_ignored(app, db_session, monkeypatch):
+    """D86, fixed. Neither find_liked_object nor the ChatMessage lookup
+    matches, and the arm used to return with no trace at all. It now logs
+    an ignored row naming the id it could not find.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance = make_instance('peer.example')
@@ -998,7 +990,9 @@ def test_delete_of_an_unmatched_ap_id_logs_nothing(app, db_session, monkeypatch)
 
     dispatch(activity)
 
-    assert ActivityPubLog.query.count() == 0
+    log = ActivityPubLog.query.one()
+    assert log.result == 'ignored'
+    assert log.exception_message == 'Delete: cannot find https://peer.example/objects/does-not-exist'
 
 
 def test_delete_of_a_dict_object_with_no_type_key_takes_the_kbin_path(app, db_session, monkeypatch):
