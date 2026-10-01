@@ -374,6 +374,7 @@ class TestABackfilledReplyThisInstanceWillNotStore:
         env.community.ap_profile_id = f'https://{PEER}/c/faraway'
         author = make_user(env.baseline.instance_remote, 'someone')
         author.ap_id = f'someone@{PEER}'
+        author.ap_domain = PEER  # an inbound author's host, which the Create gate reads (PERM-3)
         author.ap_profile_id = self.AUTHOR
         author.ap_public_url = self.AUTHOR
         db.session.commit()
