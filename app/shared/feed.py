@@ -23,6 +23,7 @@ from app.utils import authorise_api_user, feed_membership, get_request, menu_sub
 
 
 def join_feed(actor, user_id, src=SRC_WEB):
+    member_id = join_request_id = None
     try:
         remote = False
         actor = actor.strip()
@@ -43,6 +44,7 @@ def join_feed(actor, user_id, src=SRC_WEB):
                 db.session.add(member)
                 feed.subscriptions_count += 1
                 db.session.commit()
+                member_id = member.id
 
                 # also subscribe the user to the feeditem communities
                 # if they have feed_auto_follow turned on
@@ -62,6 +64,7 @@ def join_feed(actor, user_id, src=SRC_WEB):
                     join_request = FeedJoinRequest(user_id=user.id, feed_id=feed.id)
                     db.session.add(join_request)
                     db.session.commit()
+                    join_request_id = join_request.id
                     if feed.instance.online():
                         follow = {
                             "actor": user.public_url(),
@@ -76,10 +79,13 @@ def join_feed(actor, user_id, src=SRC_WEB):
                         # reach out and get the feeditems from the remote /following collection
                         res = get_request(feed.ap_following_url)
                         following_collection = res.json()
+                        following_items = following_collection.get('items', following_collection.get('orderedItems'))
+                        if not isinstance(following_items, list):
+                            raise ValueError(f'No items in the following collection of {feed.ap_id}')
 
                         # for each of those add the communities
                         # subscribe the user if they have feed_auto_follow turned on
-                        for fci in following_collection['items']:
+                        for fci in following_items:
                             community_ap_id = fci
                             community = find_actor_or_create(community_ap_id, community_only=True)
                             if community and isinstance(community, Community):
@@ -105,6 +111,14 @@ def join_feed(actor, user_id, src=SRC_WEB):
             abort(404)
     except Exception:
         db.session.rollback()
+        # a join that failed part way must not leave the user subscribed, or waiting on a request
+        if join_request_id:
+            db.session.query(FeedJoinRequest).filter_by(id=join_request_id).delete()
+        if member_id:
+            member = db.session.get(FeedMember, member_id)
+            db.session.query(Feed).filter_by(id=member.feed_id).update({Feed.subscriptions_count: Feed.subscriptions_count - 1})
+            db.session.delete(member)
+        db.session.commit()
         raise
     finally:
         db.session.remove()
