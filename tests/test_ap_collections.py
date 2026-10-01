@@ -319,7 +319,7 @@ def test_the_outbox_counts_every_eligible_post_but_inlines_fifty(app, db_session
     size, so a community with 4000 posts claimed a complete collection of 50.
     It is now the count of every post the outbox would list -- the same
     community, not deleted, past review -- while `orderedItems` still holds
-    the first 50 (paging is future work). The deleted, under-review and
+    the first 50, its first page (the pages themselves are tested below). The deleted, under-review and
     foreign posts seeded alongside must not be counted.
     """
     seed_actors()
@@ -1384,3 +1384,118 @@ def test_the_feed_following_malformed_join_is_masked_by_orm_deduplication(app, d
     assert response.json['totalItems'] == 1
     assert response.json['totalItems'] != len(feeds)
     assert response.json['items'] == [community.public_url()]
+
+
+# --------------------------------------------------------------------------
+# D173, owner ruling: outbox paging
+# --------------------------------------------------------------------------
+
+OUTBOX = 'https://test.piefed.local/c/books/outbox'
+
+
+def _a_community_with_51_posts(monkeypatch):
+    """51 posts, one of them sticky, so the second page holds exactly one; each
+    post serialises to its own ap_id so the pages can be compared."""
+    seed_actors()
+    community = seed_local_community('books')
+    user = make_user(None, 'author', local=True)
+    posts = [make_post(community, user, f'https://test.piefed.local/post/{n}') for n in range(51)]
+    posts[0].sticky = True
+    db.session.commit()
+    monkeypatch.setattr(activitypub_routes, 'post_to_activity', lambda post, community: post.ap_id)
+    return posts
+
+
+def test_the_outbox_root_names_its_first_and_last_pages(app, db_session, monkeypatch):
+    _a_community_with_51_posts(monkeypatch)
+
+    response = collection_get(app, '/c/books/outbox')
+
+    assert response.json['type'] == 'OrderedCollection'
+    assert response.json['totalItems'] == 51
+    assert response.json['first'] == f'{OUTBOX}?page=1'
+    assert response.json['last'] == f'{OUTBOX}?page=2'
+
+
+def test_an_outbox_page_is_an_ordered_collection_page_of_fifty(app, db_session, monkeypatch):
+    posts = _a_community_with_51_posts(monkeypatch)
+
+    first = collection_get(app, '/c/books/outbox?page=1')
+    second = collection_get(app, '/c/books/outbox?page=2')
+
+    assert first.status_code == second.status_code == 200
+    assert first.json['type'] == second.json['type'] == 'OrderedCollectionPage'
+    assert first.json['id'] == f'{OUTBOX}?page=1'
+    assert first.json['partOf'] == second.json['partOf'] == OUTBOX
+    assert len(first.json['orderedItems']) == 50 and len(second.json['orderedItems']) == 1
+    assert first.json['orderedItems'][0] == posts[0].ap_id  # the sticky post leads, as in the root
+    assert sorted(first.json['orderedItems'] + second.json['orderedItems']) == sorted(p.ap_id for p in posts)
+    assert first.json['next'] == f'{OUTBOX}?page=2' and 'prev' not in first.json
+    assert second.json['prev'] == f'{OUTBOX}?page=1' and 'next' not in second.json
+
+
+def test_an_outbox_page_keeps_the_collection_cache_policy(app, db_session, monkeypatch):
+    _a_community_with_51_posts(monkeypatch)
+
+    response = collection_get(app, '/c/books/outbox?page=2')
+
+    assert response.content_type == 'application/activity+json'
+    assert response.headers['Cache-Control'] == activitypub_routes.AP_CACHE_COLLECTION
+    assert response.headers['Vary'] == 'Accept, Accept-Encoding'
+
+
+@pytest.mark.parametrize('page', ['0', '-1', 'two', ''])
+def test_a_page_that_is_not_a_positive_number_is_a_400(app, db_session, page):
+    seed_actors()
+    seed_local_community('books')
+
+    response = collection_get(app, f'/c/books/outbox?page={page}')
+
+    assert response.status_code == 400
+
+
+def test_a_browser_asking_for_an_outbox_page_is_still_sent_to_the_community(app, db_session):
+    seed_actors()
+    seed_local_community('books')
+    with app.test_client() as client:
+        response = client.get('/c/books/outbox?page=2', headers={'Accept': 'text/html'})
+
+    assert (response.status_code, response.headers['Location']) == (302, '/c/books')
+
+
+def test_a_user_outbox_pages_its_empty_collection(app, db_session):
+    seed_actors()
+    make_user(None, 'alice', local=True)
+    outbox = 'https://test.piefed.local/u/alice/outbox'
+
+    root = collection_get(app, '/u/alice/outbox')
+    page = collection_get(app, '/u/alice/outbox?page=1')
+
+    assert (root.json['totalItems'], root.json['first'], root.json['last']) == \
+        (0, f'{outbox}?page=1', f'{outbox}?page=1')
+    assert page.json['type'] == 'OrderedCollectionPage'
+    assert (page.json['partOf'], page.json['orderedItems']) == (outbox, [])
+    assert 'next' not in page.json and 'prev' not in page.json
+
+
+def test_a_feed_outbox_is_paged_too(app, db_session, monkeypatch):
+    """The page size is shrunk to two so three communities make two pages."""
+    monkeypatch.setattr(activitypub_routes, 'OUTBOX_PAGE_SIZE', 2)
+    seed_actors()
+    feed = _seed_local_feed('news', public=True)
+    hidden = seed_local_community('hidden')
+    hidden.local_only = True
+    db.session.commit()
+    _feed_item(feed, hidden)
+    communities = [seed_local_community(name) for name in ('books', 'films', 'games')]
+    for community in communities:
+        _feed_item(feed, community)
+    outbox = 'https://test.piefed.local/f/news/outbox'
+
+    root = collection_get(app, '/f/news/outbox')
+    second = collection_get(app, '/f/news/outbox?page=2')
+
+    assert (root.json['totalItems'], root.json['last']) == (3, f'{outbox}?page=2')
+    assert second.json['type'] == 'OrderedCollectionPage'
+    assert second.json['orderedItems'] == [communities[0].public_url()]  # newest item first
+    assert second.json['prev'] == f'{outbox}?page=1'

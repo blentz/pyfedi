@@ -64,6 +64,30 @@ AP_CACHE_CONTENT = 'public, max-age=120'
 AP_CACHE_COLLECTION = 'public, max-age=60'
 AP_CACHE_MISS = 'no-store'
 
+# D173 (owner ruling): an outbox is an OrderedCollection naming its pages, each ?page=N an OrderedCollectionPage
+OUTBOX_PAGE_SIZE = 50
+
+
+def paged_outbox(outbox_id: str, total: int, items_from) -> dict:
+    """The outbox document a request asks for. `items_from(offset, limit)` lists one page's items. The collection
+    itself keeps its first page inline, as before paging, for peers that read no further than it."""
+    page = request.args.get('page')
+    if page is None:
+        return {"@context": default_context(), "type": "OrderedCollection", "id": outbox_id, "totalItems": total,
+                "first": f"{outbox_id}?page=1", "last": f"{outbox_id}?page={max(1, -(-total // OUTBOX_PAGE_SIZE))}",
+                "orderedItems": items_from(0, OUTBOX_PAGE_SIZE)}
+    if not page.isdigit() or int(page) < 1:
+        abort(400)
+    page = int(page)
+    result = {"@context": default_context(), "type": "OrderedCollectionPage", "id": f"{outbox_id}?page={page}",
+              "partOf": outbox_id, "totalItems": total,
+              "orderedItems": items_from((page - 1) * OUTBOX_PAGE_SIZE, OUTBOX_PAGE_SIZE)}
+    if page * OUTBOX_PAGE_SIZE < total:
+        result['next'] = f"{outbox_id}?page={page + 1}"
+    if page > 1:
+        result['prev'] = f"{outbox_id}?page={page - 1}"
+    return result
+
 
 @bp.after_request
 def ap_miss_is_not_cached(response):
@@ -542,13 +566,7 @@ def user_outbox(actor):
     # as the actor endpoints negotiate
     if not is_activitypub_request():
         return redirect(url_for('activitypub.user_profile', actor=actor))
-    outbox = {
-        "@context": default_context(),
-        'type': 'OrderedCollection',
-        'id': f"{current_app.config['SERVER_URL']}/u/{actor}/outbox",
-        'orderedItems': [],
-        'totalItems': 0
-    }
+    outbox = paged_outbox(f"{current_app.config['SERVER_URL']}/u/{actor}/outbox", 0, lambda offset, limit: [])
     resp = jsonify(outbox)
     resp.content_type = 'application/activity+json'
     resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
@@ -2225,26 +2243,15 @@ def community_outbox(actor):
         return redirect(url_for('activitypub.community_profile', actor=actor))
     community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first()
     if community is not None:
-        sticky_posts = Post.query.filter(Post.community_id == community.id).filter(Post.sticky == True, Post.deleted == False,
-                                         Post.status > POST_STATUS_REVIEWING).order_by(desc(Post.posted_at)).limit(50).all()
-        remaining_limit = 50 - len(sticky_posts)
-        remaining_posts = Post.query.filter(Post.community_id == community.id).filter(Post.sticky == False, Post.deleted == False,
-                                            Post.status > POST_STATUS_REVIEWING).order_by(desc(Post.posted_at)).limit(remaining_limit).all()
-        posts = sticky_posts + remaining_posts
-        # D173 (owner ruling): the size of the whole collection, though only the first 50 are inline
-        total_posts = Post.query.filter(Post.community_id == community.id, Post.deleted == False,
-                                        Post.status > POST_STATUS_REVIEWING).count()
+        listed = Post.query.filter(Post.community_id == community.id, Post.deleted == False,
+                                   Post.status > POST_STATUS_REVIEWING)
+        # sticky posts first, newest first within each, as the one page this served before paging
+        ordered = listed.order_by(desc(Post.sticky).nulls_last(), desc(Post.posted_at), desc(Post.id))
 
-        community_data = {
-            "@context": default_context(),
-            "type": "OrderedCollection",
-            "id": f"{current_app.config['SERVER_URL']}/c/{actor}/outbox",
-            "totalItems": total_posts,
-            "orderedItems": []
-        }
-
-        for post in posts:
-            community_data['orderedItems'].append(post_to_activity(post, community))
+        community_data = paged_outbox(
+            f"{current_app.config['SERVER_URL']}/c/{actor}/outbox", listed.count(),
+            lambda offset, limit: [post_to_activity(post, community)
+                                   for post in ordered.offset(offset).limit(limit).all()])
 
         resp = jsonify(community_data)
         resp.content_type = 'application/activity+json'
@@ -3051,23 +3058,13 @@ def feed_outbox(actor):
     if not feed.public:
         abort(403)
 
-        # get the feed items
-    feed_items = db.session.query(FeedItem).filter_by(feed_id=feed.id).order_by(desc(FeedItem.id)).all()
-    # make the ap data json
-    items = []
-    for fi in feed_items:
-        c = db.session.get(Community, fi.community_id)
-        if c.local_only or c.private:
-            continue
-        items.append(c.public_url())
-    # D185 (owner ruling): an OrderedCollection, as community_outbox is
-    result = {
-        "@context": default_context(),
-        "id": feed.ap_outbox_url,
-        "type": "OrderedCollection",
-        "totalItems": len(items),
-        "orderedItems": items
-    }
+    # the feed's communities, newest item first, withholding local-only and private ones
+    listed = db.session.query(Community).join(FeedItem, FeedItem.community_id == Community.id).filter(
+        FeedItem.feed_id == feed.id, Community.local_only.isnot(True), Community.private.isnot(True))
+    ordered = listed.order_by(desc(FeedItem.id))
+    # D185 (owner ruling): an OrderedCollection, as community_outbox is; paged as it is (D173)
+    result = paged_outbox(feed.ap_outbox_url, listed.count(),
+                          lambda offset, limit: [c.public_url() for c in ordered.offset(offset).limit(limit).all()])
     resp = jsonify(result)
     resp.content_type = 'application/activity+json'
     resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
