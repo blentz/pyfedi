@@ -2149,93 +2149,22 @@ class TestVoteForReplyGuardsAndReturns:
         finally:
             _clear_votes_cast(s.user.id)
 
-    def test_a_voter_exactly_at_the_vote_quota_is_still_allowed_through(self, db_session, app, monkeypatch):
-        """CLOSES NO STATEMENT AND NO ARC -- `33->36` is taken by four tests
-        already. IT EARNS ITS PLACE BY PINNING A REGISTERED DEFECT, D501, AND
-        NOT BY CATCHING A REGRESSION. Its unique kill against
-        `33s/user.id) > current/user.id) >= current/`, which left all 27 tests
-        green in the task-7 pass, is a FIX-CATCHER rather than a
-        fault-direction kill, and saying otherwise would contradict this
-        round's own register: D501 records the `>` at `:33` AS the off-by-one,
-        which makes `>=` the candidate FIX, and killing a semantically better
-        mutant measures change-detection, not defect-detection. The clause this
-        test qualifies under is therefore the pin-a-defect one, which obliges
-        it to state the fix-edit it owes -- stated below, in the terms
-        `TestVoteForReplySourceAndPermission`'s reversal test states its own.
-
-        THE QUOTA TEST ABOVE CANNOT PIN THE BOUNDARY, and that is a property of
-        its fixture rather than an oversight. It sets `VOTE_QUOTA` to -1 against
-        a `votes_cast_today` of 0, and 0 is strictly greater than -1 AND greater
-        than or equal to it, so `>` and `>=` agree on that input. The single
-        input on which they disagree is equality, and this test is that input:
-        `VOTE_QUOTA` 0 against 0 votes cast means `:33` is false under `>` and
-        the vote lands, and true under `>=` and the call aborts 429.
-
-        WHAT THIS TEST ALSO PINS, SAID OUT LOUD BECAUSE A BOUNDARY TEST IS WHERE
-        IT MUST BE: `:33` is evaluated BEFORE the vote is cast, so `VOTE_QUOTA =
-        N` permits N + 1 votes. The assertion below -- `VOTE_QUOTA` 0 and a vote
-        LANDS -- is that off-by-one in executable form. It is recorded, not
-        fixed: the default is 240 (config.py:203) so nothing is burning, and
-        `app/shared/post.py:53` carries the identical comparison -- as do
-        `app/activitypub/routes.py:2438` and `:2459`, written as `<=` on the
-        permitting side, which is the same boundary -- so this is a consistent
-        product decision across all four enforcement sites rather than a
-        divergence between the mirrored pair. It is registered as D501, which
-        names this test as its pin.
-
-        THIS TEST ASSERTS THE DEFECT, NOT CORRECT BEHAVIOUR, AND WHOEVER FIXES
-        D501 MUST EDIT IT. **The fix is one boundary at FOUR enforcement sites,
-        not two, and this obligation said two until the round's last review
-        caught it.** A whole-repository `/usr/bin/grep -rn "VOTE_QUOTA"
-        --include=*.py app/` returns five occurrences:
-        `app/shared/reply.py:33` and `app/shared/post.py:53`, both spelled
-        `if votes_cast_today(user.id) > VOTE_QUOTA:` as a REFUSAL; and
-        `app/activitypub/routes.py:2438` and `:2459`, spelled
-        `votes_cast_today(user.id) <= VOTE_QUOTA:` as a PERMISSION inside the
-        federation inbox's `process_upvote`/`process_downvote`, each calling
-        `liked.vote()` directly. `> N` refusing and `<= N` permitting are the
-        SAME boundary written two ways, so all four already agree and all four
-        carry the same off-by-one. The fifth, `app/user/routes.py:127`, is a
-        division for a display percentage and enforces nothing. When the
-        boundary moves, the edit owed here is to INVERT this test:
-        `VOTE_QUOTA` 0 against a `votes_cast_today` of 0 must then be REFUSED
-        with 429, so the assertions below failing at that point is the fix
-        landing, not a regression.
-
-        THE METHOD NOTE, BECAUSE IT IS THE SAME ONE D497 CARRIES AND THIS
-        DOCSTRING QUOTED IT WHILE COMMITTING IT: the two-site claim came from a
-        grep hand-scoped to four path globs, which is a filtered search that
-        called itself an enumeration. Re-deriving it required a method that
-        fails differently -- a whole-tree search with no path filter -- and not
-        a second grep of the same shape. Note also that the interactive `grep`
-        in this environment is a `ugrep` wrapper carrying `--ignore-files`,
-        which silently skips paths a `.gitignore` excludes; `/usr/bin/grep`
-        does not.
-
-        THE ASSERTION IS THE COMPLETED VOTE, not the absence of an exception. An
-        `abort(429)` would fail this test on the raise, but so would any other
-        failure, so `up_votes` and the `PostReplyVote` row are what say the call
-        got past `:33` rather than merely got past it in some other year.
-
-        `monkeypatch.setitem` on the session-scoped `app` fixture is safe for
-        the reason the quota test above records: monkeypatch restores it at
-        teardown. `_clear_votes_cast` is mandatory here and was NOT mandatory
-        there, and the difference is the whole point -- that test aborts before
-        `:36` and writes no redis key, this one votes and writes one.
-        """
+    def test_a_voter_exactly_at_the_vote_quota_is_refused(self, db_session, app, monkeypatch):
+        """D501, fixed: `:33` was `>` and is evaluated before the vote is cast,
+        so `VOTE_QUOTA = N` permitted N + 1 votes. It is now `>=`, the same
+        boundary as post.py and the inbox's `<` at both federated vote sites:
+        `VOTE_QUOTA` 0 against 0 votes cast is refused with 429. The quota test
+        above (-1 against 0) cannot see this; equality is the one input on
+        which the two operators disagree."""
         s = _seed_reply()
         monkeypatch.setitem(app.config, 'VOTE_QUOTA', 0)
-        try:
-            assert vote_for_reply(s.reply.id, 'upvote', True, None, SRC_API,
-                                  auth=bearer(s.user)) == s.user.id
 
-            db.session.refresh(s.reply)
-            assert s.reply.up_votes == 1
-            assert PostReplyVote.query.filter_by(
-                post_reply_id=s.reply.id, user_id=s.user.id).count() == 1
-        finally:
-            _clear_votes_cast(s.user.id)
+        with pytest.raises(HTTPException) as exc:
+            vote_for_reply(s.reply.id, 'upvote', True, None, SRC_API, auth=bearer(s.user))
 
+        assert exc.value.code == 429
+        db.session.refresh(s.reply)
+        assert s.reply.up_votes == 0
 
 class TestDeleteReply:
     """`delete_reply` (app/shared/reply.py:241-266) -- the author's own soft delete.

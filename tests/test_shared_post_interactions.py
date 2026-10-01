@@ -1201,21 +1201,37 @@ def test_a_vote_over_the_daily_quota_is_aborted_with_429(db_session, app):
         _clear_votes_cast(s.voter.id)
 
 
-def test_a_vote_exactly_at_the_daily_quota_is_allowed(db_session, app):
-    """`:53`'s false arm at the boundary itself.
-
-    `:53` is `>`, so a count EQUAL to VOTE_QUOTA passes. This is the
-    direction sub-project 32's mutation pass failed to probe, and the reason
-    this plan asks for both. Catches a regression changing `>` to `>=`. The
-    vote completes, so `post.vote()` (app/models.py:2825-2829) itself
-    increments this same key afterward; the `finally` clears it regardless of
-    what value it ends up holding.
-    """
+def test_a_vote_exactly_at_the_daily_quota_is_refused(db_session, app):
+    """D501, fixed: `:53` was `>`, so with VOTE_QUOTA = N votes already cast
+    the N+1th still went through. It is now `>=`: a count equal to the quota
+    is refused with 429."""
     from app import redis_client
+    from werkzeug.exceptions import TooManyRequests
 
     s = seed_post_context()
     redis_client.set(f'votes_cast_{date.today()}_{s.voter.id}',
                      str(app.config['VOTE_QUOTA']))
+
+    try:
+        with pytest.raises(TooManyRequests):
+            vote_for_post(s.post.id, 'upvote', True, None, SRC_API,
+                          auth=bearer(s.voter))
+
+        assert db.session.query(PostVote).filter_by(
+            user_id=s.voter.id, post_id=s.post.id).count() == 0
+    finally:
+        _clear_votes_cast(s.voter.id)
+
+
+def test_a_vote_one_below_the_daily_quota_is_allowed(db_session, app):
+    """The other side of the D501 boundary: the Nth vote of a quota of N.
+    The vote completes, so `post.vote()` increments the key afterward; the
+    `finally` clears it regardless."""
+    from app import redis_client
+
+    s = seed_post_context()
+    redis_client.set(f'votes_cast_{date.today()}_{s.voter.id}',
+                     str(app.config['VOTE_QUOTA'] - 1))
 
     try:
         result = vote_for_post(s.post.id, 'upvote', True, None, SRC_API,

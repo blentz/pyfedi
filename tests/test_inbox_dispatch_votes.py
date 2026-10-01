@@ -20,7 +20,7 @@ Step 4 drops each half of the two vote guards one mutation at a time:
 
     outer:  can_upvote(user, liked.community) and not instance_banned(user.instance.domain)
     inner:  isinstance(liked, (Post, PostReply)) and user.id not in blocked_users(liked.author.id)
-            and votes_cast_today(user.id) <= current_app.config['VOTE_QUOTA']
+            and votes_cast_today(user.id) < current_app.config['VOTE_QUOTA']
 
 Four of the five halves get a distinct killer test below (a bot voter, a
 banned instance, an author's block of the voter, and an over-quota voter --
@@ -462,11 +462,27 @@ def test_a_downvote_blocked_by_the_vote_quota_logs_ignored(app, db_session, monk
     assert row.exception_message == 'Cannot downvote this'
 
 
+@pytest.mark.parametrize('process', [process_upvote, process_downvote])
+def test_a_federated_vote_exactly_at_the_quota_is_refused(app, db_session, monkeypatch, process):
+    """D501, fixed: the inbox permitted `votes_cast_today <= VOTE_QUOTA`, so
+    a quota of N let an N+1th vote through. It is now `<`, the same boundary
+    as the local vote paths: with a quota of 0 and no votes cast, nothing
+    is recorded."""
+    monkeypatch.setitem(app.config, 'VOTE_QUOTA', 0)
+    voter, post = _seed_vote_scenario()
+
+    request_json = {'id': 'https://peer.example/activities/1', 'object': post.ap_id}
+
+    process(voter, True, request_json, False)
+
+    assert PostVote.query.count() == 0
+
+
 # --- Step 4: dropping each half of the two vote guards, one mutation at a time ---
 #
 # outer: can_upvote(user, liked.community) and not instance_banned(user.instance.domain)
 # inner: isinstance(liked, (Post, PostReply)) and user.id not in blocked_users(liked.author.id)
-#        and votes_cast_today(user.id) <= current_app.config['VOTE_QUOTA']
+#        and votes_cast_today(user.id) < current_app.config['VOTE_QUOTA']
 #
 # Five halves total. Four get a distinct killer test below (a bot voter, a
 # banned instance, an author's block of the voter, and -- reusing Step 3's
