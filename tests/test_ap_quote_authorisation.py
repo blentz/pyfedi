@@ -46,7 +46,8 @@ from flask import g
 from unittest.mock import patch
 
 from app import db
-from app.models import Community, Site
+from app.activitypub.util import process_quote_boost
+from app.models import Community, Post, PostReply, QuoteAuthorization, Site
 from tests.factories import (make_community, make_instance, make_post,
                              make_post_reply, make_user)
 
@@ -98,6 +99,28 @@ def env(app, db_session):
 
 def _auth(env, stamp):
     return env.client.get('/quote_boost_auth', query_string={'stamp': stamp})
+
+
+def _approve(quoted, quoting_uri):
+    """The row process_quote_boost writes when it Accepts a QuoteRequest (R205)."""
+    if isinstance(quoted, Post):
+        db.session.add(QuoteAuthorization(post_id=quoted.id, quoting_uri=quoting_uri))
+    else:
+        db.session.add(QuoteAuthorization(post_reply_id=quoted.id, quoting_uri=quoting_uri))
+    db.session.commit()
+
+
+def _accept_a_quote_request(env, quoted_ap_id, quoting_uri):
+    """process_quote_boost, as the inbox calls it, with the delivery doubled."""
+    activity = {'type': 'QuoteRequest', 'id': f'https://{PEER}/activities/1',
+                'actor': env.stranger.ap_profile_id, 'object': quoted_ap_id,
+                'instrument': {'id': quoting_uri}}
+    env.stranger.instance.inbox = f'https://{PEER}/inbox'
+    db.session.commit()
+    with patch('app.activitypub.util.find_actor_or_create_cached', return_value=env.stranger), \
+            patch('app.activitypub.util.send_post_request') as send:
+        process_quote_boost(activity, quoted_ap_id, quoting_uri)
+    return send
 
 
 # --------------------------------------------------------------------------
@@ -157,6 +180,7 @@ class TestTheStamp:
         being cut at the last separator. The target is what this instance vouches
         for, so it is the half that must not shift."""
         remote = f'https://{PEER}/p/9;extra'
+        _approve(env.post, remote)
 
         response = _auth(env, f'{env.post.profile_id()};{remote}')
 
@@ -196,6 +220,7 @@ class TestWhatItAuthorises:
     def test_a_local_post_by_a_local_author_is_authorised(self, env):
         """The control. A repair that refused everything would pass every row above
         and break the feature."""
+        _approve(env.post, f'https://{PEER}/p/2')
         response = _auth(env, f'{env.post.profile_id()};https://{PEER}/p/2')
 
         assert response.status_code == 200
@@ -208,12 +233,14 @@ class TestWhatItAuthorises:
         """`process_quote_boost` falls back to `PostReply.get_by_ap_id`, so this does
         as well -- a quote of a comment is authorised the same way as a quote of a
         post."""
+        _approve(env.reply, f'https://{PEER}/p/2')
         response = _auth(env, f'{env.reply.profile_id()};https://{PEER}/p/2')
 
         assert response.status_code == 200
         assert response.get_json()['interactionTarget'] == env.reply.profile_id()
 
     def test_the_document_is_served_as_activitypub(self, env):
+        _approve(env.post, f'https://{PEER}/p/2')
         response = _auth(env, f'{env.post.profile_id()};https://{PEER}/p/2')
 
         assert response.headers['Content-Type'] == 'application/activity+json'
@@ -222,12 +249,63 @@ class TestWhatItAuthorises:
         """The `id` is this same URL, percent-encoded, so a consumer can tell two
         authorisations apart. It is built from the two halves rather than from the raw
         query string."""
+        _approve(env.post, f'https://{PEER}/p/2')
         response = _auth(env, f'{env.post.profile_id()};https://{PEER}/p/2')
 
         body = response.get_json()
         assert body['id'].startswith('https://test.piefed.local/quote_boost_auth?stamp=')
         assert '%3A%2F%2F' in body['id']
         assert body['attributedTo'] == 'https://test.piefed.local'
+
+
+class TestOnlyARecordedApprovalIsAuthorised:
+    """R205, owner ruling: the residual above is closed. process_quote_boost records each
+    QuoteRequest it Accepts -- the quoted post or reply, the quoting object's URI and when
+    -- and the endpoint answers only for a recorded one, 404 otherwise."""
+
+    def test_accepting_a_quote_request_records_the_approval(self, env):
+        _accept_a_quote_request(env, env.post.ap_id, f'https://{PEER}/p/2')
+
+        row = QuoteAuthorization.query.one()
+        assert (row.post_id, row.post_reply_id, row.quoting_uri) == (env.post.id, None, f'https://{PEER}/p/2')
+        assert row.approved_at is not None
+
+    def test_accepting_a_quote_of_a_reply_records_the_reply(self, env):
+        _accept_a_quote_request(env, env.reply.ap_id, f'https://{PEER}/p/2')
+
+        row = QuoteAuthorization.query.one()
+        assert (row.post_id, row.post_reply_id) == (None, env.reply.id)
+
+    def test_accepting_the_same_request_twice_records_it_once(self, env):
+        _accept_a_quote_request(env, env.post.ap_id, f'https://{PEER}/p/2')
+        _accept_a_quote_request(env, env.post.ap_id, f'https://{PEER}/p/2')
+
+        assert QuoteAuthorization.query.count() == 1
+
+    def test_a_refused_request_records_nothing(self, env):
+        _accept_a_quote_request(env, env.remote_post.ap_id, f'https://{PEER}/p/2')
+
+        assert QuoteAuthorization.query.count() == 0
+
+    def test_an_accepted_request_is_then_authorised(self, env):
+        _accept_a_quote_request(env, env.post.ap_id, f'https://{PEER}/p/2')
+
+        assert _auth(env, f'{env.post.profile_id()};https://{PEER}/p/2').status_code == 200
+
+    def test_a_quote_nobody_approved_is_a_404(self, env):
+        """The residual: a real local post by a local author, named beside a quoting
+        object this instance never accepted a request from."""
+        assert _auth(env, f'{env.post.profile_id()};https://{PEER}/p/2').status_code == 404
+
+    def test_an_approval_for_another_quoting_object_does_not_carry_over(self, env):
+        _approve(env.post, f'https://{PEER}/p/3')
+
+        assert _auth(env, f'{env.post.profile_id()};https://{PEER}/p/2').status_code == 404
+
+    def test_an_approval_of_the_post_does_not_cover_its_reply(self, env):
+        _approve(env.post, f'https://{PEER}/p/2')
+
+        assert _auth(env, f'{env.reply.profile_id()};https://{PEER}/p/2').status_code == 404
 
 
 def test_the_endpoint_asks_the_same_question_process_quote_boost_asks():
