@@ -115,8 +115,7 @@ def admin_home():
                 f"last run at {cron_task.last_run.strftime('%Y-%m-%d %H:%M UTC') if cron_task.last_run else 'never'})")
     if overdue_tasks:
         tasks_str = ", ".join(overdue_tasks)
-        message = f"Some cron tasks have not been run recently: {tasks_str}"
-        flash(_(message), 'warning')
+        flash(_('Some cron tasks have not been run recently: %(tasks)s', tasks=tasks_str), 'warning')  # D910
 
     return render_template('admin/home.html', title=_('Admin'), load1=load1, load5=load5, load15=load15,
                            num_cores=num_cores, disk_usage=disk_usage,
