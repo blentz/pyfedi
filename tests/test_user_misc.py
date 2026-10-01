@@ -15,11 +15,14 @@ from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
+from flask import render_template
+from flask_login import login_user
 
 from app import db
-from app.constants import POST_STATUS_SCHEDULED
-from app.models import (Community, Feed, FeedMember, Instance, Post, PostVote,
-                        Site, User, UserFollower, read_posts)
+from app.constants import NOTIF_USER, POST_STATUS_SCHEDULED
+from app.models import (Community, Feed, FeedMember, Instance,
+                        NotificationSubscription, Post, PostVote, Site, User,
+                        UserFollower, read_posts)
 from app.utils import utcnow
 from tests.factories import (grant_permission, make_community,
                              make_community_member, make_instance, make_post,
@@ -919,6 +922,32 @@ def test_toggling_notifications_for_an_unknown_user_is_a_404(app, env):
                            data={'csrf_token': token})
 
     assert response.status_code == 404
+
+
+def test_toggling_notifications_for_a_user_by_get_is_refused(app, env):
+    """GET residue, fixed (owner ruling, the same as the post bells). The
+    profile bell toggled a subscription through `subscribe_user` on a bare GET,
+    which login_required never CSRF-checks, so any page could subscribe or
+    unsubscribe a signed-in user. It is POST-only now, and the bell is a form."""
+    client, viewer, other, community = env
+
+    assert client.get(f'/user/{other.id}/notification').status_code == 405
+    assert client.post(f'/user/{other.id}/notification').status_code == 400
+    assert NotificationSubscription.query.filter_by(
+        user_id=viewer.id, entity_id=other.id, type=NOTIF_USER).count() == 0
+
+
+def test_the_profile_bell_is_a_form_carrying_the_token(app, env):
+    client, viewer, other, community = env
+
+    with app.test_request_context('/'):
+        login_user(viewer)
+        bell = render_template('user/_notification_toggle.html', user=other)
+
+    assert f'<form method="post" action="/user/{other.id}/notification"' in bell
+    assert f'hx-post="/user/{other.id}/notification"' in bell
+    assert 'name="csrf_token"' in bell
+    assert 'href=' not in bell
 
 
 @pytest.mark.parametrize('sort', ['oldest', 'old'])

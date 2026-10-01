@@ -72,10 +72,6 @@ KNOWN_GET_MUTATORS = {
     'community.community_wiki_revert_revision',
     'topic.topic_notification',
     'user.notification_goto', 'user.notification_delete',
-    # Found once helpers in app/shared/ were derived rather than listed: the
-    # bell on a profile toggles a subscription to that user through
-    # `subscribe_user` on a GET. Not yet ruled on.
-    'user.user_notification',
 }
 
 MUTATIONS = ('db.session.add(', 'db.session.delete(', 'db.session.commit()',
@@ -214,7 +210,11 @@ def test_the_routes_this_campaign_fixed_are_not_in_the_set():
                      'user.notifications_all_read',
                      # Owner ruling: joining a feed, missed by the hand-kept
                      # MUTATING_HELPERS because join_feed was not on it.
-                     'feed.subscribe'):
+                     'feed.subscribe',
+                     # Owner ruling (GET residue), found once helpers in
+                     # app/shared/ were derived: the profile bell toggled a
+                     # subscription through `subscribe_user` on a bare GET.
+                     'user.user_notification'):
         assert endpoint not in found, (
             f'{endpoint} mutates on a GET again; it was fixed once already')
 
