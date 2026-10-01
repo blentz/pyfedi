@@ -23,6 +23,8 @@ kills one test per disjunct. Any change or mutation of this function must
 target app.activitypub.util, or patch the name as bound on activitypub_routes.
 """
 
+import pytest
+
 from app import db
 from app.activitypub import routes as activitypub_routes
 from tests.factories import (make_community, make_local_feed, make_site, make_user,
@@ -153,6 +155,29 @@ def test_a_local_community_is_resolved_by_its_profile_id(app, db_session, monkey
 
     assert response.status_code == 200
     assert response.json['preferredUsername'] == 'books'
+
+
+@pytest.mark.parametrize('path, canonical', [('/c/BOOKS', 'https://test.piefed.local/c/books'),
+                                             ('/f/NEWS', 'https://test.piefed.local/f/news'),
+                                             ('/u/ALICE', 'https://test.piefed.local/u/alice')])
+def test_a_mixed_case_profile_request_gets_the_canonical_id_and_username(
+        app, db_session, monkeypatch, path, canonical):
+    """D159, fixed. The lookups are case-insensitive, but community_profile and
+    feed_profile built `id` (and all three `preferredUsername`) from the
+    request path, so /c/BOOKS advertised an actor that is not the stored one.
+    They now come from the resolved row.
+    """
+    site, instance = seed_actors()
+    make_community(name='books', host='test.piefed.local')
+    make_local_feed('news', public=True)
+    make_user(instance, 'alice', local=True)
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, path, accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['id'] == canonical
+    assert response.json['preferredUsername'] == canonical.rsplit('/', 1)[1]
 
 
 def test_a_local_community_with_a_non_null_ap_id_is_not_found(app, db_session, monkeypatch):
