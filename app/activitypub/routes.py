@@ -2779,10 +2779,10 @@ def process_chat(user, store_ap_json, core_activity, session):
             return True
         else:
             if not isinstance(core_activity['object'].get('content'), str):
-                log_incoming_ap(id, APLOG_CHATMESSAGE, APLOG_FAILURE, saved_json, 'ChatMessage has no content')
+                log_incoming_ap(id, APLOG_CHATMESSAGE, APLOG_FAILURE, saved_json, f"{core_activity['object']['type']} has no content")
                 return True
             if not isinstance(core_activity['object'].get('id'), str):
-                log_incoming_ap(id, APLOG_CHATMESSAGE, APLOG_FAILURE, saved_json, 'ChatMessage has no id')
+                log_incoming_ap(id, APLOG_CHATMESSAGE, APLOG_FAILURE, saved_json, f"{core_activity['object']['type']} has no id")
                 return True
             blocked_phrases_list = blocked_phrases()
             if core_activity['object']['content']:

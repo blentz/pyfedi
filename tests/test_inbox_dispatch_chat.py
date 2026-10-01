@@ -357,6 +357,24 @@ def test_a_handled_chat_stops_the_arm_from_treating_it_as_content(app, db_sessio
     assert db_session.query(ChatMessage).filter_by(ap_id='https://peer.example/pm/1').one()
 
 
+def test_a_content_less_page_reaching_process_chat_is_logged_as_a_page(app, db_session, monkeypatch):
+    """D130, fixed. A link-style Page with no content, addressed to a local
+    user with no community, reaches process_chat through the arm's fallback
+    and was logged as 'ChatMessage has no content'. The message now names
+    the object type that arrived.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair()
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: None)
+
+    activity = inbox_activity(sender, activity_type='Create',
+                              object={'type': 'Page', 'to': recipient.ap_profile_id,
+                                      'id': 'https://peer.example/post/1'})
+    dispatch(activity)
+
+    assert ActivityPubLog.query.one().exception_message == 'Page has no content'
+
+
 def test_an_unhandled_chat_lets_the_arm_continue_to_the_domain_check(app, db_session, monkeypatch):
     """The mirror: `process_chat` returns FALSE (no resolvable recipient), so the
     arm does NOT stop and goes on to `ensure_domains_match`. Together with the
