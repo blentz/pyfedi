@@ -432,6 +432,8 @@ def user_profile(actor):
                 resp = jsonify('')
                 resp.content_type = 'application/activity+json'
                 return resp
+            elif (user.deleted or user.banned) and current_user.is_anonymous:
+                abort(404)  # what show_profile answers the same GET
             else:
                 return ''
         if is_activitypub_request():
