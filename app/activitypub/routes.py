@@ -385,6 +385,9 @@ def user_profile(actor):
     actor = actor.strip()
 
     if '@' in actor:
+        # don't provide activitypub info for remote users
+        if is_activitypub_request():
+            abort(400)
         user: User = User.query.filter_by(ap_id=actor.lower()).first()
     else:
         # deleted and banned local users are not served here, matching the
