@@ -64,7 +64,8 @@ def a_keypair() -> tuple[str, str]:
 
 
 def make_user(instance, name: str, local: bool = False, with_keys: bool = False) -> User:
-    """A local user has ap_id None; a remote user has a full actor URI.
+    """A local user has ap_id None; a remote user has a full actor URI and its
+    instance's domain as ap_domain, as find_actor_or_create stores it.
 
     with_keys gives the user a real RSA keypair, from the session pool above.
     Off by default because almost no test needs one -- but a user that SENDS
@@ -83,6 +84,7 @@ def make_user(instance, name: str, local: bool = False, with_keys: bool = False)
         private_key=private_key,
         public_key=public_key,
         ap_id=None if local else f'{name}@{instance.domain}',
+        ap_domain=None if local else instance.domain,
         ap_profile_id=None if local else f'https://{instance.domain}/users/{name}',
         ap_public_url=None if local else f'https://{instance.domain}/users/{name}',
         ap_inbox_url=None if local else f'https://{instance.domain}/users/{name}/inbox',

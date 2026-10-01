@@ -153,8 +153,6 @@ class TestHowAnActorIsAddressed:
         somebody, so the host has to be THEIRS -- naming this instance instead would address an
         account that does not exist."""
         remote = make_user(env.baseline.instance_remote, 'faraway')
-        remote.ap_domain = 'remote.piefed.test'
-        db.session.commit()
 
         assert remote.mention_tag() == '@faraway@remote.piefed.test'
 

@@ -1108,6 +1108,27 @@ def pytest_runtest_call(item):
                 log.write(item.nodeid.split('::', 1)[0] + '\n')
 
 
+def pytest_configure(config):
+    """Plain `-n N` honours the grouping below, not just run_tests.sh.
+
+    xdist turns `-n` without `--dist` into `--dist load`, which ignores every
+    `xdist_group` mark, so the shared-static modules (test_utils_security.py,
+    test_admin_federation.py, the upload modules) ran on several workers at once
+    and saw -- and deleted -- each other's files under app/static. A `--dist`
+    the caller named is left alone. A worker re-reads the command line rather
+    than this process's options, and decides on its own whether to tag node ids
+    with their group (`config.option.loadgroup`), so it is told the same here.
+    """
+    named = any(argument == '-d' or argument.startswith('--dist')
+                for argument in config.invocation_params.args)
+    if named:
+        return
+    if hasattr(config, 'workerinput'):
+        config.option.loadgroup = True
+    elif getattr(config.option, 'dist', 'no') == 'load':
+        config.option.dist = 'loadgroup'
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
     """Group every test by its module, and the static-touching modules together.
