@@ -49,9 +49,10 @@ legacy-bcrypt rehash, which passes `revoke_sessions=False`.
 That covers every genuine password change EXCEPT the offline `lemmy-import`
 CLI command, which writes `password_hash` directly rather than through
 `set_password()`: `app/cli.py:377` (new-user construction) is harmless
-because the column's `default=utcnow` covers a fresh row, but
+because the column's `default=utcnow` covers a fresh row, and
 `app/cli.py:360` (overwriting an existing row's hash during a re-import)
-is not stamped at all. An earlier count of "eight password-changing sites"
+now stamps `password_updated_at` itself -- see
+`test_every_direct_password_hash_write_also_stamps_the_rotation`. An earlier count of "eight password-changing sites"
 included this line among the stampers; it does not belong there. Re-derived
 mechanically rather than by hand: `grep -rn '\\.set_password(' app/` finds
 nine callers, of which eight pass the default `revoke_sessions=True` (and so
@@ -72,6 +73,8 @@ build the JWT with `jwt.encode` directly -- `_encode_token_with_iat` mirrors
 secret, same algorithm) except for the `iat`/`exp` values being varied
 explicitly instead of `int(time())`.
 """
+import ast
+import pathlib
 import uuid
 from datetime import datetime, timezone
 from time import time
@@ -596,6 +599,37 @@ class TestAPasswordResetRevokesExistingApiTokens:
         # ...and the stamp was left alone, so the token still works.
         assert user.password_updated_at == SAFE_PASSWORD_UPDATED_AT
         assert authorise_api_user(f'Bearer {token}') == user.id
+
+
+def test_every_direct_password_hash_write_also_stamps_the_rotation():
+    """U-lemmy-import-password, fixed: `lemmy-import` overwrote an EXISTING
+    user's `password_hash` directly, without set_password()'s stamp, so API
+    tokens that user already held survived the re-import. It now stamps
+    `password_updated_at` beside the write, as set_password() would.
+
+    The command needs a live Lemmy database, so the row is a source ratchet:
+    every `<x>.password_hash = ...` in app/ outside set_password() must have
+    `<x>.password_updated_at = ...` in the same block. A `User(password_hash=...)`
+    construction is not collected -- a fresh row's column default stamps it.
+    """
+    app_root = pathlib.Path(__file__).resolve().parent.parent / 'app'
+    unstamped = []
+    for path in sorted(app_root.rglob('*.py')):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == 'set_password':
+                continue
+            for body in (getattr(node, field, None) for field in ('body', 'orelse', 'finalbody')):
+                if not isinstance(body, list):
+                    continue
+                targets = {(ast.unparse(t.value), t.attr)
+                           for stmt in body if isinstance(stmt, ast.Assign)
+                           for t in stmt.targets if isinstance(t, ast.Attribute)}
+                for owner, attr in targets:
+                    if attr == 'password_hash' and (owner, 'password_updated_at') not in targets:
+                        unstamped.append(f'{path.relative_to(app_root.parent)}: {owner}.password_hash')
+
+    assert unstamped == []
 
 
 class TestAuthoriseApiUserJwtValidationFailures:

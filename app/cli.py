@@ -359,6 +359,8 @@ def register(app):
                         if row.password_encrypted:
                             existing_user.email = row.email
                             existing_user.password_hash = row.password_encrypted
+                            # set_password()'s stamp: tokens issued before this credential change are refused
+                            existing_user.password_updated_at = utcnow()
                             existing_user.private_key = row.private_key
                             existing_user.ap_id = None
                             existing_user.verified = row.email_verified if row.email_verified else False
