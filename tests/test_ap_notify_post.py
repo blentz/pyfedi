@@ -33,6 +33,7 @@ sub-projects 14 and 15 needed.
 on and assert the message EXACTLY -- a substring can match a different guard's
 row.
 """
+import contextlib
 import json
 
 import pytest
@@ -2058,3 +2059,45 @@ def test_a_failing_recipient_mid_fan_out_rolls_back_only_that_recipient(app, db_
     db.session.refresh(broken)
     assert notified.unread_notifications == 8
     assert broken.unread_notifications == INT_MAX
+
+
+class _RecordingLockDouble:
+    """An `app.redis_client` double whose `.lock(...)` records its key and
+    returns a no-op context manager."""
+
+    def __init__(self):
+        self.keys = []
+
+    def lock(self, key, *args, **kwargs):
+        self.keys.append(key)
+        return contextlib.nullcontext()
+
+
+def test_every_arm_increments_the_unread_counter_under_the_users_lock(app, db_session, monkeypatch):
+    """D279, fixed: the four arms did `user.unread_notifications += 1` with no
+    lock, where notify_about_post_reply takes `lock:user:<id>` around the same
+    read-modify-write, so two posts fanning out to one recipient could lose an
+    increment. Each arm now takes that lock."""
+    community, post, author = _seed_scenario()
+    instance = _peer_instance()
+    by_user = make_user(instance, 'user_subscriber', local=True)
+    by_community = make_user(instance, 'community_subscriber', local=True)
+    by_topic = make_user(instance, 'topic_subscriber', local=True)
+    by_feed = make_user(instance, 'feed_subscriber', local=True)
+    topic = _seed_topic(community)
+    feed = _seed_feed(community, instance, name='afeed', feed_id=8, title='A Feed')
+    _subscribe(by_user, author.id, NOTIF_USER)
+    _subscribe(by_community, community.id, NOTIF_COMMUNITY)
+    _subscribe(by_topic, topic.id, NOTIF_TOPIC)
+    _subscribe(by_feed, feed.id, NOTIF_FEED)
+    db.session.commit()
+    double = _RecordingLockDouble()
+    monkeypatch.setattr('app.redis_client', double)
+
+    notify_about_post_task(post.id)
+
+    assert double.keys == [f'lock:user:{by_user.id}', f'lock:user:{by_community.id}',
+                           f'lock:user:{by_topic.id}', f'lock:user:{by_feed.id}']
+    for subscriber in (by_user, by_community, by_topic, by_feed):
+        db.session.refresh(subscriber)
+        assert subscriber.unread_notifications == 1
