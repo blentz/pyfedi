@@ -25,11 +25,10 @@ Two entries in that baseline are unconditional in effect rather than in form,
 and both were checked against the source rather than assumed:
 
   inbox      reached through `activity_json['endpoints']['sharedInbox'] if
-             'endpoints' in activity_json else activity_json['inbox']`, whose
-             else-arm has no further fallback (unlike the Person branch's,
-             which ends in `else ''`, and unlike the Group branch's, which was
-             given that same tail). A document carrying neither key is refused
-             by the branch's except KeyError. Pinned by TestInboxResolution.
+             'endpoints' in activity_json else activity_json['inbox'] if
+             'inbox' in activity_json else ''`. It used to have no '' tail
+             (D29, fixed); it stays in the baseline so the plain-inbox arm is
+             the default. Pinned by TestInboxResolution.
   following  read unconditionally by the get_request that fetches the feed's
              /following collection, which runs BEFORE the Feed() call, and
              refused there by a handler of its own. Pinned by
@@ -94,7 +93,7 @@ The nine conditional expressions are all inside the Feed() constructor call:
     'followers' in activity_json     -> ap_followers_url, else None
     'following' in activity_json     -> ap_following_url, else None
     'endpoints' in activity_json     -> ap_inbox_url from endpoints.sharedInbox,
-                                        else activity_json['inbox']
+                                        else activity_json['inbox'], else ''
 
 and twenty-nine `if` statements (the two excluded above are not in this list):
 
@@ -165,10 +164,9 @@ to record the defect can be traced back to it:
   1. FIXED, and so no longer a finding: the Feed branch had no `except
      KeyError` at all. It now has two, one on the /following fetch and one on
      the Feed() call, and a malformed document is refused with None instead of
-     raising. What remains of the asymmetry is the inbox expression, which
-     still has no empty-string fallback where Person's and Group's both do, so
-     a document with neither 'endpoints' nor 'inbox' is refused here and
-     accepted there. TestRequiredFieldsMissing and TestInboxResolution.
+     raising. The inbox expression's missing empty-string fallback, the last
+     of that asymmetry, is fixed too (D29). TestRequiredFieldsMissing and
+     TestInboxResolution.
   2. FIXED, and so no longer a finding: `owner_users[0].id` used to be
      unguarded. An owners collection that does not return 200, or returns 200
      with an empty orderedItems, raised IndexError there; an entry
@@ -944,7 +942,7 @@ class TestRequiredFieldsMissing:
       - the get_request that fetches the /following collection, which reads
         activity_json['following'] before the constructor runs;
       - the Feed() constructor itself, for preferredUsername, name, outbox,
-        publicKey and -- when 'endpoints' is absent -- inbox.
+        and publicKey.
 
     Each try holds exactly that one statement, which is what keeps the
     committing calls out of them: find_actor_or_create, in the owners loop and
@@ -1080,16 +1078,13 @@ class TestRequiredFieldsMissing:
 
 class TestInboxResolution:
     """`ap_inbox_url = activity_json['endpoints']['sharedInbox'] if 'endpoints'
-    in activity_json else activity_json['inbox']`.
+    in activity_json else activity_json['inbox'] if 'inbox' in activity_json
+    else ''`.
 
-    The else arm has NO further fallback, unlike the Person/Service branch's,
-    which ends `else activity_json['inbox'] if 'inbox' in activity_json else
-    ''` -- and unlike the Group branch's, which was given that same tail. A
-    Feed document carrying neither key is therefore refused outright by the
-    branch's except KeyError, where the same document on either of the other
-    two branches stores an empty string and yields a row. That asymmetry is
-    still open, reported and not fixed, and it is why 'inbox' is in
-    peer_actor_json's Feed baseline.
+    D29, fixed: the else arm used to have no further fallback, so a Feed
+    document carrying neither key was refused by the branch's except KeyError
+    where the Person/Service and Group branches stored an empty string. The
+    Feed branch now ends in the same '' tail as the other two.
 
     Mutation that fails test_shared_inbox_wins_when_endpoints_is_present:
     reordering the expression to try 'inbox' first.
@@ -1108,16 +1103,15 @@ class TestInboxResolution:
         feed = actor_json_to_model(_owned_feed(), '~news', PEER)
         assert feed.ap_inbox_url == f'{_feed_id()}/inbox'
 
-    def test_neither_endpoints_nor_inbox_is_refused(
+    def test_neither_endpoints_nor_inbox_stores_an_empty_inbox(
             self, app, db_session, http_mock):
-        """The missing fallback makes this a KeyError inside the constructor,
-        which the branch's handler turns into a refusal: no Feed comes back and
-        no Feed row is written. On the Person and Group branches the same
-        document is accepted with an empty ap_inbox_url."""
+        """D29, fixed: accepted with an empty ap_inbox_url, as the Person and
+        Group branches accept the same document."""
         _peer_with_one_owner(http_mock)
         document = _owned_feed(omit=('inbox',))
-        assert actor_json_to_model(document, '~news', PEER) is None
-        assert db.session.query(Feed).count() == 0
+        feed = actor_json_to_model(document, '~news', PEER)
+        assert feed is not None
+        assert feed.ap_inbox_url == ''
 
 
 class TestApIdFromAddress:
