@@ -934,7 +934,6 @@ def report_post(post: Post, input, src, auth=None):
     if src == SRC_API:
         reporter_user = authorise_api_user(auth, return_type='model')
         suspect_user = User.query.filter_by(id=post.user_id).one()
-        source_instance = Instance.query.filter_by(id=post.instance_id).one()
         reason = input['reason']
         description = input['description']
         notify_admins = (any(x in reason.lower() for x in ['minor abuse', 'doxing']) or
@@ -944,11 +943,13 @@ def report_post(post: Post, input, src, auth=None):
     else:
         reporter_user = current_user
         suspect_user = db.session.get(User, post.user_id)
-        source_instance = db.session.get(Instance, suspect_user.instance_id)
         reason = input.reasons_to_string(input.reasons.data)
         description = input.description.data
         notify_admins = ('5' in input.reasons.data or '6' in input.reasons.data or ('17' in input.reasons.data and post.community.instance.software.lower() != 'piefed'))
         report_remote = input.report_remote.data
+
+    # both arms name the author's instance, which a moved post's own instance_id no longer is
+    source_instance = db.session.get(Instance, suspect_user.instance_id) if suspect_user.instance_id else None
 
     if post.community.is_local() and post.community.un_moderated:
         notify_admins = True
@@ -958,8 +959,8 @@ def report_post(post: Post, input, src, auth=None):
         'suspect_post_id': post.id,
         'suspect_user_id': post.user_id,
         'suspect_user_user_name': suspect_user.ap_id if suspect_user.ap_id else suspect_user.user_name,
-        'source_instance_id': source_instance.id,
-        'source_instance_domain': source_instance.domain,
+        'source_instance_id': source_instance.id if source_instance else None,
+        'source_instance_domain': source_instance.domain if source_instance else None,
         'reporter_id': reporter_user.id,
         'reporter_user_name': reporter_user.user_name,
         'orig_post_title': post.title,
