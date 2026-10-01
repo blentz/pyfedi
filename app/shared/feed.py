@@ -149,7 +149,8 @@ def leave_feed(feed: int | Feed, src, auth=None, bulk_leave=False):
         # the row behind locks the user out of ever rejoining this feed. The web
         # twin deletes it alongside the membership: app/feed/routes.py:630.
         db.session.query(FeedJoinRequest).filter_by(user_id=user_id, feed_id=feed_id).delete()
-        feed.subscriptions_count -= 1
+        if feed.subscriptions_count:  # D710: floor and NULL guard
+            feed.subscriptions_count -= 1
         db.session.commit()
 
         user = db.session.get(User, user_id)

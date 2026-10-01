@@ -316,6 +316,23 @@ def test_unsubscribing_leaves_each_community_through_the_shared_function(app, db
     assert db.session.get(Feed, feed.id).subscriptions_count == 1
 
 
+def test_unsubscribing_never_drives_the_feeds_counter_negative(app, db_session):
+    """D710, fixed: `subscriptions_count -= 1` had no floor, so a count that
+    had drifted to 0 went to -1. It now stops at 0, as leave_feed's does."""
+    instance, owner, member = _seed()
+    feed, community = _subscribed_feed_with_community(owner, member)
+    feed.subscriptions_count = 0
+    db.session.commit()
+
+    with app.test_client() as client:
+        login(client, member)
+        with patch('app.feed.routes.leave_community'):
+            client.get(f'/feed/{feed.name}/unsubscribe')
+
+    assert FeedMember.query.filter_by(user_id=member.id, feed_id=feed.id).count() == 0
+    assert db.session.get(Feed, feed.id).subscriptions_count == 0
+
+
 def test_unsubscribing_leaves_alone_a_community_the_user_joined_themselves(app, db_session):
     """D673's guard, which the repaired route inherits: a community the user
     joined on their own -- joined_via_feed False -- is not left when the feed

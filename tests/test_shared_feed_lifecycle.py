@@ -683,6 +683,23 @@ def test_leave_feed_refuses_the_owner_on_the_web_path_without_raising(app, db_se
     assert db.session.get(Feed, s.feed.id).subscriptions_count == 7
 
 
+def test_leave_feed_never_drives_the_feeds_counter_negative(app, db_session):
+    """D710, fixed: `subscriptions_count -= 1` had no floor, so a count that
+    had drifted to 0 went to -1. It now stops at 0, as the web route's does."""
+    s = _seed()
+    make_feed_member(s.member, s.feed)
+    s.member.feed_auto_leave = False
+    s.feed.subscriptions_count = 0
+    db.session.commit()
+
+    with web_ctx(app, s.member):
+        with patch('app.shared.feed.task_selector'):
+            leave_feed(s.feed, SRC_WEB)
+
+    assert FeedMember.query.filter_by(user_id=s.member.id, feed_id=s.feed.id).count() == 0
+    assert db.session.get(Feed, s.feed.id).subscriptions_count == 0
+
+
 @pytest.mark.parametrize('src', [SRC_API, SRC_WEB])
 def test_leave_feed_by_a_non_member_is_an_idempotent_success(app, db_session, src):
     """N2, fixed: the membership lookup used .one(), so leaving a feed the

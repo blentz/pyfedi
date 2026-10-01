@@ -732,7 +732,8 @@ def feed_unsubscribe(actor):
                 if proceed:
                     db.session.query(FeedMember).filter_by(user_id=current_user.id, feed_id=feed.id).delete()
                     db.session.query(FeedJoinRequest).filter_by(user_id=current_user.id, feed_id=feed.id).delete()
-                    feed.subscriptions_count -= 1
+                    if feed.subscriptions_count:  # D710: floor and NULL guard
+                        feed.subscriptions_count -= 1
                     db.session.commit()
 
                     # Remove the account from each community in the feed
