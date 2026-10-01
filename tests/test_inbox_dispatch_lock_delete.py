@@ -115,7 +115,8 @@ fix, not this task's; fixed by Task 2 as D97 above.
     attribute would miss the subtree ever being touched.
 """
 
-from sqlalchemy import inspect as sa_inspect
+from sqlalchemy import event, inspect as sa_inspect
+from sqlalchemy.orm import Session
 
 from app import db
 from app.activitypub import routes as activitypub_routes
@@ -705,6 +706,10 @@ def test_a_delete_of_a_feed_removes_items_members_and_join_requests(app, db_sess
     FeedJoinRequest are seeded so each loop is proven to walk ALL of its
     rows, not just stop after one.
 
+    D85, fixed: each loop used to commit once per row, so the teardown took
+    N+M+K+1 commits and a failure part-way left it half done. It is now one
+    commit, plus the log row's own.
+
     Also confirms the Feed shape's early return (routes.py:1305, the
     `return` ending this branch): find_liked_object is monkeypatched to
     record calls, and none arrive, proving this shape never falls into the
@@ -736,7 +741,15 @@ def test_a_delete_of_a_feed_removes_items_members_and_join_requests(app, db_sess
     activity = inbox_activity(sender, activity_type='Delete',
                               object={'type': 'Feed', 'id': feed_url})
 
-    dispatch(activity)
+    commits = []
+    record_commit = commits.append
+    event.listen(Session, 'after_commit', record_commit)
+    try:
+        dispatch(activity)
+    finally:
+        event.remove(Session, 'after_commit', record_commit)
+
+    assert len(commits) == 2
 
     db.session.expire_all()
     assert FeedItem.query.filter_by(feed_id=feed_id).count() == 0
