@@ -1259,6 +1259,8 @@ def process_inbox_request(request_json, store_ap_json):
                                 session.delete(join_request)
                                 session.commit()
                                 log_incoming_ap(id, APLOG_REJECT, APLOG_SUCCESS, saved_json)
+                            else:
+                                log_incoming_ap(id, APLOG_REJECT, APLOG_IGNORED, saved_json, 'No follow request to reject')
                     return
 
                 # Create is new content. Update is often an edit, but Updates from Lemmy can also be new content
