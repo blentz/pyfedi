@@ -15,7 +15,9 @@ hell.cloud {
 	# FastAPI already serves the route at /notifications/stream (fastapi_server.py:46),
 	# so no path rewriting is needed. flush_interval -1 disables response buffering,
 	# without which server-sent events arrive in chunks instead of live.
-	handle /notifications/* {
+	# Match that one path only: Flask serves other /notifications/... routes (e.g.
+	# /notifications/all_read), and a wildcard sent them to FastAPI, which 404s.
+	handle /notifications/stream {
 		reverse_proxy piefednotifs:8000 {
 			flush_interval -1
 		}
