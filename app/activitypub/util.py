@@ -3003,6 +3003,10 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
             post_reply = PostReply.new(user, post, parent_comment, notify_author=False, body=body, body_html=body_html,
                                        language_id=language_id, distinguished=distinguished, answer=False, request_json=request_json,
                                        announce_id=announce_id)
+            # The object's own repliesEnabled, stored as update_post_reply_from_activity does (D269)
+            if 'repliesEnabled' in request_json['object']:
+                post_reply.replies_enabled = request_json['object']['repliesEnabled']
+                db.session.commit()
             # The replier's flair, applied only once the reply is accepted: a refused reply changes nothing.
             # A non-string flair is skipped, and both branches strip (D273)
             if isinstance(request_json['object'].get('flair'), str) and request_json['object']['flair'].strip():

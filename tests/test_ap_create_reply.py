@@ -861,6 +861,27 @@ def test_a_reply_to_a_locked_comment_is_refused(app, db_session, redis_lock_only
     assert log.exception_message == 'Parent comment is locked'
 
 
+def test_a_create_carrying_replies_enabled_false_stores_it(app, db_session, redis_lock_only_double):
+    """D269, fixed (owner ruling). The create path stores the object's own
+    `repliesEnabled`, as `update_post_reply_from_activity` does; it used to drop
+    it, so a peer could lock a comment on edit but not on creation.
+    """
+    community, post, replier = _seed_scenario()
+
+    reply = _create(community, post, replier, document=_reply_doc(content='hello', repliesEnabled=False))
+
+    assert reply.replies_enabled is False
+
+
+def test_a_create_without_replies_enabled_keeps_the_default(app, db_session, redis_lock_only_double):
+    """D269's contrary seed: an absent key leaves the column default, True."""
+    community, post, replier = _seed_scenario()
+
+    reply = _create(community, post, replier)
+
+    assert reply.replies_enabled is True
+
+
 # --- the inner `if post_id is None:` guard: unreachable ------------------
 #
 # `find_reply_parent` (app/activitypub/util.py:1987-2017) sets `post_id =
