@@ -2587,6 +2587,25 @@ def test_a_post_mention_of_a_blocked_sender_is_suppressed(app, db_session, redis
     assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
 
 
+def test_a_post_mention_of_its_own_author_is_suppressed(app, db_session, redis_lock_only_double):
+    """D254, fixed (owner ruling): the post Update's Mention arm applies the
+    reply path's suppression rules. Blocks it already had
+    (`test_a_post_mention_of_a_blocked_sender_is_suppressed`) and a second
+    notification for the same post it already skipped; what it lacked is the
+    reply path's "ignore a Mention of the post author", which on a post is the
+    author mentioning themselves. The ancestor-chain rules have no meaning on
+    a post, which has no comment chain.
+    """
+    post = _seed_post()
+    recipient = _seed_local_recipient()
+    post.user_id = recipient.id
+    db.session.commit()
+
+    update_post_from_activity(post, _update(name='t', content='x', tag=[_mention()], type='Note'))
+
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
+
+
 def test_a_non_community_tag_is_not_treated_as_flair(app, db_session, redis_lock_only_double):
     """The `json_tag['type'] == 'lemmy:CommunityTag'` comparison. A tag entry
     of a different type, even one carrying a `display_name` and `id` that
