@@ -2931,6 +2931,7 @@ def feed_profile(actor, feed_owner=None):
             resp = jsonify(actor_data)
             resp.content_type = 'application/activity+json'
             resp.headers.set('Cache-Control', 'public, max-age=5')
+            resp.headers.set('Vary', 'Accept')
             resp.headers.set('Link',
                              f'<https://{current_app.config["SERVER_NAME"]}/f/{actor}>; rel="alternate"; type="text/html"')
             return resp
