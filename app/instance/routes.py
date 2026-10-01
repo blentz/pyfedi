@@ -264,12 +264,14 @@ def instance_posts(instance_domain):
         abort(404)
 
     if current_user.is_anonymous:
+        # D806: Post.private is left out, as the search and domain listings do
         posts = Post.query.filter(Post.instance_id == instance.id, Post.from_bot == False, Post.nsfw == False,
-                                  Post.nsfl == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING)
+                                  Post.nsfl == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
+                                  Post.private == False)
         content_filters = {}
     else:
         posts = Post.query.filter(Post.instance_id == instance.id, Post.deleted == False,
-                                  Post.status > POST_STATUS_REVIEWING)
+                                  Post.status > POST_STATUS_REVIEWING, Post.private == False)
 
         if current_user.ignore_bots == 1:
             posts = posts.filter(Post.from_bot == False)
