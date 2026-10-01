@@ -1207,15 +1207,15 @@ def process_inbox_request(request_json, store_ap_json):
                         if join_request:
                             requestor_user = session.get(User, join_request.user_id)
                         if not requestor_user:
-                            log_incoming_ap(id, APLOG_ACCEPT, APLOG_FAILURE, saved_json, 'Could not find recipient of Reject')
+                            log_incoming_ap(id, APLOG_REJECT, APLOG_FAILURE, saved_json, 'Could not find recipient of Reject')
                             return
                     elif not isinstance(core_activity['object'], dict) or 'type' not in core_activity['object']:
-                        log_incoming_ap(id, APLOG_ACCEPT, APLOG_FAILURE, saved_json, 'Reject object is not an activity with a type')
+                        log_incoming_ap(id, APLOG_REJECT, APLOG_FAILURE, saved_json, 'Reject object is not an activity with a type')
                         return
                     elif core_activity['object']['type'] == 'Follow':
                         requestor_user = find_actor_or_create_cached(core_activity['object']['actor'])
                         if not requestor_user:
-                            log_incoming_ap(id, APLOG_ACCEPT, APLOG_FAILURE, saved_json, 'Could not find recipient of Reject')
+                            log_incoming_ap(id, APLOG_REJECT, APLOG_FAILURE, saved_json, 'Could not find recipient of Reject')
                             return
 
                     if requestor_user:
@@ -1230,7 +1230,7 @@ def process_inbox_request(request_json, store_ap_json):
                                 session.delete(existing_membership)
                                 cache.delete_memoized(community_membership, requestor_user, community)
                             session.commit()
-                            log_incoming_ap(id, APLOG_ACCEPT, APLOG_SUCCESS, saved_json)
+                            log_incoming_ap(id, APLOG_REJECT, APLOG_SUCCESS, saved_json)
                         elif feed:
                             join_request = session.query(FeedJoinRequest).filter_by(user_id=requestor_user.id, feed_id=feed.id).first()
                             if join_request:
@@ -1240,7 +1240,7 @@ def process_inbox_request(request_json, store_ap_json):
                                 session.delete(existing_membership)
                                 cache.delete_memoized(feed_membership, requestor_user, feed)
                             session.commit()
-                            log_incoming_ap(id, APLOG_ACCEPT, APLOG_SUCCESS, saved_json)
+                            log_incoming_ap(id, APLOG_REJECT, APLOG_SUCCESS, saved_json)
                         elif user:
                             join_request = session.query(UserFollowRequest).filter_by(user_id=requestor_user.id,
                                                                                       follow_id=user.id).first()
@@ -1254,7 +1254,7 @@ def process_inbox_request(request_json, store_ap_json):
                                     existing_follow.is_accepted = False
                                 session.delete(join_request)
                                 session.commit()
-                                log_incoming_ap(id, APLOG_ACCEPT, APLOG_SUCCESS, saved_json)
+                                log_incoming_ap(id, APLOG_REJECT, APLOG_SUCCESS, saved_json)
                     return
 
                 # Create is new content. Update is often an edit, but Updates from Lemmy can also be new content

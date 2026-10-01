@@ -36,7 +36,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app import db
 from app.activitypub import routes as activitypub_routes
-from app.constants import APLOG_ACCEPT
+from app.constants import APLOG_REJECT
 from app.models import ActivityPubLog, CommunityJoinRequest, CommunityMember, FeedJoinRequest, \
     FeedMember, UserFollower, UserFollowRequest, utcnow
 from tests.factories import inbox_activity, make_community, make_community_join_request, \
@@ -1024,14 +1024,12 @@ def test_an_agupe_string_reject_for_an_unknown_request_is_refused(app, db_sessio
     assert log.exception_message == 'Could not find recipient of Reject'
 
 
-# --- Step 6: the APLOG_ACCEPT mislabelling, :1154, :1168, :1178, :1189 ---
+# --- Step 6: the Reject arm's log label ---
 
-def test_a_reject_is_logged_as_an_accept(app, db_session, monkeypatch):
-    """routes.py:1154, :1168, :1178, :1189 all pass APLOG_ACCEPT, so every
-    Reject outcome is recorded in ActivityPubLog as an Accept. Assert the
-    stored activity_type is what APLOG_ACCEPT produces -- this test documents
-    the defect rather than the intent, and Task 9 registers it. Same class as
-    D63.
+def test_a_reject_is_logged_as_a_reject(app, db_session, monkeypatch):
+    """D68, fixed. Every log call in the Reject arm passed APLOG_ACCEPT, so
+    each Reject outcome was recorded as an Accept. They now pass
+    APLOG_REJECT, here on both a success and a refusal.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     community, instance = _seed_agupe_community()
@@ -1039,11 +1037,11 @@ def test_a_reject_is_logged_as_an_accept(app, db_session, monkeypatch):
     joiner = _stamp_remote_user(follower_instance, 'joiner')
     make_community_join_request(joiner, community)
 
-    activity = inbox_activity(community, activity_type='Reject',
-                              object=_follow_object(joiner.ap_profile_id))
+    dispatch(inbox_activity(community, activity_type='Reject',
+                            object=_follow_object(joiner.ap_profile_id)))
+    dispatch(inbox_activity(community, activity_type='Reject',
+                            object=_follow_object('not-a-resolvable-actor')))
 
-    dispatch(activity)
-
-    log = ActivityPubLog.query.one()
-    assert log.result == 'success'
-    assert log.activity_type == APLOG_ACCEPT[1]
+    logs = ActivityPubLog.query.order_by(ActivityPubLog.id).all()
+    assert [log.result for log in logs] == ['success', 'failure']
+    assert all(log.activity_type == APLOG_REJECT[1] for log in logs)
