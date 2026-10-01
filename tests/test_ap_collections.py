@@ -952,9 +952,12 @@ def test_a_banned_feed_has_no_collections(app, db_session, collection):
 def test_a_feed_moderators_collection_lists_its_owner(app, db_session):
     """Feeds have a single owner, wrapped in a list "in case we want to expand
     that in the future" per the source comment (app/activitypub/routes.py).
-    Rendered as `ap_profile_id`, where `community_moderators_route` renders
-    `public_url()`. The owner is given `ap_profile_id` and `ap_public_url` at
-    DIFFERENT values so this assertion can tell the two renderings apart.
+
+    D183, fixed (owner ruling): rendered as `public_url()`, as
+    `community_moderators_route` does, where it was the raw `ap_profile_id`
+    (a literal null for a local user without one). The owner is given
+    `ap_profile_id` and `ap_public_url` at DIFFERENT values so this assertion
+    can tell the two renderings apart.
     `make_user(local=True)` (tests/factories.py:58-60) leaves `ap_id`,
     `ap_profile_id` and `ap_public_url` all None, so without those two
     assignments the assertion would compare `[None] == [None]` and pass
@@ -986,8 +989,24 @@ def test_a_feed_moderators_collection_lists_its_owner(app, db_session):
     assert response.status_code == 200
     assert response.json['type'] == 'OrderedCollection'
     assert response.json['totalItems'] == 1
-    assert response.json['orderedItems'] == ['https://test.piefed.local/u/feedowner']
-    assert response.json['orderedItems'] != [owner.ap_public_url]
+    assert response.json['orderedItems'] == ['https://test.piefed.local/users/feedowner']
+    assert response.json['orderedItems'] != [owner.ap_profile_id]
+
+
+@pytest.mark.parametrize('collection', ['moderators', 'followers'])
+def test_a_feed_collection_id_is_the_canonical_lowercase_url(app, db_session, collection):
+    """D184, fixed (owner ruling): the feed lookup is case-insensitive, but
+    the `id` echoed the caller's casing, so `/f/NEWS/followers` answered with
+    an id that is not the collection's URL. It is now the lowercase one."""
+    site, instance = seed_actors()
+    feed = _seed_local_feed('news', public=True)
+    feed.user_id = make_user(instance, 'feedowner', local=True).id
+    db.session.commit()
+
+    response = collection_get(app, f'/f/NEWS/{collection}')
+
+    assert response.status_code == 200
+    assert response.json['id'] == f'https://test.piefed.local/f/news/{collection}'
 
 
 def test_an_unknown_feed_moderators_is_404(app, db_session):
@@ -1043,6 +1062,10 @@ def _feed_item(feed, community):
 def test_a_feed_outbox_lists_its_communities(app, db_session):
     """The ordinary path. `id` comes from `feed.ap_outbox_url`, which has no
     declared default -- `_seed_local_feed` sets it.
+
+    D185, fixed (owner ruling): an `OrderedCollection` with `orderedItems`,
+    like `community_outbox`, where it was a `Collection` with `items` -- two
+    endpoints named outbox, two document shapes.
     """
     seed_actors()
     feed = _seed_local_feed('news', public=True)
@@ -1053,7 +1076,7 @@ def test_a_feed_outbox_lists_its_communities(app, db_session):
 
     assert response.status_code == 200
     assert response.json['id'] == 'https://test.piefed.local/f/news/outbox'
-    assert response.json['type'] == 'Collection'
+    assert response.json['type'] == 'OrderedCollection'
 
 
 def test_an_unknown_feed_outbox_is_404(app, db_session):
@@ -1123,7 +1146,7 @@ def test_the_feed_outbox_withholds_local_only_communities(app, db_session):
     response = collection_get(app, '/f/news/outbox')
 
     assert response.status_code == 200
-    assert response.json['items'] == []
+    assert response.json['orderedItems'] == []
 
 
 def test_the_feed_outbox_lists_a_community_by_its_public_url(app, db_session):
@@ -1140,8 +1163,8 @@ def test_the_feed_outbox_lists_a_community_by_its_public_url(app, db_session):
 
     response = collection_get(app, '/f/news/outbox')
 
-    assert response.json['items'] == [community.public_url()]
-    assert response.json['items'] != [None]
+    assert response.json['orderedItems'] == [community.public_url()]
+    assert response.json['orderedItems'] != [None]
 
 
 def test_the_feed_outbox_malformed_join_is_masked_by_orm_deduplication(app, db_session):
@@ -1195,7 +1218,7 @@ def test_the_feed_outbox_malformed_join_is_masked_by_orm_deduplication(app, db_s
     assert len(feeds) == 2
     assert response.json['totalItems'] == 1
     assert response.json['totalItems'] != len(feeds)
-    assert response.json['items'] == [community.ap_public_url]
+    assert response.json['orderedItems'] == [community.ap_public_url]
 
 
 def test_a_feed_following_lists_its_communities(app, db_session):
