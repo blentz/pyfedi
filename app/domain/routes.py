@@ -235,7 +235,8 @@ def domain_block(domain_id):
 
     block_domain(domain.name, SRC_WEB)
 
-    flash(_('%(name)s blocked.', name=domain.name))
+    if domain.name.lower() != current_app.config['SERVER_NAME'].lower():  # D581: our own domain was refused, with its own flash
+        flash(_('%(name)s blocked.', name=domain.name))
 
     if request.headers.get("HX-Request"):
         resp = make_response()
