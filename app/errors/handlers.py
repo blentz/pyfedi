@@ -1,4 +1,4 @@
-from flask import render_template, request
+from flask import jsonify, render_template, request
 
 from app import db
 from app.errors import bp
@@ -40,6 +40,14 @@ def internal_error_500(error):
 def internal_error_401(error):
     db.session.rollback()
     return render_template('errors/401.html'), 401
+
+
+@bp.app_errorhandler(413)
+def request_too_large_413(error):
+    # R207: a body over MAX_CONTENT_LENGTH. Flask prefers this code handler to the API blueprints' own, so it answers them in their JSON shape
+    if request.path.startswith('/api/'):
+        return jsonify({"code": 413, "message": "request too large", "status": error.name}), 413
+    return render_template('errors/413.html'), 413
 
 
 @bp.app_errorhandler(429)
