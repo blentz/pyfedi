@@ -33,8 +33,6 @@ import datetime
 import uuid
 from typing import Dict, Optional, Tuple, Union
 
-from app.utils import get_request
-
 from .nntpserver import (
     NNTPServer,
     NNTPGroup,
@@ -47,6 +45,16 @@ from .nntpserver import (
     Article,
     NNTPArticleNotFound,
 )
+import logging
+from app.models import Post, PostReply, User, utcnow, Site, Community
+from sqlalchemy.orm import load_only
+from app.utils import communities_banned_from, blocked_or_banned_instances, filtered_out_communities, get_setting, \
+    get_request
+from sqlalchemy import func
+from app import db
+from flask import g
+from app.api.alpha.utils.reply import post_reply as _api_post_reply
+from app.api.alpha.utils.post import post_post as _api_post_post
 
 # How long (seconds) to cache a community's article index before rebuilding it.
 COMMUNITY_INDEX_TTL = 120
@@ -200,8 +208,6 @@ class CommunityArticleIndex:
 
     def _rebuild(self) -> None:
         with self._app.app_context():
-            from app.models import Post, PostReply
-            from sqlalchemy.orm import load_only
 
             posts = (
                 Post.query
@@ -278,7 +284,6 @@ class CommunityArticleIndex:
 
     def _fetch_info(self, kind: str, db_id: int, seq_num: int) -> ArticleInfo:
         with self._app.app_context():
-            from app.models import Post, PostReply
             if kind == 'post':
                 post = Post.query.filter_by(id=db_id, deleted=False).first()
                 if not post:
@@ -323,7 +328,6 @@ class IndexArticleDict:
 
     def _global_by_message_id(self, message_id: str) -> ArticleInfo:
         with self._app.app_context():
-            from app.models import Post, PostReply
             try:
                 kind, db_id = _parse_message_id(message_id)
             except ValueError:
@@ -471,12 +475,6 @@ class PieFedNNTPServer(NNTPServer):
         self, user_id: int, base: Dict[str, PieFedNNTPGroup]
     ) -> Dict[str, PieFedNNTPGroup]:
         with self._app.app_context():
-            from app.models import User
-            from app.utils import (
-                communities_banned_from,
-                blocked_or_banned_instances,
-                filtered_out_communities,
-            )
             user = db.session.get(User, user_id)
             if not user:
                 return base
@@ -522,9 +520,6 @@ class PieFedNNTPServer(NNTPServer):
 
     def auth_user(self, user: str, password: str) -> bytes:
         with self._app.app_context():
-            from sqlalchemy import func
-            from app.models import User, utcnow
-            from app import db
 
             u = (
                 db.session.query(User)
@@ -553,7 +548,6 @@ class PieFedNNTPServer(NNTPServer):
             return f"Bearer {u.encode_jwt_token()}".encode()
 
     def post(self, auth_token: Optional[bytes], lines: str) -> None:
-        import logging
         log = logging.getLogger('nntp.post')
 
         log.info("POST received, raw article length: %d chars", len(lines))
@@ -583,9 +577,6 @@ class PieFedNNTPServer(NNTPServer):
         auth = auth_token.decode()  # 'Bearer {jwt}'
 
         with self._app.app_context():
-            from flask import g
-            from app.models import Site
-            from app.utils import get_setting
             g.site = db.session.get(Site, 1)
             g.admin_ids = get_setting('admin_ids', [])
 
@@ -605,13 +596,11 @@ class PieFedNNTPServer(NNTPServer):
                 if kind == 'post':
                     post_id = db_id
                     parent_id = None
-                    from app.models import Post
                     parent_post = db.session.get(Post, post_id)
                     if not parent_post:
                         raise NNTPPostError(f"Parent post {post_id} not found")
                     community_id = parent_post.community_id
                 else:
-                    from app.models import PostReply
                     parent = db.session.get(PostReply, db_id)
                     if not parent:
                         log.error("Parent reply %d not found in DB", db_id)
@@ -622,7 +611,6 @@ class PieFedNNTPServer(NNTPServer):
 
                 log.info("Calling post_reply: post_id=%d parent_id=%s community_id=%d",
                          post_id, parent_id, community_id)
-                from app.api.alpha.utils.reply import post_reply as _api_post_reply
                 try:
                     _api_post_reply(auth, {
                         'body': body.strip(),
@@ -645,7 +633,6 @@ class PieFedNNTPServer(NNTPServer):
                 community_id = group._community_id
                 log.info("Resolved group %r to community_id=%d", group_name, community_id)
 
-                from app.api.alpha.utils.post import post_post as _api_post_post
                 try:
                     _api_post_post(auth, {
                         'title': subject,
@@ -690,9 +677,6 @@ class PieFedNNTPServer(NNTPServer):
 
     def _load_groups(self) -> Dict[str, PieFedNNTPGroup]:
         with self._app.app_context():
-            from app.models import Community, Post, PostReply
-            from sqlalchemy import func
-            from app import db
 
             post_counts = (
                 db.session.query(Post.community_id, func.count(Post.id).label('n'))
@@ -734,7 +718,6 @@ class PieFedNNTPServer(NNTPServer):
     def _fetch_body_and_headers(self, message_id: str) -> Tuple[str, Dict[str, str]]:
         """Return (body, extra_headers).  Image posts get a MIME multipart body."""
         with self._app.app_context():
-            from app.models import Post, PostReply
             try:
                 kind, db_id = _parse_message_id(message_id)
             except ValueError:
@@ -754,7 +737,6 @@ class PieFedNNTPServer(NNTPServer):
 
     def _build_image_body(self, post) -> Tuple[str, Dict[str, str]]:
         """Build a MIME multipart body with the post text and image attachment."""
-        import logging
         log = logging.getLogger('nntp.image')
 
         text = _post_body_text(post)

@@ -5,6 +5,7 @@ import datetime
 import itertools
 import enum
 import re
+import textwrap
 
 
 class NNTPAuthSetting(enum.Flag):
@@ -1007,7 +1008,6 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
         self.send_lines(ret)
 
     def help(self) -> None:
-        import textwrap
 
         wrapper = textwrap.TextWrapper(width=50, replace_whitespace=False)
 
