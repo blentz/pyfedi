@@ -58,6 +58,17 @@ from app.utils import render_template, permission_required, set_setting, get_set
 from app.admin import bp
 
 
+@cache.memoize(timeout=3600, cache_none=True)
+def translation_service_languages(endpoint, api_key):
+    # D909: the admin home's LibreTranslate status -- a 3 s timeout, and cached for an hour so a slow or failing
+    # endpoint costs at most one wait an hour rather than one per page load
+    try:
+        return LibreTranslateAPI(endpoint, api_key=api_key).languages(timeout=3)
+    except Exception as e:
+        current_app.logger.warning(f'LibreTranslate status check failed: {e}')
+        return None
+
+
 @bp.route('/', methods=['GET', 'POST'])
 @login_required
 def admin_home():
@@ -97,12 +108,8 @@ def admin_home():
 
     translation_languages = None
     if current_app.config['TRANSLATE_ENDPOINT']:
-        try:
-            lt = LibreTranslateAPI(current_app.config['TRANSLATE_ENDPOINT'],
-                                   api_key=current_app.config['TRANSLATE_KEY'])
-            translation_languages = lt.languages()
-        except Exception:
-            pass
+        translation_languages = translation_service_languages(current_app.config['TRANSLATE_ENDPOINT'],
+                                                              current_app.config['TRANSLATE_KEY'])
 
     # Check maintenance cron tasks were run recently, show a warning if not
     result = db.session.execute(select(CronJobLog)).scalars().all()
