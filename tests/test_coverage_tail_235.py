@@ -260,7 +260,8 @@ class TestAFeedsOwnEndpoints:
 
     @pytest.mark.parametrize('suffix', ['outbox', 'following'])
     def test_a_remote_handle_is_refused(self, env, suffix):
-        response = env.client.get(f'/f/somefeed@peer.example/{suffix}')
+        # as a peer asks: without the ActivityPub Accept header a browser is redirected (D177)
+        response = env.client.get(f'/f/somefeed@peer.example/{suffix}', headers=AP_HEADERS)
 
         assert response.status_code == 400
 
@@ -268,6 +269,6 @@ class TestAFeedsOwnEndpoints:
     def test_a_feed_this_instance_does_not_have_is_a_404(self, env, suffix):
         """The line below the refusal, and the reason it is a 404 rather than a crash:
         `feed.public` is read further down."""
-        response = env.client.get(f'/f/nosuchfeed/{suffix}')
+        response = env.client.get(f'/f/nosuchfeed/{suffix}', headers=AP_HEADERS)
 
         assert response.status_code == 404
