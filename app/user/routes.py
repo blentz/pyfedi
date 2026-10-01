@@ -838,7 +838,7 @@ def user_settings_import_export():
     return render_template('user/import_export.html', title=_('Import & Export'), form=form, user=current_user)
 
 
-@bp.route('/user/<int:user_id>/notification', methods=['GET', 'POST'])
+@bp.route('/user/<int:user_id>/notification', methods=['POST'])  # POST only: CSRF (GET residue)
 @login_required
 def user_notification(user_id: int):
     return subscribe_user(user_id, None, SRC_WEB)
