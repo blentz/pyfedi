@@ -791,27 +791,11 @@ def test_the_feed_document_carries_its_federation_contract(app, db_session, monk
     assert data['publicKey']['publicKeyPem'] == 'FEEDKEY'
 
 
-def test_the_feed_response_omits_the_vary_header(app, db_session, monkeypatch):
-    """PINS a defect. `community_profile` and `user_profile` both set
-    `Vary: Accept`; `feed_profile` does not.
-
-    The response body depends entirely on the Accept header -- this same URL
-    returns ActivityPub JSON or an HTML page. Without `Vary`, any shared cache
-    between this instance and its peers may store one and serve it for the
-    other: a browser gets the JSON, or a remote instance gets the HTML and
-    fails to parse an actor it needs to federate with.
-
-    Cache-Control and Link ARE set, so this is an omission in an otherwise
-    complete header block, not a block nobody wrote.
-
-    NOTE THE ASSERTION SHAPE. A `Vary` header is always present, because
-    Flask-Compress registers an `after_request` that appends `Accept-Encoding`
-    to every response (app/__init__.py -- `compress.init_app(app)`, and the
-    comment there explains the ordering). So the defect is NOT a missing Vary
-    header; it is that `Accept` is missing FROM it. `community_profile`, which
-    does set it, yields 'Accept, Accept-Encoding'; this endpoint yields
-    'Accept-Encoding' alone. Asserting `'Vary' not in response.headers` would
-    fail against a real response and prove nothing about the defect.
+def test_the_feed_response_varies_on_accept(app, db_session, monkeypatch):
+    """D161, fixed. The body depends entirely on the Accept header (ActivityPub
+    JSON or an HTML page), but feed_profile, unlike community_profile and
+    user_profile, did not set `Vary: Accept`, so a shared cache could serve
+    one for the other. Flask-Compress appends Accept-Encoding to every Vary.
     """
     seed_actors()
     make_local_feed('news', public=True)
@@ -822,8 +806,7 @@ def test_the_feed_response_omits_the_vary_header(app, db_session, monkeypatch):
     assert response.status_code == 200
     assert response.headers['Cache-Control'] == 'public, max-age=5'
     assert 'rel="alternate"' in response.headers['Link']
-    assert response.headers['Vary'] == 'Accept-Encoding'
-    assert 'Accept,' not in response.headers['Vary']
+    assert response.headers['Vary'] == 'Accept, Accept-Encoding'
 
 
 def test_a_local_feed_with_a_non_null_ap_id_is_not_found(app, db_session, monkeypatch):
@@ -1328,8 +1311,7 @@ def test_the_user_document_carries_its_federation_contract(app, db_session, monk
 def test_the_user_response_headers_are_set(app, db_session, monkeypatch):
     """Cache-Control, Vary and Link -- the user half of the same comparison
     test_the_community_response_headers_are_set makes for community_profile
-    above. `feed_profile` omits `Vary` entirely (registered as D161 in the
-    coverage-campaign findings doc).
+    above, and test_the_feed_response_varies_on_accept for feed_profile.
 
     Flask-Compress appends 'Accept-Encoding' to whatever `Vary` the route
     sets (see test_the_community_response_headers_are_set above), so the
