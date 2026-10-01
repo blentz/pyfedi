@@ -173,11 +173,12 @@ def chat_options(conversation_id):
 @login_required
 def chat_delete(conversation_id):
     conversation = db.session.get(Conversation, conversation_id) or abort(404)
-    if current_user.is_admin() or conversation.is_member(current_user):
-        Report.query.filter(Report.suspect_conversation_id == conversation.id).delete()
-        db.session.delete(conversation)
-        db.session.commit()
-        flash(_('Conversation deleted'))
+    if not (current_user.is_admin() or conversation.is_member(current_user)):
+        abort(403)  # D761: not a silent no-op that answers like a delete
+    Report.query.filter(Report.suspect_conversation_id == conversation.id).delete()
+    db.session.delete(conversation)
+    db.session.commit()
+    flash(_('Conversation deleted'))
     return redirect(url_for('chat.chat_home'))
 
 
