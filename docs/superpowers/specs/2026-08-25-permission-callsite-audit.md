@@ -17,6 +17,8 @@ guard still appears. Every row names the guard, or **NONE**.
 
 ## Status: found deliberately, deferred deliberately
 
+**RESOLVED 2026-10-01 (owner lifted the deferral).** Item 1 / F3 `resolve_object` requires authentication (`390b958f`). Item 2 / F11 poll voting is gated by `can_create_post_reply` on web, API and inbox (`f5f10da2`). Item 3 / F1 `create_resolved_object` applies the inbound-Create author gates (`1db0afcc`) and checks ownership on update (`fe13b0b6`). Item 4 / F2 `resolve_remote_post_from_search` applies the same gates (`dfdd961e`). Item 5 / F4 `retrieve_mods_and_backfill` requires the moderators collection on the community's host (`5bdc5935`) and gates backfilled authors (`af1d878f`). F5, F7, F10, F12 and F13 were fixed earlier (see the findings register's closing section). The text below is the original deferral record.
+
 The project owner has ruled on the unguarded paths below. The ruling is
 **defer**: they are to be evaluated after the coverage campaign's testing work
 lands, not fixed now.
