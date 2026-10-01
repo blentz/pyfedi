@@ -5047,6 +5047,8 @@ def verify_object_from_source(request_json) -> Tuple[Union[dict, None], Union[st
         object_request.close()
     elif object_request.status_code == 401:
         site = db.session.get(Site, 1)
+        if site is None:
+            return None, 'the object needs a signed fetch and there is no Site row to sign it'
         try:
             object_request = signed_get_request(uri, site.private_key, f"{current_app.config['SERVER_URL']}/actor#main-key")
         except httpx.HTTPError:
