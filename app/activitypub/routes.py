@@ -416,7 +416,7 @@ def user_profile(actor):
             actor_data = {"@context": default_context(),
                           "type": "Person" if not user.bot else "Service",
                           "id": user.public_url(),
-                          "preferredUsername": actor,
+                          "preferredUsername": user.user_name,
                           "name": user.title if user.title else user.user_name,
                           "inbox": f"{user.public_url()}/inbox",
                           "outbox": f"{user.public_url()}/outbox",
@@ -539,7 +539,8 @@ def community_profile(actor):
             abort(400)
         community: Community = Community.query.filter_by(ap_id=actor.lower(), banned=False).first()
     else:
-        profile_id = f"https://{current_app.config['SERVER_NAME']}/c/{actor.lower()}"
+        actor = actor.lower()  # the canonical name, so the document's id is the stored one whatever the caller's casing
+        profile_id = f"https://{current_app.config['SERVER_NAME']}/c/{actor}"
         community: Community = Community.query.filter_by(ap_profile_id=profile_id, ap_id=None, banned=False).first()
     if community is not None:
         if is_activitypub_request():
@@ -2864,7 +2865,8 @@ def feed_profile(actor, feed_owner=None):
             abort(400)
         feed: Feed = db.session.query(Feed).filter_by(ap_id=actor.lower(), banned=False).first()
     else:
-        feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None, banned=False).first()
+        actor = actor.lower()  # the canonical name, so the document's id is the stored one whatever the caller's casing
+        feed: Feed = db.session.query(Feed).filter_by(name=actor, ap_id=None, banned=False).first()
     if feed is not None:
         if is_activitypub_request():
             # check if feed is public, if not abort
