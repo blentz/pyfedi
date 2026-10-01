@@ -32,7 +32,7 @@ from app.models import Community, File, PostReply, Post, utcnow, CommunityMember
     language_from_ap, _as_url
 from app.utils import get_request, gibberish, ensure_directory_exists, ap_datetime, instance_banned, get_task_session, \
     store_files_in_s3, guess_mime_type, patch_db_session, instance_allowed, get_setting, scale_gif, theme_list, \
-    sanitize_svg
+    sanitize_svg, can_create_post, can_create_post_reply
 from sqlalchemy import func, desc, text
 import os
 
@@ -264,6 +264,10 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                                 continue
                             if user.is_local():
                                 continue
+                            if not can_create_post(user, community):  # PERM-3: the inbound Create gate
+                                current_app.logger.warning(f'Backfill of {community.ap_profile_id} skipped '
+                                                           f'{activity.get("id")}: author may not post')
+                                continue
                             if is_peertube or is_guppe:
                                 request_json = {'id': f"https://{server}/activities/create/{gibberish(15)}", 'object': activity}
                             elif is_wordpress:
@@ -310,6 +314,10 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                                                     continue
                                                 reply_author = find_actor_or_create(reply_data['attributedTo'], retry=True)
                                                 if not reply_author:
+                                                    continue
+                                                if not can_create_post_reply(reply_author, community):  # PERM-3
+                                                    current_app.logger.warning(f'Backfill of {community.ap_profile_id} skipped '
+                                                                               f'{reply_data["id"]}: author may not reply')
                                                     continue
                                                 
                                                 # Extract reply content

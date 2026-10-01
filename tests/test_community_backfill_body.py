@@ -66,6 +66,7 @@ def env(app, api_baseline):
     community.ap_profile_id = 'https://remote.test/c/faraway'
     author = make_user(api_baseline.instance_remote, 'someone')
     author.ap_id = 'someone@remote.test'
+    author.ap_domain = 'remote.test'  # an inbound author's host, which the Create gate reads (PERM-3)
     author.ap_profile_id = AUTHOR
     author.ap_public_url = AUTHOR
     db.session.commit()
