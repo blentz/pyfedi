@@ -643,6 +643,41 @@ class TestLemmyCustomEmoji:
         assert rows[0].category == 'blobs'
         assert rows[0].aliases == 'happy'
 
+    def test_the_emoji_refresh_does_not_commit_once_per_emoji(self, db_session, monkeypatch):
+        """D386, fixed: the refresh committed inside the loop over a list the
+        remote server controls, one commit per emoji. The sweep's commit count
+        no longer grows with the list; all three rows still land."""
+        from sqlalchemy.orm import Session as _Session
+
+        def commits_for(emojis):
+            db.session.query(Emoji).delete()
+            db.session.commit()
+            count = [0]
+
+            def _make():
+                session = _Session(bind=db.engine)
+                real_commit = session.commit
+
+                def commit():
+                    count[0] += 1
+                    return real_commit()
+
+                session.commit = commit
+                return session
+
+            monkeypatch.setattr('app.shared.tasks.maintenance.get_task_session', _make)
+            _lemmy(monkeypatch, _site_payload(emojis=emojis))
+            monitor_healthy_instances()
+            return count[0]
+
+        instance = _seed_instance('peer.example', software='lemmy')
+        one = commits_for([_emoji('a')])
+        three = commits_for([_emoji('a'), _emoji('b'), _emoji('c')])
+
+        assert three == one
+        db.session.expire_all()
+        assert db.session.query(Emoji).filter_by(instance_id=instance.id).count() == 3
+
     def test_a_banned_domain_skips_the_emoji_refresh(self, db_session, monkeypatch):
         """`:672`'s false arm. Admin roles are still reconciled above it --
         only the emoji block is skipped -- so the oracle is the absence of an
