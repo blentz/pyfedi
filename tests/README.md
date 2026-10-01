@@ -2485,7 +2485,10 @@ matter what blocks are seeded. A test that seeds an `InstanceBlock`, omits the
 `User-Agent`, and asserts 200 will pass, and will go on passing if the guard is
 deleted entirely. Send `'Test (+https://blocked.example)'` and assert **401** to
 measure the guard; send a plain agent only when the *absence* of the block is
-the thing under test, and say so in the docstring. Registered as D194.
+the thing under test, and say so in the docstring. Registered as D194; since
+its fix the guards call `signed_requestor_domain()`, which prefers the keyId host
+of a valid HTTP signature from an already-stored actor, so an UNSIGNED request
+still falls back to the `User-Agent` exactly as above.
 
 **52. `find_instance_id()` CREATES AND COMMITS a sparse `Instance` row for a
 domain it does not know, so a test that names a domain it did not seed silently
