@@ -640,6 +640,26 @@ class TestMonitorHealthyInstances:
         assert reloaded.dormant is True
         assert reloaded.start_trying_again is not None
 
+    def test_the_thirteenth_failure_in_the_3xx_node_arm_ends_gone_forever(self, db_session, monkeypatch):
+        """D382, fixed: the `elif ... >= 300` arm checked only the dormant
+        threshold, so a peer whose nodeinfo kept answering non-200 never
+        reached gone_forever where the except and no-href arms did. It now
+        applies the same `> 12` check. Seeded at 12, ending at 13."""
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(503)))
+        instance = _seed_instance('thirteenth.example')
+        instance.nodeinfo_href = 'https://thirteenth.example/nodeinfo/2.0'
+        instance.failures = 12
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='thirteenth.example').first()
+        assert reloaded.failures == 13
+        assert reloaded.gone_forever is True
+
     def test_the_fifth_failure_does_not(self, db_session, monkeypatch):
         """The other side of the same boundary (`:609`). Seeded at 4, ending at 5."""
         monkeypatch.setattr(
