@@ -297,6 +297,38 @@ def test_a_follow_of_a_remote_user_is_stored_pending(app, db_session):
     assert announcer_is_followed(s.target.id) is True
 
 
+@pytest.mark.parametrize('is_accepted', [True, None])
+def test_following_a_remote_user_already_followed_is_a_no_op(app, db_session, is_accepted):
+    """R265 residue (ruling: repeated actions are idempotent). Following a
+    user already followed, accepted or pending, added a second row and sent
+    another Follow. It now changes nothing and dispatches nothing."""
+    s = _seed_followers(target_local=False)
+    db.session.add(UserFollower(local_user_id=s.follower.id, remote_user_id=s.target.id,
+                                is_inward=False, is_accepted=is_accepted))
+    db.session.commit()
+
+    with _recording_task_selector() as calls:
+        follow_user(s.target.id, SRC_API, bearer(s.follower))
+
+    rows = UserFollower.query.filter_by(local_user_id=s.follower.id, remote_user_id=s.target.id).all()
+    assert [row.is_accepted for row in rows] == [is_accepted]
+    assert calls == []
+
+
+def test_following_a_local_user_already_followed_changes_no_counts(app, db_session):
+    """R265 residue: the repeat follow neither adds a row nor counts twice."""
+    s = _seed_followers(target_local=True)
+    follow_user(s.target.id, SRC_API, bearer(s.follower))
+    following, followers = s.follower.num_following, s.target.num_followers
+    notifications = Notification.query.filter_by(user_id=s.target.id).count()
+
+    follow_user(s.target.id, SRC_API, bearer(s.follower))
+
+    assert UserFollower.query.filter_by(local_user_id=s.follower.id, remote_user_id=s.target.id).count() == 1
+    assert (s.follower.num_following, s.target.num_followers) == (following, followers)
+    assert Notification.query.filter_by(user_id=s.target.id).count() == notifications
+
+
 def test_following_again_after_a_refusal_replaces_the_refused_row(app, db_session):
     """R265 (owner ruling): a refused follow can be retried. The refused row
     is replaced by the new pending one rather than left beside it, where
