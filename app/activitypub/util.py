@@ -2522,6 +2522,7 @@ def delete_post_or_comment(deletor, to_delete, store_ap_json, request_json, reas
 
 
 def restore_post_or_comment(restorer, to_restore, store_ap_json, request_json, reason):
+    from app import redis_client
     saved_json = request_json if store_ap_json else None
     id = request_json['id']
     community = to_restore.community
@@ -2529,32 +2530,45 @@ def restore_post_or_comment(restorer, to_restore, store_ap_json, request_json, r
             (restorer.instance_id == to_restore.author.instance_id and restorer.is_instance_admin()) or
             community.is_moderator(restorer) or
             community.is_instance_admin(restorer)):
+        # The same locks delete_post_or_comment takes around the same counters (D202)
         if isinstance(to_restore, Post):
-            to_restore.deleted = False
-            to_restore.deleted_by = None
-            community.post_count += 1
-            adjust_domain_post_count(to_restore, 1)  # D1362
-            to_restore.author.post_count += 1
-            if to_restore.url:
-                to_restore.calculate_cross_posts()
-            db.session.commit()
+            with redis_client.lock(f"lock:post:{to_restore.id}", timeout=10, blocking_timeout=6):
+                to_restore.deleted = False
+                to_restore.deleted_by = None
+                if to_restore.url:
+                    to_restore.calculate_cross_posts()
+                db.session.commit()
+            with redis_client.lock(f"lock:community:{community.id}", timeout=10, blocking_timeout=6):
+                community.post_count += 1
+                adjust_domain_post_count(to_restore, 1)  # D1362
+            with redis_client.lock(f"lock:user:{to_restore.user_id}", timeout=10, blocking_timeout=6):
+                to_restore.author.post_count += 1
+                db.session.commit()
             if to_restore.author.id != restorer.id:
                 add_to_modlog('restore_post', actor=restorer, target_user=to_restore.author, reason=reason,
                               community=community, post=to_restore,
                               link_text=shorten_string(to_restore.title), link=f'post/{to_restore.id}')
 
         elif isinstance(to_restore, PostReply):
-            to_restore.deleted = False
-            to_restore.deleted_by = None
+            with redis_client.lock(f"lock:post_reply:{to_restore.id}", timeout=10, blocking_timeout=6):
+                to_restore.deleted = False
+                to_restore.deleted_by = None
+                if to_restore.path and len(to_restore.path) > 1:
+                    db.session.execute(text('update post_reply set child_count = child_count + 1 where id in :parents'),
+                                       {'parents': tuple(to_restore.path[:-1])})
+                db.session.commit()
+            with redis_client.lock(f"lock:user:{to_restore.user_id}", timeout=10, blocking_timeout=6):
+                to_restore.author.post_reply_count += 1
+                db.session.commit()
+                if not to_restore.author.bot:
+                    with redis_client.lock(f"lock:post:{to_restore.post_id}", timeout=10, blocking_timeout=6):
+                        to_restore.post.reply_count += 1
+                        to_restore.post.reply_count_cross_posted += 1
+                        db.session.commit()
             if not to_restore.author.bot:
-                to_restore.post.reply_count += 1
-                to_restore.post.reply_count_cross_posted += 1
-                community.post_reply_count += 1  # D1361, as in the delete above
-            to_restore.author.post_reply_count += 1
-            if to_restore.path and len(to_restore.path) > 1:
-                db.session.execute(text('update post_reply set child_count = child_count + 1 where id in :parents'),
-                                   {'parents': tuple(to_restore.path[:-1])})
-            db.session.commit()
+                with redis_client.lock(f"lock:community:{community.id}", timeout=10, blocking_timeout=6):
+                    community.post_reply_count += 1  # D1361, as in the delete above
+                    db.session.commit()
             if to_restore.author.id != restorer.id:
                 add_to_modlog('restore_post_reply', actor=restorer, target_user=to_restore.author, reason=reason,
                               community=community, post=to_restore.post, reply=to_restore,
