@@ -3123,6 +3123,7 @@ def notify_about_post(post: Post):
 
 @celery.task
 def notify_about_post_task(post_id):
+    from app import redis_client
     session = get_task_session()
     try:
         with patch_db_session(session):
@@ -3157,10 +3158,11 @@ def notify_about_post_task(post_id):
                                                     notif_type=NOTIF_USER,
                                                     subtype='new_post_from_followed_user',
                                                     targets=targets_data)
-                    session.add(new_notification)
-                    user = session.get(User, notify_id)
-                    user.unread_notifications += 1
-                    session.commit()
+                    with redis_client.lock(f"lock:user:{notify_id}", timeout=10, blocking_timeout=6):  # D279
+                        session.add(new_notification)
+                        user = session.get(User, notify_id)
+                        user.unread_notifications += 1
+                        session.commit()
                     notifications_sent_to.add(notify_id)
 
             # NOTIF_COMMUNITY
@@ -3180,10 +3182,11 @@ def notify_about_post_task(post_id):
                                                     notif_type=NOTIF_COMMUNITY,
                                                     subtype='new_post_in_followed_community',
                                                     targets=targets_data)
-                    session.add(new_notification)
-                    user = session.get(User, notify_id)
-                    user.unread_notifications += 1
-                    session.commit()
+                    with redis_client.lock(f"lock:user:{notify_id}", timeout=10, blocking_timeout=6):  # D279
+                        session.add(new_notification)
+                        user = session.get(User, notify_id)
+                        user.unread_notifications += 1
+                        session.commit()
                     notifications_sent_to.add(notify_id)
 
             # NOTIF_TOPIC    
@@ -3211,10 +3214,11 @@ def notify_about_post_task(post_id):
                                                     notif_type=NOTIF_TOPIC,
                                                     subtype='new_post_in_followed_topic',
                                                     targets=targets_data)
-                    session.add(new_notification)
-                    user = session.get(User, notify_id)
-                    user.unread_notifications += 1
-                    session.commit()
+                    with redis_client.lock(f"lock:user:{notify_id}", timeout=10, blocking_timeout=6):  # D279
+                        session.add(new_notification)
+                        user = session.get(User, notify_id)
+                        user.unread_notifications += 1
+                        session.commit()
                     notifications_sent_to.add(notify_id)
 
             # NOTIF_FEED
@@ -3245,10 +3249,11 @@ def notify_about_post_task(post_id):
                                                         notif_type=NOTIF_FEED,
                                                         subtype='new_post_in_followed_feed',
                                                         targets=targets_data)
-                        session.add(new_notification)
-                        user = session.get(User, notify_id)
-                        user.unread_notifications += 1
-                        session.commit()
+                        with redis_client.lock(f"lock:user:{notify_id}", timeout=10, blocking_timeout=6):  # D279
+                            session.add(new_notification)
+                            user = session.get(User, notify_id)
+                            user.unread_notifications += 1
+                            session.commit()
                         notifications_sent_to.add(notify_id)
     except Exception:
         session.rollback()
