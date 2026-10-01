@@ -242,7 +242,7 @@ class TestTheErrorHandler:
         monkeypatch.setitem(current_app.config, 'SENTRY_DSN',
                             'https://key@example.test/1')
         with patch('app.api.alpha.sentry_sdk.capture_exception') as captured:
-            handler(Exception('a genuine surprise'))
+            handler(RuntimeError('a genuine surprise'))
         captured.assert_called_once()
 
     def test_a_failed_validation_reaches_sentry_too(self, env, handler,
@@ -272,8 +272,11 @@ class TestTheErrorHandler:
         assert logged == []
 
     def test_anything_else_is(self, env, handler):
+        """D537, fixed: a bare `Exception` is a deliberate refusal and is logged
+        at info; only an internal error is logged as an exception."""
         with patch_logger() as logged:
-            handler(Exception('a genuine surprise'))
+            handler(Exception('access_denied'))
+            handler(RuntimeError('a genuine surprise'))
         assert logged == ['API exception']
 
 
