@@ -161,6 +161,48 @@ class TestAMembersRssToken:
         assert response.status_code == 404
 
 
+PAGES = {
+    'a community': ('/c/general', '/community/general/feed'),
+    'a user': ('/u/author', '/u/author/feed'),
+    'a tag': ('/tag/thetag', '/tag/thetag/feed'),
+    'a domain': ('/d/example.com', '/d/{domain_id}/feed'),
+    'a topic': ('/topic/thetopic', '/topic/thetopic.rss'),
+}
+
+
+class TestThePagesRssLinks:
+    """R219 residue, fixed (owner ruling): on a private instance the RSS link a
+    page renders for a logged-in member carries their RSS token, so the link
+    works in a reader without hand-editing. A public instance's links stay bare."""
+
+    def _page(self, app, seeded, name, private):
+        seeded.site.private_instance = private
+        seeded.author.rss_token = 'a-members-rss-token'
+        seeded.author.post_count = 1     # the user and domain pages link a feed only when there are posts
+        Domain.query.filter_by(name='example.com').one().post_count = 1
+        db.session.commit()
+        client = app.test_client()
+        with client.session_transaction() as session:
+            session['_user_id'] = str(seeded.author.id)
+            session['_fresh'] = True
+        response = client.get(PAGES[name][0])
+        assert response.status_code == 200
+        return response.get_data(as_text=True)
+
+    @pytest.mark.parametrize('name', list(PAGES))
+    def test_a_private_instances_rss_link_carries_the_members_token(self, app, seeded, name):
+        html = self._page(app, seeded, name, private=True)
+
+        domain_id = Domain.query.filter_by(name='example.com').one().id
+        assert PAGES[name][1].format(domain_id=domain_id) + '?token=a-members-rss-token"' in html
+
+    @pytest.mark.parametrize('name', list(PAGES))
+    def test_a_public_instances_rss_link_does_not(self, app, seeded, name):
+        html = self._page(app, seeded, name, private=False)
+
+        assert 'a-members-rss-token' not in html
+
+
 class TestAPublicInstance:
     @pytest.mark.parametrize('name', ['a community', 'a user', 'a tag', 'a domain',
                                       'a topic', 'a feed'])
