@@ -664,6 +664,43 @@ class TestTheCreateUpdateDispatch:
         assert result.id == PostReply.query.filter_by(ap_id=URI).one().id
 
 
+class TestAnUpdateMustComeFromTheOwner:
+    """PERM-3 residue A, owner ruling: the update branch rewrites a stored post or
+    reply only when the fetched document's author owns it, as the inbox Update
+    path checks `user.id == post.user_id`. A document on the same host naming a
+    different author is refused and the stored row is left as it was.
+    """
+
+    def test_a_post_owned_by_someone_else_is_not_rewritten(self, app, peer_author):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        owner = resolvable_remote_author(peer_author.instance, 'bob')
+        existing = make_post(community, owner, ap_id=URI, title='the old title', microblog=True)
+        old_body = existing.body_html
+        document = public_note()
+        document['content'] = 'the new body'
+        document['updated'] = PUBLISHED
+
+        result = resolved(document, community)
+
+        assert result is None
+        assert db.session.get(Post, existing.id).body_html == old_body
+
+    def test_a_reply_owned_by_someone_else_is_not_rewritten(self, app, peer_author):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        owner = resolvable_remote_author(peer_author.instance, 'bob')
+        post = parent_post(community, owner)
+        existing = make_post_reply(post, owner)
+        existing.ap_id = URI
+        db.session.commit()
+        old_body = existing.body
+        document = reply_note(updated=PUBLISHED, content='the new body')
+
+        result = resolved(document, community)
+
+        assert result is None
+        assert db.session.get(PostReply, existing.id).body == old_body
+
+
 class TestTheInReplyToSplit:
     """The branch turns on `'inReplyTo' in ... and ...['inReplyTo']`, so a
     PRESENT BUT FALSY inReplyTo takes the POST branch, not the reply branch.

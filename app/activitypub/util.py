@@ -4882,6 +4882,8 @@ def create_resolved_object(uri, post_data, uri_domain, community, announce_id, s
             if activity == 'update':
                 post_reply = PostReply.get_by_ap_id(uri)
                 if post_reply:
+                    if post_reply.user_id != user.id:  # PERM-3: only the owner edits, as an inbox Update
+                        return None
                     update_post_reply_from_activity(post_reply, request_json)
                 else:
                     activity = 'create'
@@ -4907,6 +4909,8 @@ def create_resolved_object(uri, post_data, uri_domain, community, announce_id, s
             if activity == 'update':
                 post = Post.get_by_ap_id(uri)
                 if post:
+                    if post.user_id != user.id:  # PERM-3, as for a reply above
+                        return None
                     update_post_from_activity(post, request_json)
                 else:
                     activity = 'create'
