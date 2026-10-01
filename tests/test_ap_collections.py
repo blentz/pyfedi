@@ -1007,6 +1007,23 @@ def test_a_feed_moderators_collection_lists_its_owner(app, db_session):
     assert response.json['orderedItems'] != [owner.ap_profile_id]
 
 
+def test_a_feed_with_no_owner_publishes_an_empty_moderators_collection(app, db_session):
+    """D170, fixed (owner ruling). `Feed.user_id` has no default, so a feed
+    whose owner was never set (or whose owner row is gone) made
+    `db.session.get(User, None)` return None and the loop raise
+    `AttributeError: 'NoneType' object has no attribute 'public_url'` -- a 500.
+    It now publishes an owner-less, empty collection."""
+    site, instance = seed_actors()
+    _seed_local_feed('news', public=True)
+
+    response = collection_get(app, '/f/news/moderators')
+
+    assert response.status_code == 200
+    assert response.json['type'] == 'OrderedCollection'
+    assert response.json['totalItems'] == 0
+    assert response.json['orderedItems'] == []
+
+
 @pytest.mark.parametrize('collection', ['moderators', 'followers'])
 def test_a_feed_collection_id_is_the_canonical_lowercase_url(app, db_session, collection):
     """D184, fixed (owner ruling): the feed lookup is case-insensitive, but
