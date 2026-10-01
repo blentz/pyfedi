@@ -2627,6 +2627,8 @@ def process_upvote(user, store_ap_json, request_json, announced):
             log_incoming_ap(id, APLOG_LIKE, APLOG_SUCCESS, saved_json)
             if not announced:
                 announce_activity_to_followers(liked.community, user, request_json, can_batch=True)
+        else:
+            log_incoming_ap(id, APLOG_LIKE, APLOG_IGNORED, saved_json, 'Cannot upvote this')
     else:
         log_incoming_ap(id, APLOG_LIKE, APLOG_IGNORED, saved_json, 'Cannot upvote this')
 
