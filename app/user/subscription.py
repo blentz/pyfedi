@@ -35,7 +35,7 @@ def choose_plan():
 @bp.route('/stripe_redirect/<plan>', methods=['GET'])
 @login_required
 def stripe_redirect(plan):
-    import stripe
+    import stripe  # lazy: stripe is slow to import (0.7s) and only billing uses it
     stripe.api_key = current_app.config['STRIPE_SECRET_KEY']
     if current_user.stripe_customer_id is None or current_user.stripe_customer_id == '':             # Stripe won't let us use both customer and email, so
         stripe_customer = None                              # only specify the email for new subscriptions
@@ -117,7 +117,7 @@ def user_from_reference(client_reference_id):
 
 @bp.route('/stripe_webhook', methods=['POST'])
 def stripe_webhook():
-    import stripe
+    import stripe  # lazy: stripe is slow to import (0.7s) and only billing uses it
     # inspired by https://stripe.com/docs/payments/checkout/fulfillment#webhooks
     # During development, run this in a terminal:
     # stripe listen --forward-to https://your_dev_url/stripe_webhook
@@ -183,7 +183,7 @@ def stripe_result(result):
 @bp.route('/plan_unsubscribe/<account_id>/<subscription>')
 @login_required
 def plan_unsubscribe(account_id, subscription):
-    import stripe
+    import stripe  # lazy: stripe is slow to import (0.7s) and only billing uses it
     if current_user.stripe_subscription_id is None:
         return render_template('generic_message.html', title=_('You are not donating'), message=_('There are no regular donations set to occur in the future.'))
     elif current_user.stripe_subscription_id == subscription:
