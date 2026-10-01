@@ -481,7 +481,9 @@ def test_edit_community_api_arm_reads_all_ten_keys_and_authorises_user(
     assert authorise_calls == [((auth,), {'return_type': 'model'})]
     # `:384`'s second positional argument is the user object itself; `:385`'s
     # and `:386`'s is `user.id`. Both are unwrapped to an id by the recorder.
-    assert acting_user_ids == [s.user.id, s.user.id, s.user.id]
+    # D641 added a fourth, community_membership_private, which the web route
+    # used to clear itself.
+    assert acting_user_ids == [s.user.id] * 4
     assert result is s.community
     assert s.community.title == 'API Title'
     assert s.community.description == raw_description
@@ -561,8 +563,8 @@ def test_edit_community_web_arm_reads_all_fields_and_converts_description(
     # `:317`'s `user = current_user`, observable on this path only through
     # `:384-386`. The recorder unwraps the LocalProxy to an id AT CALL TIME,
     # inside `web_ctx`'s request context, because the proxy is unbound by the
-    # time these assertions run.
-    assert acting_user_ids == [s.user.id, s.user.id, s.user.id]
+    # time these assertions run. D641 added a fourth (community_membership_private).
+    assert acting_user_ids == [s.user.id] * 4
     assert result is s.community
     assert calls == []
     assert s.community.title == 'Web Title'

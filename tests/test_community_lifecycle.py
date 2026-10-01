@@ -470,7 +470,7 @@ def _edit_payload(token, english, **overrides):
 
 def _edit(app, client, token, community, english, **overrides):
     with patch('app.community.routes.render_template', return_value='rendered') as render:
-        with patch('app.community.routes.task_selector'):
+        with patch('app.shared.community.task_selector'):
             response = client.post(url(app, 'community.community_edit', community_id=community.id),
                                    data=_edit_payload(token, english, **overrides),
                                    content_type='multipart/form-data')
@@ -569,6 +569,49 @@ def test_an_edit_saves_the_settings(app, owned_community, owner_client):
     assert updated.posting_warning == 'read the rules'
     assert (updated.nsfw, updated.restricted_to_mods, updated.new_mods_wanted) == \
         (True, True, True)
+
+
+def test_an_edit_saves_every_field_the_form_carries(app, owned_community,
+                                                   owner_client):
+    """D641 characterisation: pinned before the route was put through the
+    shared edit_community, and unchanged after. Every field the form carries,
+    the description rendered from what was typed with links in the same tab,
+    the rules and images left alone, the flash and the redirect."""
+    community, owner, ordinary, english = owned_community
+    client, token = owner_client
+    icon = File(source_url='https://example.com/icon.png', file_path='icon.png')
+    db.session.add(icon)
+    db.session.commit()
+    community.icon_id = icon.id
+    community.rules = 'stored rules'
+    community.invitations = 3
+    db.session.commit()
+
+    response, _render = _edit(app, client, token, community, english,
+                              title='Everything', description='see [here](https://example.com)',
+                              theme='dillo', ai_generated='y', local_only='y',
+                              question_answer='y', invitations='3', default_layout='masonry',
+                              default_post_type='discussion', downvote_accept_mode='2',
+                              post_url_type='post_id')
+
+    assert response.status_code == 302
+    assert response.headers['Location'].endswith('/c/general')
+    with client.session_transaction() as session:
+        assert ('message', 'Saved') in session['_flashes']
+    db.session.expire_all()
+    updated = db.session.get(Community, community.id)
+    assert updated.title == 'Everything'
+    assert updated.description == 'see [here](https://example.com)'
+    assert 'target="_blank"' not in updated.description_html
+    assert 'href="https://example.com"' in updated.description_html
+    assert (updated.theme, updated.ai_generated, updated.local_only,
+            updated.question_answer) == ('dillo', True, True, True)
+    assert (updated.default_layout, updated.default_post_type,
+            updated.downvote_accept_mode, updated.post_url_type) == \
+        ('masonry', 'discussion', 2, 'post_id')
+    assert (updated.private, updated.invitations) == (False, 0)
+    assert updated.rules == 'stored rules'
+    assert updated.icon_id == icon.id
 
 
 def test_making_a_community_private_forces_local_only(app, owned_community,
@@ -1052,7 +1095,7 @@ def test_replacing_an_image_removes_the_old_one(app, owned_community,
     old_id = old.id
 
     with patch.object(File, 'delete_from_disk') as delete_from_disk:
-        with patch(f'app.community.routes.{saver}', return_value=new):
+        with patch(f'app.shared.community.{saver}', return_value=new):
             _edit(app, client, token, community, english,
                   **{field: (io.BytesIO(b'bytes'), 'new.png')})
 
@@ -1079,7 +1122,7 @@ def test_an_upload_the_saver_rejects_leaves_the_old_image_alone(
     db.session.commit()
 
     with patch.object(File, 'delete_from_disk') as delete_from_disk:
-        with patch(f'app.community.routes.{saver}', return_value=None):
+        with patch(f'app.shared.community.{saver}', return_value=None):
             _edit(app, client, token, community, english,
                   **{field: (io.BytesIO(b'not an image'), 'new.png')})
 
@@ -1103,7 +1146,7 @@ def test_adding_a_first_image_deletes_nothing(app, owned_community,
     db.session.commit()
 
     with patch.object(File, 'delete_from_disk') as delete_from_disk:
-        with patch(f'app.community.routes.{saver}', return_value=new):
+        with patch(f'app.shared.community.{saver}', return_value=new):
             _edit(app, client, token, community, english,
                   **{field: (io.BytesIO(b'bytes'), 'new.png')})
 
@@ -1189,8 +1232,8 @@ def test_an_edit_federates_and_clears_the_membership_caches(app,
     client, token = owner_client
 
     with patch('app.community.routes.render_template', return_value='rendered'):
-        with patch('app.community.routes.task_selector') as task:
-            with patch('app.community.routes.cache.delete_memoized') as delete_memoized:
+        with patch('app.shared.community.task_selector') as task:
+            with patch('app.shared.community.cache.delete_memoized') as delete_memoized:
                 client.post(url(app, 'community.community_edit',
                                 community_id=community.id),
                             data=_edit_payload(token, english, title='Renamed'),

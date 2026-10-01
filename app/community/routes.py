@@ -45,7 +45,7 @@ from app.models import User, Community, CommunityMember, CommunityJoinRequest, C
 from app.community import bp
 from app.post.util import tags_to_string
 from app.shared.community import invite_with_chat, invite_with_email, subscribe_community, add_mod_to_community, \
-    remove_mod_from_community, get_comm_flair_list, favorite_community
+    remove_mod_from_community, get_comm_flair_list, favorite_community, edit_community
 from app.utils import back, get_setting, render_template, markdown_to_html, validation_required, can_moderate, \
     shorten_string, gibberish, community_membership, \
     request_etag_matches, return_304, can_upvote, can_downvote, user_filters_posts, \
@@ -1384,7 +1384,6 @@ def community_edit(community_id: int):
     if current_user.banned:
         return show_ban_message()
     community = db.session.get(Community, community_id) or abort(404)
-    old_topic_id = community.topic_id if community.topic_id else None
     if can_moderate(community, current_user):
         form = EditCommunityForm()
         form.topic.choices = topics_for_form(0)
@@ -1395,91 +1394,10 @@ def community_edit(community_id: int):
         if g.site.enable_nsfl is False:
             form.nsfl.render_kw = {'disabled': True}
         if form.validate_on_submit():
-            if form.private.data:
-                form.local_only.data = True
-                community.show_popular = False
-                community.show_all = False
-                community.private = True
-            else:
-                form.invitations.data = 0
-                community.private = False
-            community.title = form.title.data
-            community.description = piefed_markdown_to_lemmy_markdown(form.description.data)
-            community.description_html = markdown_to_html(form.description.data, anchors_new_tab=False)
-            community.theme = form.theme.data
-            community.posting_warning = sanitise_posting_warning(form.posting_warning.data)  # D1377
-            community.nsfw = form.nsfw.data
-            community.nsfl = form.nsfl.data and g.site.enable_nsfl is not False  # R203: the site's switch wins
-            community.ai_generated = form.ai_generated.data
-            community.local_only = form.local_only.data
-            community.invitations = form.invitations.data
-            community.restricted_to_mods = form.restricted_to_mods.data
-            community.new_mods_wanted = form.new_mods_wanted.data
-            # `form.topic.data and ...`, not a bare comparison. `topic` is a
-            # SelectField(coerce=int, validators=[Optional()]) fed from
-            # topics_for_form(0), so on an instance that has defined no topics
-            # the field has no choices, nothing is submitted, and data is None
-            # -- and `None > 0` is `TypeError: '>' not supported between
-            # instances of 'NoneType' and 'int'`. Every community edit on such
-            # an instance was a 500.
-            community.topic_id = form.topic.data if form.topic.data and form.topic.data > 0 else None
-            community.default_layout = form.default_layout.data
-            community.default_post_type = form.default_post_type.data
-            community.downvote_accept_mode = form.downvote_accept_mode.data
-            community.post_url_type = form.post_url_type.data
-            community.question_answer = form.question_answer.data
-
-            icon_file = request.files.get('icon_file')
-            if icon_file and icon_file.filename != '':
-                # Store old icon ID before uploading new one
-                old_icon_id = community.icon_id
-                file = save_icon_file(icon_file)
-                if file:
-                    community.icon = file
-                    # Only delete old icon after new one is successfully saved
-                    if old_icon_id:
-                        old_icon_file = db.session.get(File, old_icon_id)
-                        db.session.delete(old_icon_file)
-                        old_icon_file.delete_from_disk()
-            banner_file = request.files.get('banner_file')
-            if banner_file and banner_file.filename != '':
-                # Store old banner ID before uploading new one
-                old_banner_id = community.image_id
-                file = save_banner_file(banner_file)
-                if file:
-                    community.image = file
-                    cache.delete_memoized(Community.header_image, community)
-                    # Only delete old banner after new one is successfully saved
-                    if old_banner_id:
-                        old_banner_file = db.session.get(File, old_banner_id)
-                        db.session.delete(old_banner_file)
-                        old_banner_file.delete_from_disk()
-
-            # Languages of the community
-            db.session.execute(text('DELETE FROM "community_language" WHERE community_id = :community_id'),
-                               {'community_id': community_id})
-            for language_choice in form.languages.data:
-                community.languages.append(db.session.get(Language, language_choice))
-            # Always include the undetermined language, so posts with no language will be accepted
-            community.languages.append(Language.query.filter(Language.code == 'und').first())
-            db.session.commit()
-
-            if community.topic_id != old_topic_id:
-                if community.topic_id:
-                    community.topic.num_communities = community.topic.communities.count()
-                if old_topic_id:
-                    topic = db.session.get(Topic, old_topic_id)
-                    if topic:
-                        topic.num_communities = topic.communities.count()
-                db.session.commit()
+            # D641: one implementation, shared with the API.
+            edit_community(form, community, SRC_WEB, uploaded_icon_file=request.files.get('icon_file'),
+                           uploaded_banner_file=request.files.get('banner_file'))
             flash(_('Saved'))
-
-            cache.delete_memoized(moderating_communities, current_user.id)
-            cache.delete_memoized(joined_communities, current_user.id)
-            cache.delete_memoized(community_membership_private, current_user.id)
-
-            # just borrow federation code for now (replacing most of this function with a call to edit_community in app.shared.community can be done "later")
-            task_selector('edit_community', user_id=current_user.id, community_id=community.id)
             return redirect(url_for('activitypub.community_profile',
                                     actor=community.ap_id if community.ap_id is not None else community.name))
         elif request.method == 'GET':

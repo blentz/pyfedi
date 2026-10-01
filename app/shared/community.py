@@ -15,7 +15,7 @@ from app.activitypub.signature import RsaKeys
 from app.activitypub.util import make_image_sizes, normalise_actor_string
 from app.chat.util import send_message
 from app.community.forms import EditCommunityForm
-from app.community.util import community_theme_list
+from app.community.util import community_theme_list, save_banner_file, save_icon_file
 from app.constants import *
 from app.email import send_email
 from app.models import CommunityBlock, CommunityMember, Notification, NotificationSubscription, User, Conversation, \
@@ -28,7 +28,7 @@ from app.utils import authorise_api_user, blocked_communities, shorten_string, m
     instance_banned, community_membership, joined_communities, moderating_communities, is_image_url, \
     communities_banned_from, piefed_markdown_to_lemmy_markdown, community_moderators, add_to_modlog, \
     get_recipient_language, moderating_communities_ids, moderating_communities_ids_all_users, gibberish, \
-    favorite_communities, render_template, can_moderate, sanitise_posting_warning
+    favorite_communities, render_template, can_moderate, sanitise_posting_warning, community_membership_private
 
 
 # function can be shared between WEB and API (only API calls it for now)
@@ -354,7 +354,32 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
         settings = {key: input[key] for key in COMMUNITY_SETTINGS if key in input}
         _refuse_community_settings_the_form_would_not_offer(settings)
 
+        description_html = markdown_to_html(description)
+
+    elif not from_scratch:
+        # The web edit form (community_edit). D641: the route used to set all
+        # of this itself.
+        title = input.title.data
+        description = piefed_markdown_to_lemmy_markdown(input.description.data)
+        description_html = markdown_to_html(input.description.data, anchors_new_tab=False)
+        rules = community.rules
+        icon_url = banner_url = None
+        nsfw = input.nsfw.data
+        restricted_to_mods = input.restricted_to_mods.data
+        local_only = input.local_only.data
+        discussion_languages = input.languages.data
+        question_answer = input.question_answer.data
+        settings = {'private': input.private.data, 'topic_id': input.topic.data, 'theme': input.theme.data,
+                    'posting_warning': input.posting_warning.data, 'nsfl': input.nsfl.data,
+                    'ai_generated': input.ai_generated.data, 'invitations': input.invitations.data,
+                    'new_mods_wanted': input.new_mods_wanted.data, 'default_layout': input.default_layout.data,
+                    'default_post_type': input.default_post_type.data,
+                    'downvote_accept_mode': input.downvote_accept_mode.data,
+                    'post_url_type': input.post_url_type.data}
+        user = current_user
+
     else:
+        # make_community's create form.
         title = input.community_name.data
         description = piefed_markdown_to_lemmy_markdown(input.description.data)
         rules = input.rules.data
@@ -366,6 +391,7 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
         discussion_languages = input.languages.data
         question_answer = input.question_answer.data
         user = current_user
+        description_html = markdown_to_html(description)
 
     icon_url_changed = banner_url_changed = False
 
@@ -373,28 +399,31 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
         if not can_moderate(community, user):
             raise Exception('incorrect_login')
 
-        if community.icon_id and icon_url != community.icon.source_url:
-            if icon_url != community.icon.medium_url():
+        # The API names its images by url; the web edit form replaces one only
+        # when a file is uploaded, below.
+        if src == SRC_API:
+            if community.icon_id and icon_url != community.icon.source_url:
+                if icon_url != community.icon.medium_url():
+                    icon_url_changed = True
+                    remove_file = db.session.get(File, community.icon_id)
+                    community.icon_id = None
+                    if remove_file:
+                        remove_file.delete_from_disk()
+                        db.session.delete(remove_file)
+            if not community.icon_id:
                 icon_url_changed = True
-                remove_file = db.session.get(File, community.icon_id)
-                community.icon_id = None
-                if remove_file:
-                    remove_file.delete_from_disk()
-                    db.session.delete(remove_file)
-        if not community.icon_id:
-            icon_url_changed = True
-        if community.image_id and banner_url != community.image.source_url:
-            if banner_url != community.image.medium_url():
-                banner_url_changed = True
-                remove_file = db.session.get(File, community.image_id)
-                community.image_id = None
-                if remove_file:
-                    remove_file.delete_from_disk()
-                    db.session.delete(remove_file)
+            if community.image_id and banner_url != community.image.source_url:
+                if banner_url != community.image.medium_url():
+                    banner_url_changed = True
+                    remove_file = db.session.get(File, community.image_id)
+                    community.image_id = None
+                    if remove_file:
+                        remove_file.delete_from_disk()
+                        db.session.delete(remove_file)
+                    cache.delete_memoized(Community.header_image, community)
+            if not community.image_id:
                 cache.delete_memoized(Community.header_image, community)
-        if not community.image_id:
-            cache.delete_memoized(Community.header_image, community)
-            banner_url_changed = True
+                banner_url_changed = True
         db.session.execute(text('DELETE FROM "community_language" WHERE community_id = :community_id'),
                            {'community_id': community.id})
 
@@ -440,11 +469,35 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
     community.description = description
     community.rules = rules
     community.nsfw = nsfw
-    community.description_html = markdown_to_html(description)
+    community.description_html = description_html
     community.restricted_to_mods = restricted_to_mods
     community.local_only = local_only
     community.question_answer = question_answer
     db.session.commit()
+
+    if src != SRC_API and not from_scratch:
+        # The web edit form: an uploaded image replaces the old one, which is
+        # deleted only once the new one has been saved.
+        if uploaded_icon_file and uploaded_icon_file.filename != '':
+            old_icon_id = community.icon_id
+            file = save_icon_file(uploaded_icon_file)
+            if file:
+                community.icon = file
+                if old_icon_id:
+                    old_icon_file = db.session.get(File, old_icon_id)
+                    db.session.delete(old_icon_file)
+                    old_icon_file.delete_from_disk()
+        if uploaded_banner_file and uploaded_banner_file.filename != '':
+            old_banner_id = community.image_id
+            file = save_banner_file(uploaded_banner_file)
+            if file:
+                community.image = file
+                cache.delete_memoized(Community.header_image, community)
+                if old_banner_id:
+                    old_banner_file = db.session.get(File, old_banner_id)
+                    db.session.delete(old_banner_file)
+                    old_banner_file.delete_from_disk()
+        db.session.commit()
 
     if community.topic_id != old_topic_id:
         if community.topic_id:
@@ -471,6 +524,7 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
     cache.delete_memoized(community_membership, user, community)
     cache.delete_memoized(joined_communities, user.id)
     cache.delete_memoized(moderating_communities, user.id)
+    cache.delete_memoized(community_membership_private, user.id)
 
     if from_scratch:
         return community
