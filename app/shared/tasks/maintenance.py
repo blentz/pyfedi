@@ -922,6 +922,7 @@ def archive_old_posts():
     """Archive old posts to reduce DB size"""
     if current_app.config['ARCHIVE_POSTS'] > 0:
         session = get_task_session()
+        s3 = None
         try:
             cutoff = utcnow() - timedelta(days=current_app.config['ARCHIVE_POSTS'] * 28)
             sql = '''
@@ -942,7 +943,6 @@ def archive_old_posts():
                   )
             '''
             post_ids = session.execute(text(sql), {'cutoff': cutoff}).scalars()
-            s3 = None
             if store_files_in_s3():
                 boto3_session = boto3.session.Session()
                 s3 = boto3_session.client(
@@ -955,13 +955,12 @@ def archive_old_posts():
             for post_id in post_ids:
                 archive_post(post_id, s3)
 
-            if s3:
-                s3.close()
-
         except Exception:
             session.rollback()
             raise
         finally:
+            if s3:
+                s3.close()
             session.close()
 
 
