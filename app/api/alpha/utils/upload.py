@@ -1,9 +1,6 @@
 from app.models import User
-from flask import current_app
 from flask_login import current_user
-from sqlalchemy import text
 
-from app import db
 from app.shared.upload import process_upload, process_file_delete
 from app.utils import authorise_api_user
 
@@ -18,17 +15,7 @@ def post_upload_image(auth, image_file=None):
     else:
         raise Exception('incorrect_login')
 
-    user_id = user.id
-    total_size = 0
-    file_sizes = db.session.execute(text('SELECT file_id, size FROM "user_file" WHERE user_id = :user_id'),
-                                    {'user_id': user_id}).all()
-    for fs in file_sizes:
-        total_size += fs[1]
-
-    # don't check quota on image uploads until I can sort this out properly
-    #if total_size > current_app.config['FILE_UPLOAD_QUOTA']:
-    #    raise Exception('quota_exceeded')
-
+    # D881/D1061: no storage quota is enforced on uploads, so nothing sums the caller's stored files
     url = process_upload(image_file, user=user)
     return {'url': url}
 

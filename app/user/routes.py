@@ -2558,9 +2558,9 @@ def user_file_upload():
         if form.urls.data.strip() != '':
             urls = form.urls.data.strip().split('\n')
             # D1062. One submission could add a File row per line, and the box
-            # holds 10,000 characters -- roughly a thousand rows, none of which
-            # count towards the quota (D1061). D993's family again: a list from
-            # a form with no cap on its length.
+            # holds 10,000 characters -- roughly a thousand rows, recorded with size 0
+            # and never fetched to be measured (D1061, owner ruling: no quota is
+            # enforced). D993's family again: a list from a form with no cap on its length.
             urls = urls[:FILE_URLS_PER_UPLOAD]
             for url in urls:
                 if url and url.strip() != '':
