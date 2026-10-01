@@ -1387,18 +1387,16 @@ def process_inbox_request(request_json, store_ap_json):
                         feed_items = session.query(FeedItem).filter_by(feed_id=feed.id).all()
                         for fi in feed_items:
                             session.delete(fi)
-                            session.commit()
                         # find the feedmembers and remove them
                         feed_members = session.query(FeedMember).filter_by(feed_id=feed.id).all()
                         for fm in feed_members:
                             session.delete(fm)
-                            session.commit()
                         # find any feedjoinrequests and remove them
                         feed_join_requests = session.query(FeedJoinRequest).filter_by(feed_id=feed.id).all()
                         for fjr in feed_join_requests:
                             session.delete(fjr)
-                            session.commit()
-                        # finally remove the feed itself
+                        # finally remove the feed itself, flushing first so the rows above go before it, in one commit
+                        session.flush()
                         session.delete(feed)
                         session.commit()
                         log_incoming_ap(id, APLOG_DELETE, APLOG_SUCCESS, saved_json, f"Delete: Feed {core_activity['object']['id']} deleted")
