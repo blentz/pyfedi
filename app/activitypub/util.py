@@ -3389,6 +3389,9 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
 
         # Check for Mentions of local users (that weren't in the original)
         if 'tag' in request_json['object'] and isinstance(request_json['object']['tag'], list):
+            # under autoflush=False the query below cannot see this call's own pending
+            # notifications, so a repeated Mention tag notified twice (D242)
+            notified_ids = set()
             for json_tag in request_json['object']['tag']:
                 # D1397. `'type' in json_tag` over a STRING element is a substring
                 # test, and `json_tag['type']` then raises -- one `tag` entry of
@@ -3444,7 +3447,8 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
                                 if reply.user_id not in blocked_senders:
                                     existing_notification = Notification.query.filter(Notification.user_id == recipient.id,
                                                                                       Notification.url == f"{current_app.config['SERVER_URL']}/comment/{reply.id}").first()
-                                    if not existing_notification:
+                                    if not existing_notification and recipient.id not in notified_ids:
+                                        notified_ids.add(recipient.id)
                                         author = db.session.get(User, reply.user_id)
                                         targets_data = {'gen': '0',
                                                         'post_id': reply.post_id,
@@ -3555,6 +3559,7 @@ def update_post_from_activity(post: Post, request_json: dict):
             # change back when lemmy supports flairs
             # post.flair.clear()
             flair_tags = []
+            notified_ids = set()  # a repeated Mention tag notifies once (D242), as in the reply update
             for json_tag in request_json['object']['tag']:
                 # D1397, as the two reply tag loops.
                 json_tag = _as_dict(json_tag)
@@ -3581,7 +3586,8 @@ def update_post_from_activity(post: Post, request_json: dict):
                             if post.user_id not in blocked_senders:
                                 existing_notification = Notification.query.filter(Notification.user_id == recipient.id,
                                                                                   Notification.url == f"{current_app.config['SERVER_URL']}/post/{post.id}").first()
-                                if not existing_notification:
+                                if not existing_notification and recipient.id not in notified_ids:
+                                    notified_ids.add(recipient.id)
                                     author = db.session.get(User, post.user_id)
                                     targets_data = {'gen': '0',
                                                     'post_id': post.id,
