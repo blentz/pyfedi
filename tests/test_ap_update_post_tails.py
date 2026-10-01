@@ -3365,7 +3365,9 @@ class TestSuspiciousDomainNotifications:
                   moderator.id, admin.id}
         assert len(others | {post.id}) == len(others) + 1
 
-        rows = Notification.query.all()
+        # D442: user 1, the fixture's first user, is a site admin too and is told as well.
+        assert Notification.query.filter_by(user_id=1).count() == 1
+        rows = Notification.query.filter(Notification.user_id != 1).all()
         assert len(rows) == 1
         assert rows[0].user_id == admin.id
         assert rows[0].author_id == 1
@@ -3451,7 +3453,9 @@ class TestSuspiciousDomainNotifications:
         assert len({mod_admin.id, plain_admin.id}) == 2
         assert Notification.query.filter_by(user_id=mod_admin.id).count() == 1
         assert Notification.query.filter_by(user_id=plain_admin.id).count() == 1
-        assert Notification.query.count() == 2
+        # D442: user 1, the fixture's first user, is a site admin too and is told as well.
+        assert Notification.query.filter_by(user_id=1).count() == 1
+        assert Notification.query.count() == 3
 
     def test_a_domain_that_notifies_nobody_still_takes_the_post(
             self, app, db_session, http_mock, redis_lock_only_double):
@@ -3591,9 +3595,10 @@ class TestSuspiciousDomainTargetsSerialisation:
         # longer rebuilds the dict at all -- the one built before the loop already
         # holds everything -- so there is no second copy of the expression to go
         # wrong.
-        assert Notification.query.count() == 1
+        # D442: user 1, the fixture's first user, is a site admin too and is told as well.
+        assert Notification.query.count() == 2
         assert post.domain_id == new_domain.id
-        targets = Notification.query.one().targets
+        targets = Notification.query.filter_by(user_id=admin.id).one().targets
         assert targets['orig_post_domain'] == new_domain.name
         assert targets['orig_post_title'] == UPDATE_NAME
 

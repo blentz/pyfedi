@@ -128,11 +128,9 @@ def seed_remote_moderator(s, domain='remote.example', name='remotemod'):
 def seed_site_admin(s, name='siteadmin'):
     """A user `Site.admins()` actually returns.
 
-    `Site.admins()` (app/models.py:3999-4000) INNER-JOINS user_role before
-    applying `or_(role_id == ROLE_ADMIN, User.id == 1)`, so a user with no
-    user_role row produces no rows at all and the id-1 disjunct is never
-    reached. `s.author` is User id 1 and has no role row, so it is NOT a site
-    admin -- Probe A observed `Site.admins() == []`.
+    `s.author` is User id 1, which `Site.admins()` lists with no role row
+    since D442's fix, so every admin notification below reaches it as well
+    as the user seeded here.
 
     The Role is created with an explicit id because user_role.role_id is a
     foreign key to role.id and the query matches on that id, not on the role's
@@ -721,7 +719,8 @@ def test_a_doxing_report_notifies_admins_through_the_api(db_session):
     `'doxing'` is already lowercase so it matches a `.lower()`ed haystack.
     `'Minor abuse'` does not -- that is PC1, and Task 8 observes it failing.
 
-    `Site.admins()` is empty without `seed_site_admin`, so without it this test
+    `Site.admins()` held no ordinary admin without `seed_site_admin` (only user 1,
+    since D442), so without it this test
     would pass for the wrong reason after PC1 lands and fail for the wrong
     reason before it.
     """
@@ -738,8 +737,8 @@ def test_a_doxing_report_notifies_admins_through_the_api(db_session):
 
     admin_notifs = db.session.query(Notification).filter_by(
         title='Suspicious content').all()
-    assert len(admin_notifs) == 1
-    assert admin_notifs[0].user_id == admin.id
+    assert len(admin_notifs) == 2
+    assert {n.user_id for n in admin_notifs} == {admin.id, s.author.id}  # D442: user 1 is an admin too
 
 
 def test_an_ordinary_api_report_does_not_notify_admins(db_session):
@@ -772,7 +771,7 @@ def test_an_api_ai_flair_report_notifies_admins_on_a_non_piefed_instance(db_sess
     works where `:828`'s first needle does not.
     """
     s = seed_post_context(community_name='lifecycle')
-    seed_site_admin(s)
+    admin = seed_site_admin(s)
     s.instance.software = 'lemmy'
     db.session.commit()
 
@@ -784,8 +783,8 @@ def test_an_api_ai_flair_report_notifies_admins_on_a_non_piefed_instance(db_sess
         auth=bearer(s.voter),
     )
 
-    assert db.session.query(Notification).filter_by(
-        title='Suspicious content').count() == 1
+    assert {n.user_id for n in db.session.query(Notification).filter_by(
+        title='Suspicious content')} == {admin.id, s.author.id}  # D442: user 1 is an admin too
 
 
 def test_an_api_ai_flair_report_does_not_escalate_on_piefed(db_session):
@@ -1067,7 +1066,7 @@ def test_an_unmoderated_local_community_always_notifies_admins_through_the_api(d
     `self.ap_id is None or ...` -- so `:841`'s first conjunct is already true.
     """
     s = seed_post_context(community_name='lifecycle')
-    seed_site_admin(s)
+    admin = seed_site_admin(s)
     s.community.un_moderated = True
     db.session.commit()
 
@@ -1078,8 +1077,8 @@ def test_an_unmoderated_local_community_always_notifies_admins_through_the_api(d
         auth=bearer(s.voter),
     )
 
-    assert db.session.query(Notification).filter_by(
-        title='Suspicious content').count() == 1
+    assert {n.user_id for n in db.session.query(Notification).filter_by(
+        title='Suspicious content')} == {admin.id, s.author.id}  # D442: user 1 is an admin too
 
 
 def test_an_unmoderated_remote_community_does_not_force_admin_notification(db_session):
@@ -1127,8 +1126,8 @@ def test_an_admin_who_is_already_a_notified_moderator_is_not_notified_twice(db_s
     second notification. Catches a regression dropping the guard.
 
     The admin must be seeded with `seed_site_admin` (Task 5): `Site.admins()`
-    is empty otherwise, which would make the `== 0` assertion below pass
-    vacuously and witness nothing. `seed_site_admin` mints a LOCAL user, so
+    would hold only user 1 otherwise, which would make the admin assertion below
+    pass vacuously and witness nothing. `seed_site_admin` mints a LOCAL user, so
     `:876` routes it to the notification branch and `:884` adds it to
     `already_notified`.
 
@@ -1149,8 +1148,9 @@ def test_an_admin_who_is_already_a_notified_moderator_is_not_notified_twice(db_s
         auth=bearer(s.voter),
     )
 
-    assert db.session.query(Notification).filter_by(
-        title='Suspicious content').count() == 0
+    # Only the founder, user 1, is told as an admin (D442); `admin` was told as a moderator.
+    assert {n.user_id for n in db.session.query(Notification).filter_by(
+        title='Suspicious content')} == {s.author.id}
     mod_notifs = db.session.query(Notification).filter_by(
         title='A post has been reported').all()
     assert {n.user_id for n in mod_notifs} == {admin.id}
@@ -1313,7 +1313,7 @@ def test_the_web_arm_escalates_on_reason_five(db_session, app):
     from types import SimpleNamespace
 
     s = seed_post_context(community_name='lifecycle')
-    seed_site_admin(s)
+    admin = seed_site_admin(s)
     form = SimpleNamespace(
         reasons=SimpleNamespace(data=['5']),
         description=SimpleNamespace(data='x'),
@@ -1324,8 +1324,8 @@ def test_the_web_arm_escalates_on_reason_five(db_session, app):
     with web_ctx(app, s.voter):
         report_post(s.post, form, SRC_WEB)
 
-    assert db.session.query(Notification).filter_by(
-        title='Suspicious content').count() == 1
+    assert {n.user_id for n in db.session.query(Notification).filter_by(
+        title='Suspicious content')} == {admin.id, s.author.id}  # D442: user 1 is an admin too
 
 
 def test_the_web_arm_escalates_on_reason_six(db_session, app):
@@ -1340,7 +1340,7 @@ def test_the_web_arm_escalates_on_reason_six(db_session, app):
     from types import SimpleNamespace
 
     s = seed_post_context(community_name='lifecycle')
-    seed_site_admin(s)
+    admin = seed_site_admin(s)
     form = SimpleNamespace(
         reasons=SimpleNamespace(data=['6']),
         description=SimpleNamespace(data='x'),
@@ -1351,8 +1351,8 @@ def test_the_web_arm_escalates_on_reason_six(db_session, app):
     with web_ctx(app, s.voter):
         report_post(s.post, form, SRC_WEB)
 
-    assert db.session.query(Notification).filter_by(
-        title='Suspicious content').count() == 1
+    assert {n.user_id for n in db.session.query(Notification).filter_by(
+        title='Suspicious content')} == {admin.id, s.author.id}  # D442: user 1 is an admin too
 
 
 def test_the_web_arm_does_not_escalate_on_reason_seventeen_on_piefed(db_session, app):
@@ -1400,7 +1400,7 @@ def test_the_web_arm_escalates_on_reason_seventeen_on_a_non_piefed_instance(db_s
     from types import SimpleNamespace
 
     s = seed_post_context(community_name='lifecycle')
-    seed_site_admin(s)
+    admin = seed_site_admin(s)
     s.instance.software = 'lemmy'
     db.session.commit()
     form = SimpleNamespace(
@@ -1413,8 +1413,8 @@ def test_the_web_arm_escalates_on_reason_seventeen_on_a_non_piefed_instance(db_s
     with web_ctx(app, s.voter):
         report_post(s.post, form, SRC_WEB)
 
-    assert db.session.query(Notification).filter_by(
-        title='Suspicious content').count() == 1
+    assert {n.user_id for n in db.session.query(Notification).filter_by(
+        title='Suspicious content')} == {admin.id, s.author.id}  # D442: user 1 is an admin too
 
 
 def test_a_report_on_a_remote_authors_post_flags_their_instance(db_session):
@@ -1621,13 +1621,14 @@ def test_a_minor_abuse_report_notifies_admins_through_the_api(db_session):
     Failed against the unmodified tree (fixed at `a06e350f`): no admin
     notification was written.
 
-    `seed_site_admin` is load-bearing here. Without it `Site.admins()` is empty
+    `seed_site_admin` is load-bearing here. Without it `Site.admins()` held no
+    seeded admin (only user 1, since D442)
     and this test fails BOTH before and after the fix -- a failing observation
     that proves nothing, and the worst possible foundation for a production
     change.
     """
     s = seed_post_context(community_name='lifecycle')
-    seed_site_admin(s)
+    admin = seed_site_admin(s)
 
     report_post(
         s.post,
@@ -1637,8 +1638,8 @@ def test_a_minor_abuse_report_notifies_admins_through_the_api(db_session):
         auth=bearer(s.voter),
     )
 
-    assert db.session.query(Notification).filter_by(
-        title='Suspicious content').count() == 1
+    assert {n.user_id for n in db.session.query(Notification).filter_by(
+        title='Suspicious content')} == {admin.id, s.author.id}  # D442: user 1 is an admin too
 
 
 def test_minor_abuse_in_the_description_also_notifies_admins(db_session):
@@ -1648,7 +1649,7 @@ def test_minor_abuse_in_the_description_also_notifies_admins(db_session):
     only the reason leaves `:829` unwitnessed.
     """
     s = seed_post_context(community_name='lifecycle')
-    seed_site_admin(s)
+    admin = seed_site_admin(s)
 
     report_post(
         s.post,
@@ -1658,8 +1659,8 @@ def test_minor_abuse_in_the_description_also_notifies_admins(db_session):
         auth=bearer(s.voter),
     )
 
-    assert db.session.query(Notification).filter_by(
-        title='Suspicious content').count() == 1
+    assert {n.user_id for n in db.session.query(Notification).filter_by(
+        title='Suspicious content')} == {admin.id, s.author.id}  # D442: user 1 is an admin too
 
 
 def test_doxing_in_the_description_also_notifies_admins(db_session):
@@ -1673,7 +1674,7 @@ def test_doxing_in_the_description_also_notifies_admins(db_session):
     `:828` instead.
     """
     s = seed_post_context(community_name='lifecycle')
-    seed_site_admin(s)
+    admin = seed_site_admin(s)
 
     report_post(
         s.post,
@@ -1683,8 +1684,8 @@ def test_doxing_in_the_description_also_notifies_admins(db_session):
         auth=bearer(s.voter),
     )
 
-    assert db.session.query(Notification).filter_by(
-        title='Suspicious content').count() == 1
+    assert {n.user_id for n in db.session.query(Notification).filter_by(
+        title='Suspicious content')} == {admin.id, s.author.id}  # D442: user 1 is an admin too
 
 
 def test_a_remote_communitys_instance_is_flagged_even_when_ids_collide(db_session):

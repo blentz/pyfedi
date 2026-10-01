@@ -5075,8 +5075,9 @@ class Site(db.Model):
         if hasattr(g, 'admin_ids'):
             return db.session.query(User).filter(User.id.in_(tuple(g.admin_ids))).all()
         else:
-            return db.session.query(User).filter_by(deleted=False, banned=False).join(user_role).filter(
-                                          or_(user_role.c.role_id == ROLE_ADMIN, User.id == 1)).order_by(User.id).all()
+            # D442: an EXISTS, not a join, so user 1 needs no user_role row to be listed
+            return db.session.query(User).filter_by(deleted=False, banned=False).filter(
+                                          or_(User.roles.any(Role.id == ROLE_ADMIN), User.id == 1)).order_by(User.id).all()
 
     @staticmethod
     def staff() -> List[User]:
