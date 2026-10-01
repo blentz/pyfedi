@@ -144,8 +144,6 @@ def feed_add_remote():
 @bp.route('/feed/<int:feed_id>/edit', methods=['GET', 'POST'])
 @login_required
 def feed_edit(feed_id: int):
-    url_changed = False
-    old_url = None
     if current_user.banned:
         return show_ban_message()
     # load the feed
@@ -164,20 +162,14 @@ def feed_edit(feed_id: int):
         edit_feed_form.url.render_kw = {'disabled': True}
 
     if edit_feed_form.validate_on_submit():
-        if edit_feed_form.url.data:
-            edit_feed_form.url.data = slugify(edit_feed_form.url.data.strip().split('/')[0], separator='_').lower()
-            if not edit_feed_form.public.data:
-                edit_feed_form.url.data = slugify(edit_feed_form.url.data.strip(),
-                                                  separator='_').lower() + '/' + current_user.user_name.lower()
-            old_url = feed_to_edit.name
-            url_changed = feed_to_edit.name != edit_feed_form.url.data
-            feed_to_edit.name = edit_feed_form.url.data
-            feed_to_edit.machine_name = edit_feed_form.url.data
-
+        # D711: the slug is edit_feed's alone. Renaming here first hid the rename
+        # from it, so a renamed feed's ActivityPub urls were never moved.
+        old_url = feed_to_edit.name
         edit_feed(edit_feed_form, feed_to_edit, SRC_WEB, None, edit_feed_form.icon_file.data, edit_feed_form.banner_file.data, from_scratch=False)
+        url_changed = feed_to_edit.name != old_url
 
         flash(_('Settings saved.'))
-        if url_changed and old_url is not None:
+        if url_changed:
             if referrer().endswith(old_url):
                 return redirect('/f/' + feed_to_edit.name)
             else:
