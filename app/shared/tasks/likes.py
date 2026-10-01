@@ -1,8 +1,8 @@
 from app import celery
 from app.activitypub.signature import default_context, send_post_request, HttpSignature
-from app.models import CommunityBan, Post, PostReply, User, ActivityBatch, Community, PollChoiceVote, PollChoice, utcnow
+from app.models import Post, PostReply, User, ActivityBatch, Community, PollChoiceVote, PollChoice, utcnow
 from app.shared.tasks import task_selector
-from app.utils import gibberish, instance_banned, get_task_session, patch_db_session
+from app.utils import user_banned_from_community, gibberish, instance_banned, get_task_session, patch_db_session
 
 from flask import current_app, json
 
@@ -60,7 +60,7 @@ def send_vote(user_id, object, vote_to_undo, vote_direction, emoji):
         if community.local_only or community.private or not (community.instance_id and community.instance.online()):
             return
 
-        banned = session.query(CommunityBan).filter_by(user_id=user_id, community_id=community.id).first()
+        banned = user_banned_from_community(user_id, community.id)  # D995
         if banned:
             return
         if not community.is_local():

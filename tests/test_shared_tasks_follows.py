@@ -50,7 +50,7 @@ from flask import current_app, get_flashed_messages
 
 from app import db
 from app.constants import SRC_API, SRC_PLD, SRC_PLG, SRC_WEB
-from app.models import ActivityPubLog, CommunityJoinRequest, FeedJoinRequest, UserFollowRequest
+from app.models import ActivityPubLog, CommunityJoinRequest, FeedJoinRequest, InstanceBan, UserFollowRequest
 from app.shared.tasks.follows import (
     follow_user, join_community, leave_community, leave_feed, unfollow_user,
 )
@@ -320,6 +320,19 @@ def test_a_banned_user_cannot_join_and_raises_for_src_api(db_session, http_mock)
     """
     s = _seed(with_keys=True)
     make_community_ban(s.user, s.community)
+
+    with pytest.raises(Exception, match='banned_from_community'):
+        join_community(None, s.user.id, s.community.id, SRC_API)
+
+    assert db.session.query(CommunityJoinRequest).count() == 0
+
+
+def test_an_instance_banned_user_cannot_join_and_raises_for_src_api(db_session, http_mock):
+    """D995, owner ruling: the task's gate read only CommunityBan rows, so a
+    user banned from the community's whole instance was joined."""
+    s = _seed(with_keys=True)
+    db.session.add(InstanceBan(user_id=s.user.id, instance_id=s.community.instance_id))
+    db.session.commit()
 
     with pytest.raises(Exception, match='banned_from_community'):
         join_community(None, s.user.id, s.community.id, SRC_API)

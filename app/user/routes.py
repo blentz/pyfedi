@@ -20,7 +20,7 @@ from app.constants import *
 from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap
 from app.models import Post, Community, CommunityMember, User, PostReply, Notification, utcnow, File, Site, \
-    Instance, Report, UserBlock, CommunityBan, CommunityJoinRequest, CommunityBlock, Filter, Domain, DomainBlock, \
+    Instance, Report, UserBlock, CommunityJoinRequest, CommunityBlock, Filter, Domain, DomainBlock, \
     InstanceBlock, NotificationSubscription, PostBookmark, PostReplyBookmark, read_posts, Topic, UserNote, \
     UserExtraField, Feed, FeedMember, user_file, UserFollower, BotChallenge, votes_cast_today, \
     CommunityFlair, CommunityFlairBlock
@@ -35,7 +35,7 @@ from app.user.utils import unsubscribe_from_community, search_for_user, _get_use
     _get_user_upvoted_posts, _get_user_subscribed_communities, _get_user_posts, _get_user_post_replies, \
     _get_user_archived_replies, _get_user_posts_and_replies, _get_user_same_ip, insert_or_update_user_note, \
     _get_user_same_name
-from app.utils import render_template, markdown_to_html, user_access, markdown_to_text, shorten_string, back, \
+from app.utils import render_template, markdown_to_html, user_access, markdown_to_text, shorten_string, back, user_banned_from_community, \
     gibberish, community_membership, user_filters_home, \
     user_filters_posts, user_filters_replies, theme_list, \
     blocked_users, add_to_modlog, \
@@ -1614,7 +1614,7 @@ def import_settings_task(user_id, redis_key):
                                     send_post_request(community.ap_inbox_url, follow, user.private_key,
                                                       user.public_url() + '#main-key')
                             else:  # for local communities, joining is instant
-                                banned = session.query(CommunityBan).filter_by(user_id=user.id, community_id=community.id).first()
+                                banned = user_banned_from_community(user.id, community.id)  # D995
                                 if not banned:
                                     existing_member = session.query(CommunityMember).filter_by(user_id=user.id,
                                                                                       community_id=community.id).first()

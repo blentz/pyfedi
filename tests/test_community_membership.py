@@ -14,9 +14,13 @@ from flask import render_template
 
 import pytest
 
+from flask_login import login_user
+
 from app import cache, db
+from app.auth.onboarding import join_topic
 from app.models import (Community, CommunityBan, CommunityJoinRequest,
-                        CommunityMember, User)
+                        CommunityMember, InstanceBan, Topic, User)
+from app.utils import user_banned_from_community
 from tests.factories import (make_community, make_community_member,
                              make_instance, make_user)
 
@@ -1232,14 +1236,12 @@ def test_the_invite_page_warns_about_a_local_only_community(app, inviter):
 
 
 def test_join_then_add_refuses_a_user_banned_from_the_community(app, world):
-    """`if not community.user_is_banned(current_user): ... else: abort(401)`.
+    """`if not user_banned_from_community(...): ... else: abort(401)`.
 
-    The final gate on this route, and a third independent implementation of the
-    same question: `communities_banned_from` reads a memoized list,
-    `do_subscribe` reads the `CommunityBan` row, and `user_is_banned` runs its
-    own query (app/models.py:781, whose own comment says to prefer the cached
-    helper). Three answers to "is this user banned here" in one request path is
-    what D924 and fact 368 are about.
+    The final gate on this route. It used to be a third independent answer to
+    "is this user banned here" (`Community.user_is_banned`, its own query);
+    D995 put this route, `do_subscribe` and every other caller on the one
+    helper.
     """
     community, joiner, founder = world
     _able_to_post(joiner)
@@ -1338,3 +1340,75 @@ def test_join_then_add_does_not_claim_you_joined_when_you_already_had(
                         data={'csrf_token': csrf(app, client)})
 
     assert flashed.call_args_list == []
+
+
+# --------------------------------------------------------------------------
+# D995: one answer to "is this user banned from this community"
+# --------------------------------------------------------------------------
+
+
+def _instance_ban(community, user):
+    """A ban from the whole instance the community lives on, which
+    `communities_banned_from` counts and the old `Community.user_is_banned`
+    did not."""
+    db.session.add(InstanceBan(user_id=user.id, instance_id=community.instance_id))
+    db.session.commit()
+
+
+@pytest.mark.parametrize('ban, expected', [
+    (None, False), ('community', True), ('instance', True)])
+def test_the_helper_answers_for_community_and_instance_bans(app, world, ban, expected):
+    community, joiner, founder = world
+    if ban == 'community':
+        _ban(community, joiner, founder)
+    elif ban == 'instance':
+        _instance_ban(community, joiner)
+
+    assert user_banned_from_community(joiner.id, community.id) is expected
+
+
+def test_the_helper_sees_a_ban_the_cached_list_has_not(app, world):
+    """D991's stale-cache protection, kept: a CommunityBan row the memoized
+    list does not know about yet still counts."""
+    community, joiner, founder = world
+    _ban(community, joiner, founder)
+
+    with patch('app.utils.communities_banned_from', return_value=[]):
+        assert user_banned_from_community(joiner.id, community.id) is True
+
+
+def test_join_then_add_refuses_a_user_banned_from_the_whole_instance(app, world):
+    """D995, owner ruling: the route's final gate used to ask
+    `Community.user_is_banned`, which read only CommunityBan rows, so an
+    instance-banned user was sent on to the post form."""
+    community, joiner, founder = world
+    _able_to_post(joiner)
+    _instance_ban(community, joiner)
+    make_community_member(joiner, community)
+    db.session.commit()
+    client = app.test_client()
+    login(client, joiner)
+
+    with patch('app.community.routes.render_template', return_value='rendered'):
+        response = client.post(url(app, 'community.join_then_add', actor=community.name),
+                               data={'csrf_token': csrf(app, client)})
+
+    assert response.status_code == 401
+
+
+def test_onboarding_does_not_join_an_instance_banned_user_to_a_topic_community(app, world):
+    community, joiner, founder = world
+    topic = Topic(name='Books', machine_name='books')
+    db.session.add(topic)
+    db.session.commit()
+    community.topic_id = topic.id
+    db.session.commit()
+    _instance_ban(community, joiner)
+
+    with app.test_request_context('/'):
+        login_user(joiner)
+        joined = join_topic(topic.id)
+
+    assert joined == 0
+    assert not _is_member(community, joiner)
+
