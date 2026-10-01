@@ -22,15 +22,15 @@ REMOVED AS DEAD (2 lines, D1414):
     guarantees, with a row below asserting the constraint so a migration dropping it fails
     here rather than silently reviving dead code.
 
-RECORDED AS UNREACHABLE, not covered and not deleted (4 lines):
+RECORDED AS UNREACHABLE, not covered and not deleted (3 lines; a fourth,
+`app/shared/community.py`'s `if not ap_id:`, became reachable with D626's fix):
 
     app/topic/routes.py            212   an unknown segment aborts at 67 first
     app/feed/routes.py             616   `feed` is dereferenced at 481 and 530 already
-    app/shared/community.py        723   `get_ap_id()` never returns anything falsy
     app/api/alpha/utils/reply.py   369   under a comment reading `# shouldn't happen`
 
     Each is a defensive `else` that an earlier line makes impossible. Deleting one is a
-    change to somebody else's intent, and the evidence for these four is "an earlier
+    change to somebody else's intent, and the evidence for these three is "an earlier
     statement already refused or dereferenced the value" rather than a schema constraint --
     weaker than D1414's, so they are documented instead, each pinned by a row that names
     the line that makes it dead.
@@ -46,7 +46,8 @@ import pytest
 from marshmallow import ValidationError
 
 from app import db
-from app.models import Site
+from app.models import CommunityFlair, Site
+from app.shared.community import comm_flair_ap_format
 from tests.factories import (make_community, make_instance, make_site, make_user,
                              seed_community_owner)
 
@@ -324,21 +325,16 @@ class TestAnUnresolvableMention:
 # --------------------------------------------------------------------------
 
 
-def test_a_flairs_ap_id_is_never_falsy():
-    """Why `app/shared/community.py:723` cannot be covered: `get_ap_id` either returns an
-    `ap_id` that is already set, or builds one from the community's `local_url()`. This row
-    pins the reason rather than the line, so a future change that DOES make it falsy fails
-    here and the guard becomes reachable on purpose."""
-    import ast
-    import pathlib
+def test_a_flair_with_no_community_has_no_ap_id(db_session):
+    """D626, fixed: `get_ap_id` dereferenced the community it looked up with no None
+    guard, so a flair whose community is missing raised AttributeError. It now returns
+    None and stores nothing, which makes `app/shared/community.py`'s `if not ap_id:
+    return` reachable: the flair is left out of the federated list rather than crashing it.
+    (This row used to pin that guard as unreachable.)"""
+    flair = CommunityFlair(community_id=None, flair='orphan')
+    db.session.add(flair)
+    db.session.commit()
 
-    source = (pathlib.Path(__file__).resolve().parent.parent
-              / 'app' / 'models.py').read_text()
-    tree = ast.parse(source)
-    fn = next(n for n in ast.walk(tree)
-              if isinstance(n, ast.FunctionDef) and n.name == 'get_ap_id')
-    returns = [n for n in ast.walk(fn) if isinstance(n, ast.Return)]
-
-    assert len(returns) == 2
-    assert all(r.value is not None for r in returns), \
-        'get_ap_id gained a bare return, so a flair CAN have no ap_id'
+    assert flair.get_ap_id() is None
+    assert db.session.get(CommunityFlair, flair.id).ap_id is None
+    assert comm_flair_ap_format(flair) is None
