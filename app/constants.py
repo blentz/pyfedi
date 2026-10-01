@@ -121,6 +121,7 @@ APLOG_RATE = (True, 'Rate')
 APLOG_QA = (True, 'QA')
 APLOG_REPORT = (True, 'Report')
 APLOG_USERBAN = (True, 'User Ban')
+APLOG_USERBLOCK = (True, 'User Block')
 APLOG_LOCK = (True, 'Post Lock')
 APLOG_QUOTEBOOST = (True, 'Quote Boost')
 

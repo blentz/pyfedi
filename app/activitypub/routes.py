@@ -1884,9 +1884,9 @@ def process_inbox_request(request_json, store_ap_json):
                             if not blocker.has_blocked_user(blocked.id):
                                 session.add(UserBlock(blocker_id=blocker.id, blocked_id=blocked.id))
                                 session.commit()
-                                log_incoming_ap(id, APLOG_USERBAN, APLOG_SUCCESS, saved_json)
+                                log_incoming_ap(id, APLOG_USERBLOCK, APLOG_SUCCESS, saved_json)
                             else:
-                                log_incoming_ap(id, APLOG_USERBAN, APLOG_IGNORED, saved_json, 'Already blocked')
+                                log_incoming_ap(id, APLOG_USERBLOCK, APLOG_IGNORED, saved_json, 'Already blocked')
 
                     return
 

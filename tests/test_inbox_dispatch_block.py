@@ -53,8 +53,8 @@ before the code has even looked at 'target'.
 | community-ban, unfound community (1656-1659)         | not site ban; `community` (from Announce, or resolved from `target`) is falsy | nothing                                                                    | nothing                                                          | APLOG_USERBAN/APLOG_IGNORED 'Blocked or unfound community' |
 | community-ban, no permission (1660-1662)             | community found; `not community.is_moderator(blocker) and not community.is_instance_admin(blocker)` | nothing                                                       | nothing                                                          | APLOG_USERBAN/APLOG_FAILURE 'Does not have permission' |
 | community-ban, success (1664-1668)                   | community found; moderator OR instance admin                                | none directly -- delegates do the writing                                   | `community_ban_remove_data(blocker.id, community.id, blocked)` only when `removeData`; `ban_user(blocker, blocked, community, core_activity)` only when `not already_banned` | APLOG_USERBAN/APLOG_SUCCESS (unconditional) |
-| Mastodon, no target, new block (1670-1673)           | no 'target' key; `object` is a str; `not blocker.has_blocked_user(blocked.id)` | `UserBlock(blocker_id, blocked_id)`, commit                               | nothing                                                          | APLOG_USERBAN/APLOG_SUCCESS (D83, fixed; previously nothing) |
-| Mastodon, no target, already blocked (1670-1673)     | no 'target' key; `object` is a str; already blocked                          | nothing                                                                      | nothing                                                          | APLOG_USERBAN/APLOG_IGNORED 'Already blocked' (D83, fixed) |
+| Mastodon, no target, new block (1670-1673)           | no 'target' key; `object` is a str; `not blocker.has_blocked_user(blocked.id)` | `UserBlock(blocker_id, blocked_id)`, commit                               | nothing                                                          | APLOG_USERBLOCK/APLOG_SUCCESS (D83, fixed; previously nothing) |
+| Mastodon, no target, already blocked (1670-1673)     | no 'target' key; `object` is a str; already blocked                          | nothing                                                                      | nothing                                                          | APLOG_USERBLOCK/APLOG_IGNORED 'Already blocked' (D83, fixed) |
 
 ## Four findings pinned by this file, not fixed
 
@@ -1001,7 +1001,9 @@ def test_mastodon_no_target_creates_a_block_and_logs_success(app, db_session, mo
 
     UserBlock.query.filter_by(blocker_id=blocker.id, blocked_id=victim.id).one()
 
-    assert ActivityPubLog.query.one().result == 'success'
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+    assert log.activity_type == 'User Block'  # D83 residue: a user block, not a ban
 
 
 def test_mastodon_no_target_skips_a_duplicate_and_logs_ignored(app, db_session, monkeypatch):
@@ -1026,3 +1028,4 @@ def test_mastodon_no_target_skips_a_duplicate_and_logs_ignored(app, db_session, 
     log = ActivityPubLog.query.one()
     assert log.result == 'ignored'
     assert log.exception_message == 'Already blocked'
+    assert log.activity_type == 'User Block'  # D83 residue
