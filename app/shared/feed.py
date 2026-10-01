@@ -28,6 +28,7 @@ from app.community.util import search_for_community
 
 def join_feed(actor, user_id, src=SRC_WEB):
     member_id = join_request_id = None
+    follow_sent = False
     try:
         remote = False
         actor = actor.strip()
@@ -78,6 +79,7 @@ def join_feed(actor, user_id, src=SRC_WEB):
                         }
                         send_post_request(feed.ap_inbox_url, follow, user.private_key, user.public_url() + '#main-key',
                                           timeout=10)
+                        follow_sent = True
 
                         # reach out and get the feeditems from the remote /following collection
                         res = get_request(feed.ap_following_url)
@@ -117,6 +119,13 @@ def join_feed(actor, user_id, src=SRC_WEB):
             abort(404)
     except Exception:
         db.session.rollback()
+        # The peer already has our Follow: undo it the way leaving does. This runs before the join
+        # request is deleted below, because the Undo names the Follow by that request's uuid.
+        if follow_sent:
+            try:
+                task_selector('leave_feed', send_async=False, user_id=user_id, feed_id=feed.id)
+            except Exception:
+                current_app.logger.exception(f'Could not undo the Follow of feed {feed.id} after a failed join')
         # a join that failed part way must not leave the user subscribed, or waiting on a request
         if join_request_id:
             db.session.query(FeedJoinRequest).filter_by(id=join_request_id).delete()
