@@ -749,16 +749,9 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         post.type = POST_TYPE_VIDEO
     
     if url and post.image:
-        # post.image is a RELATIONSHIP and is truthy the instant it is
-        # assigned; post.image_id is only synced at FLUSH, so it is still None
-        # here unless something upstream happened to emit SQL. Keeping that
-        # None out of the lookup rather than handing it over: SQLAlchemy warns
-        # that a fully NULL primary key identity "may raise an error in a
-        # future release" (the D845 shape). The None result, and therefore the
-        # behaviour of the `if file` below, is unchanged.
-        file = db.session.get(File, post.image_id) if post.image_id else None
-        if file:
-            file.alt_text = image_alt_text
+        # D856: through the relationship. post.image_id is only synced at FLUSH, so a lookup by it found nothing
+        # unless something upstream happened to emit SQL, and the caller's alt text was dropped for some urls.
+        post.image.alt_text = image_alt_text
 
     federate = True
     if type == POST_TYPE_POLL and poll_data:

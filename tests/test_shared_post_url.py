@@ -2735,79 +2735,17 @@ class TestPollAndEventTail:
     `app/shared/tasks/follows.py:188`.
     """
 
-    def test_an_unflushed_thumbnail_is_not_found_by_its_own_foreign_key(
+    def test_an_unflushed_thumbnail_still_gets_the_callers_alt_text(
             self, db_session, http_mock):
-        """`:665` FALSE -> `:668`. Arc 665->668.
+        """D856, fixed (owner ruling): the API's `image_alt_text` is always
+        applied to the File, whatever the flush state.
 
-        THE BRIEF'S MECHANISM FOR THIS ARC WAS WRONG TWICE, and what follows
-        is measured. The brief guessed `File.query.get(None)` on an unflushed
-        `post.image_id`; the controller's amendment then reported Task 7's
-        finding that `File.query.get`'s own autoflush gives `post.image_id` a
-        value, so `:665` is TRUE on the opengraph arms, and told this task to
-        find the real mechanism. BOTH are right about their own case, and the
-        reconciliation is the url's PATH:
-
-          - `post.image = file` (`:626`) is a RELATIONSHIP write. `post.image`
-            is truthy the instant it is assigned, but `post.image_id` is only
-            synced at FLUSH. The pair is `Post.image_id` at app/models.py:1705
-            and `Post.image` at app/models.py:1764 -- re-derived with numbered
-            output, because `Community` carries a NEAR-IDENTICAL pair at
-            app/models.py:559 and :638 (`class Community` opens at :555,
-            `class Post` at :1700) and an earlier revision of this docstring
-            cited the Community lines by mistake. The two differ even in
-            loader strategy: `Post.image` is `lazy='joined'`, `Community.image`
-            is not.
-          - `:659` `post.calculate_cross_posts(url_changed=url_changed)` is
-            the only thing between `:626` and `:663` that can emit SQL, and
-            SQL is what autoflushes. For a url WITH a path it queries, the
-            autoflush fires, `post.image_id` is set, and `:665` is true --
-            that is Task 7's case, and it is the test immediately below.
-          - For a url that is a BARE DOMAIN it returns first, at
-            app/models.py:2362 `if self.url.count('/') < 3 or ...: return`,
-            having touched only already-loaded attributes -- `self.url` and
-            `self.cross_posts`, and `cross_posts` is an ARRAY COLUMN
-            (app/models.py:1745), not a relationship, so reading it is not a
-            lazy load. NO SQL, NO autoflush, so `post.image_id` is still None
-            at `:664`.
-
-        `File.query.get(None)` then returns None rather than raising -- probed
-        in this container: `PROBE File.query.get(None) -> None`, with
-        `SAWarning: fully NULL primary key identity cannot load any object.`
-
-        THAT WARNING IS THIS TEST'S PRIMARY WITNESS. It is raised by
-        SQLAlchemy only when a `get()` is handed an all-NULL primary key, and
-        it is attributed to the calling line, so it says `:664` RAN and was
-        handed None. Measured: `PROBE hits [('/app/app/shared/post.py', 664,
-        'fully NULL primary key identity cannot load any object...')]`. `:438`
-        is the function's only other `File.query.get(post.image_id)` and
-        `from_scratch=True` closes the whole `:421-459` block, so `:664` is
-        the only candidate; the assertion pins the line by SOURCE TEXT rather
-        than by number anyway, and `:664`'s `file = ...` and `:438`'s
-        `remove_file = ...` are distinguished by an exact `.strip()` compare
-        (a substring test would NOT separate them -- `:664`'s whole line is a
-        suffix of `:438`'s).
-
-        WHAT THE WARNING BUYS, STATED PRECISELY, because an earlier revision
-        of this docstring overclaimed that it was "the only assertion that
-        separates `:665` FALSE from `:663` FALSE". That is untrue of STATE:
-        both arms leave the alt_text at `:625`'s value, but only a true `:663`
-        leaves `post.image_id` pointing at a row, so
-        `assert s.post.image_id is not None` already separates them on state.
-        What the warning adds is DIRECTNESS -- it is the only assertion here
-        that observes `:664` executing and what it was given, rather than
-        inferring it from state the commit at `:734` produced afterwards. That
-        is a claim about the MUTATION sense rather than about this test's
-        verdict: a mutant that changes what `:664` is handed while leaving the
-        same final row is visible to the warning and invisible to both state
-        assertions.
-
-        The alt_text is the second witness, and alone it would be a false
-        witness: 'A photo' is what `:625` wrote, and `post.image` being falsy
-        at `:663` would leave it just as untouched (mechanism 1). Paired with
-        the warning it says `:666` did not run; paired with the test below --
-        same page, same og key, same `image_alt_text`, differing ONLY in
-        whether the url has a path -- it says `:666` is a write and not an
-        absence (mechanism 3).
+        For a BARE-DOMAIN url `calculate_cross_posts` returns before emitting
+        any SQL, so nothing autoflushes and `post.image_id` is still None when
+        the alt text is written. The write used to look the File up by that id
+        and so silently skipped it, leaving the og:title 'A photo'; the same
+        call with a url carrying a path (the test below) got the caller's text.
+        It now writes through the `post.image` relationship, so both do.
         """
         http_mock.head(BARE_PIXELFED_URL).respond(
             200, headers={'Content-Type': 'text/html'})
@@ -2821,24 +2759,10 @@ class TestPollAndEventTail:
                   s.post, POST_TYPE_LINK, SRC_API, user=s.user,
                   from_scratch=True)
 
-        # THE WARNING USED TO BE THE OBSERVABLE HERE. `:666` read
-        # `File.query.get(post.image_id)` with image_id still unflushed, and
-        # SQLAlchemy's "fully NULL primary key" SAWarning was caught and
-        # counted as direct evidence that the lookup ran on a None. Sub-project
-        # 71 stopped handing the None to the lookup at all (the D845 shape), so
-        # there is no warning left to catch -- the call is simply not made.
-        #
-        # The state assertions below are what separate this case from its twin,
-        # and they always did: this docstring's own note says
-        # `assert s.post.image_id is not None` already distinguishes them. What
-        # is lost is directness, not discrimination -- the twin immediately
-        # below supplies the same caller alt_text and DOES get it written,
-        # which is what makes `file.alt_text` here load-bearing.
         db.session.refresh(s.post)
-        assert s.post.image_id is not None  # `:663`'s `post.image` WAS truthy
         file = db.session.get(File, s.post.image_id)
         assert file.source_url == 'https://cdn.example.com/shot.jpg'
-        assert file.alt_text == 'A photo'  # `:625`'s value; `:666` never ran
+        assert file.alt_text == 'supplied by the caller'
 
     def test_a_thumbnail_flushed_by_the_cross_post_query_does_get_the_alt_text(
             self, db_session, http_mock):
