@@ -333,7 +333,10 @@ def feed_copy(feed_id: int):
                 from app.community.routes import do_subscribe
                 community = db.session.get(Community, item.community_id)
                 actor = community.ap_id if community.ap_id else community.name
-                do_subscribe(actor, current_user.id, joined_via_feed=True)
+                if current_app.debug:  # D719: dispatch, as join_feed does
+                    do_subscribe(actor, current_user.id, joined_via_feed=True)
+                else:
+                    do_subscribe.delay(actor, current_user.id, joined_via_feed=True)
 
         feed.num_communities = len(old_feed_items)
         db.session.add(feed)

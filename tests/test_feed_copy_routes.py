@@ -490,8 +490,9 @@ def test_copying_a_feed_subscribes_to_communities_the_user_is_not_in(
     import resolves it, and the actor is asserted: :298 chooses between ap_id
     and name, and the community here has an ap_id that differs from its name.
 
-    REGISTERED, NOT FIXED: this call is synchronous, where join_feed honours
-    current_app.debug and otherwise dispatches (D683's shape).
+    D719, fixed: this call was synchronous, so copying a feed ran every
+    subscribe inside the request. Like join_feed it now dispatches, and runs
+    inline only under current_app.debug (False here).
     """
     instance, owner = _seed()
     source = _feed(owner)
@@ -515,11 +516,12 @@ def test_copying_a_feed_subscribes_to_communities_the_user_is_not_in(
                 patch(subscribe_target) as subscribe:
             client.post(f'/feed/{source.id}/copy', data=_copy_payload(app, client))
 
-    assert subscribe.call_count == (1 if expect_subscribe else 0)
+    assert app.debug is False
+    assert subscribe.call_count == 0
+    assert subscribe.delay.call_count == (1 if expect_subscribe else 0)
     if expect_subscribe:
-        assert subscribe.call_args.args == ('alpha@remote.example', owner.id)
-        assert subscribe.call_args.kwargs == {'joined_via_feed': True}
-        assert subscribe.delay.call_count == 0
+        assert subscribe.delay.call_args.args == ('alpha@remote.example', owner.id)
+        assert subscribe.delay.call_args.kwargs == {'joined_via_feed': True}
 
 
 def test_copying_a_feed_makes_the_copier_its_owner_and_redirects(app, db_session):
