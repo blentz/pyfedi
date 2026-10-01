@@ -9,7 +9,7 @@ from app.models import UserBlock, NotificationSubscription, User, IpBan, UserFol
     Conversation
 from app.shared.tasks import task_selector
 from app.user.utils import purge_user_then_delete
-from app.utils import authorise_api_user, blocked_users, render_template, add_to_modlog, gibberish
+from app.utils import authorise_api_user, blocked_users, render_template, add_to_modlog, gibberish, user_access
 
 
 # only called from API for now, but can be called from web using [un]block_another_user(user.id, SRC_WEB)
@@ -153,6 +153,8 @@ def ban_user(input, src, auth=None):
         ban_ip_address = input.ip_address.data
         reason = input.reason.data
         flush_cdn = input.flush.data
+    if not (user_access('ban users', user.id) or user_access('manage users', user.id)):
+        abort(403)
     to_ban.banned = True
     db.session.commit()
 

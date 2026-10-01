@@ -142,6 +142,32 @@ def test_ban_user_api_without_purge_bans_and_logs(app, db_session):
     assert [key for key, _kwargs in calls] == ['ban_from_site']
 
 
+@pytest.mark.parametrize('src', [SRC_API, SRC_WEB])
+def test_ban_user_refuses_a_caller_without_ban_permission(app, db_session, src):
+    """D560, fixed: ban_user had no permission check of its own and relied on
+    both callers gating it. It now requires 'ban users' or 'manage users'
+    itself, the gate those callers use, and aborts 403 otherwise."""
+    from werkzeug.exceptions import Forbidden
+    s = _seed_ban_scenario()
+    nobody = make_user(s.instance, 'nobody', local=True)
+    db.session.commit()
+
+    if src == SRC_API:
+        with pytest.raises(Forbidden):
+            ban_user({'person_id': s.target.id, 'purge_content': False,
+                      'ban_ip_address': False, 'reason': 'spam'}, SRC_API, bearer(nobody))
+    else:
+        form = SimpleNamespace(person_id=s.target.id, purge=SimpleNamespace(data=False),
+                               ip_address=SimpleNamespace(data=False), reason=SimpleNamespace(data='spam'),
+                               flush=SimpleNamespace(data=False))
+        with web_ctx(app, nobody):
+            with pytest.raises(Forbidden):
+                ban_user(form, SRC_WEB, None)
+
+    db.session.expire_all()
+    assert db.session.get(User, s.target.id).banned is False
+
+
 def test_ban_user_without_purge_does_not_delete_the_target(app, db_session):
     """The `else` at :188 is the no-purge branch: it logs 'ban_user', not
     'delete_user', and reaches no deletion path at all.
