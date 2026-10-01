@@ -77,3 +77,32 @@ def report_object(session, user_id, object, summary, instance_ids):
             send_post_request(instance.inbox, flag, user.private_key, user.public_url() + '#main-key')
 
 
+@celery.task
+def report_chat(send_async, user_id, reported_id, message_ap_ids, summary):
+    """D761: a reported conversation is flagged to the reported member's instance, the object being that
+    member's messages, in the Flag shape report_object sends for a post or reply."""
+    with current_app.app_context():
+        session = get_task_session()
+        try:
+            with patch_db_session(session):
+                user = session.get(User, user_id)
+                reported = session.get(User, reported_id)
+                instance = reported.instance
+                if not message_ap_ids or instance is None or instance.inbox is None or instance.dormant or \
+                        instance.gone_forever:
+                    return
+                flag = {
+                    'id': f"{current_app.config['SERVER_URL']}/activities/flag/{gibberish(15)}",
+                    'type': 'Flag',
+                    'actor': user.public_url(),
+                    'object': message_ap_ids,
+                    '@context': default_context(),
+                    'to': [reported.public_url()],
+                    'summary': summary
+                }
+                send_post_request(instance.inbox, flag, user.private_key, user.public_url() + '#main-key')
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()

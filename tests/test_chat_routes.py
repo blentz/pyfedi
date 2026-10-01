@@ -1150,22 +1150,73 @@ def test_a_report_that_fails_validation_writes_nothing(app, db_session):
     assert render.call_args.kwargs['form'].report_remote.data is False
 
 
-def test_ticking_the_remote_box_changes_nothing_yet(app, db_session):
-    """routes.py:245-246 is `if form.report_remote.data: ...` -- a branch whose
-    body is a bare Ellipsis. The report is written either way, and that is what
-    D761 records: the checkbox the form offers does nothing.
-    """
+def _remote_conversation(alice):
+    """alice talking to a member of peer.example, who has sent two messages with
+    ap_ids and whom alice has answered once (a local message, no ap_id)."""
+    peer = make_instance('peer.example')
+    peer.inbox = 'https://peer.example/inbox'
+    remote = make_user(peer, 'remotebob')
+    conversation = make_conversation(alice, remote)
+    for number in (1, 2):
+        db.session.add(ChatMessage(sender_id=remote.id, recipient_id=alice.id, conversation_id=conversation.id,
+                                   body=f'message {number}', ap_id=f'https://peer.example/m/{number}'))
+    db.session.add(ChatMessage(sender_id=alice.id, recipient_id=remote.id, conversation_id=conversation.id,
+                               body='stop it'))
+    db.session.commit()
+    return peer, remote, conversation
+
+
+def test_ticking_the_remote_box_flags_the_messages_to_the_reported_members_instance(app, db_session):
+    """D761, owner ruling: the `report_remote` branch was a bare Ellipsis. It now
+    sends the reported member's instance a Flag of the shape report_post sends,
+    its object the reported member's messages; the local report is still written."""
     from app.models import Report
     instance, alice, bob, carol = _seed()
-    conversation = make_conversation(alice, bob)
-    _make_admin(carol)
+    peer, remote, conversation = _remote_conversation(alice)
     client = app.test_client()
     login(client, alice)
 
-    _report_post(app, client, conversation.id, report_remote='y')
+    with patch('app.shared.tasks.flags.send_post_request') as send:
+        _report_post(app, client, conversation.id, report_remote='y')
 
     assert Report.query.count() == 1
-    assert Notification.query.filter_by(subtype='chat_conversation_reported').count() == 2
+    assert send.call_count == 1
+    inbox, flag = send.call_args.args[0], send.call_args.args[1]
+    assert inbox == 'https://peer.example/inbox'
+    assert flag['type'] == 'Flag'
+    assert flag['actor'] == alice.public_url()
+    assert sorted(flag['object']) == ['https://peer.example/m/1', 'https://peer.example/m/2']
+    assert flag['to'] == [remote.public_url()]
+    assert flag['summary'] == 'Spam - they will not stop'
+    assert flag['id'].startswith('https://test.piefed.local/activities/flag/')
+
+
+def test_leaving_the_remote_box_unticked_sends_nothing(app, db_session):
+    from app.models import Report
+    instance, alice, bob, carol = _seed()
+    peer, remote, conversation = _remote_conversation(alice)
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.shared.tasks.flags.send_post_request') as send:
+        _report_post(app, client, conversation.id)
+
+    assert Report.query.count() == 1
+    assert send.call_count == 0
+
+
+def test_a_local_member_is_not_flagged_anywhere(app, db_session):
+    from app.models import Report
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.shared.tasks.flags.send_post_request') as send:
+        _report_post(app, client, conversation.id, report_remote='y')
+
+    assert Report.query.count() == 1
+    assert send.call_count == 0
 
 
 def test_a_report_names_the_reported_members_instance_as_its_source(app, db_session):
