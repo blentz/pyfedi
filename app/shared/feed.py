@@ -481,9 +481,10 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
                 db.session.delete(remove_file)
                 cache.delete_memoized(Feed.header_image, feed)
 
-    if g.site.enable_nsfw:
+    # the site switches gate setting a flag, never clearing one (D698)
+    if g.site.enable_nsfw or not nsfw:
         feed.nsfw = nsfw
-    if g.site.enable_nsfl:
+    if g.site.enable_nsfl or not nsfl:
         feed.nsfl = nsfl
     # unsubscribe every feed member except owner when moving from public to private
     if feed.public and not public:
