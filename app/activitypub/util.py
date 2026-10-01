@@ -1066,7 +1066,8 @@ def refresh_community_profile_task(community_id, activity_json):
                         if mods_request.status_code == 200:
                             mods_data = mods_request.json()
                             mods_request.close()
-                            if mods_data and 'type' in mods_data and mods_data['type'] == 'OrderedCollection' and 'orderedItems' in mods_data:
+                            # isinstance, not `in`: a string value iterated its characters (D234)
+                            if mods_data and 'type' in mods_data and mods_data['type'] == 'OrderedCollection' and isinstance(mods_data.get('orderedItems'), list):
                                 for actor in mods_data['orderedItems']:
                                     time.sleep(0.5)
                                     user = find_actor_or_create(actor, create_if_not_found=on_owner_host(actor, community.ap_profile_id),
@@ -1113,7 +1114,7 @@ def refresh_community_profile_task(community_id, activity_json):
                         if featured_request.status_code == 200:
                             featured_data = featured_request.json()
                             featured_request.close()
-                            if featured_data and 'type' in featured_data and featured_data['type'] == 'OrderedCollection' and 'orderedItems' in featured_data:
+                            if featured_data and 'type' in featured_data and featured_data['type'] == 'OrderedCollection' and isinstance(featured_data.get('orderedItems'), list):  # D234
                                 session.execute(text('UPDATE post SET sticky = false WHERE community_id = :community_id AND sticky = true'),
                                                 {'community_id': community.id})
                                 session.commit()
@@ -1239,7 +1240,7 @@ def refresh_feed_profile_task(feed_id):
                         if owners_request.status_code == 200:
                             owners_data = owners_request.json()
                             owners_request.close()
-                            if owners_data and 'type' in owners_data and owners_data['type'] == 'OrderedCollection' and 'orderedItems' in owners_data:
+                            if owners_data and 'type' in owners_data and owners_data['type'] == 'OrderedCollection' and isinstance(owners_data.get('orderedItems'), list):  # D234
                                 for actor in owners_data['orderedItems']:
                                     time.sleep(0.5)
                                     user = find_actor_or_create(actor, create_if_not_found=on_owner_host(actor, feed.ap_profile_id),
@@ -1288,7 +1289,7 @@ def refresh_feed_profile_task(feed_id):
                             res.close()
 
                             # for each of those get the communities and make feeditems
-                            if following_collection and 'items' in following_collection:
+                            if isinstance(following_collection, dict) and isinstance(following_collection.get('items'), list):  # D234
                                 for fci in following_collection['items']:
                                     community_ap_id = fci
                                     community = find_actor_or_create(community_ap_id, community_only=True, retry=True,
