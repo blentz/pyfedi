@@ -2214,6 +2214,26 @@ def test_a_post_tag_entry_with_no_type_key_is_skipped(app, db_session, redis_loc
     assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
 
 
+def test_a_nameless_hashtag_is_skipped_and_the_rest_processed(app, db_session, redis_lock_only_double):
+    """D246, fixed (owner ruling 2026-09-30). The `Hashtag` arm read
+    `json_tag['name']` unguarded, so `{"type": "Hashtag"}` raised `KeyError`
+    out of the function after `post.tags.clear()` had run. A nameless (or
+    null-named) Hashtag is now skipped; the named one after it is still
+    attached and the rest of the Update still applies.
+    """
+    post = _seed_post()
+
+    update_post_from_activity(post, _update(
+        name='a new title', content='x',
+        tag=[{'type': 'Hashtag'}, {'type': 'Hashtag', 'name': None},
+             {'type': 'Hashtag', 'name': '#topic'}],
+        type='Note',
+    ))
+
+    assert [t.name.lower() for t in post.tags] == ['topic']
+    assert post.title == 'a new title'
+
+
 def test_a_post_with_no_tag_key_leaves_existing_tags_untouched(app, db_session, redis_lock_only_double):
     """The `'tag' in request_json['object']` conjunct. Without it, an Update
     that omits `tag` entirely must not reach `post.tags.clear()` -- proved by

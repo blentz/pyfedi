@@ -3515,7 +3515,8 @@ def update_post_from_activity(post: Post, request_json: dict):
             for json_tag in request_json['object']['tag']:
                 # D1397, as the two reply tag loops.
                 json_tag = _as_dict(json_tag)
-                if 'type' in json_tag and json_tag['type'] == 'Hashtag':
+                # a Hashtag with no name has nothing to attach, so skip it rather than raise after tags were cleared
+                if 'type' in json_tag and json_tag['type'] == 'Hashtag' and isinstance(json_tag.get('name'), str):
                     if json_tag['name'][
                        1:].lower() != post.community.name.lower():  # Lemmy adds the community slug as a hashtag on every post in the community, which we want to ignore
                         hashtag = find_hashtag_or_create(json_tag['name'])
