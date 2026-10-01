@@ -222,10 +222,22 @@ def instance_add_people():
                     to_follow.append(person.strip())
 
         if form.mastodon_csv.data:
-            csv_text = form.mastodon_csv.data.read().decode('utf-8')
-            for csv_row in csv.reader(io.StringIO(csv_text)):
-                if csv_row and is_fedi_handle(csv_row[0]):
-                    to_follow.append(csv_row[0])
+            # D805: UTF-8, then UTF-8 with a byte-order mark, then Latin-1, which decodes any bytes at all
+            csv_bytes = form.mastodon_csv.data.read()
+            for encoding in ('utf-8', 'utf-8-sig', 'latin-1'):
+                try:
+                    csv_text = csv_bytes.decode(encoding)
+                    break
+                except UnicodeDecodeError:
+                    continue
+            csv_text = csv_text.lstrip('\ufeff')  # utf-8 accepts the mark as text, so utf-8-sig's job is done here
+            try:
+                for csv_row in csv.reader(io.StringIO(csv_text)):
+                    if csv_row and is_fedi_handle(csv_row[0]):
+                        to_follow.append(csv_row[0])
+            except csv.Error:
+                flash(_('Could not read this file; export it again as a UTF-8 CSV'), 'error')
+                return render_template('instance/add_people.html', title=_('Add people'), form=form)
 
         if current_app.debug:
             bulk_follow(current_user.id, to_follow)

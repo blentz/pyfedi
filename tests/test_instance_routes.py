@@ -930,12 +930,14 @@ def test_a_debug_server_follows_in_process(app, db_session):
     assert follower.delay.call_count == 0
 
 
-def test_a_csv_that_is_not_utf8_is_a_500(app, db_session):
-    """D805, recorded rather than repaired: the upload is decoded as UTF-8 with
-    no guard, so any other encoding is a traceback. A Mastodon export is always
-    UTF-8, which is why this has survived -- but the answer to the wrong file
-    is a message, and what that message should say is a product decision.
-    """
+@pytest.mark.parametrize('raw', [
+    '\ufeff@alice@example.test,true\n'.encode('utf-8'),   # UTF-8 with a byte-order mark
+    '@alice@example.test,café\n'.encode('latin-1'),     # not UTF-8 at all
+])
+def test_a_csv_in_another_encoding_is_still_read(app, db_session, raw):
+    """D805, fixed (owner ruling): the upload is decoded as UTF-8, then UTF-8
+    with a byte-order mark, then Latin-1. Any other encoding used to be an
+    unguarded UnicodeDecodeError -- a 500."""
     instance, alice, bob = _seed()
     _submitter(alice)
     client = app.test_client()
@@ -943,13 +945,36 @@ def test_a_csv_that_is_not_utf8_is_a_500(app, db_session):
     token = csrf(app, client)
 
     with patch('app.instance.routes.render_template', return_value='rendered'), \
-         patch('app.instance.routes.bulk_follow'):
-        with pytest.raises(UnicodeDecodeError):
-            client.post('/instance/add_people',
-                        data={'csrf_token': token,
-                              'mastodon_csv': (io.BytesIO(b'\xff\xfe@alice@example.test'),
-                                               'follows.csv')},
-                        content_type='multipart/form-data')
+         patch('app.instance.routes.bulk_follow') as follower:
+        client.post('/instance/add_people',
+                    data={'csrf_token': token, 'mastodon_csv': (io.BytesIO(raw), 'follows.csv')},
+                    content_type='multipart/form-data')
+
+    assert follower.delay.call_args.args[1] == ['@alice@example.test']
+
+
+def test_a_csv_that_cannot_be_parsed_says_so_and_follows_nobody(app, db_session):
+    """D805, fixed (owner ruling): a file that decodes but will not parse as
+    CSV -- here one field past the csv module's size limit -- is answered with
+    a message asking for a fresh UTF-8 export, and nobody is followed."""
+    instance, alice, bob = _seed()
+    _submitter(alice)
+    client = app.test_client()
+    login(client, alice)
+    token = csrf(app, client)
+    oversized = ('@alice@example.test,"' + 'x' * 200000 + '"\n').encode('utf-8')
+
+    with patch('app.instance.routes.render_template', return_value='rendered'), \
+         patch('app.instance.routes.bulk_follow') as follower, \
+         patch('app.instance.routes.flash') as flashed:
+        response = client.post('/instance/add_people',
+                               data={'csrf_token': token,
+                                     'mastodon_csv': (io.BytesIO(oversized), 'follows.csv')},
+                               content_type='multipart/form-data')
+
+    assert response.status_code == 200
+    assert follower.delay.call_count == 0
+    assert str(flashed.call_args.args[0]) == 'Could not read this file; export it again as a UTF-8 CSV'
 
 
 # --------------------------------------------------------------------------
