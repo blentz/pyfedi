@@ -863,32 +863,19 @@ def test_edit_community_permission_guard_neither_raises_and_leaves_community_unt
     assert _row_fields() == before
 
 
-def test_edit_community_permission_guard_staff_alone_is_refused(app, db_session):
-    """NAME NARROWED BY THE FINAL WHOLE-BRANCH REVIEW: this test used to be
-    called `..._staff_alone_is_refused_unlike_sibling_guards`, and nothing in
-    it asserts anything about the sibling guards -- they are named below as
-    context for WHY this site is worth pinning, which is a docstring's job,
-    not a name's. What the body witnesses is exactly what the name now says:
-    a staff-only user is refused here.
-
-    `:322` reads `user.is_admin()`, NOT `is_admin_or_staff()` -- the only
-    guard in this module that uses the narrower form. `delete_community:494`,
-    `restore_community:523`, `add_mod_to_community:549`, and
-    `remove_mod_from_community:617` all use `is_admin_or_staff()`
-    (app/models.py:1274-1275) and would admit a Staff-only user where this
-    site refuses them. REGISTERED AS FOUND, NOT FIXED: this test pins
-    today's actual, inconsistent behaviour -- a staff user with no
-    CommunityMember row and no 'Admin' role is refused here.
+def test_edit_community_permission_guard_staff_alone_is_admitted(app, db_session):
+    """D642, fixed (owner ruling): edit_community asks `can_moderate` --
+    moderator, admin, staff or 'administer all communities' -- so a staff
+    user with no CommunityMember row and no 'Admin' role may edit. It spelled
+    bare `is_admin()` and refused them while its siblings admitted staff.
     """
     s = _seed()
     _make_site_staff(s.user)
-    original_title = s.community.title
-    api_input = _api_input(title='Should Not Land Either')
+    api_input = _api_input(title='Staff May Land This')
 
-    with pytest.raises(Exception, match='incorrect_login'):
-        edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+    edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
 
-    assert s.community.title == original_title
+    assert s.community.title == 'Staff May Land This'
 
 
 # `edit_community` (app/shared/community.py:325-333), the icon block.
