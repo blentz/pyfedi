@@ -11,7 +11,7 @@ import pendulum
 from flask import session, g, json, request, current_app
 from sqlalchemy import text
 from app.constants import POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_ARTICLE, POST_TYPE_VIDEO, POST_TYPE_POLL, \
-    SUBSCRIPTION_MODERATOR, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, SUBSCRIPTION_PENDING, ROLE_ADMIN, VERSION, \
+    SUBSCRIPTION_MODERATOR, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, SUBSCRIPTION_PENDING, ROLE_ADMIN_NAME, VERSION, \
     POST_TYPE_EVENT
 from app.models import Site, utcnow
 from app.utils import getmtime, gibberish, shorten_string, shorten_url, digits, user_access, community_membership, \
@@ -102,9 +102,10 @@ def register_request_hooks(app):
                             UNION
                             SELECT u.id
                             FROM "user" u
-                            JOIN user_role ur ON u.id = ur.user_id AND ur.role_id = :role_admin AND u.deleted = false AND u.banned = false
+                            JOIN user_role ur ON u.id = ur.user_id AND u.deleted = false AND u.banned = false
+                            JOIN role r ON r.id = ur.role_id AND r.name = :role_admin_name
                             ORDER BY id"""),
-                    {'role_admin': ROLE_ADMIN}).scalars())
+                    {'role_admin_name': ROLE_ADMIN_NAME}).scalars())  # D481: by name, as is_admin()
                 set_setting('admin_ids', g.admin_ids)
 
         if current_user.is_authenticated:

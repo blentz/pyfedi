@@ -76,7 +76,7 @@ from app import db
 from app.activitypub.util import update_post_from_activity
 from app.constants import (NOTIF_REPORT, POST_TYPE_ARTICLE, POST_TYPE_EVENT,
                            POST_TYPE_IMAGE, POST_TYPE_LINK, POST_TYPE_POLL,
-                           POST_TYPE_VIDEO, ROLE_ADMIN)
+                           POST_TYPE_VIDEO, ROLE_ADMIN, ROLE_ADMIN_NAME)
 from app.models import (Event, File, Notification, PollChoice, PollChoiceVote,
                         Post, Role, User)
 from app.utils import set_setting, utcnow
@@ -3165,40 +3165,23 @@ def _suspicious_domain(notify_mods=False, notify_admins=False, banned=False):
 
 
 def _make_admin(user, role_id=ROLE_ADMIN):
-    """Make `user` an admin as `Site.admins()` (`:3529`) counts them.
+    """Give `user` the role `role_id`, for `Site.admins()` (`:3529`) to count.
 
-    WHICH ARM. `Site.admins()` (app/models.py:3995-4000) is, verbatim:
+    tests/conftest.py clears `flask.g` before every test and nothing in this
+    file sets `admin_ids`, so `Site.admins()` always runs its query: user 1, or
+    any user holding a role NAMED ROLE_ADMIN_NAME (D481 -- by name, as
+    `is_admin()` matches it). So the ROLE_ADMIN row is created under that name,
+    and any other `role_id` -- the ORDINARY_ROLE caller below -- makes a role
+    that confers nothing. `Role` rows are shared across calls so two admins can
+    hold the same role without colliding on its primary key.
 
-        if hasattr(g, 'admin_ids'):
-            return db.session.query(User).filter(User.id.in_(tuple(g.admin_ids))).all()
-        else:
-            return db.session.query(User).filter_by(deleted=False, banned=False).join(user_role).filter(
-                                          or_(user_role.c.role_id == ROLE_ADMIN, User.id == 1)).order_by(User.id).all()
-
-    tests/conftest.py:156 clears `flask.g` before every test and nothing in this
-    file sets `admin_ids`, so **every test here takes the JOIN arm**. That is
-    the point of saying so: a fixture that stashed `g.admin_ids` would never
-    reach the query, and a test claiming to exercise the role path would be
-    proving nothing.
-
-    WHY A ROLE ROW IS REQUIRED EVEN FOR USER 1. `.join(user_role)` is an INNER
-    join, so a user with no row in that table is dropped before the `or_` is
-    evaluated -- `User.id == 1` cannot rescue a user the join has already
-    excluded. `make_user` (tests/factories.py:39-65) creates no roles, so
-    `_seed_post`'s user 1 is NOT an admin as seeded: `Site.admins()` returns
-    `[]` for that fixture. Measured directly against this harness, and it is
-    why every admin below is given a role explicitly.
-
-    WHICH DISJUNCT the row then satisfies is `role_id`'s job. ROLE_ADMIN (4,
-    app/constants.py:81) satisfies `user_role.c.role_id == ROLE_ADMIN` for any
-    user; any other id leaves `User.id == 1` as the only thing that can match,
-    which is what the ORDINARY_ROLE caller below is for. `Role` rows are shared
-    across calls so two admins can hold the same role without colliding on its
-    primary key. The shape mirrors tests/test_request_hooks.py:140.
+    Since D442 user 1 needs no role row at all; this file's user 1 is an admin
+    as seeded, which is why the admin tests count it among the recipients.
     """
     role = db.session.get(Role, role_id)
     if role is None:
-        role = Role(id=role_id, name=f'role-{role_id}', weight=0)
+        role = Role(id=role_id, name=ROLE_ADMIN_NAME if role_id == ROLE_ADMIN else f'role-{role_id}',
+                    weight=0)
         db.session.add(role)
         db.session.commit()
     user.roles.append(role)
@@ -3394,8 +3377,8 @@ class TestSuspiciousDomainNotifications:
 
         `_seed_post`'s user 1 is the community owner, and the role granted here
         is ORDINARY_ROLE -- neither ROLE_ADMIN nor ROLE_STAFF -- so the row
-        exists only to satisfy the INNER join and `User.id == 1` is the only
-        thing that can match it. Granting ROLE_ADMIN instead would have made
+        confers nothing and `User.id == 1` is the only thing that can match.
+        (Since D442 the row is not even needed; it stays as a decoy.) Granting ROLE_ADMIN instead would have made
         this test a duplicate of the one above while looking like a different
         one; see ORDINARY_ROLE for why ROLE_STAFF was no good either.
 

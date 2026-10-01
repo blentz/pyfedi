@@ -35,7 +35,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from app import db, login, cache, celery, httpx_client, constants, app_bcrypt
 from app.constants import SUBSCRIPTION_NONMEMBER, SUBSCRIPTION_MEMBER, SUBSCRIPTION_MODERATOR, SUBSCRIPTION_OWNER, \
     SUBSCRIPTION_BANNED, SUBSCRIPTION_PENDING, NOTIF_USER, NOTIF_COMMUNITY, NOTIF_TOPIC, NOTIF_POST, NOTIF_REPLY, \
-    ROLE_ADMIN, ROLE_STAFF, NOTIF_FEED, NOTIF_DEFAULT, NOTIF_REPORT, NOTIF_MENTION, POST_STATUS_REVIEWING, \
+    NOTIF_FEED, NOTIF_DEFAULT, NOTIF_REPORT, NOTIF_MENTION, POST_STATUS_REVIEWING, \
     POST_STATUS_PUBLISHED, POST_TYPE_VIDEO, INVITE_MEMBERS_ONLY, INVITE_MODS_ONLY, INVITE_OWNER_ONLY, ROLE_ADMIN_NAME, \
     ROLE_STAFF_NAME
 
@@ -5076,14 +5076,15 @@ class Site(db.Model):
         if hasattr(g, 'admin_ids'):
             return db.session.query(User).filter(User.id.in_(tuple(g.admin_ids))).all()
         else:
-            # D442: an EXISTS, not a join, so user 1 needs no user_role row to be listed
+            # D442: an EXISTS, not a join, so user 1 needs no user_role row to be listed.
+            # D481: matched by role name, as is_admin() is.
             return db.session.query(User).filter_by(deleted=False, banned=False).filter(
-                                          or_(User.roles.any(Role.id == ROLE_ADMIN), User.id == 1)).order_by(User.id).all()
+                                          or_(User.roles.any(Role.name == ROLE_ADMIN_NAME), User.id == 1)).order_by(User.id).all()
 
     @staticmethod
     def staff() -> List[User]:
-        return db.session.query(User).filter_by(deleted=False, banned=False).join(user_role).filter(
-                                      user_role.c.role_id == ROLE_STAFF).order_by(User.id).all()
+        return db.session.query(User).filter_by(deleted=False, banned=False).filter(
+                                      User.roles.any(Role.name == ROLE_STAFF_NAME)).order_by(User.id).all()  # D481: by name, as is_staff()
 
     def active_now(self):
         return db.session.execute(text(
