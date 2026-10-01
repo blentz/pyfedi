@@ -701,6 +701,10 @@ def extract_domain_and_actor(url_string: str):
     return server_domain, actor
 
 
+# The refresh tasks act on at most this many entries of a peer's collection, since the peer chooses its length (D225)
+REFRESH_COLLECTION_LIMIT = 50
+
+
 def refresh_user_profile(user_id, activity_json=None):
     if current_app.debug:
         refresh_user_profile_task(user_id, activity_json)
@@ -1071,8 +1075,7 @@ def refresh_community_profile_task(community_id, activity_json=None):
                             mods_request.close()
                             # isinstance, not `in`: a string value iterated its characters (D234)
                             if mods_data and 'type' in mods_data and mods_data['type'] == 'OrderedCollection' and isinstance(mods_data.get('orderedItems'), list):
-                                for actor in mods_data['orderedItems']:
-                                    time.sleep(0.5)
+                                for actor in mods_data['orderedItems'][:REFRESH_COLLECTION_LIMIT]:
                                     if not isinstance(actor.get('id') if isinstance(actor, dict) else actor, str):
                                         continue  # a malformed entry is skipped, not fatal to the rest (D219)
                                     user = find_actor_or_create(actor, create_if_not_found=on_owner_host(actor, community.ap_profile_id),
@@ -1123,7 +1126,7 @@ def refresh_community_profile_task(community_id, activity_json=None):
                                 session.execute(text('UPDATE post SET sticky = false WHERE community_id = :community_id AND sticky = true'),
                                                 {'community_id': community.id})
                                 session.commit()
-                                for item in featured_data['orderedItems']:
+                                for item in featured_data['orderedItems'][:REFRESH_COLLECTION_LIMIT]:
                                     # a malformed entry is skipped, so it cannot leave every sticky cleared (D219)
                                     if not isinstance(item, dict) or not isinstance(item.get('id'), str):
                                         continue
@@ -1254,8 +1257,7 @@ def refresh_feed_profile_task(feed_id, activity_json=None):
                             owners_data = owners_request.json()
                             owners_request.close()
                             if owners_data and 'type' in owners_data and owners_data['type'] == 'OrderedCollection' and isinstance(owners_data.get('orderedItems'), list):  # D234
-                                for actor in owners_data['orderedItems']:
-                                    time.sleep(0.5)
+                                for actor in owners_data['orderedItems'][:REFRESH_COLLECTION_LIMIT]:
                                     user = find_actor_or_create(actor, create_if_not_found=on_owner_host(actor, feed.ap_profile_id),
                                                                 retry=True)
                                     if user:
@@ -1303,7 +1305,7 @@ def refresh_feed_profile_task(feed_id, activity_json=None):
 
                             # for each of those get the communities and make feeditems
                             if isinstance(following_collection, dict) and following_collection.get('type') == 'Collection' and isinstance(following_collection.get('items'), list):  # D234, D228
-                                for fci in following_collection['items']:
+                                for fci in following_collection['items'][:REFRESH_COLLECTION_LIMIT]:
                                     community_ap_id = fci
                                     community = find_actor_or_create(community_ap_id, community_only=True, retry=True,
                                                                      create_if_not_found=on_owner_host(community_ap_id, feed.ap_profile_id))

@@ -2283,3 +2283,71 @@ def test_a_string_following_collection_is_skipped(app, db_session, http_mock, mo
 
     assert seen == []
     assert db.session.query(FeedItem).count() == 0
+
+
+# D225, fixed (owner ruling): the moderators, featured, owners and following
+# loops slept 0.5s inline in the worker before every entry, and the peer chose
+# how many entries there were. The sleep is gone and each loop acts on at most
+# 50 entries.
+
+def _sixty(path):
+    return [f'https://{PEER}/{path}/{n}' for n in range(60)]
+
+
+def _record_sleeps(monkeypatch):
+    slept = []
+    monkeypatch.setattr(ap_util.time, 'sleep', lambda seconds: slept.append(seconds))
+    return slept
+
+
+def test_the_moderators_loop_acts_on_fifty_entries_without_sleeping(app, db_session, http_mock, monkeypatch):
+    community = _remote_community()
+    mods_url = f'https://{PEER}/c/memes/moderators'
+    _serve(http_mock, mods_url, {'type': 'OrderedCollection', 'orderedItems': _sixty('u')})
+    calls = _spy_on_actor_lookups(monkeypatch)
+    slept = _record_sleeps(monkeypatch)
+
+    refresh_community_profile_task(
+        community.id, _group_document(fields={'attributedTo': mods_url}))
+
+    assert [actor for actor, _, _ in calls] == _sixty('u')[:50]
+    assert slept == []
+
+
+def test_the_featured_loop_acts_on_fifty_entries(app, db_session, http_mock):
+    community = _remote_community()
+    featured_url = f'https://{PEER}/c/memes/featured'
+    community.ap_featured_url = featured_url
+    db.session.commit()
+    poster = make_user(community.instance, 'poster')
+    db.session.commit()
+    fiftieth = make_post(community, poster, _sixty('p')[49])
+    fifty_first = make_post(community, poster, _sixty('p')[50])
+    db.session.commit()
+    _serve(http_mock, featured_url, {'type': 'OrderedCollection',
+                                     'orderedItems': [{'id': url} for url in _sixty('p')]})
+
+    refresh_community_profile_task(community.id, _group_document())
+
+    db.session.refresh(fiftieth)
+    db.session.refresh(fifty_first)
+    assert fiftieth.sticky is True
+    assert fifty_first.sticky is False
+
+
+def test_the_feed_owners_and_following_loops_act_on_fifty_entries_without_sleeping(
+        app, db_session, http_mock, monkeypatch):
+    feed = _remote_feed()
+    feed.ap_following_url = f'https://{PEER}/f/news/following'
+    db.session.commit()
+    owners_url = f'https://{PEER}/f/news/owners'
+    _serve(http_mock, feed.ap_public_url, _feed_document(fields={'attributedTo': owners_url}))
+    _serve(http_mock, owners_url, {'type': 'OrderedCollection', 'orderedItems': _sixty('u')})
+    _serve(http_mock, feed.ap_following_url, {'type': 'Collection', 'items': _sixty('c')})
+    calls = _spy_on_actor_lookups(monkeypatch)
+    slept = _record_sleeps(monkeypatch)
+
+    refresh_feed_profile_task(feed.id)
+
+    assert [actor for actor, _, _ in calls] == _sixty('u')[:50] + _sixty('c')[:50]
+    assert slept == []
