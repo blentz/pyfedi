@@ -79,6 +79,9 @@ NOTIF_DEFAULT = 999  # default entry
 
 ROLE_STAFF = 3
 ROLE_ADMIN = 4
+# D965: is_admin()/is_staff() match these role NAMES, so they are spelled once here
+ROLE_STAFF_NAME = 'Staff'
+ROLE_ADMIN_NAME = 'Admin'
 
 DOWNVOTE_ACCEPT_NONE = -1
 DOWNVOTE_ACCEPT_ALL = 0

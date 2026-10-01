@@ -30,7 +30,8 @@ from app.activitypub.util import extract_domain_and_actor, notify_about_post, ho
 from app.auth.util import random_token
 from app.community.util import is_bad_name
 from app.constants import NOTIF_COMMUNITY, NOTIF_POST, NOTIF_REPLY, POST_STATUS_SCHEDULED, POST_STATUS_PUBLISHED, \
-    POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_IMAGE, NOTIF_REMINDER, POST_TYPE_VIDEO, POST_TYPE_ARTICLE, SRC_API
+    POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_IMAGE, NOTIF_REMINDER, POST_TYPE_VIDEO, POST_TYPE_ARTICLE, SRC_API, \
+    ROLE_ADMIN_NAME, ROLE_STAFF_NAME
 from app.email import send_email
 from app.models import CronJobLog, Settings, BannedInstances, Role, User, RolePermission, Domain, ActivityPubLog, utcnow, \
     utcnow, Site, Instance, File, Notification, Post, CommunityMember, NotificationSubscription, PostReply, Language, \
@@ -199,14 +200,14 @@ def register(app):
             auth_role = Role(name='Authenticated user', weight=1)
             db.session.add(auth_role)
 
-            staff_role = Role(name='Staff', weight=2)
+            staff_role = Role(name=ROLE_STAFF_NAME, weight=2)
             staff_role.permissions.append(RolePermission(permission='approve registrations'))
             staff_role.permissions.append(RolePermission(permission='ban users'))
             staff_role.permissions.append(RolePermission(permission='administer all communities'))
             staff_role.permissions.append(RolePermission(permission='manage users'))
             db.session.add(staff_role)
 
-            admin_role = Role(name='Admin', weight=3)
+            admin_role = Role(name=ROLE_ADMIN_NAME, weight=3)
             admin_role.permissions.append(RolePermission(permission='approve registrations'))
             admin_role.permissions.append(RolePermission(permission='change user roles'))
             admin_role.permissions.append(RolePermission(permission='ban users'))
@@ -300,7 +301,7 @@ def register(app):
                 return
 
             # Get the Admin role for assigning to Lemmy admins
-            admin_role = Role.query.filter_by(name='Admin').first()
+            admin_role = Role.query.filter_by(name=ROLE_ADMIN_NAME).first()
 
             print("\nImporting users...")
             with lemmy_engine.connect() as lemmy_conn:
