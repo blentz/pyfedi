@@ -2920,7 +2920,12 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
         language_id = None
         ap_language = language_from_ap(request_json['object'].get('language'))  # D1355
         if ap_language is not None:
-            language_id = find_language_or_create(*ap_language).id
+            language = find_language_or_create(*ap_language)
+            if language.id is None:
+                # A newly created Language is only add()ed, and under autoflush=False its id
+                # stays None until a flush, so the reply was created with no language (D260).
+                db.session.flush()
+            language_id = language.id
         # A non-empty dict: an empty map names no language, like an absent one, and next(iter({})) raises (D272)
         elif isinstance(request_json['object'].get('contentMap'), dict) and request_json['object']['contentMap']:
             language = find_language(next(iter(request_json['object']['contentMap'])))  # Combination of next and iter gets the first key in a dict
