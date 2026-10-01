@@ -1040,6 +1040,26 @@ def test_a_post_delete_reaches_the_authors_own_followers(db_session, http_mock):
     assert db.session.query(ActivityPubLog).count() == 2
 
 
+@pytest.mark.parametrize('inbox, dormant', [(OTHER_INBOX, True), (None, False)])
+def test_a_dormant_or_inboxless_follower_instance_is_not_sent_the_delete(
+        db_session, http_mock, inbox, dormant):
+    """D335, fixed: the author-follower fan-out filtered gone_forever only and
+    sent to `instance.inbox` unchecked, so dormant peers and null inboxes got
+    a delivery attempt. Both are now skipped; only the community's own Delete
+    is sent."""
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    community_route = http_mock.post(PEER_INBOX).respond(200, json={})
+    inst, _fan = _personal_follower_without_a_mocked_route(s, inbox=inbox)
+    inst.dormant = dormant
+    db.session.commit()
+
+    delete_post(None, s.user.id, s.post.id)
+
+    assert len(community_route.calls) == 1
+    assert db.session.query(ActivityPubLog).count() == 1
+
+
 def test_a_follower_row_with_no_resolvable_account_is_skipped_in_the_cc_list(
         db_session, http_mock):
     """`:210`'s FALSE arm. `UserFollower.remote_user_id` is a nullable FK

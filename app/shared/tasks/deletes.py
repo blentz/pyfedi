@@ -221,9 +221,9 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
             if user_details:
                 payload['cc'].append(user_details.public_url())
         instances = session.query(Instance).join(User, User.instance_id == Instance.id).join(UserFollower, UserFollower.remote_user_id == User.id)
-        instances = instances.filter(UserFollower.local_user_id == user.id).filter(Instance.gone_forever == False)
+        instances = instances.filter(UserFollower.local_user_id == user.id).filter(Instance.gone_forever == False, Instance.dormant == False)
         for instance in instances:
-            if instance.domain not in domains_sent_to:
+            if instance.inbox and instance.domain not in domains_sent_to:
                 send_post_request(instance.inbox, payload, user.private_key, user.public_url() + '#main-key')
 
     # remove any notifications about deleted posts
