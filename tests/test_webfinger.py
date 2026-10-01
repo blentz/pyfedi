@@ -323,9 +323,10 @@ def test_a_user_is_matched_case_insensitively(app, db_session):
         'https://www.w3.org/ns/activitystreams#type'] == 'Person'
 
 
-def test_a_user_is_matched_by_alt_user_name(app, db_session):
-    """The second disjunct of the `or_(...)`. `user_name` deliberately does NOT
-    match the query, so this test is the only one that can kill that disjunct.
+def test_a_user_is_not_matched_by_alt_user_name(app, db_session):
+    """D166, fixed (owner ruling). Webfinger matched `alt_user_name` too, but
+    that is the private-voting pseudonym: resolving it named the account
+    behind it, and `/u/<altname>` 404s anyway. Only `user_name` matches now.
     """
     site, instance = seed_local_actors()
     user = make_user(instance, 'alice', local=True)
@@ -334,9 +335,7 @@ def test_a_user_is_matched_by_alt_user_name(app, db_session):
 
     response = webfinger_get(app, resource='acct:alice_alt@test.piefed.local')
 
-    assert response.status_code == 200
-    assert response.content_type == 'application/jrd+json'
-    assert response.json['subject'] == 'acct:alice_alt@test.piefed.local'
+    assert response.status_code == 404
 
 
 def test_a_deleted_user_is_not_served(app, db_session):

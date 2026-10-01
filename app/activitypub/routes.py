@@ -144,8 +144,8 @@ def process_webfinger_request(resource):
     if not feed:
         # look for the User first, then the Community, then the Feed that matches
         type = 'Person'
-        object = User.query.filter(
-            or_(func.lower(User.user_name) == actor.strip().lower(), func.lower(User.alt_user_name) == actor.strip().lower())).filter_by(deleted=False,
+        # not alt_user_name: that is the private-voting pseudonym, and resolving it would name its owner (D166)
+        object = User.query.filter(func.lower(User.user_name) == actor.strip().lower()).filter_by(deleted=False,
                                                                                                  banned=False,
                                                                                                  ap_id=None).first()
         if object is None:
