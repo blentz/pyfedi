@@ -394,6 +394,33 @@ def test_an_unreachable_translation_service_does_not_break_the_page(app, db_sess
     assert render.call_args.kwargs['translation_languages'] is None
 
 
+def test_the_translation_status_is_cached_for_an_hour_with_a_3s_timeout(app, db_session, monkeypatch):
+    """D909, fixed (owner ruling): the admin home asked the configured
+    LibreTranslate endpoint on every load, with the HTTP client's default
+    30 s timeout. The answer is now fetched with a 3 s timeout and cached for
+    an hour, so a second load makes no outbound request."""
+    from cachelib import SimpleCache
+    from app import cache
+    from app.admin.routes import translation_service_languages
+
+    monkeypatch.setitem(app.extensions['cache'], cache, SimpleCache())
+    instance, ordinary = _seed()
+    staffer = _staff(instance)
+    client = app.test_client()
+    login(client, staffer)
+
+    with patch.dict(app.config, {'TRANSLATE_ENDPOINT': 'https://lt.example', 'TRANSLATE_KEY': 'k'}):
+        with patch('app.admin.routes.LibreTranslateAPI') as api:
+            api.return_value.languages.return_value = [{'code': 'en', 'name': 'English'}]
+            with patch('app.admin.routes.render_template', return_value='rendered') as render:
+                client.get('/admin/')
+                client.get('/admin/')
+
+    assert api.return_value.languages.call_args_list == [((), {'timeout': 3})]
+    assert render.call_args.kwargs['translation_languages'] == [{'code': 'en', 'name': 'English'}]
+    assert translation_service_languages.cache_timeout == 3600
+
+
 # --------------------------------------------------------------------------
 # Every route on the blueprint, refused
 # --------------------------------------------------------------------------
