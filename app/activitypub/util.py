@@ -2973,7 +2973,8 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
                     profile_id = json_tag['href'] if 'href' in json_tag else None
                     if profile_id and isinstance(profile_id, str) and profile_id.startswith('https://' + current_app.config['SERVER_NAME']):
                         profile_id = profile_id.lower()
-                        if profile_id != reply_parent.author.ap_profile_id:
+                        # once per recipient: a repeated Mention tag notified twice (D262)
+                        if profile_id != reply_parent.author.ap_profile_id and profile_id not in local_users_to_notify:
                             local_users_to_notify.append(profile_id)
 
         # A non-string flair is skipped, and both branches strip (D273)

@@ -1215,6 +1215,22 @@ def test_a_lone_mention_notifies(app, db_session, redis_lock_only_double):
     assert Notification.query.count() == 1
 
 
+def test_the_same_mention_twice_notifies_once(app, db_session, redis_lock_only_double):
+    """D262, fixed: the create path had no de-duplication at all, so a
+    document repeating one Mention tag produced two notifications and a
+    double-counted unread total. A recipient is now collected once."""
+    community, post, replier = _seed_scenario()
+    _use_a_non_microblog_instance(replier)
+    recipient = _seed_local_recipient('localuser')
+    document = _reply_doc(content='hello', tag=[_mention('localuser'), _mention('localuser')])
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    assert Notification.query.filter_by(user_id=recipient.id).count() == 1
+    assert db.session.get(User, recipient.id).unread_notifications == 1
+
+
 def test_a_mention_of_a_remote_user_produces_no_notification(app, db_session, redis_lock_only_double):
     """The `profile_id.startswith('https://' + SERVER_NAME)` guard's
     ordinary job: a foreign-host href is never collected.
