@@ -114,10 +114,8 @@ class TestAPrivateInstance:
 
     @pytest.mark.parametrize('name', list(FEEDS))
     def test_not_even_for_a_logged_in_member(self, app, seeded, name):
-        """The guard is unconditional, as `index_rss`'s always was. A row asserting only
-        the anonymous case would pass for a fix that let members through, which is a
-        different product decision and would need its own argument -- an RSS reader cannot
-        present a session anyway."""
+        """A session is not what opens a private instance's feeds: an RSS reader cannot
+        present one. Since R219 a member's RSS token in the url does (TestAMembersRssToken)."""
         seeded.site.private_instance = True
         db.session.commit()
         client = app.test_client()
@@ -126,6 +124,39 @@ class TestAPrivateInstance:
             session['_fresh'] = True
 
         response = client.get(FEEDS[name])
+
+        assert response.status_code == 404
+
+
+class TestAMembersRssToken:
+    """R219, fixed (owner ruling): an RSS reader presents no session, so on a
+    private instance a member's own RSS token in the url is what opens a feed.
+    Anonymous readers -- and a session alone, above -- still get 404."""
+
+    @pytest.mark.parametrize('name', list(FEEDS))
+    def test_a_valid_token_opens_every_feed(self, app, seeded, name):
+        seeded.site.private_instance = True
+        seeded.author.rss_token = 'a-members-rss-token'
+        db.session.commit()
+
+        response = app.test_client().get(FEEDS[name] + '?token=a-members-rss-token')
+
+        assert response.status_code == 200
+
+    @pytest.mark.parametrize('banned, deleted, token', [
+        (False, False, 'not-anyones-token'),
+        (True, False, 'a-members-rss-token'),
+        (False, True, 'a-members-rss-token'),
+    ])
+    def test_a_wrong_token_or_one_from_a_banned_or_deleted_account_does_not(
+            self, app, seeded, banned, deleted, token):
+        seeded.site.private_instance = True
+        seeded.author.rss_token = 'a-members-rss-token'
+        seeded.author.banned = banned
+        seeded.author.deleted = deleted
+        db.session.commit()
+
+        response = app.test_client().get('/community/general/feed?token=' + token)
 
         assert response.status_code == 404
 
@@ -320,5 +351,5 @@ def test_index_rss_still_checks_inline_and_says_why():
     head = source[source.index("def index_rss("):]
     head = head[:head.index('current_etag')]
 
-    assert 'if g.site.private_instance:' in head
+    assert 'if g.site.private_instance and user is None:' in head
     assert "#@cache.cached(timeout=600, query_string=True)" in source

@@ -119,11 +119,14 @@ class TestAPrivateInstance:
 
         assert response.status_code == 404
 
-    def test_a_token_does_not_open_a_private_instance(self, private):
+    def test_a_members_token_opens_a_private_instance(self, private):
+        """R219, fixed (owner ruling): an RSS reader presents no session, so a
+        member's RSS token in the url is what opens the feed on a private
+        instance. It used to be refused like an anonymous request."""
         token = a_token(private.baseline.user1)
 
         assert private.client.get(
-            f'/index/feed/subscribed?token={token}').status_code == 404
+            f'/index/feed/subscribed?token={token}').status_code == 200
 
 
 class TestTheTokenInTheQueryString:
