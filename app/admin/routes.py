@@ -47,7 +47,7 @@ from app.shared.upload import process_file_delete
 from app.translation import LibreTranslateAPI
 from app.utils import render_template, permission_required, set_setting, get_setting, gibberish, markdown_to_html, \
     moderating_communities, joined_communities, finalize_user_setup, theme_list, blocked_phrases, blocked_referrers, \
-    topic_tree, languages_for_form, menu_topics, ensure_directory_exists, add_to_modlog, get_request, file_get_contents, \
+    topic_tree, languages_for_form, menu_topics, ensure_directory_exists, add_to_modlog, get_request, \
     download_defeds, instance_banned, login_required, referrer, \
     community_membership, retrieve_image_hash, posts_with_blocked_images, user_access, reported_posts, user_notes, \
     decrement_unread_counts, \
@@ -1120,20 +1120,15 @@ def admin_federation_ban_lists():
             file_ext = os.path.splitext(import_file.filename)[1]
             if file_ext.lower() != '.json':
                 abort(400)
-            new_filename = gibberish(15) + '.json'
-
-            directory = 'app/static/media/'
-
-            # save the file
-            final_place = os.path.join(directory, new_filename + file_ext)
-            import_file.save(final_place)
+            # D930: read in memory and pass the text on, so the ban list is never written into the served media tree
+            contents = import_file.read().decode('utf-8')
 
             # import bans in background task
             if current_app.debug:
-                import_bans_task(final_place)
+                import_bans_task(contents)
                 return redirect(url_for('admin.admin_federation_ban_lists'))
             else:
-                import_bans_task.delay(final_place)
+                import_bans_task.delay(contents)
                 flash(_('Ban imports started in a background process.'))
                 return redirect(url_for('admin.admin_federation_ban_lists'))
         else:
@@ -1202,12 +1197,11 @@ def admin_federation_ban_lists():
 
 
 @celery.task
-def import_bans_task(filename):
+def import_bans_task(contents):
     with current_app.app_context():
         session = get_task_session()
         try:
             with patch_db_session(session):
-                contents = file_get_contents(filename)
                 contents_json = json.loads(contents)
 
                 # .get(key, []) throughout, not contents_json[key]. Each
