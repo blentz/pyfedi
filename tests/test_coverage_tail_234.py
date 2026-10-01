@@ -167,8 +167,8 @@ class TestTheUserOutbox:
 
     def test_it_is_served_as_activitypub_and_varies_on_accept(self, env):
         """The three headers. `Vary: Accept` is what stops a cache handing an HTML answer
-        to a peer asking for JSON, and this endpoint is explicitly cacheable for ten
-        seconds."""
+        to a peer asking for JSON, and this endpoint is cacheable for the collection
+        max-age (D180, fixed by owner ruling: ten seconds before)."""
         response = env.client.get('/u/anybody/outbox')
 
         assert response.content_type == 'application/activity+json'
@@ -176,7 +176,7 @@ class TestTheUserOutbox:
         # a substring test passes even with the header this route sets removed.
         assert 'Accept' in [part.strip()
                             for part in response.headers['Vary'].split(',')]
-        assert 'max-age=10' in response.headers['Cache-Control']
+        assert response.headers['Cache-Control'] == 'public, max-age=60'
 
     def test_it_does_not_require_the_actor_to_exist(self, env):
         """Asserted rather than assumed: the route never looks the name up, so it answers

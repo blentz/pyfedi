@@ -97,12 +97,10 @@ def test_a_remote_community_outbox_is_404(app, db_session):
 
 
 def test_the_community_outbox_sets_its_cache_control(app, db_session):
-    """max-age=10. Across the nine the values are one 5, four 10s, two 15s,
-    one 120 and -- for `community_featured` -- nothing at all, with no evident
-    rationale (D180). Six of the nine assert their value exactly, so the spread
-    is partly visible in the suite; `feed_outbox`, `feed_following` and
-    `feed_moderators_route` have no header assertion, which is why D180 grades
-    the full spread as read from source rather than measured.
+    """D180, fixed (owner ruling): every collection carries the one collection
+    max-age, 60, from the AP Cache-Control policy table in
+    app/activitypub/routes.py. Before, the nine collections set one 5, four 10s,
+    two 15s, one 120 and -- `community_featured` -- nothing at all.
     """
     seed_actors()
     seed_local_community('books')
@@ -110,7 +108,7 @@ def test_the_community_outbox_sets_its_cache_control(app, db_session):
     response = collection_get(app, '/c/books/outbox')
 
     assert response.status_code == 200
-    assert response.headers['Cache-Control'] == 'public, max-age=10'
+    assert response.headers['Cache-Control'] == 'public, max-age=60'
 
 
 def test_sticky_posts_come_before_the_rest(app, db_session, monkeypatch):
@@ -340,13 +338,10 @@ def test_a_featured_post_under_review_is_withheld(app, db_session, monkeypatch):
     assert response.json['orderedItems'] == []
 
 
-def test_the_featured_collection_sets_no_cache_control(app, db_session, monkeypatch):
-    """PINS a defect. Every one of the eight sibling collections sets a
-    Cache-Control header; this one sets none, so caching falls to whatever the
-    deployment's default is.
-
-    Asserted as absence rather than as a value, which is what makes it
-    discriminating: adding any Cache-Control would fail this test.
+def test_the_featured_collection_sets_the_collection_cache_control(app, db_session, monkeypatch):
+    """D180, fixed (owner ruling): `community_featured` set no Cache-Control at
+    all, so its caching fell to the deployment's default. It now carries the
+    collection max-age every sibling does.
     """
     seed_actors()
     seed_local_community('books')
@@ -355,7 +350,7 @@ def test_the_featured_collection_sets_no_cache_control(app, db_session, monkeypa
     response = collection_get(app, '/c/books/featured')
 
     assert response.status_code == 200
-    assert 'Cache-Control' not in response.headers
+    assert response.headers['Cache-Control'] == 'public, max-age=60'
 
 
 def test_an_unknown_community_featured_is_404(app, db_session):
@@ -443,10 +438,9 @@ def test_a_non_moderator_member_is_not_listed(app, db_session):
     assert member.public_url() not in response.json['orderedItems']
 
 
-def test_the_moderators_collection_sets_a_two_minute_cache(app, db_session):
-    """max-age=120 -- the longest of the nine (eight plus `community_followers`,
-    which this task also covers), against `community_outbox`'s 10 and
-    `feed_outbox`'s 5, for data that changes less often than either.
+def test_the_moderators_collection_sets_the_collection_cache(app, db_session):
+    """D180, fixed (owner ruling): 120 before, the longest of the nine; now the
+    collection max-age, 60, like every other collection.
     """
     seed_actors()
     seed_local_community('books')
@@ -454,7 +448,7 @@ def test_the_moderators_collection_sets_a_two_minute_cache(app, db_session):
     response = collection_get(app, '/c/books/moderators')
 
     assert response.status_code == 200
-    assert response.headers['Cache-Control'] == 'public, max-age=120'
+    assert response.headers['Cache-Control'] == 'public, max-age=60'
 
 
 def test_an_unknown_community_moderators_is_404(app, db_session):
@@ -535,14 +529,15 @@ def test_an_unknown_community_followers_is_404(app, db_session):
     assert response.status_code == 404
 
 
-def test_the_community_followers_collection_sets_a_ten_second_cache(app, db_session):
+def test_the_community_followers_collection_sets_the_collection_cache(app, db_session):
+    """D180, fixed (owner ruling): 10 before; the collection max-age now."""
     seed_actors()
     seed_local_community('books')
 
     response = collection_get(app, '/c/books/followers')
 
     assert response.status_code == 200
-    assert response.headers['Cache-Control'] == 'public, max-age=10'
+    assert response.headers['Cache-Control'] == 'public, max-age=60'
 
 
 def _follow(local_user, follower, accepted=True):
@@ -693,7 +688,7 @@ def test_the_followers_collection_sets_cache_and_vary(app, db_session):
     response = collection_get(app, '/u/alice/followers')
 
     assert response.status_code == 200
-    assert response.headers['Cache-Control'] == 'public, max-age=15'
+    assert response.headers['Cache-Control'] == 'public, max-age=60'
     assert response.headers['Vary'] == 'Accept, Accept-Encoding'
 
 
@@ -812,13 +807,43 @@ def test_an_unknown_feed_followers_is_404(app, db_session):
 
 
 def test_the_feed_followers_collection_sets_its_cache_control(app, db_session):
+    """D180, fixed (owner ruling): 15 before; the collection max-age now."""
     seed_actors()
     _seed_local_feed('news', public=True)
 
     response = collection_get(app, '/f/news/followers')
 
     assert response.status_code == 200
-    assert response.headers['Cache-Control'] == 'public, max-age=15'
+    assert response.headers['Cache-Control'] == 'public, max-age=60'
+
+
+@pytest.mark.parametrize('path', ['/f/news/outbox', '/f/news/following', '/f/news/moderators'])
+def test_the_other_feed_collections_set_the_collection_cache(app, db_session, path):
+    """D180, fixed (owner ruling): these three set 5, 10 and 10 and nothing in
+    the suite asserted them; they now carry the collection max-age."""
+    site, instance = seed_actors()
+    feed = _seed_local_feed('news', public=True)
+    feed.user_id = make_user(instance, 'feedowner', local=True).id
+    db.session.commit()
+
+    response = collection_get(app, path)
+
+    assert response.status_code == 200
+    assert response.headers['Cache-Control'] == 'public, max-age=60'
+
+
+@pytest.mark.parametrize('path', ['/c/nosuch/outbox', '/c/nosuch/featured', '/c/nosuch/moderators',
+                                  '/c/nosuch/followers', '/u/nosuch/followers', '/f/nosuch/outbox',
+                                  '/f/nosuch/following', '/f/nosuch/moderators', '/f/nosuch/followers'])
+def test_a_collection_miss_is_not_cached(app, db_session, path):
+    """D180, fixed (owner ruling): a 404 is `no-store`, so a peer asking before
+    the actor exists does not keep the miss."""
+    seed_actors()
+
+    response = collection_get(app, path)
+
+    assert response.status_code == 404
+    assert response.headers['Cache-Control'] == 'no-store'
 
 
 def test_a_non_public_feed_has_no_followers_collection(app, db_session):

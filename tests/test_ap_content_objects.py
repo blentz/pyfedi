@@ -214,6 +214,8 @@ def test_a_deleted_comment_is_410_with_a_tombstone(app, db_session, monkeypatch)
 
     assert response.status_code == 410
     assert response.content_type == 'application/activity+json'
+    # D195, fixed (owner ruling): a miss, 404 or 410, is never cached
+    assert response.headers['Cache-Control'] == 'no-store'
     assert response.json['type'] == 'Tombstone'
     assert response.json['formerType'] == 'Note'
     assert response.json['id'] == reply.ap_id
@@ -731,8 +733,11 @@ def test_a_browser_request_for_post_replies_is_400(app, db_session, monkeypatch)
 
 def test_post_replies_are_served_as_an_ordered_collection(app, db_session, monkeypatch):
     """`post_replies_ap`'s only working path. `totalItems` is `len(replies)`
-    from the doubled `post_replies_for_ap`, and `Cache-Control` is 15 --
-    against `post_ap`'s and `comment_ap`'s 120, for the same content.
+    from the doubled `post_replies_for_ap`.
+
+    D195, fixed (owner ruling): `Cache-Control` was 15 against `post_ap`'s and
+    `comment_ap`'s 120 for the same content; it is now the content max-age, 120,
+    from the AP Cache-Control policy table in app/activitypub/routes.py.
     """
     calls = _double_the_delegates(monkeypatch)
     community, author, post = seed_local_post()
@@ -741,7 +746,7 @@ def test_post_replies_are_served_as_an_ordered_collection(app, db_session, monke
 
     assert response.status_code == 200
     assert response.content_type == 'application/activity+json'
-    assert response.headers['Cache-Control'] == 'public, max-age=15'
+    assert response.headers['Cache-Control'] == 'public, max-age=120'
     assert response.headers['Vary'] == 'Accept, Accept-Encoding'
     assert response.json['type'] == 'OrderedCollection'
     assert response.json['totalItems'] == 1
@@ -865,7 +870,8 @@ def test_a_post_context_lists_the_post_and_its_replies(app, db_session, monkeypa
 
     assert response.status_code == 200
     assert response.content_type == 'application/activity+json'
-    assert response.headers['Cache-Control'] == 'public, max-age=15'
+    # D195, fixed (owner ruling): 15 before; the content max-age now
+    assert response.headers['Cache-Control'] == 'public, max-age=120'
     assert response.headers['Vary'] == 'Accept, Accept-Encoding'
     assert response.json['type'] == 'OrderedCollection'
     assert response.json['totalItems'] == 2
@@ -1094,7 +1100,9 @@ def test_a_logged_activity_is_served_as_its_stored_json(app, db_session):
 
     assert response.status_code == 200
     assert response.content_type == 'application/activity+json'
-    assert response.headers['Cache-Control'] == 'public, max-age=2400'
+    # D195, fixed (owner ruling): 2400 before; the content max-age now. The
+    # view's own @cache.cached(timeout=2400) is server-side and unchanged.
+    assert response.headers['Cache-Control'] == 'public, max-age=120'
     assert response.json['type'] == 'Announce'
 
 
