@@ -13,7 +13,9 @@ from sqlalchemy.exc import IntegrityError
 from app import db, cache, plugins
 from app.activitypub.signature import RsaKeys
 from app.activitypub.util import make_image_sizes, normalise_actor_string
-from app.chat.util import send_message
+# The module, not the name: app.chat.util reaches this file through
+# app.activitypub.signature before send_message is defined (import cycle: chat.util)
+import app.chat.util as chat_util
 from app.community.forms import EditCommunityForm
 from app.community.util import community_theme_list, save_banner_file, save_icon_file
 from app.constants import *
@@ -173,7 +175,7 @@ def invite_with_chat(community_id: int, handle: str, src, auth=None):
                 message = flask.render_template('email/invite_to_community.txt', user=user, community=community,
                                           host=current_app.config['SERVER_NAME'])
 
-        reply = send_message(message, conversation.id, user)
+        reply = chat_util.send_message(message, conversation.id, user)
 
         return 1 if reply else 0
     return 0
@@ -725,7 +727,7 @@ def add_mod_to_community(community_id: int, person_id: int, src, auth=None):
             db.session.add(existing_conversation)
             db.session.commit()
         server = current_app.config['SERVER_NAME']
-        send_message(f"Hi there. I've added you as a moderator to the community !{community.name}@{server}.",
+        chat_util.send_message(f"Hi there. I've added you as a moderator to the community !{community.name}@{server}.",
                      existing_conversation.id, user=user)
 
     add_to_modlog('add_mod', actor=user, target_user=new_moderator, community=community, link_text=new_moderator.display_name(),

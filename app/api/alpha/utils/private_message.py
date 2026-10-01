@@ -5,7 +5,9 @@ from sqlalchemy import desc, or_, text, Integer
 from app import db, current_app
 from app.api.alpha.views import private_message_view, conversation_report_view
 from app.constants import NOTIF_MESSAGE, NOTIF_REPORT, REPORT_TYPE_MESSAGE, REPORT_STATE_RESOLVED, REPORT_STATE_NEW
-from app.chat.util import send_message, update_message
+# The module, not the names: app.chat.util reaches this file through
+# app.activitypub.signature before they are defined (import cycle: chat.util)
+import app.chat.util as chat_util
 from app.models import ChatMessage, Conversation, User, Notification, Report, Site
 from app.utils import authorise_api_user, markdown_to_html, user_access
 from app.shared.tasks import task_selector
@@ -162,7 +164,7 @@ def post_private_message(auth, data):
         db.session.add(existing_conversation)
         db.session.commit()
 
-    private_message = send_message(data['content'], existing_conversation.id, user=sender)
+    private_message = chat_util.send_message(data['content'], existing_conversation.id, user=sender)
 
     pm_json = private_message_view(private_message, variant=2)
     return pm_json
@@ -203,7 +205,7 @@ def put_private_message(auth, data):
     private_message.body_html = markdown_to_html(content)
     db.session.commit()
 
-    update_message(private_message)
+    chat_util.update_message(private_message)
 
     return private_message_view(private_message, variant=2)
 

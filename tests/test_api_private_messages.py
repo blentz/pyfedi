@@ -440,7 +440,7 @@ def test_the_sender_may_edit_their_own_message(app, env):
 
     alice, bob, stranger, conversation, message = env
 
-    with patch('app.api.alpha.utils.private_message.update_message') as told:
+    with patch('app.chat.util.update_message') as told:
         answer = put_private_message(token(alice),
                                      {'private_message_id': message.id,
                                       'content': 'something **else**'})

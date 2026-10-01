@@ -1289,9 +1289,9 @@ def test_invite_with_chat_public_community_message_embeds_community_link(
     the NEW conversation by its member-id set rather than assuming it is
     the only row or the first one returned.
 
-    `send_message` is patched on `app.shared.community`, never on its
-    source module `app.chat.util`: `from app.chat.util import send_message`
-    binds the name into this module's globals at import time. The patched
+    `send_message` is patched on its source module `app.chat.util`: since
+    the import cycle fix (chat.util) `app.shared.community` imports that
+    module and looks `send_message` up on it at call time. The patched
     replacement returns a truthy sentinel so `:172`'s `return 1 if reply
     else 0` -- Task 5's territory, merely passed through here -- takes its
     true arm, and captures the exact `message` argument so the fork's
@@ -1339,7 +1339,7 @@ def test_invite_with_chat_public_community_message_embeds_community_link(
     decoy_b = make_user(s.instance, 'decoy_b', local=True)
     make_conversation(decoy_a, decoy_b)
     calls = []
-    monkeypatch.setattr('app.shared.community.send_message',
+    monkeypatch.setattr('app.chat.util.send_message',
                         lambda message, conversation_id, user=None:
                         calls.append((message, conversation_id)) or object())
 
@@ -1403,7 +1403,7 @@ def test_invite_with_chat_private_community_message_embeds_display_name(
     decoy_b = make_user(s.instance, 'decoy_d', local=True)
     make_conversation(decoy_a, decoy_b)
     calls = []
-    monkeypatch.setattr('app.shared.community.send_message',
+    monkeypatch.setattr('app.chat.util.send_message',
                         lambda message, conversation_id, user=None: calls.append(message) or object())
 
     with web_ctx(app, s.user):
@@ -1468,7 +1468,7 @@ def test_invite_with_chat_private_community_api_src_still_embeds_display_name(
     recipient = make_user(s.instance, 'rosa', local=True)
     calls = []
     senders = []
-    monkeypatch.setattr('app.shared.community.send_message',
+    monkeypatch.setattr('app.chat.util.send_message',
                         lambda message, conversation_id, user=None:
                         senders.append(user) or calls.append(message) or object())
 
@@ -1750,7 +1750,7 @@ def test_invite_with_chat_local_recipient_apply_open_message_has_subscribe_link(
     decoy_b = make_user(s.instance, 'decoy_f', local=True)
     make_conversation(decoy_a, decoy_b)
     calls = []
-    monkeypatch.setattr('app.shared.community.send_message',
+    monkeypatch.setattr('app.chat.util.send_message',
                         lambda message, conversation_id, user=None: calls.append(message) or object())
 
     result = invite_with_chat(s.community.id, 'fiona', SRC_API, bearer(s.user))
@@ -1798,7 +1798,7 @@ def test_invite_with_chat_local_recipient_invite_required_message_has_token_acce
     db.session.commit()
     recipient = make_user(s.instance, 'gabe', local=True)
     calls = []
-    monkeypatch.setattr('app.shared.community.send_message',
+    monkeypatch.setattr('app.chat.util.send_message',
                         lambda message, conversation_id, user=None: calls.append(message) or object())
 
     result = invite_with_chat(s.community.id, 'gabe', SRC_API, bearer(s.user))
@@ -1857,7 +1857,7 @@ def test_invite_with_chat_local_recipient_invite_required_web_src_still_has_toke
     db.session.commit()
     recipient = make_user(s.instance, 'silas', local=True)
     calls = []
-    monkeypatch.setattr('app.shared.community.send_message',
+    monkeypatch.setattr('app.chat.util.send_message',
                         lambda message, conversation_id, user=None: calls.append(message) or object())
 
     with web_ctx(app, s.user):
@@ -1902,7 +1902,7 @@ def test_invite_with_chat_remote_piefed_apply_open_message_has_remote_subscribe_
     remote_instance = make_instance('remote-piefed-open.example', software='PieFed')
     recipient = make_user(remote_instance, 'hana', local=False)
     calls = []
-    monkeypatch.setattr('app.shared.community.send_message',
+    monkeypatch.setattr('app.chat.util.send_message',
                         lambda message, conversation_id, user=None: calls.append(message) or object())
 
     with web_ctx(app, s.user):
@@ -1949,7 +1949,7 @@ def test_invite_with_chat_remote_piefed_apply_open_api_src_still_has_remote_subs
     remote_instance = make_instance('remote-piefed-open-api.example', software='piefed')
     recipient = make_user(remote_instance, 'nadia', local=False)
     calls = []
-    monkeypatch.setattr('app.shared.community.send_message',
+    monkeypatch.setattr('app.chat.util.send_message',
                         lambda message, conversation_id, user=None: calls.append(message) or object())
 
     result = invite_with_chat(s.community.id, recipient.ap_id, SRC_API, bearer(s.user))
@@ -2024,7 +2024,7 @@ def test_invite_with_chat_remote_piefed_local_only_invite_required_message_has_l
     remote_instance = make_instance('remote-piefed-local-only.example', software='pylova')
     recipient = make_user(remote_instance, 'ivan', local=False)
     calls = []
-    monkeypatch.setattr('app.shared.community.send_message',
+    monkeypatch.setattr('app.chat.util.send_message',
                         lambda message, conversation_id, user=None: calls.append(message) or object())
 
     with web_ctx(app, s.user):
@@ -2078,7 +2078,7 @@ def test_invite_with_chat_remote_piefed_local_only_invite_required_api_src_still
     remote_instance = make_instance('remote-piefed-local-only-api.example', software='pylova')
     recipient = make_user(remote_instance, 'oscar', local=False)
     calls = []
-    monkeypatch.setattr('app.shared.community.send_message',
+    monkeypatch.setattr('app.chat.util.send_message',
                         lambda message, conversation_id, user=None: calls.append(message) or object())
 
     result = invite_with_chat(s.community.id, recipient.ap_id, SRC_API, bearer(s.user))
@@ -2126,7 +2126,7 @@ def test_invite_with_chat_remote_piefed_not_local_only_invite_required_message_h
     remote_instance = make_instance('remote-piefed-remote.example', software='piefed')
     recipient = make_user(remote_instance, 'jill', local=False)
     calls = []
-    monkeypatch.setattr('app.shared.community.send_message',
+    monkeypatch.setattr('app.chat.util.send_message',
                         lambda message, conversation_id, user=None: calls.append(message) or object())
 
     result = invite_with_chat(s.community.id, recipient.ap_id, SRC_API, bearer(s.user))
@@ -2181,7 +2181,7 @@ def test_invite_with_chat_remote_piefed_not_local_only_invite_required_web_src_s
     remote_instance = make_instance('remote-piefed-remote-web.example', software='piefed')
     recipient = make_user(remote_instance, 'tariq', local=False)
     calls = []
-    monkeypatch.setattr('app.shared.community.send_message',
+    monkeypatch.setattr('app.chat.util.send_message',
                         lambda message, conversation_id, user=None: calls.append(message) or object())
 
     with web_ctx(app, s.user):
@@ -2258,7 +2258,7 @@ def test_invite_with_chat_remote_lemmy_apply_open_message_has_join_link(
     remote_instance = make_instance('remote-lemmy-open.example', software='LEMMY')
     recipient = make_user(remote_instance, 'kara', local=False)
     calls = []
-    monkeypatch.setattr('app.shared.community.send_message',
+    monkeypatch.setattr('app.chat.util.send_message',
                         lambda message, conversation_id, user=None: calls.append(message) or object())
 
     with web_ctx(app, s.user):
@@ -2305,7 +2305,7 @@ def test_invite_with_chat_remote_lemmy_apply_open_api_src_still_has_join_link(
     remote_instance = make_instance('remote-lemmy-open-api.example', software='lemmy')
     recipient = make_user(remote_instance, 'petra', local=False)
     calls = []
-    monkeypatch.setattr('app.shared.community.send_message',
+    monkeypatch.setattr('app.chat.util.send_message',
                         lambda message, conversation_id, user=None: calls.append(message) or object())
 
     result = invite_with_chat(s.community.id, recipient.ap_id, SRC_API, bearer(s.user))
@@ -2347,7 +2347,7 @@ def test_invite_with_chat_remote_mbin_invite_required_message_has_token_accept_i
     remote_instance = make_instance('remote-mbin-token.example', software='mbin')
     recipient = make_user(remote_instance, 'liam', local=False)
     calls = []
-    monkeypatch.setattr('app.shared.community.send_message',
+    monkeypatch.setattr('app.chat.util.send_message',
                         lambda message, conversation_id, user=None: calls.append(message) or object())
 
     result = invite_with_chat(s.community.id, recipient.ap_id, SRC_API, bearer(s.user))
@@ -2399,7 +2399,7 @@ def test_invite_with_chat_remote_mbin_invite_required_web_src_still_has_token_ac
     remote_instance = make_instance('remote-mbin-token-web.example', software='mbin')
     recipient = make_user(remote_instance, 'ursula', local=False)
     calls = []
-    monkeypatch.setattr('app.shared.community.send_message',
+    monkeypatch.setattr('app.chat.util.send_message',
                         lambda message, conversation_id, user=None: calls.append(message) or object())
 
     with web_ctx(app, s.user):
@@ -2453,7 +2453,7 @@ def test_invite_with_chat_remote_other_software_message_replaces_greeting_with_r
     assert remote_instance.software == 'mastodon'
     recipient = make_user(remote_instance, 'maya', local=False)
     calls = []
-    monkeypatch.setattr('app.shared.community.send_message',
+    monkeypatch.setattr('app.chat.util.send_message',
                         lambda message, conversation_id, user=None: calls.append(message) or object())
 
     result = invite_with_chat(s.community.id, recipient.ap_id, SRC_API, bearer(s.user))
@@ -2505,7 +2505,7 @@ def test_invite_with_chat_remote_other_software_web_src_still_replaces_greeting_
     assert remote_instance.software == 'mastodon'
     recipient = make_user(remote_instance, 'quinn', local=False)
     calls = []
-    monkeypatch.setattr('app.shared.community.send_message',
+    monkeypatch.setattr('app.chat.util.send_message',
                         lambda message, conversation_id, user=None: calls.append(message) or object())
 
     with web_ctx(app, s.user):
@@ -2574,7 +2574,7 @@ def test_invite_with_chat_failed_delivery_returns_0_and_still_creates_conversati
     s = _seed()
     recipient = make_user(s.instance, 'noor', local=True)
     calls = []
-    monkeypatch.setattr('app.shared.community.send_message',
+    monkeypatch.setattr('app.chat.util.send_message',
                         lambda message, conversation_id, user=None: calls.append(message) or None)
 
     with web_ctx(app, s.user):
@@ -2631,7 +2631,7 @@ def test_invite_with_chat_failed_delivery_api_src_also_returns_0(
     s = _seed()
     recipient = make_user(s.instance, 'viktor', local=True)
     calls = []
-    monkeypatch.setattr('app.shared.community.send_message',
+    monkeypatch.setattr('app.chat.util.send_message',
                         lambda message, conversation_id, user=None: calls.append(message) or None)
 
     result = invite_with_chat(s.community.id, 'viktor', SRC_API, bearer(s.user))
