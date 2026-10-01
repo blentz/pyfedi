@@ -772,8 +772,8 @@ def poll_vote(post_id):
             return redirect(post.slug if post.slug else url_for('activitypub.post_ap', post_id=post_id))
     else:
         votes = request.form.getlist('poll_choice[]')
-    vote_for_poll(post_id, votes, SRC_WEB)
-    flash(_('Vote has been cast.'))
+    if vote_for_poll(post_id, votes, SRC_WEB) is not False:
+        flash(_('Vote has been cast.'))
 
     return redirect(post.slug if post.slug else url_for('activitypub.post_ap', post_id=post_id))
 

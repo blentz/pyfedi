@@ -1928,22 +1928,12 @@ def test_the_membership_filter_keeps_string_ids_when_one_is_foreign(db_session, 
     assert foreign.num_votes == 0
 
 
-def test_a_web_single_mode_vote_for_only_a_foreign_choice_does_not_crash(db_session, app):
-    """Pins the SRC_WEB single-mode arm that the raise-for-API/skip-for-web
-    asymmetry exists for -- fix round 1 of PC1 left this arm broken.
-
-    A single-mode SRC_WEB vote whose only choice is foreign gets filtered by
-    the membership check down to an empty `votes` list. The skip is normally
-    communicated back by `if src == SRC_API: raise`, which never fires for
-    SRC_WEB, so control fell through to `poll.vote_for_choice(votes[0], ...)`
-    and indexed an empty list. That is an unhandled 500 on
-    app/post/routes.py:643, a route with no error handling that flashes
-    'Vote has been cast.' unconditionally -- exactly the failure mode the
-    raise-for-API/skip-for-web semantics exists to keep that route from ever
-    having. It failed with that IndexError against the fix-round-1 tree and
-    passes now that the membership branch returns early at `:1166-1167` when
-    nothing survives the filter.
-    """
+def test_a_web_single_mode_vote_for_only_a_foreign_choice_is_refused(db_session, app):
+    """D415, fixed (owner ruling). A single-mode SRC_WEB vote whose choice
+    belongs to another poll is refused with an error flash and a False return
+    the route reads to skip 'Vote has been cast.' -- it used to be filtered
+    down to nothing and returned None, so the route reported success for a
+    vote that was never recorded."""
     s = seed_post_context()
     _seed_poll(s, mode='single')
     other_post = make_post(s.community, s.author, 'https://local.example/p/other')
@@ -1957,7 +1947,38 @@ def test_a_web_single_mode_vote_for_only_a_foreign_choice_does_not_crash(db_sess
     foreign = db.session.query(PollChoice).filter_by(post_id=other_post.id).one()
 
     with web_ctx(app, s.voter):
-        vote_for_poll(s.post.id, foreign.id, SRC_WEB)
+        result = vote_for_poll(s.post.id, foreign.id, SRC_WEB)
+        flashed = get_flashed_messages(with_categories=True)
+
+    assert result is False
+    assert [category for category, _ in flashed] == ['error']
+    assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 0
+
+
+def test_a_web_single_mode_vote_for_a_non_integer_choice_is_refused(db_session, app):
+    """D415, fixed (owner ruling). The single-mode choice id is cast before
+    use; a value that is not an integer is refused like an unknown choice
+    rather than raising ValueError out of the membership filter's `int()`."""
+    s = seed_post_context()
+    _seed_poll(s, mode='single')
+
+    with web_ctx(app, s.voter):
+        result = vote_for_poll(s.post.id, ['banana'], SRC_WEB)
+        flashed = get_flashed_messages(with_categories=True)
+
+    assert result is False
+    assert [category for category, _ in flashed] == ['error']
+    assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 0
+
+
+def test_an_api_single_mode_vote_for_a_non_integer_choice_is_refused(db_session):
+    """D415, fixed (owner ruling). The API's standard refusal -- an Exception
+    the route turns into a 400 -- not a ValueError from a bare `int()`."""
+    s = seed_post_context()
+    _seed_poll(s, mode='single')
+
+    with pytest.raises(Exception, match='does not belong to this poll'):
+        vote_for_poll(s.post.id, ['banana'], SRC_API, auth=bearer(s.voter))
 
     assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 0
 

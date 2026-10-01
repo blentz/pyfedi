@@ -1299,6 +1299,14 @@ def get_post_flair_list(post: Post | int) -> list:
     return flair_list
 
 
+def _poll_choice_id(choice_id):
+    """A submitted poll choice id as an int, or None when it is not one (D415)."""
+    try:
+        return int(choice_id)
+    except (TypeError, ValueError):
+        return None
+
+
 def vote_for_poll(post_id, votes, src, auth=None):
     if src == SRC_API:
         user = authorise_api_user(auth, return_type='model')
@@ -1314,11 +1322,18 @@ def vote_for_poll(post_id, votes, src, auth=None):
     poll = db.session.get(Poll, post_id) or abort(404)
     poll_choice_ids = {row.id for row in
                        db.session.query(PollChoice).filter_by(post_id=post_id)}
-    foreign = [choice_id for choice_id in votes if int(choice_id) not in poll_choice_ids]
+    foreign = [choice_id for choice_id in votes if _poll_choice_id(choice_id) not in poll_choice_ids]
     if foreign:
+        msg = 'Choice does not belong to this poll.'
         if src == SRC_API:
-            raise Exception("Choice does not belong to this poll.")
-        votes = [choice_id for choice_id in votes if int(choice_id) in poll_choice_ids]
+            raise Exception(msg)
+        # D415: a single-mode vote has exactly one choice, so a foreign or
+        # non-integer one leaves nothing to record -- refuse it, and tell the
+        # route not to report the vote as cast.
+        if poll.mode == 'single':
+            flash(_(msg), 'error')
+            return False
+        votes = [choice_id for choice_id in votes if _poll_choice_id(choice_id) in poll_choice_ids]
         if not votes:
             return
     if poll.mode == 'single':
@@ -1326,9 +1341,10 @@ def vote_for_poll(post_id, votes, src, auth=None):
             if src == SRC_API:
                 raise Exception("Poll is in single vote mode, only a single choice is allowed.")
         if not poll.has_voted(user.id):
-            poll.vote_for_choice(votes[0], user.id)
+            choice_id = int(votes[0])
+            poll.vote_for_choice(choice_id, user.id)
             task_selector('vote_for_poll', post_id=post_id, user_id=user.id,
-                        choice_text=db.session.get(PollChoice, votes[0]).choice_text)
+                        choice_text=db.session.get(PollChoice, choice_id).choice_text)
         else:
             if src == SRC_API:
                 raise Exception("User has already voted.")
