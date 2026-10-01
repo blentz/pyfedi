@@ -78,7 +78,9 @@ def send_message(message: str, conversation_id: int, user: User = current_user, 
 
 def update_message(reply: ChatMessage):
     user = reply.sender
-    recipient = User.query.filter_by(id=reply.recipient_id).one()
+    recipient = db.session.get(User, reply.recipient_id) if reply.recipient_id else None
+    if recipient is None:  # D761: recipient_id is nullable; nobody to tell
+        return
     conversation_id = reply.conversation_id
 
     if recipient.is_local():

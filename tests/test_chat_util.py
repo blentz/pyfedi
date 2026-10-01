@@ -22,8 +22,8 @@ import pytest
 from unittest.mock import patch
 
 from app import db
-from app.chat.util import send_message
-from app.models import ChatMessage, Site
+from app.chat.util import send_message, update_message
+from app.models import ChatMessage, Notification, Site
 from tests.factories import make_conversation, make_instance, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -214,6 +214,24 @@ def _local_pair():
     site.private_instance = False
     db.session.commit()
     return sender, recipient
+
+
+def test_editing_a_message_with_no_recipient_notifies_nobody(app, db_session):
+    """D761, fixed: `recipient_id` is nullable and update_message looked the
+    recipient up with .one(), so editing such a message raised NoResultFound.
+    With nobody to tell it now tells nobody."""
+    sender, recipient = _local_pair()
+    conversation = make_conversation(sender, recipient)
+    reply = _edited(sender, recipient, conversation)
+    reply.recipient_id = None
+    db.session.commit()
+
+    with app.test_request_context():
+        with patch('app.chat.util.send_post_request') as sent:
+            update_message(reply)
+
+    assert Notification.query.count() == 0
+    assert sent.call_count == 0
 
 
 def test_editing_a_message_notifies_a_local_recipient(app, db_session):

@@ -1272,14 +1272,11 @@ def test_an_admin_may_delete_a_conversation_they_are_not_in(app, db_session):
     assert Conversation.query.count() == 0
 
 
-def test_a_stranger_deleting_a_conversation_is_a_silent_no_op(app, db_session):
-    """D761: the stranger is redirected exactly like the member, with no flash
-    and no deletion --
-
-        PROBE b6 delete status: 302 conversation survives: True
-
-    Recorded as behaviour rather than asserted as correct.
-    """
+def test_a_stranger_deleting_a_conversation_is_refused(app, db_session):
+    """D761, fixed: the stranger was redirected exactly like the member, with no
+    flash and no deletion, so the answer was the same whether the delete
+    happened or not. As D506 ruled for deleting another user's reply, it is a
+    403 now, and the conversation survives."""
     instance, alice, bob, carol = _seed()
     conversation = make_conversation(alice, bob)
     client = app.test_client()
@@ -1288,7 +1285,7 @@ def test_a_stranger_deleting_a_conversation_is_a_silent_no_op(app, db_session):
     response = client.post(f'/chat/{conversation.id}/delete',
                            data={'csrf_token': csrf(app, client)})
 
-    assert response.status_code == 302
+    assert response.status_code == 403
     assert Conversation.query.count() == 1
 
 
