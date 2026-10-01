@@ -492,9 +492,9 @@ def find_flair_or_create(flair: dict, community_id: int, session=None) -> Commun
             existing_flair.blur_images = flair["blurImages"]
         
         if "display_name" in flair:
-            existing_flair.flair = flair["display_name"]
+            existing_flair.flair = flair["display_name"].strip()
         elif "preferredUsername" in flair:
-            existing_flair.flair = flair['preferredUsername']
+            existing_flair.flair = flair['preferredUsername'].strip()
 
         if not existing_flair.ap_id:
             if 'id' in flair and flair['id']:
