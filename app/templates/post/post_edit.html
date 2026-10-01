@@ -233,6 +233,7 @@
             {% endif %}
 
             {% if post_type == POST_TYPE_EVENT %}
+                {{ render_field(form.more_info_url) }}
                 {{ render_field(form.max_attendees) }}
                 {{ render_field(form.join_mode) }}
                 {{ render_field(form.online) }}

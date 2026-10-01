@@ -5,7 +5,7 @@ from app.activitypub.signature import default_context, send_post_request
 from app.constants import POST_TYPE_LINK, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, POST_TYPE_VIDEO, \
     POST_TYPE_POLL, MICROBLOG_APPS, NOTIF_MENTION, POST_TYPE_EVENT
 from app.models import CommunityBan, Instance, Notification, Poll, PollChoice, Post, User, UserFollower, utcnow, Event, \
-    Community
+    Community, more_info_link
 from app.user.utils import search_for_user
 from app.utils import gibberish, instance_banned, ap_datetime, get_recipient_language, get_task_session, \
     patch_db_session, TaskError
@@ -248,6 +248,8 @@ def send_post(post_id, edit=False, session=None):
                     'feeAmount': event.event_fee_amount,
                     'location': event.location}
         page.update({key: value for key, value in optional.items() if value is not None})
+        if event.more_info_url:  # R223
+            page['attachment'].append(more_info_link(event.more_info_url))
 
     activity = 'create' if not edit else 'update'
     create_id = f"{current_app.config['SERVER_URL']}/activities/{activity}/{gibberish(15)}"

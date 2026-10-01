@@ -231,6 +231,13 @@
                         {% if event.location.country -%}{% if event.location.city %}, {% endif %}{{ event.location.country }}{% endif -%}
                     </p>
                 {% endif -%}
+                {% if event.more_info_url -%}
+                    <p>
+                        <a href="{{ event.more_info_url }}" target="_blank" rel="nofollow ugc">
+                            {{ _('More info') }} <span class="fe fe-external"></span>
+                        </a>
+                    </p>
+                {% endif -%}
                 {% if event.max_attendees -%}
                     <p>
                         <strong>{{ _('Max Attendees') }}:</strong>

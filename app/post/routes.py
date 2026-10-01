@@ -1335,6 +1335,7 @@ def post_edit(post_id: int):
                 form.end_datetime.data = event.end.replace(tzinfo=ZoneInfo('UTC')).astimezone(event_tz).replace(tzinfo=None)
                 form.event_timezone.data = event.timezone
                 form.max_attendees.data = event.max_attendees
+                form.more_info_url.data = event.more_info_url  # R223
                 form.online.data = event.online
                 if event.online:
                     form.online_link.data = event.online_link

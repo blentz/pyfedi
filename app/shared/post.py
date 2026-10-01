@@ -444,6 +444,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
                 'max_attendees': input.max_attendees.data,
                 'online': input.online.data,
                 'online_link': input.online_link.data,
+                'more_info_url': input.more_info_url.data,  # R223
                 'join_mode': input.join_mode.data,
                 'location': {
                     'address': input.irl_address.data,
@@ -814,6 +815,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         # columns hold for an event that named no link, and the rest of the event is still
         # what the author asked for.
         event.online_link = _as_url(event_data.get('online_link'), 1024)
+        event.more_info_url = _as_url(event_data.get('more_info_url'), 1024)  # R223
         event.join_mode = event_data.get('join_mode', 'free')
         event.external_participation_url = _as_url(
             event_data.get('external_participation_url'), 1024)

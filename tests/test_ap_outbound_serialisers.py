@@ -303,6 +303,17 @@ class TestAnEventGoingOut:
         assert 'startTime' not in page
         assert 'endTime' not in page
 
+    def test_an_events_more_info_url_is_an_extra_link_attachment(self, env):
+        """R223, fixed (owner ruling): the 'More info' link is federated as an
+        extra Link attachment named 'More info'."""
+        event = self.an_event(env.post)
+        event.more_info_url = 'https://info.example/event'
+        db.session.commit()
+
+        page = post_to_page(env.post)
+
+        assert {'type': 'Link', 'href': 'https://info.example/event', 'name': 'More info'} in page['attachment']
+
     def test_a_post_typed_as_an_event_with_no_event_row(self, env):
         """`AttributeError: 'NoneType' object has no attribute 'start'`."""
         env.post.type = POST_TYPE_EVENT

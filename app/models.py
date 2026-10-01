@@ -224,6 +224,28 @@ def _as_dict(value):
     return value if isinstance(value, dict) else {}
 
 
+# R223: an event's 'More info' link federates as an extra Link attachment carrying this name, which is how
+# ingest tells it apart from a Link holding the post's own url
+MORE_INFO_LINK_NAME = 'More info'
+
+
+def more_info_link(url: str) -> dict:
+    return {'type': 'Link', 'href': url, 'name': MORE_INFO_LINK_NAME}
+
+
+def is_more_info_link(attachment) -> bool:
+    attachment = _as_dict(attachment)
+    return attachment.get('type') == 'Link' and attachment.get('name') == MORE_INFO_LINK_NAME
+
+
+def more_info_url_from(attachments):
+    """The 'More info' link among a peer's attachments, scheme-checked as an Event's other links are, or None."""
+    for attachment in attachments if isinstance(attachments, list) else []:
+        if is_more_info_link(attachment):
+            return _as_url(_as_dict(attachment).get('href'), 1024)
+    return None
+
+
 def actor_name_from_ap(activity_json, key='preferredUsername', limit=255):
     """The name a peer publishes for an actor under `key`, or None if it published
     nothing a name column can hold.
@@ -2715,6 +2737,8 @@ class Post(db.Model):
                 # never arrived.
                 if not isinstance(attachment, dict) or 'type' not in attachment:
                     continue
+                if is_more_info_link(attachment):  # R223: an event's 'More info' link is not the post's url
+                    continue
                 if attachment['type'] == 'Link':
                     if 'href' in attachment:
                         post.url = attachment['href']  # Lemmy < 0.19.4
@@ -3114,7 +3138,8 @@ class Post(db.Model):
                                   event_fee_currency=_as_text(event_json.get('feeCurrency'), 4),
                                   event_fee_amount=_as_float(event_json.get('feeAmount'), 0),
                                   location=event_json.get('location') if isinstance(
-                                      event_json.get('location'), (dict, list)) else None)
+                                      event_json.get('location'), (dict, list)) else None,
+                                  more_info_url=more_info_url_from(event_json.get('attachment')))
                     db.session.add(event)
                 # Mobilizon puts the AP ID in request_json['object']['url'] and any attached website links in a request_json['object']['attachment'] list.
                 # None, not '': Post.url is nullable with no default, so None is
@@ -3139,7 +3164,7 @@ class Post(db.Model):
                         # element a TypeError. `.get` answers None for both, which
                         # is not 'Link'.
                         attachment_item = _as_dict(attachment_item)
-                        if attachment_item.get('type') == 'Link':
+                        if attachment_item.get('type') == 'Link' and not is_more_info_link(attachment_item):
                             if 'href' in attachment_item:
                                 post.url = attachment_item['href']
                                 break
@@ -4927,6 +4952,7 @@ class Event(db.Model):
     participant_count = db.Column(db.Integer, default=0)
     full = db.Column(db.Boolean, default=False)
     online_link = db.Column(db.String(1024))
+    more_info_url = db.Column(db.String(1024))                      # R223: the event's 'More info' link
     join_mode = db.Column(db.String(10), default='free')            # free, restricted, external, invite
     external_participation_url = db.Column(db.String(1024))         # join_made = external: the link to the place to RSVP, e.g. meetup.com
     anonymous_participation = db.Column(db.Boolean, default=False)

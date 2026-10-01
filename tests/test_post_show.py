@@ -232,6 +232,25 @@ def test_a_moderator_sees_the_original_of_a_post_its_author_deleted(app, env):
     assert b'THEBODY' in response.data
 
 
+def test_an_events_more_info_url_is_a_link_on_the_page(app, env):
+    """R223, fixed (owner ruling): an event's 'More info' link is rendered."""
+    from datetime import datetime
+    from app.constants import POST_TYPE_EVENT
+    from app.models import Event
+    anon, community, post, mod, author, outsider = env
+    post.type = POST_TYPE_EVENT
+    db.session.add(Event(post_id=post.id, start=datetime(2030, 6, 1, 12, 0),
+                         end=datetime(2030, 6, 1, 13, 0), timezone='UTC', online=True,
+                         more_info_url='https://info.example/event', location={}))
+    db.session.commit()
+
+    response = anon.get(f'/post/{post.id}')
+
+    assert response.status_code == 200
+    assert b'href="https://info.example/event"' in response.data
+    assert b'More info' in response.data
+
+
 def test_a_post_deleted_by_a_moderator_is_not_found(app, env):
     anon, community, post, mod, author, outsider = env
     post.deleted = True

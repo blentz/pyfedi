@@ -30,6 +30,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     Licence, UserExtraField, Feed, FeedMember, FeedItem, CommunityFlair, UserFlair, Topic, Event, InstanceBan, Emoji, \
     UserFollower, PostBoost, parse_ap_timestamp, image_url_from, markdown_source, \
     _as_text, _as_int, _as_float, _as_dict, _as_url, property_value_fields, public_key_pem, \
+    more_info_link, is_more_info_link, more_info_url_from, \
     language_from_ap, adjust_domain_post_count, actor_name_from_ap, PostReplyValidationError
 from app.utils import get_request, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
     sanitise_posting_warning, \
@@ -236,6 +237,8 @@ def post_to_page(post: Post):
                         'feeAmount': event.event_fee_amount,
                         'location': event.location}
             activity_data.update({key: value for key, value in optional.items() if value is not None})
+            if event.more_info_url:  # R223
+                activity_data['attachment'].append(more_info_link(event.more_info_url))
 
     if post.indexable:
         activity_data['searchableBy'] = 'https://www.w3.org/ns/activitystreams#Public'
@@ -3838,6 +3841,8 @@ def update_post_from_activity(post: Post, request_json: dict):
                     event.online = bool(event_json.get('isOnline'))
                 if 'buyTicketsLink' in event_json:
                     event.buy_tickets_link = _as_url(event_json.get('buyTicketsLink'), 1024)
+                if isinstance(event_json.get('attachment'), list):  # R223: absent from the list = removed
+                    event.more_info_url = more_info_url_from(event_json.get('attachment'))
                 if 'feeCurrency' in event_json:
                     event.event_fee_currency = _as_text(event_json.get('feeCurrency'), 4)
                 if 'feeAmount' in event_json:
@@ -3895,7 +3900,7 @@ def update_post_from_activity(post: Post, request_json: dict):
 
             for attachment in request_json['object']['attachment']:
                 attachment = _as_dict(attachment)
-                if attachment.get('type') == 'Link':
+                if attachment.get('type') == 'Link' and not is_more_info_link(attachment):  # R223: an event's own
                     if 'href' in attachment:
                         new_url = attachment['href']  # Lemmy < 0.19.4
                     elif 'url' in attachment:

@@ -285,6 +285,43 @@ class TestUpdatingAnEvent:
             'https://meet.example/room'
 
 
+class TestTheMoreInfoLink:
+    """R223, fixed (owner ruling): an event's 'More info' link travels as an
+    extra Link attachment named 'More info', and is read back from the same --
+    into Event.more_info_url, not into the post's url, scheme-checked like the
+    event's other links."""
+
+    MORE_INFO = {'type': 'Link', 'href': 'https://info.example/e', 'name': 'More info'}
+
+    def test_a_new_event_stores_it_and_keeps_its_url_separate(self, env, http_mock):
+        http_mock.head('https://site.example/e').respond(200, headers={'Content-Type': 'text/html'})
+        event = _ingested(env, attachment=[self.MORE_INFO,
+                                           {'type': 'Link', 'href': 'https://site.example/e'}])
+
+        assert event.more_info_url == 'https://info.example/e'
+        assert db.session.get(Post, event.post_id).url == 'https://site.example/e'
+
+    def test_a_dangerous_one_is_dropped(self, env):
+        event = _ingested(env, attachment=[dict(self.MORE_INFO, href='javascript:alert(1)')])
+
+        assert event.more_info_url is None
+
+    def test_an_update_changes_it_and_one_without_it_clears_it(self, env, redis_lock_only_double):
+        from app.activitypub.util import update_post_from_activity
+        event = _ingested(env, attachment=[self.MORE_INFO])
+        post = db.session.get(Post, event.post_id)
+        update = {'id': post.ap_id, 'type': 'Event', 'name': 'An event',
+                  'startTime': '2050-01-01T00:00:00Z', 'isOnline': True}
+
+        update_post_from_activity(post, {'object': dict(update, attachment=[
+            dict(self.MORE_INFO, href='https://info.example/other')])})
+        assert Event.query.filter_by(post_id=post.id).one().more_info_url == 'https://info.example/other'
+        assert db.session.get(Post, post.id).url is None
+
+        update_post_from_activity(post, {'object': dict(update, attachment=[])})
+        assert Event.query.filter_by(post_id=post.id).one().more_info_url is None
+
+
 # --------------------------------------------------------------------------
 # The template, and the local form it now agrees with
 # --------------------------------------------------------------------------

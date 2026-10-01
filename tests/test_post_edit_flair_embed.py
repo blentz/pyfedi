@@ -1117,7 +1117,8 @@ def test_an_event_post_arrives_in_its_own_timezone(app, env):
                          start=datetime(2026, 6, 1, 12, 0),
                          end=datetime(2026, 6, 1, 13, 0),
                          timezone='Europe/Berlin', online=True,
-                         online_link='https://example.com/call'))
+                         online_link='https://example.com/call',
+                         more_info_url='https://example.com/more'))
     db.session.commit()
 
     with patch('app.post.routes.render_template',
@@ -1129,6 +1130,7 @@ def test_an_event_post_arrives_in_its_own_timezone(app, env):
     assert form.start_datetime.data == datetime(2026, 6, 1, 14, 0)
     assert form.event_timezone.data == 'Europe/Berlin'
     assert form.online_link.data == 'https://example.com/call'
+    assert form.more_info_url.data == 'https://example.com/more'  # R223
     assert kwargs['event_online'] is True
 
 
