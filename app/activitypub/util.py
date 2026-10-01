@@ -4934,6 +4934,8 @@ def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
             return None
 
     # check again that it doesn't already exist (can happen with different but equivalent URLs)
+    if not post_data.get('id'):  # a document with no id is refused, not a KeyError (D39)
+        return None
     post = Post.get_by_ap_id(post_data['id'])
     if post:
         return post

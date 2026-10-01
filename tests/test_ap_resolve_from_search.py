@@ -314,9 +314,9 @@ class TestTheFetchFailing:
     kinds of falsy return -- None from a failure, and a falsy-but-not-None
     value from a 200 with an empty body.
 
-    Production change that fails these: narrowing the guard to
-    `if post_data is None`, which would carry `{}` into the Conversation test
-    and then into the unguarded `post_data['id']` read below.
+    Production change that fails the 404 test: deleting the guard. Narrowing
+    it to `if post_data is None` is no longer caught here: `{}` would now reach
+    the missing-id refusal below (D39) and return None all the same.
     """
 
     def test_a_404_returns_none(self, app, peer_author, http_mock):
@@ -348,27 +348,21 @@ class TestTheSecondExistenceCheck:
 
         assert resolve_remote_post_from_search(URI).id == stored.id
 
-    def test_a_document_with_no_id_raises_keyerror(self, app, peer_author, http_mock):
-        """**An unguarded read on a peer document, pinned as a finding.**
-        `post_data['id']` has no membership test in front of it, unlike the
-        `'type' in post_data` tests just above it, so a document without an
-        'id' raises KeyError out of the function.
-
-        A peer chooses this document: on the Move path it chooses the URI too.
-        The consequence is availability -- a failed task and a traceback, not a
-        wrong row -- but it is the same unguarded-read shape this campaign has
-        registered repeatedly, and the guards it sits between show the author
-        knew the idiom.
-
-        Task 7 should file it. Production change that fails this: a membership
-        test or a .get() on that read, which is the fix.
-        """
+    @pytest.mark.parametrize('id_value', ['absent', None])
+    def test_a_document_with_no_id_is_refused(self, app, peer_author, http_mock, id_value):
+        """D39, fixed: `post_data['id']` used to be an unguarded read, so a
+        document without an 'id' raised KeyError out of the function -- on the
+        Move path, a document the peer chooses. It is now refused with None,
+        and a null 'id' is treated the same as a missing one."""
         document = public_note()
-        del document['id']
+        if id_value == 'absent':
+            del document['id']
+        else:
+            document['id'] = id_value
         serve_remote_object(http_mock, URI, document)
 
-        with pytest.raises(KeyError):
-            resolve_remote_post_from_search(URI)
+        assert resolve_remote_post_from_search(URI) is None
+        assert Post.query.count() == 0
 
 
 class TestTheConversationRefetch:
