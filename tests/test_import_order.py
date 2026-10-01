@@ -22,7 +22,6 @@ import sys
 import pytest
 
 STILL_CIRCULAR = {
-    'app.auth.routes': 'auth.util <-> random_token', 'app.auth.util': 'auth.util <-> random_token',
     'app.chat.routes': 'chat.util <-> send_message', 'app.chat.util': 'chat.util <-> send_message',
     'app.feed.routes': 'feed.routes <-> get_all_child_feed_ids',
     'app.feed.util': 'feed.routes <-> get_all_child_feed_ids',

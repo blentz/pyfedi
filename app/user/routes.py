@@ -12,7 +12,9 @@ from sqlalchemy import desc, or_, text, asc
 from app import db, cache, celery
 from app.activitypub.signature import default_context, send_post_request
 from app.activitypub.util import find_actor_or_create, extract_domain_and_actor
-from app.auth.util import random_token
+# The module, not the name: app.auth.util reaches this file through
+# app.activitypub.util before random_token is defined (import cycle: auth.util)
+import app.auth.util as auth_util
 from app.community.util import save_icon_file, save_banner_file, retrieve_mods_and_backfill, search_for_community
 from app.constants import *
 from app.email import send_verification_email
@@ -265,7 +267,7 @@ def edit_profile(actor):
         # Email address has changed - request verification of new address
         if form.email.data.strip() != old_email and get_setting('email_verification', True):
             current_user.verified = False
-            verification_token = random_token(16)
+            verification_token = auth_util.random_token(16)
             current_user.verification_token = verification_token
             send_verification_email(current_user)
             flash(_('You have changed your email address so we need to verify it. Please check your email inbox for a verification link.'),
