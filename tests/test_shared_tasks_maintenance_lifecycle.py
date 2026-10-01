@@ -1407,6 +1407,32 @@ class TestArchiveOldPosts:
         assert recorder.calls
         assert all(c[1] is not None for c in recorder.calls)
 
+    def test_the_s3_client_is_closed_when_archiving_fails(self, db_session, monkeypatch, app):
+        """D363, fixed: `s3.close()` sat at the end of the `try`, so a raise
+        from `archive_post` leaked the client's connection pool. It is now
+        closed in the `finally`."""
+        closed = []
+
+        class _Client:
+            def close(self):
+                closed.append(True)
+
+        class _Session:
+            def client(self, **kwargs):
+                return _Client()
+
+        monkeypatch.setattr('app.shared.tasks.maintenance.boto3.session.Session', _Session)
+        monkeypatch.setattr('app.shared.tasks.maintenance.store_files_in_s3', lambda: True)
+        monkeypatch.setattr('app.shared.tasks.maintenance.archive_post', _boom)
+        instance, user, community, post = _seed()
+        self._past_the_recency_window(community, user)
+        monkeypatch.setitem(app.config, 'ARCHIVE_POSTS', 6)
+
+        with pytest.raises(RuntimeError):
+            archive_old_posts()
+
+        assert closed == [True]
+
     def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch, app):
         monkeypatch.setattr('app.shared.tasks.maintenance.utcnow', _boom)
         original = app.config['ARCHIVE_POSTS']
