@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 import flask
-from flask import abort, current_app, flash
+from flask import abort, current_app, flash, g
 from flask_babel import _, force_locale, gettext
 from flask_login import current_user
 from slugify import slugify
@@ -14,11 +14,13 @@ from app import db, cache, plugins
 from app.activitypub.signature import RsaKeys
 from app.activitypub.util import make_image_sizes, normalise_actor_string
 from app.chat.util import send_message
+from app.community.forms import EditCommunityForm
+from app.community.util import community_theme_list
 from app.constants import *
 from app.email import send_email
 from app.models import CommunityBlock, CommunityMember, Notification, NotificationSubscription, User, Conversation, \
     Community, Language, File, CommunityFlair, utcnow, CommunityInvitation, CommunityFavorite, \
-    CommunityFlairBlock, _as_url
+    CommunityFlairBlock, Topic, _as_url
 from app.shared.tasks import task_selector
 from app.shared.upload import process_upload
 from app.user.utils import search_for_user
@@ -26,7 +28,7 @@ from app.utils import authorise_api_user, blocked_communities, shorten_string, m
     instance_banned, community_membership, joined_communities, moderating_communities, is_image_url, \
     communities_banned_from, piefed_markdown_to_lemmy_markdown, community_moderators, add_to_modlog, \
     get_recipient_language, moderating_communities_ids, moderating_communities_ids_all_users, gibberish, \
-    favorite_communities, render_template, can_moderate
+    favorite_communities, render_template, can_moderate, sanitise_posting_warning
 
 
 # function can be shared between WEB and API (only API calls it for now)
@@ -300,7 +302,29 @@ def make_community(input, src, auth=None, uploaded_icon_file=None, uploaded_bann
         return community.name
 
 
+# D641: the settings the web edit form has always set and edit_community did
+# not. An API caller passes only the ones it is changing.
+COMMUNITY_SETTINGS = ('private', 'topic_id', 'theme', 'posting_warning', 'nsfl', 'ai_generated', 'invitations',
+                      'new_mods_wanted', 'default_layout', 'default_post_type', 'downvote_accept_mode',
+                      'post_url_type')
+
+
+def _refuse_community_settings_the_form_would_not_offer(settings):
+    """An API caller is held to the choices the web edit form offers."""
+    choices = {'theme': community_theme_list(), 'invitations': EditCommunityForm.joining_options,
+               'default_layout': EditCommunityForm.layouts, 'default_post_type': EditCommunityForm.post_types,
+               'downvote_accept_mode': EditCommunityForm.downvote_accept_modes,
+               'post_url_type': EditCommunityForm.url_types}
+    for key, offered in choices.items():
+        if key in settings and settings[key] not in [value for value, label in offered]:
+            raise Exception(f'{key} is not one of the allowed values')
+    topic_id = settings.get('topic_id')
+    if topic_id and topic_id > 0 and db.session.get(Topic, topic_id) is None:
+        raise Exception('topic not found')
+
+
 def edit_community(input, community, src, auth=None, uploaded_icon_file=None, uploaded_banner_file=None, from_scratch=False):
+    settings = {}
     if src == SRC_API:
         title = input['title']
         description = input['description']
@@ -327,6 +351,8 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
         for field, value in (('icon_url', icon_url), ('banner_url', banner_url)):
             if value and _as_url(value) is None:
                 raise Exception(f'{field} must be an http:// or https:// url')
+        settings = {key: input[key] for key in COMMUNITY_SETTINGS if key in input}
+        _refuse_community_settings_the_form_would_not_offer(settings)
 
     else:
         title = input.community_name.data
@@ -385,6 +411,31 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
         community.image_id = file.id
         make_image_sizes(community.image_id, 878, 1600, 'communities', community.low_quality)
 
+    old_topic_id = community.topic_id
+    if 'private' in settings or 'invitations' in settings:
+        # A private community is local-only and kept out of the listings; one
+        # that is not private takes anyone, so it has no joining process.
+        private = settings.get('private', community.private)
+        community.private = private
+        if private:
+            local_only = True
+            community.show_popular = False
+            community.show_all = False
+            community.invitations = settings.get('invitations', community.invitations)
+        else:
+            community.invitations = 0
+    if 'topic_id' in settings:
+        topic_id = settings['topic_id']
+        community.topic_id = topic_id if topic_id and topic_id > 0 else None
+    if 'posting_warning' in settings:
+        community.posting_warning = sanitise_posting_warning(settings['posting_warning'])  # D1377
+    if 'nsfl' in settings:
+        community.nsfl = settings['nsfl'] and g.site.enable_nsfl is not False  # R203: the site's switch wins
+    for key in ('theme', 'ai_generated', 'new_mods_wanted', 'default_layout', 'default_post_type',
+                'downvote_accept_mode', 'post_url_type'):
+        if key in settings:
+            setattr(community, key, settings[key])
+
     community.title = title
     community.description = description
     community.rules = rules
@@ -394,6 +445,15 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
     community.local_only = local_only
     community.question_answer = question_answer
     db.session.commit()
+
+    if community.topic_id != old_topic_id:
+        if community.topic_id:
+            community.topic.num_communities = community.topic.communities.count()
+        if old_topic_id:
+            old_topic = db.session.get(Topic, old_topic_id)
+            if old_topic:
+                old_topic.num_communities = old_topic.communities.count()
+        db.session.commit()
 
     if not from_scratch:
         for language_choice in discussion_languages:

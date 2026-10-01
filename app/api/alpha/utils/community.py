@@ -13,7 +13,7 @@ from app.models import Community, CommunityMember, User, CommunityBan, Notificat
     NotificationSubscription, Post, CommunityFlair, Feed, utcnow
 from app.shared.community import join_community, leave_community, block_community, unblock_community, make_community, \
     edit_community, subscribe_community, delete_community, restore_community, add_mod_to_community, \
-    remove_mod_from_community
+    remove_mod_from_community, COMMUNITY_SETTINGS
 from app.shared.feed import leave_feed
 from app.shared.tasks import task_selector
 from app.utils import authorise_api_user, communities_banned_from_all_users, moderating_communities_ids, \
@@ -369,6 +369,9 @@ def put_community(auth, data):
              'icon_url': icon_url, 'banner_url': banner_url,
              'nsfw': nsfw, 'restricted_to_mods': restricted_to_mods, 'local_only': local_only,
              'discussion_languages': discussion_languages, 'question_answer': question_answer}
+    # D641: the web form's settings are passed only when sent, so an edit that
+    # omits one leaves it as it is.
+    input.update({key: data[key] for key in COMMUNITY_SETTINGS if key in data})
 
     user_id = edit_community(input, community, SRC_API, auth)
     community_json = community_view(community=community, variant=4, user_id=user_id)
