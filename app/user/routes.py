@@ -759,6 +759,12 @@ def connect_oauth():
     if request.method == 'POST':
         provider = request.form.get('disconnect_provider')
         if provider in oauth_connections:
+            # D1073: never disconnect the account's last way to log in
+            other_providers = [name for name, connected in oauth_connections.items() if connected and name != provider]
+            if not user.password_hash and user.passkeys.count() == 0 and not other_providers:
+                flash(_('This is the only way you can log in. Set a password first, then disconnect '
+                        '%(provider)s.', provider=provider.capitalize()), 'error')
+                return redirect(url_for('user.connect_oauth'))
             if provider == 'google':
                 user.google_oauth_id = None
             elif provider == 'discord':
