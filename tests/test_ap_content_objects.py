@@ -799,6 +799,24 @@ def test_post_replies_are_403_for_an_unpublished_post(app, db_session, monkeypat
     assert calls['post_replies_for_ap'] == []
 
 
+@pytest.mark.parametrize('suffix', ['replies', 'context'])
+def test_a_head_request_for_post_replies_or_context_is_answered_by_flask(app, db_session, monkeypatch, suffix):
+    """D192, fixed (owner ruling): both routes are GET-only, so the
+    `request.method == 'HEAD'` arms in them could never run and were deleted.
+    Flask answers a HEAD itself, by running the GET view and dropping the
+    body.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+
+    with app.test_client() as client:
+        response = client.head(f'/post/{post.id}/{suffix}', headers={'Accept': 'application/activity+json'})
+
+    assert response.status_code == 200
+    assert response.content_type == 'application/activity+json'
+    assert response.data == b''
+
+
 def test_post_replies_are_410_for_a_deleted_post(app, db_session, monkeypatch):
     """D189, fixed. Same answer as `post_ap` for the same row: 410 and a
     Tombstone for the post.
