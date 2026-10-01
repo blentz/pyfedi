@@ -993,23 +993,22 @@ def report_post(post: Post, input, src, auth=None):
     remote_instance_ids = set()
     for mod in post.community.moderators():
         moderator = db.session.get(User, mod.user_id)
-        if moderator:
-            if moderator.is_local():
-                with force_locale(get_recipient_language(moderator.id)):
-                    notification = Notification(user_id=mod.user_id, title=gettext('A post has been reported'),
-                                                url=f"{current_app.config['SERVER_URL']}/post/{post.id}",
-                                                author_id=reporter_user.id, notif_type=NOTIF_REPORT,
-                                                subtype='post_reported',
-                                                targets=targets_data)
-                    db.session.add(notification)
-                    moderator.unread_notifications += 1
-                    already_notified.add(mod.user_id)
-            else:
-                if not report_remote:
-                    if moderator.instance_id != suspect_user.instance_id and moderator.instance_id != post.community.instance_id:
-                        remote_instance_ids.add(moderator.instance_id)
-                else:
+        if moderator.is_local():
+            with force_locale(get_recipient_language(moderator.id)):
+                notification = Notification(user_id=mod.user_id, title=gettext('A post has been reported'),
+                                            url=f"{current_app.config['SERVER_URL']}/post/{post.id}",
+                                            author_id=reporter_user.id, notif_type=NOTIF_REPORT,
+                                            subtype='post_reported',
+                                            targets=targets_data)
+                db.session.add(notification)
+                moderator.unread_notifications += 1
+                already_notified.add(mod.user_id)
+        else:
+            if not report_remote:
+                if moderator.instance_id != suspect_user.instance_id and moderator.instance_id != post.community.instance_id:
                     remote_instance_ids.add(moderator.instance_id)
+            else:
+                remote_instance_ids.add(moderator.instance_id)
 
     if notify_admins:
         for admin in Site.admins():

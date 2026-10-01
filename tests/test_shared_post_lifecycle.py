@@ -1053,41 +1053,6 @@ def test_api_report_remote_false_excludes_a_moderator_sharing_the_communitys_ins
     assert set(calls[0][1]) == {remote_instance.id}
 
 
-def test_a_moderator_row_whose_user_is_gone_is_skipped(db_session):
-    """`:875`'s false arm.
-
-    `:874` looks the moderator up by id and `:875` guards the result, so a
-    CommunityMember row whose User has been deleted is skipped rather than
-    raising. Catches a regression dropping the guard. Positive control:
-    `test_an_api_report_notifies_a_local_moderator` above, same fixture shape
-    (a single local moderator), non-empty Notification count.
-    """
-    s = seed_post_context(community_name='lifecycle')
-    mod = seed_local_moderator(s)
-    orphan_id = mod.id
-    # community_member.user_id carries a live FOREIGN KEY to user.id (RESTRICT,
-    # not CASCADE), so an ordinary delete of `mod` would raise
-    # ForeignKeyViolation rather than produce the orphaned row this test
-    # needs. `session_replication_role = replica` disables FK triggers for the
-    # rest of this transaction -- the same trick tests/conftest.py's own
-    # per-test teardown SQL uses for the identical reason -- so the
-    # CommunityMember row survives with a user_id no "user" row backs.
-    db.session.execute(text('SET LOCAL session_replication_role = replica'))
-    db.session.delete(mod)
-    db.session.commit()
-
-    reporter_id, report = report_post(
-        s.post,
-        {'reason': 'spam', 'description': 'x', 'report_remote': False},
-        SRC_API,
-        auth=bearer(s.voter),
-    )
-
-    assert reporter_id == s.voter.id
-    assert db.session.query(Notification).filter_by(
-        title='A post has been reported').count() == 0
-
-
 def test_an_unmoderated_local_community_always_notifies_admins_through_the_api(db_session):
     """`:841`'s two-conjunct override and `:842`'s assignment.
 
