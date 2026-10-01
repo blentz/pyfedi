@@ -20,11 +20,13 @@ Two defects are pinned here and repaired together:
 Both pins assert the exception TYPE rather than the fact of a raise, because
 the unrepaired code raises too.
 """
+import httpx
 import pytest
 
+from app import db
 from app.activitypub.signature import (HttpSignature, VerificationFormatError,
                                        signature_part)
-from app.models import utcnow
+from app.models import SendQueue, utcnow
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -410,17 +412,21 @@ def test_a_gone_instance_is_marked_and_its_queue_emptied(app, db_session, status
     assert [q.destination_domain for q in SendQueue.query.all()] == ['elsewhere.example']
 
 
-def test_a_transport_failure_is_logged_and_not_retried(app, db_session):
-    """The inner handler sets http_status_code = 404 (signature.py:146), which
-    the retry block below it treats as un-retryable -- so a peer refusing
-    connections is dropped after one attempt. That asymmetry is D767; this row
-    records it.
+@pytest.mark.parametrize('failure', [
+    httpx.ConnectError('connection refused'),
+    httpx.ConnectTimeout('connection refused'),
+    httpx.HTTPError('connection refused'),
+])
+def test_a_transport_failure_is_logged_and_retried_like_a_5xx(app, db_session, failure):
+    """D767, fixed (owner ruling 2026-09-30). The inner handler records
+    http_status_code = 404, and the retry gate admitted only 429 and >= 500, so
+    a peer refusing connections was dropped after one attempt while a 502 was
+    retried for hours. A transport failure now joins the same backoff queue.
+    The plain `httpx.HTTPError` row is what production raises: `signed_request`
+    re-wraps every httpx error as one (signature.py, its `except httpx.HTTPError`).
     """
-    import httpx
-    from app import db
-    from app.models import SendQueue
-
-    _deliver(raises=httpx.ConnectError('connection refused'))
+    post_request_retries = 3
+    _deliver(raises=failure, retries=post_request_retries)
 
     db.session.expire_all()
     log = _log()
@@ -428,6 +434,20 @@ def test_a_transport_failure_is_logged_and_not_retried(app, db_session):
     # the exception's own text, not merely the prefix: a mutant dropping
     # str(e) leaves an operator with 'could not send:' and nothing else
     assert log.exception_message == 'could not send:connection refused'
+    queued = SendQueue.query.one()
+    assert queued.destination == 'https://remote.example/inbox'
+    assert queued.retries == post_request_retries
+    assert queued.retry_reason == 'could not send:connection refused'
+
+
+def test_a_failure_before_sending_is_not_retried(app, db_session):
+    """D767's boundary: only transport failures retry. `signed_request` raising
+    ValueError for a uri it refuses to fetch will refuse it again next time.
+    """
+    _deliver(raises=ValueError('URI is invalid'))
+
+    db.session.expire_all()
+    assert _log().result == 'failure'
     assert SendQueue.query.count() == 0
 
 
