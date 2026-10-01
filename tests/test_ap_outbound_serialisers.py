@@ -319,8 +319,16 @@ class TestAnEventGoingOut:
         assert 'published' in page
 
     def test_an_event_with_no_timezone(self, env):
-        """`Event.timezone` is nullable and nothing here requires it."""
+        """`Event.timezone` is nullable and nothing here requires it.
+
+        D306, fixed (owner ruling): a property the event does not have is left
+        out rather than sent as a null, here as in send_post.
+        """
         self.an_event(env.post, timezone=None)
         page = post_to_page(env.post)
         assert page['type'] == 'Event'
-        assert page['timezone'] is None
+        assert 'timezone' not in page
+        event_keys = ('timezone', 'maximumAttendeeCapacity', 'participantCount', 'onlineLink', 'joinMode',
+                      'externalParticipationUrl', 'anonymousParticipation', 'isOnline', 'buyTicketsLink',
+                      'feeCurrency', 'feeAmount', 'location')
+        assert [key for key in event_keys if key in page and page[key] is None] == []
