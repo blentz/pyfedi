@@ -5370,7 +5370,9 @@ class CommunityFlair(db.Model):
         if self.ap_id:
             return self.ap_id
 
-        community = db.session.get(Community, self.community_id)
+        community = db.session.get(Community, self.community_id) if self.community_id else None
+        if community is None:  # D626: no community to build the id from
+            return None
 
         self.ap_id = community.local_url() + f"/tag/{self.id}"
         db.session.commit()
