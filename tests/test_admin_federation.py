@@ -613,8 +613,8 @@ def test_an_import_with_no_file_says_so(admin_client, media_is_clean):
 
 def test_an_import_of_something_that_is_not_json_is_refused(admin_client,
                                                             media_is_clean):
-    """The file is saved into `app/static/media`, which is SERVED, so the
-    extension check runs before anything is written."""
+    """The extension check refuses before the file is read. Nothing is written
+    to `app/static/media`, which is SERVED (D930)."""
     import glob
 
     client, token = admin_client
@@ -640,19 +640,24 @@ def test_an_import_named_with_an_uppercase_extension_is_accepted(
     assert task.delay.call_count == 1
 
 
-def test_an_import_queues_the_background_task_with_the_saved_path(
+def test_an_import_hands_the_task_the_contents_and_writes_no_file(
         admin_client, media_is_clean):
-    """The route saves and hands off; `import_bans_task` is covered separately
-    below. The path it is given must be the file that was written."""
+    """D930, fixed. The upload was saved into `app/static/media`, which is
+    SERVED, as `<gibberish>.json.json`, and never deleted -- every import left
+    the instance's full ban list there. The route now reads the upload in
+    memory and hands its text to the task, so no file is written at all (owner
+    ruling 2026-09-30). `import_bans_task` is covered separately below."""
+    import glob
+
     client, token = admin_client
+    before = set(glob.glob(f'{MEDIA}/**', recursive=True))
 
     with patch('app.admin.routes.import_bans_task') as task:
-        _response, flashed = _import(client, token, {'banned_instances': []})
+        _response, flashed = _import(client, token, {'banned_instances': ['x.example']})
 
     assert _flashes(flashed) == ['Ban imports started in a background process.']
-    saved = task.delay.call_args.args[0]
-    assert os.path.isfile(saved)
-    assert saved.startswith(MEDIA)
+    assert json.loads(task.delay.call_args.args[0]) == {'banned_instances': ['x.example']}
+    assert set(glob.glob(f'{MEDIA}/**', recursive=True)) == before
 
 
 def test_an_export_sends_the_blocklist_as_a_json_download(admin_client):
@@ -753,11 +758,10 @@ def test_an_import_in_debug_runs_inline_instead_of_queueing(app, admin_client,
 
 
 @pytest.fixture
-def bans_file(tmp_path):
+def bans_file():
+    """The uploaded file's text, which is what the route hands the task (D930)."""
     def write(payload):
-        path = tmp_path / 'bans.json'
-        path.write_text(json.dumps(payload))
-        return str(path)
+        return json.dumps(payload)
     return write
 
 
@@ -927,18 +931,15 @@ def test_an_empty_section_is_ignored(app, db_session, bans_file):
     assert BannedInstances.query.count() == 0
 
 
-def test_a_failed_import_rolls_back_and_re_raises(app, db_session, bans_file):
+def test_a_failed_import_rolls_back_and_re_raises(app, db_session):
     """`except Exception: session.rollback(); raise`. The task holds its own
     session, so a failure that did not roll back would leave it poisoned for
     whatever ran next on that worker."""
     from app.admin.routes import import_bans_task
 
     _seed()
-    path = bans_file({'banned_instances': ['evil.example']})
 
-    with patch('app.admin.routes.file_get_contents',
-               side_effect=ValueError('unreadable')):
-        with pytest.raises(ValueError):
-            import_bans_task(path)
+    with pytest.raises(ValueError):
+        import_bans_task('{"banned_instances": ["evil.example"]')  # truncated JSON
 
     assert BannedInstances.query.count() == 0
