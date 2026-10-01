@@ -2586,6 +2586,8 @@ def site_ban_remove_data(blocker_id, blocked):
         reply.deleted_by = blocker_id
         if not blocked.bot:
             reply.post.reply_count -= 1
+            if reply.post.reply_count_cross_posted:  # as delete_post_or_comment does (D206)
+                reply.post.reply_count_cross_posted -= 1
         reply.community.post_reply_count -= 1
         if reply.path and len(reply.path) > 1:
             db.session.execute(text('update post_reply set child_count = child_count - 1 where id in :parents'),
@@ -2627,6 +2629,8 @@ def community_ban_remove_data(blocker_id, community_id, blocked):
         reply.deleted_by = blocker_id
         if not blocked.bot:
             reply.post.reply_count -= 1
+            if reply.post.reply_count_cross_posted:  # as delete_post_or_comment does (D206)
+                reply.post.reply_count_cross_posted -= 1
         reply.community.post_reply_count -= 1
         blocked.post_reply_count -= 1
         if reply.path and len(reply.path) > 1:
