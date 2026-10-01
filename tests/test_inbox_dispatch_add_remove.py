@@ -141,7 +141,7 @@ import pytest
 
 from app import db
 from app.activitypub import routes as activitypub_routes
-from app.constants import APLOG_ADD, SUBSCRIPTION_OWNER
+from app.constants import APLOG_REMOVE, SUBSCRIPTION_OWNER
 from app.models import ActivityPubLog, CommunityJoinRequest, CommunityMember, FeedItem, InstanceRole, utcnow
 from app.utils import community_membership
 from tests.factories import (inbox_activity, make_community, make_community_join_request,
@@ -1356,10 +1356,8 @@ def test_remove_ovo_st_keeps_the_generated_follow_id_when_no_join_request_exists
 #     FAILURE 'Remove: cannot find community or feed', mislabelling
 #     finding #4, APLOG_ADD.
 #
-# All four mislabelled calls store `activity_type='Add'` (APLOG_ADD[1]) for
-# what is, in every case, actually a Remove -- same class as this campaign's
-# D63/D68 findings elsewhere. Registered here, NOT fixed (app/ stays closed
-# for this task).
+# All four mislabelled calls stored `activity_type='Add'` for what is, in
+# every case, actually a Remove. D80, fixed: they now pass APLOG_REMOVE.
 
 
 def _remove_from_community(community, mod, object_value, target=None, include_target=True):
@@ -1384,17 +1382,14 @@ def _remove_from_community(community, mod, object_value, target=None, include_ta
     return inbox_activity(community, activity_type='Announce', object=inner_remove)
 
 
-def test_remove_permission_denied_pins_the_aplog_add_mislabelling(
+def test_remove_permission_denied_is_logged_as_a_remove(
         app, db_session, monkeypatch):
     """routes.py's current :1532-1534 -- the guard's base case: an actor
     with NEITHER privilege is refused before `target` is ever read, mirroring
     Add's identical guard test.
 
-    ALSO pins mislabelling finding #1: the refusal's log_incoming_ap call
-    passes APLOG_ADD, not APLOG_REMOVE, so a Remove refusal is stored with
-    `activity_type='Add'`. Asserting `log.activity_type == APLOG_ADD[1]`
-    documents this defect -- it does NOT endorse it; the correct value would
-    be 'Remove'. Same class of finding as D63 and D68.
+    D80, fixed: this refusal was logged with APLOG_ADD, so a Remove read as
+    an Add. It is now APLOG_REMOVE, as are the three siblings below.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance = make_instance('peer.example')
@@ -1417,9 +1412,7 @@ def test_remove_permission_denied_pins_the_aplog_add_mislabelling(
 
     log = ActivityPubLog.query.one()
     assert log.exception_message == 'Does not have permission'
-    # The defect: this is a Remove, but the stored activity_type is what
-    # APLOG_ADD produces.
-    assert log.activity_type == APLOG_ADD[1]
+    assert log.activity_type == APLOG_REMOVE[1]
 
 
 def test_remove_unsticky_backfills_ap_featured_url_and_compares_case_insensitively(
@@ -1544,8 +1537,7 @@ def test_remove_mod_flips_an_existing_membership_to_false(app, db_session, monke
 def test_remove_mod_unresolvable_actor_reports_cannot_find(app, db_session, monkeypatch):
     """routes.py's current :1551-1552/1567-1569 -- the target matches the
     moderators URL, but the named object can't be resolved to an actor.
-    Pins mislabelling finding #2: this FAILURE is logged with APLOG_ADD
-    (:1568), not APLOG_REMOVE.
+    D80, fixed: this FAILURE is logged with APLOG_REMOVE, not APLOG_ADD.
 
     `find_actor_or_create_cached` is wrapped, not replaced, so only the
     deliberately-unresolvable ghost URL is intercepted.
@@ -1574,7 +1566,7 @@ def test_remove_mod_unresolvable_actor_reports_cannot_find(app, db_session, monk
 
     log = ActivityPubLog.query.one()
     assert log.exception_message == 'Cannot find: ' + ghost_url
-    assert log.activity_type == APLOG_ADD[1]
+    assert log.activity_type == APLOG_REMOVE[1]
 
 
 def test_remove_mod_without_existing_membership_writes_no_modlog(
@@ -1611,8 +1603,8 @@ def test_remove_mod_without_existing_membership_writes_no_modlog(
 
 def test_remove_unknown_target(app, db_session, monkeypatch):
     """routes.py's current :1571 -- a target matching neither the featured
-    URL nor the moderators URL. Pins mislabelling finding #3: logged with
-    APLOG_ADD, not APLOG_REMOVE.
+    URL nor the moderators URL. D80, fixed: logged with APLOG_REMOVE, not
+    APLOG_ADD.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, moderator, admin = _seed_community_with_mod_and_admin(name='removeunknowntargetcomm')
@@ -1627,7 +1619,7 @@ def test_remove_unknown_target(app, db_session, monkeypatch):
 
     log = ActivityPubLog.query.one()
     assert log.exception_message == 'Unknown target for Remove'
-    assert log.activity_type == APLOG_ADD[1]
+    assert log.activity_type == APLOG_REMOVE[1]
 
 
 def test_remove_target_omitted_entirely_is_refused(app, db_session, monkeypatch):
@@ -1654,8 +1646,8 @@ def test_remove_with_neither_community_nor_feed_resolvable_is_refused(
     Announced) Remove from a plain User actor whose activity carries no
     audience/cc/to/target that `find_community` can resolve against any
     Community row, and which is not itself a Feed or Community actor.
-    Neither `community` nor `feed` is ever set. Pins mislabelling finding
-    #4: logged with APLOG_ADD, not APLOG_REMOVE.
+    Neither `community` nor `feed` is ever set. D80, fixed: logged with
+    APLOG_REMOVE, not APLOG_ADD.
 
     `object` is a dict here, not a plain string -- same
     find_community-shape sidestep Add's equivalent test uses (see that
@@ -1675,7 +1667,7 @@ def test_remove_with_neither_community_nor_feed_resolvable_is_refused(
 
     log = ActivityPubLog.query.one()
     assert log.exception_message == 'Remove: cannot find community or feed'
-    assert log.activity_type == APLOG_ADD[1]
+    assert log.activity_type == APLOG_REMOVE[1]
 
 
 def test_remove_loop_skips_a_community_owner_via_the_subscription_owner_term(

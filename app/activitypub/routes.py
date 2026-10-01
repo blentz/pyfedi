@@ -1670,7 +1670,7 @@ def process_inbox_request(request_json, store_ap_json):
                                                             f'{fm_user.user_name} auto-unfollowed {community_to_remove.ap_public_url} during a feed/remove')
                     elif community:
                         if not community.is_moderator(mod) and not community.is_instance_admin(mod):
-                            log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json, 'Does not have permission')
+                            log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json, 'Does not have permission')
                             return
                         if not isinstance(core_activity.get('target'), str):
                             log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json, 'Remove has no target')
@@ -1708,12 +1708,12 @@ def process_inbox_request(request_json, store_ap_json):
                                     add_to_modlog('remove_mod', actor=mod, target_user=old_mod, community=community,
                                                   link_text=old_mod.display_name(), link=old_mod.link())
                             else:
-                                log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json,
+                                log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json,
                                                 'Cannot find: ' + core_activity['object'])
                             return
-                        log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json, 'Unknown target for Remove')
+                        log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json, 'Unknown target for Remove')
                     else:
-                        log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json, 'Remove: cannot find community or feed')
+                        log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json, 'Remove: cannot find community or feed')
                     return
 
                 if core_activity['type'] == 'Move':
