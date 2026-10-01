@@ -9,8 +9,8 @@ Each is one line in a different file, so this round is grouped by what the line 
     an upload that produced nothing   `shared/upload.py` raises rather than returning a null url,
                               because the caller stores what it is given as an image url.
     a flair with no id        `shared/community.py` refuses to publish a flair it cannot name.
-    a `/f/` prefix a person pasted   `feed/routes.py` strips it twice, on create and on copy, so a
-                              pasted feed url becomes a feed name rather than a nested path.
+    a `/f/` prefix a person pasted   `apply_feed_url_rules` strips it before anything else (D1436),
+                              so a pasted feed url becomes a feed name rather than a nested path.
     three delegations         `Site.active_daily` / `active_weekly` / `active_6monthly`, the numbers
                               on the instance's own about page and in its nodeinfo.
     two small readers         `Post.get_by_slug` and `Post.url_domain`.
@@ -174,21 +174,10 @@ COMMUNITIES = '!finalland@test.piefed.local'
 
 
 class TestAFeedUrlSomebodyPasted:
-    """D1436, RECORDED AND NOT FIXED. `feed/routes.py:58` and `:250` strip a leading `/f/` from a
-    pasted feed url, and NEITHER CAN RUN: both sit after `form.validate_on_submit()`, and
-    `AddCopyFeedForm.validate` calls `apply_feed_url_rules`, which for a public feed does
-
-        elif self.public.data and '/' in self.url.data.strip():
-            self.url.data = self.url.data.strip().split('/', 1)[0]
-
-    -- and `'/f/pasted_feed'.split('/', 1)[0]` is `''`, which then fails the
-    `^[a-zA-Z0-9_]+$` charset check. So somebody pasting the address out of their URL bar gets "Url
-    is invalid" rather than the strip the view was written to do, and the two lines are dead.
-
-    Fixing it means moving the strip into the form, ahead of `apply_feed_url_rules`, or teaching that
-    helper about the prefix -- a change to validation ORDER on a form that also serves the copy and
-    edit paths, which needs a maintainer's decision rather than a coverage round's. The rows below
-    pin what happens TODAY, deliberately: the plain name works, and the pasted one is refused.
+    """D1436, fixed (owner ruling). `feed/routes.py` stripped a leading `/f/` from a pasted feed url
+    AFTER `form.validate_on_submit()`, so it never ran: `apply_feed_url_rules` had already reduced
+    `'/f/pasted_feed'` to `''` and refused it. The strip now happens first, inside
+    `apply_feed_url_rules`, which the create, copy and edit forms share; the dead strips are gone.
     """
 
     def _signed_in(self, env):
@@ -228,25 +217,20 @@ class TestAFeedUrlSomebodyPasted:
 
         assert db.session.query(Feed).filter_by(name='plain_feed').count() == 1
 
-    def test_a_pasted_url_is_refused_rather_than_stripped(self, env):
-        """The observed behaviour of D1436, asserted so that fixing it is a visible change: no feed
-        is created, because validation rejected the url before the view's strip could run."""
+    def test_a_pasted_url_has_its_prefix_stripped(self, env):
+        """Somebody pasting a feed's address out of their URL bar gets the feed named for what
+        follows `/f/`."""
         from app.models import Feed
 
         client, token = self._signed_in(env)
-        before = db.session.query(Feed).count()
 
-        with pytest.raises(Exception):
-            # The re-render is the Jinja failure described above, which is itself the evidence that
-            # validation refused the form rather than the view handling the prefix.
-            client.post('/feed/new', data={
-                'csrf_token': token, 'title': 'Pasted Feed', 'url': '/f/pasted_feed',
-                'description': '', 'parent_feed_id': 0,
-                'communities': COMMUNITIES,
-                'public': 'y', 'submit': 'Save'}, follow_redirects=False)
+        client.post('/feed/new', data={
+            'csrf_token': token, 'title': 'Pasted Feed', 'url': '/f/pasted_feed',
+            'description': '', 'parent_feed_id': 0,
+            'communities': COMMUNITIES,
+            'public': 'y', 'submit': 'Save'}, follow_redirects=False)
 
-        assert db.session.query(Feed).count() == before
-        assert db.session.query(Feed).filter_by(name='pasted_feed').count() == 0
+        assert db.session.query(Feed).filter_by(name='pasted_feed').count() == 1
 
 
 # --------------------------------------------------------------------------

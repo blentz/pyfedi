@@ -26,7 +26,7 @@ RECORDED AS UNREACHABLE, not covered and not deleted (3 lines; a fourth,
 `app/shared/community.py`'s `if not ap_id:`, became reachable with D626's fix):
 
     app/topic/routes.py            212   an unknown segment aborts at 67 first
-    app/feed/routes.py             617   `feed` is dereferenced at 482 and 531 already
+    app/feed/routes.py             613   `feed` is dereferenced at 478 and 527 already
     app/api/alpha/utils/reply.py   369   under a comment reading `# shouldn't happen`
 
     Each is a defensive `else` that an earlier line makes impossible. Deleting one is a
@@ -156,10 +156,10 @@ def test_an_unknown_topic_aborts_before_the_line_that_looked_uncovered(app, publ
 
 
 def test_show_feed_dereferences_its_argument_long_before_the_uncovered_else(app, public):
-    """`app/feed/routes.py:617`, the same shape. `show_feed` has no route of its own -- the
+    """`app/feed/routes.py:613`, the same shape. `show_feed` has no route of its own -- the
     activitypub blueprint resolves the feed and calls it (`app/activitypub/routes.py:2765`)
-    -- and it reads `feed_readable_by(feed, ...)` at 482 and `feed.title` at 531 before
-    reaching `if current_feed:` at 537. A falsy feed raises long before the `else`.
+    -- and it reads `feed_readable_by(feed, ...)` at 478 and `feed.title` at 527 before
+    reaching `if current_feed:` at 533. A falsy feed raises long before the `else`.
 
     Read out of the source rather than driven, because driving it would mean calling
     `show_feed(None)` and asserting the AttributeError -- which pins the crash, not the
@@ -167,10 +167,10 @@ def test_show_feed_dereferences_its_argument_long_before_the_uncovered_else(app,
     """
     source = _lines('app/feed/routes.py')
 
-    assert 'feed_readable_by(feed' in source[481]
-    assert 'feed.title' in source[530]
-    assert source[536].strip() == 'if current_feed:'
-    assert source[616].strip() == 'abort(404)'
+    assert 'feed_readable_by(feed' in source[477]
+    assert 'feed.title' in source[526]
+    assert source[532].strip() == 'if current_feed:'
+    assert source[612].strip() == 'abort(404)'
 
 
 # --------------------------------------------------------------------------
