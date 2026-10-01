@@ -4,6 +4,7 @@
   no_collapse: Don't collapse for admin and moderator views
   show_deleted: Show deleted content (for admin views)
   children: replies to this reply
+  no_content_filter: Don't apply the viewer's reply filters (admin and moderation views)
 
   NB: there is a clone of this file, add_reply_inline_result.html which is used for rendering the result of the ajax call
       to create a new comment - that file needs to be kept in sync with this one.
@@ -14,6 +15,8 @@
 {% else -%}
     {% set collapsed = (post_reply.score <= -10 and post_reply.collapsible) and not no_collapse -%}
 {% endif -%}
+{# R168: a reply the viewer's filters match is a collapsed stub; its replies below stay visible #}
+{% set filtered_keyword = reply_filter_keyword(post_reply) if not no_content_filter else None -%}
 <div class="container comment{% if post_reply.score and post_reply.score <= -10 %} low_score{% endif %}{% if post_reply.distinguished %} distinguished{% endif %}{% if post_reply.author.id == post_reply.post.author.id %} original_poster{% endif %}{% if post_reply.author.id == current_user.get_id() %} my_comment{% endif %}{% if post_reply.has_been_reported() %} reported{% endif %}{% if post_reply.answer %} answer{% endif %}" id="comment_{{ post_reply.id }}"{% if post_reply.language_id and post_reply.language.code != 'en' %} lang="{{ post_reply.language.code }}"{% endif %} aria-level="{{ post_reply.depth+1 }}" role="treeitem">
     {% if not post_reply.author.indexable -%}<!--googleoff: all-->{% endif -%}
     {% if teaser -%}
@@ -28,6 +31,7 @@
         </div>
     </div>
     {% endif -%}
+    {% if filtered_keyword -%}<details><summary class="filtered_reply">{{ _('Filtered: ') }}{{ filtered_keyword }}</summary>{% endif -%}
     <div class="row">
         <div class="col-auto comment_author">
             <span class="visually-hidden">{{ _('by') }}</span>
@@ -179,6 +183,7 @@
     </div>
     {% endif -%}
     <div id="reply_to_{{ post_reply.id }}" class="hidable"></div>
+    {% if filtered_keyword -%}</details>{% endif -%}
     {% if not post_reply.author.indexable -%}<!--googleon all-->{% endif -%}
 
     {% if children -%}
