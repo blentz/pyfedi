@@ -100,6 +100,7 @@ import sys
 from io import BytesIO
 from types import SimpleNamespace
 
+import pillow_heif
 import pytest
 from PIL import Image
 from werkzeug.datastructures import FileStorage
@@ -547,6 +548,24 @@ def test_a_mov_upload_is_kept_as_a_video(db_session, chdir_upload, http_mock):
     written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
     assert [p.suffix for p in written] == ['.mov']
     assert s.post.type == POST_TYPE_VIDEO
+
+
+def test_a_genuine_heic_upload_is_accepted(db_session, chdir_upload, http_mock):
+    """D579, fixed, in `edit_post`'s copy of the upload block. Pillow reports a
+    real .heic file as 'HEIF', and the format check looked for '.heif', so a
+    decoded .heic was refused as 'filetype not allowed'. 'HEIF' now matches
+    '.heic' as well (owner ruling 2026-09-30). `make_upload` cannot build real
+    HEIC bytes, so pillow_heif encodes them here."""
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/heic'})
+    s = _seed()
+    buf = BytesIO()
+    pillow_heif.from_pillow(Image.new('RGB', (8, 8), (4, 5, 6))).save(buf, format='HEIF')
+    buf.seek(0)
+    edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+              uploaded_file=FileStorage(stream=buf, filename='pic.heic', content_type='image/heic'))
+
+    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+    assert len(written) == 1
 
 
 def test_a_video_upload_is_judged_against_the_api_caller(db_session, chdir_upload, http_mock):

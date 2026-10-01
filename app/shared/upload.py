@@ -66,7 +66,8 @@ def process_upload(image_file, destination='posts', user: User | None = None):
 
     if not final_place.endswith('.svg') and not final_place.endswith('.gif') and not is_video_url(final_place):
         img = Image.open(final_place)
-        if '.' + img.format.lower() in allowed_extensions:
+        # D579: Pillow reports a .heic file as 'HEIF'
+        if '.' + img.format.lower() in allowed_extensions or (img.format == 'HEIF' and '.heic' in allowed_extensions):
             img = ImageOps.exif_transpose(img)
             img = img.convert('RGB' if (image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg']) else 'RGBA')
             img.thumbnail((image_max_dimension, image_max_dimension), resample=Image.LANCZOS)
