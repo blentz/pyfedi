@@ -375,6 +375,11 @@ def test_site_ban_of_a_local_user_reinvokes_ban_user_even_if_already_banned(
     finding 4 in this file's module docstring: a remote admin re-sending an
     already-actioned local-user ban always re-invokes `ban_user` here,
     where the ordinary branch would have skipped the equivalent work.
+
+    D94, fixed (owner ruling) inside `ban_user` rather than here: the call
+    still happens, but `ban_user` returns at once when the InstanceBan row
+    already exists, so the user is not notified twice
+    (test_ap_moderation.py::test_re_banning_instance_wide_is_a_no_op).
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, blocker = _seed_site_ban_blocker()

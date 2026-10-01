@@ -2700,11 +2700,14 @@ def ban_user(blocker, blocked, community, core_activity):
         instance_id = find_instance_id(furl(target).host)
         existing_ban = db.session.query(InstanceBan).filter(InstanceBan.user_id == blocked.id,
                                                             InstanceBan.instance_id == instance_id).first()
-        if not existing_ban:
-            instance_ban = InstanceBan(user_id=blocked.id, instance_id=instance_id)
-            instance_ban.banned_until = parse_ban_expiry(core_activity)
-            db.session.add(instance_ban)
-            db.session.commit()
+        # D205/D94 (owner ruling): a retransmitted Block for a ban already in force is a no-op - no second
+        # notification or modlog entry - as in the community branch below
+        if existing_ban:
+            return
+        instance_ban = InstanceBan(user_id=blocked.id, instance_id=instance_id)
+        instance_ban.banned_until = parse_ban_expiry(core_activity)
+        db.session.add(instance_ban)
+        db.session.commit()
 
         if blocked.is_local():
             communities = instance_community_ids(instance_id)
