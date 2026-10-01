@@ -101,7 +101,7 @@ def ban_person(session, user_id, mod_id, community_id, expiry, reason: str, remo
     if community_id:    # community ban
         community = session.get(Community, community_id)
         communities = [community] if community.is_local() else []
-        if community.local_only or community.private or not community.instance.online():
+        if community.local_only or community.private or not (community.instance_id and community.instance.online()):
             return
         cc = [community.public_url()]
         target = community.public_url()

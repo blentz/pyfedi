@@ -130,7 +130,7 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
     if not followers and community.local_only:
         return
 
-    if community.private or not community.instance.online():
+    if community.private or not (community.instance_id and community.instance.online()):
         return
 
     # commented out because surely we still want to be able to delete stuff in banned/blocked places?

@@ -58,7 +58,7 @@ def join_community(send_async, user_id, community_id, src):
                         raise Exception('banned_from_community')
                 return
 
-            if (not community.is_local() and
+            if (not community.is_local() and community.instance_id and
                 (user.has_blocked_instance(community.instance.id) or
                  instance_banned(community.instance.domain))):
                 if not send_async:
@@ -72,7 +72,7 @@ def join_community(send_async, user_id, community_id, src):
                         raise Exception('community_on_banned_or_blocked_instance')
                 return
 
-            if not community.is_local() and community.instance.online():
+            if not community.is_local() and community.instance_id and community.instance.online():
                 join_request = CommunityJoinRequest(user_id=user_id, community_id=community_id)
                 session.add(join_request)
                 session.commit()
@@ -138,7 +138,7 @@ def leave_community(send_async, user_id, community_id):
             else:
                 join_request_uuid = gibberish(15)
 
-            if (not community.instance.online() or
+            if (not (community.instance_id and community.instance.online()) or
                user.has_blocked_instance(community.instance.id) or
                instance_banned(community.instance.domain)):
                 return

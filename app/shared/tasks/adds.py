@@ -60,7 +60,7 @@ def add_object(session, user_id, object, community_id=None):
     else:
         community = session.query(Community).filter_by(id=community_id).one()
 
-    if community.local_only or community.private or not community.instance.online():
+    if community.local_only or community.private or not (community.instance_id and community.instance.online()):
         return
 
     add_id = f"{current_app.config['SERVER_URL']}/activities/add/{gibberish(15)}"

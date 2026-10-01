@@ -146,7 +146,7 @@ def send_post(post_id, edit=False, session=None):
                     session.add(notification)
                     session.commit()
 
-    if not community.instance.online():
+    if not (community.instance_id and community.instance.online()):
         return
 
     # local_only communities do not federate
@@ -401,7 +401,7 @@ def move_object(session, user_id, object, origin, target):
     else:
         raise TaskError('Unsupported origin or target')
 
-    if community.local_only or community.private or not community.instance.online():
+    if community.local_only or community.private or not (community.instance_id and community.instance.online()):
         return
 
     move_id = f"{current_app.config['SERVER_URL']}/activities/move/{gibberish(15)}"

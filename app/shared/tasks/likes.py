@@ -57,7 +57,7 @@ def send_vote(user_id, object, vote_to_undo, vote_direction, emoji):
     try:
         user = session.get(User, user_id)
         community = object.community
-        if community.local_only or community.private or not community.instance.online():
+        if community.local_only or community.private or not (community.instance_id and community.instance.online()):
             return
 
         banned = session.query(CommunityBan).filter_by(user_id=user_id, community_id=community.id).first()
@@ -180,7 +180,7 @@ def vote_for_poll(send_async, user_id, post_id, choice_text):
         user = session.get(User, user_id)
         if post:
             community = post.community
-            if community.local_only or community.private or not community.instance.online():
+            if community.local_only or community.private or not (community.instance_id and community.instance.online()):
                 return
             type = 'PollVote'
             poll_vote_id = f"{current_app.config['SERVER_URL']}/activities/{type.lower()}/{gibberish(15)}"
