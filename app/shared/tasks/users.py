@@ -18,7 +18,7 @@ def check_user_application(application_id, send_async=True):
         if not application or not application.user:
             return
 
-        num_banned = 0
+        banned_domains = set()  # one entry per banning instance, whichever leg found it
 
         for domain in get_setting('ban_check_servers', '').split('\n'):
             if not domain.strip():
@@ -45,7 +45,7 @@ def check_user_application(application_id, send_async=True):
                         ip_results = ip_response.json()
                         # Check the result at the index where real IP was inserted
                         if ip_results and len(ip_results) > ip_index and ip_results[ip_index]:
-                            num_banned += 1
+                            banned_domains.add(domain.strip())
                 finally:
                     ip_response.close()
 
@@ -73,7 +73,7 @@ def check_user_application(application_id, send_async=True):
                         email_results = email_response.json()
                         # Check the result at the index where real email was inserted
                         if email_results and len(email_results) > email_index and email_results[email_index]:
-                            num_banned += 1
+                            banned_domains.add(domain.strip())
                 finally:
                     email_response.close()
 
@@ -81,6 +81,7 @@ def check_user_application(application_id, send_async=True):
                 current_app.logger.error(f"Error checking bans on {domain}: {str(e)}")
                 continue
 
+        num_banned = len(banned_domains)
         if num_banned > 0:
             session.execute(text('UPDATE "user_registration" SET warning = :warning WHERE id = :id'),
                             {'warning': f"{num_banned} instances have banned this account.", 'id': application_id})

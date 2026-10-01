@@ -518,30 +518,11 @@ def test_a_false_result_at_the_real_email_index_counts_nothing(
     ]
 
 
-def test_both_legs_banned_counts_twice(db_session, monkeypatch):
-    """`num_banned` accumulating across the two legs of ONE domain.
-
-    The warning text names 2, which no single-leg test can produce -- this is
-    what proves `:47` and `:73` increment the same counter. THIS IS NOT AN
-    ENDORSEMENT OF THE WORDING: `num_banned` counts LEGS (IP and email
-    checked separately), not INSTANCES, so one domain banning on both legs
-    reads "2 instances have banned this account." for a single instance.
-    Registered as **D323** in
-    `docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md` -- not
-    fixed, because fixing the string would be a fourth production change.
-    This test pins CURRENT (miscounted) behaviour and must keep passing.
-
-    `num_banned` reaches 2, so `:80`'s true arm runs `:81-82` -- see
-    `test_a_banned_ip_at_the_real_index_counts` for D319, the defect this
-    test was originally written against and marked to expect failure on.
-    Task 10 fixed `:81-82`, and this test now passes, asserting both legs'
-    counts landed in the one persisted warning.
-
-    THE ASSERTED STRING IS THE MODULE'S OWN MISCOUNT (D323), NOT A CORRECT
-    COUNT: `num_banned` is incremented once per LEG (`:47` IP, `:73` email),
-    so this single-domain, both-legs-banned scenario produces "2 instances
-    have banned this account." for ONE banning instance. This test pins
-    present behaviour, not correct behaviour, and must keep passing.
+def test_both_legs_banned_counts_one_instance(db_session, monkeypatch):
+    """D323, fixed: the warning counted LEGS, so one domain banning on both
+    its IP and email checks read "2 instances have banned this account." for
+    one instance, on the admin approval screen. It now counts banning
+    domains, so this single domain is one.
     """
     s = _seed()
     set_setting('ban_check_servers', 'real.example')
@@ -552,7 +533,7 @@ def test_both_legs_banned_counts_twice(db_session, monkeypatch):
     check_user_application(s.application.id)
 
     db.session.expire_all()
-    assert db.session.get(UserRegistration, s.application.id).warning == '2 instances have banned this account.'
+    assert db.session.get(UserRegistration, s.application.id).warning == '1 instances have banned this account.'
 
 
 def test_a_failing_domain_does_not_stop_the_next_one(db_session, monkeypatch):
@@ -604,10 +585,7 @@ def test_the_warning_update_binds_its_parameters(db_session, monkeypatch):
     the moment the line is reached, which is the unfailable shape fact 132
     exists to catch.
 
-    THE ASSERTED STRING IS THE MODULE'S OWN MISCOUNT (D323), NOT A CORRECT
-    COUNT: `num_banned` counts LEGS, not instances, so this single-domain,
-    both-legs-banned scenario reads "2 instances" for ONE. This test pins
-    present behaviour, not correct behaviour, and must keep passing.
+    One domain banning on both legs counts as one instance (D323).
     """
     s = _seed()
     set_setting('ban_check_servers', 'real.example')
@@ -619,7 +597,7 @@ def test_the_warning_update_binds_its_parameters(db_session, monkeypatch):
 
     db.session.expire_all()
     persisted = db.session.get(UserRegistration, s.application.id)
-    assert persisted.warning == '2 instances have banned this account.'
+    assert persisted.warning == '1 instances have banned this account.'
 
 
 def test_both_responses_are_closed(db_session, monkeypatch):
