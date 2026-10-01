@@ -1089,12 +1089,15 @@ def post_user_logout(auth):
         raise Exception('incorrect_login')
     
     jti = decoded.get('jti')
-    if jti:
-        # Check if already revoked
-        if not RevokedToken.query.filter_by(jti=jti).first():
-            revoked_token = RevokedToken(jti=jti)
-            db.session.add(revoked_token)
-            db.session.commit()
+    if not jti:
+        # D1182: a token with no jti cannot be revoked, so logout must not claim it was. encode_jwt_token always
+        # mints one; nothing this instance issues for login lacks it.
+        raise Exception('incorrect_login')
+    # Check if already revoked
+    if not RevokedToken.query.filter_by(jti=jti).first():
+        revoked_token = RevokedToken(jti=jti)
+        db.session.add(revoked_token)
+        db.session.commit()
     
     return {'success': True}
 
