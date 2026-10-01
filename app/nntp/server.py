@@ -30,9 +30,10 @@ import re
 import time
 import threading
 import datetime
-import urllib.request
 import uuid
 from typing import Dict, Optional, Tuple, Union
+
+from app.utils import get_request
 
 from .nntpserver import (
     NNTPServer,
@@ -764,15 +765,20 @@ class PieFedNNTPServer(NNTPServer):
         image_part = ''
         if image_url:
             try:
-                req = urllib.request.Request(image_url, headers={'User-Agent': 'PieFed-nntp/1.0'})
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    content_type = resp.headers.get_content_type() or 'image/jpeg'
+                # R162: through the SSRF guard and the pinned client, not urllib
+                resp = get_request(image_url)
+                try:
+                    if resp.status_code != 200:
+                        raise ValueError(f'status {resp.status_code}')
+                    content_type = resp.headers.get('Content-Type', '').split(';')[0].strip().lower() or 'image/jpeg'
                     ext = content_type.split('/')[-1] if '/' in content_type else 'jpg'
-                    image_data = base64.b64encode(resp.read()).decode('ascii')
-                    # Wrap base64 at 76 chars per RFC 2045
-                    image_data = '\n'.join(
-                        image_data[i:i + 76] for i in range(0, len(image_data), 76)
-                    )
+                    image_data = base64.b64encode(resp.content).decode('ascii')
+                finally:
+                    resp.close()
+                # Wrap base64 at 76 chars per RFC 2045
+                image_data = '\n'.join(
+                    image_data[i:i + 76] for i in range(0, len(image_data), 76)
+                )
                 image_part = (
                     f'--{boundary}\r\n'
                     f'Content-Type: {content_type}\r\n'
