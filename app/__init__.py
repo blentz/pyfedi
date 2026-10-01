@@ -340,7 +340,9 @@ def create_app(config_class=Config):
         mail_handler = SMTPHandler(
             mailhost=(app.config['MAIL_SERVER'], app.config['MAIL_PORT']),
             fromaddr=(app.config['MAIL_FROM']),
-            toaddrs=app.config['ERRORS_TO'], subject='PieFed error',
+            # D873: a comma-separated list, split, or SMTPHandler sends to one malformed address
+            toaddrs=[addr.strip() for addr in app.config['ERRORS_TO'].split(',') if addr.strip()],
+            subject='PieFed error',
             credentials=auth, secure=secure, timeout=5.0)
         mail_handler.setLevel(logging.ERROR)
         app.logger.addHandler(mail_handler)

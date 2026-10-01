@@ -342,7 +342,7 @@ def test_the_mailer_uses_tls_only_when_asked_to(restores_the_shared_logger, use_
 
 
 def test_the_mailer_reports_only_errors(restores_the_shared_logger):
-    """`:345`. At any lower level a busy instance would mail its operator on
+    """`:347`. At any lower level a busy instance would mail its operator on
     every warning.
     """
     built = create_app(_config(MAIL_SERVER='smtp.example', ERRORS_TO='e@example.com',
@@ -352,26 +352,21 @@ def test_the_mailer_reports_only_errors(restores_the_shared_logger):
     assert handler.level == logging.ERROR
     assert handler.mailhost == 'smtp.example'
     assert handler.mailport == 587
-    # SMTPHandler wraps a string toaddrs in a list of one. R4: that means a
-    # comma-separated ERRORS_TO becomes a SINGLE malformed recipient rather
-    # than several addresses, and nothing complains until mail is first sent.
     assert handler.toaddrs == ['e@example.com']
 
 
-def test_several_error_recipients_become_one_malformed_address(
+def test_several_error_recipients_become_several_addresses(
         restores_the_shared_logger):
-    """R4, pinned as the behaviour it is rather than repaired.
-
-    ERRORS_TO is handed to SMTPHandler unsplit. SMTPHandler wraps a str in a
-    one-element list, so 'a@x.example,b@x.example' is one recipient containing
-    a comma -- which no SMTP server will accept -- and the failure appears only
-    when an error is first reported, which is exactly when the operator is not
-    watching.
+    """D873 (R4), fixed. ERRORS_TO was handed to SMTPHandler unsplit, and
+    SMTPHandler wraps a str in a one-element list, so 'a@x.example,b@x.example'
+    was one recipient containing a comma -- which no SMTP server accepts -- and
+    the failure appeared only when an error was first reported. It is split on
+    commas now, with spaces and empty entries dropped.
     """
     built = create_app(_config(MAIL_SERVER='smtp.example',
-                               ERRORS_TO='a@x.example,b@x.example'))
+                               ERRORS_TO='a@x.example, b@x.example,'))
 
-    assert _mail_handlers(built)[0].toaddrs == ['a@x.example,b@x.example']
+    assert _mail_handlers(built)[0].toaddrs == ['a@x.example', 'b@x.example']
 
 
 # --------------------------------------------------------------------------
