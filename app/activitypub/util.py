@@ -3886,7 +3886,8 @@ def update_post_from_activity(post: Post, request_json: dict):
                     db.session.add(image)
                     db.session.commit()
                     post.image = image
-                    make_image_sizes(image.id, 170, 512, 'posts')  # the 512 sized image is for masonry view
+                    if get_setting('cache_remote_images_locally', True):
+                        make_image_sizes(image.id, 170, 512, 'posts')  # the 512 sized image is for masonry view
                 else:
                     old_db_entry_to_delete = None
 
