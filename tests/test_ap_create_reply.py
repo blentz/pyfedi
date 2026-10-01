@@ -1625,7 +1625,7 @@ def test_the_recipient_language_wrapper_is_reached(app, db_session, redis_lock_o
 # --- User flair ------------------------------------------------------------
 #
 # `request_json['object']['flair']` (Lemmy-style user flair on a comment),
-# read after the Mention scan and before `PostReply.new`. `UserFlair`
+# applied only after `PostReply.new` has accepted the reply. `UserFlair`
 # (app/models.py) has no factory in tests/factories.py -- it is a bare
 # `id`/`user_id`/`community_id`/`flair` row with no timestamps or ap_id, so
 # every test below seeds it by hand.
@@ -1667,6 +1667,28 @@ def test_a_flair_on_a_user_with_an_existing_flair_updates_it(app, db_session, re
     rows = UserFlair.query.filter_by(user_id=replier.id, community_id=community.id).all()
     assert len(rows) == 1
     assert rows[0].flair == 'gold'
+
+
+@pytest.mark.parametrize('seeded', [False, True])
+def test_a_refused_reply_does_not_change_the_repliers_flair(app, db_session, redis_lock_only_double, seeded):
+    """A refused reply must not change flair (owner ruling): the flair was
+    committed BEFORE `PostReply.new` could refuse the reply, so a peer could
+    set a user's flair in a community with a reply that was never accepted.
+    It is now applied only once the reply exists."""
+    from unittest.mock import patch
+    from app.models import PostReplyValidationError
+    community, post, replier = _seed_scenario()
+    if seeded:
+        db.session.add(UserFlair(user_id=replier.id, community_id=community.id, flair='bronze'))
+        db.session.commit()
+    document = _reply_doc(content='hello', flair='gold')
+
+    with patch('app.activitypub.util.PostReply.new', side_effect=PostReplyValidationError('refused')):
+        reply = _create(community, post, replier, document=document)
+
+    assert reply is None
+    rows = UserFlair.query.filter_by(user_id=replier.id, community_id=community.id).all()
+    assert [row.flair for row in rows] == (['bronze'] if seeded else [])
 
 
 @pytest.mark.parametrize('flair', [123, True, ['gold'], {'name': 'gold'}])
