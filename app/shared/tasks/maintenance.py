@@ -723,13 +723,17 @@ def monitor_healthy_instances():
                                         session.add(new_instance_role)
 
                         # Remove old admin roles
-                        for instance_admin in session.query(InstanceRole).filter_by(instance_id=instance.id):
-                            if instance_admin.user_id not in admin_user_ids:
-                                session.query(InstanceRole).filter(
-                                    InstanceRole.user_id == instance_admin.user_id,
-                                    InstanceRole.instance_id == instance.id,
-                                    InstanceRole.role == 'admin'
-                                ).delete()
+                        stale_roles = [
+                            instance_admin for instance_admin
+                            in session.query(InstanceRole).filter_by(instance_id=instance.id)
+                            if instance_admin.user_id not in admin_user_ids
+                        ]
+                        for instance_admin in stale_roles:
+                            session.query(InstanceRole).filter(
+                                InstanceRole.user_id == instance_admin.user_id,
+                                InstanceRole.instance_id == instance.id,
+                                InstanceRole.role == 'admin'
+                            ).delete()
                 except Exception:
                     session.rollback()
                     instance.failures += 1
