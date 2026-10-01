@@ -474,6 +474,24 @@ def test_only_the_named_instances_receive_the_flag(db_session, http_mock):
     assert db.session.query(ActivityPubLog).count() == 1
 
 
+@pytest.mark.parametrize('column', ['dormant', 'gone_forever'])
+def test_a_dormant_or_gone_instance_is_not_sent_the_flag(db_session, http_mock, column):
+    """D321, fixed: `:73` queried the named instances with no dormant or
+    gone_forever filter, so a Flag was signed and posted to dead peers. Those
+    rows are now filtered out of the caller's set; nothing else changes about
+    which instances are named (the reported user's home instance stays)."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    dead = make_instance('dead.example', software='lemmy')
+    dead.inbox = OTHER_INBOX
+    setattr(dead, column, True)
+    db.session.commit()
+
+    report_post(None, s.user.id, s.post.id, 'spam', [dead.id])
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
 def test_an_instance_without_an_inbox_is_skipped(db_session, http_mock):
     """`:75`'s `instance.inbox is not None` guard, alone.
 

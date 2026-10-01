@@ -70,7 +70,8 @@ def report_object(session, user_id, object, summary, instance_ids):
       'summary': summary
     }
 
-    instances = session.query(Instance).filter(Instance.id.in_(instance_ids))
+    instances = session.query(Instance).filter(Instance.id.in_(instance_ids), Instance.dormant == False,
+                                               Instance.gone_forever == False)
     for instance in instances:
         if instance.inbox is not None:
             send_post_request(instance.inbox, flag, user.private_key, user.public_url() + '#main-key')
