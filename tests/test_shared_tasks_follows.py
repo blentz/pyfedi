@@ -758,17 +758,33 @@ def test_leaving_a_local_feed_sends_nothing(db_session, http_mock):
     assert db.session.query(ActivityPubLog).count() == 0
 
 
+def test_leaving_an_online_feed_with_no_pending_request_still_sends_an_undo(db_session, http_mock):
+    """D340, fixed: with no FeedJoinRequest row `uuid` was never assigned, and
+    an online feed then raised UnboundLocalError building the Follow id. Like
+    leave_community, the Undo now names a fresh id, so the peer is still told."""
+    s = _seed(with_keys=True)
+    peer = make_instance('peer.example', software='lemmy')
+    feed = make_feed(peer, 'peerfeed')
+    feed.ap_inbox_url = PEER_INBOX
+    db.session.commit()
+    route = _peer_route(http_mock)
+
+    leave_feed(None, s.user.id, feed.id)
+
+    undo = _sent_activity(route)
+    assert undo['type'] == 'Undo'
+    assert undo['object']['type'] == 'Follow'
+
+
 def test_leaving_an_offline_feed_with_no_pending_request_sends_nothing(
         db_session, http_mock):
     """`:177`'s `if join_request:` False -- the `177->179` arc, taken when no
     `FeedJoinRequest` row exists for this user/feed pair, so `:178`'s uuid
     capture never runs.
 
-    THE INSTANCE MUST ALSO BE OFFLINE, and that is not incidental. If the
-    guard at `:182-184` passed instead, execution would reach `:189`'s
-    `f"...{uuid}"` with `uuid` never assigned -- an `UnboundLocalError`. Going
-    offline routes through `:185`'s `return` first, which is also this
-    test's real target: the `182->185` arc, never taken by any other test in
+    THE INSTANCE IS OFFLINE so execution routes through `:185`'s `return`,
+    which is this test's real target (the online case is the D340 test
+    above): the `182->185` arc, never taken by any other test in
     this module because every other `leave_feed` test either has a pending
     request (`:178` already assigns `uuid`) or is local (`:173` returns
     before reaching this guard at all).
