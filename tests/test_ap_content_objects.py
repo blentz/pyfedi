@@ -1,9 +1,12 @@
 """tests/test_ap_content_objects.py"""
+from unittest.mock import patch
+
 import pytest
 
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.activitypub import util as activitypub_util
+from app.activitypub.signature import HttpSignature
 from app.constants import POST_STATUS_PUBLISHED, POST_STATUS_REVIEWING
 from app.models import Instance
 from tests.factories import (make_activitypub_log, make_community, make_instance,
@@ -25,6 +28,8 @@ def ap_get(app, path, user_agent=None):
     returns None and `has_blocked_instance(None)` returns False, the 401
     instance-block branch in `comment_ap` and `post_ap` is UNREACHABLE without
     a '+'-style agent string. A test that omits it measures the wrong branch.
+    These requests are unsigned; a signed GET is identified by its signer
+    instead (D194), see `signed_ap_get`.
     """
     headers = {'Accept': AP_ACCEPT}
     if user_agent is not None:
@@ -526,6 +531,96 @@ def test_a_post_is_401_when_the_author_has_blocked_the_requesting_instance(app, 
                       user_agent='Test (+https://blocked.example)')
 
     assert response.status_code == 401
+
+
+def signed_ap_get(app, path, signer, user_agent, key_id=None):
+    """GET `path` with an HTTP signature made by `signer`'s real private key, as
+    a peer with authorized fetch would. `signed_request(..., send_via_async=True)`
+    returns the headers it would have sent rather than sending them, so the
+    signature is produced by the same code that signs this instance's own GETs.
+    Its outbound-URI guard refuses '.local' hosts, so it is doubled here.
+    """
+    with patch('app.activitypub.signature.is_invalid_get_request_uri', return_value=False):
+        uri, headers, body = HttpSignature.signed_request(
+            f'https://test.piefed.local{path}', None, signer.private_key,
+            key_id or f'{signer.ap_profile_id}#main-key', method='get', send_via_async=True)
+    headers['User-Agent'] = user_agent
+    with app.test_client() as client:
+        return client.get(path, headers=headers)
+
+
+def test_a_signed_get_is_identified_by_its_signer_not_its_user_agent(app, db_session, monkeypatch):
+    """D194, fixed (owner ruling 2026-09-30). The instance-block guard used to
+    identify the requester only by a '+URL' User-Agent, which the caller writes.
+    A GET carrying a valid HTTP signature from an actor already stored here is
+    now identified by the keyId's host, so a blocked instance claiming another
+    instance's agent string is still refused.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    blocked = make_instance('blocked.example')
+    make_instance_block(author, blocked)
+    make_instance('peer2.example')
+    signer = make_user(blocked, 'signer', with_keys=True)
+
+    response = signed_ap_get(app, f'/post/{post.id}', signer, 'Test (+https://peer2.example)')
+
+    assert response.status_code == 401
+    assert b'blocked.example' in response.data
+
+
+def test_a_comment_is_identified_by_its_signer_too(app, db_session, monkeypatch):
+    """D194, fixed: `comment_ap`'s copy of the guard uses the same identification."""
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    blocked = make_instance('blocked.example')
+    make_instance_block(author, blocked)
+    signer = make_user(blocked, 'signer', with_keys=True)
+    reply = make_post_reply(post, author)
+
+    response = signed_ap_get(app, f'/comment/{reply.id}', signer, 'Test')
+
+    assert response.status_code == 401
+
+
+def test_a_signature_that_does_not_verify_falls_back_to_the_user_agent(app, db_session, monkeypatch):
+    """D194, fixed: an unverified keyId is not trusted. The request names an
+    unblocked actor's key but is signed with another key, so the guard falls
+    back to the User-Agent, which here names the blocked instance.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    blocked = make_instance('blocked.example')
+    make_instance_block(author, blocked)
+    peer = make_instance('peer2.example')
+    innocent = make_user(peer, 'innocent', with_keys=True)
+    forger = make_user(blocked, 'forger', with_keys=True)
+
+    response = signed_ap_get(app, f'/post/{post.id}', forger, 'Test (+https://blocked.example)',
+                             key_id=f'{innocent.ap_profile_id}#main-key')
+
+    assert response.status_code == 401
+
+
+def test_a_signature_from_an_unknown_actor_falls_back_to_the_user_agent(app, db_session, monkeypatch):
+    """D194, fixed: only keys already stored here are used, so a GET never makes
+    this instance fetch a key. A signer this instance has not met is ignored and
+    the User-Agent decides, as before; nothing is fetched or created.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    blocked = make_instance('blocked.example')
+    make_instance_block(author, blocked)
+    make_instance('peer2.example')
+    stranger = make_user(blocked, 'stranger', with_keys=True)
+    db.session.delete(stranger)
+    db.session.commit()
+    users_before = db.session.query(activitypub_routes.User).count()
+
+    response = signed_ap_get(app, f'/post/{post.id}', stranger, 'Test (+https://peer2.example)')
+
+    assert response.status_code == 200
+    assert db.session.query(activitypub_routes.User).count() == users_before
 
 
 def test_a_remote_post_redirects_to_its_origin(app, db_session, monkeypatch):

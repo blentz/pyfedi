@@ -15,6 +15,7 @@ from sqlalchemy import desc, or_, text, func
 
 from app import db, cache, celery, limiter
 from app.activitypub import bp
+from app.activitypub.actor import find_actor_by_url
 from app.activitypub.signature import HttpSignature, VerificationError, VerificationFormatError, default_context, LDSignature, \
     send_post_request
 from app.activitypub.util import users_total, active_half_year, active_month, local_posts, local_comments, \
@@ -2280,8 +2281,9 @@ def comment_ap(comment_id):
             abort(403)
         if reply.deleted:
             return tombstone_response(reply.ap_id, 'Note')
-        if reply.author.has_blocked_instance(known_instance_id(requestor_domain())):
-            return make_response(f'Author has blocked {requestor_domain()}'), 401
+        requesting_domain = signed_requestor_domain()
+        if reply.author.has_blocked_instance(known_instance_id(requesting_domain)):
+            return make_response(f'Author has blocked {requesting_domain}'), 401
         reply_data = comment_model_to_json(reply) if request.method == 'GET' else []
         resp = jsonify(reply_data)
         resp.content_type = 'application/activity+json'
@@ -2305,6 +2307,23 @@ def tombstone_response(ap_id: str, former_type: str):
     return resp
 
 
+def signed_requestor_domain():
+    """The host of the keyId a GET is validly signed with, else the domain its User-Agent volunteers.
+
+    Only keys of actors already stored here are used, so identifying a requester never fetches anything; a signature
+    from an unknown actor, or one that does not verify, is ignored rather than trusted."""
+    if 'signature' in request.headers:
+        try:
+            key_id = HttpSignature.parse_signature(request.headers['signature'])['keyid']
+            actor = find_actor_by_url(key_id.split('#')[0])
+            if actor and actor.public_key:
+                HttpSignature.verify_request(request, actor.public_key)
+                return furl(key_id).host
+        except (VerificationError, ValueError):
+            pass
+    return requestor_domain()
+
+
 def post_ap_refusal(post: Post):
     """The response that refuses an ActivityPub fetch of `post` (or of its replies or context), or None to serve it.
 
@@ -2314,8 +2333,9 @@ def post_ap_refusal(post: Post):
         abort(403)
     if post.deleted:
         return tombstone_response(post.ap_id, 'Page')
-    if post.author.has_blocked_instance(known_instance_id(requestor_domain())):
-        return make_response(f'Author has blocked {requestor_domain()}'), 401
+    requesting_domain = signed_requestor_domain()
+    if post.author.has_blocked_instance(known_instance_id(requesting_domain)):
+        return make_response(f'Author has blocked {requesting_domain}'), 401
     return None
 
 
