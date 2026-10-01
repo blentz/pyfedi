@@ -49,6 +49,22 @@ def test_a_successful_post_unlock_logs_success_and_nothing_else(app, db_session,
     assert logs[0].result == 'success'
 
 
+def test_an_unlock_records_the_reason_carried_on_the_inner_lock(app, db_session, monkeypatch):
+    """D111, fixed. The reason was read from the outer Undo's summary, so one
+    carried on the inner Lock (where the Undo/Delete sibling reads it) never
+    reached the modlog.
+    """
+    instance, mod, community, author, post = _seed_lockable_post()
+    calls = record_moderation(monkeypatch, 'add_to_modlog')
+    activity = undo_lock_activity(mod, post.ap_id)
+    activity['object']['summary'] = 'discussion has cooled down'
+
+    dispatch(activity)
+
+    args, kwargs = calls['add_to_modlog'][0]
+    assert kwargs['reason'] == 'discussion has cooled down'
+
+
 def test_an_unlock_of_something_that_exists_nowhere_logs_not_found(app, db_session, monkeypatch):
     """The failure log's remaining reason to exist: neither a post nor a reply
     matched. Paired with the test above so the guard cannot be dropped in
