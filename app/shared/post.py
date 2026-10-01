@@ -354,7 +354,9 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         # Parse event data from API
         event_data = input.get('event', None)
         if event_data:
-            # Parse datetime strings to datetime objects
+            # Parse datetime strings to datetime objects. Events are wall-clock times: the digits are kept
+            # naive, read in the event's own timezone, and any offset is dropped. Polls, below, are UTC
+            # instants instead. Intended, not an inconsistency (D297).
             if 'start' in event_data:
                 if isinstance(event_data['start'], str):
                     event_data['start'] = datetime.fromisoformat(event_data['start'].replace('Z', '+00:00')).replace(tzinfo=None)
@@ -376,6 +378,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
                 'choices': poll_data.get('choices', [])
             }
             if 'end_poll' in poll_data and poll_data['end_poll']:
+                # A UTC instant: the offset is honoured, unlike an event's wall-clock times above (D297)
                 if isinstance(poll_data['end_poll'], str):
                     parsed_poll['end_poll'] = datetime.fromisoformat(poll_data['end_poll'].replace('Z', '+00:00'))
                 else:
