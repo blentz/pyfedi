@@ -13,7 +13,7 @@ from app.models import Notification, NotificationSubscription, Post, PostReply, 
 from app.shared.tasks import task_selector
 from app.utils import render_template, authorise_api_user, shorten_string, \
     piefed_markdown_to_lemmy_markdown, markdown_to_html, add_to_modlog, can_create_post_reply, \
-    can_upvote, can_downvote, get_recipient_language, user_ip_banned, ip_address
+    can_upvote, can_downvote, get_recipient_language, user_ip_banned, ip_address, can_moderate
 
 
 def vote_for_reply(reply_id: int, vote_direction, federate: bool, emoji: str | None, src, auth=None):
@@ -475,7 +475,7 @@ def mod_remove_reply(reply_id, reason, src, auth):
         user = current_user
 
     reply = db.session.query(PostReply).filter_by(id=reply_id, deleted=False).one()
-    if not reply.community.is_moderator(user) and not reply.community.is_instance_admin(user) and not user.is_admin_or_staff():
+    if not can_moderate(reply.community, user):
         raise Exception('Does not have permission')
 
     reply.deleted = True
@@ -514,7 +514,7 @@ def mod_restore_reply(reply_id, reason, src, auth):
         user = current_user
 
     reply = db.session.query(PostReply).filter_by(id=reply_id, deleted=True).one()
-    if not reply.community.is_moderator(user) and not reply.community.is_instance_admin(user):
+    if not can_moderate(reply.community, user):
         raise Exception('Does not have permission')
 
     reply.deleted = False
@@ -560,7 +560,7 @@ def lock_post_reply(post_reply_id, locked, src, auth=None):
         replies_enabled = True
         modlog_type = 'unlock_post_reply'
 
-    if post_reply.community.is_moderator(user) or post_reply.community.is_instance_admin(user):
+    if can_moderate(post_reply.community, user):
         post_reply.replies_enabled = replies_enabled
         db.session.execute(text('update post_reply set replies_enabled = :replies_enabled where path @> ARRAY[:parent_id]'),
                            {'parent_id': post_reply.id, 'replies_enabled': replies_enabled})
@@ -594,7 +594,7 @@ def set_collapse_post_reply(post_reply_id, collapsible, src, auth=None):
         user = current_user
         post_reply = db.session.get(PostReply, post_reply_id) or abort(404)
 
-    if post_reply.community.is_moderator(user) or post_reply.community.is_instance_admin(user) or user.is_admin_or_staff():
+    if can_moderate(post_reply.community, user):
         post_reply.collapsible = collapsible
         db.session.commit()
 

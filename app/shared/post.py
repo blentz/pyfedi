@@ -27,8 +27,8 @@ from app.utils import render_template, authorise_api_user, shorten_string, gibbe
     opengraph_parse, url_to_thumbnail_file, can_create_post, is_video_hosting_site, recently_upvoted_posts, \
     is_image_url, add_to_modlog, store_files_in_s3, guess_mime_type, retrieve_image_hash, \
     hash_matches_blocked_image, can_upvote, can_downvote, get_recipient_language, to_srgb, can_upload_video, \
-    is_video_url, sanitize_svg, user_ip_banned, ip_address, inspect_image_c2pa, user_access, \
-    community_membership_private, communities_banned_from
+    is_video_url, sanitize_svg, user_ip_banned, ip_address, inspect_image_c2pa, \
+    community_membership_private, communities_banned_from, can_moderate
 
 
 def vote_for_post(post_id: int, vote_direction, federate: bool, emoji: str, src, auth=None):
@@ -457,7 +457,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
     # WARNING: beyond this point do not use the input variable as it can be either a dict or a form object!
 
     post.indexable = user.indexable
-    if post.community.is_moderator(user) or post.community.is_owner(user) or user.is_admin():
+    if can_mod_post(post, user):
         post.sticky = False if src == SRC_API else input.sticky.data
     post.nsfw = nsfw or post.community.nsfw
     post.nsfl = False if src == SRC_API else input.nsfl.data
@@ -1065,7 +1065,7 @@ def lock_post(post_id: int, locked, src, auth=None):
         comments_enabled = True
         modlog_type = 'unlock_post'
 
-    if post.community.is_moderator(user) or post.community.is_admin_or_staff(user):
+    if can_mod_post(post, user):
         post.comments_enabled = comments_enabled
         db.session.commit()
         add_to_modlog(modlog_type, actor=user, target_user=post.author, reason='',
@@ -1095,7 +1095,7 @@ def move_post(post_id: int, target_id: int, src, auth=None):
 
     post = db.session.get(Post, post_id) or abort(404)
 
-    if post.community.is_moderator(user) or post.community.is_instance_admin(user) or user.is_admin_or_staff():
+    if can_mod_post(post, user):
         old_community_id = post.community_id
         target_community = db.session.get(Community, target_id)
 
@@ -1149,7 +1149,7 @@ def sticky_post(post_id: int, featured: bool, src: int, auth=None):
     post = db.session.get(Post, post_id) or abort(404)
     community = post.community
 
-    if post.community.is_moderator(user) or post.community.is_instance_admin(user) or user.is_admin_or_staff():
+    if can_mod_post(post, user):
         post.sticky = featured
         if featured:
             modlog_type = 'featured_post'
@@ -1191,9 +1191,8 @@ def hide_post(post_id: int, hidden: bool, src: int, auth=None):
 
 
 def can_mod_post(post, user) -> bool:
-    # D421: the one gate for removing or restoring someone else's post, asked by the post routes and below
-    return post.community.is_moderator(user) or user.is_admin_or_staff() or \
-        user_access('administer all communities', user.id)
+    # D421: the one gate for moderating someone else's post, asked by the post routes and below
+    return can_moderate(post.community, user)
 
 
 # mod deletes

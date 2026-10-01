@@ -1837,6 +1837,13 @@ def user_access(permission: str, user_id: int) -> bool:
     return has_access is not None
 
 
+def can_moderate(community, user) -> bool:
+    # D422/D521/D642/D963: the one moderation gate -- a moderator (owners included), an admin, staff, or a holder of
+    # 'administer all communities'. Deleting or restoring a whole community is narrower: owner and admins (D615).
+    return community.is_moderator(user) or user.is_admin_or_staff() or \
+        user_access('administer all communities', user.id)
+
+
 def role_access(permission: str, role_id: int) -> bool:
     has_access = db.session.execute(text('SELECT * FROM "role_permission" as rp ' +
                                          'WHERE rp.role_id = :role_id AND rp.permission = :permission'),

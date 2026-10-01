@@ -26,7 +26,7 @@ from app.utils import authorise_api_user, blocked_communities, shorten_string, m
     instance_banned, community_membership, joined_communities, moderating_communities, is_image_url, \
     communities_banned_from, piefed_markdown_to_lemmy_markdown, community_moderators, add_to_modlog, \
     get_recipient_language, moderating_communities_ids, moderating_communities_ids_all_users, gibberish, \
-    favorite_communities, render_template
+    favorite_communities, render_template, can_moderate
 
 
 # function can be shared between WEB and API (only API calls it for now)
@@ -342,7 +342,7 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
     icon_url_changed = banner_url_changed = False
 
     if not from_scratch:
-        if not (community.is_owner(user) or community.is_moderator(user) or user.is_admin()):
+        if not can_moderate(community, user):
             raise Exception('incorrect_login')
 
         if community.icon_id and icon_url != community.icon.source_url:

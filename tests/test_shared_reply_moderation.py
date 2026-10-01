@@ -424,29 +424,24 @@ class TestModRemoveReply:
         assert s.reply.deleted is False
         assert db.session.query(ModLog).count() == 0
 
-    def test_an_instance_admin_may_remove(self, db_session):
-        """`:423`'s SECOND disjunct alone -- `is_instance_admin` -- with the
-        first and third false.
-
-        `:423` is three disjuncts scored by coverage.py as one arc pair, so
-        each needs its own witness or mechanism (e) applies: two conditions
-        exercised only in lockstep cannot detect a swap between them.
+    def test_an_instance_admin_is_refused(self, db_session):
+        """D422/D521, fixed (owner ruling): every moderation guard asks
+        `can_moderate` -- moderator, admin, staff or 'administer all
+        communities'. An InstanceRole admin of the community's instance is
+        none of these, so the removal is refused and nothing is written.
         """
         s = _seed_moderated_reply()
         make_instance_admin(s.actor, s.instance)
 
-        mod_remove_reply(s.reply.id, 'spam', SRC_API, auth=bearer(s.actor))
+        with pytest.raises(Exception, match='Does not have permission'):
+            mod_remove_reply(s.reply.id, 'spam', SRC_API, auth=bearer(s.actor))
 
         db.session.refresh(s.reply)
-        assert s.reply.deleted is True
+        assert s.reply.deleted is False
 
     def test_a_site_admin_who_is_neither_may_remove(self, db_session):
-        """`:423`'s THIRD disjunct alone -- `user.is_admin_or_staff()`.
-
-        This is the disjunct `mod_restore_reply:461` does NOT have, which is
-        finding 2 in the spec; the paired test in `TestModRestoreReply` shows
-        the same user refused there.
-        """
+        """`can_moderate`'s `user.is_admin_or_staff()` disjunct alone. Since
+        D521's fix `TestModRestoreReply` admits the same user to undo it."""
         s = _seed_moderated_reply()
         make_site_admin(s.actor)
 
@@ -716,15 +711,9 @@ class TestModRemoveReply:
 class TestModRestoreReply:
     """`mod_restore_reply` (app/shared/reply.py:454-489).
 
-    THE GUARD HAS TWO DISJUNCTS WHERE `mod_remove_reply`'S HAS THREE. `:461`
-    is `is_moderator or is_instance_admin`; `:423` adds
-    `user.is_admin_or_staff()`. So a site admin who is not a moderator can
-    remove a comment and then cannot restore it. That is finding 2 in the
-    spec, registered rather than fixed, and
-    `test_a_site_admin_who_is_neither_is_refused` below is its witness --
-    paired deliberately with `TestModRemoveReply`'s
-    `test_a_site_admin_who_is_neither_may_remove`, which shows the same user
-    permitted one line earlier in the file.
+    The guard is `can_moderate`, the same one `mod_remove_reply` asks (D521,
+    fixed by owner ruling). Until then it lacked `user.is_admin_or_staff()`,
+    so a site admin could remove a comment and not restore it.
     """
 
     def _removed(self, *, bot=False):
@@ -759,39 +748,35 @@ class TestModRestoreReply:
         assert s.reply.deleted is False
         assert s.reply.deleted_by is None
 
-    def test_an_instance_admin_may_restore(self, db_session):
-        """`:461`'s SECOND disjunct alone, with the first false."""
+    def test_an_instance_admin_is_refused(self, db_session):
+        """D422/D521, fixed (owner ruling): an InstanceRole admin is not in
+        `can_moderate`'s rule, so the restore is refused."""
         s = self._removed()
         other = make_user(s.instance, 'admin-user', local=True)
         db.session.commit()
         make_instance_admin(other, s.instance)
-
-        mod_restore_reply(s.reply.id, 'ok', SRC_API, auth=bearer(other))
-
-        db.session.refresh(s.reply)
-        assert s.reply.deleted is False
-
-    def test_a_site_admin_who_is_neither_is_refused(self, db_session):
-        """`:461`'s true arm for a user `mod_remove_reply:423` WOULD admit.
-
-        THIS TEST PINS FINDING 2 AND ASSERTS THE DIVERGENCE ON PURPOSE. The
-        same user, with the same role, is permitted by
-        `TestModRemoveReply::test_a_site_admin_who_is_neither_may_remove`. If
-        a later round makes the two guards agree, THE EDIT OWED HERE IS TO
-        INVERT THIS TEST: the restore must then succeed and `deleted` must
-        read False. Its failure at that point is the fix landing, not a
-        regression.
-        """
-        s = self._removed()
-        other = make_user(s.instance, 'staffer', local=True)
-        db.session.commit()
-        make_site_admin(other)
 
         with pytest.raises(Exception, match='Does not have permission'):
             mod_restore_reply(s.reply.id, 'ok', SRC_API, auth=bearer(other))
 
         db.session.refresh(s.reply)
         assert s.reply.deleted is True
+
+    def test_a_site_admin_who_is_neither_may_restore(self, db_session):
+        """D521, fixed (owner ruling): removal and restore ask the same
+        `can_moderate`, so the site admin `mod_remove_reply` admits may also
+        undo the removal. This test asserted the refusal until the guards
+        were made to agree.
+        """
+        s = self._removed()
+        other = make_user(s.instance, 'staffer', local=True)
+        db.session.commit()
+        make_site_admin(other)
+
+        mod_restore_reply(s.reply.id, 'ok', SRC_API, auth=bearer(other))
+
+        db.session.refresh(s.reply)
+        assert s.reply.deleted is False
 
     def test_a_bot_authors_reply_does_not_move_the_three_guarded_counters_on_restore(self, db_session):
         """`:466`'s false arm -- `:467`-`:469` skipped, `:470` still runs.
@@ -1140,10 +1125,25 @@ class TestLockPostReply:
         assert child.replies_enabled is False
         assert decoy.replies_enabled is True
 
-    def test_an_instance_admin_may_lock(self, db_session):
-        """`:507`'s SECOND disjunct alone, with the first false."""
+    def test_an_instance_admin_is_refused(self, db_session):
+        """D422/D521, fixed (owner ruling): an InstanceRole admin is not in
+        `can_moderate`'s rule, so the lock is refused."""
         s = _seed_moderated_reply()
         make_instance_admin(s.actor, s.instance)
+        s.reply.replies_enabled = True
+        db.session.commit()
+
+        with pytest.raises(Exception, match='Does not have permission'):
+            lock_post_reply(s.reply.id, True, SRC_API, auth=bearer(s.actor))
+
+        db.session.refresh(s.reply)
+        assert s.reply.replies_enabled is True
+
+    def test_a_site_admin_who_is_neither_may_lock(self, db_session):
+        """D521, fixed (owner ruling): lock asks `can_moderate` like collapse
+        and removal, so a site admin who moderates nothing may lock."""
+        s = _seed_moderated_reply()
+        make_site_admin(s.actor)
         s.reply.replies_enabled = True
         db.session.commit()
 
@@ -1349,17 +1349,9 @@ class TestSetCollapsePostReply:
     is right only until someone adds the endpoint is not a guard. The tests
     below reach it directly, which is the only way it is reachable at all.
 
-    ITS GUARD STILL DIFFERS FROM `lock_post_reply`'s BY ONE DISJUNCT, which is
-    a separate finding and is NOT fixed: `:539` is
-    `is_moderator or is_instance_admin or user.is_admin_or_staff()` where
-    `:507` has only the first two. So a site admin who is not a moderator can
-    make a comment collapsible but cannot lock it -- finding 2's second
-    instance, and `test_a_site_admin_who_is_neither_may_collapse` below is
-    paired with `TestLockPostReply.test_an_unprivileged_api_caller_is_refused`
-    to witness it: same role, opposite outcome, one line apart in the module.
-    (That cross-reference named `..._is_not_refused` until Task 7 renamed it
-    with the behaviour; the pairing itself is unchanged, except that the lock
-    side now raises instead of returning silently.)
+    Its guard and `lock_post_reply`'s are both `can_moderate` (D521, fixed by
+    owner ruling); until then lock lacked `user.is_admin_or_staff()`, so a site
+    admin could make a comment collapsible but not lock it.
 
     `:546` and `:550` are COMMENTED-OUT `task_selector` calls, so this
     function federates nothing. A test asserting an empty recorder would
@@ -1407,28 +1399,23 @@ class TestSetCollapsePostReply:
         db.session.refresh(s.reply)
         assert s.reply.collapsible is False
 
-    def test_an_instance_admin_may_collapse(self, db_session):
-        """`:539`'s SECOND disjunct alone."""
+    def test_an_instance_admin_is_refused(self, db_session):
+        """D422/D521, fixed (owner ruling): an InstanceRole admin is not in
+        `can_moderate`'s rule, so the collapse is refused."""
         s = _seed_moderated_reply()
         make_instance_admin(s.actor, s.instance)
         s.reply.collapsible = False
         db.session.commit()
 
-        set_collapse_post_reply(s.reply.id, True, SRC_API, auth=bearer(s.actor))
+        with pytest.raises(Exception, match='Does not have permission'):
+            set_collapse_post_reply(s.reply.id, True, SRC_API, auth=bearer(s.actor))
 
         db.session.refresh(s.reply)
-        assert s.reply.collapsible is True
+        assert s.reply.collapsible is False
 
     def test_a_site_admin_who_is_neither_may_collapse(self, db_session):
-        """`:539`'s THIRD disjunct -- the one `lock_post_reply:507` lacks.
-
-        Paired with `TestLockPostReply.test_an_unprivileged_api_caller_is_refused`:
-        the same role succeeds here and is REFUSED there, which is the
-        divergence finding 2 registers. The pairing read "silently does
-        nothing there" until Task 7; after Task 7's fix the lock side raises,
-        so the divergence is now visible to the caller rather than silent --
-        but it is still a divergence, and finding 2 is still open.
-        """
+        """`can_moderate`'s `user.is_admin_or_staff()` disjunct; since D521's
+        fix `TestLockPostReply` admits the same user to lock."""
         s = _seed_moderated_reply()
         make_site_admin(s.actor)
         s.reply.collapsible = False

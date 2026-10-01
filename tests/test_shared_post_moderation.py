@@ -29,8 +29,10 @@ in tests/README.md 206-212. The three that bind hardest here:
     in THIS file returns `user.id, post`, or None on the SRC_WEB arms of
     lock_post, move_post, mod_remove_post and mod_restore_post.
 
-THE GATES ARE THE POINT OF THIS FILE, and they do not agree. Five of the six
-functions gate on permission, in two distinct predicates:
+THE GATES ARE THE POINT OF THIS FILE. Since D422's fix (owner ruling) all five
+gate on one predicate, `can_mod_post` -- moderator, admin, staff or
+'administer all communities' -- and edit_post's sticky field asks it too. The
+history below describes the predicates it replaced:
 
   P1  is_moderator or user.is_admin_or_staff()
       -- lock_post:941, mod_remove_post:1055, mod_restore_post:1097
@@ -513,21 +515,20 @@ def test_moving_records_the_target_community_in_the_modlog(db_session):
     assert entries[0].community_id == target.id
 
 
-def test_an_instance_admin_may_move_a_post(db_session):
-    """`:971`'s SECOND disjunct alone -- `community.is_instance_admin(user)`.
-
-    This is the disjunct that distinguishes P2 from P1, and the only reason
-    move_post and sticky_post admit an actor lock_post refuses. Catches a
-    regression dropping it, which would silently narrow move_post to P1.
+def test_an_instance_admin_is_refused_a_move(db_session):
+    """D422, fixed (owner ruling): every post moderation gate is
+    `can_mod_post` -- moderator, admin, staff or 'administer all
+    communities'. The InstanceRole admin P2 used to admit is none of these.
     """
     s = seed_post_context(community_name='moderation')
     target = make_community('target')
     make_instance_admin(s.voter, s.instance)
 
-    move_post(s.post.id, target.id, SRC_API, auth=bearer(s.voter))
+    with pytest.raises(Exception, match='Does not have permission'):
+        move_post(s.post.id, target.id, SRC_API, auth=bearer(s.voter))
 
     db.session.refresh(s.post)
-    assert s.post.community_id == target.id
+    assert s.post.community_id != target.id
 
 
 def test_a_site_admin_may_move_a_post(db_session):
@@ -675,19 +676,17 @@ def test_an_unprivileged_user_cannot_sticky_a_post(db_session):
     assert db.session.query(ModLog).count() == 0
 
 
-def test_an_instance_admin_may_sticky_a_post(db_session):
-    """`:1003`'s second disjunct alone -- `community.is_instance_admin(user)`.
-
-    This is the disjunct that distinguishes P2 from P1, and the only reason
-    move_post and sticky_post admit an actor lock_post refuses.
-    """
+def test_an_instance_admin_is_refused_a_sticky(db_session):
+    """D422, fixed (owner ruling): sticky_post asks `can_mod_post`, which no
+    longer admits an InstanceRole admin."""
     s = seed_post_context(community_name='moderation')
     make_instance_admin(s.voter, s.instance)
 
-    sticky_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
+    with pytest.raises(Exception, match='Does not have permission'):
+        sticky_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
 
     db.session.refresh(s.post)
-    assert s.post.sticky is True
+    assert s.post.sticky is not True
 
 
 def test_a_site_admin_may_sticky_a_post(db_session):

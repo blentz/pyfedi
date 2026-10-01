@@ -429,6 +429,24 @@ class TestStickyPermission:
         db.session.refresh(s.post)
         assert s.post.sticky is False
 
+    def test_staff_may_set_sticky(self, db_session):
+        """D422, fixed (owner ruling): the sticky field asks `can_mod_post`, so
+        staff may set it here as through sticky_post. The bare `is_admin()`
+        this gate used to spell refused them."""
+        s = self._seed_sticky()
+        staffer = make_user(s.instance, 'staffer', local=True)
+        staffer.roles.append(Role(name='Staff', weight=0))
+        db.session.commit()
+
+        assert s.community.is_moderator(staffer) is False
+        assert staffer.is_admin() is False
+
+        edit_post(_api_input(), s.post, POST_TYPE_ARTICLE, SRC_API,
+                  user=staffer, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.sticky is False
+
 
 class TestScheduledGate:
     """`:413-416` -- the scheduled-post gate.

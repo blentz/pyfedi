@@ -46,7 +46,7 @@ from app.community import bp
 from app.post.util import tags_to_string
 from app.shared.community import invite_with_chat, invite_with_email, subscribe_community, add_mod_to_community, \
     remove_mod_from_community, get_comm_flair_list, favorite_community
-from app.utils import back, get_setting, render_template, markdown_to_html, validation_required, \
+from app.utils import back, get_setting, render_template, markdown_to_html, validation_required, can_moderate, \
     shorten_string, gibberish, community_membership, \
     request_etag_matches, return_304, can_upvote, can_downvote, user_filters_posts, \
     joined_communities, moderating_communities, moderating_communities_ids, blocked_domains, \
@@ -1376,7 +1376,7 @@ def community_edit(community_id: int):
         return show_ban_message()
     community = db.session.get(Community, community_id) or abort(404)
     old_topic_id = community.topic_id if community.topic_id else None
-    if community.is_owner() or current_user.is_admin() or community.is_moderator():
+    if can_moderate(community, current_user):
         form = EditCommunityForm()
         form.topic.choices = topics_for_form(0)
         form.theme.choices = community_theme_list()
@@ -2186,7 +2186,7 @@ def community_moderate_subscribers(actor):
     # fetch was not. Hoisting them leaves the body unnested: the `elif community
     # is not None:` and the inner `is_moderator()` test that used to wrap it
     # could no longer be false.
-    if not (community.is_moderator() or current_user.is_admin()):
+    if not can_moderate(community, current_user):
         abort(401)
 
     ban_user_form = FindAndBanUserCommunityForm()

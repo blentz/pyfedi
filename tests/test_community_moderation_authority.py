@@ -656,6 +656,24 @@ def test_an_ordinary_member_cannot_read_the_subscriber_list(app,
     assert render.call_args_list == []
 
 
+def test_staff_can_read_the_subscriber_list(app, community_world):
+    """D963, fixed (owner ruling): the subscriber list asks `can_moderate`,
+    like the other moderation routes, so staff who moderate nothing may see
+    who is subscribed and banned. It asked bare `is_admin()` and refused
+    them."""
+    community, moderator, second, member = community_world
+    staffer = _staff()
+    client = app.test_client()
+    login(client, staffer)
+
+    with patch('app.community.routes.render_template', return_value='rendered') as render:
+        response = client.get(url(app, 'community.community_moderate_subscribers',
+                                  actor=community.name))
+
+    assert response.status_code == 200
+    assert render.call_args_list != []
+
+
 # --------------------------------------------------------------------------
 # Ownership
 # --------------------------------------------------------------------------
