@@ -4103,28 +4103,20 @@ class TestEventUrlIsItsOwnNewUrl:
 
 
 class TestUnparseableAttachmentUrlOnANonEvent:
-    """`:3460`'s ELSE arm, `new_url = None` for a post that is not an event.
+    """The unstorable-url guard on a post that is not an event.
 
-    The mirror of the second test above and the reason `:3460` needs two tests
-    rather than one: the two arms of a single ternary are two mutants, and
-    collapsing `:3460` to `new_url = old_url` leaves that one green -- for an
-    Event `old_url` IS what the real code assigns -- while failing this one.
+    R213, fixed (owner ruling): the guard used to be a ternary, `old_url` for an
+    Event and None otherwise, so a non-event link post had its url cleared and
+    became a discussion. It now keeps `old_url` for every post; this test and the
+    event one above are the two halves of the old ternary.
     """
 
-    def test_an_unparseable_attachment_url_clears_a_link_post_to_an_article(
+    def test_an_unparseable_attachment_url_keeps_a_link_posts_url(
             self, app, db_session, redis_lock_only_double):
-        """`_seed_link_post` is POST_TYPE_LINK on SEEDED_URL, so `:3418` starts
-        `new_url` at None, the dispatch raises it to UNPARSEABLE_HREF, `:3451`
-        rejects it and `:3460` puts it back to None. `:3472` is then true and
-        `:3476`'s `if new_url:` false, so the post falls to `:3550`'s else:
-        POST_TYPE_ARTICLE at `:3551`, `post.url = None` at `:3564`.
-
-        Both asserted values are ones the seed does not hold, which is what
-        `_seed_link_post`'s own docstring seeds POST_TYPE_LINK for. `post.title`
-        is asserted for the same anti-vacuity reason the class above gives.
-
-        No HTTP: `:3476` is false, so `:3480`'s `is_image_url` -- the only HEAD
-        this arm issues -- is never reached.
+        """`_seed_link_post` is POST_TYPE_LINK on SEEDED_URL; the dispatch raises
+        `new_url` to UNPARSEABLE_HREF, the guard rejects it and puts back
+        SEEDED_URL, so the url-change arm does not run. `post.title` is asserted
+        for the same anti-vacuity reason the class above gives.
         """
         post = _seed_link_post()
 
@@ -4133,8 +4125,8 @@ class TestUnparseableAttachmentUrlOnANonEvent:
 
         db.session.expire_all()
         assert post.title == UPDATE_NAME
-        assert post.url is None
-        assert post.type == POST_TYPE_ARTICLE
+        assert post.url == SEEDED_URL
+        assert post.type == POST_TYPE_LINK
 
 
 class TestUrllessPostGainsADomain:

@@ -251,30 +251,19 @@ class TestUpdatingAPost:
         return _created(env, SHAPES['Link/href, Lemmy < 0.19.4']('https://ok.example/x'),
                         slug='upd')
 
-    def test_an_update_cannot_store_an_unsafe_url(self, env, existing):
+    def test_an_update_with_an_unsafe_url_keeps_the_stored_one(self, env, existing):
+        """R213, fixed (owner ruling): the guard used to set `new_url` to None, so
+        the url-change arm ran and a peer could wipe a post's link by sending an
+        Update naming a scheme this instance will not store. The hostile url is
+        still not stored, and the post now keeps the url it had -- and stays a
+        link post rather than becoming a discussion."""
         update_post_from_activity(existing, {'object': {
             'id': existing.ap_id, 'type': 'Page', 'name': 'A link post',
             'attachment': [{'type': 'Link', 'href': HOSTILE}]}})
         db.session.commit()
 
-        assert existing.url is None
-
-    def test_an_unsafe_url_clears_the_link_rather_than_refusing_the_update(self, env,
-                                                                          existing):
-        """Recorded because it is a real cost of this design, not an accident. The guard
-        sets `new_url` to the same None an unparseable url gets, so the url-change arm
-        below it runs and the post becomes a discussion -- a peer can wipe a link by
-        sending an Update naming a scheme this instance will not store. That is the
-        behaviour already chosen for unparseable urls, and the comment at that guard
-        gives the reason: rejecting the Update would let peers make us drop content.
-        Storing the hostile url is not an option, so the alternative to this is keeping
-        the OLD url, which is a different change with its own argument."""
-        update_post_from_activity(existing, {'object': {
-            'id': existing.ap_id, 'type': 'Page', 'name': 'A link post',
-            'attachment': [{'type': 'Link', 'href': HOSTILE}]}})
-        db.session.commit()
-
-        assert existing.type == POST_TYPE_ARTICLE
+        assert existing.url == 'https://ok.example/x'
+        assert existing.type != POST_TYPE_ARTICLE
 
     def test_an_update_can_still_change_a_url(self, env, existing):
         update_post_from_activity(existing, {'object': {
