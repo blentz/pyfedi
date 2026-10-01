@@ -97,14 +97,6 @@ from werkzeug.http import http_date
 # config module.
 import app  # noqa: F401
 
-# Several blueprint modules import names from each other, so whichever package's
-# __init__.py starts first decides whether a `from x import name` finds `name`
-# defined yet. The community <-> activitypub cycle this prime was written for is
-# fixed (U-circular-import); tests/test_import_order.py lists the ones that are
-# not. Priming app.activitypub here, before pytest collects any test module,
-# fixes the winning order once for the whole session -- otherwise it depends on
-# which test file pytest happens to alphabetically collect first.
-import app.activitypub.signature  # noqa: F401
 from app import celery
 from config import Config
 
