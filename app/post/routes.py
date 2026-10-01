@@ -709,32 +709,34 @@ def comment_emoji_list(comment_id):
     return render_template('post/emoji_list.html', comment_id=comment_id, emojis=emoji_list, nonce=g.get('nonce', ''))
 
 
+# F10: the same three decorators as the vote routes, so an unverified or unapproved
+# account cannot cast an emoji upvote either; login_required also checks CSRF
 @bp.route('/post/<int:post_id>/emoji_set', methods=['POST'])
+@login_required
+@validation_required
+@approval_required
 def post_emoji_set(post_id):
-    if current_user.is_authenticated:
-        federate = not current_user.vote_privately
+    federate = not current_user.vote_privately
 
-        vote_for_post(post_id, 'upvote', federate, request.form.get('emoji'), SRC_WEB)
+    vote_for_post(post_id, 'upvote', federate, request.form.get('emoji'), SRC_WEB)
 
-        post = db.session.get(Post, post_id)
+    post = db.session.get(Post, post_id)
 
-        return render_template('post/_post_reply_teaser_reactions.html', post_reply=post)
-    else:
-        abort(403)
+    return render_template('post/_post_reply_teaser_reactions.html', post_reply=post)
 
 
 @bp.route('/comment/<int:comment_id>/emoji_set', methods=['POST'])
+@login_required
+@validation_required
+@approval_required
 def comment_emoji_set(comment_id):
-    if current_user.is_authenticated:
-        federate = not current_user.vote_privately
+    federate = not current_user.vote_privately
 
-        vote_for_reply(comment_id, 'upvote', federate, request.form.get('emoji'), SRC_WEB)
+    vote_for_reply(comment_id, 'upvote', federate, request.form.get('emoji'), SRC_WEB)
 
-        post_reply = db.session.get(PostReply, comment_id)
+    post_reply = db.session.get(PostReply, comment_id)
 
-        return render_template('post/_post_reply_teaser_reactions.html', post_reply=post_reply)
-    else:
-        abort(403)
+    return render_template('post/_post_reply_teaser_reactions.html', post_reply=post_reply)
 
 
 @bp.route('/poll/<int:post_id>/vote', methods=['POST'])
