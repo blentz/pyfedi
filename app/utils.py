@@ -4314,6 +4314,8 @@ def retrieve_defederation_list(domain: str) -> Optional[List[str]]:
         if not isinstance(instance_data, dict):
             return None
         blocked = instance_data.get('federated_instances') or {}
+        if not isinstance(blocked, dict) or not isinstance(blocked.get('blocked') or [], list):
+            return None
         for row in blocked.get('blocked') or []:
             if isinstance(row, dict) and row.get('domain'):
                 result.append(row['domain'])

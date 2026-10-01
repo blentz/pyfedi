@@ -120,6 +120,17 @@ class TestReadingALemmyCompatibleList:
             return_value=httpx.Response(200, text='<html>no api</html>'))
         assert retrieve_defederation_list(DOMAIN) is None
 
+    @pytest.mark.parametrize('body', [
+        {'federated_instances': ['nasty.test']},
+        {'federated_instances': {'blocked': {'domain': 'nasty.test'}}},
+    ])
+    def test_federated_instances_of_the_wrong_shape(self, env, http_mock, body):
+        """A non-object `federated_instances`, or a non-list `blocked`, is an
+        answer this cannot read: it was `AttributeError` in the worker, and is
+        now a failed fetch, so the subscription's existing bans stay."""
+        http_mock.get(LEMMY_URL).mock(return_value=httpx.Response(200, json=body))
+        assert retrieve_defederation_list(DOMAIN) is None
+
     def test_an_endpoint_that_is_not_there(self, env, http_mock):
         http_mock.get(LEMMY_URL).mock(return_value=httpx.Response(404))
         assert retrieve_defederation_list(DOMAIN) is None
