@@ -387,10 +387,9 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
     # live ORM object -- and since the raise does not roll back, the next commit
     # in the same session persisted the rejected edit. app/api/alpha/utils/
     # feed.py:202's put_feed has no ownership check of its own, so this is the
-    # only gate on the API path.
-    if not from_scratch:
-        if not (feed.user_id == user.id or user.is_admin()):
-            raise Exception('incorrect_login')
+    # only gate on the API path. It runs for from_scratch too (D694).
+    if not (feed.user_id == user.id or user.is_admin()):
+        raise Exception('incorrect_login')
 
     if url:
         url = feed_machine_name(url, public, user)
