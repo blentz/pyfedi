@@ -70,7 +70,7 @@ KNOWN_GET_MUTATORS = {
     # something at the caller's direction. Each belongs to a blueprint this
     # campaign has not finished; the entry is removed when its slice lands.
     'community.community_wiki_revert_revision',
-    'feed.feed_notification', 'feed.feed_unsubscribe',
+    'feed.feed_unsubscribe',
     'topic.topic_notification',
     'user.notification_goto', 'user.notification_delete',
 }

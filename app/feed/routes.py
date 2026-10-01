@@ -368,7 +368,7 @@ def feed_copy(feed_id: int):
     return render_template('feed/feed_copy.html', form=copy_feed_form)
 
 
-@bp.route('/feed/<int:feed_id>/notification', methods=['GET', 'POST'])
+@bp.route('/feed/<int:feed_id>/notification', methods=['POST'])  # POST only: CSRF (D709)
 @login_required
 def feed_notification(feed_id: int):
     # Toggle whether the current user is subscribed to notifications about this feed's posts or not
