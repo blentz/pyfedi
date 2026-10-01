@@ -176,7 +176,10 @@ def test_the_user_pages_need_administer_all_users(app, db_session, method, path)
     client = app.test_client()
     login(client, ordinary)
 
-    response = getattr(client, method)(path)
+    # A POST carries a token: login_required, now the outer decorator (D943),
+    # checks it before permission_required can refuse.
+    data = {'csrf_token': csrf(app, client)} if method == 'post' else None
+    response = getattr(client, method)(path, data=data)
 
     assert response.status_code == 302
     assert '/permission_denied' in response.headers['Location']
