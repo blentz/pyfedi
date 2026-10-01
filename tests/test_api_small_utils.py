@@ -8,9 +8,9 @@ MEASUREMENT BASIS, from the full-suite --cov=app run at acb3ec132:
 
 Nothing in tests/ referenced any of the three.
 
-No production change. The two shapes in upload.py that looked like defects were
-probed and are registered instead: the auth fallback (R1) and the unused quota
-sum (R2).
+The two shapes in upload.py that looked like defects were probed and
+registered: the auth fallback (R1) and the unused quota sum (R2, since
+removed as D881 by owner ruling).
 
 `api_baseline` is the fixture these modules assume -- tests/conftest.py:558 --
 because they were written against a seeded dev database.
@@ -361,14 +361,11 @@ def test_an_upload_with_a_bad_token_and_no_session_is_refused(app, db_session,
         assert upload.call_args_list == []
 
 
-def test_the_upload_sums_the_callers_existing_files(app, db_session, api_baseline):
-    """R2, pinned so the dead computation is recorded rather than merely
-    present: the per-user SELECT over user_file runs on every upload and its
-    total is discarded, because the quota check that consumed it is commented
-    out. The row asserts the upload still succeeds with rows present, which is
-    all the sum can affect today.
-    """
-    from sqlalchemy import text
+def test_the_upload_runs_no_storage_quota_query(app, db_session, api_baseline):
+    """D881, fixed (owner ruling): there is no storage quota on uploads, so the
+    per-user SUM over user_file whose total was discarded is gone. The upload
+    still succeeds with rows present, and no statement reads user_file."""
+    from sqlalchemy import event, text
     from tests.factories import make_file
 
     user = api_baseline.user1
@@ -378,13 +375,22 @@ def test_the_upload_sums_the_callers_existing_files(app, db_session, api_baselin
         text('INSERT INTO "user_file" (user_id, file_id, size) VALUES (:u, :f, 4096)'),
         {'u': user.id, 'f': stored.id})
     db.session.commit()
+    statements = []
 
-    with app.test_request_context('/'):
-        with patch('app.api.alpha.utils.upload.process_upload',
-                   return_value='https://cdn.example/a.png'):
-            result = post_upload_image(bearer(user), image_file='FILE')
+    def record(conn, cursor, statement, *args):
+        statements.append(statement)
+
+    event.listen(db.engine, 'before_cursor_execute', record)
+    try:
+        with app.test_request_context('/'):
+            with patch('app.api.alpha.utils.upload.process_upload',
+                       return_value='https://cdn.example/a.png'):
+                result = post_upload_image(bearer(user), image_file='FILE')
+    finally:
+        event.remove(db.engine, 'before_cursor_execute', record)
 
     assert result == {'url': 'https://cdn.example/a.png'}
+    assert not [sql for sql in statements if 'user_file' in sql]
 
 
 def test_deleting_an_image_reports_success(app, db_session, api_baseline):
