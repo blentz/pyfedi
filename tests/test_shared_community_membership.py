@@ -565,7 +565,7 @@ def test_subscribe_community_web_creates_via_override_and_returns_the_render(app
     with web_ctx(app, s.user):
         result = subscribe_community(s.community.id, False, SRC_WEB)
 
-    assert isinstance(result, str)
+    assert result.status_code == 200
     assert db.session.query(NotificationSubscription).filter_by(
         entity_id=s.community.id, user_id=s.user.id, type=NOTIF_COMMUNITY).count() == 1
 
@@ -597,7 +597,7 @@ def test_subscribe_community_web_banned_user_flashes_and_creates_nothing(app, db
         result = subscribe_community(s.community.id, False, SRC_WEB)
         flashed = get_flashed_messages()
 
-    assert isinstance(result, str)
+    assert result.status_code == 200
     assert len(flashed) == 1
     assert 'banned from this community' in flashed[0]
     assert db.session.query(NotificationSubscription).filter_by(
@@ -630,7 +630,7 @@ def test_subscribe_community_web_override_off_removes_an_existing_subscription(a
     with web_ctx(app, s.user):
         result = subscribe_community(s.community.id, True, SRC_WEB)
 
-    assert isinstance(result, str)
+    assert result.status_code == 200
     assert db.session.query(NotificationSubscription).filter_by(
         entity_id=s.community.id, user_id=s.user.id, type=NOTIF_COMMUNITY).count() == 0
 
@@ -676,7 +676,7 @@ def test_subscribe_community_a_third_source_reaches_the_flash_branches_the_web_a
         result = subscribe_community(s.community.id, False, SRC_PLD)
         flashed = get_flashed_messages()
 
-    assert isinstance(result, str)
+    assert result.status_code == 200
     assert len(flashed) == 1
     assert 'did not exist' in flashed[0]
     assert db.session.query(NotificationSubscription).filter_by(
@@ -688,7 +688,7 @@ def test_subscribe_community_a_third_source_reaches_the_flash_branches_the_web_a
         result = subscribe_community(s.community.id, True, SRC_PLD)
         flashed = get_flashed_messages()
 
-    assert isinstance(result, str)
+    assert result.status_code == 200
     assert len(flashed) == 1
     assert 'already existed' in flashed[0]
     assert db.session.query(NotificationSubscription).filter_by(
@@ -790,7 +790,7 @@ def test_favorite_community_web_creates_via_override_and_returns_the_render(app,
     with web_ctx(app, s.user):
         result = favorite_community(s.community.id, False, SRC_WEB)
 
-    assert isinstance(result, str)
+    assert result.status_code == 200
     assert db.session.query(CommunityFavorite).filter_by(
         community_id=s.community.id, user_id=s.user.id).count() == 1
 
@@ -810,7 +810,7 @@ def test_favorite_community_web_banned_user_flashes_and_creates_nothing(app, db_
         result = favorite_community(s.community.id, False, SRC_WEB)
         flashed = get_flashed_messages()
 
-    assert isinstance(result, str)
+    assert result.status_code == 200
     assert len(flashed) == 1
     assert 'banned from this community' in flashed[0]
     assert db.session.query(CommunityFavorite).filter_by(
@@ -842,7 +842,7 @@ def test_favorite_community_web_override_off_removes_an_existing_favorite(app, d
     with web_ctx(app, s.user):
         result = favorite_community(s.community.id, True, SRC_WEB)
 
-    assert isinstance(result, str)
+    assert result.status_code == 200
     assert db.session.query(CommunityFavorite).filter_by(
         community_id=s.community.id, user_id=s.user.id).count() == 0
 
@@ -884,7 +884,7 @@ def test_favorite_community_a_third_source_reaches_the_flash_branches_the_web_ar
         result = favorite_community(s.community.id, False, SRC_PLD)
         flashed = get_flashed_messages()
 
-    assert isinstance(result, str)
+    assert result.status_code == 200
     assert len(flashed) == 1
     assert 'did not exist' in flashed[0]
     assert db.session.query(CommunityFavorite).filter_by(
@@ -896,8 +896,23 @@ def test_favorite_community_a_third_source_reaches_the_flash_branches_the_web_ar
         result = favorite_community(s.community.id, True, SRC_PLD)
         flashed = get_flashed_messages()
 
-    assert isinstance(result, str)
+    assert result.status_code == 200
     assert len(flashed) == 1
     assert 'already existed' in flashed[0]
     assert db.session.query(CommunityFavorite).filter_by(
         community_id=s.community.id, user_id=s.user.id).count() == 1
+
+
+def test_the_notification_toggle_is_rendered_through_the_app_wrapper(app, db_session):
+    """D604, fixed: app/shared/community.py rendered its toggle partials with
+    flask.render_template, returning a bare string, where every sibling shared
+    module uses app.utils.render_template (theme lookup, protocol rewrite,
+    headers). The two toggles now use the wrapper and return a Response."""
+    make_site()
+    s = _seed_member()
+
+    with web_ctx(app, s.user):
+        result = subscribe_community(s.community.id, False, SRC_WEB)
+
+    assert result.status_code == 200
+    assert 'Link' in result.headers

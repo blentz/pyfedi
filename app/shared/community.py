@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from flask import current_app, flash, render_template
+import flask
+from flask import current_app, flash
 from flask_babel import _, force_locale, gettext
 from flask_login import current_user
 from slugify import slugify
@@ -25,7 +26,7 @@ from app.utils import authorise_api_user, blocked_communities, shorten_string, m
     instance_banned, community_membership, joined_communities, moderating_communities, is_image_url, \
     communities_banned_from, piefed_markdown_to_lemmy_markdown, community_moderators, add_to_modlog, \
     get_recipient_language, moderating_communities_ids, moderating_communities_ids_all_users, gibberish, \
-    favorite_communities
+    favorite_communities, render_template
 
 
 # function can be shared between WEB and API (only API calls it for now)
@@ -165,7 +166,7 @@ def invite_with_chat(community_id: int, handle: str, src, auth=None):
                     community_invite = create_invite_token(community, recipient, user)
                     message += f"Join the community by going to {current_app.config['SERVER_URL']}/community/{community.link()}/accept_invite/{community_invite}. You need to be logged in to a {current_app.config['SERVER_NAME']} account for this."
             else:
-                message = render_template('email/invite_to_community.txt', user=user, community=community,
+                message = flask.render_template('email/invite_to_community.txt', user=user, community=community,
                                           host=current_app.config['SERVER_NAME'])
 
         reply = send_message(message, conversation.id)
@@ -202,7 +203,7 @@ def invite_with_email(community_id: int, to: str, src, auth=None):
     if community.invitations > INVITE_APPLY:
         subscribe = f'accept_invite/{user.lemmy_link()}'
 
-    message = render_template('email/invite_to_community.txt', user=user, community=community,
+    message = flask.render_template('email/invite_to_community.txt', user=user, community=community,
                               host=current_app.config['SERVER_URL'], subscribe=subscribe)
 
     send_email(f"{community.display_name()} on {current_app.config['SERVER_NAME']}",
