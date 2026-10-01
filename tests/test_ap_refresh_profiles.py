@@ -2040,3 +2040,76 @@ def test_the_following_collection_fetch_asks_for_activity_json(app, db_session, 
     sent = following_route.calls.last.request
     assert sent.headers['accept'] == 'application/activity+json'
     assert db.session.query(FeedItem).one().community_id == community.id
+
+
+def _spy_on_actor_lookups(monkeypatch):
+    """Record each collection entry the loops resolve and whether they were
+    allowed to create it, resolving nothing so no fetch or row follows."""
+    calls = []
+
+    def spy(actor, create_if_not_found=True, **kwargs):
+        calls.append((actor, create_if_not_found, kwargs.get('retry')))
+        return None
+
+    monkeypatch.setattr(ap_util, 'find_actor_or_create', spy)
+    return calls
+
+
+def test_moderators_on_another_host_are_looked_up_but_not_created(app, db_session, http_mock, monkeypatch):
+    """D226, fixed (owner ruling 2026-09-30). Every entry in a peer-supplied
+    moderators collection used to be created if unseen, so a peer chose how many
+    actors, on which hosts, this instance fetched. Unseen actors are now created
+    only on the community's own host; other hosts are lookup-only. The housekeeping
+    `retry=True` (D775) is kept.
+    """
+    community = _remote_community()
+    mods_url = f'https://{PEER}/c/memes/moderators'
+    _serve(http_mock, mods_url, {'type': 'OrderedCollection', 'orderedItems': [
+        f'https://{PEER}/u/samehost', 'https://elsewhere.example/u/otherhost']})
+    calls = _spy_on_actor_lookups(monkeypatch)
+
+    refresh_community_profile_task(
+        community.id, _group_document(fields={'attributedTo': mods_url}))
+
+    assert calls == [(f'https://{PEER}/u/samehost', True, True),
+                     ('https://elsewhere.example/u/otherhost', False, True)]
+
+
+def test_feed_owners_on_another_host_are_looked_up_but_not_created(app, db_session, http_mock, monkeypatch):
+    """D226, fixed: the feed owners loop applies the same host rule, against the
+    feed's own host. The following collection is served empty to keep its loop
+    out of this test."""
+    feed = _remote_feed()
+    feed.ap_following_url = f'https://{PEER}/f/news/following'
+    db.session.commit()
+    owners_url = f'https://{PEER}/f/news/owners'
+    _serve(http_mock, feed.ap_public_url,
+           _feed_document(fields={'attributedTo': owners_url}))
+    _serve(http_mock, owners_url, {'type': 'OrderedCollection', 'orderedItems': [
+        f'https://{PEER}/u/samehost', 'https://elsewhere.example/u/otherhost']})
+    _serve(http_mock, feed.ap_following_url, {'items': []})
+    calls = _spy_on_actor_lookups(monkeypatch)
+
+    refresh_feed_profile_task(feed.id)
+
+    assert calls == [(f'https://{PEER}/u/samehost', True, True),
+                     ('https://elsewhere.example/u/otherhost', False, True)]
+
+
+def test_followed_communities_on_another_host_are_looked_up_but_not_created(
+        app, db_session, http_mock, monkeypatch):
+    """D226, fixed: the feed's following loop applies the same host rule. A feed
+    following a community on another host only gains it once this instance
+    already knows that community."""
+    feed = _remote_feed()
+    feed.ap_following_url = f'https://{PEER}/f/news/following'
+    db.session.commit()
+    _serve(http_mock, feed.ap_public_url, _feed_document())
+    _serve(http_mock, feed.ap_following_url, {'items': [
+        f'https://{PEER}/c/samehost', 'https://elsewhere.example/c/otherhost']})
+    calls = _spy_on_actor_lookups(monkeypatch)
+
+    refresh_feed_profile_task(feed.id)
+
+    assert calls == [(f'https://{PEER}/c/samehost', True, True),
+                     ('https://elsewhere.example/c/otherhost', False, True)]
