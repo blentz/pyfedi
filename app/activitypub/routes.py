@@ -2219,12 +2219,15 @@ def community_outbox(actor):
         remaining_posts = Post.query.filter(Post.community_id == community.id).filter(Post.sticky == False, Post.deleted == False,
                                             Post.status > POST_STATUS_REVIEWING).order_by(desc(Post.posted_at)).limit(remaining_limit).all()
         posts = sticky_posts + remaining_posts
+        # D173 (owner ruling): the size of the whole collection, though only the first 50 are inline
+        total_posts = Post.query.filter(Post.community_id == community.id, Post.deleted == False,
+                                        Post.status > POST_STATUS_REVIEWING).count()
 
         community_data = {
             "@context": default_context(),
             "type": "OrderedCollection",
             "id": f"{current_app.config['SERVER_URL']}/c/{actor}/outbox",
-            "totalItems": len(posts),
+            "totalItems": total_posts,
             "orderedItems": []
         }
 
