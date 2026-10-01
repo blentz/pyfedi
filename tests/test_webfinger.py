@@ -208,13 +208,27 @@ def test_an_acct_resource_resolves_a_local_user(app, db_session):
 
 def test_a_url_resource_resolves_by_its_last_path_segment(app, db_session):
     """The `elif 'https:' in query or 'http:' in query` branch, which takes
-    `query.split('/')[-1]`. Reached only when 'acct:' is absent from the whole
-    string -- the acct test above is its pair.
+    `query.split('/')[-1]`. Reached only when the resource does not start with
+    'acct:' -- the acct test above is its pair.
     """
     site, instance = seed_local_actors()
     make_user(instance, 'alice', local=True)
 
     response = webfinger_get(app, resource='https://test.piefed.local/u/alice')
+
+    assert response.status_code == 200
+    assert response.json['subject'] == 'acct:alice@test.piefed.local'
+
+
+def test_a_url_resource_containing_acct_is_still_parsed_as_a_url(app, db_session):
+    """D146, fixed. `'acct:' in query` was a substring test, so a URL with
+    'acct:' anywhere in it was split as an acct resource and 404'd. Only a
+    resource that starts with 'acct:' takes that branch now.
+    """
+    site, instance = seed_local_actors()
+    make_user(instance, 'alice', local=True)
+
+    response = webfinger_get(app, resource='https://test.piefed.local/acct:x/alice')
 
     assert response.status_code == 200
     assert response.json['subject'] == 'acct:alice@test.piefed.local'
