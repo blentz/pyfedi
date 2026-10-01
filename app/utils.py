@@ -68,6 +68,9 @@ from app.models import CronJobLog, Settings, Domain, Instance, BannedInstances, 
     File, ModLog, CommunityBlock, Feed, FeedMember, CommunityFlair, CommunityJoinRequest, Notification, UserNote, \
     PostReply, PostReplyBookmark, AllowedInstances, InstanceBan, Tag, Emoji, UserExtraField, ArchivedPostReply, \
     RevokedToken, CommunityFavorite, UserFollower, CommunityFlairBlock, s3_key_from_url, Role, RolePermission
+from collections import Counter
+from flask import has_request_context
+import app as app_pkg
 
 logger = logging.getLogger(__name__)
 
@@ -1820,7 +1823,6 @@ def decrement_unread_counts(user_ids) -> None:
     0)` is the floor, which is what `app/api/alpha/utils/reply.py`'s single-row
     decrement already had as `AND unread_notifications > 0`.
     """
-    from collections import Counter
 
     for user_id, how_many in Counter(user_ids).items():
         db.session.execute(
@@ -1988,8 +1990,7 @@ def blocked_referrers() -> List[str]:
 def block_honey_pot():
     # Return 403 for any IP address that has visited /honey/* too many times. See honey_pot()
     if current_user.is_anonymous and g.site.honeypot:
-        from app import redis_client
-        if redis_client.exists(f"ban:{ip_address()}"):
+        if app_pkg.redis_client.exists(f"ban:{ip_address()}"):
             abort(403)
 
 
@@ -3239,7 +3240,7 @@ def community_moderators(community_id):
 
 
 def finalize_user_setup(user):
-    from app.activitypub.signature import RsaKeys
+    from app.activitypub.signature import RsaKeys  # cycle: app.activitypub.signature imports from this module
     user.verified = True
     user.last_seen = utcnow()
     if user.private_key is None and user.public_key is None:
@@ -3515,7 +3516,7 @@ def url_to_thumbnail_file(filename) -> File:
                 final_ext = file_extension.lower()
 
                 if medium_image_format == 'AVIF':
-                    import pillow_avif  # NOQA
+                    import pillow_avif  # NOQA  # lazy: registers Pillow's AVIF plugin only on the AVIF path
 
                 # D1328. This used to run unguarded, so a body Pillow refuses --
                 # anything that is not an image, and a peer chooses what it serves --
@@ -4167,8 +4168,6 @@ def get_task_session() -> Session:
 @contextmanager
 def patch_db_session(task_session):
     """Temporarily replace db.session with task_session for functions that use it internally"""
-    from app import db
-    from flask import has_request_context
 
     # Only patch if we're not in a Flask request context (i.e., in a Celery worker)
     if has_request_context():
@@ -4546,7 +4545,6 @@ MICROBLOG_GATE = 'p.private is false'
 
 
 def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, hashtag: str = '', include_following=False, community_sql: str = None) -> List[int]:
-    from app import redis_client
     if not community_sql and (community_ids is None or len(community_ids) == 0):
         return []
     # result_id is client-controlled (every web caller reads it from ?result_id= and
@@ -4557,8 +4555,8 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
     # could disagree, and did: the read used to require a non-empty result_id while
     # the write required only an authenticated user.
     cache_key = f'feed:{current_user.id}:{result_id}' if result_id and current_user.is_authenticated else None
-    if cache_key and redis_client.exists(cache_key):
-        return json.loads(redis_client.get(cache_key))
+    if cache_key and app_pkg.redis_client.exists(cache_key):
+        return json.loads(app_pkg.redis_client.get(cache_key))
 
     params = {}                 # parameters provided to the SQL query
     post_id_sql = 'SELECT p.id, p.cross_posts, p.user_id, p.reply_count FROM "post" as p\nINNER JOIN "community" as c on p.community_id = c.id\n'
@@ -4714,7 +4712,7 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
     post_ids = dedupe_post_ids(post_ids, limit_to_visible=(community_ids[0] != -1))
 
     if cache_key:  # same key the read above used; see where it is derived
-        redis_client.set(cache_key, json.dumps(post_ids), ex=86400)  # 86400 is 1 day
+        app_pkg.redis_client.set(cache_key, json.dumps(post_ids), ex=86400)  # 86400 is 1 day
     return post_ids
 
 
@@ -5669,7 +5667,7 @@ def archive_post(post_id: int, s3_connection):
             post.body = None
             post.body_html = None
             if post.reply_count:
-                from app.post.util import post_replies
+                from app.post.util import post_replies  # cycle: app.post.util imports from this module
                 # Get replies sorted by 'hot' with scores preserved - keep hierarchical structure
                 hot_replies = post_replies(post, 'hot', None, db_only=True)  # No viewer to get all replies
 
@@ -6446,7 +6444,7 @@ def validate_email(value):
 
 
 def inspect_image_c2pa(data: bytes, mimetype: str) -> dict:
-    import c2pa
+    import c2pa  # lazy: native c2pa library, loaded only when an upload is inspected
     result = {
         "c2pa": {
             "present": False,
