@@ -468,11 +468,22 @@ def find_flair_or_create(flair: dict, community_id: int, session=None) -> Commun
 
     if existing_flair is None:
         if 'preferredUsername' in flair:
-            existing_flair = session.query(CommunityFlair).filter(CommunityFlair.flair == flair['preferredUsername'].strip(), 
-                                                              CommunityFlair.community_id == community_id).first()
+            lookup_name = flair['preferredUsername'].strip()
         elif 'display_name' in flair:
-            existing_flair = session.query(CommunityFlair).filter(CommunityFlair.flair == flair['display_name'].strip(),
+            lookup_name = flair['display_name'].strip()
+        else:
+            lookup_name = None
+        if lookup_name is not None:
+            existing_flair = session.query(CommunityFlair).filter(CommunityFlair.flair == lookup_name,
                                                                   CommunityFlair.community_id == community_id).first()
+            if existing_flair is None:
+                # Under autoflush=False a row an earlier call created in this session
+                # is still pending and invisible to the query above, so one peer list
+                # naming a flair twice created it twice (D27). Search the pending rows too.
+                existing_flair = next((pending for pending in session.new
+                                       if isinstance(pending, CommunityFlair)
+                                       and pending.community_id == community_id
+                                       and pending.flair == lookup_name), None)
 
     if existing_flair:
         # Update flair properties
@@ -499,7 +510,7 @@ def find_flair_or_create(flair: dict, community_id: int, session=None) -> Commun
         if not existing_flair.ap_id:
             if 'id' in flair and flair['id']:
                 existing_flair.ap_id = flair['id']
-            else:
+            elif existing_flair.id is not None:  # a pending row has no id to derive from yet
                 # The peer named no ap_id for this entry: either the key is absent
                 # (legacy 'lemmy:tagsForPosts' entries never carry one) or it is empty.
                 # Skip the peer's id the way every other optional key here is skipped,

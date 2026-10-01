@@ -640,20 +640,17 @@ class TestMissingIdKeyOnTheBackfill:
         assert discussion.ap_id == community.local_url() + f"/tag/{discussion.id}"
         assert meta.ap_id is None
 
-    def test_the_same_two_entries_under_autoflush_off_never_form_the_collision(self, app, db_session):
+    def test_the_same_two_entries_under_autoflush_off_create_one_row(self, app, db_session):
         """Why the test above cannot be written against db.session.
 
-        Identical input, default session, autoflush=False: the first
-        entry's insert is still pending and invisible, so the second
-        entry's query finds nothing and CREATES a second row rather than
-        reaching the backfill. This test therefore passed against the
-        DEFECTIVE code exactly as it passes now -- it is here to record
-        that, not to characterise the guard.
+        Identical input, default session, autoflush=False: the first entry's
+        insert is still pending and invisible to the second entry's query.
 
-        PINS PRESENT BEHAVIOUR, NOT DESIRED BEHAVIOUR for the count: two
-        rows named 'Discussion' for one community is duplicate flair, a
-        consequence of the same autoflush asymmetry. Reported in this
-        campaign's findings and deliberately not fixed here.
+        D27, fixed: that query used to find nothing and CREATE a second
+        'Discussion' row. The lookup now also searches the session's pending
+        rows, so the second entry finds the first's row. It is pending, with
+        no id to derive an ap_id from, so the backfill leaves it null as the
+        create path does.
         """
         seed_community_owner()
         community = make_community('noautoflushbackfill')
@@ -665,6 +662,7 @@ class TestMissingIdKeyOnTheBackfill:
         db.session.commit()
 
         assert all(flair is not None for flair in returned)
+        assert returned[0] is returned[1]
         rows = CommunityFlair.query.filter_by(community_id=community.id).all()
-        assert sorted(row.flair for row in rows) == ['Discussion', 'Discussion', 'Meta']
+        assert sorted(row.flair for row in rows) == ['Discussion', 'Meta']
         assert all(row.ap_id is None for row in rows)
