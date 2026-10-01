@@ -262,7 +262,7 @@ def test_refreshing_a_user_on_a_dormant_instance_does_nothing(app, db_session, m
     Dropping this conjunct lets the task reach the fetch, where respx raises
     `AllMockedAssertionError` -- not an `httpx.HTTPError`, so the task's
     `except Exception:` (the one guarding the `signed_get_request` fallback, below the
-    `except httpx.HTTPError:` retry) catches it, `signed_get_request` fails
+    `except httpx.HTTPError: return`) catches it, `signed_get_request` fails
     too, the inner `except Exception:` around it catches that, and the task returns
     silently. Both are cited by content rather than by line number: line
     numbers in this file went stale once already when Task 10 inserted guards
@@ -292,27 +292,27 @@ def test_refreshing_a_user_on_a_dormant_instance_does_nothing(app, db_session, m
     assert calls == []
 
 
-def test_a_failed_fetch_is_retried_once(app, db_session, http_mock, no_real_sleeping):
-    """`except httpx.HTTPError:` -> `time.sleep(randint(3, 10))` -> one retry.
+def test_a_failed_fetch_is_not_retried(app, db_session, http_mock, no_real_sleeping):
+    """D224, fixed (owner ruling): the task used to sleep `randint(3, 10)`
+    seconds inline in the worker and fetch again. `get_request` already
+    retries a read error itself, so the outer sleep-and-retry is gone and one
+    `httpx.HTTPError` ends the refresh quietly.
 
-    `no_real_sleeping` is REQUIRED: without it this test sleeps for up to ten
-    real seconds. The task sleeps inline in the worker rather than deferring to
-    the broker, which is registered as a finding rather than fixed here.
-
-    respx serves a failure then a success from one route by giving `side_effect`
-    a list, so the retry is the second call rather than a second route -- one
-    route, two responses, which is also what `assert_all_called=True` expects.
+    The observable is the transport count: `get_request` makes its own two
+    attempts, so a dead peer is asked twice, not the four times the task's
+    second `get_request` used to add. `no_real_sleeping` covers
+    `get_request`'s own sleep.
     """
     user = _remote_user()
-    http_mock.get(user.ap_public_url).mock(side_effect=[
-        httpx.ConnectError('boom'),
-        httpx.Response(200, json=_person_document(fields={'name': 'Retried'})),
-    ])
+    user.title = 'Before'
+    db.session.commit()
+    route = http_mock.get(user.ap_public_url).mock(side_effect=httpx.ConnectError('boom'))
 
     refresh_user_profile_task(user.id)
 
     db.session.refresh(user)
-    assert user.title == 'Retried'
+    assert route.call_count == 2
+    assert user.title == 'Before'
 
 
 def test_a_malformed_actor_document_counts_an_instance_failure(
@@ -1228,8 +1228,7 @@ def test_refreshing_a_local_feed_does_nothing(
     raises `httpx.HTTPError` from its own first line, BEFORE httpx is
     reached and therefore before respx or `block_outbound_http` can see
     anything. Drop `and not feed.is_local()` and the task takes the
-    `except httpx.HTTPError:` retry path, sleeps, gets the same
-    validator rejection again, and returns quietly. Outbound-HTTP blocking
+    `except httpx.HTTPError:` path and returns quietly. Outbound-HTTP blocking
     cannot distinguish the guard firing from the guard gone, which is exactly
     how this test previously passed with no assertions at all while its
     conjunct survived deletion. Spying on `ap_util.get_request` sees the
@@ -1245,11 +1244,8 @@ def test_refreshing_a_local_feed_does_nothing(
     once, applies it, and stops -- overwriting the seeded title and the NULL
     public key, which the two column assertions below catch.
 
-    `no_real_sleeping` is belt-and-braces. With the spy installed the retry
-    path is unreachable (the spy never raises), but if the patch target ever
-    moves off `ap_util.get_request` the mutant falls straight back onto the
-    real `get_request`, the `.local` rejection, and a 3-to-10-second real
-    sleep. The fixture keeps that failure fast instead of slow.
+    `no_real_sleeping` is belt-and-braces: it keeps any sleep a regression
+    reintroduces fast instead of slow.
 
     `make_local_feed` gives a local feed directly; using it rather than
     mutating a remote one keeps the fixture honest about what it represents.
@@ -1621,80 +1617,38 @@ def test_object_shaped_owners_entries_are_unwrapped_before_comparison(
         feed_id=feed.id, user_id=stale.id).count() == 0
 
 
-def test_a_failed_community_fetch_is_retried_once(
+def test_a_failed_community_fetch_is_not_retried(
         app, db_session, http_mock, no_real_sleeping):
-    """The community task's retry, whose inner catch is `except Exception:`
-    where the user task's is `except httpx.HTTPError:`. Both reach the retry;
-    the difference is what happens when the RETRY fails, which the next test
-    pins -- `except Exception:` swallows a non-httpx retry failure that the
-    user task's narrower catch would let propagate.
-
-    THE USER TASK'S `except Exception:` FALLBACK (bare until D220) IS NOT THIS HANDLER. It is a sibling
-    handler on the OUTER `try` -- the one guarding the `signed_get_request`
-    fallback, pinned by
-    `test_a_user_fetch_failing_outside_httpx_falls_back_to_a_signed_get` --
-    and it has no counterpart in either sibling task. An earlier revision of
-    this docstring identified it as the user task's retry catch; the
-    register's D220 has always had it right.
-    """
-    community = _remote_community()
-    http_mock.get(community.ap_public_url).mock(side_effect=[
-        httpx.ConnectError('boom'),
-        httpx.Response(200, json=_group_document()),
-    ])
-
-    refresh_community_profile_task(community.id, None)
-
-    db.session.refresh(community)
-    assert community.title == 'Memes, refreshed'
-
-
-def test_a_community_whose_retry_also_fails_returns_quietly(
-        app, db_session, http_mock, no_real_sleeping):
-    """`except Exception: return` on the retry. The community keeps its
+    """D224, fixed (owner ruling): one `httpx.HTTPError` returns quietly with
+    no sleep and no second fetch, as for the user task. The community keeps its
     pre-refresh title, which is the observable -- the task returns normally,
     so "nothing raised" would not distinguish this from a successful refresh.
     """
     community = _remote_community()
     community.title = 'Before'
     db.session.commit()
-    http_mock.get(community.ap_public_url).mock(side_effect=[
-        httpx.ConnectError('boom'),
-        httpx.ConnectError('boom again'),
-    ])
+    route = http_mock.get(community.ap_public_url).mock(side_effect=httpx.ConnectError('boom'))
 
     refresh_community_profile_task(community.id, None)
 
     db.session.refresh(community)
+    assert route.call_count == 2  # get_request's own two attempts, not four
     assert community.title == 'Before'
 
 
-def test_a_failed_feed_fetch_is_retried_once(
+def test_a_failed_feed_fetch_is_not_retried(
         app, db_session, http_mock, no_real_sleeping):
-    """The feed task's retry, identical in shape to the community task's.
-
-    `ap_following_url` is set and served empty as in
-    `test_refreshing_a_feed_applies_the_peers_document` above: the retry is
-    what's under test, so the feed is kept an ordinary remote one and its
-    following collection is emptied rather than left to add a second variable.
-    Before Task 10 gated that fetch the assignment was mandatory -- without it
-    the task crashed on `get_request(None)` before reaching this test's
-    assertion. The unset column now has its own test,
-    `test_a_feed_with_no_following_url_is_skipped`.
-    """
+    """D224, fixed (owner ruling): the feed task's twin of the two above."""
     feed = _remote_feed()
-    feed.ap_following_url = f'https://{PEER}/f/news/following'
+    feed.title = 'Before'
     db.session.commit()
-    http_mock.get(feed.ap_public_url).mock(side_effect=[
-        httpx.ConnectError('boom'),
-        httpx.Response(200, json=_feed_document()),
-    ])
-    _serve(http_mock, feed.ap_following_url, {'items': []})
+    route = http_mock.get(feed.ap_public_url).mock(side_effect=httpx.ConnectError('boom'))
 
     refresh_feed_profile_task(feed.id)
 
     db.session.refresh(feed)
-    assert feed.title == 'News, refreshed'
+    assert route.call_count == 2  # get_request's own two attempts, not four
+    assert feed.title == 'Before'
 
 
 def test_a_user_fetch_failing_outside_httpx_falls_back_to_a_signed_get(
@@ -1784,9 +1738,9 @@ def test_a_community_fetch_failing_outside_httpx_propagates(
     communities -- registered, not fixed.
 
     `RuntimeError` is raised rather than an `httpx.HTTPError` precisely
-    because an `httpx.HTTPError` would take the retry path
-    (`test_a_community_whose_retry_also_fails_returns_quietly`) and return
-    quietly instead of reaching the handler.
+    because an `httpx.HTTPError` would return quietly
+    (`test_a_failed_community_fetch_is_not_retried`) instead of reaching the
+    handler.
 
     The seeded title is asserted after the raise because the rollback must not
     leave a half-applied document behind. Note the rollback itself is not
@@ -1820,7 +1774,7 @@ def test_a_feed_fetch_failing_outside_httpx_propagates(
     fetch.
 
     Same asymmetry, same reason for `RuntimeError` over `httpx.HTTPError`
-    (which would take the retry path instead), and the same registered limit:
+    (which would return quietly instead), and the same registered limit:
     the `raise` is killed by this test, the `session.rollback()` beside it is
     not observable at the only reachable raise point.
     """
@@ -2027,8 +1981,8 @@ def test_the_following_collection_fetch_asks_for_activity_json(app, db_session, 
     a `User-Agent` when its `headers` argument is None, so a call site that
     passes nothing expresses no content preference at all and a peer that
     content-negotiates is free to answer an ActivityPub URL with HTML. The
-    other three `get_request` calls in `refresh_feed_profile_task` -- the
-    actor fetch, its retry, and the owners-collection fetch -- each pass
+    other two `get_request` calls in `refresh_feed_profile_task` -- the
+    actor fetch and the owners-collection fetch -- each pass
     `headers={'Accept': 'application/activity+json'}`.
 
     WHAT THE PEER SAW BEFORE THE FIX WAS `*/*`, not nothing: httpx's own
