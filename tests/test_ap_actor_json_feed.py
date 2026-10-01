@@ -120,8 +120,6 @@ and twenty-nine `if` statements (the two excluded above are not in this list):
       isinstance(image, dict) and 'url' in image
       isinstance(image, list) and 'url' in image[0]
       image_entry
-    feed                             (the re-fetch after commit; see
-                                      TestFeedRefetchAfterCommit)
     feed.icon_id                     -> make_image_sizes
     feed.image_id                    -> make_image_sizes
     'childFeeds' in activity_json
@@ -1736,23 +1734,14 @@ class TestChildFeeds:
 
 
 class TestFeedRefetchAfterCommit:
-    """`feed = db.session.query(Feed).filter_by(ap_profile_id=...).first();
-    if feed:` -- the re-fetch that runs between the FeedMember inserts and the
-    FeedItem inserts.
+    """D19, fixed: the FeedItem loop used to run under a re-fetch of the row
+    just committed, `feed = ...first(); if feed:`, whose false arm was
+    unreachable and whose very next statement (`if feed.icon_id:`) would have
+    raised had it ever been taken. The re-fetch only returned the same
+    identity-mapped instance, so it is gone and the loop uses `feed` directly.
 
-    The true arm is taken by every creating test in this file. The FALSE arm is
-    unreachable: the query re-reads a row this same session committed moments
-    earlier by the same unique ap_profile_id, so `first()` cannot come back
-    None. Nothing in this file pretends to reach it, and the very next
-    statement (`if feed.icon_id:`) would raise AttributeError if it ever did --
-    the guard protects nothing it goes on to use.
-
-    That unreachable arm is the one residue in this branch's branch coverage,
-    and it is documented as such rather than pragma'd away.
-
-    The test below is what makes the re-fetch itself observable: it pins that
-    the object the function returns is the row in the database, carrying the
-    FeedItem-driven num_communities the re-fetched instance accumulated.
+    The test below pins that the object the function returns is the row in
+    the database, carrying the FeedItem-driven num_communities.
     """
 
     def test_the_returned_feed_is_the_committed_row(self, app, db_session, http_mock):
