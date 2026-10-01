@@ -9,7 +9,9 @@ from sqlalchemy import desc, or_, text
 
 from app import db, constants
 from app.constants import POST_STATUS_REVIEWING
-from app.feed.routes import get_all_child_feed_ids
+# The module, not the name: app.feed.routes reaches this file through
+# app.activitypub before get_all_child_feed_ids is defined (import cycle: feed.routes)
+import app.feed.routes as feed_routes
 from app.inoculation import inoculation
 from app.models import Post, Community, Tag, post_tag, Topic, FeedItem, Feed
 from app.tag import bp
@@ -89,7 +91,7 @@ def show_tag(tag):
                 abort(404)
             # get the feed_ids
             if feed.show_posts_in_children:  # include posts from child feeds
-                feed_ids = get_all_child_feed_ids(feed)
+                feed_ids = feed_routes.get_all_child_feed_ids(feed)
             else:
                 feed_ids = [feed.id]
 
@@ -284,7 +286,7 @@ def tag_cloud(type, category_id: int):
             abort(404)
         # get the feed_ids
         if feed.show_posts_in_children:  # include posts from child feeds
-            feed_ids = get_all_child_feed_ids(feed)
+            feed_ids = feed_routes.get_all_child_feed_ids(feed)
         else:
             feed_ids = [feed.id]
 
@@ -453,7 +455,7 @@ def tag_posts(tag_id):
             abort(404)
         # get the feed_ids
         if feed.show_posts_in_children:  # include posts from child feeds
-            feed_ids = get_all_child_feed_ids(feed)
+            feed_ids = feed_routes.get_all_child_feed_ids(feed)
         else:
             feed_ids = [feed.id]
 

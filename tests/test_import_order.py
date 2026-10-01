@@ -22,9 +22,6 @@ import sys
 import pytest
 
 STILL_CIRCULAR = {
-    'app.feed.routes': 'feed.routes <-> get_all_child_feed_ids',
-    'app.feed.util': 'feed.routes <-> get_all_child_feed_ids',
-    'app.tag.routes': 'topic.routes <-> get_all_child_topic_ids',
     'app.topic.routes': 'topic.routes <-> get_all_child_topic_ids',
 }
 
