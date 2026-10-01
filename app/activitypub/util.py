@@ -2999,20 +2999,21 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
                         if profile_id != reply_parent.author.ap_profile_id and profile_id not in local_users_to_notify:
                             local_users_to_notify.append(profile_id)
 
-        # A non-string flair is skipped, and both branches strip (D273)
-        if isinstance(request_json['object'].get('flair'), str) and request_json['object']['flair'].strip():
-            existing_flair = UserFlair.query.filter(UserFlair.user_id == user.id,
-                                                    UserFlair.community_id == community.id).first()
-            if existing_flair:
-                existing_flair.flair = request_json['object']['flair'].strip()
-            else:
-                db.session.add(UserFlair(user_id=user.id, community_id=community.id,
-                                         flair=request_json['object']['flair'].strip()))
-            db.session.commit()
         try:
             post_reply = PostReply.new(user, post, parent_comment, notify_author=False, body=body, body_html=body_html,
                                        language_id=language_id, distinguished=distinguished, answer=False, request_json=request_json,
                                        announce_id=announce_id)
+            # The replier's flair, applied only once the reply is accepted: a refused reply changes nothing.
+            # A non-string flair is skipped, and both branches strip (D273)
+            if isinstance(request_json['object'].get('flair'), str) and request_json['object']['flair'].strip():
+                existing_flair = UserFlair.query.filter(UserFlair.user_id == user.id,
+                                                        UserFlair.community_id == community.id).first()
+                if existing_flair:
+                    existing_flair.flair = request_json['object']['flair'].strip()
+                else:
+                    db.session.add(UserFlair(user_id=user.id, community_id=community.id,
+                                             flair=request_json['object']['flair'].strip()))
+                db.session.commit()
             for lutn in local_users_to_notify:
                 recipient = db.session.query(User).filter_by(ap_profile_id=lutn, ap_id=None).first()
                 if not recipient:
