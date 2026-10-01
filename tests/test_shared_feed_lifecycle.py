@@ -511,6 +511,23 @@ def test_delete_feed_announces_only_for_a_public_feed(app, db_session, public, d
         assert announce.delay.call_args.args == (s.owner.id, s.feed.ap_public_url, [])
 
 
+def test_delete_feed_removes_its_join_requests(app, db_session):
+    """D684, fixed: delete_feed removed members and items but not
+    FeedJoinRequest rows, so a feed with one was an IntegrityError on the
+    feed_join_request FK (latent: only remote feeds get the rows). They are
+    now deleted with the feed."""
+    s = _seed()
+    make_feed_join_request(s.member, s.feed)
+    db.session.commit()
+    feed_id = s.feed.id
+
+    with web_ctx(app, s.owner):
+        delete_feed(feed_id, SRC_WEB)
+
+    assert FeedJoinRequest.query.filter_by(feed_id=feed_id).count() == 0
+    assert db.session.get(Feed, feed_id) is None
+
+
 @pytest.mark.parametrize('num_communities', [1, 0])
 def test_delete_feed_removes_the_feed_and_its_items(app, db_session, num_communities):
     """The `if feed.num_communities > 0:` guard at :409 decides whether the
