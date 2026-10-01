@@ -335,6 +335,11 @@ def restore_reply(reply_id, src, auth):
     if not reply.deleted:  # not deleted: nothing to restore or federate
         return (user_id, reply) if src == SRC_API else None
 
+    if reply.deleted_by != reply.user_id:  # D421: an author may not undo a moderator's removal
+        if src == SRC_API:
+            raise Exception('Does not have permission')
+        abort(403)
+
     reply.deleted = False
     reply.deleted_by = None
 

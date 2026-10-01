@@ -903,6 +903,23 @@ def test_a_stranger_cannot_restore_a_reply(app, env):
     assert reply.deleted is True
 
 
+def test_the_author_cannot_undo_a_moderators_removal(app, env):
+    """N3, fixed: the author arm restored any deleted reply of theirs, so an
+    author could undo a moderator's removal. As D421 ruled for posts, that is
+    a 403 and the reply stays removed."""
+    client, community, post, mod, author, outsider = env
+    reply = a_reply(post, author, deleted=True, deleted_by=mod.id)
+    token = csrf(app, client)
+
+    response = client.post(f'/post/{post.id}/comment/{reply.id}/restore',
+                           data={'csrf_token': token})
+
+    assert response.status_code == 403
+    db.session.refresh(reply)
+    assert reply.deleted is True
+    assert reply.deleted_by == mod.id
+
+
 def test_restoring_is_not_a_get(app, env):
     client, community, post, mod, author, outsider = env
     reply = a_reply(post, author, deleted=True, deleted_by=author.id)

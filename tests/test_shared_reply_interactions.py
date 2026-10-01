@@ -2933,6 +2933,7 @@ class TestRestoreReply:
         s.reply.child_count = 6
         s.reply.path = [0, parent.id, s.reply.id]
         s.reply.deleted = True
+        s.reply.deleted_by = s.user.id  # the author's own delete; N3 refuses any other
         db.session.commit()
 
         restore_reply(s.reply.id, SRC_API, auth=bearer(s.user))
@@ -3034,6 +3035,27 @@ class TestRestoreReply:
         db.session.refresh(s.reply)
         assert s.reply.deleted is True
         assert s.reply.deleted_by == s.user.id
+
+    def test_the_author_cannot_undo_a_moderators_removal(self, db_session, app):
+        """N3, fixed: restore_reply checked only that the caller wrote the
+        reply, so an author could restore a reply a moderator had removed. As
+        D421 ruled for posts, that is refused: the API arm raises its
+        permission refusal and the web arm is a 403. The reply stays removed."""
+        s = self._deleted()
+        moderator = make_user(s.instance, 'remover', local=True)
+        s.reply.deleted_by = moderator.id
+        db.session.commit()
+
+        with pytest.raises(Exception, match='Does not have permission'):
+            restore_reply(s.reply.id, SRC_API, auth=bearer(s.user))
+        with web_ctx(app, s.user):
+            with pytest.raises(HTTPException) as exc:
+                restore_reply(s.reply.id, SRC_WEB, auth=None)
+
+        assert exc.value.code == 403
+        db.session.refresh(s.reply)
+        assert s.reply.deleted is True
+        assert s.reply.deleted_by == moderator.id
 
     def test_restoring_a_missing_reply_is_a_404(self, db_session):
         """D506, fixed: an unknown id is a 404, not NoResultFound."""
