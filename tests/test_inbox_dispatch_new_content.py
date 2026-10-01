@@ -16,12 +16,16 @@ def seed_content_pair(host='peer.example'):
     `ap_fetched_at` is stamped so the preamble does not schedule an actor
     refresh, which would attempt a real fetch and surface as a respx error --
     an INFRASTRUCTURE failure that would masquerade as a behavioural one.
+
+    `ap_domain` is stamped because an edit now passes `can_create_post` (D141),
+    which refuses a remote user whose domain is absent as banned.
     """
     make_site()
     instance = seed_community_owner(host)
     community = make_community(host=host)
     author = make_user(instance, 'author')
     author.ap_fetched_at = utcnow()
+    author.ap_domain = host
     db.session.commit()
     return instance, community, author
 
@@ -298,6 +302,7 @@ def test_an_update_by_a_community_moderator_is_permitted(app, db_session, monkey
     instance, community, author = seed_content_pair()
     mod = make_user(instance, 'mod')
     mod.ap_fetched_at = utcnow()
+    mod.ap_domain = instance.domain
     make_community_member(mod, community, is_moderator=True)
     post = make_post(community, author, 'https://peer.example/post/1')
     db.session.commit()
@@ -326,6 +331,7 @@ def test_an_update_by_an_instance_admin_is_permitted(app, db_session, monkeypatc
     instance, community, author = seed_content_pair()
     admin = make_user(instance, 'admin')
     admin.ap_fetched_at = utcnow()
+    admin.ap_domain = instance.domain
     from app.models import InstanceRole
     db.session.add(InstanceRole(instance_id=community.instance_id, user_id=admin.id, role='admin'))
     post = make_post(community, author, 'https://peer.example/post/1')
@@ -415,6 +421,32 @@ def test_a_create_that_succeeds_logs_success_and_announces(app, db_session, monk
     args, kwargs = calls['announce_activity_to_followers'][0]
     assert len(long_activity_id) > 100
     assert args[2]['id'] == long_activity_id
+
+
+def test_a_permitted_editor_who_cannot_post_is_logged(app, db_session, monkeypatch):
+    """D141, fixed (owner ruling 2026-09-30). The post half's edit path used to
+    call `update_post_from_activity` straight after the outer author/moderator/
+    admin check, while the reply half also requires `can_create_post_reply`. It
+    now requires `can_create_post(user, community)` too, refused and logged the
+    same way the reply half is.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    post = make_post(community, author, 'https://peer.example/post/1')
+    db.session.commit()
+    _double_the_gate(monkeypatch, community)
+    monkeypatch.setattr(activitypub_routes, 'can_create_post', lambda user, content: False)
+    calls = record_moderation(monkeypatch, 'update_post_from_activity',
+                              'announce_activity_to_followers')
+
+    dispatch(direct_activity(author, content_object(post.ap_id), activity_type='Update'))
+
+    assert calls['update_post_from_activity'] == []
+    assert calls['announce_activity_to_followers'] == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.activity_type == 'Update'
+    assert log.exception_message == 'User cannot create post in Community'
 
 
 def test_an_update_that_lost_a_race_to_a_create_is_applied_afterwards(app, db_session, monkeypatch):
@@ -611,8 +643,8 @@ def test_a_permitted_editor_who_cannot_reply_is_logged(app, db_session, monkeypa
     the same `can_create_post_reply(user, community)`. The Update type
     distinguishes this occurrence from that one.
 
-    The post half has no equivalent inner check at all, so there is nothing to
-    mirror this on that side.
+    The post half has had the same inner check since D141 was fixed; see
+    `test_a_permitted_editor_who_cannot_post_is_logged`.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, author = seed_content_pair()
