@@ -92,7 +92,7 @@ class EditFeedForm(FlaskForm):
             return False
         if self.url.data is not None:  # when editing a feed with subscribers this field is disabled
             if self.url.data.strip() == '':
-                self.url.errors.append(_l('This field is required.'))
+                self.url.errors.append(_l('Url is required.'))  # D740: the create form's message
                 return False
             else:
                 if not apply_feed_url_rules(self):
