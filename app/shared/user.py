@@ -239,6 +239,14 @@ def follow_user(follow_id: int, src, auth=None):
 
     to_follow: User = db.session.get(User, follow_id)
 
+    # Following someone already followed, or already asked, changes nothing (repeated actions are idempotent)
+    already = db.session.query(UserFollower).filter(UserFollower.local_user_id == user.id,
+                                                    UserFollower.remote_user_id == follow_id,
+                                                    UserFollower.is_inward == False,
+                                                    UserFollower.is_accepted.is_not(False)).first()
+    if already:
+        return
+
     # R265: pending is None, as the column says -- a remote follow until its Accept arrives, or a manual approval
     is_accepted = None
     if to_follow.is_local() and to_follow.ap_manually_approves_followers is not True:
