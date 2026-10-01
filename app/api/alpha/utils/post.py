@@ -14,9 +14,9 @@ from app.constants import *
 import app.feed.routes as feed_routes
 from app.models import Post, Community, CommunityMember, utcnow, User, Feed, FeedItem, Topic, PostReply, PostVote, \
     CommunityFlair, read_posts, Poll, Report
-from app.shared.post import vote_for_post, bookmark_post, remove_bookmark_post, subscribe_post, make_post, edit_post, \
-    delete_post, restore_post, report_post, lock_post, sticky_post, mod_remove_post, mod_restore_post, mark_post_read, \
-    vote_for_poll, hide_post
+# The module, not the names: app.shared.post reaches this file through a blueprint
+# package before they are defined (import cycle: app.shared.post)
+import app.shared.post as shared_post
 from app.post.util import post_replies, get_comment_branch, tags_to_string, flair_to_string
 # The module, not the name: app.topic.routes reaches this file through
 # app.activitypub before get_all_child_topic_ids is defined (import cycle: topic.routes)
@@ -1575,7 +1575,7 @@ def post_post_like(auth, data):
         score = 0
         direction = 'reversal'
 
-    user_id = vote_for_post(post_id, direction, not private, emoji, SRC_API, auth)
+    user_id = shared_post.vote_for_post(post_id, direction, not private, emoji, SRC_API, auth)
     post_json = post_view(post=post_id, variant=4, user_id=user_id, my_vote=score)
     return post_json
 
@@ -1584,7 +1584,7 @@ def put_post_save(auth, data):
     post_id = a_post(data['post_id']).id
     save = data['save']
 
-    user_id = bookmark_post(post_id, SRC_API, auth) if save else remove_bookmark_post(post_id, SRC_API, auth)
+    user_id = shared_post.bookmark_post(post_id, SRC_API, auth) if save else shared_post.remove_bookmark_post(post_id, SRC_API, auth)
     post_json = post_view(post=post_id, variant=4, user_id=user_id)
     return post_json
 
@@ -1593,7 +1593,7 @@ def put_post_subscribe(auth, data):
     post_id = a_post(data['post_id']).id
     subscribe = data['subscribe']
 
-    user_id = subscribe_post(post_id, subscribe, SRC_API, auth)
+    user_id = shared_post.subscribe_post(post_id, subscribe, SRC_API, auth)
     post_json = post_view(post=post_id, variant=4, user_id=user_id)
     return post_json
 
@@ -1656,7 +1656,7 @@ def post_post(auth, data):
     input['title'] = post_data.get('title', input['title'])
     input['body'] = post_data.get('content', input['body'])
 
-    user_id, post = make_post(input, community, type, SRC_API, auth)
+    user_id, post = shared_post.make_post(input, community, type, SRC_API, auth)
 
     post_json = post_view(post=post, variant=4, user_id=user_id)
     return post_json
@@ -1710,7 +1710,7 @@ def put_post(auth, data):
     if 'poll' in data and data['poll']:
         input['poll'] = data['poll']
 
-    user_id, post = edit_post(input, post, type, SRC_API, auth=auth)
+    user_id, post = shared_post.edit_post(input, post, type, SRC_API, auth=auth)
 
     post_json = post_view(post=post, variant=4, user_id=user_id)
     return post_json
@@ -1721,9 +1721,9 @@ def post_post_delete(auth, data):
     deleted = data['deleted']
 
     if deleted:
-        user_id, post = delete_post(post_id, True, SRC_API, auth)
+        user_id, post = shared_post.delete_post(post_id, True, SRC_API, auth)
     else:
-        user_id, post = restore_post(post_id, SRC_API, auth)
+        user_id, post = shared_post.restore_post(post_id, SRC_API, auth)
 
     post_json = post_view(post=post, variant=4, user_id=user_id)
     return post_json
@@ -1737,7 +1737,7 @@ def post_post_report(auth, data):
     input = {'reason': reason, 'description': description, 'report_remote': report_remote}
 
     post = a_post(post_id)
-    user_id, report = report_post(post, input, SRC_API, auth)
+    user_id, report = shared_post.report_post(post, input, SRC_API, auth)
 
     post_json = post_report_view(report=report, post_id=post_id, user_id=user_id)
     return post_json
@@ -1851,7 +1851,7 @@ def post_post_lock(auth, data):
     post_id = a_post(data['post_id']).id
     locked = data['locked']
 
-    user_id, post = lock_post(post_id, locked, SRC_API, auth)
+    user_id, post = shared_post.lock_post(post_id, locked, SRC_API, auth)
 
     post_json = post_view(post=post, variant=4, user_id=user_id)
     return post_json
@@ -1861,7 +1861,7 @@ def post_post_hide(auth, data):
     post_id = a_post(data['post_id']).id
     hidden = data['hidden']
 
-    user_id, post = hide_post(post_id, hidden, SRC_API, auth)
+    user_id, post = shared_post.hide_post(post_id, hidden, SRC_API, auth)
 
     post_json = post_view(post=post, variant=4, user_id=user_id)
     return post_json
@@ -1878,7 +1878,7 @@ def post_post_feature(auth, data):
         raise Exception('feature_type must be Community or Local')
 
     if feature_type == "Community":
-        user_id, post = sticky_post(post_id, featured, SRC_API, auth)
+        user_id, post = shared_post.sticky_post(post_id, featured, SRC_API, auth)
     else:
         user = authorise_api_user(auth, 'model')
         user_id = user.id
@@ -1903,10 +1903,10 @@ def post_post_remove(auth, data):
 
     if removed:
         reason = data['reason'] if 'reason' in data else 'Removed by mod'
-        user_id, post = mod_remove_post(post_id, reason, SRC_API, auth)
+        user_id, post = shared_post.mod_remove_post(post_id, reason, SRC_API, auth)
     else:
         reason = data['reason'] if 'reason' in data else 'Restored by mod'
-        user_id, post = mod_restore_post(post_id, reason, SRC_API, auth)
+        user_id, post = shared_post.mod_restore_post(post_id, reason, SRC_API, auth)
 
     post_json = post_view(post=post, variant=4, user_id=user_id)
     return post_json
@@ -1919,11 +1919,11 @@ def post_post_mark_as_read(auth, data):
     user_id = authorise_api_user(auth)
     try:
         if 'post_id' in data:
-            mark_post_read([data['post_id']], data['read'], user_id)
+            shared_post.mark_post_read([data['post_id']], data['read'], user_id)
         else:
             # `else`, not `elif 'post_ids' in data`: the guard at the top of
             # this function already refused a request carrying neither.
-            mark_post_read(data['post_ids'], data['read'], user_id)
+            shared_post.mark_post_read(data['post_ids'], data['read'], user_id)
     except IntegrityError:
         return {"success": False}
     return {"success": True}
@@ -1999,6 +1999,6 @@ def post_poll_vote(auth, data):
 
     user_id = authorise_api_user(auth)
 
-    vote_for_poll(post_id, choice_id, SRC_API, auth=auth)
+    shared_post.vote_for_poll(post_id, choice_id, SRC_API, auth=auth)
 
     return {"post_view": post_view(post=post_id, variant=2, stub=False, user_id=user_id)}

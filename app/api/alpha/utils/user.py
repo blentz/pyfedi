@@ -14,8 +14,9 @@ from app.api.alpha.views import user_view, reply_view, post_view, community_view
 from app.constants import *
 from app.models import Conversation, ChatMessage, Notification, PostReply, User, Post, Community, File, UserFlair, \
     user_file, UserExtraField, UserNote, RevokedToken, utcnow, _as_url
-from app.shared.user import block_another_user, unblock_another_user, subscribe_user, ban_user, unban_user, follow_user, \
-    unfollow_user
+# The module, not the names: app.shared.user reaches this file through a blueprint
+# package before they are defined (import cycle: app.shared.user)
+import app.shared.user as shared_user
 from app.utils import authorise_api_user, in_sorted_list, user_in_restricted_country, user_access, user_notes
 
 
@@ -128,7 +129,7 @@ def post_user_block(auth, data):
     person_id = data['person_id']
     block = data['block']
 
-    user_id = block_another_user(person_id, SRC_API, auth) if block else unblock_another_user(person_id, SRC_API, auth)
+    user_id = shared_user.block_another_user(person_id, SRC_API, auth) if block else shared_user.unblock_another_user(person_id, SRC_API, auth)
     user_json = user_view(user=person_id, variant=4, user_id=user_id)
     return user_json
 
@@ -317,7 +318,7 @@ def put_user_subscribe(auth, data):
     person_id = data['person_id']
     subscribe = data['subscribe']
 
-    user_id = subscribe_user(person_id, subscribe, SRC_API, auth)
+    user_id = shared_user.subscribe_user(person_id, subscribe, SRC_API, auth)
     user_json = user_view(user=person_id, variant=5, user_id=user_id)
     user_json["subscribed"] = subscribe
     return user_json
@@ -978,7 +979,7 @@ def post_user_set_flair(auth, data):
 def post_user_follow(auth, data):
     to_follow = data['user_id']
 
-    follow_user(to_follow, SRC_API, auth)
+    shared_user.follow_user(to_follow, SRC_API, auth)
 
     return {'ok': 'ok'}
 
@@ -986,7 +987,7 @@ def post_user_follow(auth, data):
 def post_user_unfollow(auth, data):
     unfollow_id = data['user_id']
 
-    unfollow_user(unfollow_id, SRC_API, auth)
+    shared_user.unfollow_user(unfollow_id, SRC_API, auth)
 
     return {'ok': 'ok'}
 
@@ -1045,7 +1046,7 @@ def post_user_ban(auth, data):
         if target.is_ban_exempt() or (target.is_admin() and not user.is_admin()):
             raise Exception('cannot_ban_admin')
 
-        ban_user({'person_id': target_user_id,
+        shared_user.ban_user({'person_id': target_user_id,
                   'ban_ip_address': ban_ip_address,
                   'purge_content': purge_content,
                   'reason': reason}, SRC_API, auth)
@@ -1066,7 +1067,7 @@ def post_user_unban(auth, data):
         if db.session.get(User, target_user_id) is None:  # D1177's twin
             raise Exception('person not found')
 
-        unban_user({'person_id': target_user_id}, SRC_API, auth)
+        shared_user.unban_user({'person_id': target_user_id}, SRC_API, auth)
     else:
         abort(403)
 

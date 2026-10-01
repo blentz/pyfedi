@@ -301,7 +301,7 @@ def test_a_failed_post_does_not_put_the_exception_on_the_page(app, poster,
     client, token, community, author, english = poster
     secret = '/srv/piefed/media/tmp/upload-4f2a.png: Permission denied'
 
-    with patch('app.community.routes.make_post', side_effect=RuntimeError(secret)):
+    with patch('app.shared.post.make_post', side_effect=RuntimeError(secret)):
         with patch('app.community.routes.flash') as flashed:
             with patch('app.community.routes.render_template', return_value='rendered'):
                 client.post(url(app, 'community.add_post',
@@ -361,7 +361,7 @@ def test_a_moderator_can_sticky_their_own_post(app, poster):
     membership.is_moderator = True
     db.session.commit()
 
-    with patch('app.community.routes.sticky_post') as sticky:
+    with patch('app.shared.post.sticky_post') as sticky:
         with patch('app.community.routes.render_template', return_value='rendered'):
             client.post(url(app, 'community.add_post', actor=community.name,
                             type='discussion'),
@@ -716,7 +716,7 @@ def test_the_upload_types_pass_the_file_through(app, poster, type_name):
                             **_type_extras(type_name))
     payload['image_file'] = (io.BytesIO(b'not really a png'), 'x.png')
 
-    with patch('app.community.routes.make_post', return_value=FakePost()) as make:
+    with patch('app.shared.post.make_post', return_value=FakePost()) as make:
         with patch('app.community.routes.can_upload_video', return_value=True):
             with patch('app.community.routes.render_template', return_value='rendered') as render:
                 client.post(url(app, 'community.add_post',
@@ -739,7 +739,7 @@ def test_a_before_post_create_plugin_can_rewrite_the_title_and_body(app, poster)
         return {**data, 'title': 'rewritten title', 'content': 'rewritten body'}
 
     with patch('app.plugins.fire_hook', side_effect=rewrite), \
-            patch('app.community.routes.make_post', return_value=FakePost()) as make:
+            patch('app.shared.post.make_post', return_value=FakePost()) as make:
         with patch('app.community.routes.render_template', return_value='rendered') as render:
             client.post(url(app, 'community.add_post', actor=community.name, type='discussion'),
                         data=_post_payload(token, english, community, title='original'),
@@ -760,7 +760,7 @@ def test_a_video_post_without_upload_permission_gets_no_file(app, poster):
                             **_type_extras('video'))
     payload['image_file'] = (io.BytesIO(b'not really a png'), 'x.png')
 
-    with patch('app.community.routes.make_post', return_value=FakePost()) as make:
+    with patch('app.shared.post.make_post', return_value=FakePost()) as make:
         with patch('app.community.routes.can_upload_video', return_value=False):
             with patch('app.community.routes.render_template', return_value='rendered') as render:
                 client.post(url(app, 'community.add_post',
@@ -776,7 +776,7 @@ def test_the_other_types_pass_no_file(app, poster, type_name):
     """The `else: uploaded_file = None` arm, for each type that reaches it."""
     client, token, community, author, english = poster
 
-    with patch('app.community.routes.make_post', return_value=FakePost()) as make:
+    with patch('app.shared.post.make_post', return_value=FakePost()) as make:
         with patch('app.community.routes.render_template', return_value='rendered') as render:
             client.post(url(app, 'community.add_post', actor=community.name,
                             type=type_name),
@@ -796,7 +796,7 @@ def test_a_failure_is_logged_and_the_reason_is_not_shown(app, poster):
     log."""
     client, token, community, author, english = poster
 
-    with patch('app.community.routes.make_post',
+    with patch('app.shared.post.make_post',
                side_effect=RuntimeError('/srv/piefed/media/tmp/secret.png')):
         with patch('app.community.routes.flash') as flashed:
             with patch('app.community.routes.render_template', return_value='rendered'):
@@ -819,7 +819,7 @@ def test_a_failure_in_debug_mode_raises(app, poster):
     client, token, community, author, english = poster
     app.debug = True
     try:
-        with patch('app.community.routes.make_post',
+        with patch('app.shared.post.make_post',
                    side_effect=RuntimeError('boom')):
             with patch('app.community.routes.render_template', return_value='rendered'):
                 with pytest.raises(RuntimeError, match='boom'):
@@ -850,7 +850,7 @@ def test_an_instance_that_refuses_local_image_posts_refuses_them(app, poster):
     payload = _post_payload(token, english, community, title='An image post')
     payload['image_file'] = (io.BytesIO(b'x' * 32), 'photo.png')
 
-    with patch('app.community.routes.make_post', return_value=FakePost()) as make:
+    with patch('app.shared.post.make_post', return_value=FakePost()) as make:
         with patch('app.community.routes.render_template', return_value='rendered') as render:
             response = client.post(url(app, 'community.add_post',
                                        actor=community.name, type='image'),
@@ -873,7 +873,7 @@ def test_an_instance_that_allows_local_image_posts_accepts_them(app, poster):
     payload = _post_payload(token, english, community, title='An image post')
     payload['image_file'] = (io.BytesIO(b'x' * 32), 'photo.png')
 
-    with patch('app.community.routes.make_post', return_value=FakePost()) as make:
+    with patch('app.shared.post.make_post', return_value=FakePost()) as make:
         with patch('app.community.routes.render_template', return_value='rendered'):
             client.post(url(app, 'community.add_post', actor=community.name,
                             type='image'), data=payload,
@@ -941,7 +941,7 @@ def test_poll_choices_past_the_ninth_are_counted(app, poster):
     for i in range(10, 16):
         payload[f'choice_{i}'] = f'Option {i}'
 
-    with patch('app.community.routes.make_post', return_value=FakePost()) as make:
+    with patch('app.shared.post.make_post', return_value=FakePost()) as make:
         with patch('app.community.routes.render_template', return_value='rendered') as render:
             client.post(url(app, 'community.add_post', actor=community.name,
                             type='poll'), data=payload,
@@ -957,7 +957,7 @@ def test_a_poll_with_one_choice_is_still_refused(app, poster):
     payload = _post_payload(token, english, community, title='A poll',
                             mode='single', finish_in='3d', choice_12='Only')
 
-    with patch('app.community.routes.make_post', return_value=FakePost()) as make:
+    with patch('app.shared.post.make_post', return_value=FakePost()) as make:
         with patch('app.community.routes.render_template', return_value='rendered') as render:
             client.post(url(app, 'community.add_post', actor=community.name,
                             type='poll'), data=payload,
@@ -973,7 +973,7 @@ def test_a_poll_with_no_choices_is_refused(app, poster):
     payload = _post_payload(token, english, community, title='A poll',
                             mode='single', finish_in='3d')
 
-    with patch('app.community.routes.make_post', return_value=FakePost()) as make:
+    with patch('app.shared.post.make_post', return_value=FakePost()) as make:
         with patch('app.community.routes.render_template', return_value='rendered') as render:
             client.post(url(app, 'community.add_post', actor=community.name,
                             type='poll'), data=payload,
@@ -993,7 +993,7 @@ def test_a_poll_submission_that_omits_a_choice_field_is_not_a_500(app, poster):
                             mode='single', finish_in='3d',
                             choice_1='Yes', choice_2='No')
 
-    with patch('app.community.routes.make_post', return_value=FakePost()) as make:
+    with patch('app.shared.post.make_post', return_value=FakePost()) as make:
         with patch('app.community.routes.render_template', return_value='rendered'):
             client.post(url(app, 'community.add_post', actor=community.name,
                             type='poll'), data=payload,
@@ -1010,7 +1010,7 @@ def test_a_poll_may_not_repeat(app, poster):
                             mode='single', finish_in='3d', repeat='weekly',
                             choice_1='Yes', choice_2='No')
 
-    with patch('app.community.routes.make_post', return_value=FakePost()) as make:
+    with patch('app.shared.post.make_post', return_value=FakePost()) as make:
         with patch('app.community.routes.render_template', return_value='rendered') as render:
             client.post(url(app, 'community.add_post', actor=community.name,
                             type='poll'), data=payload,
@@ -1041,7 +1041,7 @@ def test_a_remote_community_still_accepts_images(app, poster):
     payload = _post_payload(token, english, remote, title='A remote image')
     payload['image_file'] = (io.BytesIO(b'x' * 32), 'photo.png')
 
-    with patch('app.community.routes.make_post', return_value=FakePost()) as make:
+    with patch('app.shared.post.make_post', return_value=FakePost()) as make:
         with patch('app.community.routes.render_template', return_value='rendered') as render:
             client.post(url(app, 'community.add_post', actor=remote.name,
                             type='image'), data=payload,

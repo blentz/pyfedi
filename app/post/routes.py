@@ -43,14 +43,16 @@ from app.post.forms import NewReplyForm, ReportPostForm, MeaCulpaForm, CrossPost
 from app.post.util import post_replies, get_comment_branch, tags_to_string, url_needs_archive, \
     generate_archive_link, body_has_no_archive_link, retrieve_archived_post
 from app.post.util import post_type_to_form_url_type
-from app.shared.post import edit_post, sticky_post, lock_post, bookmark_post, remove_bookmark_post, subscribe_post, \
-    vote_for_post, mark_post_read, report_post, delete_post, mod_remove_post, restore_post, mod_restore_post, \
-    vote_for_poll, hide_post, move_post, can_mod_post
+# The module, not the names: app.shared.post reaches this file through a blueprint
+# package before they are defined (import cycle: app.shared.post)
+import app.shared.post as shared_post
 from app.shared.reply import make_reply, edit_reply, bookmark_reply, remove_bookmark_reply, subscribe_reply, \
     delete_reply, mod_remove_reply, vote_for_reply, lock_post_reply, report_reply, choose_answer, unchoose_answer, \
     set_collapse_post_reply
 from app.shared.site import block_remote_instance
-from app.shared.community import get_comm_flair_list
+# The module, not the names: app.shared.community reaches this file through a blueprint
+# package before they are defined (import cycle: app.shared.community)
+import app.shared.community as shared_community
 from app.shared.tasks import task_selector
 from app.utils import render_template, markdown_to_html, validation_required, \
     shorten_string, markdown_to_text, gibberish, ap_datetime, return_304, \
@@ -340,7 +342,7 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
                 # with an EMPTY list and the setting did nothing at all.
                 # Measured: `assert [] == [1]`.
                 main_post_id = [post.id] + (post.cross_posts if post.cross_posts is not None else [])
-                mark_post_read(main_post_id, True, current_user.id)
+                shared_post.mark_post_read(main_post_id, True, current_user.id)
         else:
             user = None
 
@@ -374,7 +376,7 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
 
         response = render_template('post/post.html', title=page_title, post=post, is_moderator=is_moderator,
                                    is_owner=community.is_owner(), is_dead=is_dead,
-                                   community=post.community, community_flair=get_comm_flair_list(community),
+                                   community=post.community, community_flair=shared_community.get_comm_flair_list(community),
                                    breadcrumbs=breadcrumbs, related_communities=related_communities, mods=mod_list,
                                    has_voted=has_voted, poll_results=poll_results, poll_data=poll_data,
                                    poll_choices=poll_choices, poll_total_votes=poll_total_votes,
@@ -664,7 +666,7 @@ def post_vote(post_id: int, vote_direction, federate, emoji=None):
         federate = not current_user.vote_privately
     else:
         federate = federate == 'public'
-    return vote_for_post(post_id, vote_direction, federate, emoji, SRC_WEB)
+    return shared_post.vote_for_post(post_id, vote_direction, federate, emoji, SRC_WEB)
 
 
 @bp.route('/comment/<int:comment_id>/<vote_direction>/<federate>', methods=['POST'])
@@ -731,7 +733,7 @@ def comment_emoji_list(comment_id):
 def post_emoji_set(post_id):
     federate = not current_user.vote_privately
 
-    vote_for_post(post_id, 'upvote', federate, request.form.get('emoji'), SRC_WEB)
+    shared_post.vote_for_post(post_id, 'upvote', federate, request.form.get('emoji'), SRC_WEB)
 
     post = db.session.get(Post, post_id)
 
@@ -772,7 +774,7 @@ def poll_vote(post_id):
             return redirect(post.slug if post.slug else url_for('activitypub.post_ap', post_id=post_id))
     else:
         votes = request.form.getlist('poll_choice[]')
-    if vote_for_poll(post_id, votes, SRC_WEB) is not False:
+    if shared_post.vote_for_poll(post_id, votes, SRC_WEB) is not False:
         flash(_('Vote has been cast.'))
 
     return redirect(post.slug if post.slug else url_for('activitypub.post_ap', post_id=post_id))
@@ -876,7 +878,7 @@ def continue_discussion(post_id, comment_id):
                                recently_upvoted_replies=recently_upvoted_replies,
                                recently_downvoted_replies=recently_downvoted_replies,
                                community=post.community, parent_id=parent_id,
-                               community_flair=get_comm_flair_list(post.community),
+                               community_flair=shared_community.get_comm_flair_list(post.community),
                                user_notes=user_notes(current_user.get_id()) if current_user.is_authenticated else {},
                                user_pronouns = user_pronouns(), user_flair=user_flair,
                                SUBSCRIPTION_OWNER=SUBSCRIPTION_OWNER, SUBSCRIPTION_MODERATOR=SUBSCRIPTION_MODERATOR,
@@ -1273,7 +1275,7 @@ def post_edit(post_id: int):
         if form.validate_on_submit():
             try:
                 uploaded_file = request.files.get('image_file') if post_type == POST_TYPE_IMAGE or post_type == POST_TYPE_EVENT or post_type == POST_TYPE_VIDEO else None
-                edit_post(form, post, post_type, SRC_WEB, uploaded_file=uploaded_file)
+                shared_post.edit_post(form, post, post_type, SRC_WEB, uploaded_file=uploaded_file)
                 flash(Markup(_('Your changes have been saved. <a href="/post/%(post_id)d/edit">Edit it</a> if you notice any typos!')))
             except Exception as ex:
                 flash(_('Your edit was not accepted because %(reason)s', reason=str(ex)), 'error')
@@ -1368,15 +1370,15 @@ def post_edit(post_id: int):
 def post_delete(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
     community = post.community
-    if post.user_id == current_user.id or can_mod_post(post, current_user):
+    if post.user_id == current_user.id or shared_post.can_mod_post(post, current_user):
         if post.community.id in communities_banned_from(current_user.id) or user_ip_banned():
             abort(403)
         form = DeleteConfirmationForm()
         if form.validate_on_submit():
             if post.user_id != current_user.id:
-                mod_remove_post(post.id, form.reason.data, SRC_WEB, None)
+                shared_post.mod_remove_post(post.id, form.reason.data, SRC_WEB, None)
             else:
-                delete_post(post.id, True, SRC_WEB, None)
+                shared_post.delete_post(post.id, True, SRC_WEB, None)
             flash(_('Post deleted.'))
             # The posted `referrer` field is user-supplied, so it gets the
             # same origin check as every other redirect target. The `if ref`
@@ -1408,11 +1410,11 @@ def post_delete(post_id: int):
 @login_required
 def post_restore(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
-    if post.user_id == current_user.id or can_mod_post(post, current_user):
+    if post.user_id == current_user.id or shared_post.can_mod_post(post, current_user):
         if post.deleted_by == post.user_id:
-            restore_post(post.id, SRC_WEB, None)
-        elif can_mod_post(post, current_user):
-            mod_restore_post(post.id, '', SRC_WEB, None)
+            shared_post.restore_post(post.id, SRC_WEB, None)
+        elif shared_post.can_mod_post(post, current_user):
+            shared_post.mod_restore_post(post.id, '', SRC_WEB, None)
         else:
             abort(403)  # D421: an author may not undo a moderator's removal
 
@@ -1576,7 +1578,7 @@ def post_reply_reminder(post_reply_id: int):
 @login_required
 def post_bookmark(post_id: int):
     try:
-        bookmark_post(post_id, SRC_WEB)
+        shared_post.bookmark_post(post_id, SRC_WEB)
     except NoResultFound:
         abort(404)
 
@@ -1587,7 +1589,7 @@ def post_bookmark(post_id: int):
 @login_required
 def post_remove_bookmark(post_id: int):
     try:
-        remove_bookmark_post(post_id, SRC_WEB)
+        shared_post.remove_bookmark_post(post_id, SRC_WEB)
     except NoResultFound:
         abort(404)
 
@@ -1631,7 +1633,7 @@ def post_report(post_id: int):
             flash(_('Post has already been reported, thank you!'))
             return redirect(post.community.local_url())
 
-        report_post(post, form, SRC_WEB)
+        shared_post.report_post(post, form, SRC_WEB)
         flash(_('Post has been reported, thank you!'))
         return redirect(post.community.local_url())
     elif request.method == 'GET':
@@ -1799,7 +1801,7 @@ def post_mea_culpa(post_id: int):
 def post_sticky(post_id: int, mode):
     post = db.session.get(Post, post_id) or abort(404)
     if post.community.is_moderator(current_user) or current_user.is_admin() or user_access('administer all communities', current_user.get_id()):
-        sticky_post(post.id, mode == 'yes', SRC_WEB)
+        shared_post.sticky_post(post.id, mode == 'yes', SRC_WEB)
     if mode == 'yes':
         flash(_('%(name)s has been stickied.', name=post.title))
     else:
@@ -1837,7 +1839,7 @@ def post_instance_sticky(post_id: int, mode):
 @login_required
 def post_hide(post_id: int, mode):
     post = db.session.get(Post, post_id) or abort(404)
-    hide_post(post.id, mode == 'yes', SRC_WEB)
+    shared_post.hide_post(post.id, mode == 'yes', SRC_WEB)
 
     # todo: remove post.id from redis cache used by get_deduped_post_ids() if "result_id" is in referrer()
     
@@ -1963,7 +1965,7 @@ def post_flair_list(post_id):
 @bp.route('/post/<int:post_id>/lock/<mode>', methods=['POST'])
 @login_required
 def post_lock(post_id: int, mode):
-    lock_post(post_id, mode == 'yes', SRC_WEB)
+    shared_post.lock_post(post_id, mode == 'yes', SRC_WEB)
     return redirect(referrer(url_for('activitypub.post_ap', post_id=post_id)))
 
 
@@ -1993,7 +1995,7 @@ def post_move(post_id: int):
                 search += f'@{current_app.config["SERVER_NAME"]}'
             community = search_for_community(f'!{search}', allow_fetch=False)
             if community:
-                move_post(post_id, community.id, SRC_WEB)
+                shared_post.move_post(post_id, community.id, SRC_WEB)
             else:
                 flash(_('Could not find that community.'), 'error')
             return redirect(url_for('activitypub.post_ap', post_id=post_id))
@@ -2364,10 +2366,10 @@ def post_reply_restore(post_id: int, comment_id: int):
     if post_reply.post_id != post.id:
         abort(404)
 
-    if post_reply.user_id == current_user.id or can_mod_post(post, current_user):
+    if post_reply.user_id == current_user.id or shared_post.can_mod_post(post, current_user):
         if post_reply.deleted_by == post_reply.user_id:
             was_mod_deletion = False
-        elif can_mod_post(post, current_user):
+        elif shared_post.can_mod_post(post, current_user):
             was_mod_deletion = True
         else:
             abort(403)  # D421: an author may not undo a moderator's removal
@@ -2477,7 +2479,7 @@ def post_reply_purge(post_id: int, comment_id: int):
 @login_required
 def post_notification(post_id: int):
     try:
-        return subscribe_post(post_id, None, SRC_WEB)
+        return shared_post.subscribe_post(post_id, None, SRC_WEB)
     except NoResultFound:
         abort(404)
 
@@ -2871,7 +2873,7 @@ def post_set_ai(post_id):
 @bp.route('/post/<int:post_id>/set_read', methods=['POST'])
 @login_required
 def post_set_read(post_id):
-    mark_post_read([post_id], True, current_user.id)
+    shared_post.mark_post_read([post_id], True, current_user.id)
     return ''
 
 

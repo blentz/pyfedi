@@ -1076,7 +1076,7 @@ def test_in_debug_the_refused_edit_raises_instead(app, env):
     # patch.object on the property sets it on the CLASS and leaks into the
     # next test (fact 516).
     with patch.dict(app.config, {'DEBUG': True}):
-        with patch('app.post.routes.edit_post',
+        with patch('app.shared.post.edit_post',
                    side_effect=Exception('boom')):
             with patch('app.post.routes.flash'):
                 with pytest.raises(Exception, match='boom'):
@@ -1285,7 +1285,7 @@ def test_saving_an_edit(app, env):
     client = as_user(app, author)
     token = csrf(app, client)
 
-    with patch('app.post.routes.edit_post') as edited:
+    with patch('app.shared.post.edit_post') as edited:
         with patch('app.post.routes.flash') as flashed:
             response = client.post(
                 f'/post/{post.id}/edit',
@@ -1308,7 +1308,7 @@ def test_a_refused_edit_says_why(app, env):
     client = as_user(app, author)
     token = csrf(app, client)
 
-    with patch('app.post.routes.edit_post',
+    with patch('app.shared.post.edit_post',
                side_effect=Exception('that domain is blocked')):
         with patch('app.post.routes.flash') as flashed:
             response = client.post(

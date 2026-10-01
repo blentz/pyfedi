@@ -25,9 +25,12 @@ from app.feed.util import feeds_for_form, search_for_feed, actor_to_feed, feed_c
 from app.inoculation import inoculation
 from app.models import Feed, FeedMember, FeedItem, Community, NotificationSubscription, \
     CommunityMember, User, FeedJoinRequest, Instance, Topic, CommunityJoinRequest
-from app.shared.community import leave_community
-from app.shared.feed import join_feed, _feed_add_community, announce_feed_delete_to_subscribers, edit_feed, \
-    form_communities_to_ids, make_feed, delete_feed
+# The module, not the names: app.shared.community reaches this file through a blueprint
+# package before they are defined (import cycle: app.shared.community)
+import app.shared.community as shared_community
+# The module, not the names: app.shared.feed reaches this file through a blueprint
+# package before they are defined (import cycle: app.shared.feed)
+import app.shared.feed as shared_feed
 from app.utils import back, show_ban_message, piefed_markdown_to_lemmy_markdown, markdown_to_html, render_template, \
     user_filters_posts, joined_communities, menu_instance_feeds, validation_required, feed_membership, \
     gibberish, get_task_session, instance_banned, menu_subscribed_feeds, referrer, community_membership, \
@@ -70,7 +73,7 @@ def feed_new():
         if g.site.enable_nsfl is False:
             form.nsfl.data = False
 
-        make_feed(form, SRC_WEB, None, form.icon_file.data, form.banner_file.data)
+        shared_feed.make_feed(form, SRC_WEB, None, form.icon_file.data, form.banner_file.data)
 
         flash(_('Your new Feed has been created.'))
         return redirect(url_for('user.user_myfeeds', actor=current_user.link()))
@@ -170,7 +173,7 @@ def feed_edit(feed_id: int):
         # D711: the slug is edit_feed's alone. Renaming here first hid the rename
         # from it, so a renamed feed's ActivityPub urls were never moved.
         old_url = feed_to_edit.name
-        edit_feed(edit_feed_form, feed_to_edit, SRC_WEB, None, edit_feed_form.icon_file.data, edit_feed_form.banner_file.data, from_scratch=False)
+        shared_feed.edit_feed(edit_feed_form, feed_to_edit, SRC_WEB, None, edit_feed_form.icon_file.data, edit_feed_form.banner_file.data, from_scratch=False)
         url_changed = feed_to_edit.name != old_url
 
         flash(_('Settings saved.'))
@@ -212,7 +215,7 @@ def feed_delete(feed_id: int):
 
     feed = db.session.get(Feed, feed_id) or abort(404)
 
-    delete_feed(feed_id, SRC_WEB)
+    shared_feed.delete_feed(feed_id, SRC_WEB)
 
     flash(_('Feed deleted'))
 
@@ -421,7 +424,7 @@ def feed_add_community():
     if db.session.get(Community, community_id) is None:
         abort(404)
 
-    _feed_add_community(community_id, current_feed_id, feed_id, user_id)
+    shared_feed._feed_add_community(community_id, current_feed_id, feed_id, user_id)
 
     # send the user back to the page they came from or main
     return back(url_for('main.index'))
@@ -684,7 +687,7 @@ def feed_create_post(feed_name):
 @approval_required
 def subscribe(actor):
     # POST only, so login_required checks the CSRF token; it changed state on a GET
-    join_feed(actor, current_user.id)
+    shared_feed.join_feed(actor, current_user.id)
     # send them back where they came from
     return back('/f/' + actor)
 
@@ -747,7 +750,7 @@ def feed_unsubscribe(actor):
                                 # community believing the user still followed it
                                 # with its subscriber count one too high. Same
                                 # guard as leave_feed's, per D673.
-                                leave_community(community_id=feed_item.community_id, src=SRC_WEB,
+                                shared_community.leave_community(community_id=feed_item.community_id, src=SRC_WEB,
                                                 bulk_leave=True)
                             db.session.query(CommunityJoinRequest).filter_by(user_id=current_user.id,
                                                                              community_id=feed_item.community_id).delete()

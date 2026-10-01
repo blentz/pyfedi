@@ -139,7 +139,7 @@ def test_leave_feed_only_leaves_communities_the_user_joined_via_the_feed(app, db
 
     with web_ctx(app, s.member):
         with patch('app.shared.feed.task_selector'), \
-                patch('app.shared.feed.leave_community') as leave:
+                patch('app.shared.community.leave_community') as leave:
             leave_feed(s.feed, SRC_WEB)
 
     assert leave.call_count == 1
@@ -742,7 +742,7 @@ def test_leave_feed_skips_the_community_sweep_during_a_bulk_leave(app, db_sessio
 
     with web_ctx(app, s.member):
         with patch('app.shared.feed.task_selector'), \
-                patch('app.shared.feed.leave_community') as leave:
+                patch('app.shared.community.leave_community') as leave:
             leave_feed(s.feed, SRC_WEB, bulk_leave=bulk_leave)
 
     assert leave.call_count == (0 if bulk_leave else 1)
@@ -763,7 +763,7 @@ def test_leave_feed_does_not_sweep_communities_when_feed_auto_leave_is_off(app, 
 
     with web_ctx(app, s.member):
         with patch('app.shared.feed.task_selector'), \
-                patch('app.shared.feed.leave_community') as leave:
+                patch('app.shared.community.leave_community') as leave:
             leave_feed(s.feed, SRC_WEB)
 
     assert leave.call_count == 0

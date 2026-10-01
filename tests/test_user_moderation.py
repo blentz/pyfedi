@@ -594,7 +594,7 @@ def test_submitting_the_ban_form_bans(app, env):
     moderator_of_users(viewer)
     token = csrf(app, client)
 
-    with patch('app.user.routes.ban_user') as ban:
+    with patch('app.shared.user.ban_user') as ban:
         response = client.post(f'/u/{target.user_name}/ban',
                                data={'reason': 'spam', 'submit': 'Ban',
                                      'csrf_token': token})
@@ -608,7 +608,7 @@ def test_you_cannot_ban_yourself(app, env):
     moderator_of_users(viewer)
     token = csrf(app, client)
 
-    with patch('app.user.routes.ban_user') as ban:
+    with patch('app.shared.user.ban_user') as ban:
         with patch('app.user.routes.flash') as flashed:
             response = client.post(f'/u/{viewer.user_name}/ban',
                                    data={'reason': 'spam', 'submit': 'Ban',
@@ -638,7 +638,7 @@ def test_a_moderator_cannot_ban_an_administrator(app, env):
     make_admin(target)
     token = csrf(app, client)
 
-    with patch('app.user.routes.ban_user') as ban:
+    with patch('app.shared.user.ban_user') as ban:
         with patch('app.user.routes.flash') as flashed:
             response = client.post(f'/u/{target.user_name}/ban',
                                    data={'reason': 'spam', 'submit': 'Ban',
@@ -656,7 +656,7 @@ def test_an_administrator_can_ban_another(app, env):
     make_admin(target)
     token = csrf(app, client)
 
-    with patch('app.user.routes.ban_user') as ban:
+    with patch('app.shared.user.ban_user') as ban:
         client.post(f'/u/{target.user_name}/ban',
                     data={'reason': 'spam', 'submit': 'Ban', 'csrf_token': token})
 
@@ -669,7 +669,7 @@ def test_nobody_can_ban_user_1(app, env):
     moderator_of_users(make_admin(viewer))
     token = csrf(app, client)
 
-    with patch('app.user.routes.ban_user') as ban:
+    with patch('app.shared.user.ban_user') as ban:
         response = client.post(f'/u/{founder.user_name}/ban',
                                data={'reason': 'spam', 'submit': 'Ban',
                                      'csrf_token': token})
@@ -705,7 +705,7 @@ def test_unbanning_a_user(app, env):
     db.session.commit()
     token = csrf(app, client)
 
-    with patch('app.user.routes.unban_user') as unban:
+    with patch('app.shared.user.unban_user') as unban:
         response = client.post(f'/u/{target.user_name}/unban',
                                data={'csrf_token': token})
 
@@ -718,7 +718,7 @@ def test_you_cannot_unban_yourself(app, env):
     moderator_of_users(viewer)
     token = csrf(app, client)
 
-    with patch('app.user.routes.unban_user') as unban:
+    with patch('app.shared.user.unban_user') as unban:
         with patch('app.user.routes.flash') as flashed:
             client.post(f'/u/{viewer.user_name}/unban',
                         data={'csrf_token': token})
@@ -1047,7 +1047,7 @@ def test_a_remote_handle_resolves_for_every_action(app, env, path, extra):
     data = {'csrf_token': token}
     data.update(extra)
 
-    with patch('app.user.routes.ban_user'):
+    with patch('app.shared.user.ban_user'):
         response = client.post(f'/u/remote@other.example/{path}', data=data)
 
     assert response.status_code == 302
@@ -1061,7 +1061,7 @@ def test_unbanning_a_remote_account_by_handle(app, env):
     db.session.commit()
     token = csrf(app, client)
 
-    with patch('app.user.routes.unban_user') as unban:
+    with patch('app.shared.user.unban_user') as unban:
         response = client.post('/u/remote@other.example/unban',
                                data={'csrf_token': token})
 

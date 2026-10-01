@@ -193,7 +193,7 @@ def test_an_author_deletes_their_own_post(app, env):
     client = as_user(app, author)
     token = csrf(app, client)
 
-    with patch('app.post.routes.delete_post') as deleted:
+    with patch('app.shared.post.delete_post') as deleted:
         response = client.post(f'/post/{post.id}/delete',
                                data={'submit': 'Yes', 'csrf_token': token})
 
@@ -208,7 +208,7 @@ def test_a_moderator_removes_a_post_with_a_reason(app, env):
     client = as_user(app, mod)
     token = csrf(app, client)
 
-    with patch('app.post.routes.mod_remove_post') as removed:
+    with patch('app.shared.post.mod_remove_post') as removed:
         client.post(f'/post/{post.id}/delete',
                     data={'submit': 'Yes', 'reason': 'off topic',
                           'csrf_token': token})
@@ -225,7 +225,7 @@ def test_a_stranger_cannot_delete_a_post(app, env):
     client = as_user(app, outsider)
     token = csrf(app, client)
 
-    with patch('app.post.routes.delete_post') as deleted:
+    with patch('app.shared.post.delete_post') as deleted:
         response = client.post(f'/post/{post.id}/delete',
                                data={'submit': 'Yes', 'csrf_token': token})
 
@@ -261,7 +261,7 @@ def test_deleting_from_a_listing_goes_back_to_it(app, env):
     client = as_user(app, author)
     token = csrf(app, client)
 
-    with patch('app.post.routes.delete_post'):
+    with patch('app.shared.post.delete_post'):
         response = client.post(
             f'/post/{post.id}/delete',
             data={'submit': 'Yes', 'referrer': '/c/general',
@@ -275,7 +275,7 @@ def test_deleting_from_the_post_page_goes_to_the_community(app, env):
     client = as_user(app, author)
     token = csrf(app, client)
 
-    with patch('app.post.routes.delete_post'):
+    with patch('app.shared.post.delete_post'):
         response = client.post(
             f'/post/{post.id}/delete',
             data={'submit': 'Yes', 'referrer': f'/post/{post.id}',
@@ -291,7 +291,7 @@ def test_a_foreign_referrer_is_dropped(app, env):
     client = as_user(app, author)
     token = csrf(app, client)
 
-    with patch('app.post.routes.delete_post'):
+    with patch('app.shared.post.delete_post'):
         response = client.post(
             f'/post/{post.id}/delete',
             data={'submit': 'Yes', 'referrer': 'https://evil.example/x',
@@ -308,7 +308,7 @@ def test_an_author_restores_their_own_post(app, env):
     client = as_user(app, author)
     token = csrf(app, client)
 
-    with patch('app.post.routes.restore_post') as restored:
+    with patch('app.shared.post.restore_post') as restored:
         response = client.post(f'/post/{post.id}/restore',
                                data={'csrf_token': token})
 
@@ -326,7 +326,7 @@ def test_a_moderator_restoring_uses_the_moderation_path(app, env):
     client = as_user(app, mod)
     token = csrf(app, client)
 
-    with patch('app.post.routes.mod_restore_post') as restored:
+    with patch('app.shared.post.mod_restore_post') as restored:
         client.post(f'/post/{post.id}/restore', data={'csrf_token': token})
 
     assert restored.call_args.args[0] == post.id
@@ -340,8 +340,8 @@ def test_a_stranger_cannot_restore_a_post(app, env):
     client = as_user(app, outsider)
     token = csrf(app, client)
 
-    with patch('app.post.routes.restore_post') as restored:
-        with patch('app.post.routes.mod_restore_post') as mod_restored:
+    with patch('app.shared.post.restore_post') as restored:
+        with patch('app.shared.post.mod_restore_post') as mod_restored:
             client.post(f'/post/{post.id}/restore',
                         data={'csrf_token': token})
 

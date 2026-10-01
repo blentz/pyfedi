@@ -19,8 +19,12 @@ from app.utils import blocked_communities, blocked_or_banned_instances, blocked_
     get_setting, \
     num_topics, moderating_communities_ids, moderating_communities, joined_communities, \
     moderating_communities_ids_all_users, community_membership_private, user_filters_replies
-from app.shared.community import get_comm_flair_list
-from app.shared.post import get_post_flair_list
+# The module, not the names: app.shared.community reaches this file through a blueprint
+# package before they are defined (import cycle: app.shared.community)
+import app.shared.community as shared_community
+# The module, not the names: app.shared.post reaches this file through a blueprint
+# package before they are defined (import cycle: app.shared.post)
+import app.shared.post as shared_post
 
 
 # 'stub' param: set to True to exclude optional fields
@@ -206,7 +210,7 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
         
         post_flair =[]
         
-        flair_list = get_post_flair_list(post)
+        flair_list = shared_post.get_post_flair_list(post)
         for flair in flair_list:
             post_flair.append(flair_view(flair))
         
@@ -611,7 +615,7 @@ def community_view(community: Community | int | str, variant, stub=False, user_i
               'blocked': blocked, 'activity_alert': activity_alert, 'counts': counts,}
         
         comm_flair = []
-        flair_list = get_comm_flair_list(community)
+        flair_list = shared_community.get_comm_flair_list(community)
         for flair in flair_list:
             comm_flair.append(flair_view(flair))
         

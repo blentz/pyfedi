@@ -362,7 +362,7 @@ def test_unsubscribing_leaves_each_community_through_the_shared_function(app, db
 
     with app.test_client() as client:
         login(client, member)
-        with patch('app.feed.routes.leave_community') as leave:
+        with patch('app.shared.community.leave_community') as leave:
             response = client.post(f'/feed/{feed.name}/unsubscribe', data={'csrf_token': csrf(app, client)})
 
     assert response.status_code == 302
@@ -385,7 +385,7 @@ def test_unsubscribing_never_drives_the_feeds_counter_negative(app, db_session):
 
     with app.test_client() as client:
         login(client, member)
-        with patch('app.feed.routes.leave_community'):
+        with patch('app.shared.community.leave_community'):
             client.post(f'/feed/{feed.name}/unsubscribe', data={'csrf_token': csrf(app, client)})
 
     assert FeedMember.query.filter_by(user_id=member.id, feed_id=feed.id).count() == 0
@@ -406,7 +406,7 @@ def test_unsubscribing_leaves_alone_a_community_the_user_joined_themselves(app, 
 
     with app.test_client() as client:
         login(client, member)
-        with patch('app.feed.routes.leave_community') as leave:
+        with patch('app.shared.community.leave_community') as leave:
             client.post(f'/feed/{feed.name}/unsubscribe', data={'csrf_token': csrf(app, client)})
 
     assert leave.call_count == 0
@@ -426,7 +426,7 @@ def test_unsubscribing_with_auto_leave_off_keeps_every_community(app, db_session
 
     with app.test_client() as client:
         login(client, member)
-        with patch('app.feed.routes.leave_community') as leave:
+        with patch('app.shared.community.leave_community') as leave:
             client.post(f'/feed/{feed.name}/unsubscribe', data={'csrf_token': csrf(app, client)})
 
     assert leave.call_count == 0
@@ -445,7 +445,7 @@ def test_unsubscribing_busts_the_three_memoized_entries(app, db_session):
 
     with app.test_client() as client:
         login(client, member)
-        with patch('app.feed.routes.leave_community'), \
+        with patch('app.shared.community.leave_community'), \
                 patch('app.feed.routes.cache.delete_memoized') as bust:
             client.post(f'/feed/{feed.name}/unsubscribe', data={'csrf_token': csrf(app, client)})
 

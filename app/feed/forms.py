@@ -6,7 +6,9 @@ from wtforms import StringField, SubmitField, TextAreaField, BooleanField, Selec
 from wtforms.validators import DataRequired, Length, Optional
 
 from app.models import Community, Feed, User
-from app.shared.feed import feed_machine_name
+# The module, not the names: app.shared.feed reaches this file through a blueprint
+# package before they are defined (import cycle: app.shared.feed)
+import app.shared.feed as shared_feed
 from app.utils import apply_feed_url_rules
 
 
@@ -40,7 +42,7 @@ class AddCopyFeedForm(FlaskForm):
                 return False
             # apply_feed_url_rules compares the url as typed, but make_feed stores it
             # slugified, so 'afeed_' passed there and collided with 'afeed' (D681)
-            name = feed_machine_name(self.url.data, self.public.data, current_user)
+            name = shared_feed.feed_machine_name(self.url.data, self.public.data, current_user)
             if Feed.query.filter(Feed.name == name).first() is not None:
                 self.url.errors.append(_l('A Feed with this url already exists.'))
                 return False

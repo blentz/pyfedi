@@ -26,7 +26,9 @@ from app.models import Post, Community, CommunityMember, User, PostReply, Notifi
     CommunityFlair, CommunityFlairBlock
 from app.shared.site import block_remote_instance
 from app.shared.upload import process_file_delete, process_upload
-from app.shared.user import subscribe_user, ban_user, unban_user, follow_user, unfollow_user, bot_challenge_user
+# The module, not the names: app.shared.user reaches this file through a blueprint
+# package before they are defined (import cycle: app.shared.user)
+import app.shared.user as shared_user
 from app.user import bp
 from app.user.forms import ProfileForm, SettingsForm, DeleteAccountForm, ReportUserForm, \
     FilterForm, KeywordFilterEditForm, RemoteFollowForm, ImportExportForm, UserNoteForm, BanUserForm, DeleteFileForm, \
@@ -843,7 +845,7 @@ def user_settings_import_export():
 @bp.route('/user/<int:user_id>/notification', methods=['POST'])  # POST only: CSRF (GET residue)
 @login_required
 def user_notification(user_id: int):
-    return subscribe_user(user_id, None, SRC_WEB)
+    return shared_user.subscribe_user(user_id, None, SRC_WEB)
 
 
 @bp.route('/u/<actor>/ban', methods=['GET', 'POST'])
@@ -871,7 +873,7 @@ def ban_profile(actor):
         else:
             if form.validate_on_submit():
                 form.person_id = user.id
-                ban_user(form, SRC_WEB, None)
+                shared_user.ban_user(form, SRC_WEB, None)
                 goto = safe_redirect_target(request.args.get('redirect'), f'/u/{actor}')
                 return redirect(goto)
 
@@ -905,7 +907,7 @@ def unban_profile(actor):
         if user.id == current_user.id:
             flash(_('You cannot unban yourself.'), 'error')
         else:
-            unban_user({'person_id': user.id}, SRC_WEB, None)
+            shared_user.unban_user({'person_id': user.id}, SRC_WEB, None)
             flash(_('%(actor)s has been unbanned.', actor=actor))
     else:
         abort(401)
@@ -2295,7 +2297,7 @@ def user_follow(actor):
     if user is None:
         abort(404)
 
-    follow_user(user.id, src=SRC_WEB)
+    shared_user.follow_user(user.id, src=SRC_WEB)
 
     if request.headers.get('HX-Request') == 'true':
         if user.ap_manually_approves_followers:
@@ -2319,7 +2321,7 @@ def user_unfollow(actor):
     if user is None:
         abort(404)
 
-    unfollow_user(user.id, src=SRC_WEB)
+    shared_user.unfollow_user(user.id, src=SRC_WEB)
 
     if request.headers.get('HX-Request') == 'true':
         return '<div class="ms-auto">' + _('Done') + '</div>'
@@ -2340,7 +2342,7 @@ def user_bot_challenge(actor):
     if user is None:
         abort(404)
 
-    bot_challenge_user(user.id, src=SRC_WEB)
+    shared_user.bot_challenge_user(user.id, src=SRC_WEB)
 
     flash(_('Bot challenge was sent. If they do not respond within 48 hours their account will be flagged as a bot.'), 'success')
     if request.headers.get('HX-Request') == 'true':

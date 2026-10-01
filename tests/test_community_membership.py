@@ -361,7 +361,7 @@ def test_the_invite_box_is_capped(app, inviter):
     client, token, community, joiner = inviter
     addresses = '\n'.join(f'person{index}@example.com' for index in range(50))
 
-    with patch('app.community.routes.invite_with_email') as invite:
+    with patch('app.shared.community.invite_with_email') as invite:
         response, render = _invite(app, client, token, community, addresses)
 
     assert response.status_code == 200
@@ -375,7 +375,7 @@ def test_a_submission_at_the_cap_is_accepted(app, inviter):
     client, token, community, joiner = inviter
     addresses = '\n'.join(f'person{index}@example.com' for index in range(20))
 
-    with patch('app.community.routes.invite_with_email', return_value=1) as invite:
+    with patch('app.shared.community.invite_with_email', return_value=1) as invite:
         response, _render = _invite(app, client, token, community, addresses)
 
     assert response.status_code == 302
@@ -388,7 +388,7 @@ def test_blank_lines_do_not_count_towards_the_cap(app, inviter):
     client, token, community, joiner = inviter
     addresses = '\n\n'.join(f'person{index}@example.com' for index in range(20)) + '\n\n\n'
 
-    with patch('app.community.routes.invite_with_email', return_value=1) as invite:
+    with patch('app.shared.community.invite_with_email', return_value=1) as invite:
         response, _render = _invite(app, client, token, community, addresses)
 
     assert response.status_code == 302
@@ -399,7 +399,7 @@ def test_commas_are_still_refused(app, inviter):
     """The validator's existing rule, kept alongside the new one."""
     client, token, community, joiner = inviter
 
-    with patch('app.community.routes.invite_with_email') as invite:
+    with patch('app.shared.community.invite_with_email') as invite:
         _response, render = _invite(app, client, token, community,
                                     'a@example.com, b@example.com')
 
@@ -412,8 +412,8 @@ def test_an_email_address_is_invited_by_email(app, inviter):
     """The `else` of the `@` branch -- a plain address gets an email."""
     client, token, community, joiner = inviter
 
-    with patch('app.community.routes.invite_with_email', return_value=1) as email:
-        with patch('app.community.routes.invite_with_chat') as chat:
+    with patch('app.shared.community.invite_with_email', return_value=1) as email:
+        with patch('app.shared.community.invite_with_chat') as chat:
             _invite(app, client, token, community, 'someone@example.com')
 
     assert email.call_args.args == (community.id, 'someone@example.com', 1)
@@ -425,8 +425,8 @@ def test_a_fediverse_handle_is_invited_by_chat(app, inviter):
     email, because there is no address to send to."""
     client, token, community, joiner = inviter
 
-    with patch('app.community.routes.invite_with_chat', return_value=1) as chat:
-        with patch('app.community.routes.invite_with_email') as email:
+    with patch('app.shared.community.invite_with_chat', return_value=1) as chat:
+        with patch('app.shared.community.invite_with_email') as email:
             _invite(app, client, token, community, '@someone@remote.example')
 
     assert chat.call_args.args[1] == '@someone@remote.example'
@@ -437,7 +437,7 @@ def test_a_url_is_invited_by_chat(app, inviter):
     """`if line.startswith('http')` -- a profile URL pasted from a browser."""
     client, token, community, joiner = inviter
 
-    with patch('app.community.routes.invite_with_chat', return_value=1) as chat:
+    with patch('app.shared.community.invite_with_chat', return_value=1) as chat:
         _invite(app, client, token, community, 'https://remote.example/u/someone')
 
     assert chat.call_args.args[1] == 'https://remote.example/u/someone'
@@ -448,7 +448,7 @@ def test_the_same_address_is_not_emailed_twice(app, inviter):
     another email to the same person."""
     client, token, community, joiner = inviter
 
-    with patch('app.community.routes.invite_with_email', return_value=1) as email:
+    with patch('app.shared.community.invite_with_email', return_value=1) as email:
         _invite(app, client, token, community,
                 'someone@example.com\nsomeone@example.com')
 
@@ -460,7 +460,7 @@ def test_a_banned_user_cannot_invite(app, inviter):
     joiner.banned = True
     db.session.commit()
 
-    with patch('app.community.routes.invite_with_email') as invite:
+    with patch('app.shared.community.invite_with_email') as invite:
         _invite(app, client, token, community, 'someone@example.com')
 
     assert invite.call_args_list == []
@@ -479,7 +479,7 @@ def test_a_very_new_account_cannot_invite(app, world):
     login(client, joiner)
     token = csrf(app, client)
 
-    with patch('app.community.routes.invite_with_email') as invite:
+    with patch('app.shared.community.invite_with_email') as invite:
         with patch('app.community.routes.flash') as flashed:
             response = client.post(url(app, 'community.community_invite',
                                        actor=community.name),
@@ -501,7 +501,7 @@ def test_a_community_that_does_not_allow_invitations_refuses(app, inviter):
     community.invitations = INVITE_MODS_ONLY
     db.session.commit()
 
-    with patch('app.community.routes.invite_with_email') as invite:
+    with patch('app.shared.community.invite_with_email') as invite:
         with patch('app.community.routes.flash') as flashed:
             response = client.post(url(app, 'community.community_invite',
                                        actor=community.name),
@@ -850,7 +850,7 @@ def test_leaving_everything_leaves_each_community_but_not_the_ones_you_run(
     login(client, joiner)
     token = csrf(app, client)
 
-    with patch('app.community.routes.leave_community') as leave:
+    with patch('app.shared.community.leave_community') as leave:
         with patch('app.community.routes.flash'):
             response = client.post(url(app, 'community.community_leave_all'),
                                    data={'csrf_token': token})
@@ -871,7 +871,7 @@ def test_leaving_everything_also_leaves_subscribed_feeds(app, world):
 
     with patch('app.community.routes.subscribed_feeds', return_value=[7]):
         with patch('app.community.routes.feed_membership', return_value=1):
-            with patch('app.community.routes.leave_feed') as leave_feed:
+            with patch('app.shared.feed.leave_feed') as leave_feed:
                 with patch('app.community.routes.flash'):
                     client.post(url(app, 'community.community_leave_all'),
                                 data={'csrf_token': token})
@@ -887,7 +887,7 @@ def test_leaving_everything_with_no_feeds_is_fine(app, world):
     token = csrf(app, client)
 
     with patch('app.community.routes.subscribed_feeds', return_value=[]):
-        with patch('app.community.routes.leave_feed') as leave_feed:
+        with patch('app.shared.feed.leave_feed') as leave_feed:
             with patch('app.community.routes.flash') as flashed:
                 response = client.post(url(app, 'community.community_leave_all'),
                                        data={'csrf_token': token})
@@ -1298,7 +1298,7 @@ def test_leaving_everything_does_not_leave_a_feed_you_own(app, world):
     with patch('app.community.routes.subscribed_feeds', return_value=[7]):
         with patch('app.community.routes.feed_membership',
                    return_value=SUBSCRIPTION_OWNER):
-            with patch('app.community.routes.leave_feed') as leave_feed:
+            with patch('app.shared.feed.leave_feed') as leave_feed:
                 with patch('app.community.routes.flash'):
                     client.post(url(app, 'community.community_leave_all'),
                                 data={'csrf_token': token})
