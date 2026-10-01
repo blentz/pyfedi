@@ -22,6 +22,8 @@ from app.shared.upload import process_upload
 from app.utils import authorise_api_user, feed_membership, get_request, menu_subscribed_feeds, joined_communities, \
     community_membership, gibberish, get_task_session, instance_banned, menu_instance_feeds, \
     piefed_markdown_to_lemmy_markdown, markdown_to_html, is_image_url
+import app.community.routes as community_routes
+from app.community.util import search_for_community
 
 
 def join_feed(actor, user_id, src=SRC_WEB):
@@ -38,7 +40,6 @@ def join_feed(actor, user_id, src=SRC_WEB):
 
         if feed is not None:
             if feed_membership(user, feed) == SUBSCRIPTION_NONMEMBER:
-                from app.community.routes import do_subscribe
                 success = True
 
                 # for local feeds, joining is instant
@@ -56,9 +57,9 @@ def join_feed(actor, user_id, src=SRC_WEB):
                         community = db.session.get(Community, fi.community_id)
                         actor = community.ap_id if community.ap_id else community.name
                         if current_app.debug:
-                            do_subscribe(actor, user.id, joined_via_feed=True)
+                            community_routes.do_subscribe(actor, user.id, joined_via_feed=True)
                         else:
-                            do_subscribe.delay(actor, user.id, joined_via_feed=True)
+                            community_routes.do_subscribe.delay(actor, user.id, joined_via_feed=True)
 
                 # feed is remote
                 if remote:
@@ -94,9 +95,9 @@ def join_feed(actor, user_id, src=SRC_WEB):
                                 actor = community.ap_id if community.ap_id else community.name
                                 if user.feed_auto_follow:
                                     if current_app.debug:
-                                        do_subscribe(actor, user.id, joined_via_feed=True)
+                                        community_routes.do_subscribe(actor, user.id, joined_via_feed=True)
                                     else:
-                                        do_subscribe.delay(actor, user.id, joined_via_feed=True)
+                                        community_routes.do_subscribe.delay(actor, user.id, joined_via_feed=True)
                                 # also make a feeditem in the local db
                                 feed_item = FeedItem(feed_id=feed.id, community_id=community.id)
                                 db.session.add(feed_item)
@@ -641,10 +642,9 @@ def _feed_add_community(community_id: int, current_feed_id: int, feed_id: int, u
     acting_user = db.session.get(User, user_id)
     if current_membership is None and acting_user.feed_auto_follow:
         # import do_subscribe here, otherwise we get import errors from circular import problems
-        from app.community.routes import do_subscribe
         community = db.session.get(Community, community_id)
         actor = community.ap_id if community.ap_id else community.name
-        do_subscribe(actor, user_id, joined_via_feed=True)
+        community_routes.do_subscribe(actor, user_id, joined_via_feed=True)
 
 
 def _feed_remove_community(community_id: int, current_feed_id: int):
@@ -762,9 +762,8 @@ def announce_feed_add_remove_to_subscribers(action: str, feed_id: int, community
             if fm_user.is_local():
                 # user is local so lets auto-subscribe them to the community, if they opted in
                 if fm_user.feed_auto_follow:
-                    from app.community.routes import do_subscribe
                     actor = community.ap_id if community.ap_id else community.name
-                    do_subscribe(actor, fm_user.id, joined_via_feed=True)
+                    community_routes.do_subscribe(actor, fm_user.id, joined_via_feed=True)
                 continue
 
             # if we get here the feedmember is a remote user
@@ -846,7 +845,6 @@ def existing_communities(feed_id: int) -> List:
                               {'feed_id': feed_id}).scalars()
 
 def form_communities_to_ids(form_communities: str) -> set:
-    from app.community.util import search_for_community
     result = set()
     parts = form_communities.strip().split('\n')
     for community_ap_id in parts:

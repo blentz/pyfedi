@@ -31,6 +31,7 @@ from app.utils import authorise_api_user, blocked_communities, shorten_string, m
     communities_banned_from, piefed_markdown_to_lemmy_markdown, community_moderators, add_to_modlog, \
     get_recipient_language, moderating_communities_ids, moderating_communities_ids_all_users, gibberish, \
     favorite_communities, render_template, can_moderate, sanitise_posting_warning, community_membership_private
+import app.api.alpha.views as alpha_views
 
 
 # function can be shared between WEB and API (only API calls it for now)
@@ -682,7 +683,6 @@ def restore_community(community_id: int, src, auth=None):
 
 
 def add_mod_to_community(community_id: int, person_id: int, src, auth=None):
-    from app.api.alpha.views import cached_modlist_for_community, cached_modlist_for_user
     if src == SRC_API:
         user = authorise_api_user(auth, return_type='model')
     else:
@@ -740,8 +740,8 @@ def add_mod_to_community(community_id: int, person_id: int, src, auth=None):
     cache.delete_memoized(moderating_communities_ids, new_moderator.id)
     cache.delete_memoized(moderating_communities_ids_all_users)
     cache.delete_memoized(Community.moderators, community)
-    cache.delete_memoized(cached_modlist_for_community)
-    cache.delete_memoized(cached_modlist_for_user, new_moderator)
+    cache.delete_memoized(alpha_views.cached_modlist_for_community)
+    cache.delete_memoized(alpha_views.cached_modlist_for_user, new_moderator)
 
     task_selector('add_mod', user_id=user.id, mod_id=person_id, community_id=community_id)
 
@@ -750,7 +750,6 @@ def add_mod_to_community(community_id: int, person_id: int, src, auth=None):
 
 
 def remove_mod_from_community(community_id: int, person_id: int, src, auth=None):
-    from app.api.alpha.views import cached_modlist_for_community, cached_modlist_for_user
     if src == SRC_API:
         user = authorise_api_user(auth, return_type='model')
     else:
@@ -799,8 +798,8 @@ def remove_mod_from_community(community_id: int, person_id: int, src, auth=None)
     cache.delete_memoized(moderating_communities_ids, old_moderator.id)
     cache.delete_memoized(moderating_communities_ids_all_users)
     cache.delete_memoized(Community.moderators, community)
-    cache.delete_memoized(cached_modlist_for_community)
-    cache.delete_memoized(cached_modlist_for_user, old_moderator)
+    cache.delete_memoized(alpha_views.cached_modlist_for_community)
+    cache.delete_memoized(alpha_views.cached_modlist_for_user, old_moderator)
 
     task_selector('remove_mod', user_id=user.id, mod_id=person_id, community_id=community_id)
 

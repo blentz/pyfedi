@@ -10,6 +10,8 @@ from app.models import UserBlock, NotificationSubscription, User, IpBan, UserFol
 from app.shared.tasks import task_selector
 from app.user.utils import purge_user_then_delete
 from app.utils import authorise_api_user, blocked_users, render_template, add_to_modlog, gibberish, user_access
+import app.chat.util as chat_util
+import app as app_pkg
 
 
 # only called from API for now, but can be called from web using [un]block_another_user(user.id, SRC_WEB)
@@ -176,8 +178,7 @@ def ban_user(input, src, auth=None):
         else:
             to_ban.delete_dependencies(purge_cdn=flush_cdn)  # D1348
             to_ban.purge_content(flush=flush_cdn)
-            from app import redis_client
-            with redis_client.lock(f"lock:user:{to_ban.id}", timeout=10, blocking_timeout=6):
+            with app_pkg.redis_client.lock(f"lock:user:{to_ban.id}", timeout=10, blocking_timeout=6):
                 to_ban = db.session.get(User, to_ban.id)
                 to_ban.deleted = True
                 to_ban.deleted_by = user.id
@@ -304,7 +305,6 @@ def unfollow_user(follow_id: int, src, auth=None):
 
 
 def bot_challenge_user(user_id: int, src, auth=None):
-    from app.chat.util import send_message
 
     if src == SRC_API:
         user = authorise_api_user(auth, return_type='model')
@@ -335,7 +335,7 @@ If you are NOT using scripts, LLMs or other automation to create posts and comme
 """
     challenge_text += f"{current_app.config['SERVER_URL']}/bot_challenge/{uuid}\n\n"
     challenge_text += f"If this account is run by a bot, in part or fully, do nothing and we will automatically flag it as a bot.\n\nThank you"
-    send_message(challenge_text, conversation.id, user)
+    chat_util.send_message(challenge_text, conversation.id, user)
 
     if existing_challenge is None:
         db.session.add(BotChallenge(user_id=recipient.id, sent_by=user.id, uuid=uuid))

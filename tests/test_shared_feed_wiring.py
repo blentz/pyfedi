@@ -265,12 +265,11 @@ def test_form_communities_to_ids_normalises_each_input_shape(app, db_session, ra
     The four rows are the four combinations, so neither condition can be
     satisfied by the other's input -- false-witness mechanism (d).
 
-    search_for_community is patched on app.community.util, NOT app.shared.feed:
-    :617 does the import inside the function body to break an import cycle, so a
-    rebind on the importing module is never consulted.
+    search_for_community is patched on app.shared.feed, the binding
+    form_communities_to_ids calls.
     """
     s = _seed()
-    with patch('app.community.util.search_for_community', return_value=s.community) as search:
+    with patch('app.shared.feed.search_for_community', return_value=s.community) as search:
         with app.test_request_context('/'):
             result = form_communities_to_ids(raw)
 
@@ -287,7 +286,7 @@ def test_form_communities_to_ids_skips_names_that_resolve_to_nothing(app, db_ses
     """
     s = _seed()
     lookups = {'!found@test.piefed.local': s.community, '!missing@test.piefed.local': None}
-    with patch('app.community.util.search_for_community', side_effect=lambda x: lookups[x]):
+    with patch('app.shared.feed.search_for_community', side_effect=lambda x: lookups[x]):
         with app.test_request_context('/'):
             result = form_communities_to_ids('found\nmissing')
 
@@ -316,7 +315,7 @@ def test_form_communities_to_ids_searches_for_no_blank_line(app, db_session, raw
     line now names nothing and is skipped."""
     s = _seed()
     lookups = {'!found@test.piefed.local': s.community}
-    with patch('app.community.util.search_for_community', side_effect=lambda x: lookups[x]) as search:
+    with patch('app.shared.feed.search_for_community', side_effect=lambda x: lookups[x]) as search:
         with app.test_request_context('/'):
             result = form_communities_to_ids(raw)
 
@@ -334,7 +333,7 @@ def test_form_communities_to_ids_reads_every_line_and_returns_a_set(app, db_sess
     s = _seed()
     lookups = {'!a@test.piefed.local': s.community,
                '!b@test.piefed.local': s.bystander_community}
-    with patch('app.community.util.search_for_community', side_effect=lambda x: lookups[x]):
+    with patch('app.shared.feed.search_for_community', side_effect=lambda x: lookups[x]):
         with app.test_request_context('/'):
             result = form_communities_to_ids('a\nb')
 
@@ -1730,7 +1729,7 @@ def test_form_communities_to_ids_strips_whitespace_at_both_sites(app, db_session
     fixture cannot distinguish the two sites.
     """
     s = _seed()
-    with patch('app.community.util.search_for_community', return_value=s.community) as search:
+    with patch('app.shared.feed.search_for_community', return_value=s.community) as search:
         with app.test_request_context('/'):
             form_communities_to_ids(raw)
 

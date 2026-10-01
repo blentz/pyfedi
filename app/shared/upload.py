@@ -51,7 +51,7 @@ def process_upload(image_file, destination='posts', user: User | None = None):
     if file_ext.lower() in ('.heic', '.heif'):
         register_heif_opener()
     if file_ext.lower() == '.avif':
-        import pillow_avif  # NOQA
+        import pillow_avif  # NOQA  # lazy: registers Pillow's AVIF plugin only on the AVIF path
 
     # Use environment variables to determine image max dimension, format, and quality
     image_max_dimension = current_app.config['MEDIA_IMAGE_MAX_DIMENSION']
@@ -59,7 +59,7 @@ def process_upload(image_file, destination='posts', user: User | None = None):
     image_quality = current_app.config['MEDIA_IMAGE_QUALITY']
 
     if image_format == 'AVIF':
-        import pillow_avif  # NOQA
+        import pillow_avif  # NOQA  # lazy: registers Pillow's AVIF plugin only on the AVIF path
 
     if not final_place.endswith('.svg') and not final_place.endswith('.gif') and not is_video_url(final_place):
         img = Image.open(final_place)

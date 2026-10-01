@@ -5,6 +5,7 @@ from app.shared.tasks import task_selector
 from app.utils import user_banned_from_community, gibberish, instance_banned, get_task_session, patch_db_session
 
 from flask import current_app, json
+import app as app_pkg
 
 """ JSON format
 {
@@ -152,9 +153,8 @@ def send_vote(user_id, object, vote_to_undo, vote_direction, emoji):
                         send_post_request(instance.inbox, announce, community.private_key, community.public_url() + '#main-key')
 
             if len(send_async):
-                from app import redis_client
                 # send announce_activity via redis pub/sub to piefed_notifs service
-                redis_client.publish("http_posts:activity", json.dumps({'urls': [url[0] for url in send_async],
+                app_pkg.redis_client.publish("http_posts:activity", json.dumps({'urls': [url[0] for url in send_async],
                                                                         'headers': [url[1] for url in send_async],
                                                                         'data': send_async[0][2].decode('utf-8')}))
         else:
