@@ -97,6 +97,13 @@ def post_request(uri: str, body: dict | None, private_key: str, key_id: str,
                  method: Literal["get", "post"] = "post", timeout: int = 10, retries: int = 0):
     session = get_task_session()
     try:
+        if not isinstance(body, dict) or not body.get('id'):
+            # Nothing a peer could accept: log it as a failure rather than raise with no log row (D768)
+            session.add(ActivityPubLog(direction='out', activity_type='', result='failure',
+                                       activity_json=json.dumps(body),
+                                       exception_message=f'no activity id, not sent: {uri}'))
+            session.commit()
+            return
         if '@context' not in body:  # add a default json-ld context if necessary
             body['@context'] = default_context()
         type = body['type'] if 'type' in body else ''

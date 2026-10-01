@@ -1003,16 +1003,30 @@ def test_an_unknown_instance_returning_gone_logs_without_a_row_to_flag(app, db_s
 
 
 def test_a_task_that_cannot_log_rolls_back_and_reraises(app, db_session):
-    """The outer handler (signature.py:168-170). A body with no `id` is the
-    cheapest way to reach it -- ActivityPubLog.activity_id is read straight off
-    the body -- and it is also D768, registered rather than repaired.
-    """
+    """The outer handler. A body json.dumps cannot serialise raises before the
+    log row is added, which is the cheapest way left to reach it now that a
+    body with no `id` is refused cleanly (D768)."""
     from app.models import ActivityPubLog
 
-    with pytest.raises(KeyError):
-        _deliver(_Response(), body={'type': 'Create'})
+    with pytest.raises(TypeError):
+        _deliver(_Response(), body={'type': 'Create', 'id': 'https://local.example/activities/1',
+                                    'unserialisable': object()})
 
     assert ActivityPubLog.query.count() == 0
+
+
+@pytest.mark.parametrize('body', [None, {'type': 'Create'}, {'type': 'Create', 'id': None}])
+def test_an_activity_with_no_id_is_logged_as_a_failure_and_not_sent(app, db_session, body):
+    """D768, fixed: post_request read `'@context' not in body` and `body['id']`
+    unguarded, so a None body raised TypeError and a body with no id raised
+    KeyError out of the task, leaving no log row. Neither is deliverable, so
+    it is now logged as a failure and nothing is sent."""
+    signed = _deliver(_Response(), body=body)
+
+    signed.assert_not_called()
+    log = _log()
+    assert log.result == 'failure'
+    assert log.exception_message == 'no activity id, not sent: https://remote.example/inbox'
 
 
 def test_an_unknown_digest_algorithm_is_refused(app):
