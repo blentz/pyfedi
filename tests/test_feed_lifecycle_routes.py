@@ -563,9 +563,8 @@ def test_creating_a_feed_from_a_topic_prefills_the_form(app, db_session):
 
 
 def test_editing_someone_elses_feed_is_a_404(app, db_session):
-    """:148-149. The route's own ownership check, which is stricter than
-    edit_feed's: the shared function admits an admin (D697), this route does
-    not, and that divergence is registered rather than resolved."""
+    """:148-149. The route's ownership check refuses a stranger who is not an
+    admin; an admin is admitted, as edit_feed admits one (D697)."""
     instance, owner, stranger = _seed()
     feed = _feed(owner)
 
@@ -574,6 +573,40 @@ def test_editing_someone_elses_feed_is_a_404(app, db_session):
         response = client.get(f'/feed/{feed.id}/edit')
 
     assert response.status_code == 404
+
+
+def _admin(user):
+    from app.models import Role, user_role
+    role = Role(name='Admin', weight=0)
+    db.session.add(role)
+    db.session.commit()
+    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.commit()
+    assert user.is_admin()
+
+
+def test_an_admin_may_edit_someone_elses_feed_on_the_web(app, db_session):
+    """D697, fixed (owner ruling): admins may edit any feed on the web, as the
+    API already allowed. The private feed keeps its OWNER's name suffix -- it
+    is built from the feed's owner, not from whoever is editing."""
+    instance, owner, stranger = _seed()
+    _admin(stranger)
+    feed = _feed(owner, name='lifecyclefeed/feedowner', public=False)
+
+    with app.test_client() as client:
+        login(client, stranger)
+        with patch('app.feed.routes.render_template', return_value='rendered'):
+            assert client.get(f'/feed/{feed.id}/edit').status_code == 200
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()), \
+                patch('app.shared.feed.existing_communities', return_value=[]):
+            response = client.post(f'/feed/{feed.id}/edit',
+                                   data=_edit_payload(app, client, title='Admin edit',
+                                                      url='lifecyclefeed/feedowner', public=None))
+
+    assert response.status_code == 302
+    edited = db.session.get(Feed, feed.id)
+    assert edited.title == 'Admin edit'
+    assert edited.name == 'lifecyclefeed/feedowner'
 
 
 def test_editing_a_feed_that_is_not_there_is_a_404(app, db_session):

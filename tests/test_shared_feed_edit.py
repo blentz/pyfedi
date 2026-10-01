@@ -258,13 +258,8 @@ def test_edit_feed_lets_the_owner_through(app, db_session):
 
 
 def test_edit_feed_lets_an_admin_through(app, db_session):
-    """:311's second disjunct, `user.is_admin()`.
-
-    REGISTERED DIVERGENCE (R4), asserted here as current behaviour rather than
-    corrected: the web route refuses anyone who is not the owner
-    (app/feed/routes.py:133 aborts 404, admin or not), so an admin can edit
-    another user's feed through the API and not through the UI. Neither
-    behaviour is obviously the intended one, so this round pins what is there.
+    """:311's second disjunct, `user.is_admin()`. Since D697 (owner ruling)
+    the web route admits an admin too, so both paths agree.
     """
     s = _seed()
     _make_admin(s.stranger)
