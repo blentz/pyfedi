@@ -57,15 +57,9 @@ it; without that, a mutant hardcoding `community_id=1` at `:510`/`:534`
 would still satisfy an argument assertion built only from this test's own
 seed, because the correct value would also happen to be `1`.
 
-THE DIVERGENCE, REGISTERED NOT FIXED: `delete_community:493` reads community
-with `db.session.query(Community).get(community_id)`, which returns `None`
-for an absent id, so `:494`'s `community.is_owner(user)` raises
-`AttributeError` on `None`. `restore_community:522` reads with
-`.filter_by(id=community_id).one()`, which raises `NoResultFound` directly
-for the same absent id. The two tests near the bottom of this file pin
-today's actual, divergent behaviour rather than papering over it; this
-round's production budget was spent on remove_mod_from_community's two
-defects instead, so this divergence stands as found.
+THE MISSING-ID DIVERGENCE (D614) IS FIXED: delete_community and
+restore_community used to fail an unknown id with two different exceptions;
+both now abort 404.
 
 REMOVE_MOD_FROM_COMMUNITY'S TWO DEFECTS, BOTH NOW HISTORY: `:625`'s
 `if existing_member:` used to have no `else`, so removing a moderator who
@@ -86,6 +80,7 @@ from types import SimpleNamespace
 
 import pytest
 from sqlalchemy.exc import NoResultFound
+from werkzeug.exceptions import NotFound
 
 from app import db
 from app.constants import NOTIF_NEW_MOD, SRC_API, SRC_WEB
@@ -366,21 +361,15 @@ def test_delete_community_non_local_refusal_raises_and_leaves_community_untouche
     assert remote_community.banned is False
 
 
-def test_delete_community_missing_id_raises_AttributeError_not_NoResultFound(app, db_session):
-    """`:493` uses `.get()`, which returns `None` for an absent row, so
-    `:494`'s `community.is_owner(user)` raises `AttributeError` on `None`.
-
-    This pins the divergence rather than the intended behaviour. Registered
-    as a finding this round, NOT fixed -- the production budget is spent on
-    remove_mod_from_community's two defects. Asserting the actual behaviour
-    keeps the test honest about what the code does today; see the module
-    docstring's DIVERGENCE note and this file's companion test below for
-    `restore_community`'s `.one()` twin at `:522`.
-    """
+def test_delete_community_missing_id_is_a_404(app, db_session):
+    """D614, fixed: delete_community used `.get()` and then read
+    `community.is_owner`, an AttributeError on None, while restore_community's
+    `.one()` raised NoResultFound. Both twins now look the community up the
+    same way and abort 404 for an unknown id."""
     s = _seed()
 
     with web_ctx(app, s.user):
-        with pytest.raises(AttributeError):
+        with pytest.raises(NotFound):
             delete_community(999999, SRC_WEB)
 
 
@@ -509,16 +498,12 @@ def test_restore_community_non_local_refusal_raises_and_leaves_community_untouch
     assert remote_community.banned is True
 
 
-def test_restore_community_missing_id_raises_NoResultFound(app, db_session):
-    """`:522`'s `.one()` on an absent row raises `NoResultFound` directly --
-    the divergence's other half. See
-    test_delete_community_missing_id_raises_AttributeError_not_NoResultFound
-    above and the module docstring's DIVERGENCE note for the full pairing.
-    """
+def test_restore_community_missing_id_is_a_404(app, db_session):
+    """D614, fixed: the restore twin of the delete test above."""
     s = _seed()
 
     with web_ctx(app, s.user):
-        with pytest.raises(NoResultFound):
+        with pytest.raises(NotFound):
             restore_community(999999, SRC_WEB)
 
 

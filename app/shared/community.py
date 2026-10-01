@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 import flask
-from flask import current_app, flash
+from flask import abort, current_app, flash
 from flask_babel import _, force_locale, gettext
 from flask_login import current_user
 from slugify import slugify
@@ -513,7 +513,7 @@ def delete_community(community_id: int, src, auth=None):
     else:
         user = current_user
 
-    community = db.session.get(Community, community_id)
+    community = db.session.get(Community, community_id) or abort(404)
     # D615: the owner and instance admins only, as the web route community_delete requires
     if not (community.is_owner(user) or user.is_admin()):
         raise Exception('incorrect_login')
@@ -543,7 +543,7 @@ def restore_community(community_id: int, src, auth=None):
     else:
         user = current_user
 
-    community = db.session.query(Community).filter_by(id=community_id).one()
+    community = db.session.get(Community, community_id) or abort(404)
     if not (community.is_owner(user) or user.is_admin()):  # D615
         raise Exception('incorrect_login')
     if not community.is_local():
