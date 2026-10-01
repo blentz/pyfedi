@@ -1094,7 +1094,7 @@ def test_saving_an_edit_with_no_url_leaves_the_name_alone(app, db_session):
     load-bearing twice over: EditFeedForm.validate:82 guards its
     required-field check with `if self.url.data is not None` for exactly this
     reason (its comment says so), and a test that posted an empty STRING
-    instead gets 'This field is required.' and never reaches the route's
+    instead gets 'Url is required.' and never reaches the route's
     branch. The first version of this test did that.
 
     url_changed stays False as well, which is why the redirect is the plain

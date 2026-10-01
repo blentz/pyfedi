@@ -205,14 +205,13 @@ def test_the_edit_form_accepts_an_absent_url(app, db_session):
 
 
 def test_the_edit_form_refuses_a_blank_url(app, db_session):
-    """:86-88. Present and blank is a different case from absent, and it gets
-    a different message from AddCopyFeedForm's -- 'This field is required.'
-    rather than 'Url is required.', a divergence between the twins that is
-    registered rather than unified."""
+    """:86-88. Present and blank is a different case from absent. D740, fixed
+    (owner ruling): it gets the same message as AddCopyFeedForm's, 'Url is
+    required.', where the edit form used to say 'This field is required.'."""
     instance, owner = _seed()
     valid, form = _validate_edit(app, owner, url='  ')
     assert valid is False
-    assert 'This field is required.' in [str(e) for e in form.url.errors]
+    assert [str(e) for e in form.url.errors] == ['Url is required.']
 
 
 def test_the_edit_form_applies_the_url_rules(app, db_session):
