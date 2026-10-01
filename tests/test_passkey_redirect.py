@@ -276,12 +276,12 @@ class TestTheOptionsEndpointsBody:
         assert self._options(app, body).status_code == 400
 
     def test_a_body_with_no_username_is_answered(self, app, db_session):
-        """Answered as any unknown name is since D888: options offering no
-        credential, not an error naming the account."""
+        """Answered as any unknown name is since D888: options offering one
+        decoy credential (D888 residue), not an error naming the account."""
         response = self._options(app, {})
 
         assert response.status_code == 200
-        assert response.get_json()['allowCredentials'] == []
+        assert len(response.get_json()['allowCredentials']) == 1
 
     def test_a_known_user_still_gets_a_challenge(self, app, db_session):
         """The other direction: the shape test must not refuse the ordinary

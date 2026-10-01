@@ -251,7 +251,7 @@ def test_the_options_endpoint_answers_an_unknown_user_like_a_known_one(app, db_s
     """D888, fixed. The endpoint used to answer
     {"error": "Could not find user nobody"}, so an unauthenticated caller could
     test whether an account exists. An unknown name now gets options of the same
-    status and shape as a real account's, offering no credential, and the login
+    status and shape as a real account's, offering a decoy credential (D888 residue), and the login
     then fails with the verification endpoint's generic message.
     """
     _seed()
@@ -264,7 +264,6 @@ def test_the_options_endpoint_answers_an_unknown_user_like_a_known_one(app, db_s
     assert unknown.status_code == known.status_code == 200
     assert unknown.content_type == known.content_type
     assert set(unknown.get_json()) == set(known.get_json())
-    assert unknown.get_json()['allowCredentials'] == []
     # Nobody to cache a challenge for: only alice's request stored one.
     assert cache_set.call_count == 1
 
@@ -339,8 +338,57 @@ def test_a_banned_or_remote_account_gets_no_usable_challenge(app, db_session, co
     with patch('app.auth.passkeys.cache.set') as cache_set:
         response = client.post('/auth/passkeys/login_options', json={'username': 'alice'})
 
-    assert response.get_json()['allowCredentials'] == []
+    # D888 residue: the decoy credential an unknown name gets ('ALICE' matches no account)
+    assert len(response.get_json()['allowCredentials']) == 1
+    assert response.get_json()['allowCredentials'] == _offered(app, 'ALICE')
     assert cache_set.call_args_list == []
+
+
+def _offered(app, username):
+    client = app.test_client()
+    return client.post('/auth/passkeys/login_options', json={'username': username}).get_json()['allowCredentials']
+
+
+def test_an_unknown_name_is_offered_one_stable_decoy_credential(app, db_session):
+    """D888 residue. An account with passkeys got a non-empty allowCredentials
+    and an unknown name an empty one, so the two could still be told apart. An
+    unknown name now gets one credential shaped like a real one, whose id is
+    an HMAC of the lowercased name: the same on every request."""
+    _seed()
+    client = app.test_client()
+
+    first = client.post('/auth/passkeys/login_options', json={'username': 'nobody'}).get_json()
+    again = client.post('/auth/passkeys/login_options', json={'username': 'NoBody'}).get_json()
+    other = client.post('/auth/passkeys/login_options', json={'username': 'somebody'}).get_json()
+
+    assert len(first['allowCredentials']) == 1
+    assert first['allowCredentials'] == again['allowCredentials']
+    assert first['allowCredentials'] != other['allowCredentials']
+    assert first['challenge'] != again['challenge']
+
+
+def test_the_decoy_looks_like_a_real_credential(app, db_session):
+    """D888 residue: same keys, same type, an id of a plausible length."""
+    instance, alice = _seed()
+    _passkey(alice, passkey_id=base64.b64encode(bytes(32)).decode())
+    client = app.test_client()
+
+    real = client.post('/auth/passkeys/login_options', json={'username': 'alice'}).get_json()['allowCredentials']
+    decoy = client.post('/auth/passkeys/login_options', json={'username': 'nobody'}).get_json()['allowCredentials']
+
+    assert len(real) == len(decoy) == 1
+    assert set(real[0]) == set(decoy[0])
+    assert real[0]['type'] == decoy[0]['type']
+    assert len(real[0]['id']) == len(decoy[0]['id'])
+
+
+def test_an_account_with_no_passkeys_is_offered_the_decoy(app, db_session):
+    """D888 residue: a real account without passkeys answers like an unknown
+    name, so having no passkey is not visible either."""
+    _seed()
+
+    assert _offered(app, 'alice') == _offered(app, 'ALICE')
+    assert len(_offered(app, 'alice')) == 1
 
 
 # --------------------------------------------------------------------------

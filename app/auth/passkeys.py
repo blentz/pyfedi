@@ -1,6 +1,8 @@
 import base64
+import hashlib
+import hmac
 
-from flask import request, make_response, abort, jsonify
+from flask import request, make_response, abort, jsonify, current_app
 from flask_login import login_user
 from webauthn import generate_authentication_options, options_to_json, verify_authentication_response
 from webauthn.helpers import parse_authentication_credential_json
@@ -26,13 +28,15 @@ def passkey_options():
         User.ap_id == None,
         User.banned == False,
     ).first()
-    # D888: an unknown (or banned, or remote) name gets options of the same shape
-    # as a real account's, offering no credential, so this endpoint cannot be
-    # used to test whether an account exists. The login then fails generically.
+    # D888: an unknown (or banned, or remote) name, or an account with no passkey,
+    # gets options of the same shape as an account with one, offering a decoy
+    # credential, so this endpoint cannot be used to test whether an account
+    # exists or has a passkey. The login then fails generically.
+    credentials = allowed_credentials(user) if user else []
     options = generate_authentication_options(
         rp_id=request.host,
         timeout=120000,
-        allow_credentials=allowed_credentials(user) if user else [],
+        allow_credentials=credentials or [decoy_credential(username)],
         user_verification=UserVerificationRequirement.PREFERRED,
     )
     if user:
@@ -44,6 +48,13 @@ def passkey_options():
 
 
 # ----------------------------------------------------------------------
+def decoy_credential(username) -> PublicKeyCredentialDescriptor:
+    """A credential no device holds, the same on every request for the same name (D888)."""
+    key = str(current_app.config['SECRET_KEY']).encode()
+    return PublicKeyCredentialDescriptor(
+        id=hmac.new(key, str(username or '').lower().encode(), hashlib.sha256).digest())
+
+
 def allowed_credentials(user):
     if user.passkeys.count():
         return [PublicKeyCredentialDescriptor(id=base64.b64decode(pk.passkey_id)) for pk in user.passkeys]
