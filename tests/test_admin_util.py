@@ -202,7 +202,7 @@ class TestTheNewsletter:
         return subscriber
 
     def test_it_goes_to_everybody_who_asked_for_it(self, env, subscriber):
-        with patch('app.email.send_email') as send:
+        with patch('app.admin.util.send_email') as send:
             send_newsletter(_NewsletterForm())
         assert send.call_count == 1
         assert send.call_args.kwargs['recipients'] == \
@@ -211,7 +211,7 @@ class TestTheNewsletter:
     def test_it_does_not_go_to_anybody_who_did_not(self, env, subscriber):
         subscriber.newsletter = False
         db.session.commit()
-        with patch('app.email.send_email') as send, \
+        with patch('app.admin.util.send_email') as send, \
                 patch('app.admin.util.flash'):
             send_newsletter(_NewsletterForm())
         assert send.call_count == 0
@@ -219,7 +219,7 @@ class TestTheNewsletter:
     def test_nor_to_a_banned_account(self, env, subscriber):
         subscriber.banned = True
         db.session.commit()
-        with patch('app.email.send_email') as send, \
+        with patch('app.admin.util.send_email') as send, \
                 patch('app.admin.util.flash'):
             send_newsletter(_NewsletterForm())
         assert send.call_count == 0
@@ -227,13 +227,13 @@ class TestTheNewsletter:
     def test_nor_to_a_remote_one(self, env, subscriber):
         subscriber.ap_id = 'reader@remote.test'
         db.session.commit()
-        with patch('app.email.send_email') as send, \
+        with patch('app.admin.util.send_email') as send, \
                 patch('app.admin.util.flash'):
             send_newsletter(_NewsletterForm())
         assert send.call_count == 0
 
     def test_an_admin_is_told_when_there_is_nobody_to_send_to(self, env):
-        with patch('app.email.send_email'), \
+        with patch('app.admin.util.send_email'), \
                 patch('app.admin.util.flash') as flash:
             send_newsletter(_NewsletterForm())
         assert flash.call_count == 1
@@ -245,7 +245,7 @@ class TestTheNewsletter:
         second.email = 'another@probeland.test'
         db.session.commit()
         with env.app.test_request_context('/'), \
-                patch('app.email.send_email') as send:
+                patch('app.admin.util.send_email') as send:
             from flask_login import login_user
             login_user(env.baseline.user1)
             send_newsletter(_NewsletterForm(test=True))
@@ -254,7 +254,7 @@ class TestTheNewsletter:
             [env.baseline.user1.email]
 
     def test_what_the_body_carries(self, env, subscriber):
-        with patch('app.email.send_email') as send:
+        with patch('app.admin.util.send_email') as send:
             send_newsletter(_NewsletterForm(body_text='the news',
                                             body_html='<p>the news</p>'))
         assert 'the news' in send.call_args.kwargs['text_body']

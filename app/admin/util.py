@@ -15,6 +15,8 @@ from app.community.util import search_for_community
 from app.constants import POST_TYPE_IMAGE
 from app.models import User, Community, Instance, CommunityMember, Post, Topic
 from app.utils import gibberish, topic_tree, get_request, store_files_in_s3, ensure_directory_exists, guess_mime_type, get_task_session, patch_db_session, sanitize_svg_bytes
+import shutil
+from app.email import send_email
 
 
 def unsubscribe_from_everything_then_delete(user_id):
@@ -96,7 +98,6 @@ def send_newsletter(form):
     recipients = User.query.filter(User.newsletter == True, User.banned == False, User.ap_id == None).\
         order_by(desc(User.id)).limit(40000)
 
-    from app.email import send_email
 
     if recipients.count() == 0:
         flash(_('No recipients'), 'error')
@@ -183,7 +184,6 @@ def move_community_images_to_here(community_id):
                 """), {'community_id': community_id})
                 db.session.commit()
 
-                import shutil
                 post_ids = list(db.session.execute(text(
                     'SELECT id FROM "post" WHERE type = :post_type AND community_id = :community_id AND deleted is false AND image_id is not null'),
                                                    {'post_type': POST_TYPE_IMAGE, 'community_id': community_id}).scalars())
