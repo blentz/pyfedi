@@ -401,20 +401,14 @@ class TestHeicAndAvifLazyImports:
     "closed" should not carry gaps that cost nothing to close.
     """
 
-    def test_a_heic_upload_registers_the_heif_opener_then_hits_the_format_mismatch(self, app):
+    def test_a_heic_upload_registers_the_heif_opener_and_succeeds(self, app):
         """:52-53 -- `if file_ext.lower() == '.heic': register_heif_opener()`.
 
-        FINDING, investigated at source rather than assumed: a genuine .heic
-        upload can never succeed through this function as written. Once
-        opened, Pillow/pillow_heif report `img.format == 'HEIF'` (verified
-        directly against this environment's pillow_heif), so `:69`'s check
-        (`'.' + img.format.lower() in allowed_extensions`) tests for '.heif',
-        which is NOT in `allowed_extensions` -- only '.heic' is
-        (app/shared/upload.py:21). Every real .heic upload therefore falls
-        into `:84`'s `raise Exception('filetype not allowed')`, a second,
-        independent route to the same mismatch TestFormatVersusExtensionMismatch
-        covers with a disguised BMP. Registered, not fixed: app/ is out of
-        scope for this task.
+        D579, fixed. Pillow/pillow_heif report a real .heic file as
+        `img.format == 'HEIF'`, so `:69`'s check looked for '.heif', which is
+        not allowed, and every genuine .heic upload was refused with
+        'filetype not allowed' after decoding successfully. 'HEIF' now matches
+        '.heic' as well as '.heif' (owner ruling 2026-09-30).
         """
         before = files_under(MEDIA_ROOT)
         buffer = io.BytesIO()
@@ -423,8 +417,7 @@ class TestHeicAndAvifLazyImports:
         heic = FileStorage(stream=buffer, filename='probe.heic')
         with app.app_context():
             try:
-                with pytest.raises(Exception, match='filetype not allowed'):
-                    process_upload(heic)
+                assert process_upload(heic)
             finally:
                 _cleanup(before)
 
