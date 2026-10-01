@@ -11,6 +11,7 @@ from app.constants import NOTIF_REPORT, SRC_WEB, REPORT_TYPE_MESSAGE
 from app.models import Site, User, Report, ChatMessage, Notification, Conversation, conversation_member, \
     Community, CommunityBan, ModLog
 from app.shared.site import block_remote_instance
+from app.shared.tasks import task_selector
 from app.utils import render_template, login_required, trustworthy_account_required
 
 
@@ -255,9 +256,15 @@ def chat_report(conversation_id):
                 admin.unread_notifications += 1
         db.session.commit()
 
-        # todo: federate report to originating instance
-        if form.report_remote.data:
-            ...
+        # D761: flag the reported member's own messages to their instance
+        if form.report_remote.data and reported is not None and not reported.is_local():
+            summary = report.reasons
+            if report.description:
+                summary += ' - ' + report.description
+            message_ap_ids = [message.ap_id for message in conversation.messages.order_by(ChatMessage.id)
+                              if message.sender_id == reported.id and message.ap_id]
+            task_selector('report_chat', user_id=current_user.id, reported_id=reported.id,
+                          message_ap_ids=message_ap_ids, summary=summary)
 
         flash(_('This conversation has been reported, thank you!'))
         return redirect(url_for('chat.chat_home', conversation_id=conversation_id))
