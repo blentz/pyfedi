@@ -49,6 +49,9 @@ from app.utils import render_template, get_setting, request_etag_matches, return
 from app.models import Community, CommunityMember, Post, Site, User, utcnow, Topic, Instance, \
     Notification, Language, community_language, ModLog, Feed, FeedItem, CmsPage, BannedInstances, BotChallenge
 from app.ldap_utils import test_ldap_connection, sync_user_to_ldap, login_with_ldap
+import boto3
+from app.activitypub.routes import replay_inbox_request
+import app as app_pkg
 
 
 @bp.route('/', methods=['HEAD', 'GET'])
@@ -715,7 +718,6 @@ def keyboard_shortcuts():
 @bp.route('/replay_inbox')
 @login_required
 def replay_inbox():
-    from app.activitypub.routes import replay_inbox_request
 
     request_json = {}
     """
@@ -742,28 +744,26 @@ def honey_pot(whatever=None):
         do_not_track = ['image', 'audio', 'video']
         if request.headers.get('Sec-Fetch-Dest', '') in do_not_track or request.headers.get('Accept', '').startswith('image/'):
             return ''
-    from app import redis_client
-    from time import time
     ip = ip_address()
     key = f"honeypot:{ip}"
 
-    now = time()
+    now = time.time()
     score = now
     member = str(now)  # unique enough for repeated entries
 
-    added = redis_client.zadd(key, {member: score})
+    added = app_pkg.redis_client.zadd(key, {member: score})
 
-    if added == 1 and redis_client.ttl(key) == -1:
-        redis_client.expire(key, 86400)  # auto-expire key after 24h of inactivity
+    if added == 1 and app_pkg.redis_client.ttl(key) == -1:
+        app_pkg.redis_client.expire(key, 86400)  # auto-expire key after 24h of inactivity
 
     # Remove entries older than 24 hours
-    redis_client.zremrangebyscore(key, 0, now - 86400)
+    app_pkg.redis_client.zremrangebyscore(key, 0, now - 86400)
 
     # Count recent events
-    count = redis_client.zcount(key, now - 86400, now)
+    count = app_pkg.redis_client.zcount(key, now - 86400, now)
 
     if count >= 3:
-        redis_client.set(f"ban:{ip}", 1, ex=86400 * 7 * 4)  # ban scraper for 4 weeks
+        app_pkg.redis_client.set(f"ban:{ip}", 1, ex=86400 * 7 * 4)  # ban scraper for 4 weeks
 
     return gibberish(100)
 
@@ -778,7 +778,6 @@ def test():
     #db.session.commit()
     return markdown_to_html('Testing!\n\n![an image :: width=50](https://piefed.social/static/media/logo_8p7en.svg, https://media.piefed.social/posts/up/TR/upTRjfvFt2ma0hz.webp)\n\nthere we go')
 
-    from flask import json
     community = db.session.get(Community, 33)
     announce_activity = {
         'actor': community.ap_profile_id,
@@ -798,14 +797,12 @@ def test():
                                                    community.profile_id() + '#main-key',
                                                    send_via_async=True))
 
-    from app import redis_client
     # send announce_activity via redis pub/sub to piefed_notifs service
-    redis_client.publish("http_posts:activity", json.dumps({'urls': [url[0] for url in send_async],
+    app_pkg.redis_client.publish("http_posts:activity", json.dumps({'urls': [url[0] for url in send_async],
                                                             'headers': [url[1] for url in send_async],
                                                             'data': send_async[0][2].decode('utf-8')}))
 
     return 'Done'
-    import json
     user_id = 1
     r = get_redis_connection()
     r.publish(f"notifications:{user_id}", json.dumps({'num_notifs': randint(1, 100)}))
@@ -1057,8 +1054,7 @@ def test_email():
 @bp.route('/test_redis')
 @debug_mode_only
 def test_redis():
-    from app import redis_client
-    if redis_client and redis_client.memory_stats():
+    if app_pkg.redis_client and app_pkg.redis_client.memory_stats():
         return 'Redis connection is ok'
     else:
         return 'Redis error'
@@ -1073,7 +1069,6 @@ def test_ip():
 @bp.route('/test_s3')
 @debug_mode_only
 def test_s3():
-    import boto3
     boto3_session = boto3.session.Session()
     s3 = boto3_session.client(
         service_name='s3',
@@ -1107,7 +1102,6 @@ def test_ldap():
             return 'LDAP test failed: Could not connect to LDAP server. Check configuration.'
 
         # Test user sync with dummy data using random password
-        from random import randint
         random_password = f'testpass{randint(1000, 9999)}'
         sync_result = sync_user_to_ldap('testuser', 'test@example.com', random_password)
 
