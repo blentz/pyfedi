@@ -250,7 +250,7 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None):
 
     if uploaded_file and uploaded_file.filename != '':
         # check if this is an allowed type of file
-        allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.mpo', '.avif', '.svg']
+        allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.mpo', '.avif', '.svg']
         if type == POST_TYPE_VIDEO and can_upload_video(user):
             allowed_extensions.extend(['.mp4', '.webm', '.mov'])
         file_ext = os.path.splitext(uploaded_file.filename)[1]
@@ -530,7 +530,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
 
     if uploaded_file and uploaded_file.filename != '':
         # check if this is an allowed type of file
-        allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.mpo', '.avif', '.svg']
+        allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.mpo', '.avif', '.svg']
         if type == POST_TYPE_VIDEO and can_upload_video(user):
             allowed_extensions.extend(['.mp4', '.webm', '.mov'])
         file_ext = os.path.splitext(uploaded_file.filename)[1]
@@ -558,7 +558,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
 
         final_ext = file_ext.lower()  # track file extension for conversion
 
-        if final_ext == '.heic':
+        if final_ext in ('.heic', '.heif'):
             register_heif_opener()
         if final_ext == '.avif':
             import pillow_avif  # NOQA  # do not remove

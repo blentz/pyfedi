@@ -18,7 +18,7 @@ def process_upload(image_file, destination='posts', user: User | None = None):
     if not image_file or image_file.filename == '':
         raise Exception('file not uploaded')
 
-    allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.mpo', '.avif', '.svg']
+    allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.mpo', '.avif', '.svg']
     if user is not None and can_upload_video(user):
         allowed_extensions.extend(['.mp4', '.webm', '.mov'])
     file_ext = os.path.splitext(image_file.filename)[1]
@@ -49,7 +49,7 @@ def process_upload(image_file, destination='posts', user: User | None = None):
         if not sanitize_svg(final_place):
             raise Exception('SVG file could not be sanitized')
 
-    if file_ext.lower() == '.heic':
+    if file_ext.lower() in ('.heic', '.heif'):
         register_heif_opener()
     if file_ext.lower() == '.avif':
         import pillow_avif  # NOQA
