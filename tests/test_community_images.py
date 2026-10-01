@@ -383,6 +383,20 @@ class TestTheFormatsPillowNeedsAPluginFor:
         finally:
             cleanup(file)
 
+    def test_a_heif_named_icon_and_banner(self, env):
+        """D579 residue, fixed (owner ruling): .heif is HEIC's other name, and the
+        community icon and banner list accepts it and opens it as it does .heic,
+        like the post and generic upload paths already do. It was refused with
+        a 400."""
+        icon = save_icon_file(self.a_heic('photo.heif'))
+        banner = save_banner_file(self.a_heic('banner.heif'))
+        try:
+            assert icon.width <= 250
+            assert banner.width <= 1600
+        finally:
+            cleanup(icon)
+            cleanup(banner)
+
     def test_an_avif_banner(self, env):
         file = save_banner_file(self.an_avif('banner.avif'))
         try:

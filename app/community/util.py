@@ -36,7 +36,7 @@ from sqlalchemy import func, desc, text
 import os
 
 
-allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.mpo', '.avif', '.svg']
+allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.mpo', '.avif', '.svg']
 
 
 def search_for_community(address: str, allow_fetch: bool = True) -> Community | None:
@@ -698,7 +698,7 @@ def save_icon_file(icon_file, directory='communities') -> File:
     if file_ext.lower() == '.svg' and not sanitize_svg(final_place):
         abort(400)
 
-    if file_ext.lower() == '.heic':
+    if file_ext.lower() in ('.heic', '.heif'):  # D579: two names for one format
         register_heif_opener()
 
     # resize if necessary or if using MEDIA_IMAGE_FORMAT
@@ -859,7 +859,7 @@ def save_banner_file(banner_file, directory='communities') -> File:
         os.unlink(final_place) if os.path.exists(final_place) else None
         abort(400)
 
-    if file_ext.lower() == '.heic':
+    if file_ext.lower() in ('.heic', '.heif'):  # D579: two names for one format
         register_heif_opener()
 
     # resize if necessary
