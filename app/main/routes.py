@@ -33,7 +33,7 @@ from app.main.forms import ShareLinkForm
 from app.main.util import sidebar_active_communities, sidebar_new_instances, sidebar_upcoming_events, \
     sidebar_new_communities, _base_list_communities_context, reload_url
 from app.translation import LibreTranslateAPI
-from app.utils import render_template, get_setting, request_etag_matches, return_304, blocked_domains, rss_token_user, \
+from app.utils import render_template, ensure_rss_token, get_setting, request_etag_matches, return_304, blocked_domains, rss_token_user, \
     ap_datetime, shorten_string, user_filters_home, \
     joined_communities, moderating_communities, markdown_to_html, \
     blocked_or_banned_instances, communities_banned_from, topic_tree, recently_upvoted_posts, recently_downvoted_posts, \
@@ -108,9 +108,7 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag):
         else:
             private_communities = tuple(pc + [0])
 
-        if current_user.rss_token is None:  # set rss token to something so a private rss feed can be generated
-            current_user.rss_token = gibberish(20)
-            db.session.commit()
+        ensure_rss_token(current_user)  # so a private rss feed can be generated
     else:
         modded_communities = []
         private_communities = ()

@@ -77,9 +77,8 @@ logger = logging.getLogger(__name__)
 # Flask's render_template function, with support for themes added
 def render_template(template_name: str, skip_protocol_replacement: bool = False, **context) -> Response:
     # R219: on a private instance a page's RSS link carries the member's token, which is what opens the feed
-    if isinstance(context.get('rss_feed'), str) and g.site.private_instance and \
-            current_user.is_authenticated and current_user.rss_token:
-        context['rss_feed'] += f"?token={current_user.rss_token}"
+    if isinstance(context.get('rss_feed'), str) and g.site.private_instance and current_user.is_authenticated:
+        context['rss_feed'] += f"?token={ensure_rss_token(current_user)}"
     theme = current_theme()
     if theme != '' and os.path.exists(f'app/templates/themes/{theme}/{template_name}'):
         content = flask.render_template(f'themes/{theme}/{template_name}', **context)
@@ -2182,6 +2181,14 @@ def refuse_if_private_instance(func):
         return func(*args, **kwargs)
 
     return decorated_view
+
+
+def ensure_rss_token(user) -> str:
+    """The user's RSS token, created on first use so a private feed can be generated for them."""
+    if user.rss_token is None:
+        user.rss_token = gibberish(20)
+        db.session.commit()
+    return user.rss_token
 
 
 def rss_token_user():
