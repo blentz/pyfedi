@@ -157,7 +157,7 @@ def _web_form(**over):
         'mode': 'single', 'local_only': False, 'finish_in': '3d',
         'event_timezone': 'UTC',
         'start_datetime': datetime(2030, 1, 1, 9, 0), 'end_datetime': datetime(2030, 1, 1, 10, 0),
-        'max_attendees': 10, 'online': False, 'online_link': '',
+        'max_attendees': 10, 'online': False, 'online_link': '', 'more_info_url': '',
         'join_mode': 'free', 'irl_address': '1 Road', 'irl_city': 'Town', 'irl_country': 'Nowhere',
     }
     for i in range(1, 16):
@@ -1153,6 +1153,21 @@ def test_web_branch_carries_every_remaining_event_field(db_session):
     assert event.online is True
     assert event.online_link == 'https://meet.example/x'
     assert event.join_mode == 'request'
+
+
+@pytest.mark.parametrize('submitted, stored', [
+    ('https://info.example/event', 'https://info.example/event'),
+    ('javascript:alert(1)', None),
+    ('', None),
+])
+def test_web_branch_stores_the_more_info_url(db_session, submitted, stored):
+    """R223, fixed (owner ruling): CreateEventForm's `more_info_url` was
+    validated and then dropped -- Event had no column for it. It is stored now,
+    through `_as_url` like the event's other links."""
+    s = _seed()
+    edit_post(_web_form(more_info_url=submitted), s.post, POST_TYPE_EVENT, SRC_WEB, user=s.user)
+
+    assert Event.query.filter_by(post_id=s.post.id).first().more_info_url == stored
 
 
 def test_web_branch_leaves_event_data_none_for_a_non_event_type(db_session):

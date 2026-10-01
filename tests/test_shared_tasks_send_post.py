@@ -986,6 +986,25 @@ def test_an_event_with_both_times_still_emits_both_keys(db_session, http_mock):
     assert page['endTime'] == '2030-06-01T10:00:00+00:00'
 
 
+def test_an_events_more_info_url_is_pushed_as_an_extra_link_attachment(db_session, http_mock):
+    """R223, fixed (owner ruling): the event's 'More info' link goes out as an
+    extra Link attachment, named so ingest can tell it from the post's url, on
+    the push as on the fetch."""
+    from datetime import datetime
+    s = _seed(post_type=POST_TYPE_EVENT, url='https://events.example/1', local_community=False,
+              with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    db.session.add(Event(post_id=s.post.id, start=datetime(2030, 6, 1, 9, 0), timezone='UTC',
+                         more_info_url='https://info.example/event'))
+    db.session.commit()
+
+    _send(s.post)
+
+    assert _attachment_of(route) == [
+        {'href': 'https://events.example/1', 'type': 'Link'},
+        {'href': 'https://info.example/event', 'type': 'Link', 'name': 'More info'}]
+
+
 def test_an_event_omits_the_optional_properties_it_does_not_have(db_session, http_mock):
     """D306, fixed (owner ruling). Nine optional Event properties went out as
     JSON nulls where `startTime`/`endTime` are omitted (D298); an absent key
