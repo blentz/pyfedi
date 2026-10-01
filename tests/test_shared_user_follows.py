@@ -88,9 +88,11 @@ What each test below closes:
 import contextlib
 from types import SimpleNamespace
 
+import pytest
 from flask import get_flashed_messages
 
-from app.constants import SRC_API, SRC_PLD
+from app import db
+from app.constants import SRC_API, SRC_PLD, SRC_WEB
 from app.models import Notification, NotificationSubscription, User, UserFollower
 from app.shared.user import follow_user, subscribe_user, unfollow_user
 from tests.factories import bearer, make_instance, make_site, make_user, web_ctx
@@ -362,3 +364,22 @@ def test_a_third_source_reaches_the_flash_branches_the_web_arm_cannot(app, db_se
     assert flashed == ['A subscription for this user already existed.']
     assert db_session.query(NotificationSubscription).filter_by(
         entity_id=s.target.id, user_id=s.follower.id).count() == 1
+
+
+@pytest.mark.parametrize('banned', [True, None])
+def test_subscribing_to_a_banned_or_missing_user_is_a_404(app, db_session, banned):
+    """D559, fixed: `.one()` on `banned=False` raised NoResultFound (a 500)
+    for a missing user or one banned between render and submit. Both are now
+    a 404. `banned=None` stands for a missing id."""
+    from werkzeug.exceptions import NotFound
+    s = _seed_followers()
+    target_id = s.target.id
+    if banned:
+        s.target.banned = True
+        db.session.commit()
+    else:
+        target_id += 1000
+
+    with web_ctx(app, s.follower):
+        with pytest.raises(NotFound):
+            subscribe_user(target_id, True, SRC_WEB)

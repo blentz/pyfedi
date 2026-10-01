@@ -1,4 +1,4 @@
-from flask import flash, current_app
+from flask import abort, flash, current_app
 from flask_babel import _
 from flask_login import current_user
 from sqlalchemy import text
@@ -88,7 +88,7 @@ def unblock_another_user(person_id, src, auth=None):
 
 def subscribe_user(person_id: int, subscribe, src, auth=None):
     user_id = authorise_api_user(auth) if src == SRC_API else current_user.id
-    person = db.session.query(User).filter_by(id=person_id, banned=False).one()
+    person = db.session.query(User).filter_by(id=person_id, banned=False).first() or abort(404)
 
     if src == SRC_WEB:
         subscribe = False if person.notify_new_posts(user_id) else True
