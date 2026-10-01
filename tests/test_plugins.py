@@ -171,12 +171,11 @@ def test_firing_a_hook_nobody_registered_returns_the_data_unchanged(app, clean_h
     assert hooks.fire_hook('nobody_listens') is None
 
 
-def test_a_handler_that_raises_is_swallowed_and_the_chain_continues(app, clean_hooks):
-    """D811, recorded rather than repaired: isolation is the point of a plugin
-    system, but the caller cannot tell that a plugin failed -- the value simply
-    carries on from the last handler that worked.
-
-        PROBE g3 result: ['first', 'last']
+def test_a_handler_that_raises_is_isolated_and_logged(app, clean_hooks, caplog):
+    """D811, fixed (owner ruling 2026-09-30): isolation is the point of a plugin
+    system, so a raising handler still does not stop the chain -- the value
+    carries on from the last handler that worked -- but the failure is logged
+    with its traceback, so an operator can tell a plugin failed.
     """
     @hooks.hook('explosive')
     def a_first(data):
@@ -190,15 +189,18 @@ def test_a_handler_that_raises_is_swallowed_and_the_chain_continues(app, clean_h
     def c_last(data):
         return data + ['last']
 
-    assert hooks.fire_hook('explosive', []) == ['first', 'last']
+    with caplog.at_level('ERROR', logger='app.plugins.hooks'):
+        assert hooks.fire_hook('explosive', []) == ['first', 'last']
+
+    assert 'b_boom' in caplog.text
+    assert 'plugin exploded' in caplog.text
 
 
-def test_a_handler_that_returns_nothing_nulls_the_data_for_everyone_after_it(app, clean_hooks):
-    """D811's other half: `result = handler(result, **kwargs)` takes whatever comes back,
-    including None -- so one handler forgetting to return hands None to the
-    next and to the caller.
-
-        PROBE g4 result: None
+def test_a_handler_that_returns_nothing_leaves_the_data_unchanged(app, clean_hooks):
+    """D811, fixed (owner ruling 2026-09-30). `result = handler(result, ...)`
+    used to take whatever came back, so one handler forgetting to return handed
+    None to every later handler and to the caller. A None return now leaves
+    the data as it was.
     """
     seen = []
 
@@ -211,8 +213,8 @@ def test_a_handler_that_returns_nothing_nulls_the_data_for_everyone_after_it(app
         seen.append(data)
         return data
 
-    assert hooks.fire_hook('forgetful', {'title': 'x'}) is None
-    assert seen == [None]
+    assert hooks.fire_hook('forgetful', {'title': 'x'}) == {'title': 'x'}
+    assert seen == [{'title': 'x'}]
 
 
 def test_the_decorator_returns_a_wrapper_that_still_calls_the_function(app, clean_hooks):

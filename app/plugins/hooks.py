@@ -89,7 +89,9 @@ def fire_hook(hook_name: str, data: Any = None, **kwargs) -> Any:
     result = data
     for handler in sorted_handlers:
         try:
-            result = handler(result, **kwargs)
+            handler_result = handler(result, **kwargs)
+            if handler_result is not None:  # a handler that returns nothing leaves the data as it was
+                result = handler_result
         except Exception as e:
             logger.error(f"Error in hook handler {handler.__name__}: {e}\n{traceback.format_exc()}")
     

@@ -727,6 +727,30 @@ def test_the_upload_types_pass_the_file_through(app, poster, type_name):
     assert make.call_args.kwargs['uploaded_file'].filename == 'x.png'
 
 
+def test_a_before_post_create_plugin_can_rewrite_the_title_and_body(app, poster):
+    """D811, fixed (owner ruling 2026-09-30): the web call site now uses
+    `fire_hook`'s returned title and content for the post it creates, as the
+    API's does, rather than discarding them."""
+    client, token, community, author, english = poster
+
+    def rewrite(hook_name, data=None, **kwargs):
+        if hook_name != 'before_post_create':
+            return data
+        return {**data, 'title': 'rewritten title', 'content': 'rewritten body'}
+
+    with patch('app.plugins.fire_hook', side_effect=rewrite), \
+            patch('app.community.routes.make_post', return_value=FakePost()) as make:
+        with patch('app.community.routes.render_template', return_value='rendered') as render:
+            client.post(url(app, 'community.add_post', actor=community.name, type='discussion'),
+                        data=_post_payload(token, english, community, title='original'),
+                        content_type='multipart/form-data')
+
+    assert make.call_args is not None, render.call_args.kwargs['form'].errors
+    form = make.call_args.args[0]
+    assert form.title.data == 'rewritten title'
+    assert form.body.data == 'rewritten body'
+
+
 def test_a_video_post_without_upload_permission_gets_no_file(app, poster):
     """`elif type == 'video' and can_upload_video()` -- the permission is half
     of the condition, so an account without it posts a video by URL only and

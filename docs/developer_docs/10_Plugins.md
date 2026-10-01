@@ -135,10 +135,10 @@ post_data = {
     'user_id': current_user.id
 }
 
-plugins.fire_hook('before_post_create', post_data)
+post_data = plugins.fire_hook('before_post_create', post_data)
 ```
 
-So, this is the information that is available to the plugin to act on. Note that no data is expected to be returned from plugins utilizing this hook. Also, this hook cannot actually modify this data before it is sent to the `make_post` function where the post is actually created. So, it is more useful as a way to be aware or notified if posts meet certain conditions. Examples might include if a post's body triggers an anti-LLM detection you have set up, or if the post's body or linked url contains language or point to a domain that triggers an automatic report for increased scrutiny.
+So, this is the information that is available to the plugin to act on. A plugin may return a modified copy of this data, and the `title` and `content` it returns are used for the post that `make_post` creates; changes to the other fields (who is posting, the community, the post type) are ignored. A plugin that returns nothing (`None`) leaves the data unchanged. Otherwise, it is useful as a way to be aware or notified if posts meet certain conditions. Examples might include if a post's body triggers an anti-LLM detection you have set up, or if the post's body or linked url contains language or point to a domain that triggers an automatic report for increased scrutiny.
 
 ### `after_post_create` Hook
 
