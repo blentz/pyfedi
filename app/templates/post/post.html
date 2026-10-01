@@ -9,7 +9,7 @@
 {% from "post/reply/_macros.html" import render_comment_voting_buttons, render_reply_notification_toggle, render_emoji_button, render_post_emoji_button -%}
 
 {% block schema_org %}
-    {% if post.indexable and post.instance_id == 1 -%}
+    {% if post.indexable and post.instance_id == 1 and not post.deleted -%}{# D1085: no title or body of a deleted post #}
         {% include "post/_schema_org.html" %}
     {%- endif %}
 {% endblock %}
