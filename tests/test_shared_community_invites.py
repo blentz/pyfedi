@@ -747,10 +747,9 @@ def test_comm_flair_ap_format_int_arg_missing_id_returns_none(app, db_session):
     `CommunityFlair.query.get(flair)` -- SQLAlchemy's legacy `Query.get`,
     unrelated to the `.get()` sites this round's production fix addresses at
     `:130`/`:196` (see the module docstring) -- returns `None` quietly, and
-    `:690-691`'s guard catches it. The signature declares `-> dict`;
-    returning bare `None` here is a real mismatch with that annotation,
-    registered as a finding and left unfixed per this round's production
-    budget, not smoothed over by asserting mere falsiness.
+    `:690-691`'s guard catches it. The signature now declares
+    `-> dict | None` (D631), so this `None` is in contract; it is asserted
+    as `None`, not mere falsiness.
 
     A `CommunityFlair` row is seeded so the table is NOT empty at the point
     `comm_flair_ap_format` runs -- otherwise a mutant that deletes `:686`'s
@@ -2634,3 +2633,15 @@ def test_invite_with_chat_failed_delivery_api_src_also_returns_0(
     all_conversations = db.session.query(Conversation).all()
     assert len(all_conversations) == 1
     assert {m.id for m in all_conversations[0].members} == {s.user.id, recipient.id}
+
+
+def test_comm_flair_ap_format_declares_that_it_can_return_none():
+    """D631, fixed: the function returns None for a missing flair (and on an
+    unreachable second path) under a `-> dict` annotation. It is now
+    `-> dict | None`."""
+    import typing
+    from app.shared import community as community_module
+
+    hints = typing.get_type_hints(community_module.comm_flair_ap_format)
+
+    assert type(None) in typing.get_args(hints['return'])
