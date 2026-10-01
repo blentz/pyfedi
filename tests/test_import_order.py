@@ -39,7 +39,7 @@ MODULES = sorted(
     '.'.join(('app',) + path.relative_to(APP).with_suffix('').parts).removesuffix('.__init__')
     for path in APP.rglob('*.py')
     if '__pycache__' not in path.parts
-)
+) + ['config']   # config.py imported app.constants, so app/__init__ (from config import Config) cycled
 
 
 @pytest.mark.parametrize('module', [

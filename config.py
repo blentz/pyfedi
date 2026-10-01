@@ -1,13 +1,25 @@
+import importlib.util
 import logging
 import os
 
 from dotenv import load_dotenv
 
-import app.constants
-
 logger = logging.getLogger(__name__)
 
 basedir = os.path.abspath(os.path.dirname(__file__))
+
+
+def _app_version():
+    """app.constants.VERSION, read from the file rather than imported: importing
+    app.constants runs app/__init__.py, which does `from config import Config`, so
+    `import config` first in a fresh interpreter failed (import cycle: config).
+    app/constants.py imports nothing, so loading it standalone is safe."""
+    spec = importlib.util.spec_from_file_location('_piefed_constants',
+                                                  os.path.join(basedir, 'app', 'constants.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.VERSION
+
 load_dotenv(os.path.join(basedir, '.env'))
 
 
@@ -203,7 +215,7 @@ class Config(object):
     LDAP_READ_ATTR_USERNAME = os.environ.get('LDAP_READ_ATTR_USERNAME') or 'uid'
     LDAP_READ_ATTR_EMAIL = os.environ.get('LDAP_READ_ATTR_EMAIL') or 'mail'
 
-    VERSION = app.constants.VERSION
+    VERSION = _app_version()
 
     # How long to keep post voting data ( months )
     KEEP_LOCAL_VOTE_DATA_TIME = int(os.environ.get('KEEP_LOCAL_VOTE_DATA_TIME') or 6)
