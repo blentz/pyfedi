@@ -3462,7 +3462,6 @@ def url_to_thumbnail_file(filename) -> File:
                 if medium_image_format == 'AVIF':
                     import pillow_avif  # NOQA
 
-                Image.MAX_IMAGE_PIXELS = 89478485
                 # D1328. This used to run unguarded, so a body Pillow refuses --
                 # anything that is not an image, and a peer chooses what it serves --
                 # raised `UnidentifiedImageError` out of this function AND LEFT THE

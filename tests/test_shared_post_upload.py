@@ -72,9 +72,6 @@ rather than assumed.
      tasks that need the true arm must monkeypatch rather than try to craft a
      real AI-generation signal.
 
-`Image.MAX_IMAGE_PIXELS` IS MUTATED PROCESS-WIDE at `:503` and never restored.
-Nothing here depends on the default, but a later test in another file might.
-
 THE EXTENSION CHECK AT `:463-468` IS BYTE-IDENTICAL TO `make_post:197-204`,
 registered as D455(d). Sub-project 37 covered that copy. These tests call
 `edit_post` directly, so they exercise this one.
@@ -787,8 +784,7 @@ def test_heic_extension_registers_the_heif_opener(db_session, chdir_upload, http
     skip is correct", "the spy never installed", or "the patch targeted the
     wrong name" indistinguishably; the paired test rules out the latter two.
 
-    AN UNRESTORED GLOBAL, of the same class as `:503`'s `MAX_IMAGE_PIXELS`
-    write (see the module docstring). The spy WRAPS and calls the real
+    AN UNRESTORED GLOBAL. The spy WRAPS and calls the real
     `register_heif_opener`, so this test permanently registers Pillow's
     HEIF opener -- `.heic`/`.heif` join `Image.registered_extensions()` for
     the rest of the process, for every test that runs after this one in the

@@ -570,8 +570,6 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
             if not sanitize_svg(final_place):
                 raise Exception('SVG file could not be sanitized')
 
-        Image.MAX_IMAGE_PIXELS = 89478485
-
         # Use environment variables to determine image max dimension, format, and quality
         image_max_dimension = current_app.config['MEDIA_IMAGE_MAX_DIMENSION']
         image_format = current_app.config['MEDIA_IMAGE_FORMAT']

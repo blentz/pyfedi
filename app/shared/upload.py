@@ -54,8 +54,6 @@ def process_upload(image_file, destination='posts', user: User | None = None):
     if file_ext.lower() == '.avif':
         import pillow_avif  # NOQA
 
-    Image.MAX_IMAGE_PIXELS = 89478485
-
     # Use environment variables to determine image max dimension, format, and quality
     image_max_dimension = current_app.config['MEDIA_IMAGE_MAX_DIMENSION']
     image_format = current_app.config['MEDIA_IMAGE_FORMAT']

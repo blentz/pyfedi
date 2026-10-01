@@ -406,8 +406,6 @@ class CreateImageForm(CreatePostForm):
         # `werkzeug.exceptions.BadRequestKeyError: 400`.
         uploaded_file = request.files.get('image_file')
         if uploaded_file and uploaded_file.filename != '' and not uploaded_file.filename.endswith('.svg') and not uploaded_file.filename.endswith('.gif'):
-            Image.MAX_IMAGE_PIXELS = 89478485
-
             site = db.session.get(Site, 1)
             if site is None:
                 site = Site()

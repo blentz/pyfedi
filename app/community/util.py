@@ -690,7 +690,6 @@ def save_icon_file(icon_file, directory='communities') -> File:
             thumbnail_ext = file_ext.lower()
             final_place_thumbnail = final_place
         elif file_ext.lower() == '.gif':  # handle animated gifs specially
-            Image.MAX_IMAGE_PIXELS = 89478485
             img = Image.open(final_place)
             img_width = img.width
             img_height = img.height
@@ -711,7 +710,6 @@ def save_icon_file(icon_file, directory='communities') -> File:
             thumbnail_width = img_thumb.width
             thumbnail_height = img_thumb.height
         else:  # handle regular images (jpg, png, webp, heic, etc.)
-            Image.MAX_IMAGE_PIXELS = 89478485
             img = Image.open(final_place)
             img = ImageOps.exif_transpose(img)
             img_width = img.width
@@ -847,7 +845,6 @@ def save_banner_file(banner_file, directory='communities') -> File:
         import pillow_avif  # NOQA
 
     # resize if necessary
-    Image.MAX_IMAGE_PIXELS = 89478485
     img = Image.open(final_place)
     # Pillow names the format of a .heic file HEIF, and the allowlist spells
     # it .heic -- so a HEIC banner failed this check and was refused with a
