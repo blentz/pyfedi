@@ -1033,6 +1033,7 @@ def process_inbox_request(request_json, store_ap_json):
                         # it should not get here as we wont have a subscribe option on non-public feeds,
                         # but just for cya its here.
                         if not feed.public:
+                            log_incoming_ap(id, APLOG_FOLLOW, APLOG_FAILURE, saved_json, 'Feed is not public')
                             reject_follow = True
 
                         if reject_follow:

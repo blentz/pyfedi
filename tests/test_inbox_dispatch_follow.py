@@ -327,15 +327,10 @@ def _seed_follow_of_feed(name='peerfeed', public=False, local=False, with_keys=F
     return follower, feed
 
 
-def test_a_follow_of_a_non_public_feed_is_rejected_without_any_log(app, db_session, monkeypatch):
-    """routes.py:989-999. `if not feed.public` sets reject_follow, and a
-    Reject is sent -- but unlike either Community reject reason (:946,
-    :952), NOTHING is logged: no `log_incoming_ap` call exists anywhere on
-    this path. `ActivityPubLog.query.count() == 0` is asserted WITH logging
-    enabled precisely so this assertion would fail the moment a log call
-    were ever added here -- the same technique the already-a-member test
-    above uses for the identical reason. Registered as an asymmetry by
-    Task 9 (the design spec, routes.py:989-999), not fixed here.
+def test_a_follow_of_a_non_public_feed_is_rejected_and_logged(app, db_session, monkeypatch):
+    """D65, fixed. `if not feed.public` sends a Reject, but unlike either
+    Community reject reason nothing was logged. It now logs a failure before
+    sending, as the Community reasons do.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     sends = record_sends(monkeypatch)
@@ -354,7 +349,9 @@ def test_a_follow_of_a_non_public_feed_is_rejected_without_any_log(app, db_sessi
     assert body['actor'] == feed.public_url()
     assert key_id == f'{feed.public_url()}#main-key'
 
-    assert ActivityPubLog.query.count() == 0
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Feed is not public'
 
 
 def test_a_follow_of_a_public_feed_creates_membership_and_accepts(app, db_session, monkeypatch):
