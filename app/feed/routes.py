@@ -55,8 +55,6 @@ def feed_new():
     form.parent_feed_id.choices = feeds_for_form(0, current_user.id)
 
     if form.validate_on_submit():
-        if form.url.data.strip().lower().startswith('/f/'):
-            form.url.data = form.url.data[3:]
         form.url.data = slugify(form.url.data.strip().split('/')[0], separator='_').lower()
         if not form.public.data:
             form.url.data = slugify(form.url.data.strip(), separator='_').lower() + '/' + current_user.user_name.lower()
@@ -240,8 +238,6 @@ def feed_copy(feed_id: int):
         copy_feed_form.is_instance_feed.render_kw = {'disabled': True}
 
     if copy_feed_form.validate_on_submit():
-        if copy_feed_form.url.data.strip().lower().startswith('/f/'):
-            copy_feed_form.url.data = copy_feed_form.url.data[3:]
         # split('/')[0] first, as feed_new:57 does. apply_feed_url_rules has
         # already rewritten a private feed's url to '<slug>/<owner>' during form
         # validation, so slugifying the whole string turned the '/' into '_' and

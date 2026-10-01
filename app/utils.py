@@ -5310,6 +5310,9 @@ def user_name_is_taken(user_name: str) -> bool:
 
 
 def apply_feed_url_rules(self):
+    # D1436: a feed's address pasted from the url bar starts with /f/, which is not part of its name
+    if self.url.data.strip().lower().startswith('/f/'):
+        self.url.data = self.url.data.strip()[3:]
     if '-' in self.url.data.strip():
         self.url.errors.append(_l('- cannot be in Url. Use _ instead?'))
         return False
