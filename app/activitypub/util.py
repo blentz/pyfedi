@@ -3347,7 +3347,7 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
             reply.ap_updated = utcnow()
 
         # Check for Mentions of local users (that weren't in the original)
-        if 'tag' in request_json['object'] and isinstance(request_json['object']['tag'], list) and len(request_json['object']['tag']) > 1:
+        if 'tag' in request_json['object'] and isinstance(request_json['object']['tag'], list):
             for json_tag in request_json['object']['tag']:
                 # D1397. `'type' in json_tag` over a STRING element is a substring
                 # test, and `json_tag['type']` then raises -- one `tag` entry of
