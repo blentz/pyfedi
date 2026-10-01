@@ -869,6 +869,8 @@ def test_a_remove_skips_a_feed_member_with_no_community_membership(
     make_feed_member(owner, feed)
 
     stray = make_user(instance, 'strayfeedmember', local=True)
+    stray.feed_auto_leave = True  # opted in; the column defaults False (D663)
+    db.session.commit()
     make_feed_member(stray, feed)
     assert stray.is_local() and stray.feed_auto_leave
     assert CommunityMember.query.filter_by(user_id=stray.id, community_id=community.id).count() == 0
@@ -953,14 +955,14 @@ def _seed_removable_feed_community(host='peer.example', name='removecomm', insta
     return instance, community, feed
 
 
-def _make_would_proceed_feed_member(name, instance, feed, community, local=True, feed_auto_leave=None):
+def _make_would_proceed_feed_member(name, instance, feed, community, local=True, feed_auto_leave=True):
     """A FeedMember, paired with a real CommunityMember row for `community`,
     built so the auto-unsubscribe loop would proceed for it UNLESS the
     caller deliberately flips one thing off: it is never the feed's owner
     (callers that want the owner case set `feed.user_id` to this member's id
     themselves, afterward), it is local unless `local=False`, its
-    feed_auto_leave is True (the column's own default, app/models.py) unless
-    `feed_auto_leave` overrides it, and its CommunityMember row has
+    feed_auto_leave is True (set here: the column defaults False since D663)
+    unless `feed_auto_leave` overrides it, and its CommunityMember row has
     joined_via_feed explicitly set True (make_community_member's factory
     default is False on this column). routes.py's current :1499 guard is
     `subscription != SUBSCRIPTION_OWNER and cm and cm.joined_via_feed` --
@@ -978,8 +980,7 @@ def _make_would_proceed_feed_member(name, instance, feed, community, local=True,
     -- the guard's third, independent conjunct.
     """
     member = make_user(instance, name, local=local)
-    if feed_auto_leave is not None:
-        member.feed_auto_leave = feed_auto_leave
+    member.feed_auto_leave = feed_auto_leave
     db.session.commit()
     make_feed_member(member, feed)
     cm = make_community_member(member, community, is_moderator=False)
@@ -1823,6 +1824,8 @@ def test_remove_loop_skips_a_feed_member_whose_membership_was_not_joined_via_fee
     make_feed_member(feed_owner, feed)
 
     member = make_user(instance, 'notviafeedmember', local=True)
+    member.feed_auto_leave = True  # opted in; the column defaults False (D663)
+    db.session.commit()
     make_feed_member(member, feed)
     cm = make_community_member(member, community, is_moderator=False)
 

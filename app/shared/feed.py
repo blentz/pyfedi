@@ -705,49 +705,49 @@ def _feed_remove_community(community_id: int, current_feed_id: int):
 
 @celery.task
 def announce_feed_add_remove_to_subscribers(action: str, feed_id: int, community_id: int):
-    # find the feed
-    feed = db.session.get(Feed, feed_id)
-    # find the community
-    community = db.session.get(Community, community_id)
-    # build the Announce json
-    activity_json = {
-        "@context": default_context(),
-        "type": "Announce",
-        "actor": feed.ap_public_url,
-        "id": f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}",
-    }
-
-    # build the object json
-    object_json = {
-        "@context": "https://www.w3.org/ns/activitystreams",
-        "type": action,
-        "actor": feed.ap_public_url,
-        "id": f"{current_app.config['SERVER_URL']}/activities/feedadd/{gibberish(15)}",
-        "object": {
-            "type": "Group",
-            "id": community.ap_public_url
-        },
-        "target": {
-            "type": "Collection",
-            "id": feed.ap_following_url
-        }
-    }
-
-    # embed the object json in the Announce json
-    activity_json['object'] = object_json
-
-    # look up the feedmembers
-    feed_members = FeedMember.query.filter_by(feed_id=feed.id).all()
-
-    # for each member
-    #  - if its the owner, skip
-    #  - if its a local server user, skip
-    #  - if its a remote user
-    # setup a db session for this task
+    # D663: a celery task reads everything through its own session, never the request-scoped db.session
     session = get_task_session()
     try:
+        # find the feed
+        feed = session.get(Feed, feed_id)
+        # find the community
+        community = session.get(Community, community_id)
+        # build the Announce json
+        activity_json = {
+            "@context": default_context(),
+            "type": "Announce",
+            "actor": feed.ap_public_url,
+            "id": f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}",
+        }
+
+        # build the object json
+        object_json = {
+            "@context": "https://www.w3.org/ns/activitystreams",
+            "type": action,
+            "actor": feed.ap_public_url,
+            "id": f"{current_app.config['SERVER_URL']}/activities/feedadd/{gibberish(15)}",
+            "object": {
+                "type": "Group",
+                "id": community.ap_public_url
+            },
+            "target": {
+                "type": "Collection",
+                "id": feed.ap_following_url
+            }
+        }
+
+        # embed the object json in the Announce json
+        activity_json['object'] = object_json
+
+        # look up the feedmembers
+        feed_members = session.query(FeedMember).filter_by(feed_id=feed.id).all()
+
+        # for each member
+        #  - if its the owner, skip
+        #  - if its a local server user, skip
+        #  - if its a remote user
         for fm in feed_members:
-            fm_user = db.session.get(User, fm.user_id)
+            fm_user = session.get(User, fm.user_id)
             if fm_user.id == feed.user_id:
                 continue
             if fm_user.is_local():
@@ -759,7 +759,7 @@ def announce_feed_add_remove_to_subscribers(action: str, feed_id: int, community
                 continue
 
             # if we get here the feedmember is a remote user
-            instance: Instance = session.get(Instance, fm_user.instance.id)
+            instance: Instance = session.get(Instance, fm_user.instance_id)
             if instance.inbox and instance.online() and not instance_banned(instance.domain):
                 send_post_request(instance.inbox, activity_json, feed.private_key, feed.ap_profile_id + '#main-key', timeout=10)
     except Exception:
@@ -841,6 +841,8 @@ def form_communities_to_ids(form_communities: str) -> set:
     result = set()
     parts = form_communities.strip().split('\n')
     for community_ap_id in parts:
+        if not community_ap_id.strip():  # D663: a blank line names no community, so nothing is searched for
+            continue
         if not community_ap_id.startswith('!'):
             community_ap_id = '!' + community_ap_id
         if not '@' in community_ap_id:
