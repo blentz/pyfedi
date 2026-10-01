@@ -567,6 +567,27 @@ def test_context_processor_supplies_site_from_g(app, db_session):
     assert rendered == 'Test Site'
 
 
+def test_a_missing_site_row_is_created_with_defaults_and_a_warning(app, db_session, caplog):
+    """D911, fixed (owner ruling): with no Site row, get_site_as_dict -- run
+    by before_request for every view -- dereferenced None and no request at
+    all could be served. It now creates Site(id=1) with the model defaults
+    and logs a warning."""
+    from unittest.mock import patch
+    from app.utils import get_site_as_dict
+
+    db.session.execute(text('DELETE FROM "site"'))
+    db.session.commit()
+    assert db.session.get(Site, 1) is None
+
+    with app.test_request_context('/'):
+        with patch.object(app.logger, 'warning') as warned:
+            site = get_site_as_dict()
+
+    assert site['id'] == 1
+    assert db.session.get(Site, 1) is not None
+    assert warned.call_count == 1
+
+
 # ---------------------------------------------------------------------------
 # jinja globals and filters
 # ---------------------------------------------------------------------------

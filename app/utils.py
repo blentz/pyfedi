@@ -6029,6 +6029,12 @@ def debug_checkpoint(name: str):
 def get_site_as_dict() -> dict:
     # return the Site as a dict so that it can be serialized by flask-caching
     site = db.session.get(Site, 1)
+    if site is None:
+        # D911: no request can be served without a Site row, so make the default one rather than fail every page
+        current_app.logger.warning('No Site row found; creating Site(id=1) with defaults')
+        site = Site(id=1)
+        db.session.add(site)
+        db.session.commit()
     exclude = ['private_key']
     return { c.name: getattr(site, c.name) for c in site.__table__.columns if c.name not in exclude}
 
