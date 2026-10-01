@@ -9,15 +9,54 @@ from tests.test_actor_profiles import seed_actors
 
 
 def collection_get(app, path):
-    """GET a collection endpoint through the real route.
+    """GET a collection endpoint through the real route, as a peer does.
 
-    No Accept header is sent and none is needed: unlike the three actor-profile
-    endpoints, NONE of these nine checks `is_activitypub_request()`, so all of
-    them return ActivityPub JSON to any caller. That asymmetry is registered as
-    D177; this helper exists to make it visible rather than to work around it.
+    The ActivityPub Accept header is required: a request without it is
+    redirected to the owning HTML page (D177, see
+    test_a_browser_asking_for_a_collection_is_sent_to_its_page).
     """
     with app.test_client() as client:
-        return client.get(path)
+        return client.get(path, headers={'Accept': 'application/activity+json'})
+
+
+@pytest.mark.parametrize('path, page', [
+    ('/c/books/outbox', '/c/books'), ('/c/books/featured', '/c/books'),
+    ('/c/books/moderators', '/c/books'), ('/c/books/followers', '/c/books'),
+    ('/u/alice/outbox', '/u/alice'), ('/u/alice/followers', '/u/alice'),
+    ('/f/news/outbox', '/f/news'), ('/f/news/following', '/f/news'),
+    ('/f/news/moderators', '/f/news'), ('/f/news/followers', '/f/news'),
+])
+def test_a_browser_asking_for_a_collection_is_sent_to_its_page(app, db_session, path, page):
+    """D177, fixed (owner ruling): none of these checked
+    `is_activitypub_request()`, so a browser got raw ActivityPub JSON where the
+    actor endpoints negotiate. A non-ActivityPub request now gets a 302 to the
+    owning community, user or feed page.
+    """
+    seed_actors()
+    with app.test_client() as client:
+        response = client.get(path, headers={'Accept': 'text/html'})
+
+    assert response.status_code == 302
+    assert response.headers['Location'] == page
+
+
+@pytest.mark.parametrize('path', ['/c/books/outbox', '/c/books/featured', '/c/books/moderators',
+                                  '/c/books/followers', '/f/news/outbox', '/f/news/following',
+                                  '/f/news/moderators', '/f/news/followers'])
+def test_a_collection_varies_on_accept(app, db_session, path):
+    """D177, fixed (owner ruling): the answer depends on Accept, so a shared
+    cache must not hand this JSON to a browser. Flask-Compress appends
+    Accept-Encoding to every Vary."""
+    site, instance = seed_actors()
+    seed_local_community('books')
+    feed = _seed_local_feed('news', public=True)
+    feed.user_id = make_user(instance, 'feedowner', local=True).id
+    db.session.commit()
+
+    response = collection_get(app, path)
+
+    assert response.status_code == 200
+    assert response.headers['Vary'] == 'Accept, Accept-Encoding'
 
 
 def seed_local_community(name='books'):
@@ -672,10 +711,8 @@ def test_a_follower_who_blocked_the_owner_is_still_listed(app, db_session):
 
 
 def test_the_followers_collection_sets_cache_and_vary(app, db_session):
-    """`user_followers` is the ONLY one of the nine collections that sets
-    `Vary: Accept` -- and the only thing it varies on is nothing, since none
-    of the nine negotiates on Accept. Registered as an asymmetry; asserted
-    here so it is visible.
+    """`Vary: Accept`: since D177 every collection negotiates on Accept, a
+    browser being redirected to the owning page, so every one varies on it.
 
     Flask-Compress appends Accept-Encoding to every response, so the observed
     value is 'Accept, Accept-Encoding', not the bare 'Accept' the route sets.
