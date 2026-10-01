@@ -239,23 +239,8 @@ def test_the_web_arm_reads_current_user_and_returns_none(db_session, app):
     assert s.post.deleted is False
 
 
-def test_restoring_federates_unconditionally(db_session):
-    """`:813`'s task_selector, which has NO guard.
-
-    `delete_post:778` guards its federation on
-    `federate_deletion and post.status == POST_STATUS_PUBLISHED`; this function
-    has neither parameter nor check, so a never-published post federates a
-    restore anyway. That asymmetry is REGISTERED, NOT FIXED by this round --
-    this test pins the behaviour as it is, so a later round that decides to
-    guard it will see this test fail and know it is changing a recorded
-    decision rather than fixing an oversight.
-    """
+def _restore_recording_tasks(s):
     calls = []
-    s = seed_post_context(community_name='lifecycle')
-    s.post.deleted = True
-    s.post.status = 0
-    db.session.commit()
-
     import app.shared.post as post_module
     original = post_module.task_selector
 
@@ -268,8 +253,66 @@ def test_restoring_federates_unconditionally(db_session):
         restore_post(s.post.id, SRC_API, bearer(s.author))
     finally:
         post_module.task_selector = original
+    return calls
 
-    assert calls == ['restore_post']
+
+def test_an_unpublished_post_does_not_federate_its_restore(db_session):
+    """D439, fixed: restore_post federated unconditionally, so a
+    never-published post sent a restore. It now uses delete_post's guard,
+    `post.status == POST_STATUS_PUBLISHED`."""
+    s = seed_post_context(community_name='lifecycle')
+    s.post.deleted = True
+    s.post.status = 0
+    db.session.commit()
+
+    assert _restore_recording_tasks(s) == []
+
+
+def test_a_published_post_federates_its_restore(db_session):
+    """The other side of the D439 guard."""
+    s = seed_post_context(community_name='lifecycle')
+    s.post.deleted = True
+    s.post.status = POST_STATUS_PUBLISHED
+    db.session.commit()
+
+    assert _restore_recording_tasks(s) == ['restore_post']
+
+
+def test_restoring_touches_the_authors_last_seen(db_session):
+    """D439, fixed: delete_post touches `author.last_seen` and restore_post
+    did not. It now does."""
+    s = seed_post_context(community_name='lifecycle')
+    s.post.deleted = True
+    s.post.author.last_seen = None
+    db.session.commit()
+
+    restore_post(s.post.id, SRC_API, bearer(s.author))
+
+    db.session.refresh(s.post.author)
+    assert s.post.author.last_seen is not None
+
+
+def test_restoring_takes_the_post_lock_the_delete_takes(db_session, monkeypatch):
+    """D439, fixed: restore_post mutated the counters under no lock, where
+    delete_post holds `lock:post:<id>`, so a restore racing a delete was not
+    serialised. It now takes the same lock."""
+    import app
+    real = app.redis_client
+    keys = []
+
+    class _Recording:
+        def lock(self, key, *args, **kwargs):
+            keys.append(key)
+            return real.lock(key, *args, **kwargs)
+
+    monkeypatch.setattr(app, 'redis_client', _Recording())
+    s = seed_post_context(community_name='lifecycle')
+    s.post.deleted = True
+    db.session.commit()
+
+    restore_post(s.post.id, SRC_API, bearer(s.author))
+
+    assert keys == [f'lock:post:{s.post.id}']
 
 
 def test_restoring_through_the_api_requires_the_posts_own_author(db_session):
@@ -332,9 +375,7 @@ def test_deleting_through_the_api_sets_the_flag_and_attributes_it(db_session):
 def test_deleting_decrements_both_counters_and_touches_last_seen(db_session):
     """`:773`'s author.post_count, `:774`'s last_seen, `:775`'s community count.
 
-    `:774` has no counterpart in `restore_post`, which is one of the three
-    asymmetries this round registers rather than fixes. Catches a regression
-    dropping any of the three.
+    Catches a regression dropping any of the three.
     """
     s = seed_post_context(community_name='lifecycle')
     s.post.author.post_count = 5
