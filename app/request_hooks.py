@@ -139,7 +139,6 @@ def register_request_hooks(app):
             # module -- and the app -- would never load. The false side of this
             # condition is therefore provably unreachable, not merely unlikely.
             if 'session' in dir(flask):  # pragma: no branch
-                from flask import session
                 session.modified = False
             # Cache headers for static resources
             # Skip manifest.json as it varies by User-Agent and has its own cache headers
