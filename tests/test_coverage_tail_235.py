@@ -167,10 +167,9 @@ AP_HEADERS = {'Accept': 'application/activity+json'}
 
 
 class TestTheReplyCollections:
-    """`/post/<id>/replies` and `/post/<id>/context` both answer GET with a collection and
-    HEAD with an empty one -- a HEAD is a peer asking whether the URL exists and what its
-    headers are, and building the reply list for an answer with no body is work nobody
-    reads.
+    """`/post/<id>/replies` and `/post/<id>/context` both answer GET with a collection. Both
+    routes are GET-only, so Flask answers a HEAD itself by running the GET view and dropping
+    the body (D192).
     """
 
     @pytest.mark.parametrize('suffix', ['replies', 'context'])
@@ -186,11 +185,12 @@ class TestTheReplyCollections:
 
     @pytest.mark.parametrize('suffix,view', [('replies', 'post_replies_ap'),
                                              ('context', 'post_ap_context')])
-    def test_a_head_answers_without_building_the_list(self, env, suffix, view):
-        """The `else` arm, and the only way to see it: a HEAD response has its body
-        stripped by the time a test client sees it, so both arms look identical from
-        outside. The view is called directly, and the collection it built is read before
-        Flask discards it -- `totalItems` is absent, which is what makes a HEAD cheap.
+    def test_a_head_runs_the_get_view(self, env, suffix, view):
+        """D192, fixed (owner ruling). The views had a `request.method == 'HEAD'` arm
+        that built an empty collection, but the routes are GET-only, so Flask never
+        dispatched a HEAD to it; the arm was deleted. Called directly under HEAD, the
+        view now builds the same collection a GET does -- `totalItems` is present -- and
+        Flask strips the body on the way out.
         """
         import app.activitypub.routes as routes
 
@@ -202,13 +202,13 @@ class TestTheReplyCollections:
             response = getattr(routes, view)(env.post.id)
 
         assert response.status_code == 200
-        assert 'totalItems' not in response.get_data(as_text=True)
+        assert 'totalItems' in response.get_data(as_text=True)
 
     @pytest.mark.parametrize('suffix,view', [('replies', 'post_replies_ap'),
                                              ('context', 'post_ap_context')])
     def test_a_get_through_the_same_call_does_build_it(self, env, suffix, view):
-        """The control for the row above, taking the same route into the view so the two
-        differ only in the method."""
+        """The same call under GET, so the two differ only in the method -- and, since
+        D192, not in what the view builds."""
         import app.activitypub.routes as routes
 
         make_post_reply(env.post, env.author, body='a reply')
