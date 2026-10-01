@@ -91,7 +91,10 @@ def join_feed(actor, user_id, src=SRC_WEB):
                             if community and isinstance(community, Community):
                                 actor = community.ap_id if community.ap_id else community.name
                                 if user.feed_auto_follow:
-                                    do_subscribe(actor, user.id, joined_via_feed=True)
+                                    if current_app.debug:
+                                        do_subscribe(actor, user.id, joined_via_feed=True)
+                                    else:
+                                        do_subscribe.delay(actor, user.id, joined_via_feed=True)
                                 # also make a feeditem in the local db
                                 feed_item = FeedItem(feed_id=feed.id, community_id=community.id)
                                 db.session.add(feed_item)
