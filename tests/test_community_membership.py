@@ -163,8 +163,29 @@ def test_an_admin_preload_reports_the_ban_instead_of_raising(app, world):
     with patch('app.community.routes.communities_banned_from', return_value=[]):
         message = do_subscribe(community.name, joiner.id, admin_preload=True)
 
-    assert message['community_banned_by_local_instance'] is True
+    # D995 residue: one gate, so one key for every ban it finds
+    assert message == {'community': community.ap_id, 'user_banned': True}
     assert not _is_member(community, joiner)
+
+
+def test_a_member_banned_since_joining_is_refused_when_the_cached_list_is_stale(app, world):
+    """D995 residue. do_subscribe had two gates: the cached list refused
+    members and non-members alike, the fresh-row check only non-members, so a
+    member whose ban the cached list missed was let through. The one helper
+    gate now runs before the membership check."""
+    from werkzeug.exceptions import Unauthorized
+
+    from app.community.routes import do_subscribe
+
+    community, joiner, founder = world
+    make_community_member(joiner, community)
+    _ban(community, joiner, founder)
+
+    with patch('app.utils.communities_banned_from', return_value=[]), \
+            patch('app.community.routes.communities_banned_from', return_value=[]):
+        with patch('app.community.routes.flash'):
+            with pytest.raises(Unauthorized):
+                do_subscribe(community.name, joiner.id)
 
 
 def test_an_unbanned_user_joins(app, world):
@@ -1023,8 +1044,7 @@ def test_a_bulk_preload_reports_an_instance_level_ban(app, world):
 
     community, joiner, founder = world
 
-    with patch('app.community.routes.communities_banned_from',
-               return_value=[community.id]):
+    with patch('app.utils.communities_banned_from', return_value=[community.id]):
         message = do_subscribe(community.name, joiner.id, admin_preload=True)
 
     assert message['user_banned'] is True
@@ -1053,6 +1073,24 @@ def test_a_banned_user_joining_themselves_is_told_why(app, world):
                     do_subscribe(community.name, joiner.id)
 
     assert flashed.call_args.args[0] == 'You cannot join this community'
+
+
+def test_the_community_page_sees_a_ban_the_cached_list_missed(app, world):
+    """D995 residue. show_community's two ban checks read the cached
+    communities_banned_from only, so a ban arriving by a path that did not
+    invalidate it went unseen on the page. They use user_banned_from_community,
+    whose fresh CommunityBan read catches it."""
+    community, joiner, founder = world
+    _ban(community, joiner, founder)
+    client = app.test_client()
+    login(client, joiner)
+
+    with patch('app.community.routes.communities_banned_from', return_value=[]), \
+            patch('app.utils.communities_banned_from', return_value=[]):
+        response = client.get('/c/general')
+
+    assert response.status_code == 200
+    assert 'You have been banned from this community.' in response.get_data(as_text=True)
 
 
 def test_leaving_a_community_by_get_is_refused(app, member_client):
