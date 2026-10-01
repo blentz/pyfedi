@@ -1218,6 +1218,9 @@ def process_inbox_request(request_json, store_ap_json):
                         if not requestor_user:
                             log_incoming_ap(id, APLOG_REJECT, APLOG_FAILURE, saved_json, 'Could not find recipient of Reject')
                             return
+                    else:
+                        log_incoming_ap(id, APLOG_REJECT, APLOG_IGNORED, saved_json, 'Reject of an object that is not a Follow')
+                        return
 
                     if requestor_user:
                         if community:
