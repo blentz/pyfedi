@@ -27,7 +27,8 @@ THREE HARNESS FACTS, each established by execution during scoping:
 import pytest
 from unittest.mock import patch
 
-from flask import session
+from flask import render_template, session
+from flask_login import login_user
 from flask_wtf.csrf import generate_csrf
 
 from app import db
@@ -758,10 +759,8 @@ def test_the_notification_toggle_creates_then_removes_a_subscription(app, db_ses
     filters: the lookup names entity_id, user_id AND type, and a delete that
     dropped the user_id filter would take the bystander's row.
 
-    REGISTERED, NOT FIXED (R3): this is a GET with a side effect and no CSRF
-    token. The subscription is the caller's own, so it is not a privilege bug;
-    it is a CSRF-able state change, and changing the method is a template change
-    across the app rather than a coverage one.
+    D709, fixed: this was a GET with a side effect and no CSRF token. It is a
+    CSRF-checked POST now, so the toggle is driven by POST with a token.
     """
     from app.constants import NOTIF_FEED
     instance, owner, stranger = _seed()
@@ -772,12 +771,13 @@ def test_the_notification_toggle_creates_then_removes_a_subscription(app, db_ses
 
     with app.test_client() as client:
         login(client, owner)
+        token = csrf(app, client)
         with patch('app.feed.routes.render_template', return_value='toggled'):
-            first = client.get(f'/feed/{feed.id}/notification')
+            first = client.post(f'/feed/{feed.id}/notification', data={'csrf_token': token})
             created = NotificationSubscription.query.filter_by(
                 user_id=owner.id, entity_id=feed.id, type=NOTIF_FEED).one()
             assert created.name == feed.name
-            second = client.get(f'/feed/{feed.id}/notification')
+            second = client.post(f'/feed/{feed.id}/notification', data={'csrf_token': token})
 
     assert first.status_code == 200 and second.status_code == 200
     assert NotificationSubscription.query.filter_by(
@@ -791,8 +791,35 @@ def test_the_notification_toggle_404s_on_a_feed_that_is_not_there(app, db_sessio
     instance, owner, stranger = _seed()
     with app.test_client() as client:
         login(client, owner)
-        response = client.get('/feed/999/notification')
+        response = client.post('/feed/999/notification', data={'csrf_token': csrf(app, client)})
     assert response.status_code == 404
+
+
+def test_the_notification_toggle_by_get_or_without_a_token_is_refused(app, db_session):
+    """D709, fixed: the toggle accepted GET, which login_required never
+    CSRF-checks, so any page could flip a signed-in user's feed notifications.
+    It is POST-only now, and a POST without a token is refused."""
+    instance, owner, stranger = _seed()
+    feed = _feed(owner)
+    with app.test_client() as client:
+        login(client, owner)
+        assert client.get(f'/feed/{feed.id}/notification').status_code == 405
+        assert client.post(f'/feed/{feed.id}/notification').status_code == 400
+    assert NotificationSubscription.query.filter_by(user_id=owner.id, entity_id=feed.id).count() == 0
+
+
+def test_the_notification_bell_is_a_form_carrying_the_token(app, db_session):
+    """D709's template half: the bell posts a form with the token instead of
+    linking, as the post and reply bells do since the D994 sibling fix."""
+    instance, owner, stranger = _seed()
+    feed = _feed(owner)
+    with app.test_request_context('/'):
+        login_user(owner)
+        bell = render_template('feed/_notification_toggle.html', feed=feed)
+
+    assert f'<form method="post" action="/feed/{feed.id}/notification"' in bell
+    assert 'name="csrf_token"' in bell
+    assert 'href=' not in bell
 
 
 def test_saving_a_private_edit_appends_the_owner_to_the_url(app, db_session):
