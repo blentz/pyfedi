@@ -274,6 +274,8 @@ def test_an_unknown_community_returns_404_to_an_activitypub_request(app, db_sess
     response = profile_get(app, '/c/nosuch', accept=AP_ACCEPT)
 
     assert response.status_code == 404
+    # D160, fixed (owner ruling): a miss is never cached
+    assert response.headers['Cache-Control'] == 'no-store'
 
 
 def test_an_unknown_community_returns_404_to_an_anonymous_browser(app, db_session, monkeypatch):
@@ -385,7 +387,8 @@ def test_the_community_response_headers_are_set(app, db_session, monkeypatch):
     response = profile_get(app, '/c/books', accept=AP_ACCEPT)
 
     assert response.status_code == 200
-    assert response.headers['Cache-Control'] == 'public, max-age=30'
+    # D160, fixed (owner ruling): 30 before; the actor max-age now
+    assert response.headers['Cache-Control'] == 'public, max-age=300'
     assert response.headers['Vary'] == 'Accept, Accept-Encoding'
     assert 'rel="alternate"' in response.headers['Link']
 
@@ -807,7 +810,8 @@ def test_the_feed_response_varies_on_accept(app, db_session, monkeypatch):
     response = profile_get(app, '/f/news', accept=AP_ACCEPT)
 
     assert response.status_code == 200
-    assert response.headers['Cache-Control'] == 'public, max-age=5'
+    # D160, fixed (owner ruling): 5 before; the actor max-age now
+    assert response.headers['Cache-Control'] == 'public, max-age=300'
     assert 'rel="alternate"' in response.headers['Link']
     assert response.headers['Vary'] == 'Accept, Accept-Encoding'
 
@@ -1328,7 +1332,9 @@ def test_the_user_response_headers_are_set(app, db_session, monkeypatch):
     response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
 
     assert response.status_code == 200
-    assert response.headers['Cache-Control'] == 'public, max-age=15'
+    # D160, fixed (owner ruling): 15 before; user, community and feed profiles
+    # now share the actor max-age from the AP Cache-Control policy table
+    assert response.headers['Cache-Control'] == 'public, max-age=300'
     assert response.headers['Vary'] == 'Accept, Accept-Encoding'
     assert 'rel="alternate"' in response.headers['Link']
 
