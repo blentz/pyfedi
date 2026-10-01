@@ -1346,6 +1346,59 @@ def test_a_report_on_a_remote_authors_post_flags_their_instance(db_session):
     assert calls == [{suspect_instance.id}]
 
 
+def _report_both_ways(s, app, api_post, web_post):
+    """One report through each arm; returns their `targets`, API first."""
+    from types import SimpleNamespace
+
+    report_post(api_post, {'reason': 'spam', 'description': 'd', 'report_remote': False},
+                SRC_API, auth=bearer(s.voter))
+    form = SimpleNamespace(reasons=SimpleNamespace(data=['1']), description=SimpleNamespace(data='d'),
+                           report_remote=SimpleNamespace(data=False),
+                           reasons_to_string=lambda data: 'spam')
+    with web_ctx(app, s.voter):
+        report_post(web_post, form, SRC_WEB)
+    rows = {r.suspect_post_id: r for r in db.session.query(Report).all()}
+    return rows[api_post.id].targets, rows[web_post.id].targets
+
+
+def test_both_arms_name_the_post_author_s_instance(db_session, app):
+    """D440, fixed (owner ruling 2026-09-30), mirroring D553 in report_reply.
+    The API arm read the POST's instance (`post.instance_id`, via `.one()`) and
+    the web arm the SUSPECT USER's, so the Flag carried a different
+    `source_instance` depending on the arm whenever the two differed -- as
+    `Post.move_to` makes them. Both now read the post author's.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    author_instance = make_instance('suspect.example', software='lemmy')
+    moved_to = make_instance('moved.example', software='lemmy')
+    suspect = make_user(author_instance, 'remoteauthor')
+    api_post = make_post(s.community, suspect, 'https://suspect.example/p/1')
+    web_post = make_post(s.community, suspect, 'https://suspect.example/p/2')
+    api_post.instance_id = moved_to.id
+    web_post.instance_id = moved_to.id
+    db.session.commit()
+
+    for targets in _report_both_ways(s, app, api_post, web_post):
+        assert targets['source_instance_id'] == author_instance.id
+        assert targets['source_instance_domain'] == 'suspect.example'
+
+
+def test_an_author_with_no_instance_is_reported_without_one(db_session, app):
+    """D440, fixed: None-safe. The API arm's `.one()` raised `NoResultFound`
+    and the web arm's `.get()` deferred to an `AttributeError`; an author with
+    no instance now yields a report whose source instance is None on both.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    api_post = make_post(s.community, s.author, 'https://local.example/p/2')
+    web_post = make_post(s.community, s.author, 'https://local.example/p/3')
+    s.author.instance_id = None
+    db.session.commit()
+
+    for targets in _report_both_ways(s, app, api_post, web_post):
+        assert targets['source_instance_id'] is None
+        assert targets['source_instance_domain'] is None
+
+
 def test_a_remote_suspects_instance_is_not_added_twice(db_session):
     """`:908`'s FALSE arm, reached when a moderator already put the suspect's
     instance in the set.
