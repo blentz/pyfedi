@@ -3184,9 +3184,7 @@ def community_moderators(community_id):
                                             CommunityMember.is_moderator
                                         ))
                                         ).all()
-    community = db.session.get(Community, community_id)
-    if community.user_id not in [mod.user_id for mod in mods]:
-        mods.append(CommunityMember(user_id=community.user_id, is_owner=True, community_id=community.id))
+    # D174: only real moderator rows; community.user_id without one is not synthesised in
     return mods
 
 

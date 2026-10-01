@@ -345,16 +345,26 @@ def test_a_banned_instance_bans_the_visitor_from_the_community(app, env):
 
 
 def test_the_moderators_are_listed(app, env):
-    """`community_moderators` (app/utils.py:2917) synthesises the community's
-    own `user_id` into the list when it holds no row for them, so the founder
-    is always a moderator and a row here has to assert about the one it
-    added."""
+    """A moderator row puts its user in the sidebar list."""
     client, community, author = env
     moderator(author, community)
 
     _response, render = show(app, client, community)
 
     assert author.id in [mod.id for mod in context(render, 'mods')]
+
+
+def test_a_founder_without_a_moderator_row_is_not_listed(app, env):
+    """D174, fixed (owner ruling): `community_moderators` returns only real
+    community_member moderator rows; `community.user_id` without one is no
+    longer synthesised into the list."""
+    client, community, author = env
+    community.user_id = author.id
+    db.session.commit()
+
+    _response, render = show(app, client, community)
+
+    assert author.id not in [mod.id for mod in context(render, 'mods')]
 
 
 def test_private_mods_are_not_listed(app, env):

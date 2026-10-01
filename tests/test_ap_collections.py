@@ -430,16 +430,9 @@ def test_an_unknown_community_featured_is_404(app, db_session):
 
 def test_the_moderators_collection_lists_moderator_urls(app, db_session):
     """`community_moderators(community.id)` (app/utils.py) queries CommunityMember
-    rows filtered on `is_owner OR is_moderator`, then unconditionally appends a
-    SYNTHETIC, never-persisted CommunityMember for `community.user_id` whenever
-    that id is not already among the query results -- so the community's owner
-    is always resolved as a moderator, membership row or not (see the next
-    test). To keep this test about the `is_moderator` filter alone, the seeded
-    moderator is ALSO made the community's owner (`community.user_id = mod.id`
-    after `make_community_member`), which puts them in the query result and
-    short-circuits the append -- otherwise a second, synthetic entry for the
-    real owner (`communityowner`, user id 1 from `seed_actors`) would also
-    appear in `orderedItems`, and `totalItems` would be 2, not 1.
+    rows filtered on `is_owner OR is_moderator` and nothing else (D174: no
+    synthesized owner entry). The moderator is also made `community.user_id`,
+    which no longer matters but costs nothing.
 
     `make_community_member(user, community, is_moderator=False)` (tests/factories.py)
     already matches the brief's call shape.
@@ -460,26 +453,21 @@ def test_the_moderators_collection_lists_moderator_urls(app, db_session):
     assert response.json['orderedItems'] == [mod.public_url()]
 
 
-def test_a_community_with_no_explicit_moderators_still_lists_its_owner(app, db_session):
-    """Registers a fact the brief did not anticipate. `community_moderators`
-    appends a never-persisted CommunityMember for `community.user_id` whenever
-    that id is absent from its query result (app/utils.py). `seed_local_community`
-    gives every community `user_id=1` -- the `communityowner` user `seed_actors`
-    creates -- and never gives that user a real CommunityMember row, so this is
-    the only way an unmoderated community's moderators collection is reachable
-    through these factories: it is never actually empty. `totalItems` is 1 and
-    `orderedItems` holds the owner's URL, not 0 and `[]` as the brief assumed.
+def test_a_community_with_no_moderator_rows_publishes_an_empty_collection(app, db_session):
+    """D174, fixed (owner ruling): the collection publishes only real
+    community_member moderator rows. `community_moderators` used to append a
+    never-persisted owner entry for `community.user_id`, so an unmoderated
+    community advertised a moderator no row backed. `seed_local_community`
+    gives `user_id=1` and no CommunityMember row -- that phantom is gone.
     """
     seed_actors()
     seed_local_community('books')
-    from app.models import User
-    owner = User.query.filter_by(user_name='communityowner').first()
 
     response = collection_get(app, '/c/books/moderators')
 
     assert response.status_code == 200
-    assert response.json['totalItems'] == 1
-    assert response.json['orderedItems'] == [owner.public_url()]
+    assert response.json['totalItems'] == 0
+    assert response.json['orderedItems'] == []
 
 
 def test_a_non_moderator_member_is_not_listed(app, db_session):
@@ -488,9 +476,7 @@ def test_a_non_moderator_member_is_not_listed(app, db_session):
     weakening it to include everyone would put `member.public_url()` into
     `orderedItems`.
 
-    Asserted as `not in` rather than `orderedItems == []`: the community's
-    owner is synthesized into the result regardless (see the fact above), so
-    an exact-list assertion would be confounded by a URL this test isn't about.
+    Asserted as `not in`; the empty-collection test above covers the exact list.
     """
     site, instance = seed_actors()
     community = seed_local_community('books')
