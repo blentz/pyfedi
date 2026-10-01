@@ -2101,9 +2101,9 @@ def announce_activity_to_followers(community: Community, creator: User, activity
     if creator.banned:
         return
 
-    # remove context from what will be inner object
+    # remove context from what will be inner object, on a copy so the caller's dict is untouched (D138)
     if '@context' in activity:
-        del activity["@context"]
+        activity = {key: value for key, value in activity.items() if key != '@context'}
 
     announce_activity = {
         '@context': default_context(),
