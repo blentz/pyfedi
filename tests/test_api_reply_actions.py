@@ -17,7 +17,7 @@ from unittest.mock import patch
 import pytest
 from flask import g
 
-from app.constants import REPORT_STATE_NEW, REPORT_STATE_RESOLVED
+from app.constants import REPORT_STATE_NEW, REPORT_STATE_RESOLVED, ROLE_STAFF_NAME
 from app import db
 from app.models import (Community, CommunityMember, Language, Notification,
                         Post, PostReply, PostReplyVote, Report, Role,
@@ -694,6 +694,27 @@ def test_somebody_who_administers_communities_may_distinguish_their_own(app,
 
     author, stranger, community, post, reply, baseline = env
     with_permission(author, 'administer all communities')
+
+    post_reply_distinguish(token(author), {'comment_reply_id': reply.id,
+                                           'distinguished': True})
+
+    assert reply.distinguished is True
+
+
+def test_a_staff_member_may_distinguish_their_own(app, env):
+    """D551 residue, fixed (owner ruling): `post_reply_distinguish` asks
+    `can_moderate`, as edit_reply does, so staff (and admins) who moderate
+    nothing here may; it used to admit moderators and 'administer all
+    communities' only."""
+    from app.api.alpha.utils.reply import post_reply_distinguish
+
+    author, stranger, community, post, reply, baseline = env
+    role = Role(name=ROLE_STAFF_NAME, weight=10)
+    db.session.add(role)
+    db.session.commit()
+    db.session.execute(user_role.insert().values(user_id=author.id,
+                                                 role_id=role.id))
+    db.session.commit()
 
     post_reply_distinguish(token(author), {'comment_reply_id': reply.id,
                                            'distinguished': True})

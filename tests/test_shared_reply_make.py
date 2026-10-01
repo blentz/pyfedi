@@ -1191,6 +1191,31 @@ class TestMakeReply:
         db.session.refresh(reply)
         assert reply.distinguished is True
 
+    def test_a_community_administrator_keeps_distinguished_on_a_new_reply(self, db_session):
+        """D551 residue, fixed (owner ruling). make_reply asks `can_moderate`,
+        as edit_reply does, so a holder of 'administer all communities' who
+        moderates nothing here keeps `distinguished`; the old spelling
+        (moderator, owner, admin or staff) demoted it.
+        """
+        from app.models import Role, RolePermission, user_role
+        s = _seed_for_reply()
+        _clear_creation_guards(s.actor)
+        role = Role(name='community administrator', weight=0)
+        db.session.add(role)
+        db.session.commit()
+        db.session.add(RolePermission(role_id=role.id, permission='administer all communities'))
+        db.session.execute(user_role.insert().values(user_id=s.actor.id,
+                                                     role_id=role.id))
+        db.session.commit()
+        payload = {'body': 'speaking for the instance', 'notify_author': False,
+                   'language_id': None, 'distinguished': True}
+
+        user_id, reply = make_reply(payload, s.post, None, SRC_API,
+                                    auth=bearer(s.actor))
+
+        db.session.refresh(reply)
+        assert reply.distinguished is True
+
     def test_a_payload_without_distinguished_defaults_to_false(self, db_session):
         """`:164`'s `else` arm -- the ternary's default when the API payload
         omits the key entirely.

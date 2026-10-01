@@ -211,7 +211,8 @@ def make_reply(input, post, parent_id, src, auth=None):
     if user.banned or user_ip_banned():
         raise Exception('You are not permitted to comment in this community')
 
-    if not post.community.is_moderator(user) and not post.community.is_owner(user) and not user.is_admin_or_staff():
+    # D551: the same predicate edit_reply asks before applying distinguished
+    if not can_moderate(post.community, user):
         distinguished = False
 
     if parent_id:
