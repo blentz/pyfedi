@@ -53,21 +53,15 @@ before the code has even looked at 'target'.
 | community-ban, unfound community (1656-1659)         | not site ban; `community` (from Announce, or resolved from `target`) is falsy | nothing                                                                    | nothing                                                          | APLOG_USERBAN/APLOG_IGNORED 'Blocked or unfound community' |
 | community-ban, no permission (1660-1662)             | community found; `not community.is_moderator(blocker) and not community.is_instance_admin(blocker)` | nothing                                                       | nothing                                                          | APLOG_USERBAN/APLOG_FAILURE 'Does not have permission' |
 | community-ban, success (1664-1668)                   | community found; moderator OR instance admin                                | none directly -- delegates do the writing                                   | `community_ban_remove_data(blocker.id, community.id, blocked)` only when `removeData`; `ban_user(blocker, blocked, community, core_activity)` only when `not already_banned` | APLOG_USERBAN/APLOG_SUCCESS (unconditional) |
-| Mastodon, no target, new block (1670-1673)           | no 'target' key; `object` is a str; `not blocker.has_blocked_user(blocked.id)` | `UserBlock(blocker_id, blocked_id)`, commit                               | nothing                                                          | **NOTHING.** No `log_incoming_ap` call exists anywhere in this branch. |
-| Mastodon, no target, already blocked (1670-1673)     | no 'target' key; `object` is a str; already blocked                          | nothing                                                                      | nothing                                                          | **NOTHING**, same as above. |
+| Mastodon, no target, new block (1670-1673)           | no 'target' key; `object` is a str; `not blocker.has_blocked_user(blocked.id)` | `UserBlock(blocker_id, blocked_id)`, commit                               | nothing                                                          | APLOG_USERBAN/APLOG_SUCCESS (D83, fixed; previously nothing) |
+| Mastodon, no target, already blocked (1670-1673)     | no 'target' key; `object` is a str; already blocked                          | nothing                                                                      | nothing                                                          | APLOG_USERBAN/APLOG_IGNORED 'Already blocked' (D83, fixed) |
 
 ## Four findings pinned by this file, not fixed
 
-**1. The Mastodon no-target path logs nothing, on either outcome.** Neither
-the create-a-UserBlock branch nor the already-blocked no-op branch calls
-`log_incoming_ap` anywhere -- confirmed by reading :1669-1673 in full: no
-such call exists in the branch's source, not merely "not observed to fire".
-`test_mastodon_no_target_creates_a_block_and_logs_nothing` and
-`test_mastodon_no_target_skips_a_duplicate_and_logs_nothing` below both run
-with `LOG_ACTIVITYPUB_TO_DB` explicitly True and assert
-`ActivityPubLog.query.count() == 0`, so the zero is not a vacuous artifact
-of logging being off (Task 6's shipped mistake, called out in this task's
-brief).
+**1. The Mastodon no-target path logged nothing, on either outcome (D83,
+fixed).** It now logs success for a new UserBlock and ignored for one that
+already exists; `test_mastodon_no_target_creates_a_block_and_logs_success`
+and `test_mastodon_no_target_skips_a_duplicate_and_logs_ignored` assert both.
 
 A Block whose `object` is not a string never reaches the Mastodon branch:
 it is refused at the top of the arm (finding 2, D87, fixed).
@@ -982,14 +976,11 @@ def test_community_ban_when_announced_short_circuits_target_resolution(app, db_s
 # --- The Mastodon no-target path: routes.py:1669-1673 ---
 
 
-def test_mastodon_no_target_creates_a_block_and_logs_nothing(app, db_session, monkeypatch):
+def test_mastodon_no_target_creates_a_block_and_logs_success(app, db_session, monkeypatch):
     """routes.py:1670-1673. No 'target' key at all -- Mastodon's own Block
     shape. `blocker.has_blocked_user(blocked.id)` is False (no prior
-    UserBlock row), so a new one is created and committed. Per this file's
-    module docstring (finding 1), no `log_incoming_ap` call exists anywhere
-    in this branch's source -- LOG_ACTIVITYPUB_TO_DB is explicitly True
-    here so the zero-count assertion is not a vacuous artifact of logging
-    being off.
+    UserBlock row), so a new one is created and committed. D83, fixed: this
+    branch logged nothing on either outcome; it now logs success.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance = make_instance('peer.example')
@@ -1005,14 +996,14 @@ def test_mastodon_no_target_creates_a_block_and_logs_nothing(app, db_session, mo
 
     UserBlock.query.filter_by(blocker_id=blocker.id, blocked_id=victim.id).one()
 
-    assert ActivityPubLog.query.count() == 0
+    assert ActivityPubLog.query.one().result == 'success'
 
 
-def test_mastodon_no_target_skips_a_duplicate_and_logs_nothing(app, db_session, monkeypatch):
+def test_mastodon_no_target_skips_a_duplicate_and_logs_ignored(app, db_session, monkeypatch):
     """routes.py:1671's `if not blocker.has_blocked_user(blocked.id):` --
     the OTHER outcome of the same branch: a UserBlock row already exists,
-    so nothing new is created. Still logs nothing, matching the "on any
-    outcome" claim in this file's module docstring finding 1.
+    so nothing new is created. D83, fixed: logged as ignored rather than
+    nothing.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance = make_instance('peer.example')
@@ -1027,4 +1018,6 @@ def test_mastodon_no_target_skips_a_duplicate_and_logs_nothing(app, db_session, 
     dispatch(activity)
 
     assert UserBlock.query.filter_by(blocker_id=blocker.id, blocked_id=victim.id).count() == 1
-    assert ActivityPubLog.query.count() == 0
+    log = ActivityPubLog.query.one()
+    assert log.result == 'ignored'
+    assert log.exception_message == 'Already blocked'
