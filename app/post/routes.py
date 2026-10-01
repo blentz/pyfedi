@@ -69,6 +69,10 @@ from app.utils import render_template, markdown_to_html, validation_required, \
     instance_sticky_posts, instance_sticky_post_ids, user_access, show_reason_why_no_federation, \
     community_membership_private, user_ip_banned, check_anoobis, safe_redirect_target, \
     allowlist_html, roles_with
+import dateparser
+import pendulum
+from sqlalchemy import or_
+import app as app_pkg
 
 def can_view_private(community):
     """The membership test `refuse_private_community` aborts on, as a
@@ -1528,8 +1532,6 @@ def post_reminder(post_id: int):
         abort(403)
     form = NewReminderForm()
     if form.validate_on_submit():
-        import dateparser
-        import pendulum
         remind_at = dateparser.parse(form.remind_at.data, settings={'RELATIVE_BASE': datetime.now(),
                                                                     "RETURN_AS_TIMEZONE_AWARE": True}, languages=[get_locale()])
         remind_at_utc = pendulum.instance(remind_at).in_tz('UTC')
@@ -1553,8 +1555,6 @@ def post_reply_reminder(post_reply_id: int):
         abort(403)
     form = NewReminderForm()
     if form.validate_on_submit():
-        import dateparser
-        import pendulum
         remind_at = dateparser.parse(form.remind_at.data, settings={'RELATIVE_BASE': datetime.now(),
                                                                     "RETURN_AS_TIMEZONE_AWARE": True})
         remind_at_utc = pendulum.instance(remind_at).in_tz("UTC")
@@ -2038,7 +2038,6 @@ def post_search_community_suggestions():
             already_added.add(c.id)
 
     if len(comms) < 10:
-        from sqlalchemy import or_
         search_pattern = f"%{q}%"
         visible_private = community_membership_private(current_user.id)
         db_comms = db.session.query(Community).filter(
@@ -2461,8 +2460,7 @@ def post_reply_purge(post_id: int, comment_id: int):
         abort(404)
     if post_reply.deleted_by == current_user.id or post.community.is_moderator() or current_user.is_admin() or user_access('administer all communities', current_user.get_id()):
         if not post_reply.has_replies():
-            from app import redis_client
-            with redis_client.lock(f"lock:post_reply:{post_reply.id}", timeout=10, blocking_timeout=6):
+            with app_pkg.redis_client.lock(f"lock:post_reply:{post_reply.id}", timeout=10, blocking_timeout=6):
                 post_reply.delete_dependencies()
                 db.session.delete(post_reply)
                 db.session.commit()
