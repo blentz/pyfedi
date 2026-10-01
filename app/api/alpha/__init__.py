@@ -120,10 +120,6 @@ def shared_error_handler(e):
         response = {"code": e.code, "message": e.data['message'], "status": e.name}
         return jsonify(response), e.code
     else:
-        if str(e) != 'incorrect_login' and str(e) != 'No object found.':
-            current_app.logger.exception("API exception")
-            if current_app.config['SENTRY_DSN']:
-                sentry_sdk.capture_exception(e)
         # D1390, D895. `str(e)` is the API's error contract only for the
         # deliberate refusals: the bare `Exception('incorrect_login')`,
         # `Exception('access_denied')` and the like throughout app/shared and
@@ -131,10 +127,16 @@ def shared_error_handler(e):
         # validation and HTTP errors. Anything else is an internal error whose
         # `str()` may name a table, a column, the full SQL statement and its
         # bound parameters, or a path -- a SQLAlchemyError measurably did. It is
-        # logged and sent to Sentry above; the caller gets a generic 500.
+        # logged and sent to Sentry; the caller gets a generic 500.
         if type(e) is Exception or isinstance(e, (PostReplyValidationError, ValidationError, HTTPException)):
+            # D537: a refusal is routine and caller-driven, so info, not a stack trace and a Sentry event
+            if str(e) != 'incorrect_login' and str(e) != 'No object found.':
+                current_app.logger.info(f"API refusal: {e}")
             response = {"code": 400, "message": str(e), "status": "Bad Request"}
             return jsonify(response), 400
+        current_app.logger.exception("API exception")
+        if current_app.config['SENTRY_DSN']:
+            sentry_sdk.capture_exception(e)
         response = {"code": 500, "message": "internal error", "status": "Internal Server Error"}
         return jsonify(response), 500
 

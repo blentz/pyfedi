@@ -142,11 +142,23 @@ class TestTheDeliberateRefusals:
 
         assert not logged.called
 
-    def test_an_ordinary_exception_is_logged(self, app):
-        with patch.object(current_app.logger, 'exception') as logged:
-            handled(app, Exception('access_denied'))
+    @pytest.mark.parametrize('refusal', [
+        Exception('access_denied'), Exception('Does not have permission'),
+    ])
+    def test_a_refusal_is_logged_at_info_without_sentry(self, app, monkeypatch, refusal):
+        """D537, fixed (ruling D896/D537): a permission refusal is routine, and
+        any caller can provoke one at will, so it is no longer a logged stack
+        trace plus a Sentry event. It stays a 400 and is logged at info."""
+        monkeypatch.setitem(app.config, 'SENTRY_DSN', 'https://key@sentry.example/1')
+        with patch.object(current_app.logger, 'exception') as stack_trace, \
+                patch.object(current_app.logger, 'info') as info, \
+                patch('app.api.alpha.sentry_sdk.capture_exception') as sentry:
+            code, body = handled(app, refusal)
 
-        assert logged.called
+        assert (code, body['message']) == (400, str(refusal))
+        assert info.called
+        assert not stack_trace.called
+        assert not sentry.called
 
     def test_a_post_reply_refusal_reaches_the_caller(self, app):
         """`PostReply.new` refuses with its own exception type, which reaches the

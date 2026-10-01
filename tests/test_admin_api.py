@@ -532,25 +532,30 @@ def test_an_internal_failures_text_is_not_echoed_to_the_caller(app, db_session):
     assert body['message'] == 'internal error'
 
 
-@pytest.mark.parametrize('message, logged', [
-    ('incorrect_login', False),
-    ('No object found.', False),
-    ('something genuinely broke', True),
+@pytest.mark.parametrize('error, info, stack_trace', [
+    (Exception('incorrect_login'), False, False),
+    (Exception('No object found.'), False, False),
+    (Exception('access_denied'), True, False),
+    (RuntimeError('something genuinely broke'), False, True),
 ])
-def test_only_unexpected_failures_are_logged(app, db_session, message, logged):
+def test_only_unexpected_failures_are_logged(app, db_session, error, info, stack_trace):
     """`if str(e) != 'incorrect_login' and str(e) != 'No object found.'` -- both
     conjuncts, plus the arm that logs. The two exclusions are the application's
     own routine refusals: logging them would bury a real fault in noise, and
     capturing them to Sentry would bill for it.
+
+    D537, fixed: any other refusal is logged at info, not as a stack trace;
+    only an internal error gets `logger.exception`.
     """
     from app.api.alpha import shared_error_handler
 
     with app.test_request_context('/api/alpha/site'):
         with patch('app.api.alpha.current_app', new_callable=MagicMock) as current_app_mock:
             current_app_mock.config = {'SENTRY_DSN': None}
-            shared_error_handler(Exception(message))
+            shared_error_handler(error)
 
-            assert bool(current_app_mock.logger.exception.call_args_list) is logged
+            assert bool(current_app_mock.logger.info.call_args_list) is info
+            assert bool(current_app_mock.logger.exception.call_args_list) is stack_trace
 
 
 @pytest.mark.parametrize('dsn, captured', [
@@ -564,7 +569,7 @@ def test_sentry_is_told_only_when_it_is_configured(app, db_session, dsn, capture
         with patch('app.api.alpha.sentry_sdk') as sentry:
             with patch('app.api.alpha.current_app', new_callable=MagicMock) as current_app_mock:
                 current_app_mock.config = {'SENTRY_DSN': dsn}
-                shared_error_handler(Exception('something genuinely broke'))
+                shared_error_handler(RuntimeError('something genuinely broke'))
 
             assert bool(sentry.capture_exception.call_args_list) is captured
 
