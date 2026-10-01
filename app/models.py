@@ -4967,6 +4967,15 @@ event_user = db.Table('event_user', db.Column('post_id', db.Integer, db.ForeignK
                       db.PrimaryKeyConstraint('post_id', 'user_id'))
 
 
+class QuoteAuthorization(db.Model):
+    # R205: a FEP-044f QuoteRequest this instance Accepted. /quote_boost_auth vouches for these and nothing else.
+    id = db.Column(db.Integer, primary_key=True)
+    post_id = db.Column(db.Integer, db.ForeignKey('post.id', ondelete='CASCADE'), index=True)  # the quoted post,
+    post_reply_id = db.Column(db.Integer, db.ForeignKey('post_reply.id', ondelete='CASCADE'), index=True)  # or reply
+    quoting_uri = db.Column(db.String(1024), index=True)  # the peer's object that quotes it
+    approved_at = db.Column(db.DateTime, default=utcnow)
+
+
 class PostBookmark(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), index=True)

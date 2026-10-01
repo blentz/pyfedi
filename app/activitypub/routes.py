@@ -40,7 +40,7 @@ import app.feed.routes as feed_routes
 from app.models import User, Community, CommunityJoinRequest, CommunityMember, ActivityPubLog, Post, \
     PostReply, Instance, AllowedInstances, BannedInstances, utcnow, Site, Notification, \
     ChatMessage, Conversation, UserFollower, UserBlock, Poll, PollChoice, Feed, FeedItem, FeedMember, FeedJoinRequest, \
-    IpBan, ActivityBatch, InstanceBan, UserFollowRequest, votes_cast_today
+    IpBan, ActivityBatch, InstanceBan, UserFollowRequest, votes_cast_today, QuoteAuthorization
 # The module, not the names: app.post.routes reaches this file through
 # app.activitypub.signature before they are defined (import cycle: post.routes)
 import app.post.routes as post_routes
@@ -3237,12 +3237,9 @@ def quote_boost_auth():
     not carried in the stamp and not re-checked, so the authorisation asserted a fact
     nobody had established.
 
-    THE RESIDUAL, which needs a table and not a guard: nothing records WHICH
-    QuoteRequests were accepted. So this endpoint can confirm that the target is a
-    local post whose author is local, and it still cannot distinguish "this author
-    approved this quote" from "this post exists". A caller may still name any local
-    post together with any remote one. Closing that means persisting the accepted
-    requests in `process_quote_boost` and looking them up here.
+    R205 (owner ruling) closed the residual that needed a table: `process_quote_boost`
+    records each QuoteRequest it Accepts as a QuoteAuthorization, and this answers only
+    for a recorded one, so naming any local post beside any remote one is a 404.
     """
     import urllib.parse
     stamp = request.args.get('stamp')
@@ -3263,6 +3260,9 @@ def quote_boost_auth():
     if quoted is None:
         quoted = PostReply.get_by_ap_id(local_post_id)
     if quoted is None or quoted.author is None or not quoted.author.is_local():
+        return abort(404)
+    approved = {'post_id': quoted.id} if isinstance(quoted, Post) else {'post_reply_id': quoted.id}
+    if QuoteAuthorization.query.filter_by(quoting_uri=remote_post_id, **approved).first() is None:
         return abort(404)
     response_payload = {
         '@context': [

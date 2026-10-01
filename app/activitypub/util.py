@@ -28,7 +28,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
     Licence, UserExtraField, Feed, FeedMember, FeedItem, CommunityFlair, UserFlair, Topic, Event, InstanceBan, Emoji, \
-    UserFollower, PostBoost, parse_ap_timestamp, image_url_from, markdown_source, \
+    UserFollower, PostBoost, QuoteAuthorization, parse_ap_timestamp, image_url_from, markdown_source, \
     _as_text, _as_int, _as_float, _as_dict, _as_url, property_value_fields, public_key_pem, \
     more_info_link, is_more_info_link, more_info_url_from, \
     language_from_ap, adjust_domain_post_count, actor_name_from_ap, PostReplyValidationError
@@ -4350,6 +4350,11 @@ def process_quote_boost(core_activity: dict, post_ap: str, their_post_ap: str):
     if post is None:
         post = PostReply.get_by_ap_id(post_ap)
     if post is not None and post.author.is_local():
+        # R205: the decision is recorded, so /quote_boost_auth vouches for this quote and no other
+        quoted = {'post_id': post.id} if isinstance(post, Post) else {'post_reply_id': post.id}
+        if QuoteAuthorization.query.filter_by(quoting_uri=their_post_ap, **quoted).first() is None:
+            db.session.add(QuoteAuthorization(quoting_uri=their_post_ap, **quoted))
+            db.session.commit()
 
         accept_activity = {
           "@context": [
