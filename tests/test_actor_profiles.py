@@ -1239,6 +1239,25 @@ def test_a_remote_user_still_serves_html_to_a_browser(app, db_session, monkeypat
     assert calls['show_profile'][0].id == user_id
 
 
+@pytest.mark.parametrize('flag', ['deleted', 'banned'])
+def test_a_deleted_or_banned_remote_user_is_not_served_on_either_path(app, db_session, flag):
+    """D157, closed as moot (owner ruling). The remote lookup in
+    `user_profile` has no `deleted`/`banned` guard, but D156 refuses every AP
+    request for a remote handle with 400 BEFORE that lookup runs, so the
+    guard is unreachable for AP; and the HTML path hands the row to
+    `show_profile`, which 404s a deleted or banned user for an anonymous
+    viewer itself. Pins both, so a change to either reopens D157.
+    """
+    site, instance = seed_actors()
+    site.private_instance = False        # show_profile is login_required_if_private_instance
+    user = make_user(instance, 'wakko')
+    setattr(user, flag, True)
+    db.session.commit()
+
+    assert profile_get(app, '/u/wakko@peer.example', accept=AP_ACCEPT).status_code == 400
+    assert profile_get(app, '/u/wakko@peer.example', accept='text/html').status_code == 404
+
+
 def test_a_bot_user_is_typed_as_a_service(app, db_session, monkeypatch):
     """`"type": "Person" if not user.bot else "Service"`. Nothing else covers
     the Service side; `User.bot` is set explicitly rather than left to default
