@@ -372,7 +372,25 @@ def test_a_content_less_page_reaching_process_chat_is_logged_as_a_page(app, db_s
                                       'id': 'https://peer.example/post/1'})
     dispatch(activity)
 
-    assert ActivityPubLog.query.one().exception_message == 'Page has no content'
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Page has no content'
+    # D130 residue: the row's label names the activity too, not 'Create ChatMessage'
+    assert log.activity_type == 'Create'
+
+
+def test_a_page_delivered_as_a_message_is_logged_under_create(app, db_session, monkeypatch):
+    """D130 residue. A Page that process_chat stores as a message is labelled
+    'Create', the type that arrived; a ChatMessage keeps 'Create ChatMessage'."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair()
+    record_moderation(monkeypatch, 'publish_sse_event')
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: None)
+
+    dispatch(inbox_activity(sender, activity_type='Create',
+                            object={'type': 'Page', 'to': recipient.ap_profile_id,
+                                    'content': 'hello', 'id': 'https://peer.example/pm/1'}))
+
+    assert [(l.activity_type, l.result) for l in ActivityPubLog.query.all()] == [('Create', 'success')]
 
 
 def test_an_unhandled_chat_lets_the_arm_continue_to_the_domain_check(app, db_session, monkeypatch):
