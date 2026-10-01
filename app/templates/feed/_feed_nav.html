@@ -145,9 +145,9 @@
                     <div class="dropdown-divider"></div>
                     {% if current_user.is_authenticated and feed_membership(current_user, feed) in [SUBSCRIPTION_MEMBER] and current_user.id != feed.user_id -%}
                         <li>
-                            <a class="dropdown-item" href="/feed/{{ feed.link() }}/unsubscribe" rel="nofollow">
-                                {{ _('Leave') }}
-                            </a>
+                            <form method="post" action="/feed/{{ feed.link() }}/unsubscribe"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit" class="dropdown-item">{{ _('Leave') }}</button>
+                            </form>
                         </li>
                         <div class="dropdown-divider"></div>
                         <li>
@@ -157,9 +157,9 @@
                         </li>
                     {% elif current_user.is_authenticated and feed_membership(current_user, feed) == SUBSCRIPTION_PENDING and current_user.id != feed.user_id -%}
                         <li>
-                            <a class="dropdown-item" href="/feed/{{ feed.link() }}/unsubscribe" rel="nofollow">
-                                {{ _('Pending') }}
-                            </a>
+                            <form method="post" action="/feed/{{ feed.link() }}/unsubscribe"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit" class="dropdown-item">{{ _('Pending') }}</button>
+                            </form>
                         </li>
                     {% elif current_user.is_authenticated and current_user.id == feed.user_id -%}
                         <li>
