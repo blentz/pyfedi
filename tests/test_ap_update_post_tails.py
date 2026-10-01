@@ -48,9 +48,10 @@ techniques exist in this suite and they are NOT interchangeable:
   (2) `set_setting('cache_remote_images_locally', False)`. Precedent:
       tests/test_event_post_type_survives_update.py:161-164.
 
-Technique (2) only works for the Event tail: the setting gates the call at
-`app/activitypub/util.py:3396-3397` and nothing gates the one in the url-change
-arm at `:3504`, which runs whenever that arm builds an image. So this file
+Technique (2) was written as working only for the Event tail, because the
+url-change arm's call at `:3504` was ungated; since D289 that call is gated by
+the same setting too (see TestUrlChangeThumbnailRespectsTheCachingSetting), and
+the notes below that call it ungated predate the fix. This file still
 standardises on TECHNIQUE (1) -- it works at both call sites, and
 `assert_all_called=True` turns the registered 404 into positive evidence that
 the image path was entered. The `Video` cluster never reaches either call site:
@@ -2779,6 +2780,49 @@ class TestUrlChangeOldImage:
         assert db.session.get(File, new_id).source_url == OBJECT_IMAGE_URL
         assert File.query.filter_by(id=old_id).count() == 0
         assert File.query.count() == 1
+
+
+class TestUrlChangeThumbnailRespectsTheCachingSetting:
+    """D289, fixed (owner ruling 2026-09-30). The url-change arm's
+    `make_image_sizes(image.id, 170, 512, 'posts')` used to run ungated, so a
+    peer Update alone made this instance fetch and resize an arbitrary remote
+    url even with `cache_remote_images_locally` turned off. It now carries the
+    Event block's gate. `make_image_sizes` is doubled here because its fetch is
+    wrapped in a bare `except:`, so a fetch that should not happen leaves no
+    trace otherwise.
+    """
+
+    def _record_thumbnailing(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr('app.activitypub.util.make_image_sizes',
+                            lambda *args, **kwargs: calls.append(args))
+        return calls
+
+    def test_no_thumbnail_is_made_when_remote_image_caching_is_off(
+            self, app, db_session, http_mock, redis_lock_only_double, monkeypatch):
+        post = _seed_image_typed_post()
+        _not_an_image(http_mock, CHANGED_LINK_URL)
+        set_setting('cache_remote_images_locally', False)
+        calls = self._record_thumbnailing(monkeypatch)
+
+        update_post_from_activity(post, _linked_update(
+            CHANGED_LINK_URL, image={'url': OBJECT_IMAGE_URL}))
+
+        db.session.expire_all()
+        assert db.session.get(File, post.image_id).source_url == OBJECT_IMAGE_URL
+        assert calls == []
+
+    def test_a_thumbnail_is_made_when_remote_image_caching_is_on(
+            self, app, db_session, http_mock, redis_lock_only_double, monkeypatch):
+        post = _seed_image_typed_post()
+        _not_an_image(http_mock, CHANGED_LINK_URL)
+        calls = self._record_thumbnailing(monkeypatch)
+
+        update_post_from_activity(post, _linked_update(
+            CHANGED_LINK_URL, image={'url': OBJECT_IMAGE_URL}))
+
+        db.session.expire_all()
+        assert calls == [(post.image_id, 170, 512, 'posts')]
 
 
 class TestUrlChangeYoutubeFixup:
