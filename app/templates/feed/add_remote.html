@@ -35,7 +35,7 @@
                                 <p> {% if subscribed %}
                                         <form method="post" action="/feed/{{ new_feed.link() }}/unsubscribe" class="d-inline"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-primary mt-4">{{ _('Leave') }}</button></form>
                                     {% else %}
-                                        <a class="btn btn-primary mt-4" href="/feed/{{ new_feed.link() }}/subscribe">{{ _('Subscribe') }}</a>
+                                        <form method="post" action="/feed/{{ new_feed.link() }}/subscribe" class="d-inline"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-primary mt-4">{{ _('Subscribe') }}</button></form>
                                     {% endif %}
                                 </p>
                             </div>

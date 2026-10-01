@@ -678,11 +678,12 @@ def feed_create_post(feed_name):
                            SUBSCRIPTION_OWNER=SUBSCRIPTION_OWNER, SUBSCRIPTION_MODERATOR=SUBSCRIPTION_MODERATOR)
 
 
-@bp.route('/feed/<actor>/subscribe', methods=['GET'])
+@bp.route('/feed/<actor>/subscribe', methods=['POST'])
 @login_required
 @validation_required
 @approval_required
 def subscribe(actor):
+    # POST only, so login_required checks the CSRF token; it changed state on a GET
     join_feed(actor, current_user.id)
     # send them back where they came from
     return back('/f/' + actor)

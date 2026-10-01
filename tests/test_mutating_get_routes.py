@@ -72,6 +72,10 @@ KNOWN_GET_MUTATORS = {
     'community.community_wiki_revert_revision',
     'topic.topic_notification',
     'user.notification_goto', 'user.notification_delete',
+    # Found once helpers in app/shared/ were derived rather than listed: the
+    # bell on a profile toggles a subscription to that user through
+    # `subscribe_user` on a GET. Not yet ruled on.
+    'user.user_notification',
 }
 
 MUTATIONS = ('db.session.add(', 'db.session.delete(', 'db.session.commit()',
@@ -94,6 +98,43 @@ MUTATING_HELPERS = (
     'purge_user_then_delete(',
 )
 
+SHARED_ROOT = APP_ROOT / 'shared'
+
+
+def _calls_by_name(node):
+    return {call.func.id for call in ast.walk(node)
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)}
+
+
+def _shared_mutating_helpers():
+    """Every function in `app/shared/` that writes, directly or through
+    another `app/shared/` function, found rather than listed.
+
+    `MUTATING_HELPERS` above is a hand-kept list, and a hand-kept list misses
+    whatever nobody added: `feed.subscribe` mutated on a bare GET through
+    `join_feed`, which was never on it, so the ratchet passed it. Deriving
+    the set closes that class; following calls only within `app/shared/`
+    keeps it to the helpers the list was always meant to hold (following
+    every function in `app/` matches by bare name and flags most read paths).
+    """
+    functions = {}
+    for path in SHARED_ROOT.rglob('*.py'):
+        for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                functions.setdefault(node.name, []).append(node)
+    mutating = {name for name, nodes in functions.items()
+                if any(marker in ast.unparse(node) for node in nodes for marker in MUTATIONS)}
+    calls = {name: set().union(*(_calls_by_name(node) for node in nodes))
+             for name, nodes in functions.items()}
+    grew = True
+    while grew:
+        grew = False
+        for name, called in calls.items():
+            if name not in mutating and called & mutating:
+                mutating.add(name)
+                grew = True
+    return mutating
+
 
 def _blueprint_name(path):
     """`app/community/routes.py` -> `community`; `app/main/routes.py` -> `main`."""
@@ -102,6 +143,7 @@ def _blueprint_name(path):
 
 def _get_mutating_routes():
     found = set()
+    shared_helpers = _shared_mutating_helpers()
     for path in sorted(APP_ROOT.rglob('routes.py')):
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):
@@ -120,7 +162,8 @@ def _get_mutating_routes():
             if methods is None or 'GET' not in methods:
                 continue
             body = ast.unparse(node)
-            if not any(marker in body for marker in MUTATIONS + MUTATING_HELPERS):
+            if not any(marker in body for marker in MUTATIONS + MUTATING_HELPERS) and \
+                    not _calls_by_name(node) & shared_helpers:
                 continue
             if 'validate_on_submit' in body:
                 continue
@@ -168,7 +211,10 @@ def test_the_routes_this_campaign_fixed_are_not_in_the_set():
                      # blueprint: removing your own avatar or banner, and
                      # marking every notification read.
                      'user.remove_avatar', 'user.remove_cover',
-                     'user.notifications_all_read'):
+                     'user.notifications_all_read',
+                     # Owner ruling: joining a feed, missed by the hand-kept
+                     # MUTATING_HELPERS because join_feed was not on it.
+                     'feed.subscribe'):
         assert endpoint not in found, (
             f'{endpoint} mutates on a GET again; it was fixed once already')
 

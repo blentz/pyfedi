@@ -145,7 +145,7 @@
                             {% if current_user.is_authenticated and feed.subscribed(current_user.id) == 1 %}
                                 <form method="post" action="{{ url_for('feed.feed_unsubscribe', actor=feed.ap_id if feed.ap_id else feed.name) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="w-100 btn btn-warning mb-2">{{ _('Unsubscribe') }}</button></form>
                             {% else %}
-                                <a class="w-100 btn btn-primary mb-2" href="{{ url_for('feed.subscribe', actor=feed.ap_id if feed.ap_id else feed.name) }}" rel="nofollow">{{ _('Subscribe') }}</a>
+                                <form method="post" action="{{ url_for('feed.subscribe', actor=feed.ap_id if feed.ap_id else feed.name) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="w-100 btn btn-primary mb-2">{{ _('Subscribe') }}</button></form>
                             {% endif %}
                         {% endif %}
                     </div>
