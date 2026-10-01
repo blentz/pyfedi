@@ -595,6 +595,7 @@ class CommentView(DefaultSchema):
         validate=validate.OneOf(subscribed_type_list))
     my_vote = fields.Integer()
     can_auth_user_moderate = fields.Boolean()
+    filtered = fields.Boolean(metadata={"description": "A 'hide completely' reply filter of the auth'ed user matched this comment."})
 
 
 class FeedView(DefaultSchema):

@@ -3050,6 +3050,22 @@ def user_filters_replies(user_id):
     return result
 
 
+def reply_filter_keyword(post_reply) -> str | None:
+    """The keyword of the viewer's reply filters that `post_reply` matches, or None.
+
+    R168 (owner ruling): the reader views of post/_post_reply_teaser.html render a match as a collapsed
+    'Filtered: <keyword>' stub, 'hide completely' filters included; admin and moderation views pass
+    no_content_filter. `PostReply.blocked_by_content_filter` decides the match, as Post's does for posts.
+    """
+    if not current_user.is_authenticated:
+        return None
+    for name, keywords in user_filters_replies(current_user.id).items():
+        for keyword in sorted(keywords):
+            if post_reply.blocked_by_content_filter({name: [keyword]}, current_user.id):
+                return keyword
+    return None
+
+
 @cache.memoize(timeout=300)
 def user_filters_languages(user_id):
     user = db.session.get(User, user_id)

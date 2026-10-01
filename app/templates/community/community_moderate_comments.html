@@ -26,7 +26,7 @@
         {% if post_replies %}
             <div class="post_list comments">
                 {% for post_reply in post_replies.items %}
-                    {% with teaser=True %}
+                    {% with teaser=True, no_content_filter=True %}
                         {% include 'post/_post_reply_teaser.html' %}
                     {% endwith %}
                 {% endfor %}

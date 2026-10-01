@@ -18,7 +18,7 @@ from app.post.util import tags_to_string, flair_to_string
 from app.utils import blocked_communities, blocked_or_banned_instances, blocked_users, communities_banned_from, \
     get_setting, \
     num_topics, moderating_communities_ids, moderating_communities, joined_communities, \
-    moderating_communities_ids_all_users, community_membership_private
+    moderating_communities_ids_all_users, community_membership_private, user_filters_replies
 from app.shared.community import get_comm_flair_list
 from app.shared.post import get_post_flair_list
 
@@ -848,7 +848,10 @@ def reply_view(reply: PostReply | int, variant: int, user_id=None,
             'creator_banned_from_community': creator_banned,
             'creator_is_moderator': creator_is_moderator,
             'creator_is_admin': creator_is_admin,
-            'can_auth_user_moderate': can_auth_user_moderate
+            'can_auth_user_moderate': can_auth_user_moderate,
+            # R168: as post_view's flag, True when a 'hide completely' reply filter matched
+            'filtered': reply.blocked_by_content_filter(user_filters_replies(user_id) if user_id else {},
+                                                        user_id) == '-1'
         }
         if add_creator_in_view:
             v3['creator'] = user_view(user=reply.author, variant=1, stub=True, flair_community_id=reply.community_id,

@@ -67,7 +67,7 @@
             {% if posts %}<h3 class="mt-4" id="comments">{{ _('Comments') }}</h3>{% endif %}
             <div class="post_list">
                 {% for post_reply in post_replies.items %}
-                    {% with teaser=True, disable_voting=True, no_collapse=True, show_deleted=True %}
+                    {% with teaser=True, disable_voting=True, no_collapse=True, show_deleted=True, no_content_filter=True %}
                         {% include 'post/_post_reply_teaser.html' %}
                     {% endwith %}
                     <hr />

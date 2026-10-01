@@ -4,7 +4,8 @@
 three post-teaser templates call it, and it answers the filter's NAME when the
 content matches so the template can say which filter hid it.
 
-`PostReply.blocked_by_content_filter` has no callers. D1364 found it disagreeing with
+`PostReply.blocked_by_content_filter` had no callers until R168 wired it up (see
+tests/test_reply_content_filters.py). D1364 found it disagreeing with
 the live one four ways, and because nothing calls it the disagreement could be settled
 by making it match rather than left as a product question:
 
