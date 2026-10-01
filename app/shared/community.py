@@ -703,6 +703,8 @@ def get_comm_flair_list(community: Community | int | str) -> list:
             community = db.session.query(Community).filter(func.lower(Community.name) == name.lower(),
                                                func.lower(Community.ap_domain) == ap_domain.lower()).one()
         community_id = community.id
+    else:
+        raise TypeError(f'get_comm_flair_list expects a Community, int or str, not {type(community).__name__}')
 
     return CommunityFlair.query.filter_by(community_id=community_id).order_by(CommunityFlair.flair).all()
 
