@@ -3150,8 +3150,10 @@ def notify_about_post_task(post_id):
             # get the community
             community = session.get(Community, post.community_id)
 
-            # Send notifications based on subscriptions
-            notifications_sent_to = set()
+            # Send notifications based on subscriptions. A retried task skips anyone an earlier
+            # attempt already notified about this post, as the fan-out commits per recipient (D278)
+            notifications_sent_to = {row.user_id for row in session.query(Notification.user_id).filter(
+                Notification.url == f"/post/{post.id}")}
 
             # NOTIF_USER 
             user_send_notifs_to = notification_subscribers(post.user_id, NOTIF_USER)
