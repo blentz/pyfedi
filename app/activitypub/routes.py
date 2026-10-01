@@ -1950,7 +1950,8 @@ def process_inbox_request(request_json, store_ap_json):
                             post = Post.get_by_ap_id(target_ap_id)
                             if post is None:
                                 post_reply = PostReply.get_by_ap_id(target_ap_id)
-                        reason = core_activity['summary'] if 'summary' in core_activity else ''
+                        # The reason travels on the inner Lock; the outer Undo's is a fallback (D111)
+                        reason = core_activity['object'].get('summary') or core_activity.get('summary', '')
                         if post:
                             if post.community.is_moderator(mod) or post.community.is_instance_admin(mod):
                                 post.comments_enabled = True
