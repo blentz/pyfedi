@@ -3019,12 +3019,13 @@ def feed_outbox(actor):
         if c.local_only or c.private:
             continue
         items.append(c.public_url())
+    # D185 (owner ruling): an OrderedCollection, as community_outbox is
     result = {
         "@context": default_context(),
         "id": feed.ap_outbox_url,
-        "type": "Collection",
+        "type": "OrderedCollection",
         "totalItems": len(items),
-        "items": items
+        "orderedItems": items
     }
     resp = jsonify(result)
     resp.content_type = 'application/activity+json'
@@ -3101,13 +3102,13 @@ def feed_moderators_route(actor):
         moderators_data = {
             "@context": default_context(),
             "type": "OrderedCollection",
-            "id": f"{current_app.config['SERVER_URL']}/f/{actor}/moderators",
+            "id": f"{current_app.config['SERVER_URL']}/f/{actor.lower()}/moderators",  # D184: canonical, whatever the caller's casing
             "totalItems": len(moderators),
             "orderedItems": []
         }
 
         for moderator in moderators:
-            moderators_data['orderedItems'].append(moderator.ap_profile_id)
+            moderators_data['orderedItems'].append(moderator.public_url())  # D183: as community_moderators_route
 
         resp = jsonify(moderators_data)
         resp.content_type = 'application/activity+json'
@@ -3135,7 +3136,7 @@ def feed_followers(actor):
         if feed is not None:
             result = {
                 "@context": default_context(),
-                "id": f'{current_app.config["SERVER_URL"]}/f/{actor}/followers',
+                "id": f'{current_app.config["SERVER_URL"]}/f/{actor.lower()}/followers',  # D184, as feed_moderators_route
                 "type": "Collection",
                 "totalItems": db.session.query(FeedMember).filter_by(feed_id=feed.id).count(),
                 "items": []  # D175: intended (owner ruling) - a real count, but the member list is private
