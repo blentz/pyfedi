@@ -28,11 +28,8 @@ first pass never printed it.
 All seven get `login_required_if_private_instance`, the decorator D1411 and D1412 used:
 they are pages a person opens in a browser, and a member may open them.
 
-`/sitemap.xml` is left alone deliberately. It is 461 bytes here because it lists
-communities, and `Community.private` already filters it; a sitemap is also the one document
-whose whole purpose is to be fetched by a crawler that cannot log in. If a private instance
-should publish no sitemap at all, that is the same argument `index_rss` settles for feeds
-and it deserves its own round rather than a decorator added in passing.
+`/sitemap.xml` was left alone here deliberately; R222 later settled it the way `index_rss`
+settles feeds -- a private instance publishes no sitemap (owner ruling 2026-09-30).
 """
 import pytest
 
@@ -145,24 +142,25 @@ class TestAPublicInstance:
             '/community/general/wiki/rules').get_data(as_text=True)
 
 
-def test_the_sitemap_is_deliberately_left_public():
-    """Recorded rather than fixed, so the omission is a decision and not an oversight.
+def test_a_private_instance_publishes_no_sitemap(app, seeded):
+    """R222, fixed. The sitemap was left public on a private instance and listed its post
+    slugs. It now 404s, the answer `index_rss` gives for feeds (owner ruling 2026-09-30).
 
-    A sitemap exists to be fetched by a crawler that cannot log in, and `Community.private`
-    already filters what it lists. Whether a private instance should publish one at all is
-    the argument `index_rss` settles for feeds, and it deserves its own round.
+    Fetched once while public first: the route is `@cache.cached`, and the refusal must
+    run before the cache replays the public answer.
     """
-    import ast
-    import pathlib
+    from app import cache
 
-    root = pathlib.Path(__file__).resolve().parent.parent
-    tree = ast.parse((root / 'app' / 'main' / 'routes.py').read_text())
-    fn = next(n for n in ast.walk(tree)
-              if isinstance(n, ast.FunctionDef) and n.name == 'sitemap')
-    decorators = {d.id for d in fn.decorator_list if isinstance(d, ast.Name)}
+    cache.clear()
+    seeded.site.private_instance = False
+    db.session.commit()
+    client = app.test_client()
+    assert client.get('/sitemap.xml').status_code == 200
 
-    assert 'login_required_if_private_instance' not in decorators
-    assert 'login_required' not in decorators
+    seeded.site.private_instance = True
+    db.session.commit()
+
+    assert client.get('/sitemap.xml').status_code == 404
 
 
 def test_the_seven_routes_carry_the_decorator():
@@ -212,7 +210,7 @@ def test_no_get_route_outside_the_known_list_is_ungated():
     PUBLIC = {
         # served to anyone, by definition: the instance's own public documents
         ('main', 'about_page'), ('main', 'privacy'), ('main', 'robots'),
-        ('main', 'security'), ('main', 'rsl'), ('main', 'sitemap'),
+        ('main', 'security'), ('main', 'rsl'),
         ('main', 'keyboard_shortcuts'), ('main', 'content_warning'),
         ('main', 'anoobis'), ('main', 'bot_challenge_result'),
         # operational, no instance content
