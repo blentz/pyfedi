@@ -24,6 +24,8 @@ from authlib.integrations.flask_client import OAuth
 
 from config import Config
 from app.pinned_http import pinned_transport
+import sentry_sdk
+from app.plugins import load_plugins
 
 
 def get_locale():
@@ -143,7 +145,6 @@ def create_app(config_class=Config):
         app.config["SERVER_URL"] = f"{app.config['HTTP_PROTOCOL']}://{app.config['SERVER_NAME']}"
 
     if app.config['SENTRY_DSN']:
-        import sentry_sdk
         sentry_sdk.init(
             dsn=app.config["SENTRY_DSN"],
             enable_tracing=False,
@@ -227,7 +228,7 @@ def create_app(config_class=Config):
 
     # Initialize redis_client
     global redis_client
-    from app.utils import get_redis_connection
+    from app.utils import get_redis_connection  # cycle: app.utils imports db and the other extensions from this package
     redis_client = get_redis_connection(app.config['CACHE_REDIS_URL'])
 
     oauth.init_app(app)
@@ -263,58 +264,59 @@ def create_app(config_class=Config):
             client_kwargs={"scope": "identify email"}
         )
 
-    from app.main import bp as main_bp
+    from app.main import bp as main_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(main_bp)
 
-    from app.errors import bp as errors_bp
+    from app.errors import bp as errors_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(errors_bp)
 
-    from app.admin import bp as admin_bp
+    from app.admin import bp as admin_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(admin_bp, url_prefix='/admin')
 
-    from app.activitypub import bp as activitypub_bp
+    from app.activitypub import bp as activitypub_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(activitypub_bp)
 
-    from app.auth import bp as auth_bp
+    from app.auth import bp as auth_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(auth_bp, url_prefix='/auth')
 
-    from app.community import bp as community_bp
+    from app.community import bp as community_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(community_bp, url_prefix='/community')
 
-    from app.post import bp as post_bp
+    from app.post import bp as post_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(post_bp)
 
-    from app.user import bp as user_bp
+    from app.user import bp as user_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(user_bp)
 
-    from app.domain import bp as domain_bp
+    from app.domain import bp as domain_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(domain_bp)
 
-    from app.feed import bp as feed_bp
+    from app.feed import bp as feed_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(feed_bp)
 
-    from app.instance import bp as instance_bp
+    from app.instance import bp as instance_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(instance_bp)
 
-    from app.topic import bp as topic_bp
+    from app.topic import bp as topic_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(topic_bp)
 
-    from app.chat import bp as chat_bp
+    from app.chat import bp as chat_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(chat_bp)
 
-    from app.search import bp as search_bp
+    from app.search import bp as search_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(search_bp)
 
-    from app.tag import bp as tag_bp
+    from app.tag import bp as tag_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(tag_bp)
 
-    from app.dev import bp as dev_bp
+    from app.dev import bp as dev_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(dev_bp)
 
-    from app.api.alpha import bp as app_api_bp
+    from app.api.alpha import bp as app_api_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(app_api_bp)
 
     # API Namespaces
+    # cycle: blueprint modules import db and the other extensions from this package
     from app.api.alpha import site_bp, misc_bp, comm_bp, feed_bp, topic_bp, user_bp, \
                               reply_bp, post_bp, upload_bp, private_message_bp, admin_bp
     rest_api.register_blueprint(site_bp)
@@ -362,10 +364,9 @@ def create_app(config_class=Config):
     app.logger.setLevel(logging.INFO)
 
     # Load plugins
-    from app.plugins import load_plugins
     load_plugins()
 
-    from app.request_hooks import register_request_hooks
+    from app.request_hooks import register_request_hooks  # cycle: app.request_hooks imports app.models, which imports db from this package
     # Must be registered after compress.init_app(app) above. Flask runs after_request
     # callbacks in reverse registration order, so registering here (last) makes our
     # after_request in app/request_hooks.py run FIRST and Flask-Compress run after it,
