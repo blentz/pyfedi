@@ -553,8 +553,9 @@ def delete_feed(feed_id: int, src, auth=None):
             announce_feed_delete_to_subscribers.delay(user_id, feed.ap_public_url,
                                                       inboxes)
 
-    # strip out any feedmembers before deleting
+    # strip out any feedmembers and join requests before deleting
     db.session.query(FeedMember).filter(FeedMember.feed_id == feed.id).delete()
+    db.session.query(FeedJoinRequest).filter(FeedJoinRequest.feed_id == feed.id).delete()
 
     # delete the feed
     if feed.num_communities > 0:
