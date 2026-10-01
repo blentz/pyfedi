@@ -663,11 +663,11 @@ def _feed_remove_community(community_id: int, current_feed_id: int):
                 if not community.is_local():  # this is a remote community, so activitypub is needed
                     if not community.instance.gone_forever:
                         follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{gibberish(15)}"
-                        if community.instance.domain == 'ovo.st':
-                            join_request = db.session.query(CommunityJoinRequest).filter_by(user_id=user.id,
-                                                                                            community_id=community.id).first()
-                            if join_request:
-                                follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{join_request.uuid}"
+                        # D89 (owner ruling): the original Follow's id, for every peer rather than only ovo.st
+                        join_request = db.session.query(CommunityJoinRequest).filter_by(user_id=user.id,
+                                                                                        community_id=community.id).first()
+                        if join_request:
+                            follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{join_request.uuid}"
                         undo_id = f"{current_app.config['SERVER_URL']}/activities/undo/" + gibberish(15)
                         follow = {
                             "actor": user.public_url(),
