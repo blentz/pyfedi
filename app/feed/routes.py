@@ -103,6 +103,7 @@ def feed_add_remote():
         return show_ban_message()
     form = SearchRemoteFeed()
     new_feed = None
+    lookup_failed = False
     if form.validate_on_submit():
         address = form.address.data.strip().lower()
 
@@ -110,8 +111,13 @@ def feed_add_remote():
             try:
                 new_feed = search_for_feed(address)
             except Exception as e:
+                # D720: a blocked instance and an unreachable one each get their own message, not also 'not found'
+                lookup_failed = True
                 if 'is blocked.' in str(e):
                     flash(_('Sorry, that instance is blocked, check https://gui.fediseer.com/ for reasons.'), 'warning')
+                else:
+                    current_app.logger.warning(f'Remote lookup of {address} failed: {e}')
+                    flash(_("Couldn't reach that server, try again later."), 'warning')
         elif address.startswith('@') and '@' in address[1:]:
             # todo: the user is searching for a person instead
             ...
@@ -124,13 +130,13 @@ def feed_add_remote():
             message = Markup(
                 _('Accepted address formats: ~feedname@server.name or https://server.name/f/feedname.'))
             flash(message, 'error')
-        if new_feed is None:
+        if new_feed is None and not lookup_failed:
             if g.site.enable_nsfw:
                 flash(_('Feed not found.'), 'warning')
             else:
                 flash(_('Feed not found. If you are searching for a nsfw feed it is blocked by this instance.'),
                       'warning')
-        else:
+        elif new_feed is not None:
             cache.delete_memoized(feed_membership, current_user, new_feed)
 
     return render_template('feed/add_remote.html',
@@ -776,19 +782,25 @@ def lookup(feedname, domain):
         address = '~' + feedname + '@' + domain
         if current_user.is_authenticated:
             new_feed = None
+            lookup_failed = False
 
             try:
                 new_feed = search_for_feed(address)
             except Exception as e:
+                # D720: a blocked instance and an unreachable one each get their own message, not also 'not found'
+                lookup_failed = True
                 if 'is blocked.' in str(e):
                     flash(_('Sorry, that instance is blocked, check https://gui.fediseer.com/ for reasons.'), 'warning')
-            if new_feed is None:
+                else:
+                    current_app.logger.warning(f'Remote lookup of {address} failed: {e}')
+                    flash(_("Couldn't reach that server, try again later."), 'warning')
+            if new_feed is None and not lookup_failed:
                 if g.site.enable_nsfw:
                     flash(_('Feed not found.'), 'warning')
                 else:
                     flash(_('Feed not found. If you are searching for a nsfw feed it is blocked by this instance.'),
                           'warning')
-            else:
+            elif new_feed is not None:
                 if new_feed.banned:
                     flash(_('That feed is banned from %(site)s.', site=g.site.name), 'warning')
 

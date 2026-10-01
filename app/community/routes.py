@@ -191,6 +191,7 @@ def add_remote():
         return show_ban_message()
     form = SearchRemoteCommunity()
     new_community = None
+    lookup_failed = False
     
     if get_setting("allow_default_user_add_remote_community", True) is False and not current_user.is_admin_or_staff():
         flash(_('Adding remote communities is restricted to admin and staff users only.'))
@@ -202,8 +203,13 @@ def add_remote():
             try:
                 new_community = search_for_community(address)
             except Exception as e:
+                # D720: a blocked instance and an unreachable one each get their own message, not also 'not found'
+                lookup_failed = True
                 if 'is blocked.' in str(e):
                     flash(_('Sorry, that instance is blocked, check https://gui.fediseer.com/ for reasons.'), 'warning')
+                else:
+                    current_app.logger.warning(f'Remote lookup of {address} failed: {e}')
+                    flash(_("Couldn't reach that server, try again later."), 'warning')
         else:
             # The only other shape SearchRemoteCommunity.validate lets through.
             # It refuses anything that does not start with '!' or 'http(s)://',
@@ -213,13 +219,13 @@ def add_remote():
             # with a message per rule.
             server, community = extract_domain_and_actor(address)
             new_community = search_for_community('!' + community + '@' + server)
-        if new_community is None:
+        if new_community is None and not lookup_failed:
             if g.site.enable_nsfw:
                 flash(_('Community not found.'), 'warning')
             else:
                 flash(_('Community not found. If you are searching for a nsfw community it is blocked by this instance.'),
                       'warning')
-        else:
+        elif new_community is not None:
             from app.main.util import sidebar_new_communities
             cache.delete_memoized(sidebar_new_communities, current_user.id)
             if new_community.banned:
@@ -3075,20 +3081,26 @@ def lookup(community, domain):
         address = '!' + community + '@' + domain
         if current_user.is_authenticated:
             new_community = None
+            lookup_failed = False
 
             try:
                 new_community = search_for_community(address)
             except Exception as e:
+                # D720: a blocked instance and an unreachable one each get their own message, not also 'not found'
+                lookup_failed = True
                 if 'is blocked.' in str(e):
                     flash(_('Sorry, that instance is blocked, check https://gui.fediseer.com/ for reasons.'), 'warning')
-            if new_community is None:
+                else:
+                    current_app.logger.warning(f'Remote lookup of {address} failed: {e}')
+                    flash(_("Couldn't reach that server, try again later."), 'warning')
+            if new_community is None and not lookup_failed:
                 if g.site.enable_nsfw:
                     flash(_('Community not found.'), 'warning')
                 else:
                     flash(
                         _('Community not found. If you are searching for a nsfw community it is blocked by this instance.'),
                         'warning')
-            else:
+            elif new_community is not None:
                 if new_community.banned:
                     flash(_('That community is banned from %(site)s.', site=g.site.name), 'warning')
 
