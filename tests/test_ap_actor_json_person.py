@@ -244,6 +244,18 @@ class TestIdHostMatchesServerGuard:
         assert user.ap_public_url == 'https://GOOD.EXAMPLE/u/alice'
         assert user.ap_profile_id == 'https://good.example/u/alice'
 
+    def test_a_mixed_case_server_is_stored_lowercased_in_ap_domain(self, app, db_session):
+        """D25, fixed: ap_domain used to store `server` as given, so a
+        mixed-case authority from extract_domain_and_actor left ap_domain
+        differing from ap_profile_id's host in case alone. It is now lowered
+        like ap_id, and like the Group and Feed branches' ap_domain."""
+        peer_instance('good.example')
+        document = peer_actor_json(name='alice', server='good.example')
+        user = actor_json_to_model(document, 'alice', 'Good.Example')
+        assert user is not None
+        assert user.ap_domain == 'good.example'
+        assert user.ap_id == 'alice@good.example'
+
     def test_server_name_only_in_the_query_string_is_rejected(self, app, db_session):
         """The server name appears only in the query string; the real host is
         attacker.net. The old substring gate admitted this too."""
