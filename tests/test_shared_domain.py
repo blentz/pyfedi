@@ -6,12 +6,12 @@ These are structural twins of block_another_user/unblock_another_user
 (app/shared/user.py:20-87), which sub-project 43 closed in
 tests/test_shared_user_blocks.py -- the src fork, bearer, web_ctx and the
 id-1 burn all transfer. What does NOT transfer is the user-side guards:
-there is no self-block check and no admin/staff check here, and an unknown
-domain is a silent no-op that still returns user_id on the API arm. Those
-three are registered findings, not defects this round fixes, and the tests
-below pin them as they are.
+there is no admin/staff check here. Since D581 (owner ruling) an unknown
+domain is an error and this instance's own domain cannot be blocked.
 """
 from types import SimpleNamespace
+
+import pytest
 
 from app import db
 from app.constants import SRC_API, SRC_WEB
@@ -83,19 +83,32 @@ def test_block_domain_is_idempotent(app, db_session):
     assert db.session.query(DomainBlock).count() == 1
 
 
-def test_block_domain_silently_does_nothing_for_an_unknown_domain(app, db_session):
-    """PINS A DEFECT. :17's false arm.
-
-    No Domain row named 'nosuch.example' exists, so nothing is written -- and
-    the API arm still returns user_id at :27, indistinguishable from a
-    successful block. A caller cannot tell the two apart. Registered rather
-    than fixed: this round's production budget is the auth dedent.
-    """
+def test_block_domain_refuses_an_unknown_domain(app, db_session):
+    """D581, fixed (owner ruling): an unknown domain is a clear error. The API
+    arm used to return user_id with nothing written, indistinguishable from a
+    successful block."""
     s = _seed_blocker()
 
-    returned = block_domain('nosuch.example', SRC_API, bearer(s.blocker))
+    with pytest.raises(Exception, match='domain_not_found'):
+        block_domain('nosuch.example', SRC_API, bearer(s.blocker))
 
-    assert returned == s.blocker.id
+    assert db.session.query(DomainBlock).count() == 0
+
+
+def test_block_domain_refuses_this_instances_own_domain(app, db_session):
+    """D581, fixed (owner ruling): blocking the local instance's own domain
+    would hide every local link post from the caller, so it is refused."""
+    s = _seed_blocker()
+    own = Domain(name=app.config['SERVER_NAME'], banned=False)
+    db.session.add(own)
+    db.session.commit()
+
+    with pytest.raises(Exception, match='cannot_block_own_domain'):
+        block_domain(own.name, SRC_API, bearer(s.blocker))
+
+    with web_ctx(app, s.blocker):
+        block_domain(own.name, SRC_WEB)
+
     assert db.session.query(DomainBlock).count() == 0
 
 
@@ -174,11 +187,12 @@ def test_unblock_domain_is_idempotent(app, db_session):
     assert db.session.query(DomainBlock).count() == 0
 
 
-def test_unblock_domain_silently_does_nothing_for_an_unknown_domain(app, db_session):
-    """PINS A DEFECT. :40's false arm, the unblock twin of :17's."""
+def test_unblock_domain_refuses_an_unknown_domain(app, db_session):
+    """D581, fixed (owner ruling): the unblock twin -- an unknown domain is a
+    clear error rather than a silent success."""
     s = _seed_blocker()
 
-    returned = unblock_domain('nosuch.example', SRC_API, bearer(s.blocker))
+    with pytest.raises(Exception, match='domain_not_found'):
+        unblock_domain('nosuch.example', SRC_API, bearer(s.blocker))
 
-    assert returned == s.blocker.id
     assert db.session.query(DomainBlock).count() == 0

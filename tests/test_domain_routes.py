@@ -834,6 +834,25 @@ def test_blocking_a_domain_records_it_for_that_reader(app, db_session):
     assert block.domain_id == domain.id
 
 
+def test_blocking_this_instances_own_domain_is_refused_without_a_confirmation(app, db_session):
+    """D581, fixed (owner ruling): our own domain cannot be blocked, and the
+    route does not also flash a "blocked" confirmation (D608's shape)."""
+    instance, alice, bob = _seed()
+    domain = Domain(name=app.config['SERVER_NAME'], banned=False)
+    db.session.add(domain)
+    db.session.commit()
+    client = app.test_client()
+    login(client, alice)
+    token = csrf(app, client)
+
+    client.post(f'/d/{domain.id}/block', data={'csrf_token': token})
+
+    assert DomainBlock.query.count() == 0
+    with client.session_transaction() as session:
+        messages = [message for _category, message in session.get('_flashes', [])]
+    assert messages == ["You cannot block this instance's own domain."]
+
+
 def test_blocking_over_htmx_answers_with_a_redirect_header(app, db_session):
     instance, alice, bob = _seed()
     domain = _domain()
