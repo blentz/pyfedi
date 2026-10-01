@@ -788,8 +788,9 @@ def test_a_second_reply_mention_does_not_duplicate_the_notification(app, db_sess
     `session_options={"autoflush": False}` (app/__init__.py), so the first
     tag's `db.session.add(notification)` is still pending and unflushed when
     the second tag runs that query, and a document carrying the same Mention
-    twice produces TWO rows -- confirmed by running it. Only a second Update,
-    after the first has committed, exercises the check this test is named for.
+    twice produced TWO rows until D242 was fixed (see the next test). Only a
+    second Update, after the first has committed, exercises the check this
+    test is named for.
     """
     reply = _seed_reply()
     recipient = _seed_local_recipient()
@@ -800,6 +801,20 @@ def test_a_second_reply_mention_does_not_duplicate_the_notification(app, db_sess
     update_post_reply_from_activity(reply, document)
 
     assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 1
+
+
+def test_the_same_reply_mention_twice_in_one_update_notifies_once(app, db_session, redis_lock_only_double):
+    """D242, fixed: under autoflush=False `existing_notification` could not
+    see the first tag's pending notification, so a document repeating one
+    Mention produced two rows. The block now also remembers who it has
+    notified in this call."""
+    reply = _seed_reply()
+    recipient = _seed_local_recipient()
+
+    update_post_reply_from_activity(reply, _update(content='hello', tag=[_mention(), _mention()]))
+
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 1
+    assert recipient.unread_notifications == 1
 
 
 def test_a_reply_mention_tag_that_is_not_a_list_notifies_nobody(app, db_session, redis_lock_only_double):
@@ -2330,6 +2345,17 @@ def test_a_second_post_mention_does_not_duplicate_the_notification(app, db_sessi
     update_post_from_activity(post, document)
 
     assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 1
+
+
+def test_the_same_post_mention_twice_in_one_update_notifies_once(app, db_session, redis_lock_only_double):
+    """D242, fixed, on the post side: one notification for a repeated tag."""
+    post = _seed_post()
+    recipient = _seed_local_recipient()
+
+    update_post_from_activity(post, _update(name='t', content='x', tag=[_mention(), _mention()], type='Note'))
+
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 1
+    assert recipient.unread_notifications == 1
 
 
 def test_a_post_tag_of_another_type_is_not_treated_as_a_mention(app, db_session, redis_lock_only_double):
