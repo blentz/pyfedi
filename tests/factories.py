@@ -917,13 +917,10 @@ def peer_actor_json(actor_type: str = 'Person', name: str = 'alice',
       Group           the above, plus name, inbox, outbox
       Feed            the above, plus following
 
-    `inbox` earns its place in the Group and Feed baselines even though it is
-    read through a conditional: the expression is
-    `activity_json['endpoints']['sharedInbox'] if 'endpoints' in activity_json
-    else activity_json['inbox']`, whose else-arm has no further fallback, so a
-    document with neither key raises KeyError. A test wanting the sharedInbox
-    arm passes an 'endpoints' key; a test wanting no inbox at all passes
-    omit=('inbox',) and expects the KeyError handler.
+    `inbox` stays in the Group and Feed baselines although both branches now
+    fall back to '' without it (D12, D29): it makes the plain-inbox arm the
+    default. A test wanting the sharedInbox arm passes an 'endpoints' key; a
+    test wanting no inbox at all passes omit=('inbox',) and gets ''.
 
     `attributedTo` is deliberately NOT in the Feed baseline, even though the
     Feed branch dereferences the resulting owners_url over HTTP. It is read
