@@ -688,6 +688,7 @@ def monitor_healthy_instances():
                             session.commit()
                         cache.delete_memoized(get_emoji_replacements)
                 except Exception:
+                    # An identity-endpoint failure is counted but deliberately not escalated to dormant (D391)
                     session.rollback()
                     instance.failures += 1
                 finally:
@@ -736,7 +737,7 @@ def monitor_healthy_instances():
                             ).delete()
                 except Exception:
                     session.rollback()
-                    instance.failures += 1
+                    instance.failures += 1  # not escalated to dormant, as for Lemmy/PieFed above (D391)
                 finally:
                     if response is not None:
                         response.close()
