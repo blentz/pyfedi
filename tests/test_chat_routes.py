@@ -31,7 +31,7 @@ from flask_wtf.csrf import generate_csrf
 
 from app import db
 from app.constants import NOTIF_MESSAGE
-from app.models import ChatMessage, Conversation, Notification, Site, User, utcnow
+from app.models import ChatMessage, Conversation, InstanceBlock, Notification, Site, User, utcnow
 from tests.factories import (make_community, make_conversation, make_instance, make_user,
                              make_user_block)
 
@@ -1007,6 +1007,24 @@ def test_blocking_an_instance_from_elsewhere_returns_the_reader_there(app, db_se
 
     assert response.status_code == 200
     assert response.headers['HX-Redirect'] == 'https://test.piefed.local/u/bob'
+
+
+def test_blocking_the_local_instance_from_a_chat_only_says_it_cannot(app, db_session):
+    """D608, fixed: `block_remote_instance` refuses instance 1 with its own
+    flash, and this route then flashed "Instance blocked." as well, so the
+    user was told both. Only the refusal is shown now."""
+    instance, alice, bob, carol = _seed()
+    assert instance.id == 1
+    client = app.test_client()
+    login(client, alice)
+    token = csrf(app, client)
+
+    client.post(f'/chat/{instance.id}/block_instance', data={'csrf_token': token})
+
+    with client.session_transaction() as sess:
+        flashed = [message for _, message in sess.get('_flashes', [])]
+    assert flashed == ['You cannot block the local instance.']
+    assert InstanceBlock.query.count() == 0
 
 
 def test_blocking_an_instance_without_htmx_redirects_to_chat(app, db_session):

@@ -334,7 +334,8 @@ def instance_posts(instance_domain):
 def instance_block(instance_id):
     instance = db.session.get(Instance, instance_id) or abort(404)
     block_remote_instance(instance_id, SRC_WEB)
-    flash(_('Content from %(instance_domain)s will be hidden.', instance_domain=instance.domain))
+    if instance_id != 1:  # D608: instance 1 was refused, with its own flash
+        flash(_('Content from %(instance_domain)s will be hidden.', instance_domain=instance.domain))
 
     if request.headers.get('HX-Request'):
         resp = make_response()

@@ -973,6 +973,24 @@ def test_blocking_an_instance_records_it_and_redirects(app, db_session):
     assert block.instance_id == peer.id
 
 
+def test_blocking_the_local_instance_only_says_it_cannot(app, db_session):
+    """D608, fixed: `block_remote_instance` refuses instance 1 with its own
+    flash, and this route then flashed "Content from ... will be hidden." as
+    well, so the user was told both. Only the refusal is shown now."""
+    instance, alice, bob = _seed()
+    assert instance.id == 1
+    client = app.test_client()
+    login(client, alice)
+    token = csrf(app, client)
+
+    client.post(f'/instance/{instance.id}/block', data={'csrf_token': token})
+
+    with client.session_transaction() as sess:
+        flashed = [message for _, message in sess.get('_flashes', [])]
+    assert flashed == ['You cannot block the local instance.']
+    assert InstanceBlock.query.count() == 0
+
+
 def test_blocking_over_htmx_answers_with_a_redirect_header(app, db_session):
     instance, alice, bob = _seed()
     peer = _instance('peer.example')

@@ -200,7 +200,8 @@ def chat_leave(conversation_id):
 @login_required
 def block_instance(instance_id):
     block_remote_instance(instance_id, SRC_WEB)
-    flash(_('Instance blocked.'))
+    if instance_id != 1:  # D608: instance 1 was refused, with its own flash
+        flash(_('Instance blocked.'))
 
     if request.headers.get('HX-Request'):
         resp = make_response()
