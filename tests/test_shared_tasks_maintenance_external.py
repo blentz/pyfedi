@@ -1046,6 +1046,26 @@ class TestRefreshInstanceChooser:
         assert db.session.query(InstanceChooser).filter_by(
             domain='peer.example').first() is None
 
+    def test_one_domains_database_failure_drops_only_that_domain(self, db_session, http_mock):
+        """D364, fixed (owner ruling): each domain is written inside its own
+        SAVEPOINT. A document the database refuses -- here an `nsfw` that is
+        not a boolean, which fails at flush -- used to fail the per-domain
+        commit, which the task re-raised, so the other domains' rows and the
+        final prune were lost with it. Now only that domain is dropped."""
+        db.session.add(InstanceChooser(domain='gone.example'))
+        db.session.commit()
+        http_mock.post(self.OBSERVER).respond(
+            200, json=self._nodes('peer.example', 'bad.example'))
+        http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(
+            200, json=self._chooser())
+        http_mock.get('https://bad.example/api/alpha/site/instance_chooser').respond(
+            200, json={'nsfw': 'not a boolean', 'name': 'Bad'})
+
+        refresh_instance_chooser()
+
+        db.session.expire_all()
+        assert {r.domain for r in db.session.query(InstanceChooser).all()} == {'peer.example'}
+
     def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch, http_mock):
         """`:1062-1064`'s handler.
 

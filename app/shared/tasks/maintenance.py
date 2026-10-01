@@ -8,6 +8,7 @@ import httpx
 import boto3
 from flask import current_app
 from sqlalchemy import text, select, func
+from sqlalchemy.exc import SQLAlchemyError
 
 from app import celery, cache, httpx_client
 from app.activitypub.util import find_actor_or_create, find_language_or_create, find_instance_id
@@ -1053,51 +1054,57 @@ def refresh_instance_chooser():
             observer_domains.add(domain)
             
             try:
-                # Request instance_chooser API endpoint
-                try:
-                    chooser_response = get_request(f'https://{domain}/api/alpha/site/instance_chooser')
-                except Exception as e:
-                    current_app.logger.warning(f"Failed to connect to {domain}: {str(e)}")
-                    # Remove existing record if API call failed
-                    existing = session.query(InstanceChooser).filter_by(domain=domain).first()
-                    if existing:
-                        session.delete(existing)
-                    continue
+                # A SAVEPOINT per domain, so a database failure drops only this domain and the
+                # rest of the run, including the prune below, still happens (D364)
+                with session.begin_nested():
+                    try:
+                        # Request instance_chooser API endpoint
+                        try:
+                            chooser_response = get_request(f'https://{domain}/api/alpha/site/instance_chooser')
+                        except Exception as e:
+                            current_app.logger.warning(f"Failed to connect to {domain}: {str(e)}")
+                            # Remove existing record if API call failed
+                            existing = session.query(InstanceChooser).filter_by(domain=domain).first()
+                            if existing:
+                                session.delete(existing)
+                            continue
                 
-                if chooser_response.status_code == 200:
-                    chooser_data = chooser_response.json()
+                        if chooser_response.status_code == 200:
+                            chooser_data = chooser_response.json()
 
-                    chooser_data['uptime'] = node['uptime_alltime']
-                    chooser_data['monthsmonitored'] = node['monthsmonitored']
+                            chooser_data['uptime'] = node['uptime_alltime']
+                            chooser_data['monthsmonitored'] = node['monthsmonitored']
                     
-                    # Update or create InstanceChooser record
-                    instance_chooser = session.query(InstanceChooser).filter_by(domain=domain).first()
-                    if not instance_chooser:
-                        instance_chooser = InstanceChooser(domain=domain)
-                        session.add(instance_chooser)
+                            # Update or create InstanceChooser record
+                            instance_chooser = session.query(InstanceChooser).filter_by(domain=domain).first()
+                            if not instance_chooser:
+                                instance_chooser = InstanceChooser(domain=domain)
+                                session.add(instance_chooser)
                     
-                    # Map API response to InstanceChooser fields
-                    if 'language' in chooser_data and 'id' in chooser_data['language']:
-                        instance_chooser.language_id = find_language_or_create(chooser_data['language']['code'], chooser_data['language']['name']).id
+                            # Map API response to InstanceChooser fields
+                            if 'language' in chooser_data and 'id' in chooser_data['language']:
+                                instance_chooser.language_id = find_language_or_create(chooser_data['language']['code'], chooser_data['language']['name']).id
                     
-                    instance_chooser.nsfw = chooser_data.get('nsfw', False)
-                    instance_chooser.newbie_friendly = chooser_data.get('newbie_friendly', True)
+                            instance_chooser.nsfw = chooser_data.get('nsfw', False)
+                            instance_chooser.newbie_friendly = chooser_data.get('newbie_friendly', True)
                     
-                    # Store the full response in the data field
-                    instance_chooser.data = chooser_data
+                            # Store the full response in the data field
+                            instance_chooser.data = chooser_data
                     
-                else:
-                    # 404 or other error - remove existing record if it exists
-                    existing = session.query(InstanceChooser).filter_by(domain=domain).first()
-                    if existing:
-                        session.delete(existing)
+                        else:
+                            # 404 or other error - remove existing record if it exists
+                            existing = session.query(InstanceChooser).filter_by(domain=domain).first()
+                            if existing:
+                                session.delete(existing)
                         
-            except Exception as e:
-                current_app.logger.warning(f"Error processing domain {domain}: {str(e)}")
-                # Remove existing record if API call failed
-                existing = session.query(InstanceChooser).filter_by(domain=domain).first()
-                if existing:
-                    session.delete(existing)
+                    except Exception as e:
+                        current_app.logger.warning(f"Error processing domain {domain}: {str(e)}")
+                        # Remove existing record if API call failed
+                        existing = session.query(InstanceChooser).filter_by(domain=domain).first()
+                        if existing:
+                            session.delete(existing)
+            except SQLAlchemyError as e:
+                current_app.logger.warning(f"Database error for domain {domain}: {str(e)}")
             session.commit()
         
         # Remove InstanceChooser records for domains not in fediverse.observer
