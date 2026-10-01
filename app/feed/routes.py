@@ -40,6 +40,7 @@ from app.utils import back, show_ban_message, piefed_markdown_to_lemmy_markdown,
     blocked_or_banned_instances, blocked_communities, block_honey_pot, user_pronouns, mimetype_from_url, \
     community_membership_private, check_anoobis, feed_readable_by, \
     refuse_if_private_instance
+import app.community.routes as community_routes
 
 
 @bp.route('/feed/new', methods=['GET', 'POST'])
@@ -326,13 +327,12 @@ def feed_copy(feed_id: int):
             member_of_ids.append(cm.community_id)
         for item in old_feed_items:
             if item.community_id not in member_of_ids and current_user.feed_auto_follow:
-                from app.community.routes import do_subscribe
                 community = db.session.get(Community, item.community_id)
                 actor = community.ap_id if community.ap_id else community.name
                 if current_app.debug:  # D719: dispatch, as join_feed does
-                    do_subscribe(actor, current_user.id, joined_via_feed=True)
+                    community_routes.do_subscribe(actor, current_user.id, joined_via_feed=True)
                 else:
-                    do_subscribe.delay(actor, current_user.id, joined_via_feed=True)
+                    community_routes.do_subscribe.delay(actor, current_user.id, joined_via_feed=True)
 
         feed.num_communities = len(old_feed_items)
         db.session.add(feed)
