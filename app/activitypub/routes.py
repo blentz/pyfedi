@@ -43,7 +43,9 @@ from app.models import User, Community, CommunityJoinRequest, CommunityMember, C
 # app.activitypub.signature before they are defined (import cycle: post.routes)
 import app.post.routes as post_routes
 from app.shared.tasks import task_selector
-from app.user.routes import show_profile
+# The module, not the name: app.user.routes reaches this file through
+# app.activitypub.signature before show_profile is defined (import cycle: user.routes)
+import app.user.routes as user_routes
 from app.user.utils import search_for_user
 from app.utils import gibberish, get_setting, community_membership, ap_datetime, ip_address, can_downvote, \
     can_upvote, can_create_post, awaken_dormant_instance, shorten_string, can_create_post_reply, sha256_digest, \
@@ -497,7 +499,7 @@ def user_profile(actor):
                              f'<https://{current_app.config["SERVER_NAME"]}/u/{actor}>; rel="alternate"; type="text/html"')
             return resp
         else:
-            return show_profile(user)
+            return user_routes.show_profile(user)
     else:
         abort(404)
 

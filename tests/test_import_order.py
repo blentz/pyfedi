@@ -28,7 +28,6 @@ STILL_CIRCULAR = {
     'app.feed.util': 'feed.routes <-> get_all_child_feed_ids',
     'app.tag.routes': 'topic.routes <-> get_all_child_topic_ids',
     'app.topic.routes': 'topic.routes <-> get_all_child_topic_ids',
-    'app.user.routes': 'user.routes <-> show_profile',
 }
 
 MODULES = [
