@@ -1477,7 +1477,9 @@ def process_inbox_request(request_json, store_ap_json):
                         else:
                             reason = core_activity['summary'] if 'summary' in core_activity else ''
                             delete_post_or_comment(user, to_delete, store_ap_json, request_json, reason)
-                            if not announced:
+                            # A followers-only object's Create was never relayed (process_new_content), so no
+                            # community follower holds it and its Delete has no one to reach there either.
+                            if not announced and to_delete.visibility in OPEN_VISIBILITIES:
                                 announce_activity_to_followers(to_delete.community, user, request_json)
                     else:
                         # no content found. check if it was a PM
@@ -1543,7 +1545,7 @@ def process_inbox_request(request_json, store_ap_json):
                         # report about a user or a community has no such community and
                         # is not relayed -- the local record above is the whole of what
                         # this instance does with it.
-                        if isinstance(reported, (Post, PostReply)):
+                        if isinstance(reported, (Post, PostReply)) and reported.visibility in OPEN_VISIBILITIES:
                             announce_activity_to_followers(
                                 reported.community, user, request_json, is_flag=True,
                                 admin_instance_id=reported.author.instance_id)
@@ -1798,7 +1800,7 @@ def process_inbox_request(request_json, store_ap_json):
                             add_to_modlog('move_post', actor=user, target_user=post.author, reason='',
                                           community=target_community, post=post,
                                           link_text=shorten_string(post.title), link=f'post/{post.id}')
-                            if origin_community.is_local():
+                            if origin_community.is_local() and post.visibility in OPEN_VISIBILITIES:
                                 announce_activity_to_followers(origin_community, user, request_json)
                             log_incoming_ap(id, APLOG_MOVE, APLOG_SUCCESS, saved_json,
                                             f'{user.user_name} moved post to {target_community.link()}')
@@ -1957,7 +1959,7 @@ def process_inbox_request(request_json, store_ap_json):
                             else:
                                 reason = core_activity['object']['summary'] if 'summary' in core_activity['object'] else ''
                                 restore_post_or_comment(restorer, to_restore, store_ap_json, request_json, reason)
-                                if not announced:
+                                if not announced and to_restore.visibility in OPEN_VISIBILITIES:
                                     announce_activity_to_followers(to_restore.community, user, request_json)
                         else:
                             # no content found. check if it was a PM
@@ -1975,7 +1977,7 @@ def process_inbox_request(request_json, store_ap_json):
                         post_or_comment = undo_vote(comment, post, target_ap_id, user)
                         if post_or_comment:
                             log_incoming_ap(id, APLOG_UNDO_VOTE, APLOG_SUCCESS, saved_json)
-                            if not announced:
+                            if not announced and post_or_comment.visibility in OPEN_VISIBILITIES:
                                 announce_activity_to_followers(post_or_comment.community, user, request_json, can_batch=True)
                         else:
                             log_incoming_ap(id, APLOG_UNDO_VOTE, APLOG_FAILURE, saved_json,
@@ -2728,7 +2730,7 @@ def process_upvote(user, store_ap_json, request_json, announced):
                 votes_cast_today(user.id) < current_app.config['VOTE_QUOTA']:
             liked.vote(user, 'upvote', emoji)
             log_incoming_ap(id, APLOG_LIKE, APLOG_SUCCESS, saved_json)
-            if not announced:
+            if not announced and liked.visibility in OPEN_VISIBILITIES:  # as process_new_content (interop D7)
                 announce_activity_to_followers(liked.community, user, request_json, can_batch=True)
         else:
             log_incoming_ap(id, APLOG_LIKE, APLOG_IGNORED, saved_json, 'Cannot upvote this')
@@ -2751,7 +2753,7 @@ def process_downvote(user, store_ap_json, request_json, announced):
                 votes_cast_today(user.id) < current_app.config['VOTE_QUOTA']:
             liked.vote(user, 'downvote', None)
             log_incoming_ap(id, APLOG_DISLIKE, APLOG_SUCCESS, saved_json)
-            if not announced:
+            if not announced and liked.visibility in OPEN_VISIBILITIES:  # as process_new_content (interop D7)
                 announce_activity_to_followers(liked.community, user, request_json, can_batch=True)
         else:
             log_incoming_ap(id, APLOG_DISLIKE, APLOG_IGNORED, saved_json, 'Cannot downvote this')
@@ -2821,7 +2823,7 @@ def process_question_answer(user, store_ap_json, request_json, announced):
                 post_reply.author.unread_notifications += 1
             db.session.commit()
         log_incoming_ap(id, APLOG_QA, APLOG_SUCCESS, saved_json)
-        if not announced:
+        if not announced and post_reply.visibility in OPEN_VISIBILITIES:
             announce_activity_to_followers(post_reply.community, user, request_json)
     else:
         log_incoming_ap(id, APLOG_QA, APLOG_IGNORED, saved_json, 'Cannot set answer')
