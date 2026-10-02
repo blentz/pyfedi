@@ -8,10 +8,11 @@ from dataclasses import dataclass
 from typing import Optional
 
 from sqlalchemy import and_, exists, or_
+from sqlalchemy.orm import aliased
 
 from app import db
 from app.constants import VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC, VISIBILITY_UNLISTED
-from app.models import UserFollower
+from app.models import ModLog, Post, PostReply, UserFollower
 
 OPEN_VISIBILITIES = (VISIBILITY_PUBLIC, VISIBILITY_UNLISTED)
 
@@ -44,6 +45,21 @@ def visible_to_clause(model, viewer_id: Optional[int]):
     return or_(open_audience,
                and_(model.visibility == VISIBILITY_FOLLOWERS,
                     or_(model.user_id == viewer_id, follows)))
+
+
+def _open(model):
+    return or_(model.visibility.in_(OPEN_VISIBILITIES), model.visibility.is_(None))
+
+
+def modlog_open_clause():
+    """ModLog entries whose post, reply and reply's post are all open to everyone. For a reader who is not an
+    admin, an entry about anything else names no target user, so a filter by target user must not match it (R3)."""
+    reply_post = aliased(Post)
+    hidden_post = exists().where(Post.id == ModLog.post_id, ~_open(Post))
+    hidden_reply = exists().where(PostReply.id == ModLog.reply_id,
+                                  or_(~_open(PostReply),
+                                      exists().where(reply_post.id == PostReply.post_id, ~_open(reply_post))))
+    return and_(~hidden_post, ~hidden_reply)
 
 
 def listable_clause(model):

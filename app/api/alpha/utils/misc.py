@@ -11,11 +11,12 @@ from app.api.alpha.utils.community import get_community_list
 from app.api.alpha.utils.post import get_post_list
 from app.api.alpha.utils.user import get_user_list
 from app.api.alpha.utils.reply import get_reply_list
-from app.api.alpha.views import search_view, post_view, reply_view, user_view, community_view, feed_view
+from app.api.alpha.views import search_view, post_view, reply_view, user_view, community_view, feed_view, \
+    neutral_person, reply_removal_ack_view
 from app.community.util import search_for_community
 from app.models import Post, PostReply, User, Community, BannedInstances, Feed, ModLog
 from app.user.utils import search_for_user
-from app.visibility import can_view
+from app.visibility import can_view, modlog_open_clause
 from app.feed.util import search_for_feed
 from app.utils import authorise_api_user, gibberish, subscribed_feeds, communities_banned_from, \
     moderating_communities_ids, joined_or_modding_communities, blocked_communities, blocked_or_banned_instances
@@ -521,6 +522,8 @@ def get_modlog(auth, data):
         base_q = base_q.filter(ModLog.community_id == community_id)
     if other_person_id:
         base_q = base_q.filter(ModLog.target_user_id == other_person_id)
+        if not is_admin:
+            base_q = base_q.filter(modlog_open_clause())  # R3: those entries name no target user to this reader
     if post_id:
         base_q = base_q.filter(ModLog.post_id == post_id)
     if comment_id:
@@ -561,6 +564,12 @@ def get_modlog(auth, data):
         for name, (actions, comm_required) in categories_to_fetch.items()
     }
 
+    viewer_id = user.id if user else None
+
+    def names_hidden_content(entry):
+        return any(obj is not None and not can_view(obj, None)
+                   for obj in (entry.post, entry.reply, entry.reply.post if entry.reply else None))
+
     def build_removed_posts(entries):
         result = []
         for entry in entries:
@@ -574,7 +583,7 @@ def get_modlog(auth, data):
                     'when_': entry.created_at.isoformat(timespec="microseconds") + 'Z',
                 },
                 'moderator': user_view(entry.author, variant=1) if entry.author else None,
-                'post': post_view(entry.post, variant=1) if entry.post else None,
+                'post': post_view(entry.post, variant=1, user_id=viewer_id) if entry.post else None,
                 'community': community_view(entry.community, variant=1) if entry.community else None,
             })
         return result
@@ -591,7 +600,7 @@ def get_modlog(auth, data):
                     'when_': entry.created_at.isoformat(timespec="microseconds") + 'Z',
                 },
                 'moderator': user_view(entry.author, variant=1) if entry.author else None,
-                'post': post_view(entry.post, variant=1) if entry.post else None,
+                'post': post_view(entry.post, variant=1, user_id=viewer_id) if entry.post else None,
                 'community': community_view(entry.community, variant=1) if entry.community else None,
             })
         return result
@@ -609,7 +618,7 @@ def get_modlog(auth, data):
                     'when_': entry.created_at.isoformat(timespec="microseconds") + 'Z',
                 },
                 'moderator': user_view(entry.author, variant=1) if entry.author else None,
-                'post': post_view(entry.post, variant=1) if entry.post else None,
+                'post': post_view(entry.post, variant=1, user_id=viewer_id) if entry.post else None,
                 'community': community_view(entry.community, variant=1) if entry.community else None,
             })
         return result
@@ -627,9 +636,13 @@ def get_modlog(auth, data):
                     'when_': entry.created_at.isoformat(timespec="microseconds") + 'Z',
                 },
                 'moderator': user_view(entry.author, variant=1) if entry.author else None,
-                'comment': reply_view(entry.reply, variant=1) if entry.reply else None,
-                'commenter': user_view(entry.reply.user_id, variant=1) if entry.reply else None,
-                'post': post_view(entry.reply.post_id, variant=1) if entry.reply else None,
+                'comment': (reply_view(entry.reply, variant=1) if can_view(entry.reply, viewer_id)
+                            else reply_removal_ack_view(entry.reply)['comment']) if entry.reply else None,
+                # R3: admins see who; anyone else, not for an entry about content that is not open
+                'commenter': (user_view(entry.reply.user_id, variant=1)
+                              if is_admin or not names_hidden_content(entry) else neutral_person())
+                if entry.reply else None,
+                'post': post_view(entry.reply.post_id, variant=1, user_id=viewer_id) if entry.reply else None,
                 'community': community_view(entry.community, variant=1) if entry.community else None,
             })
         return result
