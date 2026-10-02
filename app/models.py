@@ -2777,6 +2777,7 @@ class Post(db.Model):
                         post.url = attachment['url']  # PixelFed, PieFed, Lemmy >= 0.19.4
                         alt_text = attachment.get("name")
                         file_path = attachment.get("file_path")
+                        break  # the first image is the post's own; set_post_gallery keeps the rest in order
 
         if 'attachment' in request_json['object'] and isinstance(request_json['object']['attachment'],
                                                                  dict):  # a.gup.pe (Mastodon)

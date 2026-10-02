@@ -243,3 +243,14 @@ def test_deleting_the_post_deletes_its_gallery(ingest, tmp_path):
     assert all(str(path) in cache_urls for path in on_disk)
     assert db.session.execute(post_file.select().where(post_file.c.post_id == post.id)).all() == []
     assert File.query.filter(File.id.in_(gallery_ids)).count() == 0
+
+
+def test_image_type_attachments_keep_the_first_as_the_primary(ingest):
+    """PieFed, Lemmy and Pixelfed send `type: Image`: the first is the post's own image, the rest the gallery in order."""
+    post = ingest(album({'type': 'Image', 'url': FIRST, 'name': 'a'},
+                        {'type': 'Image', 'url': SECOND, 'name': 'b'},
+                        {'type': 'Image', 'url': THIRD, 'name': 'c'}))
+
+    assert post.image.source_url == FIRST
+    assert post.image.alt_text == 'a'
+    assert [f.source_url for f in gallery_of(post)] == [SECOND, THIRD]
