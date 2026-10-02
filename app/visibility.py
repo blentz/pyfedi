@@ -56,7 +56,7 @@ def listable_sql(alias: str) -> str:
 
 def visible_to_sql(alias: str) -> str:
     """Raw-SQL twin of visible_to_clause. Binds :visibility_viewer_id (NULL for anonymous)."""
-    return (f"({alias}.visibility IN ('public', 'unlisted') OR ({alias}.visibility = 'followers' AND "
+    return (f"({alias}.visibility IN ('public', 'unlisted') OR {alias}.visibility IS NULL OR ({alias}.visibility = 'followers' AND "
             f"({alias}.user_id = :visibility_viewer_id OR EXISTS (SELECT 1 FROM user_follower vf "
             f"WHERE vf.local_user_id = :visibility_viewer_id AND vf.remote_user_id = {alias}.user_id "
             f"AND vf.is_inward IS FALSE AND vf.is_accepted IS TRUE))))")

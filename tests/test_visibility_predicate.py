@@ -1,7 +1,9 @@
+from sqlalchemy import text
+
 from app import db
 from app.models import Post, PostReply
-from app.visibility import (can_view, listable_sql, mark_restricted, visible_to_clause,
-                            RestrictedReply)
+from app.visibility import (can_view, listable_clause, listable_sql, mark_restricted, visible_to_clause,
+                            visible_to_sql, RestrictedReply)
 from tests.factories import make_visibility_world
 
 
@@ -46,6 +48,31 @@ def test_clause_matches_python_predicate(db_session):
     for viewer in (None, w.follower.id, w.pending.id, w.stranger.id, w.author.id):
         ids = {p.id for p in Post.query.filter(visible_to_clause(Post, viewer))}
         assert (w.post.id in ids) == can_view(w.post, viewer), viewer
+
+
+def test_sql_matches_python_predicate(db_session):
+    w = make_visibility_world()
+    query = text(f"SELECT p.id FROM post p WHERE {visible_to_sql('p')}")
+    for viewer in (None, w.follower.id, w.pending.id, w.stranger.id, w.author.id):
+        ids = {row[0] for row in db.session.execute(query, {'visibility_viewer_id': viewer})}
+        for post in (w.post, w.public_post):
+            assert (post.id in ids) == can_view(post, viewer), viewer
+
+
+def test_sql_treats_null_visibility_as_public(db_session):
+    # post.visibility is NOT NULL, so feed the predicate a derived table that yields NULL.
+    w = make_visibility_world()
+    query = text("SELECT p.id FROM (SELECT id, user_id, CAST(NULL AS VARCHAR) AS visibility FROM post) p "
+                 f"WHERE {visible_to_sql('p')}")
+    ids = {row[0] for row in db.session.execute(query, {'visibility_viewer_id': None})}
+    assert w.post.id in ids
+
+
+def test_listable_clause_only_public(db_session):
+    w = make_visibility_world()
+    ids = {p.id for p in Post.query.filter(listable_clause(Post))}
+    assert w.public_post.id in ids
+    assert w.post.id not in ids
 
 
 def test_listable_sql_shape():
