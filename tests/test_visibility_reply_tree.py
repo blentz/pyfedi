@@ -90,9 +90,10 @@ def test_ap_context_collection_omits_hidden_reply(app, world):
 
 
 def _find(comments, reply_id):
+    """Client-style walk: every entry, stub or not, is read through entry['comment']['id'] and ['path']."""
     for c in comments:
-        cid = c['id'] if 'comment' not in c else c['comment']['id']
-        if cid == reply_id:
+        assert c['comment']['path']
+        if c['comment']['id'] == reply_id:
             return c
         found = _find(c.get('replies', []), reply_id)
         if found:
@@ -106,9 +107,9 @@ def test_api_post_replies_returns_stub_for_stranger(app, world):
                                      headers={'Authorization': bearer(w.stranger)})
     assert response.status_code == 200
     stub = _find(response.json['comments'], w.reply.id)
-    assert stub['body'] is None and stub['creator'] is None
+    assert stub['comment']['body'] is None and stub['creator'] is None
     assert stub['visibility'] == 'followers'
-    assert stub['post_id'] == w.public_post.id
+    assert stub['comment']['post_id'] == w.public_post.id
     assert 'secret reply' not in response.get_data(as_text=True)
     child = stub['replies'][0]
     assert child['comment']['body'] == 'public child'
@@ -127,7 +128,7 @@ def test_api_comment_list_returns_stub_for_stranger(app, world):
                                      headers={'Authorization': bearer(w.stranger)})
     assert response.status_code == 200
     stub = _find(response.json['comments'], w.reply.id)
-    assert stub['body'] is None and stub['visibility'] == 'followers'
+    assert stub['comment']['body'] is None and stub['visibility'] == 'followers'
     assert 'secret reply' not in response.get_data(as_text=True)
 
 
@@ -138,4 +139,11 @@ def test_api_comment_list_tree_modes_return_stub(app, world):
                                          headers={'Authorization': bearer(w.stranger)})
         assert response.status_code == 200
         assert 'secret reply' not in response.get_data(as_text=True)
-        assert _find(response.json['comments'], w.reply.id)['body'] is None
+        assert _find(response.json['comments'], w.reply.id)['comment']['body'] is None
+
+
+def test_restricted_reply_carries_its_path(app, db_session):
+    w = make_visibility_world()
+    entry = next(e for e in post_replies(w.public_post, 'new', w.stranger) if e['comment'].id == w.reply.id)
+    assert entry['comment'].path[-1] == w.reply.id
+    assert entry['comment'].path[0] == 0

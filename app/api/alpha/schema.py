@@ -601,18 +601,43 @@ class CommentView(DefaultSchema):
 class CommentViewOrStub(fields.Nested):
     """D18: a comment the viewer may not see arrives as a RestrictedCommentStub instead of the full view."""
     def _deserialize(self, value, attr, data, partial=None, **kwargs):
-        if isinstance(value, dict) and value.get('visibility') == 'followers' and value.get('body', 0) is None:
+        if isinstance(value, dict) and value.get('visibility') == 'followers' and isinstance(value.get('comment'), dict) \
+                and value['comment'].get('body', 0) is None:
             return RestrictedCommentStub().load(value)
         return super()._deserialize(value, attr, data, partial=partial, **kwargs)
 
 
-class RestrictedCommentStub(DefaultSchema):
+class RestrictedComment(DefaultSchema):
     id = fields.Integer(required=True)
     post_id = fields.Integer(required=True)
     path = fields.String(required=True)
-    visibility = fields.String(required=True, validate=validate.OneOf(['followers']))
     body = fields.String(allow_none=True, validate=validate.Equal(None))
+    visibility = fields.String(required=True, validate=validate.OneOf(['followers']))
+    ap_id = fields.String(allow_none=True)
+    deleted = fields.Boolean()
+    removed = fields.Boolean()
+    local = fields.Boolean()
+    language_id = fields.Integer()
+    user_id = fields.Integer(allow_none=True)
+    published = fields.String(allow_none=True)
+
+
+class RestrictedCommentStub(DefaultSchema):
+    comment = fields.Nested(RestrictedComment, required=True)
+    visibility = fields.String(required=True, validate=validate.OneOf(['followers']))
     creator = fields.Raw(allow_none=True)
+    counts = fields.Raw(allow_none=True)
+    community = fields.Raw(allow_none=True)
+    post = fields.Raw(allow_none=True)
+    activity_alert = fields.Boolean()
+    banned_from_community = fields.Boolean()
+    creator_banned_from_community = fields.Boolean()
+    creator_blocked = fields.Boolean()
+    creator_is_admin = fields.Boolean()
+    creator_is_moderator = fields.Boolean()
+    saved = fields.Boolean()
+    subscribed = fields.String()
+    my_vote = fields.Integer()
     replies = fields.List(CommentViewOrStub(lambda: PostReplyView), metadata={"description": "Replies below the hidden one, which may be visible or stubs too."})
 
 

@@ -1517,7 +1517,7 @@ def get_post_replies(auth, data):
             reply = item['comment']
             if item.get('restricted'):
                 # D18: the place in the tree, nothing of the reply; its visible children stay
-                stub = reply_stub_view(db.session.get(PostReply, reply.id))
+                stub = reply_stub_view(reply)
                 stub['replies'] = process_nested_replies(item['replies'], is_top_level=False)
                 processed_replies.append(stub)
                 continue

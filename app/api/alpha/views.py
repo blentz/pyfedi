@@ -905,12 +905,20 @@ def reply_view(reply: PostReply | int, variant: int, user_id=None,
         return v6
 
 
-def reply_stub_view(reply: PostReply) -> dict:
-    """D18: what the API shows of a reply the viewer may not see. Nothing but its place in the tree."""
-    if not reply.path:
-        calculate_path(reply)
-    return {'id': reply.id, 'post_id': reply.post_id, 'path': '.'.join(str(id) for id in reply.path),
-            'visibility': VISIBILITY_FOLLOWERS, 'body': None, 'creator': None, 'replies': []}
+def reply_stub_view(reply) -> dict:
+    """D18: what the API shows of a reply the viewer may not see. A CommentView with the same nesting
+    (clients read comment.id and comment.path) but nothing of the reply. `reply` needs id, post_id and path
+    only: a RestrictedReply, or a PostReply in the flat lists."""
+    path = '.'.join(str(id) for id in reply.path) if reply.path else f'0.{reply.id}'
+    return {'comment': {'id': reply.id, 'post_id': reply.post_id, 'path': path, 'body': None,
+                        'visibility': VISIBILITY_FOLLOWERS, 'ap_id': None, 'deleted': False, 'removed': False,
+                        'local': False, 'language_id': 0, 'user_id': None, 'published': None},
+            'creator': None, 'counts': None, 'community': None, 'post': None,
+            'visibility': VISIBILITY_FOLLOWERS,
+            'activity_alert': False, 'banned_from_community': False, 'creator_banned_from_community': False,
+            'creator_blocked': False, 'creator_is_admin': False, 'creator_is_moderator': False,
+            'saved': False, 'subscribed': 'NotSubscribed', 'my_vote': 0,
+            'replies': []}
 
 
 def reply_report_view(report, reply_id, user_id, variant=1) -> dict:
