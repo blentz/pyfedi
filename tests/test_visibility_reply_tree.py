@@ -107,7 +107,7 @@ def test_api_post_replies_returns_stub_for_stranger(app, world):
                                      headers={'Authorization': bearer(w.stranger)})
     assert response.status_code == 200
     stub = _find(response.json['comments'], w.reply.id)
-    assert stub['comment']['body'] is None and stub['creator'] is None
+    assert stub['comment']['body'] is None and stub['creator']['id'] == 0 and not stub['creator']['user_name']
     assert stub['visibility'] == 'followers'
     assert stub['comment']['post_id'] == w.public_post.id
     assert 'secret reply' not in response.get_data(as_text=True)

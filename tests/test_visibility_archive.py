@@ -104,6 +104,6 @@ def test_api_replies_on_an_archived_post_return_the_nested_stub(app, archived):
     assert response.status_code == 200
     stub = _find(response.json['comments'], w.reply_id)
     assert stub['visibility'] == 'followers'
-    assert stub['comment']['body'] is None and stub['creator'] is None
+    assert stub['comment']['body'] is None and stub['creator']['id'] == 0 and not stub['creator']['user_name']
     assert stub['replies'][0]['comment']['body'] == 'public child'
     assert SECRET not in response.get_data(as_text=True)
