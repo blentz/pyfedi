@@ -80,7 +80,9 @@
                     <p>{{ _('Deleted by author') }}</p>
                 {% endif -%}
             {% else -%}
+                {% if post_reply.content_warning -%}<details class="content_warning"><summary>{{ post_reply.content_warning }}</summary>{% endif -%}
                 {{ post_reply.body_html | community_links | feed_links | person_links | safe }}
+                {% if post_reply.content_warning -%}</details>{% endif -%}
             {% endif -%}
         </div>
     </div>
