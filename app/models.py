@@ -3617,10 +3617,12 @@ class Post(db.Model):
         Unlike blurred(), which says what a feed teaser does for a viewer who
         has chosen 'Blur' (a viewer on 'Hide' never sees the teaser), a post
         opened by its link is blurred for everyone except a viewer who chose
-        'Show' for that kind of content.
+        'Show' for that kind of content. A spoiler flair blurs for everyone, as
+        it does in teasers.
         """
         return bool((self.nsfw and getattr(user, 'hide_nsfw', None) != 0) or
-                    (self.nsfl and getattr(user, 'hide_nsfl', None) != 0))
+                    (self.nsfl and getattr(user, 'hide_nsfl', None) != 0) or
+                    self.spoiler_flair())
 
     def posted_at_localized(self, sort, locale):
         # some locales do not have a definition for 'weeks' so are unable to display some dates in some languages. Fall back to english for those languages.
