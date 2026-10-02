@@ -130,7 +130,7 @@ def run_search():
 
         replies = None
         if search_for == 'comments':
-            replies = PostReply.query.filter(PostReply.deleted == False, PostReply.private == False,
+            replies = PostReply.query.filter(PostReply.deleted == False,
                                             listable_clause(PostReply))
             if current_user.is_authenticated:
                 if current_user.ignore_bots == 1:

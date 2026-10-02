@@ -4449,7 +4449,8 @@ def activitypub_visibility(obj: dict) -> str:
 
     Note that Post.private does NOT mean "not public": Post.new() sets it for any
     titleless object, i.e. every microblog post, making it an unlisted marker.
-    PostReply.private does mean followers-only. The two are not the same thing.
+    PostReply.private is no longer read or written: a reply's visibility column
+    carries followers-only.
 
     Also note Post.new() clears that private flag whenever the ACTIVITY-level
     'to' or 'cc' contains Public (app/models.py ~1802-1807), including via 'cc' --

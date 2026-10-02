@@ -3975,11 +3975,6 @@ class PostReply(db.Model):
             parent_id = None
             depth = 0
 
-        private = False
-        if request_json and 'to' in request_json and len(request_json['to']) == 1:
-            if request_json['to'][0].endswith('/followers'):  # Mastodon followers-only posts are private
-                private = True
-
         visibility = activitypub_visibility(request_json['object']) \
             if request_json and isinstance(request_json.get('object'), dict) else 'public'
 
@@ -3990,7 +3985,7 @@ class PostReply(db.Model):
                           from_bot=user.bot or user.bot_override, nsfw=post.nsfw,
                           notify_author=notify_author, instance_id=user.instance_id,
                           language_id=language_id, collapsible=user.id != post.user_id,
-                          distinguished=distinguished, answer=answer, private=private, visibility=visibility,
+                          distinguished=distinguished, answer=answer, visibility=visibility,
                           indexable=user.indexable,
                           ap_id=request_json['object']['id'] if request_json else None,
                           ap_create_id=request_json['id'] if request_json else None,
