@@ -2660,7 +2660,8 @@ class Post(db.Model):
         # cycle: app.activitypub.util imports from this module
         from app.activitypub.util import find_language_or_create, find_language, \
             find_hashtag_or_create, \
-            find_licence_or_create, make_image_sizes, notify_about_post, find_flair_or_create, host_of
+            find_licence_or_create, make_image_sizes, notify_about_post, find_flair_or_create, host_of, \
+            activitypub_visibility
         # cycle: app.utils imports from this module
         from app.utils import allowlist_html, markdown_to_html, html_to_text, microblog_content_to_title, \
             microblog_content_to_link, blocked_phrases, get_setting, \
@@ -2685,6 +2686,7 @@ class Post(db.Model):
                     private = False
         else:
             title = request_json['object']['name'].strip()
+        visibility = activitypub_visibility(request_json['object'])
         nsfl_in_title = '[NSFL]' in title.upper() or '(NSFL)' in title.upper() or '[COMBAT]' in title.upper()
         post = Post(user_id=user.id, community_id=community.id,
                     title=html.unescape(title),
@@ -2694,6 +2696,7 @@ class Post(db.Model):
                     nsfl=request_json['object']['nsfl'] if 'nsfl' in request_json['object'] else nsfl_in_title,
                     ai_generated=request_json['object']['genAI'] if 'genAI' in request_json['object'] else False,
                     private=private,
+                    visibility=visibility,
                     ap_id=request_json['object']['id'],
                     ap_create_id=request_json['id'],
                     ap_announce_id=announce_id,
@@ -4019,7 +4022,8 @@ class PostReply(db.Model):
         # cycle: app.utils imports from this module
         from app.utils import shorten_string, blocked_phrases, recently_upvoted_post_replies, reply_already_exists, \
             reply_is_just_link_to_gif_reaction, reply_is_low_effort, wilson_confidence_lower_bound, get_setting
-        from app.activitypub.util import notify_about_post_reply  # cycle: app.activitypub.util imports from this module
+        # cycle: app.activitypub.util imports from this module
+        from app.activitypub.util import notify_about_post_reply, activitypub_visibility
 
         if session is None:
             session = db.session
@@ -4042,6 +4046,9 @@ class PostReply(db.Model):
             if request_json['to'][0].endswith('/followers'):  # Mastodon followers-only posts are private
                 private = True
 
+        visibility = activitypub_visibility(request_json['object']) \
+            if request_json and isinstance(request_json.get('object'), dict) else 'public'
+
         reply = PostReply(user_id=user.id, post_id=post.id, parent_id=parent_id,
                           depth=depth,
                           community_id=post.community.id, body=body,
@@ -4049,7 +4056,8 @@ class PostReply(db.Model):
                           from_bot=user.bot or user.bot_override, nsfw=post.nsfw,
                           notify_author=notify_author, instance_id=user.instance_id,
                           language_id=language_id, collapsible=user.id != post.user_id,
-                          distinguished=distinguished, answer=answer, private=private, indexable=user.indexable,
+                          distinguished=distinguished, answer=answer, private=private, visibility=visibility,
+                          indexable=user.indexable,
                           ap_id=request_json['object']['id'] if request_json else None,
                           ap_create_id=request_json['id'] if request_json else None,
                           ap_announce_id=announce_id,
