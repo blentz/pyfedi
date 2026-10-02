@@ -15,6 +15,7 @@ from app.api.alpha.views import search_view, post_view, reply_view, user_view, c
 from app.community.util import search_for_community
 from app.models import Post, PostReply, User, Community, BannedInstances, Feed, ModLog
 from app.user.utils import search_for_user
+from app.visibility import can_view
 from app.feed.util import search_for_feed
 from app.utils import authorise_api_user, gibberish, subscribed_feeds, communities_banned_from, \
     moderating_communities_ids, joined_or_modding_communities, blocked_communities, blocked_or_banned_instances
@@ -281,7 +282,8 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             # Since this is a local request, just search for the post by id
             object = db.session.get(Post, post_id)
 
-            if not object:
+            # A followers-only post is as unknown to this caller as an id nobody holds
+            if not object or not can_view(object, user_id):
                 raise Exception('No object found.')
             else:
                 return post_view(post=object, variant=5, user_id=user_id)
@@ -302,7 +304,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             # Since this is a local request, just search for the comment by id
             object = db.session.get(PostReply, comment_id)
 
-            if not object:
+            if not object or not can_view(object, user_id):
                 raise Exception('No object found.')
             else:
                 return reply_view(reply=object, variant=5, user_id=user_id)
@@ -448,6 +450,8 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             get_resolve_object(None, {"q": ap_json['inReplyTo']}, user_id, True)
             object = create_resolved_object(query, ap_json, server, community, announce_id, False)
 
+    if object and not recursive and not can_view(object, user_id):
+        raise Exception('No object found.')  # as for an object that could not be resolved
     if object:
         if isinstance(object, Post):
             return post_view(post=object, variant=5, user_id=user_id) if not recursive else object

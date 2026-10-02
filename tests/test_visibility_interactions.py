@@ -260,3 +260,24 @@ def test_api_moderator_action_is_not_the_not_found_for_follower(app, world, name
     hidden = call_api(app, w, w.follower, method, path, body, key, target)
     missing = call_api(app, w, w.follower, method, path, body, key, MISSING)
     assert hidden.get_data(as_text=True) != missing.get_data(as_text=True)
+
+
+def test_resolve_object_does_not_return_hidden_objects(app, world):
+    """A followers-only post or reply resolves for a follower; for a stranger or an anonymous caller the answer is
+    the one an unknown url gets."""
+    w = world
+    base = f"https://{current_app.config['SERVER_NAME']}"
+    for obj, path in ((w.post, f'/post/{w.post.id}'), (w.reply, f'/comment/{w.reply.id}')):
+        client = app.test_client()
+        query = {'q': base + path}
+        missing_path = path.replace(str(obj.id), str(MISSING))
+        for headers in ({'Authorization': bearer(w.stranger)}, {}):
+            unknown = client.get('/api/alpha/resolve_object', query_string={'q': base + missing_path},
+                                 headers=headers)
+            hidden = client.get('/api/alpha/resolve_object', query_string=query, headers=headers)
+            assert hidden.status_code == unknown.status_code
+            assert hidden.get_data() == unknown.get_data()
+        assert unknown.status_code != 200
+        ok = client.get('/api/alpha/resolve_object', query_string=query,
+                        headers={'Authorization': bearer(w.follower)})
+        assert ok.status_code == 200, ok.get_data(as_text=True)
