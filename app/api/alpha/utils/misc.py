@@ -389,7 +389,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
     # document of any other type carrying no `preferredUsername` was
     # `KeyError: 'preferredUsername'`, measured as PROBE bk1. D1190's shape,
     # second instance in this file.
-    if (ap_json['type'] in ('Person', 'Service', 'Group', 'Feed')
+    if (ap_json['type'] in ('Person', 'Service', 'Podcast', 'Group', 'Feed')
             and 'preferredUsername' in ap_json):
         name = ap_json['preferredUsername'].lower()
         object = actor_json_to_model(ap_json, name, server)
