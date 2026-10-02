@@ -3293,7 +3293,7 @@ def create_post(store_ap_json, community: Community, request_json: dict, user: U
 # C1. A Castopod episode is announced as a plain Note whose content opens with a link to the episode page
 # (`https://pod.example/@mypod/episodes/ep-1`). The Note carries no attachment: the audio lives on the
 # `PodcastEpisode` object served at that url, so ingest fetches it afterwards.
-_CASTOPOD_EPISODE_PATH = re.compile(r'^/@[^/]+/episodes/[^/]+/?$')
+_CASTOPOD_EPISODE_PATH = re.compile(r'/@[^/]+/episodes/[^/]+/?')
 _CASTOPOD_EPISODE_LINK = re.compile(r'^\s*(?:<p>\s*)?<a\s[^>]*?href="([^"]+)"', re.IGNORECASE)
 
 
@@ -3315,7 +3315,7 @@ def castopod_episode_url(note: dict, actor_ap_id: str):
     if not href:
         return None
     parsed = urlparse(href)
-    if not _CASTOPOD_EPISODE_PATH.match(parsed.path or '') or parsed.query or not actor_ap_id:
+    if not _CASTOPOD_EPISODE_PATH.fullmatch(parsed.path or '') or parsed.query or not actor_ap_id:
         return None
     if not parsed.hostname or parsed.hostname != host_of(actor_ap_id):
         return None
