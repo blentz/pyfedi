@@ -375,3 +375,25 @@ def test_a_listing_reads_post_file_once_for_the_whole_page(app, ingest, post_fil
         assert [image['alt_text'] for image in entry['post']['extensions']['gallery']] == ['b', 'c']
     assert len(post_file_queries) == 1
 
+
+def test_the_blocked_images_purge_list_considers_gallery_images(ingest):
+    from app.models import BlockedImage
+    from app.utils import posts_with_blocked_images
+    post = ingest(album(image(FIRST, 'a'), image(SECOND, 'b')))
+    gallery_of(post)[0].hash = BLOCKED_HASH
+    db.session.add(BlockedImage(hash=BLOCKED_HASH, file_name='blocked.jpg'))
+    db.session.commit()
+
+    assert posts_with_blocked_images() == [post.id]
+
+
+def test_the_blocked_images_purge_list_still_considers_the_primary_image(ingest):
+    from app.models import BlockedImage
+    from app.utils import posts_with_blocked_images
+    post = ingest(album(image(FIRST, 'a'), image(SECOND, 'b')))
+    post.image.hash = BLOCKED_HASH
+    db.session.add(BlockedImage(hash=BLOCKED_HASH, file_name='blocked.jpg'))
+    db.session.commit()
+
+    assert posts_with_blocked_images() == [post.id]
+

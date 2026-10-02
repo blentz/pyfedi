@@ -256,6 +256,8 @@ def delete_posts_with_blocked_images(post_ids, user_id, send_async):
                         if post.image_id:
                             file = session.get(File, post.image_id)
                             file.delete_from_disk()
+                        for gallery_file in post.gallery:  # an album's other images may be the blocked one
+                            gallery_file.delete_from_disk()
                         session.commit()
 
                         delete_object(user_id, post, is_post=True, reason='Contains blocked image', session=session)

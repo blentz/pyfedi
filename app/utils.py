@@ -5143,10 +5143,16 @@ def hash_matches_blocked_image(hash: str) -> bool:
 
 
 def posts_with_blocked_images() -> List[int]:
+    # A post's own image and the images of its gallery (post_file) are both held to the blocked hashes
     sql = """
     SELECT DISTINCT post.id
     FROM post
-    JOIN file ON post.image_id = file.id
+    JOIN (
+        SELECT post.id AS post_id, post.image_id AS file_id FROM post
+        UNION ALL
+        SELECT post_id, file_id FROM post_file
+    ) AS post_image ON post_image.post_id = post.id
+    JOIN file ON post_image.file_id = file.id
     JOIN blocked_image ON (
         length(replace((file.hash # blocked_image.hash)::text, '0', ''))
     ) < 15
