@@ -305,3 +305,32 @@ def test_the_api_reads_no_post_file_rows_for_a_post_without_a_gallery(app, inges
     post_view(post=post, variant=1)
 
     assert post_file_queries == []
+
+
+def an_update(*attachments):
+    update = album(*attachments)
+    update['type'] = 'Update'
+    return update
+
+
+def test_an_update_with_the_same_images_changes_alt_text_in_place(ingest):
+    from app.activitypub.util import update_post_from_activity
+    post = ingest(album(image(FIRST, 'a'), image(SECOND, 'b'), image(THIRD, 'c')))
+    ids = [f.id for f in gallery_of(post)]
+
+    update_post_from_activity(post, an_update(image(FIRST, 'a'), image(SECOND, 'new b'), image(THIRD, 'c')))
+    db.session.refresh(post)
+
+    assert [f.id for f in gallery_of(post)] == ids
+    assert [f.alt_text for f in gallery_of(post)] == ['new b', 'c']
+
+
+def test_an_update_that_reorders_the_images_rewrites_the_gallery(ingest):
+    from app.activitypub.util import update_post_from_activity
+    post = ingest(album(image(FIRST, 'a'), image(SECOND, 'b'), image(THIRD, 'c')))
+
+    update_post_from_activity(post, an_update(image(FIRST, 'a'), image(THIRD, 'c'), image(SECOND, 'b')))
+    db.session.refresh(post)
+
+    assert [f.source_url for f in gallery_of(post)] == [THIRD, SECOND]
+    assert post.gallery_count == 2
