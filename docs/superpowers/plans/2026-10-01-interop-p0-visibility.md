@@ -930,5 +930,5 @@ Deferred:
 - API album posts run one `post_file` query each: FIXED at 8a0c04aeb (one query per listing page). Admin `posts_with_blocked_images` checks the primary image only: FIXED at 0bbf97be3.
 - An Update on an album with a previously dropped blocked image rebuilds the gallery every time: FIXED at 55639f037 (the dropped url is remembered as a post_file row of weight -1).
 - Friendica-style Link + several images gets no gallery (Mbin rule): FIXED at c3f545df9.
-- Castopod episodes have no audio player: Castopod never federates audio in a Create (needs the episodes collection).
+- Castopod episodes have no audio player: FIXED at b96bb0524 (the announcement Note's episode link is fetched as a PodcastEpisode; audio becomes the post url, the cover its image; players for .mp3/.m4a/.ogg/.oga/.opus/.wav/.aac/.flac).
 - Migration b5d2c8e1f7a3 was amended to add `post.gallery_count`; a database already at that revision needs `ALTER TABLE post ADD COLUMN gallery_count integer NOT NULL DEFAULT 0`.
