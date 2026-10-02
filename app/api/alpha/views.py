@@ -964,12 +964,18 @@ def reply_removal_ack_view(reply) -> dict:
 def reply_stub_view(reply) -> dict:
     """D18: what the API shows of a reply the viewer may not see. A CommentView with the same nesting
     (clients read comment.id and comment.path) but nothing of the reply. `reply` needs id, post_id and path
-    only: a RestrictedReply, or a PostReply in the flat lists."""
+    only: a RestrictedReply, or a PostReply in the flat lists. Creator, counts, community and post are neutral
+    objects, never null (R2), as in the removal acknowledgements."""
     path = '.'.join(str(id) for id in reply.path) if reply.path else f'0.{reply.id}'
+    post = db.session.get(Post, reply.post_id)  # already in the session: the stub sits in that post's thread or list
     return {'comment': {'id': reply.id, 'post_id': reply.post_id, 'path': path, 'body': None,
                         'visibility': VISIBILITY_FOLLOWERS, 'ap_id': None, 'deleted': False, 'removed': False,
                         'local': False, 'language_id': 0, 'user_id': None, 'published': None},
-            'creator': None, 'counts': None, 'community': None, 'post': None,
+            'creator': _neutral_person(),
+            'counts': {'child_count': 0, 'comment_id': reply.id, 'downvotes': 0, 'published': NEUTRAL_TIME,
+                       'score': 0, 'upvotes': 0},
+            'community': community_view(community=post.community, variant=1, stub=True),
+            'post': _neutral_post(post),
             'visibility': VISIBILITY_FOLLOWERS,
             'activity_alert': False, 'banned_from_community': False, 'creator_banned_from_community': False,
             'creator_blocked': False, 'creator_is_admin': False, 'creator_is_moderator': False,

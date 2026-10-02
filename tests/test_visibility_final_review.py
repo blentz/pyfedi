@@ -175,3 +175,32 @@ def test_cross_posts_do_not_carry_a_hidden_post(app, world):
         assert 'alice' not in str(response.get_json()['cross_posts'])
     follower = api_get(app, '/api/alpha/post', w.follower, id=w.public_post.id).get_json()
     assert follower['cross_posts'][0]['post']['title'] == SECRET_TITLE
+
+
+# R2
+def _stub_of(comments, reply_id):
+    for c in comments:
+        if c['comment']['id'] == reply_id:
+            return c
+        found = _stub_of(c.get('replies') or [], reply_id)
+        if found:
+            return found
+
+
+@pytest.mark.parametrize('path, params', [('/api/alpha/post/replies', 'post_id'),
+                                          ('/api/alpha/comment/list', 'post_id')])
+def test_a_reply_stub_carries_neutral_objects_not_nulls(app, world, path, params):
+    w = world
+    w.reply.body = 'secret reply'
+    db.session.commit()
+    response = api_get(app, path, w.stranger, **{params: w.public_post.id})
+    assert response.status_code == 200, response.get_data(as_text=True)
+    stub = _stub_of(response.get_json()['comments'], w.reply.id)
+    assert stub['visibility'] == 'followers' and stub['comment']['body'] is None
+    for key in ('creator', 'counts', 'post', 'community'):
+        assert isinstance(stub[key], dict), key
+    assert stub['creator']['id'] == 0 and stub['creator']['user_name'] == ''
+    assert stub['counts']['score'] == 0 and stub['counts']['comment_id'] == w.reply.id
+    assert stub['post']['id'] == w.public_post.id and stub['post']['title'] == '' and stub['post']['user_id'] == 0
+    text = response.get_data(as_text=True)
+    assert 'secret reply' not in text and '"alice"' not in text
