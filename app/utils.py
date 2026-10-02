@@ -4564,7 +4564,8 @@ FOLLOWED_BOOSTER_SQL = """(EXISTS (SELECT 1 FROM post_boost pb
                                   INNER JOIN user_follower uf2 ON uf2.remote_user_id = pb.user_id
                                   WHERE pb.post_id = p.id
                                   AND uf2.local_user_id = :local_user_id
-                                  AND uf2.is_inward is false)
+                                  AND uf2.is_inward is false
+                                  AND uf2.is_accepted is true)
                                   AND """ + visible_to_sql('p') + ')'
 
 # Applied to the COMMUNITY source only, never to the whole query and never to the

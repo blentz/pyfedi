@@ -1969,15 +1969,17 @@ def post_post_mark_as_read(auth, data):
         raise Exception('post_id or post_ids required')
 
     user_id = authorise_api_user(auth)
-    for post_id in [data['post_id']] if 'post_id' in data else data['post_ids']:
-        a_visible_post(post_id, auth)
+    if 'post_id' in data:
+        post_ids = [a_visible_post(data['post_id'], auth).id]
+    else:
+        # `else`, not `elif 'post_ids' in data`: the guard at the top of
+        # this function already refused a request carrying neither. A batch
+        # skips ids nobody holds or the caller may not see, so one of them
+        # neither fails the rest nor tells the two cases apart.
+        posts = Post.query.filter(Post.id.in_(data['post_ids']), visible_to_clause(Post, user_id))
+        post_ids = [post.id for post in posts]
     try:
-        if 'post_id' in data:
-            shared_post.mark_post_read([data['post_id']], data['read'], user_id)
-        else:
-            # `else`, not `elif 'post_ids' in data`: the guard at the top of
-            # this function already refused a request carrying neither.
-            shared_post.mark_post_read(data['post_ids'], data['read'], user_id)
+        shared_post.mark_post_read(post_ids, data['read'], user_id)
     except IntegrityError:
         return {"success": False}
     return {"success": True}
