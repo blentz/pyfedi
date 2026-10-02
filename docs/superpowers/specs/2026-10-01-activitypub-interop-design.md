@@ -31,6 +31,9 @@ Full cross-compatibility with Mastodon, PeerTube, Pixelfed and Castopod. "Full" 
   - Direct: becomes a PieFed chat for local recipients; remote participants shown read-only. Full multi-instance DM threads are post-MVP.
   - Outbound: local users post public content only in the MVP.
 
+- **D18 Hidden replies in a thread.** A reply the viewer may not see renders as a placeholder ("Visible to followers only") with no author, body or score. Its visible children stay in the tree. The API returns a stub with `visibility: "followers"` and null content. ActivityPub collections omit hidden replies.
+- **D19 No moderator exemption.** Admins, staff and community moderators see followers-only content only through the report queue, which snapshots the reported body. Everywhere else they get the same placeholder or 404 as any other viewer.
+
 ### Extensibility
 
 - **D8 Content kind.** The unit of extension is a content kind, one registered bundle of:
