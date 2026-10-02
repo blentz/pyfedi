@@ -445,7 +445,7 @@ def get_reply_list(auth, data, user_details=None):
             reply_json['community'] = inner_community_view
         if add_post_in_view == False:
             if inner_post_view is None:
-                inner_post_view = post_view(post=reply.post, variant=1)
+                inner_post_view = post_view(post=reply.post, variant=1, user_id=user_id)
             reply_json['post'] = inner_post_view
 
         reply_list.append(reply_json)

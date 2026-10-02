@@ -20,6 +20,12 @@ from app.utils import getmtime, gibberish, shorten_string, shorten_url, digits, 
     notif_id_to_string, feed_link_to_href, get_setting, set_setting, show_explore, human_filesize, can_upload_video, \
     debug_checkpoint, compaction_level, humanize_number, round_invisible_digits, get_site_as_dict, localize_datetime, \
     display_back_button, favorite_communities, get_event_start, reply_filter_keyword, user_banned_from_community
+from app.visibility import can_view
+
+
+def viewer_can_view(obj) -> bool:
+    """can_view for the request's viewer, for templates that show one object inside another (R1)."""
+    return can_view(obj, current_user.get_id())
 
 
 def register_request_hooks(app):
@@ -71,6 +77,7 @@ def register_request_hooks(app):
     app.jinja_env.globals["get_event_start"] = get_event_start
     app.jinja_env.globals['reply_filter_keyword'] = reply_filter_keyword
     app.jinja_env.globals['user_banned_from_community'] = user_banned_from_community  # D995
+    app.jinja_env.globals['viewer_can_view'] = viewer_can_view
     app.jinja_env.filters['community_links'] = community_link_to_href
     app.jinja_env.filters['feed_links'] = feed_link_to_href
     app.jinja_env.filters['person_links'] = person_link_to_href

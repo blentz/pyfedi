@@ -52,7 +52,7 @@ from app.utils import communities_banned_from, blocked_or_banned_instances, filt
     get_request
 from sqlalchemy import func
 from app import db
-from app.visibility import visible_to_clause
+from app.visibility import can_view, visible_to_clause
 from flask import g
 from app.api.alpha.utils.reply import post_reply as _api_post_reply
 from app.api.alpha.utils.post import post_post as _api_post_post
@@ -157,8 +157,10 @@ def _reply_to_info(reply, domain: str, seq_num: int) -> ArticleInfo:
         else _make_message_id('post', reply.post_id, domain)
     )
     subject = "(no subject)"
-    if reply.post:
+    if reply.post and can_view(reply.post, None):  # NNTP is anonymous: a hidden parent's title stays unsaid
         subject = f"Re: {reply.post.title or '(no subject)'}"
+    elif reply.post:
+        subject = "Re: (a followers-only post)"
     web_url = f"https://{domain}/post/{reply.post_id}#comment-{reply.id}"
     return ArticleInfo(
         number=seq_num,

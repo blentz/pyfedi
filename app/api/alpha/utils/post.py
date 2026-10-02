@@ -1581,7 +1581,7 @@ def get_post_replies(auth, data):
             # Only include post and community info on top-level replies
             if is_top_level:
                 if not inner_post_view:
-                    inner_post_view = post_view(post, variant=1)
+                    inner_post_view = post_view(post, variant=1, user_id=user_id)
                 view['post'] = inner_post_view
                 if not inner_community_view:
                     inner_community_view = community_view(post.community, variant=1, stub=True)

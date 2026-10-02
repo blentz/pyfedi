@@ -102,12 +102,12 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
     # Check to see if the query parameter is already federated and is the canonical ap url
     object = db.session.query(PostReply).filter_by(ap_id=query).first()
     if object:
-        if object.deleted:
+        if object.deleted or (not recursive and not can_view(object, user_id)):
             raise Exception('No object found.')
         return reply_view(reply=object, variant=5, user_id=user_id) if not recursive else object
     object = db.session.query(Post).filter_by(ap_id=query).first()
     if object:
-        if object.deleted:
+        if object.deleted or (not recursive and not can_view(object, user_id)):
             raise Exception('No object found.')
         return post_view(post=object, variant=5, user_id=user_id) if not recursive else object
     object = db.session.query(Community).filter_by(ap_profile_id=query.lower()).first()

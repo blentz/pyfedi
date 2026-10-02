@@ -17,12 +17,16 @@
 {% endif -%}
 {# R168: a reply the viewer's filters match is a collapsed stub; its replies below stay visible #}
 {% set filtered_keyword = reply_filter_keyword(post_reply) if not no_content_filter else None -%}
-<div class="container comment{% if post_reply.score and post_reply.score <= -10 %} low_score{% endif %}{% if post_reply.distinguished %} distinguished{% endif %}{% if post_reply.author.id == post_reply.post.author.id %} original_poster{% endif %}{% if post_reply.author.id == current_user.get_id() %} my_comment{% endif %}{% if post_reply.has_been_reported() %} reported{% endif %}{% if post_reply.answer %} answer{% endif %}" id="comment_{{ post_reply.id }}"{% if post_reply.language_id and post_reply.language.code != 'en' %} lang="{{ post_reply.language.code }}"{% endif %} aria-level="{{ post_reply.depth+1 }}" role="treeitem">
+{# R1: a visible reply under a post the viewer may not see names nothing of that post #}
+{% set parent_visible = viewer_can_view(post_reply.post) -%}
+<div class="container comment{% if post_reply.score and post_reply.score <= -10 %} low_score{% endif %}{% if post_reply.distinguished %} distinguished{% endif %}{% if parent_visible and post_reply.author.id == post_reply.post.author.id %} original_poster{% endif %}{% if post_reply.author.id == current_user.get_id() %} my_comment{% endif %}{% if post_reply.has_been_reported() %} reported{% endif %}{% if post_reply.answer %} answer{% endif %}" id="comment_{{ post_reply.id }}"{% if post_reply.language_id and post_reply.language.code != 'en' %} lang="{{ post_reply.language.code }}"{% endif %} aria-level="{{ post_reply.depth+1 }}" role="treeitem">
     {% if not post_reply.author.indexable -%}<!--googleoff: all-->{% endif -%}
     {% if teaser -%}
     <div class="row">
         <div class="col-12 hidable">
-            {% if post_reply.post.deleted: -%}
+            {% if not parent_visible -%}
+                {{ _('reply to') }}: {{ _('a followers-only post') }}
+            {% elif post_reply.post.deleted: -%}
                 {{ _('reply to') }}: <a href="{{ url_for('activitypub.post_ap', post_id=post_reply.post.id, _anchor='comment_' + str(post_reply.id)) }}">[{{ _('deleted post') }}]</a>
             {% else -%}
                 {{ _('reply to') }}: <a href="{{ url_for('activitypub.post_ap', post_id=post_reply.post.id, _anchor='comment_' + str(post_reply.id)) }}">{{ post_reply.post.title | truncate(80, True) }}</a>
@@ -42,7 +46,7 @@
                 <span class="user_flair pronouns">{{ user_pronouns[post_reply.author.id] }}</span>
             {%- endif %}
             {% if post_reply.distinguished -%}<span class="fe fe-distinguished orangered" title="{{ _('Moderator') }}"></span>{% endif -%}
-            {% if post_reply.author.id == post_reply.post.author.id -%}
+            {% if parent_visible and post_reply.author.id == post_reply.post.author.id -%}
                 <span title="{{ _('Submitter of original post') }}" aria-label="{{ _('Post creator') }}" class="user_flair original_poster">{{ _('OP') }}</span>
             {% endif -%}
             <span class="comment_time">{% if has_continued %}<a href="{{ url_for('post.continue_discussion', post_id=post_reply.post.id, comment_id=post_reply.id) }}">{% else %}<a href="/post/{{ post_reply.post_id }}#comment_{{ post_reply.id }}">{% endif %}

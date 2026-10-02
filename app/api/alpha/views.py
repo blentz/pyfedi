@@ -25,7 +25,7 @@ import app.shared.community as shared_community
 # The module, not the names: app.shared.post reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.post)
 import app.shared.post as shared_post
-from app.visibility import can_view
+from app.visibility import can_view, visible_to_sql
 
 
 # 'stub' param: set to True to exclude optional fields
@@ -33,7 +33,7 @@ from app.visibility import can_view
 
 def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, communities_moderating=None, banned_from=None,
               bookmarked_posts=None, post_subscriptions=None, communities_joined=None, read_posts=None, content_filters=None,
-              usernotes=None, unread_counts=None, interacted_at=None) -> dict:
+              usernotes=None, unread_counts=None, interacted_at=None, report_queue=False) -> dict:
     if isinstance(post, int):
         post = db.session.get(Post, post)
         if post is None:
@@ -42,6 +42,10 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
     # Interop D7: the single-post views answer for a followers-only post exactly as for one that does not exist.
     if variant in (3, 4) and not can_view(post, user_id):
         raise Exception('post not found')
+    # R1: embedded in something the viewer may see (a reply's parent, a cross-post, a modlog entry), a post they may
+    # not see is a stub. The report queue is the one exemption (D19), for the reported post itself.
+    if variant in (1, 2) and not report_queue and not can_view(post, user_id):
+        return _neutral_post(post) if variant == 1 else _neutral_post_view(post)
 
     # Variant 1 - models/post/post.dart
     if variant == 1:
@@ -94,8 +98,8 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
                     v1['alt_text'] = post.image.alt_text
         if post.cross_posts:
             v1['cross_posts'] = []
-            cross_post_data = db.session.execute(text('SELECT p.id, reply_count, c.title FROM "post" as p INNER JOIN "community" as c ON p.community_id = c.id WHERE p.id IN :cross_posts'),
-                                                 {'cross_posts': tuple(post.cross_posts)}).all()
+            cross_post_data = db.session.execute(text('SELECT p.id, reply_count, c.title FROM "post" as p INNER JOIN "community" as c ON p.community_id = c.id WHERE p.id IN :cross_posts AND ' + visible_to_sql('p')),
+                                                 {'cross_posts': tuple(post.cross_posts), 'visibility_viewer_id': user_id}).all()
             for cross_post in cross_post_data:
                 v1['cross_posts'].append({'post_id': cross_post[0], 'reply_count': cross_post[1], 'community_name': cross_post[2]})
         else:
@@ -203,7 +207,7 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
         subscribe_type = 'Subscribed' if followed else 'NotSubscribed'
         can_auth_user_moderate = True if user_id and communities_moderating and user_id in communities_moderating and \
                                          post.community_id in communities_moderating[user_id] else False
-        v2 = {'post': post_view(post=post, variant=1, stub=stub), 'counts': counts, 'banned_from_community': False,
+        v2 = {'post': post_view(post=post, variant=1, stub=stub, user_id=user_id, report_queue=report_queue), 'counts': counts, 'banned_from_community': False,
               'subscribed': subscribe_type,
               'saved': saved, 'read': read, 'hidden': False, 'unread_comments': unread_comments, 'my_vote': my_vote,
               'filtered': post.blocked_by_content_filter(content_filters, user_id) == '-1',
@@ -309,11 +313,11 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
         xplist = []
         if post.cross_posts:
             for xp_id in post.cross_posts:
-                try:
-                    entry = post_view(post=xp_id, variant=2, stub=True, communities_moderating=communities_moderating)
-                    xplist.append(entry)
-                except NoResultFound:
-                    continue
+                xp = db.session.get(Post, xp_id)
+                if xp is None or not can_view(xp, user_id):
+                    continue  # a cross-post the viewer may not see is not offered at all
+                xplist.append(post_view(post=xp, variant=2, stub=True, user_id=user_id,
+                                        communities_moderating=communities_moderating))
 
         if post.community.private and post.community_id not in community_membership_private(user_id):
             raise Exception('Private community - membership required')
@@ -870,7 +874,7 @@ def reply_view(reply: PostReply | int, variant: int, user_id=None,
             v3['creator'] = user_view(user=reply.author, variant=1, stub=True, flair_community_id=reply.community_id,
                                       user_id=user_id)
         if add_post_in_view:
-            v3['post'] = post_view(post=reply.post, variant=1)
+            v3['post'] = post_view(post=reply.post, variant=1, user_id=user_id)
         if add_community_in_view:
             v3['community'] = community_view(community=reply.community, variant=1, stub=True)
 
@@ -918,7 +922,8 @@ def _neutral_post(post) -> dict:
     return {'ap_id': f"{current_app.config['SERVER_URL']}/post/{post.id}", 'community_id': post.community_id,
             'deleted': False, 'id': post.id, 'language_id': 0, 'local': False, 'locked': False, 'nsfw': False,
             'ai_generated': False, 'published': NEUTRAL_TIME, 'removed': bool(post.deleted), 'sticky': False,
-            'instance_sticky': False, 'title': '', 'user_id': 0, 'post_type': 'Discussion', 'visibility': post.visibility}
+            'instance_sticky': False, 'title': '', 'user_id': 0, 'post_type': 'Discussion', 'visibility': post.visibility,
+            'cross_posts': [], 'tags': '', 'flair': ''}
 
 
 def post_removal_ack_view(post) -> dict:
@@ -931,6 +936,12 @@ def post_removal_ack_view(post) -> dict:
             'banned_from_community': False, 'creator_banned_from_community': False, 'creator_is_admin': False,
             'creator_is_moderator': False, 'hidden': False, 'read': False, 'saved': False,
             'subscribed': 'NotSubscribed', 'unread_comments': 0}
+
+
+def _neutral_post_view(post) -> dict:
+    """R1: a PostView of a post the viewer may not see, as post_removal_ack_view with the PostView extras."""
+    return {**post_removal_ack_view(post), 'my_vote': 0, 'filtered': False, 'blurred': False, 'activity_alert': False,
+            'can_auth_user_moderate': False, 'flair_list': []}
 
 
 def reply_removal_ack_view(reply) -> dict:
@@ -1009,7 +1020,7 @@ def reply_report_view(report, reply_id, user_id, variant=1) -> dict:
 
 def post_report_view(report, post_id, user_id, variant=1) -> dict:
     # views/post_report_view.dart - /post/report api endpoint
-    post_json = post_view(post=post_id, variant=2, user_id=user_id)
+    post_json = post_view(post=post_id, variant=2, user_id=user_id, report_queue=True)
     community_json = community_view(community=post_json['post']['community_id'], variant=1, stub=True)
 
     banned = db.session.execute(

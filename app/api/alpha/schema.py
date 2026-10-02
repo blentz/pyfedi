@@ -419,6 +419,9 @@ class Post(DefaultSchema):
     emoji_reactions = fields.List(fields.Nested(Reactions), allow_none=True)
     event = fields.Nested(PostEvent)
     poll = fields.Nested(PostPoll)
+    visibility = fields.String(validate=validate.OneOf(['public', 'unlisted', 'followers', 'direct']),
+                               metadata={"description": "Present only on a neutral stub of a post (one the viewer may "
+                                                        "not see, or inside a removal acknowledgement)."})
 
 
 class PostAggregates(DefaultSchema):
