@@ -29,6 +29,7 @@ from app.utils import authorise_api_user, blocked_users, blocked_communities, bl
     community_membership_private, paginate_post_ids, post_ids_to_models, user_access, moderating_communities_ids, \
     user_filters_languages, feed_readable_by
 from app.shared.tasks import task_selector
+from app.visibility import can_view
 
 
 def a_post(post_id):
@@ -42,6 +43,16 @@ def a_post(post_id):
     """
     post = db.session.get(Post, post_id)
     if not post:
+        raise Exception('post not found')
+    return post
+
+
+def a_visible_post(post_id, auth):
+    """a_post for an action: a post the caller may not see is `post not found`, as if nobody held the id.
+    Checked before the action runs. Moderators get no exemption (D19)."""
+    post = a_post(post_id)
+    user_id = authorise_api_user(auth) if auth else None
+    if not can_view(post, user_id):
         raise Exception('post not found')
     return post
 
@@ -1563,7 +1574,7 @@ def post_post_like(auth, data):
     # guard that used to stand here could not run.
     user = authorise_api_user(auth, return_type="model")
 
-    post_id = a_post(data['post_id']).id
+    post_id = a_visible_post(data['post_id'], auth).id
     score = data['score']
     private = data['private'] if 'private' in data else bool(user.vote_privately)
     emoji = data['emoji'] if 'emoji' in data else None
@@ -1581,7 +1592,7 @@ def post_post_like(auth, data):
 
 
 def put_post_save(auth, data):
-    post_id = a_post(data['post_id']).id
+    post_id = a_visible_post(data['post_id'], auth).id
     save = data['save']
 
     user_id = shared_post.bookmark_post(post_id, SRC_API, auth) if save else shared_post.remove_bookmark_post(post_id, SRC_API, auth)
@@ -1590,7 +1601,7 @@ def put_post_save(auth, data):
 
 
 def put_post_subscribe(auth, data):
-    post_id = a_post(data['post_id']).id
+    post_id = a_visible_post(data['post_id'], auth).id
     subscribe = data['subscribe']
 
     user_id = shared_post.subscribe_post(post_id, subscribe, SRC_API, auth)
@@ -1664,7 +1675,7 @@ def post_post(auth, data):
 
 def put_post(auth, data):
     post_id = data['post_id']
-    post = a_post(post_id)
+    post = a_visible_post(post_id, auth)
 
     title = data['title'] if 'title' in data else post.title
     # `or ''`: Post.body is nullable and a link or image post routinely has no
@@ -1717,7 +1728,7 @@ def put_post(auth, data):
 
 
 def post_post_delete(auth, data):
-    post_id = a_post(data['post_id']).id
+    post_id = a_visible_post(data['post_id'], auth).id
     deleted = data['deleted']
 
     if deleted:
@@ -1736,7 +1747,7 @@ def post_post_report(auth, data):
     report_remote = data['report_remote'] if 'report_remote' in data else True
     input = {'reason': reason, 'description': description, 'report_remote': report_remote}
 
-    post = a_post(post_id)
+    post = a_visible_post(post_id, auth)
     user_id, report = shared_post.report_post(post, input, SRC_API, auth)
 
     post_json = post_report_view(report=report, post_id=post_id, user_id=user_id)
@@ -1848,7 +1859,7 @@ def put_post_report_resolve(auth, data):
 
 
 def post_post_lock(auth, data):
-    post_id = a_post(data['post_id']).id
+    post_id = a_visible_post(data['post_id'], auth).id
     locked = data['locked']
 
     user_id, post = shared_post.lock_post(post_id, locked, SRC_API, auth)
@@ -1858,7 +1869,7 @@ def post_post_lock(auth, data):
 
 
 def post_post_hide(auth, data):
-    post_id = a_post(data['post_id']).id
+    post_id = a_visible_post(data['post_id'], auth).id
     hidden = data['hidden']
 
     user_id, post = shared_post.hide_post(post_id, hidden, SRC_API, auth)
@@ -1868,7 +1879,7 @@ def post_post_hide(auth, data):
 
 
 def post_post_feature(auth, data):
-    post_id = a_post(data['post_id']).id
+    post_id = a_visible_post(data['post_id'], auth).id
     featured = data['featured']
     feature_type = data['feature_type'] if 'feature_type' in data else 'Community'
 
@@ -1898,7 +1909,7 @@ def post_post_feature(auth, data):
 
 
 def post_post_remove(auth, data):
-    post_id = a_post(data['post_id']).id
+    post_id = a_visible_post(data['post_id'], auth).id
     removed = data['removed']
 
     if removed:
@@ -1917,6 +1928,8 @@ def post_post_mark_as_read(auth, data):
         raise Exception('post_id or post_ids required')
 
     user_id = authorise_api_user(auth)
+    for post_id in [data['post_id']] if 'post_id' in data else data['post_ids']:
+        a_visible_post(post_id, auth)
     try:
         if 'post_id' in data:
             shared_post.mark_post_read([data['post_id']], data['read'], user_id)
@@ -1938,7 +1951,7 @@ def get_post_like_list(auth, data):
         limit = current_app.config["PAGE_LENGTH"]
 
     user = authorise_api_user(auth, return_type='model')
-    post = a_post(post_id)
+    post = a_visible_post(post_id, auth)
 
     if post.community.is_moderator(user) or user.is_admin() or user.is_staff():
         banned_from_site_user_ids = list(db.session.execute(text('SELECT id FROM "user" WHERE banned = true')).scalars())
@@ -1967,7 +1980,7 @@ def put_post_set_flair(auth, data):
     post_id = data['post_id']
     flair_list = data['flair_id_list'] if 'flair_id_list' in data else []
 
-    post = a_post(post_id)
+    post = a_visible_post(post_id, auth)
     user = authorise_api_user(auth, return_type='model')
     
     if post.community.is_moderator(user) or user.is_admin_or_staff() or post.user_id == user.id:
@@ -1994,7 +2007,7 @@ def put_post_set_flair(auth, data):
 
 
 def post_poll_vote(auth, data):
-    post_id = a_post(data['post_id']).id
+    post_id = a_visible_post(data['post_id'], auth).id
     choice_id = data['choice_id']
 
     user_id = authorise_api_user(auth)

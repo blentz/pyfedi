@@ -5,10 +5,11 @@ from flask import current_app, g
 
 from app import db
 from app.models import Language, Site
-from tests.factories import make_visibility_world, bearer
+from tests.factories import make_visibility_world, make_post_reply, bearer
 
 
 def client_as(app, user):
+    g.pop('_login_user', None)  # the test's app context outlives requests, and flask-login caches the user in g
     client = app.test_client()
     if user is not None:
         with client.session_transaction() as session:
@@ -50,6 +51,7 @@ def test_other_post_views_404_for_stranger(app, world, path):
     db.session.commit()
     url = path.format(pid=w.post.id)
     assert client_as(app, w.stranger).get(url).status_code == 404
+    assert client_as(app, w.follower).get(url).status_code == 200
 
 
 @pytest.mark.parametrize('who, status', [('stranger', 404), ('follower', 200)])
@@ -69,7 +71,11 @@ def test_reply_source(app, world, who, shown):
 
 def test_continue_discussion_gates_the_post_only(app, world):
     w = world
-    assert client_as(app, w.stranger).get(f'/post/{w.post.id}/comment/{w.reply.id}').status_code == 404
+    under_hidden_post = make_post_reply(w.post, w.author, 'a public reply under a followers-only post')
+    url = f'/post/{w.post.id}/comment/{under_hidden_post.id}'
+    assert client_as(app, w.stranger).get(url).status_code == 404
+    with patch('app.post.routes.render_template', return_value=app.response_class('rendered')):
+        assert client_as(app, w.follower).get(url).status_code == 200
 
 
 def test_activitypub_post_is_404_even_for_follower_servers(app, world):

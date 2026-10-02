@@ -110,6 +110,14 @@ def refuse_invisible(obj):
         abort(404)
 
 
+def refuse_invisible_ids(post_id=None, reply_id=None):
+    """refuse_invisible for routes that pass a bare id on to a shared helper. An unknown id is 404 as well."""
+    if post_id is not None:
+        refuse_invisible(db.session.get(Post, post_id) or abort(404))
+    if reply_id is not None:
+        refuse_invisible(db.session.get(PostReply, reply_id) or abort(404))
+
+
 def refuse_unpublished_post(post):
     """D1084/D1089. An unpublished post is the author's alone until its time
     comes: the scheduled-posts page is scoped to `Post.user_id ==
@@ -143,7 +151,10 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
                     flash(_('This post has been deleted and is only visible to staff and admins.'), 'warning')
                 else:
                     abort(404)
-        
+
+        # Before the anonymous NSFW/NSFL login redirect: that redirect would confirm the post exists.
+        refuse_invisible(post)
+
         if current_user.is_anonymous:
             if current_app.config['CONTENT_WARNING']:
                 if post.nsfl:
@@ -164,7 +175,6 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
                 abort(403)
 
         refuse_unpublished_post(post)
-        refuse_invisible(post)
 
         # If nothing has changed since their last visit, return HTTP 304
         current_etag = f"{post.id}{sort}_{hash(post.last_active)}"
@@ -679,6 +689,7 @@ def post_oembed(post_id):
 @validation_required
 @approval_required
 def post_vote(post_id: int, vote_direction, federate, emoji=None):
+    refuse_invisible_ids(post_id=post_id)
     if federate == 'default':
         federate = not current_user.vote_privately
     else:
@@ -691,6 +702,7 @@ def post_vote(post_id: int, vote_direction, federate, emoji=None):
 @validation_required
 @approval_required
 def comment_vote(comment_id, vote_direction, federate):
+    refuse_invisible_ids(reply_id=comment_id)
     if federate == 'default':
         federate = not current_user.vote_privately
     else:
@@ -703,6 +715,7 @@ def comment_vote(comment_id, vote_direction, federate):
 @validation_required
 @approval_required
 def comment_emoji_reaction(comment_id, vote_direction, federate):
+    refuse_invisible_ids(reply_id=comment_id)
     form = ChooseEmojiForm()
     if request.method == 'POST' and form.validate_on_submit():
         if federate == 'default':
@@ -748,6 +761,7 @@ def comment_emoji_list(comment_id):
 @validation_required
 @approval_required
 def post_emoji_set(post_id):
+    refuse_invisible_ids(post_id=post_id)
     federate = not current_user.vote_privately
 
     shared_post.vote_for_post(post_id, 'upvote', federate, request.form.get('emoji'), SRC_WEB)
@@ -762,6 +776,7 @@ def post_emoji_set(post_id):
 @validation_required
 @approval_required
 def comment_emoji_set(comment_id):
+    refuse_invisible_ids(reply_id=comment_id)
     federate = not current_user.vote_privately
 
     vote_for_reply(comment_id, 'upvote', federate, request.form.get('emoji'), SRC_WEB)
@@ -777,6 +792,7 @@ def comment_emoji_set(comment_id):
 @approval_required
 def poll_vote(post_id):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     poll_data = db.session.get(Poll, post_id) or abort(404)
     # D1122. A form field is whatever the caller sends, and this one was read
     # with a bare `int()`: `TypeError: int() argument must be a string, a
@@ -914,6 +930,7 @@ def continue_discussion(post_id, comment_id):
 @login_required_if_private_instance
 def continue_discussion_ajax(post_id, comment_id, nonce):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     comment = db.session.get(PostReply, comment_id) or abort(404)
 
     # D1077's family: the same page, fetched by the front end.
@@ -978,12 +995,14 @@ def add_reply(post_id: int, comment_id: int):
     if current_user.banned or current_user.ban_comments or user_ip_banned():
         return show_ban_message()
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
 
     if not post.comments_enabled:
         flash(_('Comments have been disabled.'), 'warning')
         return redirect(post.slug if post.slug else url_for('activitypub.post_ap', post_id=post_id))
 
     in_reply_to = db.session.get(PostReply, comment_id) or abort(404)
+    refuse_invisible(in_reply_to)
 
     # D1077's family, on the write side: without this a reply could be
     # attached to a parent in a different post -- and a different community --
@@ -1045,6 +1064,7 @@ def add_reply_inline(post_id: int, comment_id: int, nonce):
     if current_user.banned or current_user.ban_comments or user_ip_banned():
         return _('You have been banned.')
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     if not can_create_post_reply(current_user, post.community):
         return _('You are not permitted to comment in this community')
 
@@ -1052,6 +1072,7 @@ def add_reply_inline(post_id: int, comment_id: int, nonce):
         return _('Comments have been disabled.')
 
     in_reply_to = db.session.get(PostReply, comment_id) or abort(404)
+    refuse_invisible(in_reply_to)
 
     # D1092. D1077's family, ninth site and the worst of them: every
     # permission above is tested against `post.community`, and the reply is
@@ -1236,6 +1257,7 @@ def post_source(post_id: int, state: str):
 @login_required
 def post_edit(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     post_type = post.type
     if post.type == POST_TYPE_ARTICLE:
         form = CreateDiscussionForm()
@@ -1391,6 +1413,7 @@ def post_edit(post_id: int):
 @login_required
 def post_delete(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     community = post.community
     if post.user_id == current_user.id or shared_post.can_mod_post(post, current_user):
         if post.community.id in communities_banned_from(current_user.id) or user_ip_banned():
@@ -1432,6 +1455,7 @@ def post_delete(post_id: int):
 @login_required
 def post_restore(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     if post.user_id == current_user.id or shared_post.can_mod_post(post, current_user):
         if post.deleted_by == post.user_id:
             shared_post.restore_post(post.id, SRC_WEB, None)
@@ -1448,6 +1472,7 @@ def post_restore(post_id: int):
 @login_required
 def post_purge(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     if not post.deleted:
         abort(404)
     if post.deleted_by == current_user.id or post.community.is_moderator() or current_user.is_admin():
@@ -1465,6 +1490,7 @@ def post_purge(post_id: int):
 @login_required
 def post_teaser_translate(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     refuse_private_community(post)  # D1124
     if current_app.config['TRANSLATE_ENDPOINT']:
         recipient_language = get_recipient_language(current_user.id)
@@ -1491,6 +1517,7 @@ def post_teaser_translate(post_id: int):
 @login_required
 def post_translate(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
 
     # D1124. Translation hands back the text it was given, so these three
     # routes are read surfaces for the body and the title -- and none of them
@@ -1529,6 +1556,7 @@ def post_translate(post_id: int):
 @login_required
 def post_reply_translate(post_reply_id: int):
     post_reply = db.session.get(PostReply, post_reply_id) or abort(404)
+    refuse_invisible(post_reply)
     refuse_private_community(post_reply.post)  # D1124
     if current_app.config['TRANSLATE_ENDPOINT']:
         recipient_language = get_recipient_language(current_user.id)
@@ -1546,6 +1574,7 @@ def post_reply_translate(post_reply_id: int):
 @login_required
 def post_reminder(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     if post.community.id in communities_banned_from(current_user.id):
         abort(403)
     form = NewReminderForm()
@@ -1569,6 +1598,7 @@ def post_reminder(post_id: int):
 @login_required
 def post_reply_reminder(post_reply_id: int):
     post_reply = db.session.get(PostReply, post_reply_id) or abort(404)
+    refuse_invisible(post_reply)
     if post_reply.community.id in communities_banned_from(current_user.id):
         abort(403)
     form = NewReminderForm()
@@ -1595,6 +1625,7 @@ def post_reply_reminder(post_reply_id: int):
 @bp.route('/post/<int:post_id>/bookmark', methods=['POST'])
 @login_required
 def post_bookmark(post_id: int):
+    refuse_invisible_ids(post_id=post_id)
     try:
         shared_post.bookmark_post(post_id, SRC_WEB)
     except NoResultFound:
@@ -1606,6 +1637,7 @@ def post_bookmark(post_id: int):
 @bp.route('/post/<int:post_id>/remove_bookmark', methods=['POST'])
 @login_required
 def post_remove_bookmark(post_id: int):
+    refuse_invisible_ids(post_id=post_id)
     try:
         shared_post.remove_bookmark_post(post_id, SRC_WEB)
     except NoResultFound:
@@ -1617,6 +1649,7 @@ def post_remove_bookmark(post_id: int):
 @bp.route('/post/<int:post_id>/comment/<int:comment_id>/bookmark', methods=['POST'])
 @login_required
 def post_reply_bookmark(post_id: int, comment_id: int):
+    refuse_invisible_ids(post_id=post_id, reply_id=comment_id)
     try:
         bookmark_reply(comment_id, SRC_WEB)
     except NoResultFound:
@@ -1629,6 +1662,7 @@ def post_reply_bookmark(post_id: int, comment_id: int):
 @bp.route('/post/<int:post_id>/comment/<int:comment_id>/remove_bookmark', methods=['POST'])
 @login_required
 def post_reply_remove_bookmark(post_id: int, comment_id: int):
+    refuse_invisible_ids(post_id=post_id, reply_id=comment_id)
     try:
         remove_bookmark_reply(comment_id, SRC_WEB)
     except NoResultFound:
@@ -1642,6 +1676,7 @@ def post_reply_remove_bookmark(post_id: int, comment_id: int):
 @login_required
 def post_report(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     form = ReportPostForm()
     if post.reports == -1:  # When a mod decides to ignore future reports, post.reports is set to -1
         flash(_('Moderators have already assessed reports regarding this post, no further reports are necessary.'),
@@ -1664,6 +1699,7 @@ def post_report(post_id: int):
 @login_required
 def post_block_user(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     existing = UserBlock.query.filter_by(blocker_id=current_user.id, blocked_id=post.author.id).first()
     if not existing:
         db.session.add(UserBlock(blocker_id=current_user.id, blocked_id=post.author.id))
@@ -1694,6 +1730,7 @@ def post_block_user(post_id: int):
 @login_required
 def post_block_domain(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
 
     # D1099. Only a link post has a domain. For any other kind `post.domain_id`
     # is None, and the INSERT below was `psycopg2.errors.NotNullViolation: null
@@ -1728,6 +1765,7 @@ def post_block_domain(post_id: int):
 @login_required
 def post_block_community(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     existing = CommunityBlock.query.filter_by(user_id=current_user.id, community_id=post.community_id).first()
     if not existing:
         db.session.add(CommunityBlock(user_id=current_user.id, community_id=post.community_id))
@@ -1754,6 +1792,7 @@ def post_block_community(post_id: int):
 @login_required
 def post_block_instance(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
 
     # D1101. `block_remote_instance` refuses instance 1 with its own flash
     # ("You cannot block the local instance."), and this line then said
@@ -1785,6 +1824,7 @@ def post_block_instance(post_id: int):
 @login_required
 def post_mea_culpa(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
 
     # D1097. There was NO authorization here at all. "I changed my mind" is
     # the author admitting a mistake in their own post -- it marks the post
@@ -1818,6 +1858,7 @@ def post_mea_culpa(post_id: int):
 @login_required
 def post_sticky(post_id: int, mode):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     if post.community.is_moderator(current_user) or current_user.is_admin() or user_access('administer all communities', current_user.get_id()):
         shared_post.sticky_post(post.id, mode == 'yes', SRC_WEB)
     if mode == 'yes':
@@ -1837,6 +1878,7 @@ def post_sticky(post_id: int, mode):
 @login_required
 def post_instance_sticky(post_id: int, mode):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     
     if current_user.is_admin():
         if mode == 'yes':
@@ -1857,6 +1899,7 @@ def post_instance_sticky(post_id: int, mode):
 @login_required
 def post_hide(post_id: int, mode):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     shared_post.hide_post(post.id, mode == 'yes', SRC_WEB)
 
     # todo: remove post.id from redis cache used by get_deduped_post_ids() if "result_id" is in referrer()
@@ -1872,6 +1915,7 @@ def post_hide(post_id: int, mode):
 @login_required
 def post_set_flair(post_id):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     if post.user_id == current_user.id or post.community.is_moderator(current_user) or current_user.is_staff() or current_user.is_admin() or user_access('administer all communities', current_user.get_id()):
 
         # D1090. This branch WRITES -- it resets the post's flair and its
@@ -1957,6 +2001,7 @@ def post_set_flair(post_id):
 @login_required
 def post_flair_list(post_id):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     if post.user_id == current_user.id or post.community.is_moderator(current_user) or current_user.is_staff() or current_user.is_admin():
         # D1091. Measured: `TypeError: argument of type 'NoneType' is not
         # iterable` (app/post/routes.py:1736) for a request without the
@@ -1983,6 +2028,7 @@ def post_flair_list(post_id):
 @bp.route('/post/<int:post_id>/lock/<mode>', methods=['POST'])
 @login_required
 def post_lock(post_id: int, mode):
+    refuse_invisible_ids(post_id=post_id)
     shared_post.lock_post(post_id, mode == 'yes', SRC_WEB)
     return redirect(referrer(url_for('activitypub.post_ap', post_id=post_id)))
 
@@ -1990,6 +2036,7 @@ def post_lock(post_id: int, mode):
 @bp.route('/post/<int:post_id>/<int:post_reply_id>/lock/<mode>', methods=['POST'])
 @login_required
 def post_reply_lock(post_id: int, post_reply_id: int, mode):
+    refuse_invisible_ids(post_id=post_id, reply_id=post_reply_id)
     lock_post_reply(post_reply_id, mode == 'yes', SRC_WEB)
     return redirect(referrer(url_for('activitypub.post_ap', post_id=post_id, _anchor=f'comment_{post_reply_id}')))
 
@@ -1997,6 +2044,7 @@ def post_reply_lock(post_id: int, post_reply_id: int, mode):
 @bp.route('/post/<int:post_id>/<int:post_reply_id>/collapse/<mode>', methods=['POST'])
 @login_required
 def post_reply_collapse(post_id: int, post_reply_id: int, mode):
+    refuse_invisible_ids(post_id=post_id, reply_id=post_reply_id)
     set_collapse_post_reply(post_reply_id, mode == 'yes', SRC_WEB)
     return redirect(referrer(url_for('activitypub.post_ap', post_id=post_id, _anchor=f'comment_{post_reply_id}')))
 
@@ -2005,6 +2053,7 @@ def post_reply_collapse(post_id: int, post_reply_id: int, mode):
 @login_required
 def post_move(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     if current_user.id == post.user_id or post.community.is_moderator(current_user) or (post.community.is_local() and (post.community.is_admin_or_staff(current_user)  or user_access('administer all communities', current_user.get_id()))):
         form = MovePostForm()
         if form.validate_on_submit():
@@ -2085,7 +2134,9 @@ def post_search_community_suggestions():
 @login_required
 def post_reply_report(post_id: int, comment_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
+    refuse_invisible(post_reply)
 
     # D1077's family. The report is filed against `post_reply` and routed to
     # `post.community`'s moderators, so a mismatch sends a community a report
@@ -2124,7 +2175,9 @@ def post_reply_report(post_id: int, comment_id: int):
 @login_required
 def post_reply_block_user(post_id: int, comment_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
+    refuse_invisible(post_reply)
 
     # D1077's family. The block is the caller's own, but the redirect below
     # compares `post_reply.author` with `post.author`, so a mismatched pair
@@ -2164,6 +2217,7 @@ def post_reply_block_user(post_id: int, comment_id: int):
 @login_required
 def post_reply_block_instance(post_id: int, comment_id: int):
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
+    refuse_invisible(post_reply)
 
     # D1101's twin. `block_remote_instance` refuses instance 1 with its own
     # flash and this line said the opposite straight after it; a reply with no
@@ -2198,7 +2252,9 @@ def post_reply_block_instance(post_id: int, comment_id: int):
 @login_required
 def post_reply_distinguish(post_id: int, comment_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
+    refuse_invisible(post_reply)
 
     # D1120. D1077's twelfth site. The moderator test is made against
     # `post.community` and the flag is set on `post_reply`, so a moderator of
@@ -2264,7 +2320,9 @@ def post_reply_source(post_id: int, comment_id: int, state: str):
 @login_required
 def post_reply_edit(post_id: int, comment_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
+    refuse_invisible(post_reply)
 
     # D1077's family. Authorization here IS on the reply (`post_reply.user_id
     # == current_user.id`), but `edit_reply` is handed both objects and the
@@ -2303,7 +2361,9 @@ def post_reply_edit(post_id: int, comment_id: int):
 @login_required
 def post_reply_delete(post_id: int, comment_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
+    refuse_invisible(post_reply)
 
     # D1077's second site. Here the mismatch was caught one level down --
     # `delete_reply` raises `Exception: Does not have permission`, measured --
@@ -2372,7 +2432,9 @@ def post_reply_delete(post_id: int, comment_id: int):
 @login_required
 def post_reply_restore(post_id: int, comment_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
+    refuse_invisible(post_reply)
 
     # D1077. Both ids come from the URL and nothing tied them together, while
     # every authorization test below is made against `post.community` -- so a
@@ -2467,7 +2529,9 @@ def post_reply_restore(post_id: int, comment_id: int):
 @login_required
 def post_reply_purge(post_id: int, comment_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
+    refuse_invisible(post_reply)
 
     # D1077's family, tenth site: the permission below is tested against
     # `post.community` and the row deleted is `post_reply`. Purging is the one
@@ -2495,6 +2559,7 @@ def post_reply_purge(post_id: int, comment_id: int):
 @bp.route('/post/<int:post_id>/notification', methods=['POST'])  # POST only: CSRF (D994 sibling)
 @login_required
 def post_notification(post_id: int):
+    refuse_invisible_ids(post_id=post_id)
     try:
         return shared_post.subscribe_post(post_id, None, SRC_WEB)
     except NoResultFound:
@@ -2504,6 +2569,7 @@ def post_notification(post_id: int):
 @bp.route('/post_reply/<int:post_reply_id>/notification', methods=['POST'])  # POST only: CSRF (D994 sibling)
 @login_required
 def post_reply_notification(post_reply_id: int):
+    refuse_invisible_ids(reply_id=post_reply_id)
     try:
         return subscribe_reply(post_reply_id, None, SRC_WEB)
     except NoResultFound:
@@ -2528,6 +2594,7 @@ def post_cross_posts(post_id: int):
 @permission_required('change instance settings')
 def post_block_image(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     if post.type == POST_TYPE_IMAGE:
         form = ConfirmationForm()
         if form.validate_on_submit():
@@ -2559,6 +2626,7 @@ def post_block_image(post_id: int):
 @permission_required('change instance settings')
 def post_block_image_purge_posts(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     if request.method == 'POST':
         post_ids = request.form.getlist('post_ids')
 
@@ -2588,6 +2656,7 @@ def post_block_image_purge_posts(post_id: int):
 @login_required
 def post_view_voting_activity(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
 
     if current_user.is_admin_or_staff() or post.community.is_moderator():
 
@@ -2617,6 +2686,7 @@ def post_view_voting_activity(post_id: int):
 @login_required
 def post_reply_view_voting_activity(comment_id: int):
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
+    refuse_invisible(post_reply)
 
     if current_user.is_admin_or_staff() or post_reply.community.is_moderator():
 
@@ -2647,6 +2717,7 @@ def post_reply_view_voting_activity(comment_id: int):
 @permission_required('change instance settings')
 def post_fixup_from_remote(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
 
     # will fail for some MBIN objects for same reason that 'View original on ...' does
     # (ap_id is lowercase, but original URL was mixed-case and remote instance software is case-sensitive)
@@ -2831,6 +2902,7 @@ def post_check_ai(post_id):
     # and the fetch below reads `post.ap_id`: `AttributeError: 'NoneType'
     # object has no attribute 'ap_id'`.
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     refuse_private_community(post)
     if current_app.config['DETECT_AI_ENDPOINT']:
         is_ai = get_request(f"{current_app.config['DETECT_AI_ENDPOINT']}?url={post.ap_id}")
@@ -2882,6 +2954,7 @@ def post_set_ai(post_id):
     # with nothing written -- a refusal reported as a success, which is worse
     # than either a refusal or a success.
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     if current_user.is_authenticated and (current_user.is_admin_or_staff() or post.user_id == current_user.id or post.community.is_moderator()):
         post.ai_generated = True
         db.session.commit()
@@ -2893,6 +2966,7 @@ def post_set_ai(post_id):
 @bp.route('/post/<int:post_id>/set_read', methods=['POST'])
 @login_required
 def post_set_read(post_id):
+    refuse_invisible_ids(post_id=post_id)
     shared_post.mark_post_read([post_id], True, current_user.id)
     return ''
 
@@ -2902,6 +2976,7 @@ def post_set_read(post_id):
 def post_reply_check_ai(post_reply_id):
     # D1107's twin, with D1108's miss as well: `post_reply.body` on None.
     post_reply = db.session.get(PostReply, post_reply_id) or abort(404)
+    refuse_invisible(post_reply)
     refuse_private_community(post_reply.post)
     if current_app.config['DETECT_AI_ENDPOINT']:
         if len(post_reply.body) > 100:
@@ -2937,6 +3012,7 @@ def post_reply_choose_answer(post_reply_id):
     # reply id that does not exist. An anonymous caller never saw it, because
     # `current_user.is_authenticated` short-circuits first.
     post_reply = db.session.get(PostReply, post_reply_id) or abort(404)
+    refuse_invisible(post_reply)
     if current_user.is_authenticated:
         choose_answer(post_reply_id, src=SRC_WEB)
         return _('Done')
@@ -2947,6 +3023,7 @@ def post_reply_choose_answer(post_reply_id):
 @bp.route('/post_reply/<int:post_reply_id>/unchoose_answer', methods=['POST'])
 def post_reply_unchoose_answer(post_reply_id):
     post_reply = db.session.get(PostReply, post_reply_id) or abort(404)  # D1357
+    refuse_invisible(post_reply)
     if current_user.is_authenticated:
         unchoose_answer(post_reply_id, src=SRC_WEB)
         return _('Done')
@@ -2958,6 +3035,7 @@ def post_reply_unchoose_answer(post_reply_id):
 @login_required_if_private_instance
 def post_share_mastodon(post_id):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     form = ShareMastodonForm()
     if form.validate_on_submit():
         # D1121. The field is a Length check and nothing else, and its value

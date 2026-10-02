@@ -12,6 +12,7 @@ from app.shared.reply import vote_for_reply, bookmark_reply, remove_bookmark_rep
     edit_reply, \
     delete_reply, restore_reply, report_reply, mod_remove_reply, mod_restore_reply, lock_post_reply, choose_answer, \
     unchoose_answer
+from app.visibility import can_view
 from app.utils import authorise_api_user, blocked_users, blocked_or_banned_instances, site_language_id, \
     communities_banned_from, in_sorted_list, moderating_communities_ids, joined_communities, user_access, \
     can_moderate
@@ -468,6 +469,16 @@ def a_reply(reply_id):
     return reply
 
 
+def a_visible_reply(reply_id, auth):
+    """a_reply for an action: a comment the caller may not see is `comment not found`, as if nobody held the id.
+    Checked before the action runs. Moderators get no exemption (D19)."""
+    reply = a_reply(reply_id)
+    user_id = authorise_api_user(auth) if auth else None
+    if not can_view(reply, user_id):
+        raise Exception('comment not found')
+    return reply
+
+
 def get_reply(auth, data):
     id = int(data['id'])
     a_reply(id)
@@ -485,6 +496,7 @@ def post_reply_like(auth, data):
     # it never answers a falsy user. Three of these, plus a fourth spelled
     # `if not user_id`.
 
+    a_visible_reply(data['comment_id'], auth)
     score = data['score']
     reply_id = data['comment_id']
     emoji = data['emoji'] if 'emoji' in data else None
@@ -503,7 +515,7 @@ def post_reply_like(auth, data):
 
 
 def put_reply_save(auth, data):
-    reply_id = data['comment_id']
+    reply_id = a_visible_reply(data['comment_id'], auth).id
     save = data['save']
 
     user_id = bookmark_reply(reply_id, SRC_API, auth) if save else remove_bookmark_reply(reply_id, SRC_API, auth)
@@ -512,7 +524,7 @@ def put_reply_save(auth, data):
 
 
 def put_reply_subscribe(auth, data):
-    reply_id = data['comment_id']
+    reply_id = a_visible_reply(data['comment_id'], auth).id
     subscribe = data['subscribe']
 
     user_id = subscribe_reply(reply_id, subscribe, SRC_API, auth)
@@ -537,8 +549,10 @@ def post_reply(auth, data):
 
     input = {'body': body, 'notify_author': True, 'language_id': language_id}
     post = db.session.get(Post, post_id)
-    if post is None:
+    if post is None or not can_view(post, authorise_api_user(auth)):
         raise Exception('post not found')
+    if parent_id is not None:
+        a_visible_reply(parent_id, auth)
 
     user_id, reply = make_reply(input, post, parent_id, SRC_API, auth)
 
@@ -548,7 +562,7 @@ def post_reply(auth, data):
 
 def put_reply(auth, data):
     reply_id = data['comment_id']
-    reply = a_reply(reply_id)
+    reply = a_visible_reply(reply_id, auth)
 
     body = data['body'] if 'body' in data else reply.body
     language_id = data['language_id'] if 'language_id' in data else reply.language_id
@@ -568,7 +582,7 @@ def put_reply(auth, data):
 
 
 def post_reply_delete(auth, data):
-    reply_id = data['comment_id']
+    reply_id = a_visible_reply(data['comment_id'], auth).id
     deleted = data['deleted']
 
     if deleted == True:
@@ -587,7 +601,7 @@ def post_reply_report(auth, data):
     report_remote = data['report_remote'] if 'report_remote' in data else True
     input = {'reason': reason, 'description': description, 'report_remote': report_remote}
 
-    reply = a_reply(reply_id)
+    reply = a_visible_reply(reply_id, auth)
     user_id, report = report_reply(reply, input, SRC_API, auth)
 
     reply_json = reply_report_view(report=report, reply_id=reply_id, user_id=user_id)
@@ -698,7 +712,7 @@ def put_reply_report_resolve(auth, data):
 
 
 def post_reply_remove(auth, data):
-    reply_id = data['comment_id']
+    reply_id = a_visible_reply(data['comment_id'], auth).id
     removed = data['removed']
 
     if removed == True:
@@ -721,7 +735,7 @@ def post_reply_mark_as_read(auth, data):
 
     # no real support for this. Just marking the Notification for the reply really
     # notification has its own id, which would be handy, but reply_view is currently just returning the reply.id for that
-    reply = a_reply(reply_id)
+    reply = a_visible_reply(reply_id, auth)
 
     reply_url = '#comment_' + str(reply.id)
     mention_url = '/comment/' + str(reply.id)
@@ -766,7 +780,7 @@ def post_reply_mark_as_answer(auth, data):
     user_details = authorise_api_user(auth, return_type='dict')
     user_id = user_details['id']
 
-    a_reply(reply_id)
+    a_visible_reply(reply_id, auth)
 
     if answer:
         choose_answer(reply_id, SRC_API, auth)
@@ -800,7 +814,7 @@ def post_reply_distinguish(auth, data):
     user = authorise_api_user(auth, return_type='model')
     user_id = user.id
 
-    reply = a_reply(reply_id)
+    reply = a_visible_reply(reply_id, auth)
     author = reply.author
 
     if not author.id == user_id:
@@ -819,7 +833,7 @@ def post_reply_distinguish(auth, data):
 
 
 def post_reply_lock(auth, data):
-    comment_id = data['comment_id']
+    comment_id = a_visible_reply(data['comment_id'], auth).id
     locked = data['locked']
 
     user_id, reply = lock_post_reply(comment_id, locked, SRC_API, auth)
@@ -837,7 +851,7 @@ def get_reply_like_list(auth, data):
         limit = current_app.config["PAGE_LENGTH"]
 
     user = authorise_api_user(auth, return_type='model')
-    post_reply = a_reply(comment_id)
+    post_reply = a_visible_reply(comment_id, auth)
 
     if post_reply.community.is_moderator(user) or user.is_admin() or user.is_staff():
         banned_from_site_user_ids = list(db.session.execute(text('SELECT id FROM "user" WHERE banned = true')).scalars())
