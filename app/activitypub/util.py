@@ -1994,6 +1994,21 @@ def set_post_gallery(post: Post, request_json: dict, low_quality: bool = False, 
     image is not stored: Post.new refuses the whole post for one, so this only
     drops one an Update brings.
     """
+    if post.type == POST_TYPE_IMAGE:
+        if images is None:
+            images = gallery_attachments(request_json, [post.url, post.image.source_url if post.image else None])
+    else:
+        images = []
+
+    # The same images in the same order (an Update editing the text, or the alt
+    # text): keep the files, which are already sized and hashed
+    current = post.gallery.all()
+    if [file.source_url for file in current] == [extra['url'] for extra in images]:
+        for file, extra in zip(current, images):
+            file.alt_text = extra['alt_text']
+        db.session.commit()
+        return
+
     old_ids = [row.file_id for row in db.session.execute(
         post_file.select().where(post_file.c.post_id == post.id)).all()]
     db.session.execute(post_file.delete().where(post_file.c.post_id == post.id))
@@ -2001,12 +2016,7 @@ def set_post_gallery(post: Post, request_json: dict, low_quality: bool = False, 
         file.delete_from_disk()
         db.session.delete(file)
 
-    if post.type == POST_TYPE_IMAGE:
-        if images is None:
-            images = gallery_attachments(request_json, [post.url, post.image.source_url if post.image else None])
-        images = [extra for extra in images if not gallery_image_is_blocked(extra)]
-    else:
-        images = []
+    images = [extra for extra in images if not gallery_image_is_blocked(extra)]
     for weight, extra in enumerate(images, start=1):
         file = File(source_url=extra['url'], alt_text=extra['alt_text'],
                     width=extra['width'], height=extra['height'], hash=extra['hash'])
