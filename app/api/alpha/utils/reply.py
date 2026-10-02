@@ -857,11 +857,13 @@ def post_reply_distinguish(auth, data):
 
 
 def post_reply_lock(auth, data):
-    comment_id = a_visible_reply(data['comment_id'], auth).id
+    comment_id = a_moderatable_reply(data['comment_id'], auth).id
     locked = data['locked']
 
     user_id, reply = lock_post_reply(comment_id, locked, SRC_API, auth)
 
+    if not can_view(reply, user_id):  # as post_reply_remove: an acknowledgement, not the content (D19)
+        return {'comment_view': reply_removal_ack_view(reply)}
     reply_json = reply_view(reply=reply, variant=4, user_id=user_id)
     return reply_json
 
