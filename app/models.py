@@ -941,7 +941,7 @@ post_file = db.Table('post_file', db.Column('post_id', db.Integer, db.ForeignKey
                       )
 # A post_file row of this weight is not part of the album: it remembers a gallery image an Update brought
 # that matched a blocked image, so an unchanged album is recognised and not rebuilt (and rehashed) every time
-GALLERY_BLOCKED_WEIGHT = -1
+GALLERY_BLOCKED_WEIGHT = -1  # any other weight (even none) is an album image
 
 
 user_file = db.Table('user_file',
@@ -2538,7 +2538,7 @@ class Post(db.Model):
     boosts = db.relationship('PostBoost', backref='post', lazy='dynamic', cascade='all, delete-orphan')
     gallery = db.relationship('File', secondary=post_file, lazy='dynamic', order_by=post_file.c.weight,
                               primaryjoin=lambda: Post.id == post_file.c.post_id,
-                              secondaryjoin=lambda: and_(File.id == post_file.c.file_id, post_file.c.weight > 0))
+                              secondaryjoin=lambda: and_(File.id == post_file.c.file_id, func.coalesce(post_file.c.weight, 0) >= 0))
     votes = db.relationship('PostVote', lazy='dynamic', backref='post', cascade='all, delete-orphan', passive_deletes=True)
     bookmarks = db.relationship('PostBookmark', backref='post', lazy='dynamic', cascade='all, delete-orphan')
     poll = db.relationship('Poll', uselist=False, backref='post', lazy='select', cascade='all, delete-orphan')

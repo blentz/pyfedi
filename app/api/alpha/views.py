@@ -39,7 +39,7 @@ def galleries_for_posts(posts) -> dict:
     if ids:
         rows = db.session.execute(
             db.select(post_file.c.post_id, File).join(File, File.id == post_file.c.file_id)
-            .where(post_file.c.post_id.in_(ids), post_file.c.weight > 0).order_by(post_file.c.weight)).all()
+            .where(post_file.c.post_id.in_(ids), func.coalesce(post_file.c.weight, 0) >= 0).order_by(post_file.c.weight)).all()
         for post_id, file in rows:
             galleries.setdefault(post_id, []).append(file)
     return galleries
