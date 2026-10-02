@@ -158,4 +158,4 @@ def test_the_modlog_does_not_name_removed_followers_only_content(app, world):
     assert len(entries) == 2
     for entry in entries:
         assert entry.link_text == 'followers-only content'
-        assert entry.target_user_id is None
+        assert entry.target_user_id == w.author.id  # R3: kept; neutralized on read

@@ -204,3 +204,76 @@ def test_a_reply_stub_carries_neutral_objects_not_nulls(app, world, path, params
     assert stub['post']['id'] == w.public_post.id and stub['post']['title'] == '' and stub['post']['user_id'] == 0
     text = response.get_data(as_text=True)
     assert 'secret reply' not in text and '"alice"' not in text
+
+
+# R3 / I1
+@pytest.fixture
+def modlogged(world):
+    from app.models import ModLog
+    from app.utils import add_to_modlog, set_setting
+    from tests.factories import grant_permission, make_user
+    w = world
+    set_setting('public_modlog', True)
+    w.admin = make_user(w.stranger.instance, 'ada', local=True)
+    role = grant_permission(w.admin, 'administer all communities')
+    role.name = 'Admin'
+    w.reply.body = 'secret reply'
+    db.session.commit()
+    for action in ('delete_post', 'lock_post', 'featured_post'):
+        add_to_modlog(action, actor=w.admin, target_user=w.author, community=w.community, post=w.post,
+                      link=f'post/{w.post.id}', link_text=SECRET_TITLE)
+    add_to_modlog('delete_post_reply', actor=w.admin, target_user=w.author, community=w.community, reply=w.reply,
+                  link=f'post/{w.public_post.id}#comment_{w.reply.id}', link_text='secret reply')
+    w.modlog = ModLog.query.all()
+    return w
+
+
+def test_the_modlog_keeps_the_target_user(app, modlogged):
+    w = modlogged
+    assert len(w.modlog) == 4
+    for entry in w.modlog:
+        assert entry.target_user_id == w.author.id
+        assert entry.link_text == 'followers-only content'
+
+
+@pytest.mark.parametrize('who', ['stranger', None])
+def test_the_api_modlog_names_nothing_hidden_to_a_non_admin(app, modlogged, who):
+    w = modlogged
+    response = api_get(app, '/api/alpha/modlog', getattr(w, who) if who else None)
+    assert response.status_code == 200, response.get_data(as_text=True)
+    body = response.get_json()
+    for key in ('removed_posts', 'locked_posts', 'featured_posts', 'removed_comments'):
+        assert len(body[key]) == 1, key
+    text = response.get_data(as_text=True)
+    assert_no_secret(text, 'modlog')
+    assert 'secret reply' not in text and 'alice' not in text
+    removed = body['removed_comments'][0]
+    assert removed['commenter']['id'] == 0 and removed['comment']['body'] in ('', None)
+    filtered = api_get(app, '/api/alpha/modlog', getattr(w, who) if who else None, other_person_id=w.author.id)
+    assert all(filtered.get_json()[key] == [] for key in ('removed_posts', 'locked_posts', 'featured_posts',
+                                                          'removed_comments'))
+
+
+def test_the_api_modlog_shows_an_admin_the_target_user(app, modlogged):
+    w = modlogged
+    g.admin_ids = [w.admin.id]
+    response = api_get(app, '/api/alpha/modlog', w.admin, other_person_id=w.author.id)
+    body = response.get_json()
+    assert len(body['removed_comments']) == 1 and len(body['removed_posts']) == 1
+    assert body['removed_comments'][0]['commenter']['id'] == w.author.id
+
+
+def test_the_web_modlog_filter_does_not_match_hidden_entries_for_a_non_admin(app, modlogged):
+    from app.models import ModLog
+    w = modlogged
+
+    def shown(user):
+        with patch('app.main.routes.render_template', return_value=app.response_class('rendered')) as render:
+            assert client_as(app, user).get('/modlog?suspect_user_name=alice@m.example').status_code == 200
+        return [e.id for e in render.call_args.kwargs['modlog_entries'].items]
+    assert shown(w.stranger) == [] and shown(None) == []
+    assert len(shown(w.admin)) == 4
+    w.post.visibility = 'public'
+    w.reply.visibility = 'public'
+    db.session.commit()
+    assert len(shown(w.stranger)) == 4

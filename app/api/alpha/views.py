@@ -912,7 +912,7 @@ def reply_view(reply: PostReply | int, variant: int, user_id=None,
 NEUTRAL_TIME = '1970-01-01T00:00:00.000000Z'
 
 
-def _neutral_person() -> dict:
+def neutral_person() -> dict:
     return {'actor_id': '', 'banned': False, 'bot': False, 'deleted': False, 'id': 0, 'instance_id': 0, 'local': False,
             'user_name': ''}
 
@@ -929,7 +929,7 @@ def _neutral_post(post) -> dict:
 def post_removal_ack_view(post) -> dict:
     """D19: what a moderator who may not see a followers-only post is told after removing it. Every field the response
     schema requires is present and neutral; nothing identifies the author or carries the post's content."""
-    return {'post': _neutral_post(post), 'creator': _neutral_person(),
+    return {'post': _neutral_post(post), 'creator': neutral_person(),
             'community': community_view(community=post.community, variant=1, stub=True),
             'counts': {'comments': 0, 'downvotes': 0, 'newest_comment_time': NEUTRAL_TIME, 'post_id': post.id,
                        'published': NEUTRAL_TIME, 'score': 0, 'upvotes': 0, 'cross_posts': 0},
@@ -952,7 +952,7 @@ def reply_removal_ack_view(reply) -> dict:
                         'path': '.'.join(str(i) for i in reply.path) if reply.path else f'0.{reply.id}',
                         'post_id': reply.post_id, 'published': NEUTRAL_TIME, 'removed': bool(reply.deleted),
                         'user_id': 0, 'visibility': reply.visibility},
-            'creator': _neutral_person(), 'post': _neutral_post(reply.post),
+            'creator': neutral_person(), 'post': _neutral_post(reply.post),
             'community': community_view(community=reply.community, variant=1, stub=True),
             'counts': {'child_count': 0, 'comment_id': reply.id, 'downvotes': 0, 'published': NEUTRAL_TIME,
                        'score': 0, 'upvotes': 0},
@@ -971,7 +971,7 @@ def reply_stub_view(reply) -> dict:
     return {'comment': {'id': reply.id, 'post_id': reply.post_id, 'path': path, 'body': None,
                         'visibility': VISIBILITY_FOLLOWERS, 'ap_id': None, 'deleted': False, 'removed': False,
                         'local': False, 'language_id': 0, 'user_id': None, 'published': None},
-            'creator': _neutral_person(),
+            'creator': neutral_person(),
             'counts': {'child_count': 0, 'comment_id': reply.id, 'downvotes': 0, 'published': NEUTRAL_TIME,
                        'score': 0, 'upvotes': 0},
             'community': community_view(community=post.community, variant=1, stub=True),

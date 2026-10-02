@@ -33,7 +33,7 @@ from app.main.forms import ShareLinkForm
 from app.main.util import sidebar_active_communities, sidebar_new_instances, sidebar_upcoming_events, \
     sidebar_new_communities, _base_list_communities_context, reload_url
 from app.translation import LibreTranslateAPI
-from app.visibility import listable_clause, visible_to_clause
+from app.visibility import listable_clause, modlog_open_clause, visible_to_clause
 from app.utils import render_template, ensure_rss_token, get_setting, request_etag_matches, return_304, blocked_domains, rss_token_user, \
     ap_datetime, shorten_string, user_filters_home, \
     joined_communities, moderating_communities, markdown_to_html, \
@@ -565,6 +565,9 @@ def modlog():
             user = User.query.filter_by(ap_id=suspect_user_name.lower()).first()
         if user:
             modlog_entries = modlog_entries.filter(ModLog.target_user_id == user.id)
+            if not (current_user.is_authenticated and (current_user.is_admin() or current_user.is_staff())):
+                # R3: an entry about content that is not open names no target user to this reader
+                modlog_entries = modlog_entries.filter(modlog_open_clause())
     if user_name:
         if f"@{current_app.config['SERVER_NAME']}" in user_name:
             user_name = user_name.split('@')[0]

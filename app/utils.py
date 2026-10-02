@@ -4073,8 +4073,7 @@ def add_to_modlog(action: str, actor: User, target_user: User = None, reason: st
     # The modlog can be public. Content only some viewers may see (D19) is named neither by its title or body nor by its author.
     if any(obj is not None and (obj.visibility or 'public') not in OPEN_VISIBILITIES
            for obj in (post, reply, reply.post if reply else None)):
-        link_text = 'followers-only content'
-        target_user_id = None
+        link_text = 'followers-only content'  # the target user is kept; readers who are not admins never see it (R3)
     post_id = post.id if post else None
     reply_id = reply.id if reply else None
     reason = shorten_string(reason, 512)
