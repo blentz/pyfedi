@@ -313,3 +313,19 @@ def test_check_url_already_posted_obeys_the_predicate(app, world):
         return [p.id for p in render.call_args.kwargs['posts']]
     assert shown(w.stranger) == []
     assert shown(w.follower) == [hidden.id]
+
+
+# I5
+def test_a_poll_vote_on_a_followers_only_poll_is_not_relayed(app, db_session, monkeypatch):
+    from app.activitypub import routes as activitypub_routes
+    from app.models import PollChoiceVote
+    from tests.test_inbox_dispatch_votes import _seed_poll_scenario
+    voter, post, choice = _seed_poll_scenario()
+    post.visibility = 'followers'
+    db.session.commit()
+    calls = []
+    monkeypatch.setattr(activitypub_routes, 'announce_activity_to_followers', lambda *a, **k: calls.append(a))
+    request_json = {'id': 'https://peer.example/activities/1', 'object': post.ap_id, 'choice_text': 'yes'}
+    activitypub_routes.process_poll_vote(voter, False, request_json, False)
+    assert PollChoiceVote.query.filter_by(user_id=voter.id, choice_id=choice.id).count() == 1
+    assert calls == []

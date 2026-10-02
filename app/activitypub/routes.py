@@ -2784,7 +2784,7 @@ def process_poll_vote(user, store_ap_json, request_json, announced):
         if choice:
             poll.vote_for_choice(choice.id, user.id)
             log_incoming_ap(id, APLOG_RATE, APLOG_SUCCESS, saved_json)
-            if not announced:
+            if not announced and post.visibility in OPEN_VISIBILITIES:  # as process_new_content: no relay of a followers-only poll
                 announce_activity_to_followers(post.community, user, request_json)
         else:
             log_incoming_ap(id, APLOG_RATE, APLOG_FAILURE, saved_json, 'Unfound poll choice ' + choice_text)
