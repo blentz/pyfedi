@@ -570,6 +570,25 @@ git commit -m "feat: followers-only posts and replies are 404 to non-followers o
 
 ---
 
+### Task 4b: Interactive routes refuse hidden objects before any side effect
+
+Added during execution (controller ruling after the Task 4 review). D7 makes a followers-only object invisible to non-followers. Acting on an object you cannot see (voting, replying, reporting, bookmarking, subscribing, emoji-reacting, boosting) must fail the same way viewing it does, and it must fail **before** the side effect.
+
+**Sites:**
+- Web: every route in `app/post/routes.py` that takes a `post_id` or `comment_id` and changes state (vote, reply/add_reply_inline, report, bookmark, subscribe and notification toggles, emoji reaction, boost and quote, edit/delete by a non-author). Call `refuse_invisible(obj)` at the top, after loading the object.
+- API: `app/api/alpha/utils/post.py` and `app/api/alpha/utils/reply.py`. Every action that calls `shared_post.*` or `shared_reply.*` and then `post_view`/`reply_view` (for example post.py around :1578, :1588, :1597; reply.py around :501, :510, :519; and the moderator actions around post.py :1661, :1715, :1728, :1856-1911 and reply.py :711, :816, :827) checks `can_view(obj, user_id)` **first** and raises the same not-found exception (`post not found` / `comment not found`) without performing the action. D19 means moderators get no exemption, so the moderator actions are gated too.
+- `show_post`: move the `refuse_invisible(post)` call above the anonymous NSFW/NSFL login redirect, so an anonymous request for a hidden NSFW post gets 404 rather than a redirect that confirms the post exists.
+
+**Tests** (`tests/test_visibility_interactions.py`):
+- For each gated web and API action, a stranger's attempt returns 404 or not-found, **and** the database is unchanged: no vote row, no bookmark, no reply, no report, no subscription.
+- A follower's identical attempt succeeds. This is the positive control.
+- Anonymous GET `/post/<hidden nsfw id>` returns 404, not 302.
+- Add follower-200 controls to Task 4's `test_other_post_views_404_for_stranger` and `test_continue_discussion_gates_the_post_only`.
+
+Commit: `feat: actions on followers-only content are refused before they take effect`
+
+---
+
 ### Task 5: Reply trees keep the shape and hide the content (D18)
 
 **Files:**
