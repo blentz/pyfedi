@@ -25490,7 +25490,17 @@ covered in three other places (rounds 266, 270).
 
 Seven mutants, all dead, on a green baseline.
 
-**Next free number: D1438.**
+**D1438. REPORTED AND NOT FIXED (2026-10-01, found in the ActivityPub interop design session): a followers-only reply that mentions anyone is stored public.**
+`PostReply` creation (`app/models.py:3972-3976`) sets `private = True` only when `to` has exactly one
+entry and that entry ends in `/followers`. Mastodon addresses a followers-only reply to the author's
+followers collection *and* to every mentioned actor, so `to` has two or more entries and the reply is
+stored with `private = False`. The post path (`app/models.py:2640-2645`) uses a different rule (private
+unless `as:Public` is in `to` or `cc`), so posts and replies disagree. Severity: high (privacy leak).
+Fix by ruling D6 of `2026-10-01-activitypub-interop-design.md`: one shared `to`/`cc` parser for posts
+and replies, private unless `as:Public` appears in `to` or `cc`. This fix lands before the `visibility`
+field.
+
+**Next free number: D1439.**
 
 ## 2026-09-30 / 2026-10-01 — the open register worked through
 
