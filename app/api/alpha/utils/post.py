@@ -1420,7 +1420,7 @@ def get_post_replies(auth, data):
             raise Exception('comment not found')
         if post_id is None:
             post_id = parent.post_id
-        post = a_post(post_id)
+        post = a_visible_post(post_id, auth)
         replies = get_comment_branch(post, parent.id, sort.lower(), user)
     else:
         # Naming neither leaves post_id None, and `db.session.get(Post, None)`
@@ -1430,7 +1430,7 @@ def get_post_replies(auth, data):
         # post_replies, and so was one naming a post nobody holds.
         if post_id is None:
             raise Exception('post_id or parent_id required')
-        post = a_post(post_id)
+        post = a_visible_post(post_id, auth)
         replies = post_replies(post, sort.lower(), user)
 
     is_user_banned_from_community = post.community_id in user_details['user_ban_community_ids'] if user_details else False
