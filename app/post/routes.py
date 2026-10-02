@@ -111,8 +111,9 @@ def refuse_invisible(obj):
 
 
 def refuse_invisible_unless_moderating(obj):
-    """refuse_invisible for a moderation removal. D19 restricts seeing, not enforcement: a moderator or admin of the
-    content's community may act on a followers-only object they cannot view, so a report can be actioned."""
+    """refuse_invisible for a moderation action (removal, restore, lock, sticky, purge, image block). D19 restricts
+    seeing, not enforcement (D22): a moderator or admin of the content's community may act on a followers-only object
+    they cannot view, so a report can be actioned. What the route then shows them must stay neutral."""
     if current_user.is_authenticated and can_moderate(obj.community, current_user):
         return
     refuse_invisible(obj)
@@ -1470,7 +1471,7 @@ def post_delete(post_id: int):
 @login_required
 def post_restore(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
-    refuse_invisible(post)
+    refuse_invisible_unless_moderating(post)
     if post.user_id == current_user.id or shared_post.can_mod_post(post, current_user):
         if post.deleted_by == post.user_id:
             shared_post.restore_post(post.id, SRC_WEB, None)
@@ -1487,7 +1488,7 @@ def post_restore(post_id: int):
 @login_required
 def post_purge(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
-    refuse_invisible(post)
+    refuse_invisible_unless_moderating(post)
     if not post.deleted:
         abort(404)
     if post.deleted_by == current_user.id or post.community.is_moderator() or current_user.is_admin():
@@ -1498,6 +1499,9 @@ def post_purge(post_id: int):
     else:
         abort(401)
 
+    if not can_view(post, current_user.id):  # a moderator who may not see the post is not shown who wrote it (D19)
+        return redirect(url_for('activitypub.community_profile',
+                                actor=post.community.ap_id if post.community.ap_id is not None else post.community.name))
     return redirect(url_for('user.show_profile_by_id', user_id=post.user_id))
 
 
@@ -1873,13 +1877,13 @@ def post_mea_culpa(post_id: int):
 @login_required
 def post_sticky(post_id: int, mode):
     post = db.session.get(Post, post_id) or abort(404)
-    refuse_invisible(post)
+    refuse_invisible_unless_moderating(post)
     if post.community.is_moderator(current_user) or current_user.is_admin() or user_access('administer all communities', current_user.get_id()):
         shared_post.sticky_post(post.id, mode == 'yes', SRC_WEB)
     if mode == 'yes':
-        flash(_('%(name)s has been stickied.', name=post.title))
+        flash(_('%(name)s has been stickied.', name=post_title_for(post, current_user.id)))
     else:
-        flash(_('%(name)s has been un-stickied.', name=post.title))
+        flash(_('%(name)s has been un-stickied.', name=post_title_for(post, current_user.id)))
     return redirect(referrer(post.slug if post.slug else url_for('activitypub.post_ap', post_id=post.id)))
 
 
@@ -1893,15 +1897,15 @@ def post_sticky(post_id: int, mode):
 @login_required
 def post_instance_sticky(post_id: int, mode):
     post = db.session.get(Post, post_id) or abort(404)
-    refuse_invisible(post)
+    refuse_invisible_unless_moderating(post)
     
     if current_user.is_admin():
         if mode == 'yes':
             post.instance_sticky = True
-            flash(_('%(name)s has been stickied to the instance.', name=post.title))
+            flash(_('%(name)s has been stickied to the instance.', name=post_title_for(post, current_user.id)))
         else:
             post.instance_sticky = False
-            flash(_('%(name)s has been un-stickied from the instance.', name=post.title))
+            flash(_('%(name)s has been un-stickied from the instance.', name=post_title_for(post, current_user.id)))
         
         cache.delete_memoized(instance_sticky_posts)
         cache.delete_memoized(instance_sticky_post_ids)
@@ -2043,7 +2047,7 @@ def post_flair_list(post_id):
 @bp.route('/post/<int:post_id>/lock/<mode>', methods=['POST'])
 @login_required
 def post_lock(post_id: int, mode):
-    refuse_invisible_ids(post_id=post_id)
+    refuse_invisible_unless_moderating(db.session.get(Post, post_id) or abort(404))
     shared_post.lock_post(post_id, mode == 'yes', SRC_WEB)
     return redirect(referrer(url_for('activitypub.post_ap', post_id=post_id)))
 
@@ -2051,7 +2055,8 @@ def post_lock(post_id: int, mode):
 @bp.route('/post/<int:post_id>/<int:post_reply_id>/lock/<mode>', methods=['POST'])
 @login_required
 def post_reply_lock(post_id: int, post_reply_id: int, mode):
-    refuse_invisible_ids(post_id=post_id, reply_id=post_reply_id)
+    refuse_invisible_unless_moderating(db.session.get(Post, post_id) or abort(404))
+    refuse_invisible_unless_moderating(db.session.get(PostReply, post_reply_id) or abort(404))
     lock_post_reply(post_reply_id, mode == 'yes', SRC_WEB)
     return redirect(referrer(url_for('activitypub.post_ap', post_id=post_id, _anchor=f'comment_{post_reply_id}')))
 
@@ -2447,9 +2452,9 @@ def post_reply_delete(post_id: int, comment_id: int):
 @login_required
 def post_reply_restore(post_id: int, comment_id: int):
     post = db.session.get(Post, post_id) or abort(404)
-    refuse_invisible(post)
+    refuse_invisible_unless_moderating(post)
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
-    refuse_invisible(post_reply)
+    refuse_invisible_unless_moderating(post_reply)
 
     # D1077. Both ids come from the URL and nothing tied them together, while
     # every authorization test below is made against `post.community` -- so a
@@ -2544,9 +2549,9 @@ def post_reply_restore(post_id: int, comment_id: int):
 @login_required
 def post_reply_purge(post_id: int, comment_id: int):
     post = db.session.get(Post, post_id) or abort(404)
-    refuse_invisible(post)
+    refuse_invisible_unless_moderating(post)
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
-    refuse_invisible(post_reply)
+    refuse_invisible_unless_moderating(post_reply)
 
     # D1077's family, tenth site: the permission below is tested against
     # `post.community` and the row deleted is `post_reply`. Purging is the one
@@ -2609,7 +2614,7 @@ def post_cross_posts(post_id: int):
 @permission_required('change instance settings')
 def post_block_image(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
-    refuse_invisible(post)
+    refuse_invisible_unless_moderating(post)
     if post.type == POST_TYPE_IMAGE:
         form = ConfirmationForm()
         if form.validate_on_submit():
@@ -2617,7 +2622,8 @@ def post_block_image(post_id: int):
             if hash:
                 file_name = str(furl(post.url).path).split('/')
                 file_name = file_name[-1]
-                blocked_image = BlockedImage(hash=hash, file_name=file_name, note=shorten_string(post.title))
+                blocked_image = BlockedImage(hash=hash, file_name=file_name,
+                                             note=shorten_string(post_title_for(post, current_user.id)))
                 db.session.add(blocked_image)
                 db.session.commit()
 
@@ -2641,7 +2647,7 @@ def post_block_image(post_id: int):
 @permission_required('change instance settings')
 def post_block_image_purge_posts(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
-    refuse_invisible(post)
+    refuse_invisible_unless_moderating(post)
     if request.method == 'POST':
         post_ids = request.form.getlist('post_ids')
 

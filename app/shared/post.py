@@ -22,6 +22,7 @@ from app.models import File, Notification, NotificationSubscription, Poll, PollC
     PostBookmark, PostVote, Report, Site, User, utcnow, Instance, Event, Community, CommunityFlair, \
     votes_cast_today, adjust_domain_post_count, served_path, _as_url
 from app.shared.tasks import task_selector
+from app.visibility import post_title_for
 from app.utils import render_template, authorise_api_user, shorten_string, gibberish, ensure_directory_exists, \
     piefed_markdown_to_lemmy_markdown, markdown_to_html, fixup_url, domain_from_url, \
     opengraph_parse, url_to_thumbnail_file, can_create_post, is_video_hosting_site, recently_upvoted_posts, \
@@ -1067,11 +1068,11 @@ def lock_post(post_id: int, locked, src, auth=None):
 
         if locked:
             if src == SRC_WEB:
-                flash(_('%(name)s has been locked.', name=post.title))
+                flash(_('%(name)s has been locked.', name=post_title_for(post, user.id)))
             task_selector('lock_post', user_id=user.id, post_id=post_id)
         else:
             if src == SRC_WEB:
-                flash(_('%(name)s has been unlocked.', name=post.title))
+                flash(_('%(name)s has been unlocked.', name=post_title_for(post, user.id)))
             task_selector('unlock_post', user_id=user.id, post_id=post_id)
     elif src == SRC_API:
         raise Exception('Does not have permission')

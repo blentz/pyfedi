@@ -1900,11 +1900,13 @@ def put_post_report_resolve(auth, data):
 
 
 def post_post_lock(auth, data):
-    post_id = a_visible_post(data['post_id'], auth).id
+    post_id = a_moderatable_post(data['post_id'], auth).id
     locked = data['locked']
 
     user_id, post = shared_post.lock_post(post_id, locked, SRC_API, auth)
 
+    if not can_view(post, user_id):  # as post_post_remove: an acknowledgement, not the content (D19)
+        return {'post_view': post_removal_ack_view(post)}
     post_json = post_view(post=post, variant=4, user_id=user_id)
     return post_json
 
@@ -1920,7 +1922,7 @@ def post_post_hide(auth, data):
 
 
 def post_post_feature(auth, data):
-    post_id = a_visible_post(data['post_id'], auth).id
+    post_id = a_moderatable_post(data['post_id'], auth).id
     featured = data['featured']
     feature_type = data['feature_type'] if 'feature_type' in data else 'Community'
 
@@ -1945,6 +1947,8 @@ def post_post_feature(auth, data):
         else:
             raise Exception('Only admin users can feature a post locally')
 
+    if not can_view(post, user_id):  # as post_post_remove: an acknowledgement, not the content (D19)
+        return {'post_view': post_removal_ack_view(post)}
     post_json = post_view(post=post, variant=4, user_id=user_id)
     return post_json
 
