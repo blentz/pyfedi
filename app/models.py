@@ -2525,6 +2525,7 @@ class Post(db.Model):
     from_bot = db.Column(db.Boolean, default=False, index=True)
     from_reposter = db.Column(db.Boolean, default=False, index=True)
     private = db.Column(db.Boolean, default=False, index=True)
+    visibility = db.Column(db.String(10), default='public', server_default='public', nullable=False, index=True)
     created_at = db.Column(db.DateTime, index=True, default=utcnow)  # this is when the content arrived here
     posted_at = db.Column(db.DateTime, index=True, default=utcnow, server_default=db.func.now(), nullable=False)  # this is when the original server created it
     # `default=utcnow` is new with the NOT NULL: this column had no default of
@@ -3953,6 +3954,7 @@ class PostReply(db.Model):
     indexable = db.Column(db.Boolean, default=True, index=True)
     nsfw = db.Column(db.Boolean, default=False, index=True)
     private = db.Column(db.Boolean, default=False, index=True)
+    visibility = db.Column(db.String(10), default='public', server_default='public', nullable=False, index=True)
     distinguished = db.Column(db.Boolean, default=False)
     notify_author = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, index=True, default=utcnow) # this is when the post arrived here
