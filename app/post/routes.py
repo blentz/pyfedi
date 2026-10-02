@@ -898,7 +898,8 @@ def continue_discussion(post_id, comment_id):
     for u_flair in UserFlair.query.filter(UserFlair.community_id == post.community_id):
         user_flair[u_flair.user_id] = u_flair.flair
 
-    description = shorten_string(markdown_to_text(comment.body), 200) if comment.body else None
+    # a hidden comment renders as a placeholder, so its body must not reach the page head either
+    description = shorten_string(markdown_to_text(comment.body), 200) if comment.body and can_view(comment, current_user.get_id()) else None
     og_image = post.image.source_url if post.image_id else None
 
     response = render_template('post/continue_discussion.html', title=_('Discussing %(title)s', title=post.title),

@@ -905,6 +905,14 @@ def reply_view(reply: PostReply | int, variant: int, user_id=None,
         return v6
 
 
+def reply_stub_view(reply: PostReply) -> dict:
+    """D18: what the API shows of a reply the viewer may not see. Nothing but its place in the tree."""
+    if not reply.path:
+        calculate_path(reply)
+    return {'id': reply.id, 'post_id': reply.post_id, 'path': '.'.join(str(id) for id in reply.path),
+            'visibility': VISIBILITY_FOLLOWERS, 'body': None, 'creator': None, 'replies': []}
+
+
 def reply_report_view(report, reply_id, user_id, variant=1) -> dict:
     # /comment/report api endpoint
     # similar to a reply_view in many ways, except that the 'creator' is the report creator,

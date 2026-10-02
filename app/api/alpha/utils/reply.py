@@ -5,7 +5,7 @@ from sqlalchemy import desc, text, func, cast, Float, exists, and_, or_, any_
 from sqlalchemy.orm import aliased
 
 from app import db
-from app.api.alpha.views import reply_view, reply_report_view, post_view, community_view, user_view
+from app.api.alpha.views import reply_view, reply_stub_view, reply_report_view, post_view, community_view, user_view
 from app.constants import *
 from app.models import Notification, PostReply, Post, PostReplyVote, Report, Community, utcnow
 from app.shared.reply import vote_for_reply, bookmark_reply, remove_bookmark_reply, subscribe_reply, make_reply, \
@@ -373,6 +373,9 @@ def get_reply_list(auth, data, user_details=None):
     reply_list = []
     inner_creator_view = inner_community_view = inner_post_view = None
     for reply in replies:
+        if not can_view(reply, user_id):
+            reply_list.append(reply_stub_view(reply))  # D18
+            continue
         if add_creator_in_view == False and add_community_in_view == False:
             if is_creator_banned_from_community is None:
                 is_creator_banned_from_community = reply.community_id in communities_banned_from(reply.user_id)

@@ -598,6 +598,24 @@ class CommentView(DefaultSchema):
     filtered = fields.Boolean(metadata={"description": "A 'hide completely' reply filter of the auth'ed user matched this comment."})
 
 
+class CommentViewOrStub(fields.Nested):
+    """D18: a comment the viewer may not see arrives as a RestrictedCommentStub instead of the full view."""
+    def _deserialize(self, value, attr, data, partial=None, **kwargs):
+        if isinstance(value, dict) and value.get('visibility') == 'followers' and value.get('body', 0) is None:
+            return RestrictedCommentStub().load(value)
+        return super()._deserialize(value, attr, data, partial=partial, **kwargs)
+
+
+class RestrictedCommentStub(DefaultSchema):
+    id = fields.Integer(required=True)
+    post_id = fields.Integer(required=True)
+    path = fields.String(required=True)
+    visibility = fields.String(required=True, validate=validate.OneOf(['followers']))
+    body = fields.String(allow_none=True, validate=validate.Equal(None))
+    creator = fields.Raw(allow_none=True)
+    replies = fields.List(CommentViewOrStub(lambda: PostReplyView), metadata={"description": "Replies below the hidden one, which may be visible or stubs too."})
+
+
 class FeedView(DefaultSchema):
     actor_id = fields.Url(required=True)
     ap_domain = fields.String(required=True)
@@ -1212,7 +1230,7 @@ class ListCommentsRequest(DefaultSchema):
 
 
 class ListCommentsResponse(DefaultSchema):
-    comments = fields.List(fields.Nested(CommentView), required=True)
+    comments = fields.List(CommentViewOrStub(CommentView), required=True)
     next_page = fields.String(allow_none=True)
 
 
@@ -1526,11 +1544,11 @@ class GetPostRepliesRequest(DefaultSchema):
 class PostReplyView(CommentView):
     post = fields.Nested(Post)
     community = fields.Nested(Community)
-    replies = fields.List(fields.Nested(lambda: PostReplyView))
+    replies = fields.List(CommentViewOrStub(lambda: PostReplyView))
 
 
 class GetPostRepliesResponse(DefaultSchema):
-    comments = fields.List(fields.Nested(PostReplyView))
+    comments = fields.List(CommentViewOrStub(PostReplyView))
     next_page = fields.String(allow_none=True)
 
 

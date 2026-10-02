@@ -11,6 +11,7 @@ from sqlalchemy import desc, asc, text, or_
 from app import db, cache
 from app.constants import POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_VIDEO, POST_TYPE_POLL
 from app.models import PostReply, Post, Community, User, Language, utcnow
+from app.visibility import mark_restricted
 from app.utils import blocked_or_banned_instances, blocked_users, is_video_hosting_site, get_request, silenced_instances
 
 
@@ -145,7 +146,7 @@ def post_replies(post: Post, sort_by: str, viewer: User, db_only=False) -> List[
         archived_data = retrieve_archived_post(post.archived)
         if archived_data and 'replies' in archived_data:
             archived_replies = convert_archived_replies_to_tree(archived_data['replies'], post)
-            return archived_replies
+            return mark_restricted(archived_replies, viewer.id if viewer else None)
 
     comments = db.session.query(PostReply).filter_by(post_id=post.id)
     if viewer:
@@ -195,7 +196,10 @@ def post_replies(post: Post, sort_by: str, viewer: User, db_only=False) -> List[
             if parent_comment:
                 parent_comment['replies'].append(comments_dict[comment.id])
 
-    return [comment for comment in comments_dict.values() if comment['comment'].parent_id is None]
+    tree = [comment for comment in comments_dict.values() if comment['comment'].parent_id is None]
+    if db_only:
+        return tree  # archive_post reads every reply, unmarked, and decides what to store
+    return mark_restricted(tree, viewer.id if viewer else None)
 
 
 def get_comment_branch(post: Post, comment_id: int, sort_by: str, viewer: User) -> List[PostReply]:
@@ -205,7 +209,7 @@ def get_comment_branch(post: Post, comment_id: int, sort_by: str, viewer: User) 
         if archived_data and 'replies' in archived_data:
             branch_data = find_comment_branch_in_archived(archived_data['replies'], comment_id)
             if branch_data:
-                return convert_archived_replies_to_tree(branch_data, post)
+                return mark_restricted(convert_archived_replies_to_tree(branch_data, post), viewer.id if viewer else None)
             else:
                 return []
     
@@ -257,7 +261,8 @@ def get_comment_branch(post: Post, comment_id: int, sort_by: str, viewer: User) 
             if parent_comment:
                 parent_comment['replies'].append(comments_dict[comment.id])
 
-    return [comment for comment in comments_dict.values() if comment['comment'].id == comment_id]
+    tree = [comment for comment in comments_dict.values() if comment['comment'].id == comment_id]
+    return mark_restricted(tree, viewer.id if viewer else None)
 
 
 # The number of replies a post has

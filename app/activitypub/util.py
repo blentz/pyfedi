@@ -45,6 +45,7 @@ from app.utils import get_request, allowlist_html, get_setting, ap_datetime, mar
 import app.activitypub.actor as activitypub_actor
 import urllib.parse
 from app.utils import site_language_id
+from app.visibility import OPEN_VISIBILITIES
 import app as app_pkg
 
 
@@ -250,7 +251,8 @@ def post_to_page(post: Post):
 
 
 def post_replies_for_ap(post_id: int) -> List[dict]:
-    replies = PostReply.query.filter_by(post_id=post_id, deleted=False).order_by(PostReply.posted_at).limit(2000)
+    replies = PostReply.query.filter_by(post_id=post_id, deleted=False).filter(PostReply.visibility.in_(OPEN_VISIBILITIES)) \
+        .order_by(PostReply.posted_at).limit(2000)
     return [comment_model_to_json(reply) for reply in replies]
 
 

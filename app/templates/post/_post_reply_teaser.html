@@ -191,7 +191,7 @@
             {% if not THREAD_CUTOFF_DEPTH or post_reply.depth <= THREAD_CUTOFF_DEPTH -%}
                     {% for reply in children -%}
                         {% with post_reply=reply['comment'], children=reply['replies'] %}
-                            {% include 'post/_post_reply_teaser.html' %}
+                            {% if reply.restricted %}{% include 'post/_post_reply_restricted.html' %}{% else %}{% include 'post/_post_reply_teaser.html' %}{% endif %}
                         {% endwith %}
                     {% endfor -%}
             {% else -%}

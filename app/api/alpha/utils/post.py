@@ -6,7 +6,7 @@ from sqlakeyset import InvalidPage, get_page
 from sqlalchemy.exc import IntegrityError
 
 from app import db, plugins, cache
-from app.api.alpha.views import post_view, post_report_view, reply_view, community_view, user_view, flair_view
+from app.api.alpha.views import post_view, post_report_view, reply_view, reply_stub_view, community_view, user_view, flair_view
 from app.activitypub.util import normalise_actor_string
 from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
@@ -1421,7 +1421,7 @@ def get_post_replies(auth, data):
 
             if effective_depth <= max_depth:
                 filtered_item = {
-                    'comment': comment,
+                    **item,
                     'replies': filter_max_depth(item['replies'], current_depth + 1, parent_depth)
                 }
                 filtered_tree.append(filtered_item)
@@ -1515,6 +1515,12 @@ def get_post_replies(auth, data):
 
         for item in reply_tree:
             reply = item['comment']
+            if item.get('restricted'):
+                # D18: the place in the tree, nothing of the reply; its visible children stay
+                stub = reply_stub_view(db.session.get(PostReply, reply.id))
+                stub['replies'] = process_nested_replies(item['replies'], is_top_level=False)
+                processed_replies.append(stub)
+                continue
             is_reply_bookmarked = reply.id in user_details['bookmarked_reply_ids'] if user_details else None
             is_creator_blocked = reply.user_id in user_details['blocked_creator_ids'] if user_details else False
             vote_effect = 0

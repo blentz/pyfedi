@@ -30,7 +30,7 @@
         <div id="replies" class="comments" role="tree" aria-label="{{ _('Comments') }}" aria-expanded="true">
             {% for reply in replies -%}
               {% with post_reply=reply['comment'], children=reply['replies'], nonce=nonce %}
-                  {% include 'post/_post_reply_teaser.html' %}
+                  {% if reply.restricted %}{% include 'post/_post_reply_restricted.html' %}{% else %}{% include 'post/_post_reply_teaser.html' %}{% endif %}
               {% endwith %}
             {% endfor -%}
         </div>
@@ -82,7 +82,7 @@
 
                 {% for reply in replies -%}
                   {% with post_reply=reply['comment'], children=reply['replies'], nonce=nonce %}
-                      {% include 'post/_post_reply_teaser.html' %}
+                      {% if reply.restricted %}{% include 'post/_post_reply_restricted.html' %}{% else %}{% include 'post/_post_reply_teaser.html' %}{% endif %}
                   {% endwith %}
                 {% endfor -%}
             {% endfor -%}
