@@ -533,7 +533,7 @@ def show_community(community: Community):
         # `PROBE s2 replies shown for a post under review: [...]`. The two
         # filters are the ones the posts branch applies to Post itself.
         comments = community.replies.join(Post, PostReply.post_id == Post.id).filter(
-            Post.deleted == False, Post.status > POST_STATUS_REVIEWING, listable_clause(Post), listable_clause(PostReply))
+            Post.deleted == False, Post.status > POST_STATUS_REVIEWING, listable_clause(PostReply))
 
         # filter out nsfw and nsfl if desired
         if current_user.is_anonymous:

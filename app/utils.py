@@ -4552,7 +4552,8 @@ def paginate_post_ids(post_ids, page: int, page_length: int):
 # see MICROBLOG_GATE below.
 FOLLOWED_AUTHOR_SQL = """(EXISTS (SELECT 1 FROM user_follower uf
                                   WHERE uf.local_user_id = :local_user_id
-                                  AND uf.remote_user_id = p.user_id AND is_inward is false)
+                                  AND uf.remote_user_id = p.user_id AND uf.is_inward is false
+                                  AND uf.is_accepted is true)
                                   AND """ + visible_to_sql('p') + ')'
 
 FOLLOWED_BOOSTER_SQL = """(EXISTS (SELECT 1 FROM post_boost pb
