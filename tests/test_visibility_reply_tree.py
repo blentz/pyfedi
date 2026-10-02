@@ -147,3 +147,28 @@ def test_restricted_reply_carries_its_path(app, db_session):
     entry = next(e for e in post_replies(w.public_post, 'new', w.stranger) if e['comment'].id == w.reply.id)
     assert entry['comment'].path[-1] == w.reply.id
     assert entry['comment'].path[0] == 0
+
+
+@pytest.mark.parametrize('path', ['/api/alpha/post/replies', '/api/alpha/comment/list'])
+def test_api_builds_the_neutral_post_and_community_once_per_thread(app, world, path):
+    """D7 (residuals WP-D): every stub in one post's thread shares one neutral community and post."""
+    from unittest.mock import patch
+    from app import db
+    from app.api.alpha import views
+    from tests.factories import make_post_reply
+    w = world
+    for n in range(3):
+        hidden = make_post_reply(w.public_post, w.author, f'secret {n}')
+        hidden.visibility = 'followers'
+    db.session.commit()
+    real = views._neutral_post
+    with patch('app.api.alpha.views._neutral_post', side_effect=real) as neutral:
+        response = app.test_client().get(path, query_string={'post_id': w.public_post.id},
+                                         headers={'Authorization': bearer(w.stranger)})
+    assert response.status_code == 200
+
+    def stubs(comments):
+        return sum((c['comment']['body'] is None) + stubs(c.get('replies', [])) for c in comments)
+
+    assert stubs(response.json['comments']) == 4
+    assert neutral.call_count == 1
