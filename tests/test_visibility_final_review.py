@@ -277,3 +277,39 @@ def test_the_web_modlog_filter_does_not_match_hidden_entries_for_a_non_admin(app
     w.reply.visibility = 'public'
     db.session.commit()
     assert len(shown(w.stranger)) == 4
+
+
+# I2
+def test_the_moderator_comments_page_obeys_the_predicate(app, world):
+    from tests.factories import make_community_member
+    w = world
+    make_community_member(w.stranger, w.community, is_moderator=True)
+    make_community_member(w.follower, w.community, is_moderator=True)
+    w.reply.body = 'secret reply'
+    db.session.commit()
+
+    def shown(user):
+        with patch('app.community.routes.render_template', return_value=app.response_class('rendered')) as render:
+            assert client_as(app, user).get('/community/microblogs/moderate/comments').status_code == 200
+        return [r.id for r in render.call_args.kwargs['post_replies'].items]
+    assert w.reply.id not in shown(w.stranger) and w.public_child.id in shown(w.stranger)
+    assert w.reply.id in shown(w.follower)
+
+
+# I3
+def test_check_url_already_posted_obeys_the_predicate(app, world):
+    from tests.factories import make_post
+    w = world
+    url = 'https://news.example/story'
+    hidden = make_post(w.community, w.author, 'https://m.example/s/9', title='hidden link')
+    hidden.url = url
+    hidden.visibility = 'followers'
+    db.session.commit()
+
+    def shown(user):
+        with patch('app.community.routes.retrieve_metadata_of_url', return_value=('', '')), \
+                patch('app.community.routes.flask.render_template', return_value='rendered') as render:
+            assert client_as(app, user).get('/community/check_url_already_posted', query_string={'link_url': url}).status_code == 200
+        return [p.id for p in render.call_args.kwargs['posts']]
+    assert shown(w.stranger) == []
+    assert shown(w.follower) == [hidden.id]
