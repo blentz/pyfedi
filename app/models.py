@@ -2630,7 +2630,7 @@ class Post(db.Model):
             find_hashtag_or_create, \
             find_licence_or_create, make_image_sizes, notify_about_post, find_flair_or_create, host_of, \
             activitypub_visibility, set_post_gallery, content_warning_from, gallery_attachments, \
-            gallery_image_is_blocked
+            gallery_image_is_blocked, castopod_episode_url, fetch_castopod_episode_audio
         # cycle: app.utils imports from this module
         from app.utils import allowlist_html, markdown_to_html, html_to_text, microblog_content_to_title, \
             microblog_content_to_link, blocked_phrases, get_setting, \
@@ -3213,6 +3213,11 @@ class Post(db.Model):
             # The rest of an album: Pixelfed and Mastodon send one attachment per image, Friendica beside a link
             if post.type in (constants.POST_TYPE_IMAGE, constants.POST_TYPE_LINK):
                 set_post_gallery(post, request_json, community.low_quality, gallery_images)
+
+            # C1. A Castopod episode announcement is a bare Note; its audio is on the episode object it links to
+            if request_json.get('type') != 'Update' and not user.is_local() and \
+                    (episode_url := castopod_episode_url(request_json['object'], user.ap_profile_id)):
+                fetch_castopod_episode_audio(post, episode_url)
 
             # Update list of cross posts
             if post.url:

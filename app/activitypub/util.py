@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import html
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone, timedelta
@@ -3286,6 +3288,89 @@ def create_post(store_ap_json, community: Community, request_json: dict, user: U
     except Exception as ex:
         log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, str(ex))
         return None
+
+
+# C1. A Castopod episode is announced as a plain Note whose content opens with a link to the episode page
+# (`https://pod.example/@mypod/episodes/ep-1`). The Note carries no attachment: the audio lives on the
+# `PodcastEpisode` object served at that url, so ingest fetches it afterwards.
+_CASTOPOD_EPISODE_PATH = re.compile(r'^/@[^/]+/episodes/[^/]+/?$')
+_CASTOPOD_EPISODE_LINK = re.compile(r'^\s*(?:<p>\s*)?<a\s[^>]*?href="([^"]+)"', re.IGNORECASE)
+
+
+def castopod_episode_url(note: dict, actor_ap_id: str):
+    """The episode page url a Castopod announcement Note opens with, or None.
+
+    The link must be on the author's own host, which stops a Note from naming some third party's url as
+    the thing this instance should fetch.
+    """
+    if not isinstance(note, dict) or note.get('type') != 'Note' or note.get('inReplyTo'):
+        return None
+    content = note.get('content')
+    if not isinstance(content, str):
+        return None
+    match = _CASTOPOD_EPISODE_LINK.match(content)
+    if not match:
+        return None
+    href = _as_url(html.unescape(match.group(1)), 1024)
+    if not href:
+        return None
+    parsed = urlparse(href)
+    if not _CASTOPOD_EPISODE_PATH.match(parsed.path or '') or parsed.query or not actor_ap_id:
+        return None
+    if not parsed.hostname or parsed.hostname != host_of(actor_ap_id):
+        return None
+    return href
+
+
+def fetch_castopod_episode_audio(post: Post, episode_url: str):
+    if current_app.debug:
+        fetch_castopod_episode_audio_task(post.id, episode_url)
+    else:
+        fetch_castopod_episode_audio_task.delay(post.id, episode_url)
+
+
+@celery.task
+def fetch_castopod_episode_audio_task(post_id, episode_url):
+    """Fetch the PodcastEpisode object and give the post its audio and episode image.
+
+    remote_object_to_json goes through get_request (the SSRF guard) and falls back to a signed GET on a 401.
+    Any failure leaves the post as the Note made it.
+    """
+    with current_app.app_context():
+        episode = remote_object_to_json(episode_url)
+        if not isinstance(episode, dict) or episode.get('type') != 'PodcastEpisode':
+            return
+        audio = _as_dict(episode.get('audio'))
+        link = _as_dict(audio.get('url'))
+        audio_url = _as_url(link.get('href'), 1024)
+        if not audio_url or not str(link.get('mediaType', '')).startswith('audio/') or not url_is_storable(audio_url):
+            return
+        # the episode and its audio are served by the podcast's own host
+        if host_of(audio_url) != host_of(episode_url):
+            return
+        session = get_task_session()
+        try:
+            with patch_db_session(session):
+                post = session.get(Post, post_id)
+                if post is None or post.deleted:
+                    return
+                post.url = audio_url
+                post.type = POST_TYPE_LINK
+                domain = domain_from_url(audio_url)
+                if domain and not domain.banned and post.domain_id is None:
+                    domain.post_count += 1
+                    post.domain = domain
+                image_url = image_url_from(episode.get('image'))
+                if image_url and post.image_id is None:
+                    post.image = File(source_url=image_url)
+                session.commit()
+                if post.image_id and get_setting('cache_remote_images_locally', True):
+                    make_image_sizes(post.image_id, 170, 512, 'posts', post.community.low_quality)
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
 
 def notify_about_post(post: Post):

@@ -122,7 +122,7 @@
                     <span class="fe {{ post.domain.type_to_class() }}" title="{{ post.domain.post_warning }}"></span>
                 {% endif -%}
             </p>
-            {% if post.url.endswith('.mp3') -%}
+            {% if post.url.endswith(('.mp3', '.m4a', '.ogg', '.oga', '.opus', '.wav', '.aac', '.flac')) -%}
                 <p>
                     <audio controls preload="{{ 'none' if low_bandwidth else 'metadata' }}" src="{{ post.url }}"></audio>
                 </p>
