@@ -145,3 +145,17 @@ def test_the_boost_disjunct_carries_no_microblog_gate():
     assert MICROBLOG_GATE not in FOLLOWED_AUTHOR_SQL
     assert 'private' not in FOLLOWED_BOOSTER_SQL
     assert 'private' not in FOLLOWED_AUTHOR_SQL
+
+
+def test_a_pending_follow_of_the_booster_does_not_surface_the_boost(db_session):
+    """M1: only an accepted follow counts, as in the viewer predicate."""
+    booster = make_user(make_instance('pending.example'), 'pendingbooster')
+    author = make_user(make_instance('pending-author.example'), 'pendingauthor')
+    local = make_user(None, 'pendinglocal', local=True)
+    make_follow(local, booster, is_accepted=None)
+    post = make_post(make_community('pending-test'), author, 'https://pending-author.example/notes/1')
+    record_boost(post, booster)
+
+    ids = [row[0] for row in db.session.execute(text(BOOST_CLAUSE), {'local_user_id': local.id, 'visibility_viewer_id': local.id})]
+
+    assert post.id not in ids

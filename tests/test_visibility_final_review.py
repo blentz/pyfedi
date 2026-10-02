@@ -329,3 +329,17 @@ def test_a_poll_vote_on_a_followers_only_poll_is_not_relayed(app, db_session, mo
     activitypub_routes.process_poll_vote(voter, False, request_json, False)
     assert PollChoiceVote.query.filter_by(user_id=voter.id, choice_id=choice.id).count() == 1
     assert calls == []
+
+
+# M2
+def test_mark_as_read_skips_missing_and_hidden_ids_in_a_batch(app, world):
+    from app.models import read_posts
+    w = world
+    response = client_as(app, None).post('/api/alpha/post/mark_as_read',
+                                          json={'post_ids': [w.public_post.id, w.post.id, MISSING], 'read': True},
+                                          headers={'Authorization': bearer(w.stranger)})
+    assert response.status_code == 200, response.get_data(as_text=True)
+    assert response.get_json() == {'success': True}
+    marked = {row.read_post_id for row in db.session.execute(
+        db.select(read_posts).where(read_posts.c.user_id == w.stranger.id))}
+    assert marked == {w.public_post.id}
