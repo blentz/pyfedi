@@ -3365,6 +3365,14 @@ class Post(db.Model):
         # Handle file deletions from disk before cascade deletes the File records
         if self.image_id and self.image:
             self.image.delete_from_disk(cache_urls=cache_urls)
+        # The album's other images: post_file has no cascade, and its File rows belong to this post alone
+        gallery_ids = [row.file_id for row in db.session.execute(
+            post_file.select().where(post_file.c.post_id == self.id)).all()]
+        if gallery_ids:
+            db.session.execute(post_file.delete().where(post_file.c.post_id == self.id))
+            for file in File.query.filter(File.id.in_(gallery_ids)).all():
+                file.delete_from_disk(cache_urls=cache_urls)
+                db.session.delete(file)
         if self.type == POST_TYPE_VIDEO and _store_files_in_s3() and self.url:
             # D1343. This passed `self.url` -- the whole `https://...` -- as an S3
             # KEY, so `delete_objects` was asked for an object that cannot exist

@@ -221,3 +221,25 @@ def test_an_update_drops_a_blocked_gallery_image(ingest, hashing):
     db.session.refresh(post)
 
     assert [f.source_url for f in gallery_of(post)] == [THIRD]
+
+
+def test_deleting_the_post_deletes_its_gallery(ingest, tmp_path):
+    from app.models import post_file
+    post = ingest(album(image(FIRST, 'a'), image(SECOND, 'b'), image(THIRD, 'c')))
+    on_disk = []
+    for number, file in enumerate(gallery_of(post)):
+        path = tmp_path / f'{number}.jpg'
+        path.write_bytes(b'x')
+        file.file_path = str(path)
+        on_disk.append(path)
+    db.session.commit()
+    gallery_ids = [file.id for file in gallery_of(post)]
+
+    cache_urls = []
+    post.delete_dependencies(cache_urls=cache_urls)
+    db.session.commit()
+
+    assert not any(path.exists() for path in on_disk)
+    assert all(str(path) in cache_urls for path in on_disk)
+    assert db.session.execute(post_file.select().where(post_file.c.post_id == post.id)).all() == []
+    assert File.query.filter(File.id.in_(gallery_ids)).count() == 0
