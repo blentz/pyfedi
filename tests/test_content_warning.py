@@ -1,6 +1,7 @@
 """Mastodon and Pixelfed send a content warning as `summary` (+ `sensitive`). It is
 kept on Post and PostReply, shown as a collapsed <details> on the post page, in
 place of the body preview in teasers, and sent back out as `summary`."""
+import json
 import re
 
 import pytest
@@ -268,3 +269,58 @@ def test_an_unwarned_polls_choices_are_not_collapsed(app, community, author):
 
     assert 'the first choice' in html
     assert 'content_warning' not in html
+
+
+def json_ld(app, post, user=None):
+    client = app.test_client()
+    if user is not None:
+        with client.session_transaction() as sess:
+            sess['_user_id'] = str(user.id)
+            sess['_fresh'] = True
+    html = client.get(f'/post/{post.id}', follow_redirects=True).get_data(as_text=True)
+    blocks = re.findall(r'<script type="application/ld\+json">(.*?)</script>', html, re.S)
+    return json.loads(next(block for block in blocks if 'SocialMediaPosting' in block))
+
+
+def test_json_ld_of_a_warned_post_is_the_warning_and_no_image(app, community, author):
+    from app.constants import POST_TYPE_LINK
+    public_site()
+    post = with_image(ingest(community, author, activity(summary='look away')))
+    post.type = POST_TYPE_LINK
+    db.session.commit()
+
+    data = json_ld(app, post)
+
+    assert data['text'] == 'look away'
+    assert 'the secret body' not in json.dumps(data)
+    assert 'image' not in data
+
+
+def test_json_ld_of_an_nsfw_post_has_no_body_and_no_image(app, community, author):
+    from app.constants import POST_TYPE_LINK
+    public_site()
+    post = with_image(ingest(community, author, activity(sensitive=True)))
+    post.type = POST_TYPE_LINK
+    shows_nsfw = make_user(make_instance('local.example'), 'carol', local=True)
+    shows_nsfw.hide_nsfw = 0
+    post.comments_enabled = False
+    db.session.commit()
+
+    data = json_ld(app, post, shows_nsfw)
+
+    assert data['text'] == ''
+    assert 'image' not in data
+    assert data['isFamilyFriendly'] is False
+
+
+def test_json_ld_of_an_ordinary_post_keeps_its_body_and_image(app, community, author):
+    from app.constants import POST_TYPE_LINK
+    public_site()
+    post = with_image(ingest(community, author, activity()))
+    post.type = POST_TYPE_LINK
+    db.session.commit()
+
+    data = json_ld(app, post)
+
+    assert 'the secret body' in data['text']
+    assert data['image'] == 'https://m.example/preview.jpg'
