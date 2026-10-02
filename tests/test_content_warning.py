@@ -231,3 +231,40 @@ def test_link_preview_of_an_ordinary_post_keeps_its_body_and_image(app, communit
 
     assert 'the secret body' in head
     assert '<meta property="og:image" content="https://m.example/preview.jpg" />' in head
+
+
+def a_poll(community, author, warning):
+    from datetime import timedelta
+    from app.constants import POST_TYPE_POLL
+    from app.models import utcnow
+    from tests.factories import make_poll, make_poll_choice
+    post = ingest(community, author, activity(summary=warning))
+    post.type = POST_TYPE_POLL
+    make_poll(post, end_poll=utcnow() + timedelta(days=1))
+    make_poll_choice(post, 'the first choice', sort_order=0)
+    make_poll_choice(post, 'the second choice', sort_order=1)
+    db.session.commit()
+    return post
+
+
+def test_a_warned_polls_choices_are_collapsed_under_the_warning(app, community, author):
+    public_site()
+    post = a_poll(community, author, 'poll warning')
+
+    html = app.test_client().get(f'/post/{post.id}', follow_redirects=True).get_data(as_text=True)
+
+    blocks = [html[m.start():html.index('</details>', m.start())]
+              for m in re.finditer(r'<details class="content_warning"', html)]
+    holding = [block for block in blocks if 'the first choice' in block]
+    assert holding and 'the second choice' in holding[0]
+    assert re.search(r'<summary>\s*poll warning\s*</summary>', holding[0])
+
+
+def test_an_unwarned_polls_choices_are_not_collapsed(app, community, author):
+    public_site()
+    post = a_poll(community, author, None)
+
+    html = app.test_client().get(f'/post/{post.id}', follow_redirects=True).get_data(as_text=True)
+
+    assert 'the first choice' in html
+    assert 'content_warning' not in html

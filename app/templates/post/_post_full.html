@@ -288,6 +288,7 @@
         </div>
         {% if post.content_warning and sees_deleted_original -%}</details>{% endif -%}
         {% if post.type == POST_TYPE_POLL and not post.deleted -%}
+            {% if post.content_warning and sees_deleted_original -%}<details class="content_warning"><summary>{{ post.content_warning }}</summary>{% endif -%}
             <div class="post_poll" lang="{{ post.language_code() }}">
                 {% if poll_finished and poll_total_votes == 0 -%}
                     <p>
@@ -417,6 +418,7 @@
                     </form>
                 {% endif -%}
             </div>
+            {% if post.content_warning and sees_deleted_original -%}</details>{% endif -%}
         {% endif -%}
         {% if post.type == POST_TYPE_EVENT -%}
             <a class="btn btn-sm btn-outline-secondary" style="float: right;" href="{{ url_for('post.show_post_ical', post_id=post.id) }}">
