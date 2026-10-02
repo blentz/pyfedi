@@ -3,7 +3,7 @@
 {% if replies -%}
 {% for reply in replies -%}
   {% with post_reply=reply['comment'], children=reply['replies'], nonce=nonce, has_continued=1 %}
-      {% include 'post/_post_reply_teaser.html' %}
+      {% if reply.restricted %}{% include 'post/_post_reply_restricted.html' %}{% else %}{% include 'post/_post_reply_teaser.html' %}{% endif %}
   {% endwith %}
 {% endfor -%}
 {% endif -%}

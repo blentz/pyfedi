@@ -891,7 +891,8 @@ def continue_discussion(post_id, comment_id):
     # user flair
     user_flair = user_flair_on_post(post)
 
-    description = shorten_string(markdown_to_text(comment.body), 200) if comment.body else None
+    # a hidden comment renders as a placeholder, so its body must not reach the page head either
+    description = shorten_string(markdown_to_text(comment.body), 200) if comment.body and can_view(comment, current_user.get_id()) else None
     og_image = post.image.source_url if post.image_id else None
 
     response = render_template('post/continue_discussion.html', title=post.title,

@@ -1,0 +1,16 @@
+{# D18: a reply the viewer may not see. post_reply is an app.visibility.RestrictedReply:
+   id, depth, parent_id and post_id only. Its children render normally below. #}
+<div class="container comment restricted" id="comment_{{ post_reply.id }}" aria-level="{{ post_reply.depth+1 }}" role="treeitem">
+    <div class="row comment_body">
+        <div class="col-12 pr-0"><p class="text-muted">{{ _('Visible to followers only') }}</p></div>
+    </div>
+    {% if children -%}
+        <div class="replies depth_{{ post_reply.depth }}" role="group">
+            {% for reply in children -%}
+                {% with post_reply=reply['comment'], children=reply['replies'] %}
+                    {% if reply.restricted %}{% include 'post/_post_reply_restricted.html' %}{% else %}{% include 'post/_post_reply_teaser.html' %}{% endif %}
+                {% endwith %}
+            {% endfor -%}
+        </div>
+    {% endif -%}
+</div>

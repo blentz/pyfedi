@@ -2550,7 +2550,8 @@ def post_ap_context(post_id):
             return refusal
         if post.community.local_only or post.community.private:
             abort(403)
-        replies = PostReply.query.filter_by(post_id=post_id, deleted=False).order_by(PostReply.posted_at).limit(2000)
+        replies = PostReply.query.filter_by(post_id=post_id, deleted=False).filter(PostReply.visibility.in_(OPEN_VISIBILITIES)) \
+            .order_by(PostReply.posted_at).limit(2000)
         urls = [reply.ap_id for reply in replies]
         urls = [post.ap_id] + urls
         replies_collection = {"type": "OrderedCollection", "totalItems": len(urls), "orderedItems": urls}
