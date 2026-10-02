@@ -3,7 +3,7 @@ import time
 
 from flask import current_app
 from flask_login import current_user
-from sqlalchemy import text, desc, or_, select
+from sqlalchemy import text, desc, exists, or_
 
 from app import celery, db
 from app.activitypub.signature import signed_get_request, send_post_request
@@ -196,27 +196,41 @@ class SimplePagination:
         return iter(self.items)
 
 
+def _not_in_ids(column, ids):
+    """`column NOT IN ids` that keeps a row whose column is NULL: NULL NOT IN (a non-empty set) is NULL, not true."""
+    return or_(column.is_(None), column.not_in(ids))
+
+
+def _outside_private_communities(model, viewer_id):
+    """Rows in no private community, save the private communities the viewer belongs to (and is not banned from),
+    as the API's person listings allow (D5). NOT EXISTS keeps a row that has no community at all (D10)."""
+    hidden = [Community.id == model.community_id, Community.private.is_(True)]
+    member_of = community_membership_private(viewer_id) if viewer_id else []
+    if member_of:
+        hidden.append(Community.id.not_in(member_of))
+    return ~exists().where(*hidden)
+
+
 def _get_user_posts(user, post_page):
     """Get posts for a user based on current user's permissions."""
     # no role exempts the viewer from the audience of a post (D19)
     viewer_id = current_user.get_id()
-    base_query = Post.query.filter_by(user_id=user.id).filter(Post.community_id.not_in(community_membership_private(user.id)),
-                                                              visible_to_clause(Post, viewer_id))
+    base_query = Post.query.filter_by(user_id=user.id).filter(visible_to_clause(Post, viewer_id))
 
     if current_user.is_authenticated and (current_user.is_admin() or current_user.is_staff()):
         # Admins see everything
-        query = base_query.order_by(desc(Post.posted_at))
+        query = base_query.filter(_not_in_ids(Post.community_id, community_membership_private(user.id))).order_by(
+            desc(Post.posted_at))
     elif current_user.is_authenticated and current_user.id == user.id:
         # Users see their own posts including soft-deleted ones they deleted
         query = base_query.filter(
+            _not_in_ids(Post.community_id, community_membership_private(user.id)),
             or_(Post.deleted == False, Post.status > POST_STATUS_REVIEWING, Post.deleted_by == user.id)
         ).order_by(desc(Post.posted_at))
     else:
-        # Everyone else sees only non-deleted posts, and none in a private community
-        # the account has left or been banned from
+        # Everyone else sees only non-deleted posts, and none in a private community they do not belong to
         query = base_query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
-                                  Post.community_id.not_in(select(Community.id).where(Community.private == True))).order_by(
-            desc(Post.posted_at))
+                                  _outside_private_communities(Post, viewer_id)).order_by(desc(Post.posted_at))
     
     # Get all post IDs (capped at 1000)
     all_post_ids = query.with_entities(Post.id).limit(1000).all()
@@ -240,22 +254,21 @@ def _get_user_post_replies(user, replies_page):
     """Get post replies for a user based on current user's permissions."""
     # no role exempts the viewer from the audience of a reply (D19)
     viewer_id = current_user.get_id()
-    base_query = PostReply.query.filter_by(user_id=user.id).filter(PostReply.community_id.not_in(community_membership_private(user.id)),
-                                                                   visible_to_clause(PostReply, viewer_id))
+    base_query = PostReply.query.filter_by(user_id=user.id).filter(visible_to_clause(PostReply, viewer_id))
 
     if current_user.is_authenticated and (current_user.is_admin() or current_user.is_staff()):
         # Admins see everything
-        query = base_query.order_by(desc(PostReply.posted_at))
+        query = base_query.filter(_not_in_ids(PostReply.community_id, community_membership_private(user.id))).order_by(
+            desc(PostReply.posted_at))
     elif current_user.is_authenticated and current_user.id == user.id:
         # Users see their own replies including soft-deleted ones they deleted
-        query = base_query.filter(or_(PostReply.deleted == False, PostReply.deleted_by == user.id)).order_by(
+        query = base_query.filter(_not_in_ids(PostReply.community_id, community_membership_private(user.id)),
+                                  or_(PostReply.deleted == False, PostReply.deleted_by == user.id)).order_by(
             desc(PostReply.posted_at))
     else:
-        # Everyone else sees only non-deleted replies, and none in a private community
-        # the account has left or been banned from
+        # Everyone else sees only non-deleted replies, and none in a private community they do not belong to
         query = base_query.filter(PostReply.deleted == False,
-                                  PostReply.community_id.not_in(select(Community.id).where(Community.private == True))).order_by(
-            desc(PostReply.posted_at))
+                                  _outside_private_communities(PostReply, viewer_id)).order_by(desc(PostReply.posted_at))
     
     # Get all reply IDs (capped at 1000)
     all_reply_ids = query.with_entities(PostReply.id).limit(1000).all()
@@ -289,28 +302,26 @@ def _get_user_posts_and_replies(user, page):
         # Admins see everything
         post_select = f"SELECT id, posted_at, 'post' AS type FROM post WHERE user_id = {user_id}"
         reply_select = f"SELECT id, posted_at, 'reply' AS type FROM post_reply WHERE user_id = {user_id}"
-        if private:
-            post_select += f" AND community_id NOT IN ({private})"
-            reply_select += f" AND community_id NOT IN ({private})"
+        if private:  # IS NULL: a row with no community is in no private one (D10)
+            post_select += f" AND (community_id IS NULL OR community_id NOT IN ({private}))"
+            reply_select += f" AND (community_id IS NULL OR community_id NOT IN ({private}))"
     elif current_user.is_authenticated and current_user.id == user_id:
         # Users see their own posts/replies including soft-deleted ones they deleted
         post_select = f"SELECT id, posted_at, 'post' AS type FROM post WHERE user_id = {user_id} AND (deleted = 'False' OR deleted_by = {user_id})"
         reply_select = f"SELECT id, posted_at, 'reply' AS type FROM post_reply WHERE user_id={user_id} AND (deleted = 'False' OR deleted_by = {user_id})"
         if private:
-            post_select += f" AND community_id NOT IN ({private})"
-            reply_select += f" AND community_id NOT IN ({private})"
+            post_select += f" AND (community_id IS NULL OR community_id NOT IN ({private}))"
+            reply_select += f" AND (community_id IS NULL OR community_id NOT IN ({private}))"
     else:
-        # Everyone else sees only non-deleted posts/replies
-        # `private` below excludes the private communities this account is
-        # STILL a member of; the subselects cover the ones it has left or been
-        # banned from. Post.private is only the microblog marker (see
-        # tests/test_post_private_is_only_the_microblog_marker.py), so audience
-        # is decided by the visibility predicate appended below.
-        post_select = f"SELECT id, posted_at, 'post' AS type FROM post WHERE user_id = {user_id} AND deleted = 'False' and status > {POST_STATUS_REVIEWING} AND community_id NOT IN (SELECT id FROM community WHERE private)"
-        reply_select = f"SELECT id, posted_at, 'reply' AS type FROM post_reply WHERE user_id={user_id} AND deleted = 'False' AND community_id NOT IN (SELECT id FROM community WHERE private)"
-        if private:
-            post_select += f" AND community_id NOT IN ({private})"
-            reply_select += f" AND community_id NOT IN ({private})"
+        # Everyone else sees only non-deleted posts/replies, and none in a private community they do not belong
+        # to (D5, as _outside_private_communities). NOT EXISTS keeps a row with no community (D10). Post.private is
+        # only the microblog marker (see tests/test_post_private_is_only_the_microblog_marker.py), so audience is
+        # decided by the visibility predicate appended below.
+        member_of = ','.join(intlist_to_strlist(community_membership_private(viewer_id))) if viewer_id else ''
+        carve_out = f" AND pc.id NOT IN ({member_of})" if member_of else ''
+        hidden = "NOT EXISTS (SELECT 1 FROM community pc WHERE pc.id = {table}.community_id AND pc.private" + carve_out + ")"
+        post_select = f"SELECT id, posted_at, 'post' AS type FROM post WHERE user_id = {user_id} AND deleted = 'False' and status > {POST_STATUS_REVIEWING} AND {hidden.format(table='post')}"
+        reply_select = f"SELECT id, posted_at, 'reply' AS type FROM post_reply WHERE user_id={user_id} AND deleted = 'False' AND {hidden.format(table='post_reply')}"
 
     post_select += f" AND {visible_to_sql('post')}"
     reply_select += f" AND {visible_to_sql('post_reply')}"

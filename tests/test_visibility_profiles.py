@@ -183,3 +183,68 @@ def test_api_post_list_by_person_obeys_the_predicate(app, world, path):
         assert resp.status_code == 200, resp.get_data(as_text=True)
         ids = [p['post']['id'] for p in resp.get_json()['posts']]
         assert (w.post.id in ids) is shown
+
+
+# --- D5 / D10 (residuals WP-D): private communities and community-less rows on a profile ---------
+
+def _private_community_with_public_post(w):
+    from tests.factories import make_community, make_community_member
+    private = make_community('hush')
+    private.private = True
+    w.public_post.community_id = private.id
+    w.public_child.community_id = private.id
+    db.session.commit()
+    make_community_member(w.author, private)
+    return private
+
+
+def test_a_member_of_a_private_community_sees_its_content_on_a_profile(app, world):
+    from tests.factories import make_community_member
+    w = world
+    private = _private_community_with_public_post(w)
+    make_community_member(w.stranger, private)
+
+    posts, _replies, o_posts, _o_replies = profile(app, w, w.stranger)
+
+    assert w.public_post.id in posts and w.public_post.id in o_posts
+
+
+@pytest.mark.parametrize('who', ['pending', None])
+def test_a_non_member_still_does_not_see_private_community_content_on_a_profile(app, world, who):
+    w = world
+    _private_community_with_public_post(w)
+
+    posts, _replies, o_posts, _o_replies = profile(app, w, getattr(w, who) if who else None)
+
+    assert w.public_post.id not in posts and w.public_post.id not in o_posts
+
+
+def test_a_banned_member_does_not_see_private_community_content_on_a_profile(app, world):
+    from tests.factories import make_community_member
+    w = world
+    private = _private_community_with_public_post(w)
+    make_community_member(w.stranger, private).is_banned = True
+    db.session.commit()
+
+    posts, _replies, o_posts, _o_replies = profile(app, w, w.stranger)
+
+    assert w.public_post.id not in posts and w.public_post.id not in o_posts
+
+
+@pytest.mark.parametrize('who', ['stranger', None, 'author'])
+def test_rows_with_no_community_are_not_dropped_from_a_profile(app, world, who):
+    from tests.factories import make_community, make_community_member
+    w = world
+    private = make_community('hush')  # NULL NOT IN (a non-empty set) is NULL, which drops the row
+    private.private = True
+    db.session.commit()
+    make_community_member(w.author, private)
+    reply = make_post_reply(w.public_post, w.author, 'a community-less reply')
+    reply.community_id = None
+    w.public_post.community_id = None
+    db.session.commit()
+
+    posts, replies, o_posts, o_replies = profile(app, w, getattr(w, who) if who else None)
+
+    assert w.public_post.id in posts and w.public_post.id in o_posts
+    assert reply.id in replies and reply.id in o_replies
