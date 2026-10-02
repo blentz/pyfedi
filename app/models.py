@@ -3098,7 +3098,8 @@ class Post(db.Model):
                         if profile_id and isinstance(profile_id, str) and profile_id.startswith(current_app.config['SERVER_URL']):
                             profile_id = profile_id.lower()
                             recipient = User.query.filter_by(ap_profile_id=profile_id, ap_id=None).first()
-                            if recipient:
+                            # A mention must not hand a followers-only body to a recipient who may not view it
+                            if recipient and visibility_mod.can_view(post, recipient.id):
                                 blocked_senders = blocked_users(recipient.id)
                                 if post.user_id not in blocked_senders:
                                     # D1329. `db.session.get` answers a model
@@ -5730,3 +5731,8 @@ def ap_parse_datetime(dt_str: str) -> datetime:
     """
     dt = pendulum.parse(dt_str, strict=False)
     return datetime(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second, dt.microsecond)
+
+
+# At the foot, not the top: app.visibility imports UserFollower from this module, so it can be
+# imported only once the models above exist. Read as visibility_mod.<name> at call time.
+import app.visibility as visibility_mod  # noqa: E402  cycle: app.visibility imports from this module

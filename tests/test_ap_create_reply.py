@@ -227,13 +227,13 @@ def test_store_ap_json_decides_whether_the_log_row_carries_the_document(
 
 
 @pytest.mark.parametrize('visibility_field,expected', [
-    ({'to': [f'https://{PEER}/u/someone/followers'], 'cc': []}, 'followers'),
     ({'to': [], 'cc': []}, 'direct'),
 ])
-def test_a_non_public_reply_is_refused(app, db_session, redis_lock_only_double, ap_log,
+def test_a_direct_reply_is_refused(app, db_session, redis_lock_only_double, ap_log,
                                        visibility_field, expected):
     """The visibility guard, which reads `activitypub_visibility(request_json
-    .get('object'))` and refuses 'followers' and 'direct'.
+    .get('object'))` and refuses 'direct'. A followers-only reply is stored
+    (tests/test_visibility_ingest.py).
 
     Read directly from `activitypub_visibility`
     (app/activitypub/util.py): 'public' requires AS_PUBLIC in `to`; failing

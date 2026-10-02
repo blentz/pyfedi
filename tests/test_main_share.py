@@ -315,3 +315,17 @@ class TestWhoMayUseIt:
         response = client.get('/share', query_string={'url': URL})
 
         assert response.status_code in (200, 302)
+
+
+class TestVisibility:
+    def test_a_followers_only_post_does_not_reveal_that_the_link_was_shared(self, env):
+        client, joined, elsewhere, alice = env
+        author = make_user(make_instance('m.example'), 'bob')
+        post = make_post(elsewhere, author, 'https://m.example/s/1')
+        post.url = URL
+        post.visibility = 'followers'
+        db.session.commit()
+        assert b'already been shared' not in share(client).data
+        post.visibility = 'public'
+        db.session.commit()
+        assert b'already been shared' in share(client).data

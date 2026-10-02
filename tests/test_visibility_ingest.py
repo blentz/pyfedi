@@ -38,17 +38,18 @@ def note_activity(visibility_to, visibility_cc):
     }
 
 
-def test_followers_only_post_is_refused(db_session, author, log_spy):
-    """A followers-only post is not stored"""
+def test_followers_only_post_is_stored_as_followers(db_session, author, log_spy):
+    """A followers-only post is stored, with visibility 'followers'"""
     from app.activitypub.util import create_post
     from app.models import Post
     community = make_community()
+    make_site()  # Post.new() -> blocked_phrases() looks up Site id 1 unconditionally
 
     result = create_post(False, community, note_activity([FOLLOWERS], []), author)
 
-    assert result is None
-    assert Post.query.count() == 0
-    assert 'followers' in log_spy[-1][2]
+    assert result is not None
+    assert Post.query.count() == 1
+    assert result.visibility == 'followers'
 
 
 def test_direct_post_is_refused(db_session, author, log_spy):
@@ -90,11 +91,12 @@ def test_unlisted_post_is_accepted(db_session, author, log_spy):
     assert Post.query.count() == 1
 
 
-def test_followers_only_reply_is_refused(db_session, author, log_spy):
-    """A followers-only reply is not stored"""
+def test_followers_only_reply_is_stored_as_followers(db_session, author, log_spy):
+    """A followers-only reply is stored, with visibility 'followers'"""
     from app.activitypub.util import create_post_reply
     from app.models import PostReply
     community = make_community()
+    make_site()
     parent = make_post(community, author, 'https://m.example/users/alice/statuses/9')
 
     activity = note_activity([FOLLOWERS], [])
@@ -102,9 +104,9 @@ def test_followers_only_reply_is_refused(db_session, author, log_spy):
 
     result = create_post_reply(False, community, parent.ap_id, activity, author)
 
-    assert result is None
-    assert PostReply.query.count() == 0
-    assert 'followers' in log_spy[-1][2]
+    assert result is not None
+    assert PostReply.query.count() == 1
+    assert result.visibility == 'followers'
 
 
 def test_direct_reply_is_refused(db_session, author, log_spy):
@@ -130,10 +132,10 @@ def test_post_and_reply_refusal_reasons_differ(db_session, author, log_spy):
     community = make_community()
     parent = make_post(community, author, 'https://m.example/users/alice/statuses/9')
 
-    create_post(False, community, note_activity([FOLLOWERS], []), author)
+    create_post(False, community, note_activity(['https://m.example/users/bob'], []), author)
     post_reason = log_spy[-1][2]
 
-    activity = note_activity([FOLLOWERS], [])
+    activity = note_activity(['https://m.example/users/bob'], [])
     activity['object']['inReplyTo'] = parent.ap_id
     create_post_reply(False, community, parent.ap_id, activity, author)
     reply_reason = log_spy[-1][2]

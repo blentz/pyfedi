@@ -167,5 +167,5 @@ def test_the_visibility_refusal_still_guards_create_post():
     normalized = re.sub(r'\s+', ' ', source)
 
     assert 'activitypub_visibility(request_json.get(\'object\'))' in normalized
-    assert "if visibility in ('followers', 'direct')" in normalized
-    assert normalized.index("if visibility in ('followers', 'direct')") < normalized.index('Post.new(')
+    assert "if visibility == 'direct'" in normalized
+    assert normalized.index("if visibility == 'direct'") < normalized.index('Post.new(')
