@@ -919,3 +919,15 @@ Deferred minor findings from the task and final reviews. None blocks merge.
 - Task 11: minor (deferred): moderators cannot restore/lock/sticky/block-image content they cannot view (asymmetric with remove exemption) — final review to triage.
 - Task 11: minor (deferred): post_reply_delete executes only for is_moderator()/is_admin(), narrower than can_moderate gate (pre-existing).
 - Final: minor (deferred): search sweep surfaces assert absence only (no presence check); reply_stub_view rebuilds community stub per hidden reply; notification titles interpolate parent post title for recipients who may not view it (util.py:3313,3355; shared/reply.py:173,637,642; routes.py:2814; cli.py:1168,1788; post/routes.py:1631); modlog post entries show post.user_id to viewing followers while commenter neutralized (inconsistent, no leak).
+
+## Platform-gap residuals (2026-10-02 local seeding: PeerTube, Pixelfed, Castopod)
+
+Fixed on this branch: Castopod `Podcast` actor accepted (G1); markdown replies rendered (G2); multi-image gallery with order, hashing, deletion, count column and in-place Update (G3); content warning stored, collapsed on page/teaser/dillo, emitted as `summary` + `sensitive` (G4); sensitive/spoiler images blurred on the post page with keyboard-safe reveal (G5); link previews honour CW/nsfw.
+Deferred:
+- RSS bodies, reply forms, poll choices and `_schema_org.html` JSON-LD still show content under a CW.
+- API does not expose `content_warning` (suggested: `post.extensions.content_warning`, reply equivalent, per D17).
+- API album posts run one `post_file` query each; admin `posts_with_blocked_images` checks the primary image only.
+- An Update on an album with a previously dropped blocked image rebuilds the gallery every time.
+- Friendica-style Link + several images gets no gallery (Mbin rule).
+- Castopod episodes have no audio player: Castopod never federates audio in a Create (needs the episodes collection).
+- Migration b5d2c8e1f7a3 was amended to add `post.gallery_count`; a database already at that revision needs `ALTER TABLE post ADD COLUMN gallery_count integer NOT NULL DEFAULT 0`.
