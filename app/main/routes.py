@@ -33,6 +33,7 @@ from app.main.util import sidebar_active_communities, sidebar_new_instances, sid
     sidebar_new_communities, _base_list_communities_context, reload_url
 from app.shared.tasks.maintenance import refresh_instance_chooser
 from app.translation import LibreTranslateAPI
+from app.visibility import listable_clause
 from app.utils import render_template, ensure_rss_token, get_setting, request_etag_matches, return_304, blocked_domains, rss_token_user, \
     ap_datetime, shorten_string, user_filters_home, \
     joined_communities, moderating_communities, markdown_to_html, \
@@ -693,7 +694,8 @@ def security():
 def sitemap():
     posts = Post.query.join(Community, Post.community_id == Community.id).filter(
         Post.from_bot == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
-        Post.instance_id == 1, Post.indexable == True, Community.private == False, Community.local_only == False)
+        Post.instance_id == 1, Post.indexable == True, Community.private == False, Community.local_only == False,
+        listable_clause(Post))
     posts = posts.order_by(desc(Post.posted_at)).limit(500)
 
     resp = make_response(render_template('sitemap.xml', posts=posts, current_app=current_app))

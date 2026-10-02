@@ -24,6 +24,7 @@ from app.utils import render_template, user_filters_posts, validation_required, 
     login_required_if_private_instance, communities_banned_from, reported_posts, user_notes, moderating_communities_ids, \
     approval_required, block_honey_pot, user_pronouns, community_membership_private, check_anoobis, \
     calculate_rss_cache_timeout, refuse_if_private_instance
+from app.visibility import listable_clause
 from app.rss_extras import RSSFeed
 
 
@@ -110,7 +111,7 @@ def show_topic(topic_path):
             prev_url = url_for('topic.show_topic', topic_path=topic_path, result_id=result_id,
                                page=page - 1, sort=sort, layout=post_layout) if page > 0 else None
         elif content_type == 'comments':
-            comments = PostReply.query.filter(PostReply.community_id.in_(community_ids))
+            comments = PostReply.query.filter(PostReply.community_id.in_(community_ids), listable_clause(PostReply))
 
             # filter out nsfw and nsfl if desired
             if current_user.is_anonymous:

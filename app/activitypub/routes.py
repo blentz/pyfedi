@@ -44,7 +44,7 @@ from app.models import User, Community, CommunityJoinRequest, CommunityMember, A
 # The module, not the names: app.post.routes reaches this file through
 # app.activitypub.signature before they are defined (import cycle: post.routes)
 import app.post.routes as post_routes
-from app.visibility import OPEN_VISIBILITIES
+from app.visibility import OPEN_VISIBILITIES, listable_clause
 from app.shared.tasks import task_selector
 # The module, not the name: app.user.routes reaches this file through
 # app.activitypub.signature before show_profile is defined (import cycle: user.routes)
@@ -2257,7 +2257,7 @@ def community_outbox(actor):
         if community.local_only or community.private:
             abort(403)
         listed = Post.query.filter(Post.community_id == community.id, Post.deleted == False,
-                                   Post.status > POST_STATUS_REVIEWING)
+                                   Post.status > POST_STATUS_REVIEWING, listable_clause(Post))
         # sticky posts first, newest first within each, as the one page this served before paging
         ordered = listed.order_by(desc(Post.sticky).nulls_last(), desc(Post.posted_at), desc(Post.id))
 
@@ -2286,7 +2286,7 @@ def community_featured(actor):
         if community.local_only or community.private:
             abort(403)
         posts = Post.query.filter_by(community_id=community.id, sticky=True, deleted=False).filter(
-            Post.status >= POST_STATUS_PUBLISHED).all()
+            Post.status >= POST_STATUS_PUBLISHED, listable_clause(Post)).all()
 
         community_data = {
             "@context": default_context(),

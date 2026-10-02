@@ -15,6 +15,7 @@ from app.instance import bp
 from app.instance.util import is_fedi_handle, bulk_follow
 from app.models import Instance, User, Post, read_posts, AllowedInstances, BannedInstances, utcnow
 from app.shared.site import block_remote_instance, unblock_remote_instance
+from app.visibility import listable_clause
 from app.utils import render_template, blocked_domains, \
     blocked_or_banned_instances, blocked_communities, blocked_users, user_filters_home, recently_upvoted_posts, \
     recently_downvoted_posts, reported_posts, login_required, moderating_communities_ids, following_user_ids, \
@@ -267,11 +268,12 @@ def instance_posts(instance_domain):
         # D806: Post.private is left out, as the search and domain listings do
         posts = Post.query.filter(Post.instance_id == instance.id, Post.from_bot == False, Post.nsfw == False,
                                   Post.nsfl == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
-                                  Post.private == False)
+                                  Post.private == False, listable_clause(Post))
         content_filters = {}
     else:
         posts = Post.query.filter(Post.instance_id == instance.id, Post.deleted == False,
-                                  Post.status > POST_STATUS_REVIEWING, Post.private == False)
+                                  Post.status > POST_STATUS_REVIEWING, Post.private == False,
+                                  listable_clause(Post))
 
         if current_user.ignore_bots == 1:
             posts = posts.filter(Post.from_bot == False)
