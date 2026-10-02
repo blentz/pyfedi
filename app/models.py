@@ -2630,7 +2630,7 @@ class Post(db.Model):
             find_hashtag_or_create, \
             find_licence_or_create, make_image_sizes, notify_about_post, find_flair_or_create, host_of, \
             activitypub_visibility, set_post_gallery, content_warning_from, gallery_attachments, \
-            gallery_image_is_blocked, castopod_episode_url, fetch_castopod_episode_audio
+            gallery_image_is_blocked, castopod_episode_url, fetch_castopod_episode_audio, can_view
         # cycle: app.utils imports from this module
         from app.utils import allowlist_html, markdown_to_html, html_to_text, microblog_content_to_title, \
             microblog_content_to_link, blocked_phrases, get_setting, \
@@ -3056,7 +3056,7 @@ class Post(db.Model):
                             profile_id = profile_id.lower()
                             recipient = User.query.filter_by(ap_profile_id=profile_id, ap_id=None).first()
                             # A mention must not hand a followers-only body to a recipient who may not view it
-                            if recipient and visibility_mod.can_view(post, recipient.id):
+                            if recipient and can_view(post, recipient.id):
                                 blocked_senders = blocked_users(recipient.id)
                                 if post.user_id not in blocked_senders:
                                     # D1329. `db.session.get` answers a model
@@ -5693,8 +5693,3 @@ def _large_community_subscribers() -> float:
 def _store_files_in_s3():
     return current_app.config['S3_ACCESS_KEY'] != '' and current_app.config['S3_ACCESS_SECRET'] != '' and \
         current_app.config['S3_ENDPOINT'] != ''
-
-
-# At the foot, not the top: app.visibility imports UserFollower from this module, so it can be
-# imported only once the models above exist. Read as visibility_mod.<name> at call time.
-import app.visibility as visibility_mod  # noqa: E402  cycle: app.visibility imports from this module
