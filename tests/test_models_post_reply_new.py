@@ -233,17 +233,18 @@ class TestWhatAPeerSays:
         del activity['type']
         assert a_reply(env, request_json=activity).edited_at is None
 
-    def test_a_followers_only_reply_is_private(self, env):
+    def test_a_followers_only_reply_is_stored_as_followers(self, env):
+        activity = an_activity()
+        activity['object']['to'] = ['https://remote.test/u/someone/followers']
+        assert a_reply(env, request_json=activity).visibility == 'followers'
+
+    def test_a_public_one_is_stored_as_public(self, env):
+        activity = an_activity()
+        activity['object']['to'] = [PUBLIC]
+        assert a_reply(env, request_json=activity).visibility == 'public'
+
+    def test_the_old_private_marker_is_no_longer_written(self, env):
         activity = an_activity(to=['https://remote.test/u/someone/followers'])
-        assert a_reply(env, request_json=activity).private is True
-
-    def test_a_public_one_is_not(self, env):
-        assert a_reply(env, request_json=an_activity()).private is False
-
-    def test_one_addressed_to_two_places_is_not(self, env):
-        """The private rule reads a `to` of exactly one entry."""
-        activity = an_activity(to=['https://remote.test/u/someone/followers',
-                                   PUBLIC])
         assert a_reply(env, request_json=activity).private is False
 
     def test_one_the_peer_says_is_not_searchable(self, env):

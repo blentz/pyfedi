@@ -582,13 +582,13 @@ def test_a_comment_search_finds_a_reply_by_its_body(app, db_session):
     assert render.call_args.kwargs['posts'] is None
 
 
-def test_a_comment_search_skips_deleted_private_and_unindexed_replies(app, db_session):
+def test_a_comment_search_skips_deleted_followers_only_and_unindexed_replies(app, db_session):
     instance, alice, bob = _seed()
     community = make_community('microblogs')
     post = _post(community, alice, 'a thread')
     _reply(community, bob, post, 'visible advice')
     _reply(community, bob, post, 'deleted advice', deleted=True)
-    _reply(community, bob, post, 'private advice', private=True)
+    _reply(community, bob, post, 'private advice', visibility='followers')
     _reply(community, bob, post, 'unindexed advice', indexable=False)
     client = app.test_client()
 
