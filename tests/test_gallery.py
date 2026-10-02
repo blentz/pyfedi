@@ -442,3 +442,57 @@ def test_the_blocked_image_is_forgotten_when_an_update_no_longer_carries_it(inge
     assert File.query.filter_by(source_url=SECOND).count() == 0
     assert [f.source_url for f in gallery_of(post)] == [THIRD]
 
+
+
+LINK = 'https://blog.example/an-article'
+
+
+def link(url=LINK):
+    return {'type': 'Link', 'href': url}
+
+
+@pytest.fixture(autouse=True)
+def article_site(request):
+    """The linked site, for the tests that ingest a link post (the post page fetches its opengraph)."""
+    if 'pixelfed' not in request.fixturenames:
+        yield
+        return
+    pixelfed = request.getfixturevalue('pixelfed')
+    pixelfed.route(host='blog.example').respond(200, headers={'Content-Type': 'text/html'}, content='<html><head></head></html>')
+    yield
+
+
+def test_a_link_with_several_images_is_a_link_post_with_a_gallery(ingest):
+    from app.constants import POST_TYPE_LINK
+    post = ingest(album(link(), image(FIRST, 'a'), image(SECOND, 'b')))
+
+    assert post.type == POST_TYPE_LINK
+    assert post.url == LINK
+    assert post.image_id is None
+    assert [f.source_url for f in gallery_of(post)] == [FIRST, SECOND]
+    assert post.gallery_count == 2
+
+
+def test_a_link_with_one_image_keeps_its_preview_out_of_the_gallery(ingest):
+    post = ingest(album(link(), image(FIRST, 'a')))
+
+    assert post.url == LINK
+    assert gallery_of(post) == []
+    assert post.gallery_count == 0
+
+
+def test_a_link_post_gallery_is_shown_on_the_post_page_the_api_and_the_badge(app, ingest):
+    from app.api.alpha.views import post_view
+    site = db.session.get(Site, 1)
+    site.private_instance = False
+    db.session.add(Language(code='und', name='Undetermined'))
+    db.session.commit()
+    post = ingest(album(link(), image(FIRST, 'a'), image(SECOND, 'b')))
+    client = app.test_client()
+
+    page = client.get(f'/post/{post.id}', follow_redirects=True).get_data(as_text=True)
+    listing = client.get(f'/c/{post.community.link()}').get_data(as_text=True)
+
+    assert 'post_gallery_image' in page and SECOND in page and FIRST in page and LINK in page
+    assert '2 images' in listing
+    assert [i['alt_text'] for i in post_view(post=post, variant=1)['extensions']['gallery']] == ['a', 'b']
