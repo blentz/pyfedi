@@ -70,13 +70,21 @@ class RestrictedReply:
     depth: int
     parent_id: Optional[int]
     post_id: int
+    path: tuple = ()  # ancestor ids from the root, as PostReply.path, so a serializer needs no DB read
 
 
-def mark_restricted(tree: list, viewer_id: Optional[int]) -> list:
+def mark_restricted(tree: list, viewer_id: Optional[int], parent_path: tuple = ()) -> list:
     for entry in tree:
         comment = entry['comment']
         if not isinstance(comment, RestrictedReply) and not can_view(comment, viewer_id):
-            entry['comment'] = RestrictedReply(comment.id, comment.depth or 0, comment.parent_id, comment.post_id)
+            if comment.path:
+                path = tuple(comment.path)
+            elif parent_path:
+                path = parent_path + (comment.id,)
+            else:
+                path = (0, comment.parent_id, comment.id) if comment.parent_id else (0, comment.id)
+            entry['comment'] = RestrictedReply(comment.id, comment.depth or 0, comment.parent_id, comment.post_id, path)
             entry['restricted'] = True
-        mark_restricted(entry['replies'], viewer_id)
+        shown = entry['comment']
+        mark_restricted(entry['replies'], viewer_id, tuple(shown.path) if shown.path else ())
     return tree
