@@ -426,6 +426,9 @@ class Post(DefaultSchema):
     event = fields.Nested(PostEvent)
     poll = fields.Nested(PostPoll)
     gallery = fields.List(fields.String(metadata={"format": "url"}))
+    visibility = fields.String(validate=validate.OneOf(['public', 'unlisted', 'followers', 'direct']),
+                               metadata={"description": "Present only on a neutral stub of a post (one the viewer may "
+                                                        "not see, or inside a removal acknowledgement)."})
 
 
 class ScheduledPost(Post):

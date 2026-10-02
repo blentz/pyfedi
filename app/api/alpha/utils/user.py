@@ -767,7 +767,7 @@ def _process_notification_item(item):
         notification_json['notif_type'] = NOTIF_USER
         notification_json['notif_subtype'] = item.subtype
         notification_json['author'] = user_view(user=author.id, variant=1, user_id=item.user_id)
-        notification_json['post'] = post_view(post, variant=2)
+        notification_json['post'] = post_view(post, variant=2, user_id=item.user_id)
         notification_json['post_id'] = post.id
         notification_json['notif_body'] = post.body if post.body else ''
         notification_json['status'] = 'Read' if item.read else 'Unread'
@@ -782,7 +782,7 @@ def _process_notification_item(item):
         notification_json['notif_type'] = NOTIF_COMMUNITY
         notification_json['notif_subtype'] = item.subtype
         notification_json['author'] = user_view(user=author.id, variant=1, user_id=item.user_id)
-        notification_json['post'] = post_view(post, variant=2)
+        notification_json['post'] = post_view(post, variant=2, user_id=item.user_id)
         notification_json['post_id'] = post.id
         notification_json['community'] = community_view(community, variant=1)
         notification_json['notif_body'] = post.body if post.body else ''
@@ -797,7 +797,7 @@ def _process_notification_item(item):
         notification_json['notif_type'] = NOTIF_TOPIC
         notification_json['notif_subtype'] = item.subtype
         notification_json['author'] = user_view(user=author.id, variant=1, user_id=item.user_id)
-        notification_json['post'] = post_view(post, variant=2)
+        notification_json['post'] = post_view(post, variant=2, user_id=item.user_id)
         notification_json['post_id'] = post.id
         notification_json['notif_body'] = post.body if post.body else ''
         notification_json['status'] = 'Read' if item.read else 'Unread'
@@ -812,7 +812,7 @@ def _process_notification_item(item):
         notification_json['notif_type'] = NOTIF_POST
         notification_json['notif_subtype'] = item.subtype
         notification_json['author'] = user_view(user=author.id, variant=1, user_id=item.user_id)
-        notification_json['post'] = post_view(post, variant=2)
+        notification_json['post'] = post_view(post, variant=2, user_id=item.user_id)
         notification_json['post_id'] = post.id
         notification_json['comment'] = reply_view(comment, variant=1)
         notification_json['comment_id'] = comment.id
@@ -829,10 +829,10 @@ def _process_notification_item(item):
         notification_json['notif_type'] = NOTIF_REPLY
         notification_json['notif_subtype'] = item.subtype
         notification_json['author'] = user_view(user=author.id, variant=1, user_id=item.user_id)
-        notification_json['post'] = post_view(post, variant=2)
+        notification_json['post'] = post_view(post, variant=2, user_id=item.user_id)
         notification_json['post_id'] = post.id
         notification_json['comment'] = reply_view(comment, variant=1)
-        notification_json['comment_view'] = reply_view(comment, variant=3)
+        notification_json['comment_view'] = reply_view(comment, variant=3, user_id=item.user_id)
         notification_json['comment_id'] = comment.id
         notification_json['notif_body'] = comment.body if comment.body else ''
         notification_json['status'] = 'Read' if item.read else 'Unread'
@@ -846,7 +846,7 @@ def _process_notification_item(item):
         notification_json['notif_type'] = NOTIF_FEED
         notification_json['notif_subtype'] = item.subtype
         notification_json['author'] = user_view(user=author.id, variant=1, user_id=item.user_id)
-        notification_json['post'] = post_view(post, variant=2)
+        notification_json['post'] = post_view(post, variant=2, user_id=item.user_id)
         notification_json['post_id'] = post.id
         notification_json['notif_body'] = post.body if post.body else ''
         notification_json['status'] = 'Read' if item.read else 'Unread'
@@ -858,7 +858,7 @@ def _process_notification_item(item):
             author = db.session.get(User, item.author_id)
             post = db.session.get(Post, item.targets['post_id'])
             notification_json['author'] = user_view(user=author.id, variant=1, user_id=item.user_id)
-            notification_json['post'] = post_view(post, variant=2)
+            notification_json['post'] = post_view(post, variant=2, user_id=item.user_id)
             notification_json['post_id'] = post.id
             notification_json['notif_id'] = item.id
             notification_json['notif_type'] = NOTIF_MENTION
