@@ -6,7 +6,7 @@ from sqlakeyset import InvalidPage, get_page
 from sqlalchemy.exc import IntegrityError
 
 from app import db, plugins, cache
-from app.api.alpha.views import post_view, post_report_view, reply_view, reply_stub_view, community_view, user_view, flair_view
+from app.api.alpha.views import post_view, post_removal_ack_view, post_report_view, reply_view, reply_stub_view, community_view, user_view, flair_view
 from app.activitypub.util import normalise_actor_string
 from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
@@ -1947,17 +1947,6 @@ def post_post_feature(auth, data):
     return post_json
 
 
-def post_stub_view(post, user_id):
-    """What a moderator who may not see a followers-only post gets back from removing it: the post_view shape with the
-    post's state but none of its text, link or author (D19). The response schema wants every field present."""
-    view = post_view(post=post, variant=2, stub=True, user_id=user_id)
-    for key in ('url', 'thumbnail_url', 'small_thumbnail_url', 'alt_text', 'image_details', 'edited_at'):
-        view['post'].pop(key, None)
-    view['post'].update({'title': '', 'body': '', 'cross_posts': [], 'visibility': post.visibility})
-    view['creator'].update({'user_name': '', 'title': None, 'actor_id': ''})
-    return view
-
-
 def post_post_remove(auth, data):
     post_id = a_moderatable_post(data['post_id'], auth).id
     removed = data['removed']
@@ -1970,7 +1959,7 @@ def post_post_remove(auth, data):
         user_id, post = shared_post.mod_restore_post(post_id, reason, SRC_API, auth)
 
     if not can_view(post, user_id):  # a moderator who may not see the post gets an acknowledgement, not its content (D19)
-        return {'post_view': post_stub_view(post, user_id)}
+        return {'post_view': post_removal_ack_view(post)}
     post_json = post_view(post=post, variant=4, user_id=user_id)
     return post_json
 

@@ -905,6 +905,51 @@ def reply_view(reply: PostReply | int, variant: int, user_id=None,
         return v6
 
 
+NEUTRAL_TIME = '1970-01-01T00:00:00.000000Z'
+
+
+def _neutral_person() -> dict:
+    return {'actor_id': '', 'banned': False, 'bot': False, 'deleted': False, 'id': 0, 'instance_id': 0, 'local': False,
+            'user_name': ''}
+
+
+def _neutral_post(post) -> dict:
+    """A Post carrying only ids and the removed flag: nothing of the post's text, link, author, tags or flair."""
+    return {'ap_id': f"{current_app.config['SERVER_URL']}/post/{post.id}", 'community_id': post.community_id,
+            'deleted': False, 'id': post.id, 'language_id': 0, 'local': False, 'locked': False, 'nsfw': False,
+            'ai_generated': False, 'published': NEUTRAL_TIME, 'removed': bool(post.deleted), 'sticky': False,
+            'instance_sticky': False, 'title': '', 'user_id': 0, 'post_type': 'Discussion', 'visibility': post.visibility}
+
+
+def post_removal_ack_view(post) -> dict:
+    """D19: what a moderator who may not see a followers-only post is told after removing it. Every field the response
+    schema requires is present and neutral; nothing identifies the author or carries the post's content."""
+    return {'post': _neutral_post(post), 'creator': _neutral_person(),
+            'community': community_view(community=post.community, variant=1, stub=True),
+            'counts': {'comments': 0, 'downvotes': 0, 'newest_comment_time': NEUTRAL_TIME, 'post_id': post.id,
+                       'published': NEUTRAL_TIME, 'score': 0, 'upvotes': 0, 'cross_posts': 0},
+            'banned_from_community': False, 'creator_banned_from_community': False, 'creator_is_admin': False,
+            'creator_is_moderator': False, 'hidden': False, 'read': False, 'saved': False,
+            'subscribed': 'NotSubscribed', 'unread_comments': 0}
+
+
+def reply_removal_ack_view(reply) -> dict:
+    """As post_removal_ack_view, for a followers-only reply. The embedded post is neutral too: its title and body may
+    themselves be followers-only."""
+    return {'comment': {'ap_id': f"{current_app.config['SERVER_URL']}/comment/{reply.id}", 'body': '',
+                        'deleted': False, 'id': reply.id, 'language_id': 0, 'local': False,
+                        'path': '.'.join(str(i) for i in reply.path) if reply.path else f'0.{reply.id}',
+                        'post_id': reply.post_id, 'published': NEUTRAL_TIME, 'removed': bool(reply.deleted),
+                        'user_id': 0, 'visibility': reply.visibility},
+            'creator': _neutral_person(), 'post': _neutral_post(reply.post),
+            'community': community_view(community=reply.community, variant=1, stub=True),
+            'counts': {'child_count': 0, 'comment_id': reply.id, 'downvotes': 0, 'published': NEUTRAL_TIME,
+                       'score': 0, 'upvotes': 0},
+            'activity_alert': False, 'banned_from_community': False, 'creator_banned_from_community': False,
+            'creator_blocked': False, 'creator_is_admin': False, 'creator_is_moderator': False, 'saved': False,
+            'subscribed': 'NotSubscribed'}
+
+
 def reply_stub_view(reply) -> dict:
     """D18: what the API shows of a reply the viewer may not see. A CommentView with the same nesting
     (clients read comment.id and comment.path) but nothing of the reply. `reply` needs id, post_id and path

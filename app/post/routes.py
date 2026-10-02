@@ -1447,10 +1447,11 @@ def post_delete(post_id: int):
         else:
             form.referrer.data = referrer(url_for('activitypub.community_profile',
                                                   actor=community.ap_id if community.ap_id is not None else community.name))
-            return render_template('generic_form.html',
-                                   title=_('Are you sure you want to delete the post "%(post_title)s"?',
-                                           post_title=post.title),
-                                   form=form)
+            if can_view(post, current_user.id):
+                title = _('Are you sure you want to delete the post "%(post_title)s"?', post_title=post.title)
+            else:  # a moderator acting on a post they may not see (D19) is not told what it says
+                title = _('Are you sure you want to delete this post?')
+            return render_template('generic_form.html', title=title, form=form)
     else:
         # D1098. There was no `else`, so a caller who is not permitted fell
         # off the end and the view returned None: `TypeError: The view

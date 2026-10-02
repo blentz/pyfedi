@@ -102,3 +102,60 @@ def test_purge_list_stubs_a_followers_only_post(app, world):
     assert 'Visible to followers only' in html
     assert 'Secret Title' not in html and 'alice' not in html
     assert 'Open Title' in html
+
+
+def test_remove_ack_for_a_reply_on_a_followers_only_post_leaks_nothing(app, world):
+    from tests.factories import make_post_reply
+    w = world
+    w.post.title = 'Parent Secret Title'
+    w.post.body = 'parent secret body'
+    reply = make_post_reply(w.post, w.author, 'reply secret body')
+    reply.visibility = 'followers'
+    db.session.commit()
+    path = '/api/alpha/comment/remove'
+    with patch('app.shared.reply.task_selector'):
+        response = app.test_client().post(path, json={'comment_id': reply.id, 'removed': True},
+                                          headers={'Authorization': bearer(w.admin)})
+    assert response.status_code == 200, response.data
+    text = response.get_data(as_text=True)
+    for leaked in ('Parent Secret Title', 'parent secret body', 'reply secret body', 'alice', 'm.example'):
+        assert leaked not in text
+    creator = response.get_json()['comment_view']['creator']
+    assert creator['id'] == 0 and not creator.get('avatar') and not creator.get('published')
+    assert response.get_json()['comment_view']['comment']['user_id'] == 0
+
+
+def test_post_remove_ack_has_no_author_identity(app, world):
+    w = world
+    with patch('app.shared.post.task_selector'):
+        response = app.test_client().post('/api/alpha/post/remove', json={'post_id': w.post.id, 'removed': True},
+                                          headers={'Authorization': bearer(w.admin)})
+    view = response.get_json()['post_view']
+    assert view['creator']['id'] == 0 and view['post']['user_id'] == 0
+    assert str(w.author.id) != '0' and 'alice' not in response.get_data(as_text=True)
+
+
+def test_delete_confirmation_page_does_not_name_the_hidden_post(app, world):
+    w = world
+    w.post.title = 'Hidden Title'
+    db.session.commit()
+    html = client_as(app, w.admin).get(f'/post/{w.post.id}/delete').get_data(as_text=True)
+    assert 'Hidden Title' not in html
+    assert 'Are you sure you want to delete this post?' in html
+
+
+def test_the_modlog_does_not_name_removed_followers_only_content(app, world):
+    from app.models import ModLog
+    w = world
+    w.post.title = 'Modlog Secret Title'
+    w.reply.body = 'modlog secret reply'
+    db.session.commit()
+    with patch('app.shared.post.task_selector'), patch('app.shared.reply.task_selector'):
+        for path, body in (('/api/alpha/post/remove', {'post_id': w.post.id, 'removed': True}),
+                           ('/api/alpha/comment/remove', {'comment_id': w.reply.id, 'removed': True})):
+            assert app.test_client().post(path, json=body, headers={'Authorization': bearer(w.admin)}).status_code == 200
+    entries = ModLog.query.all()
+    assert len(entries) == 2
+    for entry in entries:
+        assert entry.link_text == 'followers-only content'
+        assert entry.target_user_id is None

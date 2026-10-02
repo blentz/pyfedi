@@ -5,7 +5,7 @@ from sqlalchemy import desc, text, func, cast, Float, exists, and_, or_, any_
 from sqlalchemy.orm import aliased
 
 from app import db
-from app.api.alpha.views import reply_view, reply_stub_view, reply_report_view, post_view, community_view, user_view
+from app.api.alpha.views import reply_view, reply_stub_view, reply_removal_ack_view, reply_report_view, post_view, community_view, user_view
 from app.constants import *
 from app.models import Notification, PostReply, Post, PostReplyVote, Report, Community, utcnow
 from app.shared.reply import vote_for_reply, bookmark_reply, remove_bookmark_reply, subscribe_reply, make_reply, \
@@ -733,15 +733,6 @@ def put_reply_report_resolve(auth, data):
     return reply_json
 
 
-def reply_removed_ack_view(reply, user_id):
-    """What a moderator who may not see a followers-only reply gets back from removing it: the comment_view shape with
-    the reply's state but none of its text or author (D19). The response schema wants every field present."""
-    view = reply_view(reply=reply, variant=3, user_id=user_id)
-    view['comment'].update({'body': '', 'ap_id': f"{current_app.config['SERVER_URL']}/comment/{reply.id}", 'visibility': reply.visibility})
-    view['creator'].update({'user_name': '', 'title': None, 'actor_id': ''})
-    return view
-
-
 def post_reply_remove(auth, data):
     reply_id = a_moderatable_reply(data['comment_id'], auth).id
     removed = data['removed']
@@ -754,7 +745,7 @@ def post_reply_remove(auth, data):
         user_id, reply = mod_restore_reply(reply_id, reason, SRC_API, auth)
 
     if not can_view(reply, user_id):  # a moderator who may not see the reply gets an acknowledgement, not its content (D19)
-        return {'comment_view': reply_removed_ack_view(reply, user_id)}
+        return {'comment_view': reply_removal_ack_view(reply)}
     reply_json = reply_view(reply=reply, variant=4, user_id=user_id)
     return reply_json
 

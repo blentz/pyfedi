@@ -55,7 +55,7 @@ from markupsafe import Markup
 import boto3
 from app import db, cache, httpx_client, celery, get_ip_address, plugins
 from app.pinned_http import is_refused_address
-from app.visibility import listable_sql, visible_to_sql
+from app.visibility import OPEN_VISIBILITIES, listable_sql, visible_to_sql
 from app.constants import *
 import re
 from PIL import Image, ImageOps, ImageCms
@@ -4070,6 +4070,11 @@ def add_to_modlog(action: str, actor: User, target_user: User = None, reason: st
         action_type = 'mod'
     community_id = community.id if community else None
     target_user_id = target_user.id if target_user else None
+    # The modlog can be public. Content only some viewers may see (D19) is named neither by its title or body nor by its author.
+    if any(obj is not None and (obj.visibility or 'public') not in OPEN_VISIBILITIES
+           for obj in (post, reply, reply.post if reply else None)):
+        link_text = 'followers-only content'
+        target_user_id = None
     post_id = post.id if post else None
     reply_id = reply.id if reply else None
     reason = shorten_string(reason, 512)
