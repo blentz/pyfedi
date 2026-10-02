@@ -167,3 +167,57 @@ def test_teaser_badge_counts_the_images(app, ingest):
 
     assert 'post_gallery_badge' in html
     assert '3 images' in html
+
+
+BLOCKED_HASH = '1' * 256
+CLEAN_HASH = '0' * 256
+
+
+@pytest.fixture
+def hashing(app, pixelfed, monkeypatch):
+    """A hashing endpoint that answers SECOND (and only SECOND) with a blocked
+    image's hash, and a BlockedImage row holding that hash."""
+    import httpx
+    from app.models import BlockedImage
+    monkeypatch.setitem(app.config, 'IMAGE_HASHING_ENDPOINT', 'https://hash.example/pdq')
+    db.session.add(BlockedImage(hash=BLOCKED_HASH, file_name='blocked.jpg'))
+    db.session.commit()
+    asked = []
+
+    def answer(request):
+        image_url = request.url.params['image_url']
+        asked.append(image_url)
+        pdq = BLOCKED_HASH if image_url == hashing.blocked else CLEAN_HASH
+        return httpx.Response(200, json={'quality': 100, 'pdq_hash_binary': pdq})
+    hashing.blocked = None
+    hashing.asked = asked
+    pixelfed.route(host='hash.example').mock(side_effect=answer)
+    return hashing
+
+
+def test_gallery_images_are_hashed(ingest, hashing):
+    post = ingest(album(image(FIRST, 'a'), image(SECOND, 'b')))
+
+    assert SECOND in hashing.asked
+    assert gallery_of(post)[0].hash == CLEAN_HASH
+
+
+def test_a_blocked_gallery_image_refuses_the_post_as_a_blocked_primary_does(ingest, hashing):
+    hashing.blocked = SECOND
+
+    assert ingest(album(image(FIRST, 'a'), image(SECOND, 'b'))) is None
+    assert Post.query.count() == 0
+    assert File.query.filter_by(source_url=SECOND).count() == 0
+
+
+def test_an_update_drops_a_blocked_gallery_image(ingest, hashing):
+    from app.activitypub.util import update_post_from_activity
+    post = ingest(album(image(FIRST, 'a'), image(THIRD, 'c')))
+    hashing.blocked = SECOND
+
+    update = album(image(FIRST, 'a'), image(SECOND, 'b'), image(THIRD, 'c'))
+    update['type'] = 'Update'
+    update_post_from_activity(post, update)
+    db.session.refresh(post)
+
+    assert [f.source_url for f in gallery_of(post)] == [THIRD]
