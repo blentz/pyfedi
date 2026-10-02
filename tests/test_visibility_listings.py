@@ -204,7 +204,7 @@ def test_followed_author_source_gives_the_follower_the_hidden_posts(app, feed_wo
 def test_followed_author_source_hides_followers_only_from_a_pending_follower(app, feed_world):
     w = feed_world
     pending_ids = feed_ids(app, w.pending, [w.community.id], include_following=True)
-    assert not set(pending_ids) & {w.post.id, w.followers_post.id}
+    assert not set(pending_ids) & {w.post.id, w.followers_post.id, w.unlisted_post.id}
 
 
 def test_followed_author_source_gives_the_stranger_nothing_hidden(app, feed_world):
@@ -250,3 +250,12 @@ def test_community_ical_omits_non_public_events(app, world):
     assert f'event {w.public_post.id}' in body
     assert f'event {w.followers_post.id}' not in body
     assert f'event {w.unlisted_post.id}' not in body
+
+
+def test_community_comments_judge_a_reply_by_its_own_visibility(app, world):
+    w = world
+    w.public_post.visibility = 'followers'
+    db.session.commit()
+    body = client_as(app, w.stranger).get('/c/microblogs?content_type=comments').get_data(as_text=True)
+    assert 'public child' in body
+    assert 'secret reply' not in body
