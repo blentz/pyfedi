@@ -395,6 +395,17 @@ class Reactions(DefaultSchema):
     count = fields.Integer()
 
 
+class GalleryImage(DefaultSchema):
+    url = fields.String(required=True, metadata={"format": "url"})
+    alt_text = fields.String(allow_none=True)
+    width = fields.Integer(allow_none=True)
+    height = fields.Integer(allow_none=True)
+
+
+class PostExtensions(DefaultSchema):
+    gallery = fields.List(fields.Nested(GalleryImage), metadata={"description": "The images of a multi-image post after the first, in order. Fork extension; Lemmy clients ignore it."})
+
+
 class Post(DefaultSchema):
     ap_id = fields.String(required=True)
     community_id = fields.Integer(required=True)
@@ -426,6 +437,7 @@ class Post(DefaultSchema):
     event = fields.Nested(PostEvent)
     poll = fields.Nested(PostPoll)
     gallery = fields.List(fields.String(metadata={"format": "url"}))
+    extensions = fields.Nested(PostExtensions)
     visibility = fields.String(validate=validate.OneOf(['public', 'unlisted', 'followers', 'direct']),
                                metadata={"description": "Present only on a neutral stub of a post (one the viewer may "
                                                         "not see, or inside a removal acknowledgement)."})
