@@ -97,3 +97,16 @@ def test_an_ordinary_image_post_is_not_blurred(app, community, author):
     images = page_images(app, album_post(community, author), viewer())
     assert len(images) == 2
     assert not any(blurred(tag) for tag in images)
+
+
+def test_a_spoiler_flair_blurs_the_images_as_it_blurs_the_teaser(app, community, author):
+    from app.models import CommunityFlair
+    post = album_post(community, author)
+    flair = CommunityFlair(community_id=community.id, flair='spoiler', blur_images=True)
+    db.session.add(flair)
+    post.flair.append(flair)
+    db.session.commit()
+
+    images = page_images(app, post, viewer(hide_nsfw=0, hide_nsfl=0))
+    assert len(images) == 2
+    assert all(blurred(tag) for tag in images)
