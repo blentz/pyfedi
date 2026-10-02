@@ -6,7 +6,7 @@ from sqlakeyset import InvalidPage, get_page
 from sqlalchemy.exc import IntegrityError
 
 from app import db, plugins, cache
-from app.api.alpha.views import post_view, post_report_view, reply_view, community_view, user_view, scheduled_post_view, reply_stub_view, post_removal_ack_view
+from app.api.alpha.views import post_view, post_report_view, reply_view, community_view, user_view, scheduled_post_view, reply_stub_view, post_removal_ack_view, galleries_for_posts
 from app.activitypub.util import normalise_actor_string
 from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
@@ -754,6 +754,7 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
         unread_counts = {}
         interacted_at = {}
 
+    galleries = galleries_for_posts(posts)
     postlist = []
     for post in posts:
         # Get the pre-fetched vote, default to 0 if not found
@@ -765,7 +766,7 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
                                   post_subscriptions=post_subscriptions, read_posts=read_post_set,
                                   communities_joined=communities_joined, content_filters=content_filters,
                                   usernotes=usernotes, my_vote=my_vote, unread_counts=unread_counts,
-                                  interacted_at=interacted_at))
+                                  interacted_at=interacted_at, galleries=galleries))
     if use_faster_query:
         list_json = {
             "posts": postlist,
@@ -1455,6 +1456,7 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
         communities_joined = []
         user_votes = {}
 
+    galleries = galleries_for_posts(posts.items)
     postlist = []
     for post in posts.items:
         # Get the pre-fetched vote, default to 0 if not found
@@ -1465,7 +1467,7 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
                                   banned_from=banned_from, bookmarked_posts=bookmarked_posts,
                                   post_subscriptions=post_subscriptions, read_posts=read_post_set,
                                   communities_joined=communities_joined, content_filters=content_filters,
-                                  my_vote=my_vote))
+                                  my_vote=my_vote, galleries=galleries))
 
     list_json = {
         "posts": postlist,
