@@ -18,6 +18,7 @@ import app.shared.community as shared_community
 # package before they are defined (import cycle: app.shared.feed)
 import app.shared.feed as shared_feed
 from app.shared.tasks import task_selector
+from app.visibility import can_view
 from app.utils import user_banned_from_community, authorise_api_user, communities_banned_from_all_users, moderating_communities_ids, \
     blocked_or_banned_instances
 from app.utils import communities_banned_from, blocked_instances, blocked_communities, shorten_string, \
@@ -620,6 +621,9 @@ def post_community_moderate_post_nsfw(auth, data):
     # get the post from the data
     post_id = int(data['post_id'])
     post = a_post(post_id)
+    # D19: moderators get no exemption from followers-only visibility
+    if not can_view(post, mod_user.id):
+        raise Exception('post not found')
 
     # get the community from the post
     community = db.session.get(Community, post.community_id)
