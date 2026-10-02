@@ -114,3 +114,106 @@ def test_the_unread_digest_lists_public_posts_only_even_for_a_follower(world, mo
     assert len(sent) == 1
     assert 'PUBLIC-TITLE' in sent[0]
     assert 'FOLLOWERS-ONLY-TITLE' not in sent[0]
+
+
+# --- mention notifications are gated like every other notification ---------
+
+def _local_recipient(name):
+    from app.models import User
+    user = User.query.filter_by(user_name=name).first()
+    if user is None:
+        from tests.factories import make_user
+        user = make_user(None, name, local=True)
+    user.ap_profile_id = f'https://test.piefed.local/u/{name}'
+    db.session.commit()
+    return user
+
+
+def _mention(user):
+    return {'type': 'Mention', 'href': user.ap_profile_id}
+
+
+def test_a_followers_only_reply_edit_mentions_only_a_follower(world):
+    from app.activitypub.util import update_post_reply_from_activity
+    from tests.factories import make_follow
+    w = world
+    w.reply.instance.software = 'lemmy'
+    follower = _local_recipient('fran')
+    stranger = _local_recipient('sam')
+    db.session.commit()
+
+    update_post_reply_from_activity(w.reply, {'object': {'content': 'hi', 'tag': [_mention(follower), _mention(stranger)]}})
+
+    assert _notified(follower) == 1
+    assert _notified(stranger) == 0
+
+
+def test_a_followers_only_post_edit_mentions_only_a_follower(world):
+    from app.activitypub.util import update_post_from_activity
+    w = world
+    _local_recipient('fran'), _local_recipient('sam')
+    update_post_from_activity(w.post, {'object': {'name': 't', 'content': 'x', 'type': 'Note',
+                                                  'tag': [_mention(w.follower), _mention(w.stranger)]}})
+
+    assert _notified(w.follower) == 1
+    assert _notified(w.stranger) == 0
+
+
+def test_a_created_followers_only_reply_mentions_only_a_follower(world, monkeypatch):
+    from app.activitypub.util import create_post_reply
+    from app.models import PostReply
+    w = world
+    w.author.instance.software = 'lemmy'
+    original = PostReply.new.__func__
+
+    def new_followers_only(cls, *args, **kwargs):
+        reply = original(cls, *args, **kwargs)
+        reply.visibility = 'followers'
+        db.session.commit()
+        return reply
+
+    monkeypatch.setattr(PostReply, 'new', classmethod(new_followers_only))
+    follower, stranger = _local_recipient('fran'), _local_recipient('sam')
+    document = {'id': 'https://m.example/create/1', 'object': {
+        'id': 'https://m.example/note/1', 'type': 'Note', 'content': '<p>hello</p>',
+        'to': ['https://www.w3.org/ns/activitystreams#Public'], 'cc': [],
+        'attributedTo': w.author.ap_profile_id, 'inReplyTo': w.public_post.ap_id,
+        'tag': [_mention(follower), _mention(stranger)]}}
+
+    reply = create_post_reply(False, w.community, w.public_post.ap_id, document, w.author)
+
+    assert reply is not None and reply.visibility == 'followers'
+    assert _notified(follower) == 1
+    assert _notified(stranger) == 0
+
+
+def test_a_local_followers_only_post_mentions_only_a_follower(db_session):
+    from tests.factories import make_follow, make_user
+    from tests.test_shared_tasks_send_post import _seed, _send
+    s = _seed(body='hello @fran@test.piefed.local and @sam@test.piefed.local')
+    follower = make_user(s.instance, 'fran', local=True)
+    stranger = make_user(s.instance, 'sam', local=True)
+    make_follow(follower, s.user)
+    s.post.visibility = 'followers'
+    db.session.commit()
+
+    _send(s.post)
+
+    assert _notified(follower) == 1
+    assert _notified(stranger) == 0
+
+
+def test_a_local_followers_only_reply_mentions_only_a_follower(db_session):
+    from tests.factories import make_follow, make_user
+    from tests.test_shared_tasks_send_reply import _seed, _send
+    s = _seed(body='hello @fran@test.piefed.local and @sam@test.piefed.local')
+    follower = make_user(s.instance, 'fran', local=True)
+    stranger = make_user(s.instance, 'sam', local=True)
+    make_follow(follower, s.reply.author)
+    s.reply.visibility = 'followers'
+    db.session.commit()
+
+    _send(s)
+
+    assert _notified(follower) == 1
+    assert _notified(stranger) == 0

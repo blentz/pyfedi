@@ -3019,7 +3019,7 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
                 db.session.commit()
             for lutn in local_users_to_notify:
                 recipient = db.session.query(User).filter_by(ap_profile_id=lutn, ap_id=None).first()
-                if not recipient:
+                if not recipient or not can_view(post_reply, recipient.id):
                     continue
                 if post_reply.instance.software == 'mbin' or post_reply.instance.software in MICROBLOG_APPS:
                     # ignore Mention of post author from microblog apps
@@ -3459,7 +3459,7 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
                             reply_parent = reply.post
                         if reply_parent and profile_id != reply_parent.author.ap_profile_id:
                             recipient = User.query.filter_by(ap_profile_id=profile_id, ap_id=None).first()
-                            if recipient:
+                            if recipient and can_view(reply, recipient.id):
                                 if reply.instance.software == 'mbin' or reply.instance.software in MICROBLOG_APPS:
                                     # ignore Mention of post author
                                     if recipient.id == reply.post.user_id:
@@ -3634,7 +3634,7 @@ def update_post_from_activity(post: Post, request_json: dict):
                         recipient = User.query.filter_by(ap_profile_id=profile_id, ap_id=None).first()
                         # the reply path's suppression rules that mean anything on a post: the author
                         # mentioning themselves, a block, and a notification already sent (D254)
-                        if recipient and recipient.id != post.user_id:
+                        if recipient and recipient.id != post.user_id and can_view(post, recipient.id):
                             blocked_senders = blocked_users(recipient.id)
                             if post.user_id not in blocked_senders:
                                 existing_notification = Notification.query.filter(Notification.user_id == recipient.id,
