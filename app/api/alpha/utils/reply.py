@@ -491,6 +491,16 @@ def a_visible_reply(reply_id, auth):
     return reply
 
 
+def a_moderatable_reply(reply_id, auth):
+    """a_visible_reply for a delete or removal. D19 restricts seeing, not enforcement: a moderator or admin of the
+    reply's community may act on a followers-only reply they cannot view."""
+    reply = a_reply(reply_id)
+    user = authorise_api_user(auth, return_type='model') if auth else None
+    if user is not None and can_moderate(reply.community, user):
+        return reply
+    return a_visible_reply(reply_id, auth)
+
+
 def get_reply(auth, data):
     id = int(data['id'])
     a_reply(id)
@@ -723,8 +733,17 @@ def put_reply_report_resolve(auth, data):
     return reply_json
 
 
+def reply_removed_ack_view(reply, user_id):
+    """What a moderator who may not see a followers-only reply gets back from removing it: the comment_view shape with
+    the reply's state but none of its text or author (D19). The response schema wants every field present."""
+    view = reply_view(reply=reply, variant=3, user_id=user_id)
+    view['comment'].update({'body': '', 'ap_id': f"{current_app.config['SERVER_URL']}/comment/{reply.id}", 'visibility': reply.visibility})
+    view['creator'].update({'user_name': '', 'title': None, 'actor_id': ''})
+    return view
+
+
 def post_reply_remove(auth, data):
-    reply_id = a_visible_reply(data['comment_id'], auth).id
+    reply_id = a_moderatable_reply(data['comment_id'], auth).id
     removed = data['removed']
 
     if removed == True:
@@ -734,6 +753,8 @@ def post_reply_remove(auth, data):
         reason = data['reason'] if 'reason' in data else 'Restored by mod'
         user_id, reply = mod_restore_reply(reply_id, reason, SRC_API, auth)
 
+    if not can_view(reply, user_id):  # a moderator who may not see the reply gets an acknowledgement, not its content (D19)
+        return {'comment_view': reply_removed_ack_view(reply, user_id)}
     reply_json = reply_view(reply=reply, variant=4, user_id=user_id)
     return reply_json
 

@@ -21,7 +21,7 @@ from app.post.util import post_replies, get_comment_branch, tags_to_string, flai
 # The module, not the name: app.topic.routes reaches this file through
 # app.activitypub before get_all_child_topic_ids is defined (import cycle: topic.routes)
 import app.topic.routes as topic_routes
-from app.utils import authorise_api_user, blocked_users, blocked_communities, blocked_or_banned_instances, \
+from app.utils import can_moderate, authorise_api_user, blocked_users, blocked_communities, blocked_or_banned_instances, \
     recently_upvoted_posts, \
     site_language_id, filtered_out_communities, joined_or_modding_communities, \
     user_filters_home, user_filters_posts, in_sorted_list, instance_sticky_posts, instance_sticky_post_ids, \
@@ -55,6 +55,16 @@ def a_visible_post(post_id, auth):
     if not can_view(post, user_id):
         raise Exception('post not found')
     return post
+
+
+def a_moderatable_post(post_id, auth):
+    """a_visible_post for a delete or removal. D19 restricts seeing, not enforcement: a moderator or admin of the
+    post's community may act on a followers-only post they cannot view."""
+    post = a_post(post_id)
+    user = authorise_api_user(auth, return_type='model') if auth else None
+    if user is not None and can_moderate(post.community, user):
+        return post
+    return a_visible_post(post_id, auth)
 
 
 def a_community(community_id):
@@ -1937,8 +1947,19 @@ def post_post_feature(auth, data):
     return post_json
 
 
+def post_stub_view(post, user_id):
+    """What a moderator who may not see a followers-only post gets back from removing it: the post_view shape with the
+    post's state but none of its text, link or author (D19). The response schema wants every field present."""
+    view = post_view(post=post, variant=2, stub=True, user_id=user_id)
+    for key in ('url', 'thumbnail_url', 'small_thumbnail_url', 'alt_text', 'image_details', 'edited_at'):
+        view['post'].pop(key, None)
+    view['post'].update({'title': '', 'body': '', 'cross_posts': [], 'visibility': post.visibility})
+    view['creator'].update({'user_name': '', 'title': None, 'actor_id': ''})
+    return view
+
+
 def post_post_remove(auth, data):
-    post_id = a_visible_post(data['post_id'], auth).id
+    post_id = a_moderatable_post(data['post_id'], auth).id
     removed = data['removed']
 
     if removed:
@@ -1948,6 +1969,8 @@ def post_post_remove(auth, data):
         reason = data['reason'] if 'reason' in data else 'Restored by mod'
         user_id, post = shared_post.mod_restore_post(post_id, reason, SRC_API, auth)
 
+    if not can_view(post, user_id):  # a moderator who may not see the post gets an acknowledgement, not its content (D19)
+        return {'post_view': post_stub_view(post, user_id)}
     post_json = post_view(post=post, variant=4, user_id=user_id)
     return post_json
 

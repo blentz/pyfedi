@@ -55,7 +55,7 @@ from app.shared.site import block_remote_instance
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
 from app.shared.tasks import task_selector
-from app.utils import render_template, markdown_to_html, validation_required, \
+from app.utils import can_moderate, render_template, markdown_to_html, validation_required, \
     shorten_string, markdown_to_text, gibberish, ap_datetime, return_304, \
     request_etag_matches, ip_address, instance_banned, \
     blocked_or_banned_instances, blocked_domains, community_moderators, show_ban_message, recently_upvoted_posts, \
@@ -108,6 +108,14 @@ def refuse_invisible(obj):
     404, not 403, so the response does not confirm that the object exists."""
     if not can_view(obj, current_user.get_id()):
         abort(404)
+
+
+def refuse_invisible_unless_moderating(obj):
+    """refuse_invisible for a moderation removal. D19 restricts seeing, not enforcement: a moderator or admin of the
+    content's community may act on a followers-only object they cannot view, so a report can be actioned."""
+    if current_user.is_authenticated and can_moderate(obj.community, current_user):
+        return
+    refuse_invisible(obj)
 
 
 def refuse_invisible_ids(post_id=None, reply_id=None):
@@ -1414,7 +1422,7 @@ def post_edit(post_id: int):
 @login_required
 def post_delete(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
-    refuse_invisible(post)
+    refuse_invisible_unless_moderating(post)
     community = post.community
     if post.user_id == current_user.id or shared_post.can_mod_post(post, current_user):
         if post.community.id in communities_banned_from(current_user.id) or user_ip_banned():
@@ -2362,9 +2370,9 @@ def post_reply_edit(post_id: int, comment_id: int):
 @login_required
 def post_reply_delete(post_id: int, comment_id: int):
     post = db.session.get(Post, post_id) or abort(404)
-    refuse_invisible(post)
+    refuse_invisible_unless_moderating(post)
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
-    refuse_invisible(post_reply)
+    refuse_invisible_unless_moderating(post_reply)
 
     # D1077's second site. Here the mismatch was caught one level down --
     # `delete_reply` raises `Exception: Does not have permission`, measured --

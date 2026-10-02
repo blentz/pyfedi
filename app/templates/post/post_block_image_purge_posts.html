@@ -24,8 +24,13 @@
                     <tr>
                         <td valign="middle"><input type="checkbox" name="post_ids" class="can_select_all" value="{{ p.id }}" checked="checked"></td>
                         <td class="blocked_image"><img src="{{ p.image.thumbnail_url() }}"></td>
-                        <td><a href="{{ url_for('activitypub.post_ap', post_id=p.id) }}">{{ p.title }}</a></td>
-                        <td>{{ render_username(p.author) }}</td>
+                        {% if p.visibility is none or p.visibility in ('public', 'unlisted') -%}
+                            <td><a href="{{ url_for('activitypub.post_ap', post_id=p.id) }}">{{ p.title }}</a></td>
+                            <td>{{ render_username(p.author) }}</td>
+                        {% else -%}
+                            <td>{{ _('Visible to followers only') }}</td>
+                            <td></td>
+                        {% endif -%}
                         <td>{{ p.posted_at_localized('', locale) }}</td>
                     </tr>
                 {% endfor -%}
