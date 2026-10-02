@@ -110,7 +110,7 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
                 'height': post.image.height,
             }
 
-        if post.type == POST_TYPE_IMAGE:
+        if post.type == POST_TYPE_IMAGE and post.gallery_count:
             # Fork extension (spec D17): the album's images after the first, kept out of the bare Lemmy fields
             gallery = [{'url': image.view_url(), 'alt_text': image.alt_text, 'width': image.width, 'height': image.height}
                        for image in post.gallery]

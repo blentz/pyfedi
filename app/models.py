@@ -2480,6 +2480,7 @@ class Post(db.Model):
     nsfw = db.Column(db.Boolean, default=False, index=True)
     nsfl = db.Column(db.Boolean, default=False, index=True)
     content_warning = db.Column(db.Text)  # a peer's `summary`, shown collapsed above the body
+    gallery_count = db.Column(db.Integer, default=0, server_default='0', nullable=False)  # rows in post.gallery, so a listing need not count them
     sticky = db.Column(db.Boolean, default=False, server_default='false', index=True, nullable=False)
     instance_sticky = db.Column(db.Boolean, default=False, server_default='false', index=True, nullable=False)
     ai_generated = db.Column(db.Boolean, default=False, index=True)

@@ -2005,14 +2005,17 @@ def set_post_gallery(post: Post, request_json: dict, low_quality: bool = False, 
         if images is None:
             images = gallery_attachments(request_json, [post.url, post.image.source_url if post.image else None])
         images = [extra for extra in images if not gallery_image_is_blocked(extra)]
-        for weight, extra in enumerate(images, start=1):
-            file = File(source_url=extra['url'], alt_text=extra['alt_text'],
-                        width=extra['width'], height=extra['height'], hash=extra['hash'])
-            db.session.add(file)
-            db.session.flush()
-            db.session.execute(post_file.insert().values(post_id=post.id, file_id=file.id, weight=weight))
-            if get_setting('cache_remote_images_locally', True):
-                make_image_sizes(file.id, 512, 1200, 'posts', low_quality)
+    else:
+        images = []
+    for weight, extra in enumerate(images, start=1):
+        file = File(source_url=extra['url'], alt_text=extra['alt_text'],
+                    width=extra['width'], height=extra['height'], hash=extra['hash'])
+        db.session.add(file)
+        db.session.flush()
+        db.session.execute(post_file.insert().values(post_id=post.id, file_id=file.id, weight=weight))
+        if get_setting('cache_remote_images_locally', True):
+            make_image_sizes(file.id, 512, 1200, 'posts', low_quality)
+    post.gallery_count = len(images)
     db.session.commit()
 
 

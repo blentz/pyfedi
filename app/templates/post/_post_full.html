@@ -110,7 +110,7 @@
                         <img src="{{ post.url }}" style="max-width: 100%; height: auto;" class="{{ 'blur' if blur_images }}" />
                     </a>
                 {% endif -%}
-                {% for gallery_image in post.gallery -%}
+                {% for gallery_image in (post.gallery if post.gallery_count else []) -%}
                     <a href="{{ gallery_image.view_url(resize=low_bandwidth) }}" rel="nofollow ugc" class="post_gallery_image">
                         <img src="{{ gallery_image.medium_url() }}"
                                 alt="{{ gallery_image.alt_text if gallery_image.alt_text else post.title }}"

@@ -254,3 +254,54 @@ def test_image_type_attachments_keep_the_first_as_the_primary(ingest):
     assert post.image.source_url == FIRST
     assert post.image.alt_text == 'a'
     assert [f.source_url for f in gallery_of(post)] == [SECOND, THIRD]
+
+
+@pytest.fixture
+def post_file_queries():
+    """The SQL statements that read post_file, recorded while the test runs."""
+    from sqlalchemy import event
+    seen = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        if 'post_file' in statement:
+            seen.append(statement)
+    engine = db.engine
+    event.listen(engine, 'before_cursor_execute', record)
+    yield seen
+    event.remove(engine, 'before_cursor_execute', record)
+
+
+def test_the_gallery_count_follows_the_gallery(ingest):
+    from app.activitypub.util import update_post_from_activity
+    post = ingest(album(image(FIRST, 'a'), image(SECOND, 'b'), image(THIRD, 'c')))
+    assert post.gallery_count == 2
+
+    update = album(image(FIRST, 'a'))
+    update['type'] = 'Update'
+    update_post_from_activity(post, update)
+    db.session.refresh(post)
+    assert post.gallery_count == 0
+
+
+def test_the_teaser_badge_reads_no_post_file_rows(app, ingest, post_file_queries):
+    site = db.session.get(Site, 1)
+    site.private_instance = False
+    db.session.add(Language(code='und', name='Undetermined'))
+    db.session.commit()
+    post = ingest(album(image(FIRST, 'a'), image(SECOND, 'b'), image(THIRD, 'c')))
+    post_file_queries.clear()
+
+    html = app.test_client().get(f'/c/{post.community.link()}').get_data(as_text=True)
+
+    assert '3 images' in html
+    assert post_file_queries == []
+
+
+def test_the_api_reads_no_post_file_rows_for_a_post_without_a_gallery(app, ingest, post_file_queries):
+    from app.api.alpha.views import post_view
+    post = ingest(album(image(FIRST, 'a')))
+    post_file_queries.clear()
+
+    post_view(post=post, variant=1)
+
+    assert post_file_queries == []
