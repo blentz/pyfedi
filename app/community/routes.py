@@ -49,7 +49,7 @@ from app.post.util import tags_to_string
 # The module, not the names: app.shared.community reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
-from app.visibility import listable_clause
+from app.visibility import listable_clause, visible_to_clause
 from app.utils import user_banned_from_community, back, get_setting, render_template, markdown_to_html, validation_required, can_moderate, \
     shorten_string, gibberish, community_membership, \
     request_etag_matches, return_304, can_upvote, can_downvote, user_filters_posts, \
@@ -2197,7 +2197,9 @@ def community_moderate_comments(actor):
     if community is not None:
         if community.is_moderator() or current_user.is_admin():
             replies_page = request.args.get('replies_page', 1, type=int)
-            post_replies = PostReply.query.filter_by(community_id=community.id, deleted=False).order_by(
+            # D19: moderators get no exemption outside the report queue
+            post_replies = PostReply.query.filter_by(community_id=community.id, deleted=False).filter(
+                visible_to_clause(PostReply, current_user.id)).order_by(
                 desc(PostReply.posted_at)).paginate(page=replies_page, per_page=50, error_out=False)
 
             replies_next_url = url_for('community.community_moderate_comments', actor=community.link(),
@@ -3038,7 +3040,8 @@ def check_url_already_posted():
     if url:
         url = remove_tracking_from_link(url.strip())
         posts = Post.query.filter(Post.url == url, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
-                                  Post.microblog == False, Post.from_bot == False).all()
+                                  Post.microblog == False, Post.from_bot == False,
+                                  visible_to_clause(Post, current_user.id)).all()
         title, description = retrieve_metadata_of_url(url)
         return flask.render_template('community/check_url_posted.html', posts=posts,
                                      title=title, description=description)
