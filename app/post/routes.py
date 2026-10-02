@@ -271,6 +271,11 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
 
         og_image = post.image.source_url if post.image_id else None
         description = shorten_string(markdown_to_text(post.body), 150) if post.body else None
+        # A link preview shows no more than a teaser does: a warned post's warning, and no sensitive image
+        if post.content_warning:
+            description = post.content_warning
+        if post.content_warning or post.nsfw or post.nsfl:
+            og_image = None
         # D1085: a post its author deleted keeps its comments, but its title and body are a placeholder for anyone
         # but its moderators and the admins -- here for the page title and link previews, in _post_full.html for the page
         page_title = post.title
