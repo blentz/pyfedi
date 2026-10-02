@@ -45,7 +45,7 @@ from app.utils import get_request, allowlist_html, get_setting, ap_datetime, mar
 import app.activitypub.actor as activitypub_actor
 import urllib.parse
 from app.utils import site_language_id
-from app.visibility import OPEN_VISIBILITIES
+from app.visibility import OPEN_VISIBILITIES, can_view
 import app as app_pkg
 
 
@@ -3172,7 +3172,8 @@ def notify_about_post_task(post_id):
                 if notify_id != post.user_id and notify_id not in notifications_sent_to and \
                         post.user_id not in blocked_senders and \
                         post.community_id not in blocked_comms and \
-                        post.instance_id not in blocked_ints:
+                        post.instance_id not in blocked_ints and \
+                        can_view(post, notify_id):
                     targets_data = {'gen': '0',
                                     'post_id': post.id,
                                     'post_title': post.title,
@@ -3199,7 +3200,8 @@ def notify_about_post_task(post_id):
                 blocked_ints = blocked_or_banned_instances(notify_id)
                 if notify_id != post.user_id and notify_id not in notifications_sent_to and \
                         post.user_id not in blocked_senders and post.community_id not in blocked_comms and \
-                        post.instance_id not in blocked_ints:
+                        post.instance_id not in blocked_ints and \
+                        can_view(post, notify_id):
                     targets_data = {'gen': '0',
                                     'post_id': post.id,
                                     'post_title': post.title,
@@ -3229,7 +3231,8 @@ def notify_about_post_task(post_id):
                         notify_id not in notifications_sent_to and \
                         post.user_id not in blocked_senders and \
                         post.community_id not in blocked_comms and \
-                        post.instance_id not in blocked_ints:
+                        post.instance_id not in blocked_ints and \
+                        can_view(post, notify_id):
                     targets_data = {'gen': '0',
                                     'post_id': post.id,
                                     'post_title': post.title,
@@ -3264,7 +3267,8 @@ def notify_about_post_task(post_id):
                             notify_id not in notifications_sent_to and \
                             post.user_id not in blocked_senders and \
                             post.community_id not in blocked_comms and \
-                            post.instance_id not in blocked_ints:
+                            post.instance_id not in blocked_ints and \
+                            can_view(post, notify_id):
                         targets_data = {'gen': '0',
                                         'post_id': post.id,
                                         'post_title': post.title,
@@ -3297,7 +3301,7 @@ def notify_about_post_reply(parent_reply: Union[PostReply, None], new_reply: Pos
         community = db.session.get(Community, post.community_id)
         author = db.session.get(User, new_reply.user_id)
         for notify_id in send_notifs_to:
-            if new_reply.user_id != notify_id:
+            if new_reply.user_id != notify_id and can_view(new_reply, notify_id):
                 targets_data = {'gen': '0',
                                 'post_id': new_reply.post.id,
                                 'post_title': post.title,
@@ -3335,7 +3339,7 @@ def notify_about_post_reply(parent_reply: Union[PostReply, None], new_reply: Pos
         # Send notifications based on subscriptions
         send_notifs_to = set(notification_subscribers(parent_reply.id, NOTIF_REPLY))
         for notify_id in send_notifs_to:
-            if new_reply.user_id != notify_id:
+            if new_reply.user_id != notify_id and can_view(new_reply, notify_id):
                 author = db.session.get(User, new_reply.user_id)
                 targets_data = {'gen': '0',
                                 'post_id': parent_reply.post.id,

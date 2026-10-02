@@ -38,6 +38,7 @@ from app.models import CronJobLog, Settings, BannedInstances, Role, User, RolePe
     Community, SendQueue, _store_files_in_s3, PostVote, Poll, \
     ActivityBatch, Reminder, RssFeed, RssFeedItem, Feed
 from app.shared.tasks import task_selector
+from app.visibility import listable_clause
 from app.shared.tasks.maintenance import add_remote_communities, remove_old_bot_content, pwn_bots
 from app.shared.post import make_post
 from app.utils import retrieve_block_list, blocked_domains, retrieve_peertube_block_list, \
@@ -1567,7 +1568,7 @@ def register(app):
                         if notifications:
                             # Also get the top 20 posts since their last login
                             posts = Post.query.join(CommunityMember, Post.community_id == CommunityMember.community_id).filter(
-                                CommunityMember.is_banned == False)
+                                CommunityMember.is_banned == False, listable_clause(Post))
                             posts = posts.filter(CommunityMember.user_id == user.id)
                             if user.ignore_bots == 1:
                                 posts = posts.filter(Post.from_bot == False)

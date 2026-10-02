@@ -867,7 +867,7 @@ And if you want to add your score to the database to help your fellow Bookworms 
         if notifications:
             # Also get the top 20 posts since their last login
             posts = Post.query.join(CommunityMember, Post.community_id == CommunityMember.community_id).filter(
-                CommunityMember.is_banned == False)
+                CommunityMember.is_banned == False, listable_clause(Post))
             posts = posts.filter(CommunityMember.user_id == user.id)
             if user.ignore_bots == 1:
                 posts = posts.filter(Post.from_bot == False)
