@@ -324,3 +324,57 @@ def test_json_ld_of_an_ordinary_post_keeps_its_body_and_image(app, community, au
 
     assert 'the secret body' in data['text']
     assert data['image'] == 'https://m.example/preview.jpg'
+
+
+def test_api_post_view_offers_the_content_warning_under_extensions(app, community, author):
+    from app.api.alpha.views import post_view
+    post = ingest(community, author, activity(summary='look away'))
+
+    assert post_view(post=post, variant=1)['extensions'] == {'content_warning': 'look away'}
+
+
+def test_api_post_view_has_no_extensions_without_a_warning(app, community, author):
+    from app.api.alpha.views import post_view
+    post = ingest(community, author, activity())
+
+    assert 'extensions' not in post_view(post=post, variant=1)
+
+
+def test_api_post_view_keeps_the_gallery_beside_the_warning(app, community, author):
+    from app.api.alpha.views import post_view
+    from app.models import File
+    from app.constants import POST_TYPE_IMAGE
+    post = ingest(community, author, activity(summary='look away'))
+    post.type = POST_TYPE_IMAGE
+    post.gallery_count = 1
+    post.gallery = [File(source_url='https://m.example/b.jpg')]
+    db.session.commit()
+
+    extensions = post_view(post=post, variant=1)['extensions']
+
+    assert extensions['content_warning'] == 'look away'
+    assert [image['url'] for image in extensions['gallery']] != []
+
+
+def test_api_neutral_post_stub_never_carries_the_warning(app, community, author):
+    from app.api.alpha.views import _neutral_post
+    post = ingest(community, author, activity(summary='look away'))
+
+    assert 'extensions' not in _neutral_post(post)
+
+
+def test_api_reply_view_offers_the_content_warning_under_extensions(app, community, author):
+    from flask import g
+    from app.api.alpha.views import reply_view
+    g.admin_ids = []
+    _, reply = reply_to(community, author, summary='heavy')
+
+    assert reply_view(reply=reply, variant=1)['extensions'] == {'content_warning': 'heavy'}
+    assert reply_view(reply=reply, variant=3)['comment']['extensions'] == {'content_warning': 'heavy'}
+
+
+def test_api_reply_view_has_no_extensions_without_a_warning(app, community, author):
+    from app.api.alpha.views import reply_view
+    _, reply = reply_to(community, author)
+
+    assert 'extensions' not in reply_view(reply=reply, variant=1)
