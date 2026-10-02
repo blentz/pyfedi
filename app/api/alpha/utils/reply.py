@@ -381,9 +381,10 @@ def get_reply_list(auth, data, user_details=None):
 
     reply_list = []
     inner_creator_view = inner_community_view = inner_post_view = None
+    stub_neutrals = {}  # D7: one neutral community and post per post, however many of its replies are stubs
     for reply in replies:
         if not can_view(reply, user_id):
-            reply_list.append(reply_stub_view(reply))  # D18
+            reply_list.append(reply_stub_view(reply, stub_neutrals))  # D18
             continue
         if add_creator_in_view == False and add_community_in_view == False:
             if is_creator_banned_from_community is None:

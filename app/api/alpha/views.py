@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import time
 from datetime import datetime, timedelta
+from typing import Optional
 
 from flask import current_app, g
 from sqlalchemy import text, func, or_, inspect
@@ -989,21 +990,30 @@ def reply_removal_ack_view(reply) -> dict:
             'subscribed': 'NotSubscribed'}
 
 
-def reply_stub_view(reply) -> dict:
+def reply_stub_view(reply, neutral_by_post: Optional[dict] = None) -> dict:
     """D18: what the API shows of a reply the viewer may not see. A CommentView with the same nesting
     (clients read comment.id and comment.path) but nothing of the reply. `reply` needs id, post_id and path
     only: a RestrictedReply, or a PostReply in the flat lists. Creator, counts, community and post are neutral
-    objects, never null (R2), as in the removal acknowledgements."""
+    objects, never null (R2), as in the removal acknowledgements.
+
+    `neutral_by_post` is a dict the caller keeps for one listing: it holds each post's neutral community and post,
+    so a thread of hidden replies builds them once rather than once per stub."""
     path = '.'.join(str(id) for id in reply.path) if reply.path else f'0.{reply.id}'
-    post = db.session.get(Post, reply.post_id)  # already in the session: the stub sits in that post's thread or list
+    neutral = neutral_by_post.get(reply.post_id) if neutral_by_post is not None else None
+    if neutral is None:
+        post = db.session.get(Post, reply.post_id)  # already in the session: the stub sits in that post's thread or list
+        neutral = (community_view(community=post.community, variant=1, stub=True), _neutral_post(post))
+        if neutral_by_post is not None:
+            neutral_by_post[reply.post_id] = neutral
+    neutral_community, neutral_post = neutral
     return {'comment': {'id': reply.id, 'post_id': reply.post_id, 'path': path, 'body': None,
                         'visibility': VISIBILITY_FOLLOWERS, 'ap_id': None, 'deleted': False, 'removed': False,
                         'local': False, 'language_id': 0, 'user_id': None, 'published': None},
             'creator': neutral_person(),
             'counts': {'child_count': 0, 'comment_id': reply.id, 'downvotes': 0, 'published': NEUTRAL_TIME,
                        'score': 0, 'upvotes': 0},
-            'community': community_view(community=post.community, variant=1, stub=True),
-            'post': _neutral_post(post),
+            'community': {**neutral_community},
+            'post': {**neutral_post},
             'visibility': VISIBILITY_FOLLOWERS,
             'activity_alert': False, 'banned_from_community': False, 'creator_banned_from_community': False,
             'creator_blocked': False, 'creator_is_admin': False, 'creator_is_moderator': False,

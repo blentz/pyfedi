@@ -1541,6 +1541,8 @@ def get_post_replies(auth, data):
     community_moderator_ids = {m.user_id for m in post.community.moderators()}
     all_ban_data = communities_banned_from_all_users()
 
+    stub_neutrals = {}  # D7: one neutral community and post for every stub in this thread
+
     # Process nested reply tree while preserving structure
     def process_nested_replies(reply_tree, is_top_level=True):
         """Process nested reply tree while preserving nested structure"""
@@ -1552,7 +1554,7 @@ def get_post_replies(auth, data):
             reply = item['comment']
             if item.get('restricted'):
                 # D18: the place in the tree, nothing of the reply; its visible children stay
-                stub = reply_stub_view(reply)
+                stub = reply_stub_view(reply, stub_neutrals)
                 stub['replies'] = process_nested_replies(item['replies'], is_top_level=False)
                 processed_replies.append(stub)
                 continue
