@@ -1610,12 +1610,14 @@ function setupPopupCommunitySidebar() {
     }
 }
 
-// A blurred image on the post page is shown by clicking it; a second click opens it as usual
+// A blurred image on the post page is shown by the first activation of its link -- a click, or Enter on the
+// focused link, which a listener on the img would miss; the next activation opens it as usual
 function setupBlurredPostImages() {
-    document.querySelectorAll('.post_image img.blur').forEach(function(img) {
-        if (img.dataset.blurSetup) return;
-        img.dataset.blurSetup = '1';
-        img.addEventListener('click', function(event) {
+    document.querySelectorAll('.post_image a').forEach(function(link) {
+        const img = link.querySelector('img.blur');
+        if (!img || link.dataset.blurSetup) return;
+        link.dataset.blurSetup = '1';
+        link.addEventListener('click', function(event) {
             if (img.classList.contains('blur')) {
                 event.preventDefault();
                 event.stopPropagation();
