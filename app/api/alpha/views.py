@@ -13,7 +13,7 @@ from app.activitypub.util import active_month, normalise_actor_string
 from app.constants import *
 from app.models import ChatMessage, Community, Language, Instance, Post, PostReply, User, utcnow, \
     AllowedInstances, BannedInstances, utcnow, Site, Feed, FeedItem, Topic, CommunityFlair, \
-    UserNote, Poll, Event, PollChoice, Conversation, Report
+    UserNote, Poll, Event, PollChoice, Conversation, Report, File, post_file
 from app.post.util import tags_to_string, flair_to_string
 from app.utils import blocked_communities, blocked_or_banned_instances, blocked_users, communities_banned_from, \
     get_setting, \
@@ -31,9 +31,23 @@ from app.visibility import can_view, visible_to_sql
 # 'stub' param: set to True to exclude optional fields
 
 
+def galleries_for_posts(posts) -> dict:
+    """{post id: [File, ...]} -- the gallery of every album post in `posts`, in album order,
+    read with one query. A post without a gallery_count is not looked up at all."""
+    ids = [post.id for post in posts if post.type == POST_TYPE_IMAGE and post.gallery_count]
+    galleries = {}
+    if ids:
+        rows = db.session.execute(
+            db.select(post_file.c.post_id, File).join(File, File.id == post_file.c.file_id)
+            .where(post_file.c.post_id.in_(ids)).order_by(post_file.c.weight)).all()
+        for post_id, file in rows:
+            galleries.setdefault(post_id, []).append(file)
+    return galleries
+
+
 def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, communities_moderating=None, banned_from=None,
               bookmarked_posts=None, post_subscriptions=None, communities_joined=None, read_posts=None, content_filters=None,
-              usernotes=None, unread_counts=None, interacted_at=None, report_queue=False) -> dict:
+              usernotes=None, unread_counts=None, interacted_at=None, report_queue=False, galleries=None) -> dict:
     if isinstance(post, int):
         post = db.session.get(Post, post)
         if post is None:
@@ -112,8 +126,10 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
 
         if post.type == POST_TYPE_IMAGE and post.gallery_count:
             # Fork extension (spec D17): the album's images after the first, kept out of the bare Lemmy fields
+            # A listing passes `galleries` (galleries_for_posts), so the page costs one query
+            images = galleries.get(post.id, []) if galleries is not None else post.gallery
             gallery = [{'url': image.view_url(), 'alt_text': image.alt_text, 'width': image.width, 'height': image.height}
-                       for image in post.gallery]
+                       for image in images]
             if gallery:
                 v1.setdefault('extensions', {})['gallery'] = gallery
         if post.content_warning and not post.deleted:
@@ -217,7 +233,7 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
         subscribe_type = 'Subscribed' if followed else 'NotSubscribed'
         can_auth_user_moderate = True if user_id and communities_moderating and user_id in communities_moderating and \
                                          post.community_id in communities_moderating[user_id] else False
-        v2 = {'post': post_view(post=post, variant=1, stub=stub, user_id=user_id, report_queue=report_queue), 'counts': counts, 'banned_from_community': False,
+        v2 = {'post': post_view(post=post, variant=1, stub=stub, user_id=user_id, report_queue=report_queue, galleries=galleries), 'counts': counts, 'banned_from_community': False,
               'subscribed': subscribe_type,
               'saved': saved, 'read': read, 'hidden': False, 'unread_comments': unread_comments, 'my_vote': my_vote,
               'filtered': post.blocked_by_content_filter(content_filters, user_id) == '-1',

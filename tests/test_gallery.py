@@ -348,3 +348,30 @@ def test_an_update_without_attachment_keeps_the_gallery(ingest):
 
     assert [f.source_url for f in gallery_of(post)] == [SECOND]
     assert post.gallery_count == 1
+
+
+def numbered_album(number, *attachments):
+    activity = album(*attachments)
+    activity['id'] = f'https://pix.example/p/alice/{number}/activity'
+    activity['object']['id'] = f'https://pix.example/p/alice/{number}'
+    return activity
+
+
+def test_a_listing_reads_post_file_once_for_the_whole_page(app, ingest, post_file_queries):
+    from flask import g
+    from app.api.alpha.utils.post import get_post_list2
+    posts = [ingest(numbered_album(number,
+                                   image(f'https://pix.example/storage/{number}a.jpg', 'a'),
+                                   image(f'https://pix.example/storage/{number}b.jpg', 'b'),
+                                   image(f'https://pix.example/storage/{number}c.jpg', 'c')))
+             for number in (1, 2, 3)]
+    post_file_queries.clear()
+    g.admin_ids = set()
+
+    listing = get_post_list2(None, {'community_id': posts[0].community_id}, user_id=None)
+
+    assert len(listing['posts']) == 3
+    for entry in listing['posts']:
+        assert [image['alt_text'] for image in entry['post']['extensions']['gallery']] == ['b', 'c']
+    assert len(post_file_queries) == 1
+
