@@ -2936,6 +2936,10 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
             if source_markdown is not None:
                 body = source_markdown
                 body_html = markdown_to_html(body)  # prefer Markdown if provided, overwrite version obtained from HTML
+            elif request_json['object'].get('mediaType') == 'text/markdown':
+                # G2. PeerTube sends a comment as markdown `content` with no `source`
+                body = request_json['object']['content']
+                body_html = markdown_to_html(body)
             else:
                 body = html_to_text(body_html)
 
