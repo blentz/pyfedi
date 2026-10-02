@@ -173,7 +173,7 @@ def search_for_user(address: str, allow_fetch: bool = True):
                 else:
                     return None
 
-                if 'type' in object and (object['type'] == 'Person' or object['type'] == 'Service'):
+                if 'type' in object and object['type'] in ('Person', 'Service', 'Podcast'):
                     user = actor_json_to_model(object, name, server)
                     return user
 

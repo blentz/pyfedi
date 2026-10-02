@@ -1362,7 +1362,8 @@ def actor_json_to_model(activity_json, address, server):
     server_host = host_of(f'//{server}')
     if not id_host or id_host != server_host:
         return None
-    if activity_json['type'] == 'Person' or activity_json['type'] == 'Service':
+    # G1. Castopod's podcast actor has the custom type 'Podcast'; it authors Notes like a person.
+    if activity_json['type'] in ('Person', 'Service', 'Podcast'):
         user = db.session.query(User).filter(User.ap_profile_id == activity_json['id'].lower()).first()
         if user:
             return user
@@ -4770,7 +4771,7 @@ def ensure_domains_match(activity: dict) -> bool:
             note_actor = attributed_to
         elif isinstance(attributed_to, list):
             for a in attributed_to:
-                if isinstance(a, dict) and a.get('type') == 'Person':
+                if isinstance(a, dict) and a.get('type') in ('Person', 'Podcast'):
                     note_actor = a.get('id')
                     break
                 elif isinstance(a, str):
@@ -4863,7 +4864,7 @@ def create_resolved_object(uri, post_data, uri_domain, community, announce_id, s
             actor_domain = host_of(actor)
         elif isinstance(attributed_to, list):
             for a in attributed_to:
-                if isinstance(a, dict) and a.get('type') == 'Person':
+                if isinstance(a, dict) and a.get('type') in ('Person', 'Podcast'):
                     actor = a.get('id')
                     if isinstance(actor, str):  # Ensure `actor` is a valid string
                         actor_domain = host_of(actor)
@@ -5063,7 +5064,7 @@ def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
             actor_domain = host_of(actor)
         elif isinstance(attributed_to, list):
             for a in attributed_to:
-                if isinstance(a, dict) and a.get('type') == 'Person':
+                if isinstance(a, dict) and a.get('type') in ('Person', 'Podcast'):
                     actor = a.get('id')
                     if isinstance(actor, str):  # Ensure `actor` is a valid string
                         actor_domain = host_of(actor)
@@ -5214,7 +5215,7 @@ def verify_object_from_source(request_json) -> Tuple[Union[dict, None], Union[st
             if isinstance(a, str):
                 actor_domain = host_of(a)
                 break
-            elif isinstance(a, dict) and a.get('type') == 'Person':
+            elif isinstance(a, dict) and a.get('type') in ('Person', 'Podcast'):
                 actor = a.get('id')
                 if isinstance(actor, str):
                     actor_domain = host_of(actor)
