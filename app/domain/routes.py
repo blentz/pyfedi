@@ -16,7 +16,7 @@ from app.shared.domain import block_domain, unblock_domain
 from app.visibility import listable_clause
 from app.utils import render_template, permission_required, user_filters_posts, blocked_domains, \
     blocked_or_banned_instances, \
-    recently_upvoted_posts, recently_downvoted_posts, request_etag_matches, \
+    recently_upvoted_posts, recently_downvoted_posts, request_etag_matches, feed_entry_body, \
     return_304, joined_or_modding_communities, login_required_if_private_instance, reported_posts, \
     moderating_communities_ids, block_honey_pot, user_pronouns, community_membership_private, check_anoobis, \
     calculate_rss_cache_timeout, refuse_if_private_instance

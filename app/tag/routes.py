@@ -21,7 +21,7 @@ import app.topic.routes as topic_routes
 from app.visibility import listable_clause
 from app.utils import render_template, permission_required, user_filters_posts, blocked_or_banned_instances, \
     blocked_users, \
-    blocked_domains, \
+    blocked_domains, feed_entry_body, \
     blocked_communities, login_required, moderating_communities_ids, community_membership_private, \
     login_required_if_private_instance, feed_readable_by, refuse_if_private_instance
 from app.rss_extras import RSSFeed

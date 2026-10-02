@@ -46,7 +46,7 @@ from app.utils import render_template, ensure_rss_token, get_setting, request_et
     moderating_communities_ids, user_notes, login_required, safe_order_by, filtered_out_communities, \
     num_topics, referrer, block_honey_pot, user_pronouns, get_instance_stickies, \
     community_membership_private, favorite_communities, mimetype_from_url, check_anoobis, get_request, \
-    store_files_in_s3, calculate_rss_cache_timeout, is_safe_redirect_target, feed_readable_by, refuse_if_private_instance
+    store_files_in_s3, calculate_rss_cache_timeout, is_safe_redirect_target, feed_readable_by, refuse_if_private_instance, feed_entry_body
 from app.models import Community, CommunityMember, Post, Site, User, utcnow, Topic, Instance, \
     Notification, Language, community_language, ModLog, Feed, FeedItem, CmsPage, BannedInstances, BotChallenge
 from app.ldap_utils import test_ldap_connection, sync_user_to_ldap, login_with_ldap

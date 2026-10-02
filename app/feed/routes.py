@@ -37,7 +37,7 @@ from app.utils import back, show_ban_message, piefed_markdown_to_lemmy_markdown,
     recently_downvoted_posts, joined_or_modding_communities, login_required_if_private_instance, \
     communities_banned_from, reported_posts, user_notes, login_required, moderating_communities_ids, approval_required, \
     blocked_or_banned_instances, blocked_communities, block_honey_pot, user_pronouns, \
-    community_membership_private, check_anoobis, calculate_rss_cache_timeout, feed_readable_by, refuse_if_private_instance
+    community_membership_private, check_anoobis, calculate_rss_cache_timeout, feed_readable_by, refuse_if_private_instance, feed_entry_body
 from app.rss_extras import RSSFeed
 import app.community.routes as community_routes
 

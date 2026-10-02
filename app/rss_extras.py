@@ -3,7 +3,7 @@ from urllib.parse import urlsplit
 
 from feedgen.feed import FeedGenerator
 # not needed ATM from app.constants import POST_TYPE_GALLERY
-from app.utils import mimetype_from_url, is_valid_xml_utf8 as _is_valid_xml_utf8
+from app.utils import feed_entry_body, mimetype_from_url, is_valid_xml_utf8 as _is_valid_xml_utf8
 # could be used later for instance checks: from app.models import User, Community, Post, PostReply
 
 ####################################################################################################
@@ -87,7 +87,8 @@ class RSSFeed:
         # @see https://www.w3.org/TR/REC-xml/#charsets
         if not _is_valid_xml_utf8(post.title.strip()):
             return
-        content = post.body_html.strip() if post.body_html else None
+        body = feed_entry_body(post)
+        content = body.strip() if body else None
         if content and not _is_valid_xml_utf8(content):
             return
 
@@ -98,7 +99,8 @@ class RSSFeed:
         fe.guid(post.profile_id(), permalink=False)
 
         fe.content(content, type='CDATA')  # feedgen takes care if this is empty
-        cls._add_media_content(post, fe)
+        if not post.content_warning:  # a warning hides the image too
+            cls._add_media_content(post, fe)
 
         if post.author:
             fe.author(email=cls._email_from_public_url(post.author.public_url()))
