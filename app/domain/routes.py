@@ -17,7 +17,7 @@ from app.shared.domain import block_domain, unblock_domain
 from app.visibility import listable_clause
 from app.utils import render_template, permission_required, user_filters_posts, blocked_domains, \
     blocked_or_banned_instances, \
-    recently_upvoted_posts, recently_downvoted_posts, mimetype_from_url, request_etag_matches, \
+    recently_upvoted_posts, recently_downvoted_posts, mimetype_from_url, feed_entry_body, request_etag_matches, \
     return_304, joined_or_modding_communities, login_required_if_private_instance, reported_posts, \
     moderating_communities_ids, block_honey_pot, user_pronouns, community_membership_private, check_anoobis, \
     refuse_if_private_instance
@@ -157,12 +157,12 @@ def show_domain_rss(domain_id):
                     fe.link(href=f"{current_app.config['SERVER_URL']}{post.slug}")
                 else:
                     fe.link(href=f"{current_app.config['SERVER_URL']}/post/{post.id}")
-                if post.url:
+                if post.url and not post.content_warning:
                     type = mimetype_from_url(post.url)
                     if type and not type.startswith('text/'):
                         fe.enclosure(post.url, type=type)
                     already_added.add(post.url)
-                fe.description(post.body_html)
+                fe.description(feed_entry_body(post))
                 fe.guid(post.profile_id(), permalink=True)
                 fe.author(name=post.author.user_name)
                 fe.pubDate(post.created_at.replace(tzinfo=timezone.utc))

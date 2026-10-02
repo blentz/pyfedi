@@ -45,7 +45,7 @@ from app.utils import render_template, ensure_rss_token, get_setting, request_et
     retrieve_image_hash, possible_communities, remove_tracking_from_link, reported_posts, \
     moderating_communities_ids, user_notes, login_required, safe_order_by, filtered_out_communities, \
     num_topics, referrer, block_honey_pot, user_pronouns, get_instance_stickies, \
-    community_membership_private, favorite_communities, mimetype_from_url, check_anoobis, \
+    community_membership_private, favorite_communities, mimetype_from_url, feed_entry_body, check_anoobis, \
     is_safe_redirect_target, feed_readable_by, refuse_if_private_instance
 from app.models import Community, CommunityMember, Post, Site, User, utcnow, Topic, Instance, \
     Notification, Language, community_language, ModLog, Feed, FeedItem, CmsPage, BannedInstances, BotChallenge
@@ -1440,11 +1440,11 @@ def index_rss(feed_type=None):
             fe.link(href=f"{current_app.config['SERVER_URL']}{post.slug}")
         else:
             fe.link(href=f"{current_app.config['SERVER_URL']}/post/{post.id}")
-        if post.url:
+        if post.url and not post.content_warning:
             type = mimetype_from_url(post.url)
             if type and not type.startswith('text/'):
                 fe.enclosure(post.url, type=type)
-        fe.description(post.body_html)
+        fe.description(feed_entry_body(post))
         fe.guid(post.profile_id(), permalink=True)
         fe.author(name=post.author.user_name)
         fe.pubDate(post.created_at.replace(tzinfo=timezone.utc))

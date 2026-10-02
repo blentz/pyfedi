@@ -4,6 +4,7 @@ import base64
 import bisect
 import gzip
 import hashlib
+from html import escape as html_escape
 import io
 import logging
 import mimetypes
@@ -2065,6 +2066,13 @@ def ensure_directory_exists(directory):
     # Check if the final directory is writable
     if not os.access(directory, os.W_OK):
         current_app.logger.warning(f"Directory '{directory}' is not writable")
+
+
+def feed_entry_body(post) -> str | None:
+    """What a feed entry says for a post: a content warning stands in for the body, which a reader cannot collapse."""
+    if post.content_warning:
+        return f'<p>{html_escape(post.content_warning)}</p>'
+    return post.body_html
 
 
 def mimetype_from_url(url):

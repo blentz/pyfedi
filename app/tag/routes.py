@@ -22,7 +22,7 @@ import app.topic.routes as topic_routes
 from app.visibility import listable_clause
 from app.utils import render_template, permission_required, user_filters_posts, blocked_or_banned_instances, \
     blocked_users, \
-    blocked_domains, mimetype_from_url, \
+    blocked_domains, mimetype_from_url, feed_entry_body, \
     blocked_communities, login_required, moderating_communities_ids, community_membership_private, \
     login_required_if_private_instance, feed_readable_by, \
     refuse_if_private_instance
@@ -162,11 +162,11 @@ def show_tag_rss(tag):
                 fe.link(href=f"{current_app.config['SERVER_URL']}{post.slug}")
             else:
                 fe.link(href=f"{current_app.config['SERVER_URL']}/post/{post.id}")
-            if post.url:
+            if post.url and not post.content_warning:
                 type = mimetype_from_url(post.url)
                 if type and not type.startswith('text/'):
                     fe.enclosure(post.url, type=type)
-            fe.description(post.body_html)
+            fe.description(feed_entry_body(post))
             fe.guid(post.profile_id(), permalink=True)
             fe.author(name=post.author.user_name)
             fe.pubDate(post.created_at.replace(tzinfo=timezone.utc))

@@ -37,7 +37,7 @@ from app.utils import back, show_ban_message, piefed_markdown_to_lemmy_markdown,
     paginate_post_ids, get_deduped_post_ids, get_request, post_ids_to_models, recently_upvoted_posts, \
     recently_downvoted_posts, joined_or_modding_communities, login_required_if_private_instance, \
     communities_banned_from, reported_posts, user_notes, login_required, moderating_communities_ids, approval_required, \
-    blocked_or_banned_instances, blocked_communities, block_honey_pot, user_pronouns, mimetype_from_url, \
+    blocked_or_banned_instances, blocked_communities, block_honey_pot, user_pronouns, mimetype_from_url, feed_entry_body, \
     community_membership_private, check_anoobis, feed_readable_by, \
     refuse_if_private_instance
 import app.community.routes as community_routes
@@ -865,11 +865,11 @@ def show_feed_rss(feed_path):
                 fe.link(href=f"{current_app.config['SERVER_URL']}{post.slug}")
             else:
                 fe.link(href=f"{current_app.config['SERVER_URL']}/post/{post.id}")
-            if post.url:
+            if post.url and not post.content_warning:
                 type = mimetype_from_url(post.url)
                 if type and not type.startswith('text/'):
                     fe.enclosure(post.url, type=type)
-            fe.description(post.body_html)
+            fe.description(feed_entry_body(post))
             fe.guid(post.profile_id(), permalink=True)
             fe.author(name=post.author.user_name)
             fe.pubDate(post.created_at.replace(tzinfo=timezone.utc))

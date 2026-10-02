@@ -19,7 +19,7 @@ from app.models import Topic, Community, NotificationSubscription, PostReply, ut
 from app.topic import bp
 from app.topic.forms import SuggestTopicsForm
 from app.visibility import listable_clause
-from app.utils import render_template, user_filters_posts, validation_required, mimetype_from_url, login_required, \
+from app.utils import render_template, user_filters_posts, validation_required, mimetype_from_url, feed_entry_body, login_required, \
     gibberish, get_deduped_post_ids, paginate_post_ids, post_ids_to_models, blocked_communities, \
     recently_upvoted_posts, recently_downvoted_posts, blocked_or_banned_instances, blocked_users, \
     joined_or_modding_communities, \
@@ -250,11 +250,11 @@ def show_topic_rss(topic_path):
                 fe.link(href=f"{current_app.config['SERVER_URL']}{post.slug}")
             else:
                 fe.link(href=f"{current_app.config['SERVER_URL']}/post/{post.id}")
-            if post.url:
+            if post.url and not post.content_warning:
                 type = mimetype_from_url(post.url)
                 if type and not type.startswith('text/'):
                     fe.enclosure(post.url, type=type)
-            fe.description(post.body_html)
+            fe.description(feed_entry_body(post))
             fe.guid(post.profile_id(), permalink=True)
             fe.author(name=post.author.user_name)
             fe.pubDate(post.created_at.replace(tzinfo=timezone.utc))
