@@ -2623,7 +2623,8 @@ class Post(db.Model):
         from app.activitypub.util import find_language_or_create, find_language, \
             find_hashtag_or_create, \
             find_licence_or_create, make_image_sizes, notify_about_post, find_flair_or_create, host_of, \
-            activitypub_visibility, set_post_gallery, content_warning_from
+            activitypub_visibility, set_post_gallery, content_warning_from, gallery_attachments, \
+            gallery_image_is_blocked
         # cycle: app.utils imports from this module
         from app.utils import allowlist_html, markdown_to_html, html_to_text, microblog_content_to_title, \
             microblog_content_to_link, blocked_phrases, get_setting, \
@@ -2724,6 +2725,7 @@ class Post(db.Model):
 
         file_path = None
         alt_text = None
+        gallery_images = None  # set when the album is hashed below
         # D1397 on the last operand. The loop below already refuses an element
         # that is not a dict; this pre-check, which decides whether the loop runs
         # at all, was a membership test over whatever element 0 happens to be --
@@ -2806,6 +2808,10 @@ class Post(db.Model):
                     from app.utils import retrieve_image_hash, hash_matches_blocked_image  # cycle: app.utils imports from this module
                     image_hash = retrieve_image_hash(post.url)
                     if image_hash and hash_matches_blocked_image(image_hash):
+                        return None
+                    # The album's other images are held to the same rule as its first
+                    gallery_images = gallery_attachments(request_json, [post.url])
+                    if any(gallery_image_is_blocked(extra) for extra in gallery_images):
                         return None
 
                 image = File(source_url=post.url, hash=image_hash)
@@ -3199,7 +3205,7 @@ class Post(db.Model):
 
             # The rest of an album: Pixelfed and Mastodon send one attachment per image
             if post.type == constants.POST_TYPE_IMAGE:
-                set_post_gallery(post, request_json, community.low_quality)
+                set_post_gallery(post, request_json, community.low_quality, gallery_images)
 
             # Update list of cross posts
             if post.url:

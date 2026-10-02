@@ -41,7 +41,7 @@ from app.utils import get_request, allowlist_html, get_setting, ap_datetime, mar
     blocked_users, piefed_markdown_to_lemmy_markdown, store_files_in_s3, guess_mime_type, get_recipient_language, \
     patch_db_session, to_srgb, communities_banned_from_all_users, blocked_communities, blocked_or_banned_instances, \
     instance_community_ids, banned_instances, communities_run_by_inactive_mods, inspect_image_c2pa, \
-    url_is_storable, can_create_post, can_create_post_reply
+    url_is_storable, can_create_post, can_create_post_reply, retrieve_image_hash, hash_matches_blocked_image
 import app.activitypub.actor as activitypub_actor
 import urllib.parse
 from app.utils import site_language_id
@@ -1974,12 +1974,25 @@ def gallery_attachments(request_json: dict, primary_urls) -> list:
     return found[:MAX_GALLERY_IMAGES]
 
 
-def set_post_gallery(post: Post, request_json: dict, low_quality: bool = False):
+def gallery_image_is_blocked(image: dict) -> bool:
+    """Whether a gallery image (an entry of gallery_attachments) matches a blocked
+    image, hashing it as Post.new hashes the post's own image. The hash is kept in
+    image['hash'] (None when no IMAGE_HASHING_ENDPOINT is configured or the
+    endpoint gave none), so an image is hashed once."""
+    if 'hash' not in image:
+        image['hash'] = retrieve_image_hash(image['url']) if current_app.config['IMAGE_HASHING_ENDPOINT'] else None
+    return bool(image['hash']) and hash_matches_blocked_image(image['hash'])
+
+
+def set_post_gallery(post: Post, request_json: dict, low_quality: bool = False, images: list = None):
     """Make `post.gallery` the extra images of `request_json`, replacing what it held.
 
     Each image is sized by make_image_sizes, as the post's own image is, and the
     `weight` of the post_file row is its place in the album (the post's own image
-    being 0).
+    being 0). `images` is gallery_attachments' answer when the caller already has
+    it (Post.new hashes them before the post exists). An image matching a blocked
+    image is not stored: Post.new refuses the whole post for one, so this only
+    drops one an Update brings.
     """
     old_ids = [row.file_id for row in db.session.execute(
         post_file.select().where(post_file.c.post_id == post.id)).all()]
@@ -1989,10 +2002,12 @@ def set_post_gallery(post: Post, request_json: dict, low_quality: bool = False):
         db.session.delete(file)
 
     if post.type == POST_TYPE_IMAGE:
-        primary_urls = [post.url, post.image.source_url if post.image else None]
-        for weight, extra in enumerate(gallery_attachments(request_json, primary_urls), start=1):
+        if images is None:
+            images = gallery_attachments(request_json, [post.url, post.image.source_url if post.image else None])
+        images = [extra for extra in images if not gallery_image_is_blocked(extra)]
+        for weight, extra in enumerate(images, start=1):
             file = File(source_url=extra['url'], alt_text=extra['alt_text'],
-                        width=extra['width'], height=extra['height'])
+                        width=extra['width'], height=extra['height'], hash=extra['hash'])
             db.session.add(file)
             db.session.flush()
             db.session.execute(post_file.insert().values(post_id=post.id, file_id=file.id, weight=weight))
