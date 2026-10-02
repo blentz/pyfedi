@@ -1300,3 +1300,30 @@ def bearer(user):
     `auth=f'Bearer {s.user.encode_jwt_token()}'` into edit_post's API branch.
     """
     return f'Bearer {user.encode_jwt_token()}'
+
+
+def make_visibility_world():
+    """The audience fixture for the visibility plan. Instance 1 is local (fact 21)."""
+    local = make_instance('piefed.test')
+    remote = make_instance('m.example')
+    make_site()
+    author = make_user(remote, 'alice')
+    follower = make_user(local, 'fran', local=True)
+    pending = make_user(local, 'pat', local=True)
+    stranger = make_user(local, 'sam', local=True)
+    make_follow(follower, author)
+    make_follow(pending, author, is_accepted=None)
+    community = make_community()
+    post = make_post(community, author, 'https://m.example/s/1', title='', microblog=True)
+    post.visibility = 'followers'
+    public_post = make_post(community, author, 'https://m.example/s/2')
+    reply = make_post_reply(public_post, author, 'secret reply')
+    reply.visibility = 'followers'
+    db.session.commit()
+    public_child = make_post_reply(public_post, stranger, 'public child')
+    public_child.parent_id = reply.id
+    public_child.depth = 1
+    db.session.commit()
+    return SimpleNamespace(author=author, follower=follower, pending=pending, stranger=stranger,
+                           community=community, post=post, reply=reply,
+                           public_post=public_post, public_child=public_child)
