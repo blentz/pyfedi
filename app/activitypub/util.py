@@ -31,7 +31,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     UserFollower, PostBoost, QuoteAuthorization, parse_ap_timestamp, image_url_from, markdown_source, \
     _as_text, _as_int, _as_float, _as_dict, _as_url, property_value_fields, public_key_pem, \
     more_info_link, is_more_info_link, more_info_url_from, \
-    language_from_ap, adjust_domain_post_count, actor_name_from_ap, PostReplyValidationError
+    language_from_ap, adjust_domain_post_count, actor_name_from_ap, PostReplyValidationError, post_file
 from app.utils import get_request, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
     sanitise_posting_warning, \
     is_image_url, domain_from_url, gibberish, ensure_directory_exists, shorten_string, fixup_url, \
@@ -1908,6 +1908,73 @@ def actor_json_to_model(activity_json, address, server):
                     f"{type(activity_json['childFeeds']).__name__}, not a list, "
                     f"so no child feed is linked to this feed")
         return feed
+
+
+MAX_GALLERY_IMAGES = 20  # extra images kept per post; a peer chooses how many it sends
+
+
+def gallery_attachments(request_json: dict, primary_urls) -> list:
+    """The image attachments of a peer's object other than the post's own image.
+
+    Pixelfed and Mastodon send an album as several `attachment` entries
+    (`Document` or `Image`, `mediaType` image/*, `name` the alt text). Post.new
+    keeps the first as post.url/post.image; the rest are returned here, in order,
+    as {'url', 'alt_text', 'width', 'height'}. Only http(s) urls are kept.
+    """
+    attachments = request_json['object'].get('attachment')
+    if isinstance(attachments, dict):
+        attachments = [attachments]
+    if not isinstance(attachments, list):
+        return []
+    if any(_as_dict(attachment).get('type') == 'Link' for attachment in attachments):
+        return []  # a link post (Mbin sends the image beside it): the images are its preview, not an album
+    seen = {url for url in primary_urls if url}
+    found = []
+    for attachment in attachments:
+        attachment = _as_dict(attachment)
+        if attachment.get('type') not in ('Image', 'Document'):
+            continue
+        url = _as_url(attachment.get('url'), 1024)
+        if not url or url in seen or not url_is_storable(url):
+            continue
+        # No is_image_url() fallback: it HEADs the peer for an extensionless url
+        media_type = attachment.get('mediaType')
+        if attachment['type'] != 'Image' and not (isinstance(media_type, str) and media_type.startswith('image/')):
+            continue
+        seen.add(url)
+        alt_text = attachment.get('name')
+        found.append({'url': url,
+                      'alt_text': alt_text[:1500] if isinstance(alt_text, str) and alt_text else None,
+                      'width': _as_int(attachment.get('width'), None),
+                      'height': _as_int(attachment.get('height'), None)})
+    return found[:MAX_GALLERY_IMAGES]
+
+
+def set_post_gallery(post: Post, request_json: dict, low_quality: bool = False):
+    """Make `post.gallery` the extra images of `request_json`, replacing what it held.
+
+    Each image is sized by make_image_sizes, as the post's own image is, and the
+    `weight` of the post_file row is its place in the album (the post's own image
+    being 0).
+    """
+    old_ids = [row.file_id for row in db.session.execute(
+        post_file.select().where(post_file.c.post_id == post.id)).all()]
+    db.session.execute(post_file.delete().where(post_file.c.post_id == post.id))
+    for file in File.query.filter(File.id.in_(old_ids)).all():
+        file.delete_from_disk()
+        db.session.delete(file)
+
+    if post.type == POST_TYPE_IMAGE:
+        primary_urls = [post.url, post.image.source_url if post.image else None]
+        for weight, extra in enumerate(gallery_attachments(request_json, primary_urls), start=1):
+            file = File(source_url=extra['url'], alt_text=extra['alt_text'],
+                        width=extra['width'], height=extra['height'])
+            db.session.add(file)
+            db.session.flush()
+            db.session.execute(post_file.insert().values(post_id=post.id, file_id=file.id, weight=weight))
+            if get_setting('cache_remote_images_locally', True):
+                make_image_sizes(file.id, 512, 1200, 'posts', low_quality)
+    db.session.commit()
 
 
 # Save two different versions of a File, after downloading it from file.source_url. Set a width parameter to None to avoid generating one of that size
@@ -4083,6 +4150,10 @@ def update_post_from_activity(post: Post, request_json: dict):
         if old_db_entry_to_delete:
             File.query.filter_by(id=old_db_entry_to_delete).delete()
             db.session.commit()
+
+        # An Update that carries attachments replaces the album, as it replaces the image
+        if 'attachment' in request_json['object']:
+            set_post_gallery(post, request_json, post.community.low_quality)
 
 
 def undo_vote(comment, post, target_ap_id, user):

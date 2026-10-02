@@ -2531,7 +2531,7 @@ class Post(db.Model):
     modlog = db.relationship('ModLog', lazy='dynamic', foreign_keys="ModLog.post_id", back_populates='post')
     event = db.relationship('Event', uselist=False, backref='post', lazy='select', cascade='all, delete-orphan')
     boosts = db.relationship('PostBoost', backref='post', lazy='dynamic', cascade='all, delete-orphan')
-    gallery = db.relationship('File', secondary=post_file, lazy='dynamic')
+    gallery = db.relationship('File', secondary=post_file, lazy='dynamic', order_by=post_file.c.weight)
     votes = db.relationship('PostVote', lazy='dynamic', backref='post', cascade='all, delete-orphan', passive_deletes=True)
     bookmarks = db.relationship('PostBookmark', backref='post', lazy='dynamic', cascade='all, delete-orphan')
     poll = db.relationship('Poll', uselist=False, backref='post', lazy='select', cascade='all, delete-orphan')
@@ -2622,7 +2622,7 @@ class Post(db.Model):
         from app.activitypub.util import find_language_or_create, find_language, \
             find_hashtag_or_create, \
             find_licence_or_create, make_image_sizes, notify_about_post, find_flair_or_create, host_of, \
-            activitypub_visibility
+            activitypub_visibility, set_post_gallery
         # cycle: app.utils imports from this module
         from app.utils import allowlist_html, markdown_to_html, html_to_text, microblog_content_to_title, \
             microblog_content_to_link, blocked_phrases, get_setting, \
@@ -3194,6 +3194,10 @@ class Post(db.Model):
                 else:
                     make_image_sizes(post.image_id, 170, 512, 'posts',
                                      community.low_quality)  # the 512 sized image is for masonry view and API responses
+
+            # The rest of an album: Pixelfed and Mastodon send one attachment per image
+            if post.type == constants.POST_TYPE_IMAGE:
+                set_post_gallery(post, request_json, community.low_quality)
 
             # Update list of cross posts
             if post.url:

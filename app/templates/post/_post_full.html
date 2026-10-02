@@ -108,6 +108,14 @@
                         <img src="{{ post.url }}" style="max-width: 100%; height: auto;"  />
                     </a>
                 {% endif -%}
+                {% for gallery_image in post.gallery -%}
+                    <a href="{{ gallery_image.view_url(resize=low_bandwidth) }}" rel="nofollow ugc" class="post_gallery_image">
+                        <img src="{{ gallery_image.medium_url() }}"
+                                alt="{{ gallery_image.alt_text if gallery_image.alt_text else post.title }}"
+                                loading="lazy" referrerpolicy="same-origin"
+                                {% if gallery_image.width and gallery_image.height -%}width="{{ gallery_image.width }}" height="{{ gallery_image.height }}"{% endif %} />
+                    </a>
+                {% endfor -%}
             </div>
         {% elif post.type == POST_TYPE_LINK and post.url and not post.deleted -%}
             <p class="mt-2">
