@@ -51,13 +51,18 @@ def convert_archived_replies_to_tree(archived_replies: list, post: Post) -> List
     if not archived_replies:
         return []
     
+    def children_of(reply_data):
+        return [child for child in (create_real_reply(data) for data in reply_data.get('replies', [])) if child]
+
     def create_real_reply(reply_data):
         if reply_data.get('visibility', VISIBILITY_PUBLIC) not in OPEN_VISIBILITIES:
+            if reply_data.get('id') is None:  # a malformed stub has no place in the tree: skipped, with its subtree
+                return None
             return {
                 'comment': RestrictedReply(reply_data['id'], reply_data.get('depth', 0), reply_data.get('parent_id'),
                                            reply_data.get('post_id', post.id), tuple(reply_data.get('path', []))),
                 'restricted': True,
-                'replies': [create_real_reply(child) for child in reply_data.get('replies', [])]
+                'replies': children_of(reply_data)
             }
         # Create a PostReply instance (not persisted to DB)
         post_reply = PostReply()
@@ -126,10 +131,10 @@ def convert_archived_replies_to_tree(archived_replies: list, post: Post) -> List
         
         return {
             'comment': post_reply,
-            'replies': [create_real_reply(child) for child in reply_data.get('replies', [])]
+            'replies': children_of(reply_data)
         }
     
-    return [create_real_reply(reply) for reply in archived_replies]
+    return children_of({'replies': archived_replies})
 
 
 def find_comment_branch_in_archived(archived_replies: list, comment_id: int) -> list:
