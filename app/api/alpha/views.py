@@ -115,7 +115,10 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
             gallery = [{'url': image.view_url(), 'alt_text': image.alt_text, 'width': image.width, 'height': image.height}
                        for image in post.gallery]
             if gallery:
-                v1['extensions'] = {'gallery': gallery}
+                v1.setdefault('extensions', {})['gallery'] = gallery
+        if post.content_warning and not post.deleted:
+            # Fork extension: the warning a peer sent as `summary`, for a client that collapses the body under it
+            v1.setdefault('extensions', {})['content_warning'] = post.content_warning
 
         v1['tags'] = tags_to_string(post) or ''
         v1['flair'] = flair_to_string(post) or ''
@@ -774,6 +777,8 @@ def reply_view(reply: PostReply | int, variant: int, user_id=None,
         v1['path'] = '.'.join(str(id) for id in reply.path)
         if reply.edited_at:
             v1['updated'] = reply.edited_at.isoformat(timespec="microseconds") + 'Z'
+        if reply.content_warning and not reply.deleted:
+            v1['extensions'] = {'content_warning': reply.content_warning}  # fork extension, as on a post
         if reply.deleted == True:
             v1['body'] = ''
             if reply.deleted_by and reply.user_id != reply.deleted_by:

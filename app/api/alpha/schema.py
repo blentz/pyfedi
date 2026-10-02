@@ -398,6 +398,11 @@ class GalleryImage(DefaultSchema):
 
 class PostExtensions(DefaultSchema):
     gallery = fields.List(fields.Nested(GalleryImage), metadata={"description": "The images of a multi-image post after the first, in order. Fork extension; Lemmy clients ignore it."})
+    content_warning = fields.String(metadata={"description": "The warning the post's body and images should be collapsed under. Present only when there is one. Fork extension; Lemmy clients ignore it."})
+
+
+class CommentExtensions(DefaultSchema):
+    content_warning = fields.String(metadata={"description": "The warning the comment's body should be collapsed under. Present only when there is one. Fork extension; Lemmy clients ignore it."})
 
 
 class Post(DefaultSchema):
@@ -563,6 +568,7 @@ class Comment(Schema):
     locked = fields.Boolean()
     answer = fields.Boolean()
     emoji_reactions = fields.List(fields.Nested(Reactions), allow_none=True)
+    extensions = fields.Nested(CommentExtensions)
 
     class Meta:
         unknown = INCLUDE # let the not-consistent-with-anything 'repliesEnabled' through for Boost
