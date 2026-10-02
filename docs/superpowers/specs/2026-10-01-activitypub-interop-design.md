@@ -34,6 +34,11 @@ Full cross-compatibility with Mastodon, PeerTube, Pixelfed and Castopod. "Full" 
 - **D18 Hidden replies in a thread.** A reply the viewer may not see renders as a placeholder ("Visible to followers only") with no author, body or score. Its visible children stay in the tree. The API returns a stub with `visibility: "followers"` and null content. ActivityPub collections omit hidden replies.
 - **D19 No moderator exemption.** Admins, staff and community moderators see followers-only content only through the report queue, which snapshots the reported body. Everywhere else they get the same placeholder or 404 as any other viewer.
 
+- **D20 Replies under hidden posts (execution ruling, 2026-10-02).** A reply is judged by its own visibility, so a public reply under a followers-only post stays visible. Every parent-post field shown with it is neutral unless the viewer can view the parent: the API embedded post, the web "reply to" line and the NNTP subject.
+- **D21 Stub shape (amends D18 for the API).** Hidden-reply stubs keep Lemmy's CommentView nesting. `body` is null, `visibility` is `"followers"`, and `creator`, `counts` and `post` are neutral non-null objects with no content, so typed clients don't fail on nulls.
+- **D22 Enforcement is not seeing (amends D19).** Moderator and admin removal actions skip the visibility gate. Views stay gated. Removal acknowledgements, the delete-confirmation page and modlog entries for non-open content are neutral to anyone who can't view it. The modlog keeps the target user, and shows it only to admins for non-open entries.
+- **D23 Mentions.** Mention notifications obey the visibility predicate. Follow-up: store each object's addressees and add an addressee arm to the predicate, because Mastodon shows followers-only posts to the people they mention.
+
 ### Extensibility
 
 - **D8 Content kind.** The unit of extension is a content kind, one registered bundle of:
