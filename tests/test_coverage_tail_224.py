@@ -151,8 +151,8 @@ def test_an_unknown_topic_aborts_before_the_line_that_looked_uncovered(app, publ
 
     assert response.status_code == 404
     source = _lines('app/topic/routes.py')
-    assert source[66].strip() == 'abort(404)', 'the early abort moved; 212 may now be live'
-    assert source[211].strip() == 'abort(404)'
+    assert source[67].strip() == 'abort(404)', 'the early abort moved; 212 may now be live'
+    assert source[212].strip() == 'abort(404)'
 
 
 def test_show_feed_dereferences_its_argument_long_before_the_uncovered_else(app, public):

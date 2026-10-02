@@ -55,6 +55,7 @@ from markupsafe import Markup
 import boto3
 from app import db, cache, httpx_client, celery, get_ip_address, plugins
 from app.pinned_http import is_refused_address
+from app.visibility import listable_sql, visible_to_sql
 from app.constants import *
 import re
 from PIL import Image, ImageOps, ImageCms
@@ -4539,23 +4540,27 @@ def paginate_post_ids(post_ids, page: int, page_length: int):
 # fragments OR'd into get_deduped_post_ids' WHERE clause. Module level rather than
 # inline so tests exercise the production string itself: they used to hold a
 # hand-copied duplicate, which cannot notice a restructure and had already drifted
-# from the code it claimed to mirror. Both bind :local_user_id, so
-# get_deduped_post_ids must add that parameter whenever it appends either of them.
+# from the code it claimed to mirror. Both bind :local_user_id and
+# :visibility_viewer_id, so get_deduped_post_ids must add both whenever it appends
+# either of them. Each is ANDed with the viewer predicate on the POST's author, so
+# following a booster never grants the author's followers-only audience.
 #
 # NEITHER carries a `p.private is false` gate, deliberately. p.private is the
 # microblog marker (Post.new(), app/models.py ~1796), and gating these excluded
 # every ingested Mastodon post from the feed -- a boosted microblog SHOULD appear
 # when you follow the booster. The gate belongs on the community source instead;
 # see MICROBLOG_GATE below.
-FOLLOWED_AUTHOR_SQL = """EXISTS (SELECT 1 FROM user_follower uf
+FOLLOWED_AUTHOR_SQL = """(EXISTS (SELECT 1 FROM user_follower uf
                                   WHERE uf.local_user_id = :local_user_id
-                                  AND uf.remote_user_id = p.user_id AND is_inward is false)"""
+                                  AND uf.remote_user_id = p.user_id AND is_inward is false)
+                                  AND """ + visible_to_sql('p') + ')'
 
-FOLLOWED_BOOSTER_SQL = """EXISTS (SELECT 1 FROM post_boost pb
+FOLLOWED_BOOSTER_SQL = """(EXISTS (SELECT 1 FROM post_boost pb
                                   INNER JOIN user_follower uf2 ON uf2.remote_user_id = pb.user_id
                                   WHERE pb.post_id = p.id
                                   AND uf2.local_user_id = :local_user_id
-                                  AND uf2.is_inward is false)"""
+                                  AND uf2.is_inward is false)
+                                  AND """ + visible_to_sql('p') + ')'
 
 # Applied to the COMMUNITY source only, never to the whole query and never to the
 # two disjuncts above. A microblog reaches an aggregate feed because you follow its
@@ -4594,11 +4599,12 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
     # post in front of users who follow nobody. The extra parentheses are
     # load-bearing: community_sql is caller-supplied (app/main/routes.py) and must
     # not be able to bind looser than the AND.
-    sources = [f'(({community_disjunct}) AND {MICROBLOG_GATE})']
+    sources = [f'(({community_disjunct}) AND {MICROBLOG_GATE} AND {listable_sql("p")})']
     if current_user.is_authenticated and current_user.num_following and include_following:
         sources.append(FOLLOWED_AUTHOR_SQL)
         sources.append(FOLLOWED_BOOSTER_SQL)
         params['local_user_id'] = current_user.id
+        params['visibility_viewer_id'] = current_user.id
 
     post_id_where = ["(" + " OR ".join(sources) + ")", 'c.banned is false']
     if current_user.is_authenticated and current_user.hide_low_quality and community_ids[0] == -1:

@@ -44,7 +44,7 @@ def test_boosted_post_is_visible(db_session, scenario):
     """A post boosted by a followed account matches the clause"""
     local, post, _ = scenario
 
-    ids = [row[0] for row in db.session.execute(text(BOOST_CLAUSE), {'local_user_id': local.id})]
+    ids = [row[0] for row in db.session.execute(text(BOOST_CLAUSE), {'local_user_id': local.id, 'visibility_viewer_id': local.id})]
 
     assert post.id in ids
 
@@ -54,7 +54,7 @@ def test_unboosted_post_is_not_visible(db_session, scenario):
     local, _, stranger = scenario
     other_post = make_post(make_community('other'), stranger, 'https://other.example/notes/2')
 
-    ids = [row[0] for row in db.session.execute(text(BOOST_CLAUSE), {'local_user_id': local.id})]
+    ids = [row[0] for row in db.session.execute(text(BOOST_CLAUSE), {'local_user_id': local.id, 'visibility_viewer_id': local.id})]
 
     assert other_post.id not in ids
 
@@ -73,7 +73,7 @@ def test_boost_by_unfollowed_account_is_not_visible(db_session, scenario):
                             'https://other.example/notes/3')
     record_boost(other_post, unfollowed_booster)
 
-    ids = [row[0] for row in db.session.execute(text(BOOST_CLAUSE), {'local_user_id': local.id})]
+    ids = [row[0] for row in db.session.execute(text(BOOST_CLAUSE), {'local_user_id': local.id, 'visibility_viewer_id': local.id})]
 
     assert other_post.id not in ids
 
@@ -84,7 +84,7 @@ def test_not_visible_to_a_user_who_follows_nobody(db_session, scenario):
     someone_else = make_user(None, 'someoneelse', local=True)
 
     ids = [row[0] for row in db.session.execute(text(BOOST_CLAUSE),
-                                                {'local_user_id': someone_else.id})]
+                                                {'local_user_id': someone_else.id, 'visibility_viewer_id': someone_else.id})]
 
     assert ids == []
 
@@ -106,7 +106,7 @@ def test_inward_follow_does_not_open_visibility(db_session):
     post = make_post(make_community('inward-test'), stranger, 'https://inward-stranger.example/notes/1')
     record_boost(post, booster)
 
-    ids = [row[0] for row in db.session.execute(text(BOOST_CLAUSE), {'local_user_id': local.id})]
+    ids = [row[0] for row in db.session.execute(text(BOOST_CLAUSE), {'local_user_id': local.id, 'visibility_viewer_id': local.id})]
 
     assert post.id not in ids
 
@@ -127,7 +127,7 @@ def test_boosted_microblog_post_is_visible(db_session):
     post = make_post(make_community(), stranger, 'https://other.example/notes/1', microblog=True)
     record_boost(post, booster)
 
-    ids = [row[0] for row in db.session.execute(text(BOOST_CLAUSE), {'local_user_id': local.id})]
+    ids = [row[0] for row in db.session.execute(text(BOOST_CLAUSE), {'local_user_id': local.id, 'visibility_viewer_id': local.id})]
 
     assert post.id in ids
 

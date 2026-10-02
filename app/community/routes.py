@@ -49,6 +49,7 @@ from app.post.util import tags_to_string
 # The module, not the names: app.shared.community reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
+from app.visibility import listable_clause
 from app.utils import user_banned_from_community, back, get_setting, render_template, markdown_to_html, validation_required, can_moderate, \
     shorten_string, gibberish, community_membership, \
     request_etag_matches, return_304, can_upvote, can_downvote, user_filters_posts, \
@@ -405,7 +406,7 @@ def show_community(community: Community):
         # for any titleless object), not a privacy flag -- non-public objects are
         # refused at ingest by create_post(). Filtering it here hid every microblog
         # from the community that carries them, e.g. /c/microblogs@piefed.social.
-        posts = Post.query.filter(Post.community_id == community.id)
+        posts = Post.query.filter(Post.community_id == community.id, listable_clause(Post))
 
         if content_type == 'events':
             posts = posts.filter(Post.type == POST_TYPE_EVENT)
@@ -532,7 +533,7 @@ def show_community(community: Community):
         # `PROBE s2 replies shown for a post under review: [...]`. The two
         # filters are the ones the posts branch applies to Post itself.
         comments = community.replies.join(Post, PostReply.post_id == Post.id).filter(
-            Post.deleted == False, Post.status > POST_STATUS_REVIEWING)
+            Post.deleted == False, Post.status > POST_STATUS_REVIEWING, listable_clause(Post), listable_clause(PostReply))
 
         # filter out nsfw and nsfl if desired
         if current_user.is_anonymous:
@@ -800,7 +801,7 @@ def show_community_rss(actor):
 
         # No Post.private filter, for the same reason as show_community above.
         posts = Post.query.filter(Post.community_id == community.id).filter(Post.from_bot == False, Post.deleted == False,
-                                  Post.status > POST_STATUS_REVIEWING)
+                                  Post.status > POST_STATUS_REVIEWING, listable_clause(Post))
         if score:
             posts = posts.filter(Post.score >= score)
         if tag:
@@ -846,7 +847,8 @@ def show_community_ical(actor):
         if community.private:
             abort(403)
         posts = Post.query.filter(Post.community_id == community.id, Post.type == POST_TYPE_EVENT).\
-            filter(Post.from_bot == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING).\
+            filter(Post.from_bot == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
+                   listable_clause(Post)).\
             order_by(desc(Post.created_at)).limit(50).all()
         ical = Calendar(creator='PieFed')
         for post in posts:

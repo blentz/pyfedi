@@ -19,6 +19,7 @@ from app.tag import bp
 # The module, not the name: app.topic.routes reaches this file through
 # app.activitypub before get_all_child_topic_ids is defined (import cycle: topic.routes)
 import app.topic.routes as topic_routes
+from app.visibility import listable_clause
 from app.utils import render_template, permission_required, user_filters_posts, blocked_or_banned_instances, \
     blocked_users, \
     blocked_domains, mimetype_from_url, \
@@ -40,7 +41,7 @@ def show_tag(tag):
         posts = Post.query.join(Community, Community.id == Post.community_id). \
             join(post_tag, post_tag.c.post_id == Post.id).filter(post_tag.c.tag_id == tag.id). \
             filter(Community.banned == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
-                   Post.private == False)
+                   Post.private == False, listable_clause(Post))
 
         if current_user.is_anonymous or current_user.ignore_bots == 1:
             posts = posts.filter(Post.from_bot == False)
@@ -138,7 +139,7 @@ def show_tag_rss(tag):
         posts = Post.query.join(Community, Community.id == Post.community_id). \
             join(post_tag, post_tag.c.post_id == Post.id).filter(post_tag.c.tag_id == tag.id). \
             filter(Community.banned == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
-                   Post.private == False)
+                   Post.private == False, listable_clause(Post))
 
         if current_user.is_anonymous or current_user.ignore_bots == 1:
             posts = posts.filter(Post.from_bot == False)
@@ -334,7 +335,7 @@ def tag_cloud(type, category_id: int):
         join(Community, Community.id == Post.community_id). \
         filter(Post.community_id.in_(community_ids), Post.deleted == False,
                Post.status > POST_STATUS_REVIEWING, Post.private == False,
-               Community.banned == False). \
+               listable_clause(Post), Community.banned == False). \
         filter(readable_communities). \
         group_by(Tag.id)
     
@@ -373,6 +374,7 @@ def tag_cloud(type, category_id: int):
                 Post.deleted == False,
                 Post.status > POST_STATUS_REVIEWING,
                 Post.private == False,
+                listable_clause(Post),
                 Community.banned == False,
                 readable_communities
             ).subquery()
@@ -404,7 +406,7 @@ def tag_posts(tag_id):
     posts = Post.query.join(Community, Community.id == Post.community_id). \
         join(post_tag, post_tag.c.post_id == Post.id).filter(post_tag.c.tag_id == tag_id). \
         filter(Community.banned == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
-               Post.private == False)
+               Post.private == False, listable_clause(Post))
 
     if current_user.is_authenticated:
         # filter domains and instances

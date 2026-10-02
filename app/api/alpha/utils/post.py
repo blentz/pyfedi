@@ -29,7 +29,7 @@ from app.utils import authorise_api_user, blocked_users, blocked_communities, bl
     community_membership_private, paginate_post_ids, post_ids_to_models, user_access, moderating_communities_ids, \
     user_filters_languages, feed_readable_by
 from app.shared.tasks import task_selector
-from app.visibility import can_view
+from app.visibility import can_view, listable_clause, listable_sql
 
 
 def a_post(post_id):
@@ -203,6 +203,8 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
     if read_language_ids:
         post_query_criteria.append('(p.language_id IN :read_language_ids OR p.language_id is null)')
         post_query_parameters['read_language_ids'] = tuple(read_language_ids)
+
+    profile_listing = bool(user_id and (liked_only or saved_only))
 
     if type == "Local":
         posts = Post.query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
@@ -382,6 +384,7 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
             
             content_filters = user_filters_posts(user_id) if user_id else {}
         elif person_id:
+            profile_listing = True
             use_faster_query = False
             segregate_instance_stickies = False
             posts = Post.query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
@@ -410,6 +413,12 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
             content_filters = user_filters_home(user_id) if user_id else {}
 
     posts = posts.filter(or_(Community.private == False, Community.id.in_(private_community_ids)))
+
+    # a listing shows public posts only (interop D7). The profile listings (by person,
+    # saved, liked) apply the viewer predicate instead and are handled separately.
+    if not profile_listing:
+        posts = posts.filter(listable_clause(Post))
+        post_query_criteria.append(listable_sql('p'))
     
     # for materialized view - private community filtering
     # ALWAYS append a private-community criterion, whether or not the reader is
@@ -890,6 +899,8 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
     # Depending on filters, determine whether instance stickies should be listed first or not
     segregate_instance_stickies = True
 
+    profile_listing = bool(user_id and (liked_only or saved_only))
+
     if type == "Local":
         posts = Post.query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
                                   Post.user_id.not_in(blocked_person_ids),
@@ -1033,6 +1044,7 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
                                                                               blocked_instance_ids))
             content_filters = user_filters_posts(user_id) if user_id else {}
         elif person_id:
+            profile_listing = True
             segregate_instance_stickies = False
             posts = Post.query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
                                       Post.community_id.not_in(blocked_community_ids),
@@ -1052,6 +1064,11 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
             content_filters = user_filters_home(user_id) if user_id else {}
 
     posts = posts.filter(or_(Community.private == False, Community.id.in_(private_community_ids)))
+
+    # a listing shows public posts only (interop D7). The profile listings (by person,
+    # saved, liked) apply the viewer predicate instead and are handled separately.
+    if not profile_listing:
+        posts = posts.filter(listable_clause(Post))
 
     # The reader's own languages. get_post_list has had this filter all along
     # and this listing had none, so an account that reads one language was

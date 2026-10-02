@@ -18,6 +18,7 @@ from app.inoculation import inoculation
 from app.models import Topic, Community, NotificationSubscription, PostReply, utcnow
 from app.topic import bp
 from app.topic.forms import SuggestTopicsForm
+from app.visibility import listable_clause
 from app.utils import render_template, user_filters_posts, validation_required, mimetype_from_url, login_required, \
     gibberish, get_deduped_post_ids, paginate_post_ids, post_ids_to_models, blocked_communities, \
     recently_upvoted_posts, recently_downvoted_posts, blocked_or_banned_instances, blocked_users, \
@@ -110,7 +111,7 @@ def show_topic(topic_path):
             prev_url = url_for('topic.show_topic', topic_path=topic_path, result_id=result_id,
                                page=page - 1, sort=sort, layout=post_layout) if page > 0 else None
         elif content_type == 'comments':
-            comments = PostReply.query.filter(PostReply.community_id.in_(community_ids))
+            comments = PostReply.query.filter(PostReply.community_id.in_(community_ids), listable_clause(PostReply))
 
             # filter out nsfw and nsfl if desired
             if current_user.is_anonymous:

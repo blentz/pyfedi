@@ -14,6 +14,7 @@ from app.domain.forms import PostWarningForm
 from app.inoculation import inoculation
 from app.models import Post, Domain, Community, DomainBlock, read_posts
 from app.shared.domain import block_domain, unblock_domain
+from app.visibility import listable_clause
 from app.utils import render_template, permission_required, user_filters_posts, blocked_domains, \
     blocked_or_banned_instances, \
     recently_upvoted_posts, recently_downvoted_posts, mimetype_from_url, request_etag_matches, \
@@ -53,12 +54,14 @@ def show_domain(domain_id):
             if current_user.is_anonymous or current_user.ignore_bots == 1:
                 posts = Post.query.join(Community, Community.id == Post.community_id). \
                     filter(Post.from_bot == False, Post.domain_id == domain.id, Community.banned == False,
-                           Post.deleted == False, Post.status > POST_STATUS_REVIEWING, Post.private == False). \
+                           Post.deleted == False, Post.status > POST_STATUS_REVIEWING, Post.private == False,
+                           listable_clause(Post)). \
                     order_by(desc(Post.posted_at))
             else:
                 posts = Post.query.join(Community).filter(Post.domain_id == domain.id, Community.banned == False,
                                                           Post.deleted == False,
-                                                          Post.status > POST_STATUS_REVIEWING).order_by(
+                                                          Post.status > POST_STATUS_REVIEWING,
+                                                          listable_clause(Post)).order_by(
                     desc(Post.posted_at))
 
             if current_user.is_authenticated:
@@ -130,7 +133,7 @@ def show_domain_rss(domain_id):
             posts = Post.query.join(Community, Community.id == Post.community_id). \
                 filter(Post.from_bot == False, Post.domain_id == domain.id, Community.banned == False,
                        Post.deleted == False, Post.status > POST_STATUS_REVIEWING, Community.private == False,
-                       Post.private == False).order_by(desc(Post.posted_at)).limit(20)
+                       Post.private == False, listable_clause(Post)).order_by(desc(Post.posted_at)).limit(20)
 
             fg = FeedGenerator()
             fg.id(f"{current_app.config['SERVER_URL']}/d/{domain_id}")
