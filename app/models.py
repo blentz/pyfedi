@@ -3210,8 +3210,8 @@ class Post(db.Model):
                     make_image_sizes(post.image_id, 170, 512, 'posts',
                                      community.low_quality)  # the 512 sized image is for masonry view and API responses
 
-            # The rest of an album: Pixelfed and Mastodon send one attachment per image
-            if post.type == constants.POST_TYPE_IMAGE:
+            # The rest of an album: Pixelfed and Mastodon send one attachment per image, Friendica beside a link
+            if post.type in (constants.POST_TYPE_IMAGE, constants.POST_TYPE_LINK):
                 set_post_gallery(post, request_json, community.low_quality, gallery_images)
 
             # Update list of cross posts

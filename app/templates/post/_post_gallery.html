@@ -1,0 +1,10 @@
+{# The images of a post's gallery after its own: an album's, or the images beside a link #}
+{% set blur_images = post.blur_images(current_user) -%}
+{% for gallery_image in (post.gallery if post.gallery_count else []) -%}
+    <a href="{{ gallery_image.view_url(resize=low_bandwidth) }}" rel="nofollow ugc" class="post_gallery_image">
+        <img src="{{ gallery_image.medium_url() }}"
+                alt="{{ gallery_image.alt_text if gallery_image.alt_text else post.title }}"
+                loading="lazy" referrerpolicy="same-origin" class="{{ 'blur' if blur_images }}"
+                {% if gallery_image.width and gallery_image.height -%}width="{{ gallery_image.width }}" height="{{ gallery_image.height }}"{% endif %} />
+    </a>
+{% endfor -%}

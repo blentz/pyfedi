@@ -34,7 +34,7 @@ from app.visibility import can_view, visible_to_sql
 def galleries_for_posts(posts) -> dict:
     """{post id: [File, ...]} -- the gallery of every album post in `posts`, in album order,
     read with one query. A post without a gallery_count is not looked up at all."""
-    ids = [post.id for post in posts if post.type == POST_TYPE_IMAGE and post.gallery_count]
+    ids = [post.id for post in posts if post.type in (POST_TYPE_IMAGE, POST_TYPE_LINK) and post.gallery_count]
     galleries = {}
     if ids:
         rows = db.session.execute(
@@ -124,7 +124,7 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
                 'height': post.image.height,
             }
 
-        if post.type == POST_TYPE_IMAGE and post.gallery_count:
+        if post.type in (POST_TYPE_IMAGE, POST_TYPE_LINK) and post.gallery_count:
             # Fork extension (spec D17): the album's images after the first, kept out of the bare Lemmy fields
             # A listing passes `galleries` (galleries_for_posts), so the page costs one query
             images = galleries.get(post.id, []) if galleries is not None else post.gallery

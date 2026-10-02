@@ -1944,14 +1944,17 @@ def gallery_attachments(request_json: dict, primary_urls) -> list:
     (`Document` or `Image`, `mediaType` image/*, `name` the alt text). Post.new
     keeps the first as post.url/post.image; the rest are returned here, in order,
     as {'url', 'alt_text', 'width', 'height'}. Only http(s) urls are kept.
+
+    An object with a Link attachment is a link post. One image beside it is its
+    preview (Mbin) and is not an album; two or more are (Friendica), and all of
+    them are returned, the Link staying post.url.
     """
     attachments = request_json['object'].get('attachment')
     if isinstance(attachments, dict):
         attachments = [attachments]
     if not isinstance(attachments, list):
         return []
-    if any(_as_dict(attachment).get('type') == 'Link' for attachment in attachments):
-        return []  # a link post (Mbin sends the image beside it): the images are its preview, not an album
+    has_link = any(_as_dict(attachment).get('type') == 'Link' for attachment in attachments)
     seen = {url for url in primary_urls if url}
     found = []
     for attachment in attachments:
@@ -1971,6 +1974,8 @@ def gallery_attachments(request_json: dict, primary_urls) -> list:
                       'alt_text': alt_text[:1500] if isinstance(alt_text, str) and alt_text else None,
                       'width': _as_int(attachment.get('width'), None),
                       'height': _as_int(attachment.get('height'), None)})
+    if has_link and len(found) < 2:
+        return []  # a link post with its one preview image (Mbin): the image is not an album
     return found[:MAX_GALLERY_IMAGES]
 
 
@@ -1995,7 +2000,7 @@ def set_post_gallery(post: Post, request_json: dict, low_quality: bool = False, 
     drops one an Update brings, remembering its url (a post_file row of
     GALLERY_BLOCKED_WEIGHT) so an unchanged album is not rebuilt.
     """
-    if post.type == POST_TYPE_IMAGE:
+    if post.type in (POST_TYPE_IMAGE, POST_TYPE_LINK):
         if images is None:
             images = gallery_attachments(request_json, [post.url, post.image.source_url if post.image else None])
     else:
