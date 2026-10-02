@@ -11,6 +11,7 @@ from app.constants import *
 from app.models import Notification, NotificationSubscription, Post, PostReply, PostReplyBookmark, PostReplyVote, \
     Report, Site, User, utcnow, Instance, votes_cast_today
 from app.shared.tasks import task_selector
+from app.visibility import post_title_for
 from app.utils import render_template, authorise_api_user, shorten_string, \
     piefed_markdown_to_lemmy_markdown, markdown_to_html, add_to_modlog, can_create_post_reply, \
     can_upvote, can_downvote, get_recipient_language, user_ip_banned, ip_address, can_moderate
@@ -170,7 +171,7 @@ def subscribe_reply(reply_id: int, subscribe, src, auth=None):
                 flash(_(msg))
         else:
             new_notification = NotificationSubscription(name=shorten_string(_('Replies to my comment on %(post_title)s',
-                                                                              post_title=reply.post.title)),
+                                                                              post_title=post_title_for(reply.post, user_id))),
                                                         user_id=user_id, entity_id=reply_id,
                                                         type=NOTIF_REPLY)
             db.session.add(new_notification)
@@ -633,13 +634,13 @@ def choose_answer(post_reply_id, src, auth=None):
     _refuse_unless_answer_chooser(post_reply, user, src)
     post_reply.answer = True
     with force_locale(get_recipient_language(post_reply.user_id)):
-        title = _('Your answer was chosen as an answer to %(post_title)s',
-                  post_title=shorten_string(post_reply.post.title, 100))
+        post_title = shorten_string(post_title_for(post_reply.post, post_reply.user_id), 100)
+        title = _('Your answer was chosen as an answer to %(post_title)s', post_title=post_title)
     targets_data = {'gen': '0',
                     'post_id': post_reply.post_id,
                     'requestor_id': user.id,
                     'author_user_name': post_reply.author.display_name(),
-                    'post_title': shorten_string(post_reply.post.title, 100)}
+                    'post_title': post_title}
     notify = Notification(title=title, url=post_reply.post.slug,
                           user_id=post_reply.user_id,
                           author_id=user.id, notif_type=NOTIF_ANSWER,

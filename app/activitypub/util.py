@@ -47,7 +47,7 @@ from app.utils import get_request, allowlist_html, get_setting, ap_datetime, mar
 import app.activitypub.actor as activitypub_actor
 import urllib.parse
 from app.utils import site_language_id
-from app.visibility import OPEN_VISIBILITIES, can_view
+from app.visibility import OPEN_VISIBILITIES, can_view, post_title_for
 import app as app_pkg
 
 
@@ -3538,15 +3538,16 @@ def notify_about_post_reply(parent_reply: Union[PostReply, None], new_reply: Pos
         author = db.session.get(User, new_reply.user_id)
         for notify_id in send_notifs_to:
             if new_reply.user_id != notify_id and can_view(new_reply, notify_id):
+                post_title = post_title_for(post, notify_id)  # the reply may be visible where its post is not
                 targets_data = {'gen': '0',
                                 'post_id': new_reply.post.id,
-                                'post_title': post.title,
+                                'post_title': post_title,
                                 'community_name': community.ap_id if community.ap_id else community.name,
                                 'author_user_name': author.ap_id if author.ap_id else author.user_name,
                                 'comment_id': new_reply.id,
                                 'comment_body': new_reply.body}
                 new_notification = Notification(title=shorten_string(_('Reply to %(post_title)s',
-                                                                       post_title=new_reply.post.title), 150),
+                                                                       post_title=post_title), 150),
                                                 url=f"/post/{new_reply.post.id}/comment/{new_reply.id}#comment_{new_reply.id}",
                                                 user_id=notify_id, author_id=new_reply.user_id,
                                                 notif_type=NOTIF_POST,
@@ -3580,7 +3581,7 @@ def notify_about_post_reply(parent_reply: Union[PostReply, None], new_reply: Pos
                 targets_data = {'gen': '0',
                                 'post_id': parent_reply.post.id,
                                 'parent_comment_id': new_reply.parent_id,
-                                'parent_reply_body': parent_reply.body,
+                                'parent_reply_body': parent_reply.body if can_view(parent_reply, notify_id) else '',
                                 'comment_id': new_reply.id,
                                 'comment_body': new_reply.body,
                                 'author_id': new_reply.user_id,
@@ -3588,7 +3589,7 @@ def notify_about_post_reply(parent_reply: Union[PostReply, None], new_reply: Pos
                 with force_locale(get_recipient_language(notify_id)):
                     new_notification = Notification(
                         title=shorten_string(gettext('Reply to comment on %(post_title)s',
-                                                     post_title=parent_reply.post.title), 150),
+                                                     post_title=post_title_for(parent_reply.post, notify_id)), 150),
                         url=f"/post/{parent_reply.post.id}/comment/{new_reply.parent_id}#comment_{new_reply.id}",
                         user_id=notify_id, author_id=new_reply.user_id,
                         notif_type=NOTIF_REPLY,

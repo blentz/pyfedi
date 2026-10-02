@@ -44,7 +44,7 @@ from app.models import User, Community, CommunityJoinRequest, CommunityMember, A
 # The module, not the names: app.post.routes reaches this file through
 # app.activitypub.signature before they are defined (import cycle: post.routes)
 import app.post.routes as post_routes
-from app.visibility import OPEN_VISIBILITIES, listable_clause
+from app.visibility import OPEN_VISIBILITIES, listable_clause, post_title_for
 from app.shared.tasks import task_selector
 # The module, not the name: app.user.routes reaches this file through
 # app.activitypub.signature before show_profile is defined (import cycle: user.routes)
@@ -2811,7 +2811,7 @@ def process_question_answer(user, store_ap_json, request_json, announced):
                                 'post_id': post_reply.post_id,
                                 'requestor_id': user.id,
                                 'author_user_name': post_reply.author.display_name(),
-                                'post_title': shorten_string(post_reply.post.title, 100)}
+                                'post_title': shorten_string(post_title_for(post_reply.post, post_reply.user_id), 100)}
                 notify = Notification(title='Answer was chosen', url=post_reply.post.slug,
                                       user_id=post_reply.user_id,
                                       author_id=user.id, notif_type=NOTIF_ANSWER,

@@ -37,7 +37,7 @@ from app.models import Post, PostReply, PostReplyValidationError, \
     PostReplyBookmark, CommunityBlock, File, CommunityFlair, UserFlair, BlockedImage, CommunityBan, Language, Event, \
     Reminder, Emoji
 from app.post import bp
-from app.visibility import can_view
+from app.visibility import can_view, post_title_for
 from app.post.forms import NewReplyForm, ReportPostForm, MeaCulpaForm, CrossPostForm, ConfirmationForm, \
     ConfirmationMultiDeleteForm, EditReplyForm, FlairPostForm, DeleteConfirmationForm, NewReminderForm, \
     ShareMastodonForm, ChooseEmojiForm, MovePostForm
@@ -1633,7 +1633,7 @@ def post_reply_reminder(post_reply_id: int):
         return render_template('generic_form.html',
                                title=_('Creating a reminder about comment by %(author)s on "%(post_title)s"',
                                        author=post_reply.author.display_name(),
-                                       post_title=post_reply.post.title),
+                                       post_title=post_title_for(post_reply.post, current_user.id)),
                                form=form)
 
 

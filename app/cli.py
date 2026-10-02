@@ -38,7 +38,7 @@ from app.models import CronJobLog, Settings, BannedInstances, Role, User, RolePe
     Community, SendQueue, _store_files_in_s3, PostVote, Poll, \
     ActivityBatch, Reminder, RssFeed, RssFeedItem, Feed
 from app.shared.tasks import task_selector
-from app.visibility import listable_clause
+from app.visibility import listable_clause, post_title_for
 from app.shared.tasks.maintenance import add_remote_communities, remove_old_bot_content, pwn_bots
 from app.shared.post import make_post
 from app.utils import retrieve_block_list, blocked_domains, retrieve_peertube_block_list, \
@@ -1153,6 +1153,10 @@ def register(app):
                 ActivityBatch.query.filter(ActivityBatch.id.in_(delete_payloads)).delete()
                 db.session.commit()
 
+    @app.cli.command('reminders')
+    def reminders_command():
+        reminders()
+
     def reminders():
         pending_reminders = Reminder.query.filter(Reminder.remind_at < utcnow()).all()
         for pending_reminder in pending_reminders:
@@ -1160,12 +1164,13 @@ def register(app):
             with force_locale(get_recipient_language(pending_reminder.user_id)):
                 if pending_reminder.reminder_type == 1:
                     post = db.session.get(Post, pending_reminder.reminder_destination)
-                    title = _('Reminder: %(title)s', title=post.title)
+                    title = _('Reminder: %(title)s', title=post_title_for(post, pending_reminder.user_id))
                     url = f'/post/{post.id}'
                     targets_data['post_id'] = post.id
                 elif pending_reminder.reminder_type == 2:
                     post_reply = db.session.get(PostReply, pending_reminder.reminder_destination)
-                    title = _('Reminder: comment on %(title)s', title=post_reply.post.title, )
+                    title = _('Reminder: comment on %(title)s',
+                              title=post_title_for(post_reply.post, pending_reminder.user_id))
                     url = f'/post/{post_reply.post.id}/comment/{post_reply.id}'
                     targets_data['comment_id'] = post_reply.id
                 else:
@@ -1785,8 +1790,8 @@ def register(app):
             for reply in post_replies:
                 new_notification = NotificationSubscription(
                     name=shorten_string(_('Replies to my comment on %(post_title)s',
-                                          post_title=reply.post.title)),
-                    user_id=post.user_id, entity_id=reply.id,
+                                          post_title=post_title_for(reply.post, reply.user_id))),
+                    user_id=reply.user_id, entity_id=reply.id,
                     type=NOTIF_REPLY)
                 db.session.add(new_notification)
             db.session.commit()

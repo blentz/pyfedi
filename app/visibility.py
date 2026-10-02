@@ -7,6 +7,7 @@ followers-only content through the report queue's snapshot, nowhere else.
 from dataclasses import dataclass
 from typing import Optional
 
+from flask_babel import _
 from sqlalchemy import and_, exists, or_
 from sqlalchemy.orm import aliased
 
@@ -32,6 +33,12 @@ def can_view(obj, viewer_id: Optional[int]) -> bool:
     if visibility != VISIBILITY_FOLLOWERS or not viewer_id:
         return False
     return viewer_id == obj.user_id or _follows(viewer_id, obj.user_id)
+
+
+def post_title_for(post, viewer_id: Optional[int]) -> str:
+    """A post's title as a notification, subscription name or page title tells it to `viewer_id`. Someone who may not
+    view the post learns that one exists (its link still 404s for them), not what it is called."""
+    return post.title if can_view(post, viewer_id) else _('a followers-only post')
 
 
 def visible_to_clause(model, viewer_id: Optional[int]):
