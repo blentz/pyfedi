@@ -5696,8 +5696,21 @@ def archive_post(post_id: int, s3_connection):
                     result = []
                     for reply_dict in reply_tree:
                         comment = reply_dict['comment']
+                        if comment.visibility not in (VISIBILITY_PUBLIC, VISIBILITY_UNLISTED):
+                            # D18: an archive keeps the position of a non-public reply, never its content
+                            result.append({
+                                'id': int(comment.id),
+                                'parent_id': int(comment.parent_id) if comment.parent_id else None,
+                                'depth': int(comment.depth) if comment.depth else 0,
+                                'post_id': int(comment.post_id),
+                                'visibility': comment.visibility,
+                                'path': list(comment.path) if comment.path else [],
+                                'replies': serialize_tree(reply_dict['replies'])
+                            })
+                            continue
                         serialized = {
                             'id': int(comment.id) if comment.id else None,
+                            'visibility': comment.visibility,
                             'body': str(comment.body) if comment.body else '',
                             'body_html': str(comment.body_html) if comment.body_html else '',
                             'posted_at': comment.posted_at.isoformat() if comment.posted_at else None,

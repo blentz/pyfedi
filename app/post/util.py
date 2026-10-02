@@ -9,9 +9,9 @@ from flask_login import current_user
 from sqlalchemy import desc, asc, text, or_
 
 from app import db, cache
-from app.constants import POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_VIDEO, POST_TYPE_POLL
+from app.constants import VISIBILITY_PUBLIC, POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_VIDEO, POST_TYPE_POLL
 from app.models import PostReply, Post, Community, User, Language, utcnow
-from app.visibility import mark_restricted
+from app.visibility import OPEN_VISIBILITIES, RestrictedReply, mark_restricted
 from app.utils import blocked_or_banned_instances, blocked_users, is_video_hosting_site, get_request, silenced_instances
 
 
@@ -52,6 +52,13 @@ def convert_archived_replies_to_tree(archived_replies: list, post: Post) -> List
         return []
     
     def create_real_reply(reply_data):
+        if reply_data.get('visibility', VISIBILITY_PUBLIC) not in OPEN_VISIBILITIES:
+            return {
+                'comment': RestrictedReply(reply_data['id'], reply_data.get('depth', 0), reply_data.get('parent_id'),
+                                           reply_data.get('post_id', post.id), tuple(reply_data.get('path', []))),
+                'restricted': True,
+                'replies': [create_real_reply(child) for child in reply_data.get('replies', [])]
+            }
         # Create a PostReply instance (not persisted to DB)
         post_reply = PostReply()
         post_reply.id = reply_data.get('id')
@@ -79,6 +86,7 @@ def convert_archived_replies_to_tree(archived_replies: list, post: Post) -> List
         post_reply.child_count = reply_data.get('child_count', 0)
         post_reply.path = reply_data.get('path', [])
         post_reply.answer = reply_data.get('answer', False)
+        post_reply.visibility = reply_data.get('visibility', VISIBILITY_PUBLIC)
         post_reply.reports = 0
         
         # Post relationship
