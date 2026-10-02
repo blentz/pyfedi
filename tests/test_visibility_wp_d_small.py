@@ -50,3 +50,39 @@ def test_blocking_the_instance_of_a_visible_reply_still_works(app, world):
         response = send(app, w.stranger, 'post', f'/post/{w.public_post.id}/comment/{w.public_child.id}/block_instance')
     assert response.status_code == 302
     assert block.called
+
+
+# --- D6: the D18 placeholder honours THREAD_CUTOFF_DEPTH and is hidable like the teaser ------------
+
+def _placeholder_html(app, depth, cutoff=5):
+    from flask import render_template
+    from app.visibility import RestrictedReply
+    parent = RestrictedReply(id=10, depth=depth, parent_id=None, post_id=3)
+    child = RestrictedReply(id=11, depth=depth + 1, parent_id=10, post_id=3)
+    with app.test_request_context('/'):
+        return render_template('post/_post_reply_restricted.html', post_reply=parent, THREAD_CUTOFF_DEPTH=cutoff, nonce='n0nce',
+                               children=[{'comment': child, 'replies': [], 'restricted': True}])
+
+
+def test_a_placeholder_below_the_cutoff_renders_its_children(app, db_session):
+    html = _placeholder_html(app, depth=2)
+    assert 'id="comment_11"' in html
+    assert 'Continue thread' not in html
+
+
+def test_a_placeholder_past_the_cutoff_links_to_the_rest_of_the_thread(app, db_session):
+    html = _placeholder_html(app, depth=6)
+    assert 'id="comment_11"' not in html
+    assert 'Continue thread' in html
+    assert '/post/3/comment/10' in html
+
+
+def test_a_placeholder_with_no_cutoff_renders_every_level(app, db_session):
+    assert 'id="comment_11"' in _placeholder_html(app, depth=60, cutoff=0)
+
+
+def test_a_placeholder_hides_with_its_collapsed_parent(app, db_session):
+    html = _placeholder_html(app, depth=2)
+    assert 'comment_body hidable' in html
+    assert 'replies hidable depth_2' in html
+

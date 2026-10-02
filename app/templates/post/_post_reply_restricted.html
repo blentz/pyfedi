@@ -1,16 +1,23 @@
 {# D18: a reply the viewer may not see. post_reply is an app.visibility.RestrictedReply:
-   id, depth, parent_id and post_id only. Its children render normally below. #}
+   id, depth, parent_id and post_id only. Its children render normally below, down to THREAD_CUTOFF_DEPTH
+   as in the teaser; `hidable` lets a collapsed parent hide it as it hides a teaser. #}
 <div class="container comment restricted" id="comment_{{ post_reply.id }}" aria-level="{{ post_reply.depth+1 }}" role="treeitem">
-    <div class="row comment_body">
+    <div class="row comment_body hidable">
         <div class="col-12 pr-0"><p class="text-muted">{{ _('Visible to followers only') }}</p></div>
     </div>
     {% if children -%}
-        <div class="replies depth_{{ post_reply.depth }}" role="group">
-            {% for reply in children -%}
-                {% with post_reply=reply['comment'], children=reply['replies'] %}
-                    {% if reply.restricted %}{% include 'post/_post_reply_restricted.html' %}{% else %}{% include 'post/_post_reply_teaser.html' %}{% endif %}
-                {% endwith %}
-            {% endfor -%}
+        <div class="replies hidable depth_{{ post_reply.depth }}" role="group">
+            {% if not THREAD_CUTOFF_DEPTH or post_reply.depth <= THREAD_CUTOFF_DEPTH -%}
+                {% for reply in children -%}
+                    {% with post_reply=reply['comment'], children=reply['replies'] %}
+                        {% if reply.restricted %}{% include 'post/_post_reply_restricted.html' %}{% else %}{% include 'post/_post_reply_teaser.html' %}{% endif %}
+                    {% endwith %}
+                {% endfor -%}
+            {% else -%}
+                <a href="{{ url_for('post.continue_discussion', post_id=post_reply.post_id, comment_id=post_reply.id, _anchor='replies') }}"
+                   hx-post="{{ url_for('post.continue_discussion_ajax', post_id=post_reply.post_id, comment_id=post_reply.id, nonce=nonce) }}"
+                   hx-target="#comment_{{ post_reply.id }}" hx-swap="outerHTML">{{ _('Continue thread') }}</a>
+            {% endif -%}
         </div>
     {% endif -%}
 </div>
