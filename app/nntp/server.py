@@ -52,6 +52,7 @@ from app.utils import communities_banned_from, blocked_or_banned_instances, filt
     get_request
 from sqlalchemy import func
 from app import db
+from app.visibility import visible_to_clause
 from flask import g
 from app.api.alpha.utils.reply import post_reply as _api_post_reply
 from app.api.alpha.utils.post import post_post as _api_post_post
@@ -212,12 +213,14 @@ class CommunityArticleIndex:
             posts = (
                 Post.query
                 .filter_by(community_id=self.community_id, deleted=False)
+                .filter(visible_to_clause(Post, None))
                 .options(load_only(Post.id, Post.posted_at, Post.created_at))
                 .all()
             )
             replies = (
                 PostReply.query
                 .filter_by(community_id=self.community_id, deleted=False)
+                .filter(visible_to_clause(PostReply, None))
                 .options(load_only(PostReply.id, PostReply.posted_at, PostReply.created_at))
                 .all()
             )
@@ -285,12 +288,12 @@ class CommunityArticleIndex:
     def _fetch_info(self, kind: str, db_id: int, seq_num: int) -> ArticleInfo:
         with self._app.app_context():
             if kind == 'post':
-                post = Post.query.filter_by(id=db_id, deleted=False).first()
+                post = Post.query.filter_by(id=db_id, deleted=False).filter(visible_to_clause(Post, None)).first()
                 if not post:
                     raise NNTPArticleNotFound(f"post-{db_id}")
                 return _post_to_info(post, self._domain, seq_num)
             else:
-                reply = PostReply.query.filter_by(id=db_id, deleted=False).first()
+                reply = PostReply.query.filter_by(id=db_id, deleted=False).filter(visible_to_clause(PostReply, None)).first()
                 if not reply:
                     raise NNTPArticleNotFound(f"reply-{db_id}")
                 return _reply_to_info(reply, self._domain, seq_num)
@@ -333,12 +336,12 @@ class IndexArticleDict:
             except ValueError:
                 raise NNTPArticleNotFound(message_id)
             if kind == 'post':
-                post = Post.query.filter_by(id=db_id, deleted=False).first()
+                post = Post.query.filter_by(id=db_id, deleted=False).filter(visible_to_clause(Post, None)).first()
                 if not post:
                     raise NNTPArticleNotFound(message_id)
                 return _post_to_info(post, self._domain, post.id)
             else:
-                reply = PostReply.query.filter_by(id=db_id, deleted=False).first()
+                reply = PostReply.query.filter_by(id=db_id, deleted=False).filter(visible_to_clause(PostReply, None)).first()
                 if not reply:
                     raise NNTPArticleNotFound(message_id)
                 return _reply_to_info(reply, self._domain, reply.id)
@@ -723,14 +726,14 @@ class PieFedNNTPServer(NNTPServer):
             except ValueError:
                 raise NNTPArticleNotFound(message_id)
             if kind == 'post':
-                post = Post.query.filter_by(id=db_id, deleted=False).first()
+                post = Post.query.filter_by(id=db_id, deleted=False).filter(visible_to_clause(Post, None)).first()
                 if not post:
                     raise NNTPArticleNotFound(message_id)
                 if post.type == 3 and post.image:
                     return self._build_image_body(post)
                 return _post_body_text(post), {}
             else:
-                reply = PostReply.query.filter_by(id=db_id, deleted=False).first()
+                reply = PostReply.query.filter_by(id=db_id, deleted=False).filter(visible_to_clause(PostReply, None)).first()
                 if not reply:
                     raise NNTPArticleNotFound(message_id)
                 return reply.body or '', {}

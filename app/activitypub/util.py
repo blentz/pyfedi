@@ -2882,7 +2882,7 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
         log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, 'Community is local only, reply discarded')
         return None
     visibility = activitypub_visibility(request_json.get('object'))
-    if visibility in ('followers', 'direct'):
+    if visibility == 'direct':
         log_incoming_ap(id, APLOG_CREATE, APLOG_IGNORED, saved_json,
                         f'Non-public reply refused: {visibility}')
         return None
@@ -3103,7 +3103,7 @@ def create_post(store_ap_json, community: Community, request_json: dict, user: U
         log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, 'Community is local only, post discarded')
         return None
     visibility = activitypub_visibility(request_json.get('object'))
-    if visibility in ('followers', 'direct'):
+    if visibility == 'direct':
         log_incoming_ap(id, APLOG_CREATE, APLOG_IGNORED, saved_json,
                         f'Non-public post refused: {visibility}')
         return None

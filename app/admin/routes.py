@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 from furl import furl
 
 from app import db, celery, cache
+from app.visibility import visible_to_clause
 from app.activitypub.routes import process_inbox_request, process_delete_request, replay_inbox_request, \
     SIGNATURE_FAILURE_MESSAGES
 from app.activitypub.signature import post_request, default_context, RsaKeys
@@ -1940,8 +1941,10 @@ def admin_content():
         show = 'trash'
 
     posts = Post.query.join(User, User.id == Post.user_id).filter(Post.deleted == False,
-                                                                  Post.status > POST_STATUS_REVIEWING)
-    post_replies = PostReply.query.join(User, User.id == PostReply.user_id).filter(PostReply.deleted == False)
+                                                                  Post.status > POST_STATUS_REVIEWING,
+                                                                  visible_to_clause(Post, None))
+    post_replies = PostReply.query.join(User, User.id == PostReply.user_id).filter(PostReply.deleted == False,
+                                                                             visible_to_clause(PostReply, None))
     if show == 'trash':
         title = _('Bad / Most downvoted')
         posts = posts.filter(Post.down_votes > 1, Post.score < 10)
@@ -1966,11 +1969,11 @@ def admin_content():
         post_replies = post_replies.order_by(PostReply.score)
     else:                                   # 'deleted'
         title = _('Deleted content')
-        posts = Post.query.filter(Post.deleted == True)
+        posts = Post.query.filter(Post.deleted == True, visible_to_clause(Post, None))
         if days > 0:
             posts = posts.filter(Post.posted_at > utcnow() - timedelta(days=days))
         posts = posts.order_by(desc(Post.posted_at))
-        post_replies = PostReply.query.filter(PostReply.deleted == True)
+        post_replies = PostReply.query.filter(PostReply.deleted == True, visible_to_clause(PostReply, None))
         if days > 0:
             post_replies = post_replies.filter(PostReply.posted_at > utcnow() - timedelta(days=days))
         post_replies = post_replies.order_by(desc(PostReply.posted_at))
