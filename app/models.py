@@ -2816,6 +2816,7 @@ class Post(db.Model):
                         post.url = attachment['url']  # PixelFed, PieFed, Lemmy >= 0.19.4
                         alt_text = attachment.get("name")
                         file_path = attachment.get("file_path")
+                        break  # the first image is the post's own; set_post_gallery keeps the rest in order
             if len(attached_images) > 1:
                 post.url = None
                 post.type = POST_TYPE_GALLERY
