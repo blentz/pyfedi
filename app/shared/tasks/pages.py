@@ -7,6 +7,7 @@ from app.constants import POST_TYPE_LINK, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, PO
 from app.models import Instance, Notification, Poll, PollChoice, Post, User, UserFollower, utcnow, Event, \
     Community, more_info_link
 from app.user.utils import search_for_user
+from app.visibility import can_view
 from app.utils import user_banned_from_community, gibberish, instance_banned, ap_datetime, get_recipient_language, get_task_session, \
     patch_db_session, TaskError
 
@@ -124,7 +125,7 @@ def send_post(post_id, edit=False, session=None):
 
     # Notify any local users that have been Mentioned
     for recipient in recipients:
-        if recipient.is_local():
+        if recipient.is_local() and can_view(post, recipient.id):
             if edit:
                 existing_notification = session.query(Notification).filter(Notification.user_id == recipient.id, Notification.url == f"{current_app.config['SERVER_URL']}/post/{post.id}").first()
             else:

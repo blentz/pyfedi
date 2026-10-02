@@ -5,6 +5,7 @@ from app.constants import NOTIF_MENTION
 from app.models import Community, CommunityJoinRequest, CommunityMember, Notification, Post, \
     PostReply, utcnow, User
 from app.user.utils import search_for_user
+from app.visibility import can_view
 from app.utils import user_banned_from_community, community_membership, gibberish, joined_communities, instance_banned, ap_datetime, \
     recently_upvoted_posts, recently_downvoted_posts, recently_upvoted_post_replies, \
     recently_downvoted_post_replies, get_recipient_language, get_task_session, patch_db_session
@@ -117,7 +118,7 @@ def send_reply(reply_id, parent_id, edit=False, session=None):
 
     # Notify any local users that have been Mentioned
     for recipient in recipients:
-        if recipient.is_local() and recipient.id != parent.author.id:
+        if recipient.is_local() and recipient.id != parent.author.id and can_view(reply, recipient.id):
             if edit:
                 existing_notification = session.query(Notification).filter(Notification.user_id == recipient.id, Notification.url == f"{current_app.config['SERVER_URL']}/comment/{reply.id}").first()
             else:
