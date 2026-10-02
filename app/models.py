@@ -3595,6 +3595,17 @@ class Post(db.Model):
                 (user.ignore_bots == 2 and self.from_bot) or \
                 self.spoiler_flair()
 
+    def blur_images(self, user):
+        """Whether the post page blurs this post's images for `user`.
+
+        Unlike blurred(), which says what a feed teaser does for a viewer who
+        has chosen 'Blur' (a viewer on 'Hide' never sees the teaser), a post
+        opened by its link is blurred for everyone except a viewer who chose
+        'Show' for that kind of content.
+        """
+        return bool((self.nsfw and getattr(user, 'hide_nsfw', None) != 0) or
+                    (self.nsfl and getattr(user, 'hide_nsfl', None) != 0))
+
     def posted_at_localized(self, sort, locale):
         # some locales do not have a definition for 'weeks' so are unable to display some dates in some languages. Fall back to english for those languages.
         try:

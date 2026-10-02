@@ -66,6 +66,7 @@ document.addEventListener("DOMContentLoaded", function () {
         setupFederationModeToggle,
         setupPopupCommunitySidebar,
         setupVideoSpoilers,
+        setupBlurredPostImages,
         setupCommunityFilter,
         setupPasswordEye,
         setupBasicAutoResize,
@@ -1607,6 +1608,21 @@ function setupPopupCommunitySidebar() {
             }
         });
     }
+}
+
+// A blurred image on the post page is shown by clicking it; a second click opens it as usual
+function setupBlurredPostImages() {
+    document.querySelectorAll('.post_image img.blur').forEach(function(img) {
+        if (img.dataset.blurSetup) return;
+        img.dataset.blurSetup = '1';
+        img.addEventListener('click', function(event) {
+            if (img.classList.contains('blur')) {
+                event.preventDefault();
+                event.stopPropagation();
+                img.classList.remove('blur');
+            }
+        }, true);
+    });
 }
 
 function setupVideoSpoilers() {

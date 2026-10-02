@@ -1244,6 +1244,11 @@ time {
 .post_image {
   img {
     max-width: 100%;
+
+    &.blur {
+      filter: blur(var(--spacing-24));
+      cursor: pointer;
+    }
   }
 }
 

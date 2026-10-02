@@ -2040,6 +2040,10 @@ time {
 .post_image img {
   max-width: 100%;
 }
+.post_image img.blur {
+  filter: blur(var(--spacing-24));
+  cursor: pointer;
+}
 
 details {
   margin-bottom: var(--spacing-16);

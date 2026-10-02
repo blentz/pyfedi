@@ -76,6 +76,7 @@
                 {% endif -%}
             </div>
         {%- endif -%}
+        {% set blur_images = post.blur_images(current_user) -%}
         {% if post.content_warning and sees_deleted_original -%}<details class="content_warning"><summary>{{ post.content_warning }}</summary>{% endif -%}
         {% if post.type == POST_TYPE_IMAGE and not post.deleted -%}
             <div class="post_image">
@@ -83,7 +84,7 @@
                     {% if low_bandwidth -%}
                         <a href="{{ post.image.view_url(resize=True) }}" rel="nofollow ugc">
                             <img src="{{ post.image.medium_url() }}"
-                                    alt="{{ post.image.alt_text if post.image.alt_text else post.title }}" fetchpriority="high" referrerpolicy="same-origin"
+                                    alt="{{ post.image.alt_text if post.image.alt_text else post.title }}" fetchpriority="high" referrerpolicy="same-origin" class="{{ 'blur' if blur_images }}"
                                     width="{{ post.image.width }}" height="{{ post.image.height }}" />
                         </a>
                     {% else -%}
@@ -94,26 +95,26 @@
                             {% if is_portrait -%}
                                 <img src="{{ post.image.medium_url() }}"
                                         alt="{{ post.image.alt_text if post.image.alt_text else post.title }}"
-                                        fetchpriority="high" referrerpolicy="same-origin" />
+                                        fetchpriority="high" referrerpolicy="same-origin" class="{{ 'blur' if blur_images }}" />
                             {% else -%}
                                 <img src="{{ post.image.medium_url() }}"
                                         sizes="(max-width: 512px) 100vw, 100vw"
                                         srcset="{{ post.image.thumbnail_url() }} 512w, {{ post.image.medium_url() }} 1024w"
                                         alt="{{ post.image.alt_text if post.image.alt_text else post.title }}"
-                                        fetchpriority="high" referrerpolicy="same-origin" />
+                                        fetchpriority="high" referrerpolicy="same-origin" class="{{ 'blur' if blur_images }}" />
                             {% endif -%}
                         </a>
                     {% endif -%}
                 {% else -%}
                     <a href="{{ post.url }}" rel="nofollow ugc" target="_blank" aria-label="{{ _("Go to image") }}">
-                        <img src="{{ post.url }}" style="max-width: 100%; height: auto;"  />
+                        <img src="{{ post.url }}" style="max-width: 100%; height: auto;" class="{{ 'blur' if blur_images }}" />
                     </a>
                 {% endif -%}
                 {% for gallery_image in post.gallery -%}
                     <a href="{{ gallery_image.view_url(resize=low_bandwidth) }}" rel="nofollow ugc" class="post_gallery_image">
                         <img src="{{ gallery_image.medium_url() }}"
                                 alt="{{ gallery_image.alt_text if gallery_image.alt_text else post.title }}"
-                                loading="lazy" referrerpolicy="same-origin"
+                                loading="lazy" referrerpolicy="same-origin" class="{{ 'blur' if blur_images }}"
                                 {% if gallery_image.width and gallery_image.height -%}width="{{ gallery_image.width }}" height="{{ gallery_image.height }}"{% endif %} />
                     </a>
                 {% endfor -%}
