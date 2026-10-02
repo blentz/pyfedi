@@ -927,8 +927,8 @@ Deferred:
 - RSS bodies: FIXED at d2a902c4f (a warned entry carries the warning, no body, no enclosure or media).
 - Reply forms: FIXED at 80af216ba. Poll choices: FIXED at 6cf29084e. `_schema_org.html` JSON-LD: FIXED at 146483eb3 (also no body or image for nsfw/nsfl).
 - API `content_warning`: FIXED at 1fc05cae6 (`post.extensions.content_warning`, `comment.extensions.content_warning`).
-- API album posts run one `post_file` query each; admin `posts_with_blocked_images` checks the primary image only.
-- An Update on an album with a previously dropped blocked image rebuilds the gallery every time.
-- Friendica-style Link + several images gets no gallery (Mbin rule).
+- API album posts run one `post_file` query each: FIXED at 8a0c04aeb (one query per listing page). Admin `posts_with_blocked_images` checks the primary image only: FIXED at 0bbf97be3.
+- An Update on an album with a previously dropped blocked image rebuilds the gallery every time: FIXED at 55639f037 (the dropped url is remembered as a post_file row of weight -1).
+- Friendica-style Link + several images gets no gallery (Mbin rule): FIXED at c3f545df9.
 - Castopod episodes have no audio player: Castopod never federates audio in a Create (needs the episodes collection).
 - Migration b5d2c8e1f7a3 was amended to add `post.gallery_count`; a database already at that revision needs `ALTER TABLE post ADD COLUMN gallery_count integer NOT NULL DEFAULT 0`.
