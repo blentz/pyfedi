@@ -1,6 +1,8 @@
 """Mastodon and Pixelfed send a content warning as `summary` (+ `sensitive`). It is
 kept on Post and PostReply, shown as a collapsed <details> on the post page, in
 place of the body preview in teasers, and sent back out as `summary`."""
+import re
+
 import pytest
 
 from app import db
@@ -128,7 +130,7 @@ def test_post_page_collapses_body_and_image_under_the_warning(app, community, au
     start = html.index('<details class="content_warning"')
     end = html.index('</details>', start)
     inside = html[start:end]
-    assert '<summary>look away</summary>' in inside
+    assert re.search(r'<summary>\s*look away\s*</summary>', inside)
     assert 'the secret body' in inside
     assert 'post_gallery_image' in inside  # the album's later images are collapsed too
 
@@ -146,7 +148,7 @@ def test_reply_on_the_page_collapses_under_the_warning(app, community, author):
     html = app.test_client().get(f'/post/{parent.id}', follow_redirects=True).get_data(as_text=True)
     start = html.index('<details class="content_warning"')
     inside = html[start:html.index('</details>', start)]
-    assert '<summary>reply warning</summary>' in inside
+    assert re.search(r'<summary>\s*reply warning\s*</summary>', inside)
     assert 'the secret body' in inside
 
 

@@ -334,3 +334,17 @@ def test_an_update_that_reorders_the_images_rewrites_the_gallery(ingest):
 
     assert [f.source_url for f in gallery_of(post)] == [THIRD, SECOND]
     assert post.gallery_count == 2
+
+
+def test_an_update_without_attachment_keeps_the_gallery(ingest):
+    from app.activitypub.util import update_post_from_activity
+    post = ingest(album(image(FIRST, 'a'), image(SECOND, 'b')))
+    update = an_update()
+    del update['object']['attachment']
+    update['object']['content'] = '<p>edited text</p>'
+
+    update_post_from_activity(post, update)
+    db.session.refresh(post)
+
+    assert [f.source_url for f in gallery_of(post)] == [SECOND]
+    assert post.gallery_count == 1
