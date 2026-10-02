@@ -397,3 +397,48 @@ def test_the_blocked_images_purge_list_still_considers_the_primary_image(ingest)
 
     assert posts_with_blocked_images() == [post.id]
 
+
+def test_an_unchanged_album_with_a_dropped_blocked_image_is_a_no_op(ingest, hashing):
+    from app.activitypub.util import update_post_from_activity
+    post = ingest(album(image(FIRST, 'a'), image(THIRD, 'c')))
+    hashing.blocked = SECOND
+    update = an_update(image(FIRST, 'a'), image(SECOND, 'b'), image(THIRD, 'c'))
+    update_post_from_activity(post, update)
+    db.session.refresh(post)
+    ids = [f.id for f in gallery_of(post)]
+    hashing.asked.clear()
+
+    update_post_from_activity(post, an_update(image(FIRST, 'a'), image(SECOND, 'b'), image(THIRD, 'c')))
+    db.session.refresh(post)
+
+    assert [f.source_url for f in gallery_of(post)] == [THIRD]
+    assert [f.id for f in gallery_of(post)] == ids
+    assert hashing.asked == []
+    assert post.gallery_count == 1
+
+
+def test_a_known_blocked_image_does_not_count_in_the_gallery_or_the_api(app, ingest, hashing):
+    from app.activitypub.util import update_post_from_activity
+    from app.api.alpha.views import post_view
+    post = ingest(album(image(FIRST, 'a'), image(THIRD, 'c')))
+    hashing.blocked = SECOND
+    update_post_from_activity(post, an_update(image(FIRST, 'a'), image(SECOND, 'b'), image(THIRD, 'c')))
+    db.session.refresh(post)
+
+    gallery = post_view(post=post, variant=1)['extensions']['gallery']
+
+    assert [image['alt_text'] for image in gallery] == ['c']
+
+
+def test_the_blocked_image_is_forgotten_when_an_update_no_longer_carries_it(ingest, hashing):
+    from app.activitypub.util import update_post_from_activity
+    post = ingest(album(image(FIRST, 'a'), image(THIRD, 'c')))
+    hashing.blocked = SECOND
+    update_post_from_activity(post, an_update(image(FIRST, 'a'), image(SECOND, 'b'), image(THIRD, 'c')))
+
+    update_post_from_activity(post, an_update(image(FIRST, 'a'), image(THIRD, 'c')))
+    db.session.refresh(post)
+
+    assert File.query.filter_by(source_url=SECOND).count() == 0
+    assert [f.source_url for f in gallery_of(post)] == [THIRD]
+

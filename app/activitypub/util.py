@@ -31,7 +31,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     UserFollower, PostBoost, QuoteAuthorization, parse_ap_timestamp, image_url_from, markdown_source, \
     _as_text, _as_int, _as_float, _as_dict, _as_url, property_value_fields, public_key_pem, \
     more_info_link, is_more_info_link, more_info_url_from, \
-    language_from_ap, adjust_domain_post_count, actor_name_from_ap, PostReplyValidationError, post_file
+    language_from_ap, adjust_domain_post_count, actor_name_from_ap, PostReplyValidationError, post_file, GALLERY_BLOCKED_WEIGHT
 from app.utils import get_request, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
     sanitise_posting_warning, \
     is_image_url, domain_from_url, gibberish, ensure_directory_exists, shorten_string, fixup_url, \
@@ -1992,7 +1992,8 @@ def set_post_gallery(post: Post, request_json: dict, low_quality: bool = False, 
     being 0). `images` is gallery_attachments' answer when the caller already has
     it (Post.new hashes them before the post exists). An image matching a blocked
     image is not stored: Post.new refuses the whole post for one, so this only
-    drops one an Update brings.
+    drops one an Update brings, remembering its url (a post_file row of
+    GALLERY_BLOCKED_WEIGHT) so an unchanged album is not rebuilt.
     """
     if post.type == POST_TYPE_IMAGE:
         if images is None:
@@ -2000,23 +2001,44 @@ def set_post_gallery(post: Post, request_json: dict, low_quality: bool = False, 
     else:
         images = []
 
+    # Rows of an earlier blocked image weigh GALLERY_BLOCKED_WEIGHT: an image in that memory is not hashed
+    # again, and an album that is otherwise unchanged is left alone
+    rows = db.session.execute(post_file.select().where(post_file.c.post_id == post.id)).all()
+    old_files = {file.id: file for file in File.query.filter(File.id.in_([row.file_id for row in rows])).all()}
+    known_blocked = {old_files[row.file_id].source_url: old_files[row.file_id]
+                     for row in rows if row.weight == GALLERY_BLOCKED_WEIGHT}
+    incoming_urls = {extra['url'] for extra in images}
+    wanted = [extra for extra in images if extra['url'] not in known_blocked]
+
     # The same images in the same order (an Update editing the text, or the alt
     # text): keep the files, which are already sized and hashed
     current = post.gallery.all()
-    if [file.source_url for file in current] == [extra['url'] for extra in images]:
-        for file, extra in zip(current, images):
+    if [file.source_url for file in current] == [extra['url'] for extra in wanted]:
+        for file, extra in zip(current, wanted):
             file.alt_text = extra['alt_text']
+        for url in set(known_blocked) - incoming_urls:  # no longer in the album: forget it
+            forget = known_blocked[url]
+            db.session.execute(post_file.delete().where(post_file.c.file_id == forget.id))
+            db.session.delete(forget)
         db.session.commit()
         return
 
-    old_ids = [row.file_id for row in db.session.execute(
-        post_file.select().where(post_file.c.post_id == post.id)).all()]
-    db.session.execute(post_file.delete().where(post_file.c.post_id == post.id))
-    for file in File.query.filter(File.id.in_(old_ids)).all():
-        file.delete_from_disk()
-        db.session.delete(file)
+    for row in rows:
+        if row.weight != GALLERY_BLOCKED_WEIGHT or old_files[row.file_id].source_url not in incoming_urls:
+            db.session.execute(post_file.delete().where(post_file.c.file_id == row.file_id))
+            old_files[row.file_id].delete_from_disk()
+            db.session.delete(old_files[row.file_id])
 
-    images = [extra for extra in images if not gallery_image_is_blocked(extra)]
+    kept = []
+    for extra in wanted:
+        if gallery_image_is_blocked(extra):
+            blocked = File(source_url=extra['url'], hash=extra['hash'])
+            db.session.add(blocked)
+            db.session.flush()
+            db.session.execute(post_file.insert().values(post_id=post.id, file_id=blocked.id, weight=GALLERY_BLOCKED_WEIGHT))
+        else:
+            kept.append(extra)
+    images = kept
     for weight, extra in enumerate(images, start=1):
         file = File(source_url=extra['url'], alt_text=extra['alt_text'],
                     width=extra['width'], height=extra['height'], hash=extra['hash'])
