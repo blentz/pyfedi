@@ -2236,8 +2236,12 @@ def post_reply_block_user(post_id: int, comment_id: int):
 @bp.route('/post/<int:post_id>/comment/<int:comment_id>/block_instance', methods=['POST'])
 @login_required
 def post_reply_block_instance(post_id: int, comment_id: int):
+    post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     post_reply = db.session.get(PostReply, comment_id) or abort(404)
     refuse_invisible(post_reply)
+    if post_reply.post_id != post.id:  # D1077's family: the post gate means nothing for an unrelated post id
+        abort(404)
 
     # D1101's twin. `block_remote_instance` refuses instance 1 with its own
     # flash and this line said the opposite straight after it; a reply with no
@@ -2255,8 +2259,7 @@ def post_reply_block_instance(post_id: int, comment_id: int):
         if post_reply.instance.domain in curr_url:
             resp.headers["HX-Redirect"] = url_for("main.index")
         elif "/post/" in curr_url or ("/c/" in curr_url and "/p/" in curr_url):
-            post = db.session.get(Post, post_id)
-            if post is not None and post.instance_id == post_reply.instance_id:
+            if post.instance_id == post_reply.instance_id:
                 resp.headers["HX-Redirect"] = url_for("main.index")
             else:
                 resp.headers["HX-Redirect"] = curr_url
