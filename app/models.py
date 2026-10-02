@@ -2479,6 +2479,7 @@ class Post(db.Model):
     score = db.Column(db.Integer, default=0, server_default='0', index=True, nullable=False)  # used for 'top' ranking
     nsfw = db.Column(db.Boolean, default=False, index=True)
     nsfl = db.Column(db.Boolean, default=False, index=True)
+    content_warning = db.Column(db.Text)  # a peer's `summary`, shown collapsed above the body
     sticky = db.Column(db.Boolean, default=False, server_default='false', index=True, nullable=False)
     instance_sticky = db.Column(db.Boolean, default=False, server_default='false', index=True, nullable=False)
     ai_generated = db.Column(db.Boolean, default=False, index=True)
@@ -2622,7 +2623,7 @@ class Post(db.Model):
         from app.activitypub.util import find_language_or_create, find_language, \
             find_hashtag_or_create, \
             find_licence_or_create, make_image_sizes, notify_about_post, find_flair_or_create, host_of, \
-            activitypub_visibility, set_post_gallery
+            activitypub_visibility, set_post_gallery, content_warning_from
         # cycle: app.utils imports from this module
         from app.utils import allowlist_html, markdown_to_html, html_to_text, microblog_content_to_title, \
             microblog_content_to_link, blocked_phrases, get_setting, \
@@ -2655,6 +2656,7 @@ class Post(db.Model):
                     sticky=request_json['object']['stickied'] if 'stickied' in request_json['object'] else False,
                     nsfw=request_json['object']['sensitive'] if 'sensitive' in request_json['object'] else False,
                     nsfl=request_json['object']['nsfl'] if 'nsfl' in request_json['object'] else nsfl_in_title,
+                    content_warning=content_warning_from(request_json['object']),
                     ai_generated=request_json['object']['genAI'] if 'genAI' in request_json['object'] else False,
                     private=private,
                     visibility=visibility,
@@ -2704,7 +2706,7 @@ class Post(db.Model):
                     post.nsfl = True
                 if '[NSFW]' in title.upper() or '(NSFW)' in title.upper():
                     post.nsfw = True
-                post.title = title
+                post.title = shorten_string(post.content_warning, 255) if post.content_warning else title  # a warning hides the body, so the body must not become the title
                 if link != '':
                     post.url = link
                 else:
@@ -3895,6 +3897,7 @@ class PostReply(db.Model):
     score = db.Column(db.Integer, default=0, index=True)  # used for 'top' sorting
     indexable = db.Column(db.Boolean, default=True, index=True)
     nsfw = db.Column(db.Boolean, default=False, index=True)
+    content_warning = db.Column(db.Text)  # a peer's `summary`, shown collapsed above the body
     private = db.Column(db.Boolean, default=False, index=True)
     visibility = db.Column(db.String(10), default='public', server_default='public', nullable=False, index=True)
     distinguished = db.Column(db.Boolean, default=False)
@@ -3962,7 +3965,7 @@ class PostReply(db.Model):
         from app.utils import shorten_string, blocked_phrases, recently_upvoted_post_replies, reply_already_exists, \
             reply_is_just_link_to_gif_reaction, reply_is_low_effort, wilson_confidence_lower_bound, get_setting
         # cycle: app.activitypub.util imports from this module
-        from app.activitypub.util import notify_about_post_reply, activitypub_visibility
+        from app.activitypub.util import notify_about_post_reply, activitypub_visibility, content_warning_from
 
         if session is None:
             session = db.session
@@ -3992,6 +3995,7 @@ class PostReply(db.Model):
                           language_id=language_id, collapsible=user.id != post.user_id,
                           distinguished=distinguished, answer=answer, visibility=visibility,
                           indexable=user.indexable,
+                          content_warning=content_warning_from(request_json['object']) if request_json else None,
                           ap_id=request_json['object']['id'] if request_json else None,
                           ap_create_id=request_json['id'] if request_json else None,
                           ap_announce_id=announce_id)

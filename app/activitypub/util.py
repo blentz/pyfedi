@@ -127,6 +127,24 @@ def post_to_activity(post: Post, community: Community):
     return activity_data
 
 
+CONTENT_WARNING_MAX_LENGTH = 500
+
+
+def content_warning_from(obj: dict):
+    """The content warning in a peer's object: its `summary`, as plain text, or None.
+
+    Mastodon and Pixelfed put the warning there on a Note. On a Page `summary` is
+    a description (PieFed and Lemmy do not send one), so it counts there only
+    alongside `sensitive: true`, which is how a warning is flagged outbound.
+    """
+    summary = obj.get('summary')
+    if not isinstance(summary, str):
+        return None
+    if obj.get('type') != 'Note' and obj.get('sensitive') is not True:
+        return None
+    return shorten_string(html_to_text(summary).strip(), CONTENT_WARNING_MAX_LENGTH) or None
+
+
 def post_to_page(post: Post):
     activity_data = {
         "type": "Page",
@@ -163,6 +181,9 @@ def post_to_page(post: Post):
     }
     if post.language_id:
         activity_data['contentMap'] = {post.language_code(): activity_data['content']}
+    if post.content_warning:
+        activity_data['summary'] = post.content_warning
+        activity_data['sensitive'] = True  # a peer takes `summary` as a warning only alongside this
     if post.edited_at is not None:
         activity_data["updated"] = ap_datetime(post.edited_at)
     if (post.type == POST_TYPE_LINK or post.type == POST_TYPE_VIDEO or post.type == POST_TYPE_EVENT) and post.url is not None:
@@ -295,6 +316,9 @@ def comment_model_to_json(reply: PostReply) -> dict:
         },
         'tag': reply.tags_for_activitypub()
     }
+    if reply.content_warning:
+        reply_data['summary'] = reply.content_warning
+        reply_data['sensitive'] = True
     if reply.edited_at:
         reply_data['updated'] = ap_datetime(reply.edited_at)
     if reply.deleted:
@@ -3459,6 +3483,7 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
                     content = '<p>' + content + '</p>'
                 reply.body_html = allowlist_html(content)
                 reply.body = html_to_text(reply.body_html)
+        reply.content_warning = content_warning_from(request_json['object'])
         # Language
         old_language_id = reply.language_id
         new_language = None
@@ -3648,6 +3673,8 @@ def update_post_from_activity(post: Post, request_json: dict):
                 # federate {"href": ""} back out.
                 post.url = link if url_is_storable(link) else None
             post.microblog = True
+            if warning := content_warning_from(request_json['object']):
+                new_title = shorten_string(warning, 255)  # a warning hides the body, so the body must not become the title
 
         if old_title != new_title:
             post.title = new_title
@@ -3657,6 +3684,7 @@ def update_post_from_activity(post: Post, request_json: dict):
                 post.nsfw = True
         if 'sensitive' in request_json['object']:
             post.nsfw = request_json['object']['sensitive']
+        post.content_warning = content_warning_from(request_json['object'])
         if 'nsfl' in request_json['object']:
             post.nsfl = request_json['object']['nsfl']
 

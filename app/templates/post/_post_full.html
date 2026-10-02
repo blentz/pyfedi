@@ -76,6 +76,7 @@
                 {% endif -%}
             </div>
         {%- endif -%}
+        {% if post.content_warning and sees_deleted_original -%}<details class="content_warning"><summary>{{ post.content_warning }}</summary>{% endif -%}
         {% if post.type == POST_TYPE_IMAGE and not post.deleted -%}
             <div class="post_image">
                 {% if post.image_id -%}
@@ -284,6 +285,7 @@
                 </p>
             {% endif -%}
         </div>
+        {% if post.content_warning and sees_deleted_original -%}</details>{% endif -%}
         {% if post.type == POST_TYPE_POLL and not post.deleted -%}
             <div class="post_poll" lang="{{ post.language_code() }}">
                 {% if poll_finished and poll_total_votes == 0 -%}
