@@ -177,3 +177,55 @@ def test_outbound_reply_carries_the_summary(community, author):
     note = comment_model_to_json(reply)
     assert note['summary'] == 'reply out'
     assert note['sensitive'] is True
+
+
+def page_meta(app, post, user=None):
+    client = app.test_client()
+    if user is not None:
+        with client.session_transaction() as sess:
+            sess['_user_id'] = str(user.id)
+            sess['_fresh'] = True
+    html = client.get(f'/post/{post.id}', follow_redirects=True).get_data(as_text=True)
+    return html[:html.index('</head>')]
+
+
+def with_image(post):
+    from app.models import File
+    post.image = File(source_url='https://m.example/preview.jpg')
+    db.session.commit()
+    return post
+
+
+def test_link_preview_of_a_warned_post_is_the_warning_and_no_image(app, community, author):
+    public_site()
+    post = with_image(ingest(community, author, activity(summary='look away')))
+
+    head = page_meta(app, post)
+
+    assert '<meta name="description" content="look away" />' in head
+    assert 'https://m.example/preview.jpg' not in head
+
+
+def test_link_preview_of_an_nsfw_post_has_no_image(app, community, author):
+    public_site()
+    post = with_image(ingest(community, author, activity(sensitive=True)))
+    assert post.nsfw and not post.content_warning
+    post.comments_enabled = False  # a signed-in page's reply form needs the CSRF token the test app turns off
+    shows_nsfw = make_user(make_instance('local.example'), 'carol', local=True)
+    shows_nsfw.hide_nsfw = 0  # anonymous viewers are sent to log in for an nsfw post
+    db.session.commit()
+
+    head = page_meta(app, post, shows_nsfw)
+
+    assert 'the secret body' in head  # the page really rendered
+    assert 'https://m.example/preview.jpg' not in head
+
+
+def test_link_preview_of_an_ordinary_post_keeps_its_body_and_image(app, community, author):
+    public_site()
+    post = with_image(ingest(community, author, activity()))
+
+    head = page_meta(app, post)
+
+    assert 'the secret body' in head
+    assert '<meta property="og:image" content="https://m.example/preview.jpg" />' in head
