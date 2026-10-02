@@ -86,3 +86,19 @@ def test_a_placeholder_hides_with_its_collapsed_parent(app, db_session):
     assert 'comment_body hidable' in html
     assert 'replies hidable depth_2' in html
 
+
+# --- D9: an archived stub with no id is skipped, not a KeyError ---------------------------------------
+
+def test_a_malformed_archived_stub_is_skipped(app, world):
+    from app.post.util import convert_archived_replies_to_tree
+    w = world
+    archived = [
+        {'visibility': 'followers', 'depth': 0, 'replies': []},  # no id: written by nothing this code knows
+        {'id': 7, 'visibility': 'followers', 'depth': 0, 'path': [0, 7], 'replies': [
+            {'visibility': 'followers', 'depth': 1, 'replies': []}]},
+    ]
+
+    tree = convert_archived_replies_to_tree(archived, w.public_post)
+
+    assert [entry['comment'].id for entry in tree] == [7]
+    assert tree[0]['restricted'] and tree[0]['replies'] == []
