@@ -24,7 +24,7 @@ Full cross-compatibility with Mastodon, PeerTube, Pixelfed and Castopod. "Full" 
 
 - **D4 Person-centric content.** PeerTube channels and Castopod podcasts map to communities. Mastodon and Pixelfed people get a Following feed and profile timelines; their posts stay stored in the synthetic `microblogs` community (no nullable `community_id`). MVP rendering fix: titleless posts render by body, no auto-generated title.
 - **D5 Outbound shape.** One canonical object per activity, never varied by recipient (one `id`, relays, refetch, LD signatures). The per-platform matrix drives which fields the canonical object fills so every renderer has something good to show.
-- **D6 Visibility storage.** New `visibility` field: `public | unlisted | followers | direct`, filled by one shared `to`/`cc` parser for posts and replies. Fix the existing reply leak (`models.py` reply path only marks `private` when `to` is exactly one `/followers` entry) as a separate defect first.
+- **D6 Visibility storage.** New `visibility` field on `Post` and `PostReply`: `public | unlisted | followers | direct`, filled by the existing object-level classifier `activitypub_visibility` (`app/activitypub/util.py`). Current state: `create_post`, `create_post_reply` and the reply backfill refuse `followers` and `direct` at ingest, so nothing leaks today, but the D4 Following feed would miss followers-only posts. `Post.private` is a microblog "unlisted" marker derived from activity-level addressing, and `PostReply.private` uses a separate `to[0]` rule; both derivations are replaced by `visibility`. The ingest refusal is lifted only after D7 enforcement ships. (D1438, suspected as a leak during the session, was closed as not a defect.)
 - **D7 Visibility enforcement.**
   - Unlisted: hidden from All, Popular, community listings and search; shown in the Following feed and the author's profile.
   - Followers: visible only to logged-in local followers of the author; 404 on HTML and ActivityPub URLs for everyone else; excluded from the API, RSS and the sitemap.
@@ -83,7 +83,7 @@ Full cross-compatibility with Mastodon, PeerTube, Pixelfed and Castopod. "Full" 
 ### Rollout and fork maintenance
 
 - **D15 Order.**
-  - **Phase 0, foundations:** matrix and drift job, visibility (after the reply-leak fix), kind registry, `extensions` column, iframe helper, lint check, workaround registry, forwarded-activity refetch, test markers and the harness skeleton. All schema migrations land here.
+  - **Phase 0, foundations:** matrix and drift job, visibility (enforcement before the ingest refusal is lifted), kind registry, `extensions` column, iframe helper, lint check, workaround registry, forwarded-activity refetch, test markers and the harness skeleton. All schema migrations land here.
   - Then **Phase 1** Mastodon, **Phase 2** PeerTube, **Phase 3** Pixelfed, **Phase 4** Castopod.
   - Each built-in kind gets an admin toggle, off by default for one release and then on. A disabled kind falls back to core rendering.
 - **D16 Fork-only.** No upstream RFC. Maintained through a sync/rebase process.
