@@ -29,7 +29,7 @@ from app.utils import authorise_api_user, blocked_users, blocked_communities, bl
     community_membership_private, paginate_post_ids, post_ids_to_models, user_access, moderating_communities_ids, \
     user_filters_languages, feed_readable_by
 from app.shared.tasks import task_selector
-from app.visibility import can_view, listable_clause, listable_sql
+from app.visibility import can_view, listable_clause, listable_sql, visible_to_clause, visible_to_sql
 
 
 def a_post(post_id):
@@ -415,8 +415,12 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
     posts = posts.filter(or_(Community.private == False, Community.id.in_(private_community_ids)))
 
     # a listing shows public posts only (interop D7). The profile listings (by person,
-    # saved, liked) apply the viewer predicate instead and are handled separately.
-    if not profile_listing:
+    # saved, liked) apply the viewer predicate instead.
+    if profile_listing:
+        posts = posts.filter(visible_to_clause(Post, user_id))
+        post_query_criteria.append(visible_to_sql('p'))
+        post_query_parameters['visibility_viewer_id'] = user_id
+    else:
         posts = posts.filter(listable_clause(Post))
         post_query_criteria.append(listable_sql('p'))
     
@@ -1066,8 +1070,10 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
     posts = posts.filter(or_(Community.private == False, Community.id.in_(private_community_ids)))
 
     # a listing shows public posts only (interop D7). The profile listings (by person,
-    # saved, liked) apply the viewer predicate instead and are handled separately.
-    if not profile_listing:
+    # saved, liked) apply the viewer predicate instead.
+    if profile_listing:
+        posts = posts.filter(visible_to_clause(Post, user_id))
+    else:
         posts = posts.filter(listable_clause(Post))
 
     # The reader's own languages. get_post_list has had this filter all along

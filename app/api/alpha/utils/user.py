@@ -19,6 +19,7 @@ from app.models import Conversation, ChatMessage, Notification, PostReply, User,
 import app.shared.user as shared_user
 from app.utils import authorise_api_user, in_sorted_list, user_in_restricted_country, user_access, user_notes
 from app.utils import markdown_to_html
+from app.visibility import visible_to_clause
 
 
 def get_user(auth, data):
@@ -222,7 +223,7 @@ def get_user_replies(auth, data, mentions=False):
                 if result[1] == True:
                     read_comment_ids.append(result[0]['comment_id'])
 
-    replies = PostReply.query.filter(PostReply.id.in_(all_comment_ids))
+    replies = PostReply.query.filter(PostReply.id.in_(all_comment_ids), visible_to_clause(PostReply, user_id))
     if sort == "Hot":
         replies = replies.order_by(desc(PostReply.ranking)).order_by(desc(PostReply.posted_at))
     elif sort == "Top":

@@ -19,6 +19,7 @@ from app.community.util import save_icon_file, save_banner_file, retrieve_mods_a
 from app.constants import *
 from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap
+from app.visibility import OPEN_VISIBILITIES, visible_to_clause
 from app.models import Post, Community, CommunityMember, User, PostReply, Notification, utcnow, File, Site, \
     Instance, Report, UserBlock, CommunityJoinRequest, CommunityBlock, Filter, Domain, DomainBlock, \
     InstanceBlock, NotificationSubscription, PostBookmark, PostReplyBookmark, read_posts, Topic, UserNote, \
@@ -1922,7 +1923,8 @@ def user_bookmarks():
     page = request.args.get('page', 1, type=int)
     low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
 
-    posts = Post.query.filter(Post.status > POST_STATUS_REVIEWING).join(PostBookmark, PostBookmark.post_id == Post.id). \
+    posts = Post.query.filter(Post.status > POST_STATUS_REVIEWING, visible_to_clause(Post, current_user.id)). \
+        join(PostBookmark, PostBookmark.post_id == Post.id). \
         filter(PostBookmark.user_id == current_user.id).order_by(desc(PostBookmark.created_at))
 
     posts = posts.paginate(page=page, per_page=100 if current_user.is_authenticated and not low_bandwidth else 50,
@@ -1946,7 +1948,7 @@ def user_bookmarks_comments():
     page = request.args.get('page', 1, type=int)
     low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
 
-    post_replies = PostReply.query.filter(PostReply.deleted == False).join(PostReplyBookmark,
+    post_replies = PostReply.query.filter(PostReply.deleted == False, visible_to_clause(PostReply, current_user.id)).join(PostReplyBookmark,
                                                                            PostReplyBookmark.post_reply_id == PostReply.id). \
         filter(PostReplyBookmark.user_id == current_user.id).order_by(desc(PostReplyBookmark.created_at))
 
@@ -1989,6 +1991,7 @@ def user_alerts(type='posts', filter='all'):
             entities = PostReply.query.filter_by(deleted=False). \
                 join(NotificationSubscription, NotificationSubscription.entity_id == PostReply.id). \
                 filter_by(type=NOTIF_REPLY, user_id=current_user.id).order_by(desc(NotificationSubscription.created_at))
+        entities = entities.filter(visible_to_clause(PostReply, current_user.id))
         title = _('Reply Alerts')
 
     elif type == 'communities':
@@ -2047,6 +2050,7 @@ def user_alerts(type='posts', filter='all'):
             entities = Post.query.filter_by(deleted=False). \
                 join(NotificationSubscription, NotificationSubscription.entity_id == Post.id). \
                 filter_by(type=NOTIF_POST, user_id=current_user.id).order_by(desc(NotificationSubscription.created_at))
+        entities = entities.filter(visible_to_clause(Post, current_user.id))
         title = _('Post Alerts')
 
     entities = entities.paginate(page=page, per_page=100 if not low_bandwidth else 50, error_out=False)
@@ -2081,7 +2085,7 @@ def user_hidden_posts():
     post_ids = db.session.execute(text('SELECT hidden_post_id FROM "hidden_posts" WHERE user_id = :user_id'),
                                {"user_id": current_user.id}).all()
     post_ids = [post_id[0] for post_id in post_ids]
-    posts = Post.query.filter(Post.id.in_(post_ids))
+    posts = Post.query.filter(Post.id.in_(post_ids), visible_to_clause(Post, current_user.id))
 
     posts = posts.paginate(page=page, per_page=100, error_out=False)
     next_url = url_for('user.user_hidden_posts', page=posts.next_num) if posts.has_next else None
@@ -2145,7 +2149,8 @@ def user_read_posts(sort=None):
     page = request.args.get('page', 1, type=int)
     low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
 
-    posts = Post.query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING)
+    posts = Post.query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
+                             visible_to_clause(Post, current_user.id))
 
     if current_user.ignore_bots == 1:
         posts = posts.filter(Post.from_bot == False)
@@ -2462,7 +2467,7 @@ def show_profile_rss(actor):
         # answers 404 for one.
         posts = user.posts.join(Community, Post.community_id == Community.id). \
             filter(Community.private == False, Community.banned == False). \
-            filter(Post.from_bot == False, Post.deleted == False,
+            filter(Post.from_bot == False, Post.deleted == False, Post.visibility.in_(OPEN_VISIBILITIES),
                    Post.status > POST_STATUS_REVIEWING).order_by(desc(Post.created_at)).limit(limit).all()
 
         server_url = current_app.config['SERVER_URL']

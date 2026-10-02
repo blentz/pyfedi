@@ -12,7 +12,7 @@ from app.shared.reply import vote_for_reply, bookmark_reply, remove_bookmark_rep
     edit_reply, \
     delete_reply, restore_reply, report_reply, mod_remove_reply, mod_restore_reply, lock_post_reply, choose_answer, \
     unchoose_answer
-from app.visibility import can_view, listable_clause
+from app.visibility import can_view, listable_clause, visible_to_clause
 from app.utils import authorise_api_user, blocked_users, blocked_or_banned_instances, site_language_id, \
     communities_banned_from, in_sorted_list, moderating_communities_ids, joined_communities, user_access, \
     can_moderate
@@ -154,8 +154,11 @@ def get_reply_list(auth, data, user_details=None):
 
         # a listing omits a hidden reply outright (interop D7); only a threaded
         # conversation keeps a stub, to hold the tree together (D18). The person,
-        # saved and liked listings are the profile surfaces and are handled separately.
-        if not (by_person_id or by_saved_only or by_liked_only):
+        # saved and liked listings are the profile surfaces: they show what the viewer
+        # may see and omit the rest, with no stub.
+        if by_person_id or by_saved_only or by_liked_only:
+            replies = replies.filter(visible_to_clause(PostReply, user_id))
+        else:
             replies = replies.filter(listable_clause(PostReply))
 
         # safe to just remove any replies by blocked users (won't cause gaps in threaded convo)

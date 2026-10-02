@@ -3,7 +3,7 @@ import time
 
 from flask import current_app
 from flask_login import current_user
-from sqlalchemy import text, desc, or_
+from sqlalchemy import text, desc, or_, select
 
 from app import celery, db
 from app.activitypub.signature import signed_get_request, send_post_request
@@ -14,6 +14,7 @@ from app.models import User, CommunityMember, Community, Site, BannedInstances, 
 from app.shared.tasks import task_selector
 from app.utils import gibberish, get_request, get_task_session, patch_db_session, \
     intlist_to_strlist, community_membership_private, paginate_post_ids, post_ids_to_models
+from app.visibility import visible_to_clause, visible_to_sql
 
 import httpx
 import app as app_pkg
@@ -197,7 +198,10 @@ class SimplePagination:
 
 def _get_user_posts(user, post_page):
     """Get posts for a user based on current user's permissions."""
-    base_query = Post.query.filter_by(user_id=user.id).filter(Post.community_id.not_in(community_membership_private(user.id)))
+    # no role exempts the viewer from the audience of a post (D19)
+    viewer_id = current_user.get_id()
+    base_query = Post.query.filter_by(user_id=user.id).filter(Post.community_id.not_in(community_membership_private(user.id)),
+                                                              visible_to_clause(Post, viewer_id))
 
     if current_user.is_authenticated and (current_user.is_admin() or current_user.is_staff()):
         # Admins see everything
@@ -208,8 +212,10 @@ def _get_user_posts(user, post_page):
             or_(Post.deleted == False, Post.status > POST_STATUS_REVIEWING, Post.deleted_by == user.id)
         ).order_by(desc(Post.posted_at))
     else:
-        # Everyone else sees only public, non-deleted posts
-        query = base_query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING, Post.private == False).order_by(
+        # Everyone else sees only non-deleted posts, and none in a private community
+        # the account has left or been banned from
+        query = base_query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
+                                  Post.community_id.not_in(select(Community.id).where(Community.private == True))).order_by(
             desc(Post.posted_at))
     
     # Get all post IDs (capped at 1000)
@@ -232,7 +238,10 @@ def _get_user_posts(user, post_page):
 
 def _get_user_post_replies(user, replies_page):
     """Get post replies for a user based on current user's permissions."""
-    base_query = PostReply.query.filter_by(user_id=user.id).filter(PostReply.community_id.not_in(community_membership_private(user.id)))
+    # no role exempts the viewer from the audience of a reply (D19)
+    viewer_id = current_user.get_id()
+    base_query = PostReply.query.filter_by(user_id=user.id).filter(PostReply.community_id.not_in(community_membership_private(user.id)),
+                                                                   visible_to_clause(PostReply, viewer_id))
 
     if current_user.is_authenticated and (current_user.is_admin() or current_user.is_staff()):
         # Admins see everything
@@ -242,8 +251,10 @@ def _get_user_post_replies(user, replies_page):
         query = base_query.filter(or_(PostReply.deleted == False, PostReply.deleted_by == user.id)).order_by(
             desc(PostReply.posted_at))
     else:
-        # Everyone else sees only non-deleted replies
-        query = base_query.filter(PostReply.deleted == False, PostReply.private == False).order_by(
+        # Everyone else sees only non-deleted replies, and none in a private community
+        # the account has left or been banned from
+        query = base_query.filter(PostReply.deleted == False,
+                                  PostReply.community_id.not_in(select(Community.id).where(Community.private == True))).order_by(
             desc(PostReply.posted_at))
     
     # Get all reply IDs (capped at 1000)
@@ -272,6 +283,8 @@ def _get_user_posts_and_replies(user, page):
     next_page = False
 
     private = ','.join(intlist_to_strlist(community_membership_private(user_id)))
+    # no role exempts the viewer from the audience of a post or reply (D19)
+    viewer_id = current_user.get_id() or None
     if current_user.is_authenticated and (current_user.is_admin() or current_user.is_staff()):
         # Admins see everything
         post_select = f"SELECT id, posted_at, 'post' AS type FROM post WHERE user_id = {user_id}"
@@ -289,16 +302,21 @@ def _get_user_posts_and_replies(user, page):
     else:
         # Everyone else sees only non-deleted posts/replies
         # `private` below excludes the private communities this account is
-        # STILL a member of. The post's own flag is what covers the ones it
-        # has left or been banned from, and both other tabs apply it.
-        post_select = f"SELECT id, posted_at, 'post' AS type FROM post WHERE user_id = {user_id} AND deleted = 'False' and status > {POST_STATUS_REVIEWING} AND private = 'False'"
-        reply_select = f"SELECT id, posted_at, 'reply' AS type FROM post_reply WHERE user_id={user_id} AND deleted = 'False' AND private = 'False'"
+        # STILL a member of; the subselects cover the ones it has left or been
+        # banned from. Post.private is only the microblog marker (see
+        # tests/test_post_private_is_only_the_microblog_marker.py), so audience
+        # is decided by the visibility predicate appended below.
+        post_select = f"SELECT id, posted_at, 'post' AS type FROM post WHERE user_id = {user_id} AND deleted = 'False' and status > {POST_STATUS_REVIEWING} AND community_id NOT IN (SELECT id FROM community WHERE private)"
+        reply_select = f"SELECT id, posted_at, 'reply' AS type FROM post_reply WHERE user_id={user_id} AND deleted = 'False' AND community_id NOT IN (SELECT id FROM community WHERE private)"
         if private:
             post_select += f" AND community_id NOT IN ({private})"
             reply_select += f" AND community_id NOT IN ({private})"
 
+    post_select += f" AND {visible_to_sql('post')}"
+    reply_select += f" AND {visible_to_sql('post_reply')}"
+
     full_query = post_select + " UNION " + reply_select + f" ORDER BY posted_at DESC LIMIT {per_page + 1} OFFSET {offset_val};"
-    query_result = db.session.execute(text(full_query))
+    query_result = db.session.execute(text(full_query), {'visibility_viewer_id': viewer_id})
 
     for row in query_result:
         if row.type == "post":      # the query selects these two literals and
