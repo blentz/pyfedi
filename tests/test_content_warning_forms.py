@@ -19,11 +19,9 @@ def collapsed(html, text):
 
 
 @pytest.fixture(autouse=True)
-def csrf_on(app):
+def csrf_on(app, monkeypatch):
     """A form's template calls `form.csrf_token()`, which the test config's WTF_CSRF_ENABLED = False leaves undefined."""
-    app.config['WTF_CSRF_ENABLED'] = True
-    yield
-    app.config['WTF_CSRF_ENABLED'] = False
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)
 
 
 def warned(post, comment):
