@@ -44,6 +44,7 @@ from app.models import User, Community, CommunityJoinRequest, CommunityMember, A
 # The module, not the names: app.post.routes reaches this file through
 # app.activitypub.signature before they are defined (import cycle: post.routes)
 import app.post.routes as post_routes
+from app.visibility import OPEN_VISIBILITIES
 from app.shared.tasks import task_selector
 # The module, not the name: app.user.routes reaches this file through
 # app.activitypub.signature before show_profile is defined (import cycle: user.routes)
@@ -2387,6 +2388,8 @@ def comment_ap(comment_id):
             return redirect(reply.ap_id, code=301)
         if reply.community.local_only or reply.community.private:
             abort(403)
+        if reply.visibility not in OPEN_VISIBILITIES:
+            abort(404)
         if reply.deleted:
             return tombstone_response(reply.ap_id, 'Note')
         requesting_domain = signed_requestor_domain()
@@ -2439,6 +2442,8 @@ def post_ap_refusal(post: Post):
     may not see."""
     if post.community.local_only or post.community.private or post.status < POST_STATUS_PUBLISHED:
         abort(403)
+    if post.visibility not in OPEN_VISIBILITIES:
+        abort(404)
     if post.deleted:
         return tombstone_response(post.ap_id, 'Page')
     requesting_domain = signed_requestor_domain()

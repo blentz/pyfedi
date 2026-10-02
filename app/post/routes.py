@@ -37,6 +37,7 @@ from app.models import Post, PostReply, PostReplyValidationError, \
     PostReplyBookmark, CommunityBlock, File, CommunityFlair, UserFlair, BlockedImage, CommunityBan, Language, Event, \
     Reminder, Emoji
 from app.post import bp
+from app.visibility import can_view
 from app.post.forms import NewReplyForm, ReportPostForm, MeaCulpaForm, CrossPostForm, ConfirmationForm, \
     ConfirmationMultiDeleteForm, EditReplyForm, FlairPostForm, DeleteConfirmationForm, NewReminderForm, \
     ShareMastodonForm, ChooseEmojiForm, MovePostForm
@@ -102,6 +103,13 @@ def refuse_private_community(post):
         abort(403)
 
 
+def refuse_invisible(obj):
+    """Interop D7: followers-only content is 404 to anyone but the author's accepted local followers.
+    404, not 403, so the response does not confirm that the object exists."""
+    if not can_view(obj, current_user.get_id()):
+        abort(404)
+
+
 def refuse_unpublished_post(post):
     """D1084/D1089. An unpublished post is the author's alone until its time
     comes: the scheduled-posts page is scoped to `Post.user_id ==
@@ -156,6 +164,7 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
                 abort(403)
 
         refuse_unpublished_post(post)
+        refuse_invisible(post)
 
         # If nothing has changed since their last visit, return HTTP 304
         current_etag = f"{post.id}{sort}_{hash(post.last_active)}"
@@ -451,6 +460,7 @@ def post_lazy_replies(post_id, nonce):
     # Measured: `PROBE an2 lazy_replies of a private post: 200 | reply: True`.
     refuse_private_community(post)
     refuse_unpublished_post(post)
+    refuse_invisible(post)
 
     sort = request.args.get('sort', 'hot') if post.archived is None else 'hot'  # archived posts can only show comments sorted by 'hot'
     community = post.community
@@ -537,6 +547,7 @@ def post_embed(post_id):
         # `PROBE ai3 embed scheduled: 200 | body: True`.
         refuse_private_community(post)
         refuse_unpublished_post(post)
+        refuse_invisible(post)
 
         # If nothing has changed since their last visit, return HTTP 304
         current_etag = f"{post.id}_{hash(post.last_active)}"
@@ -564,6 +575,7 @@ def post_embed_code(post_id):
     # embed_code anon: 200 | title: True` against a private community.
     refuse_private_community(post)
     refuse_unpublished_post(post)
+    refuse_invisible(post)
 
     # Breadcrumbs
     breadcrumbs = []
@@ -632,6 +644,7 @@ def post_oembed(post_id):
         # `PROBE aq1 oembed of a private post: 200 | title: True`.
         refuse_private_community(post)
         refuse_unpublished_post(post)
+        refuse_invisible(post)
 
         # D1085: the page's placeholder title for a post its author deleted, with the same exception for its viewers
         title = post.title
@@ -802,6 +815,7 @@ def continue_discussion(post_id, comment_id):
         abort(404)
 
     refuse_private_community(post)
+    refuse_invisible(post)
 
     if post.community.banned or post.deleted or comment.deleted:
         if current_user.is_anonymous or not (current_user.is_authenticated and (current_user.is_admin() or current_user.is_staff())):
@@ -1133,6 +1147,7 @@ def post_options(post_id: int, offer_markdown_source: str):
     # D1123. `post_reply_options` next door got this check in slice A and its
     # post-level twin did not: the menu names the post and offers its actions.
     refuse_private_community(post)
+    refuse_invisible(post)
 
     if post.deleted:
         if current_user.is_anonymous:
@@ -1160,6 +1175,8 @@ def post_reply_options(post_id: int, comment_id: int):
         abort(404)
 
     refuse_private_community(post)
+    refuse_invisible(post)
+    refuse_invisible(post_reply)
 
     if post.deleted or post_reply.deleted:
         if current_user.is_anonymous:
@@ -1190,7 +1207,8 @@ def post_source(post_id: int, state: str):
     # route already uses for a post it will not show, which withholds the
     # post's existence as well as its text.
     if post is not None and (post.body is None or
-                             not can_view_private(post.community)):
+                             not can_view_private(post.community) or
+                             not can_view(post, current_user.get_id())):
         post = None
 
     if not post or state not in ['show', 'hide'] or (post.deleted and not current_user.is_admin()):
@@ -2213,7 +2231,8 @@ def post_reply_source(post_id: int, comment_id: int, state: str):
 
     # D1112's twin: the same two misses on the comment side.
     if post_reply is not None and (post_reply.body is None or
-                                   not can_view_private(post_reply.community)):
+                                   not can_view_private(post_reply.community) or
+                                   not can_view(post_reply, current_user.get_id())):
         post_reply = None
 
     if not post_reply or state not in ['show', 'hide'] or (post_reply.deleted and not current_user.is_admin()):
@@ -2496,6 +2515,7 @@ def post_reply_notification(post_reply_id: int):
 @check_anoobis
 def post_cross_posts(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
+    refuse_invisible(post)
     if post.cross_posts:
         cross_posts = Post.query.filter(Post.id.in_(post.cross_posts))
         return render_template('post/post_cross_posts.html', cross_posts=cross_posts)
@@ -2663,6 +2683,7 @@ def post_cross_post(post_id: int):
     # the template: SECRETTITLE`.
     refuse_private_community(post)
     refuse_unpublished_post(post)
+    refuse_invisible(post)
 
     form = CrossPostForm()
 
@@ -2775,6 +2796,7 @@ def show_post_ical(post_id: int):
         # `post.event.start`.
         refuse_private_community(post)
         refuse_unpublished_post(post)
+        refuse_invisible(post)
         if post.event is None:
             abort(404)
 

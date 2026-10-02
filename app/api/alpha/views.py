@@ -25,6 +25,7 @@ import app.shared.community as shared_community
 # The module, not the names: app.shared.post reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.post)
 import app.shared.post as shared_post
+from app.visibility import can_view
 
 
 # 'stub' param: set to True to exclude optional fields
@@ -37,6 +38,10 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
         post = db.session.get(Post, post)
         if post is None:
             raise NoResultFound
+
+    # Interop D7: the single-post views answer for a followers-only post exactly as for one that does not exist.
+    if variant in (3, 4) and not can_view(post, user_id):
+        raise Exception('post not found')
 
     # Variant 1 - models/post/post.dart
     if variant == 1:
@@ -731,6 +736,10 @@ def reply_view(reply: PostReply | int, variant: int, user_id=None,
         reply = db.session.get(PostReply, reply)
         if reply is None:  # D1367, as in post_view
             raise NoResultFound
+
+    # Interop D7, as in post_view. Variant 3 stays open: the reply lists use it and Task 5 turns hidden replies into stubs there.
+    if variant == 4 and not can_view(reply, user_id):
+        raise Exception('comment not found')
 
     if read_comment_ids is None:
         read_comment_ids = []
