@@ -21,6 +21,14 @@ POST_STATUS_DRAFT = -1
 POST_STATUS_REVIEWING = 0
 POST_STATUS_PUBLISHED = 1
 
+# ActivityPub audience of a Post or PostReply, classified at ingest by
+# app.activitypub.util.activitypub_visibility and enforced by app/visibility.py.
+VISIBILITY_PUBLIC = 'public'
+VISIBILITY_UNLISTED = 'unlisted'
+VISIBILITY_FOLLOWERS = 'followers'
+VISIBILITY_DIRECT = 'direct'
+VISIBILITIES = (VISIBILITY_PUBLIC, VISIBILITY_UNLISTED, VISIBILITY_FOLLOWERS, VISIBILITY_DIRECT)
+
 DATETIME_MS_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 # Community subscription levels
