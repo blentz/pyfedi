@@ -125,3 +125,30 @@ def test_a_count_outside_one_to_two_hundred_is_refused(world, admin, monkeypatch
     assert response.status_code == 200          # re-rendered with the form error, not a redirect
     assert 'Number must be between 1 and 200' in response.get_data(as_text=True)
     assert queued == []
+
+
+def test_the_task_refuses_a_person_entry_passed_directly(world, monkeypatch):
+    monkeypatch.setattr(preload, 'find_actor_or_create', lambda *a, **k: pytest.fail('must not resolve a person'))
+    monkeypatch.setattr(preload, 'do_subscribe', lambda *a, **k: pytest.fail('must not subscribe'))
+    ann = DiscoveryEntry.query.filter_by(name='Ann').one()
+
+    assert preload_discovered_communities([ann.id], world.founder.id) == [{'entry': ann.id, 'status': 'gone'}]
+
+
+def test_the_task_skips_a_host_banned_after_enqueue(world, monkeypatch):
+    monkeypatch.setattr(preload, 'find_actor_or_create', lambda *a, **k: pytest.fail('banned host'))
+    monkeypatch.setattr(preload, 'do_subscribe', lambda *a, **k: pytest.fail('banned host'))
+    big = DiscoveryEntry.query.filter_by(name='Bigchan').one()
+    make_banned_instance('bigchan.example')
+
+    assert preload_discovered_communities([big.id], world.founder.id) == [{'entry': big.id, 'status': 'skipped'}]
+
+
+def test_the_task_skips_an_entry_flagged_nsfw_after_enqueue(world, monkeypatch):
+    monkeypatch.setattr(preload, 'find_actor_or_create', lambda *a, **k: pytest.fail('nsfw'))
+    monkeypatch.setattr(preload, 'do_subscribe', lambda *a, **k: pytest.fail('nsfw'))
+    mid = DiscoveryEntry.query.filter_by(name='Midchan').one()
+    mid.nsfw = True
+    db.session.commit()
+
+    assert preload_discovered_communities([mid.id], world.founder.id) == [{'entry': mid.id, 'status': 'skipped'}]
