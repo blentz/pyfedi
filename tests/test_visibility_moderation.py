@@ -109,6 +109,34 @@ def test_purge_list_stubs_a_followers_only_post(app, world):
     assert 'Open Title' in html
 
 
+def test_purge_list_renders_a_post_whose_only_match_is_in_its_gallery(app, world):
+    """A link post can match through a post_file row alone; it has no post.image to show."""
+    w = world
+    w.public_post.image_id = None
+    w.public_post.title = 'Gallery Only'
+    db.session.commit()
+    with patch('app.admin.routes.posts_with_blocked_images', return_value=[w.public_post.id]):
+        response = client_as(app, w.admin).get('/admin/block_image_purge_posts')
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert f'value="{w.public_post.id}"' in html and 'Gallery Only' in html
+
+
+def test_purge_list_shows_no_image_of_a_followers_only_post(app, world):
+    w = world
+    image = File(source_url='https://m.example/secret-album-cover.png', file_path='c.png', hash='0' * 256)
+    db.session.add(image)
+    db.session.commit()
+    w.post.image_id = image.id
+    w.post.title = 'Secret Album'
+    db.session.commit()
+    with patch('app.admin.routes.posts_with_blocked_images', return_value=[w.post.id]):
+        html = client_as(app, w.admin).get('/admin/block_image_purge_posts').get_data(as_text=True)
+    assert f'value="{w.post.id}"' in html
+    assert 'secret-album-cover' not in html
+    assert 'Secret Album' not in html and 'alice' not in html
+
+
 def test_remove_ack_for_a_reply_on_a_followers_only_post_leaks_nothing(app, world):
     w = world
     w.post.title = 'Parent Secret Title'
