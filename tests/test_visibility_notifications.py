@@ -6,12 +6,13 @@ import pytest
 from flask import current_app
 
 from app import cli, db
-from app.activitypub.util import notify_about_post_reply, notify_about_post_task
-from app.constants import NOTIF_COMMUNITY, NOTIF_POST, NOTIF_REPLY
-from app.models import Notification, Site
+from app.activitypub.util import (create_post_reply, notify_about_post_reply, notify_about_post_task,
+                                  update_post_from_activity, update_post_reply_from_activity)
+from app.constants import NOTIF_COMMUNITY, NOTIF_FEED, NOTIF_POST, NOTIF_REPLY, NOTIF_TOPIC, NOTIF_USER
+from app.models import Notification, PostReply, Site, Topic
 from app.utils import utcnow
-from tests.factories import (make_community_member, make_notification_subscription,
-                             make_post_reply, make_visibility_world)
+from tests.factories import (make_community_member, make_feed, make_feed_item, make_follow,
+                             make_notification_subscription, make_post_reply, make_user, make_visibility_world)
 
 
 class _LockOnlyRedis:
@@ -48,6 +49,49 @@ def test_public_post_still_notifies_a_stranger(world):
     notify_about_post_task(w.public_post.id)
 
     assert _notified(w.stranger) == 1
+
+
+def test_followers_only_post_by_a_followed_user_notifies_a_follower_but_not_a_stranger(world):
+    w = world
+    for user in (w.follower, w.stranger, w.pending):
+        make_notification_subscription(user, w.author.id, NOTIF_USER)
+
+    notify_about_post_task(w.post.id)
+
+    assert _notified(w.follower) == 1
+    assert _notified(w.stranger) == 0
+    assert _notified(w.pending) == 0
+
+
+def test_followers_only_post_in_a_followed_topic_notifies_a_follower_but_not_a_stranger(world):
+    w = world
+    topic = Topic(name='news', machine_name='news', num_communities=1, show_posts_in_children=False)
+    db.session.add(topic)
+    db.session.commit()
+    w.community.topic_id = topic.id
+    db.session.commit()
+    for user in (w.follower, w.stranger, w.pending):
+        make_notification_subscription(user, topic.id, NOTIF_TOPIC)
+
+    notify_about_post_task(w.post.id)
+
+    assert _notified(w.follower) == 1
+    assert _notified(w.stranger) == 0
+    assert _notified(w.pending) == 0
+
+
+def test_followers_only_post_in_a_followed_feed_notifies_a_follower_but_not_a_stranger(world):
+    w = world
+    feed = make_feed(w.author.instance, 'newsfeed', local=True)
+    make_feed_item(feed, w.community)
+    for user in (w.follower, w.stranger, w.pending):
+        make_notification_subscription(user, feed.id, NOTIF_FEED)
+
+    notify_about_post_task(w.post.id)
+
+    assert _notified(w.follower) == 1
+    assert _notified(w.stranger) == 0
+    assert _notified(w.pending) == 0
 
 
 def test_followers_only_top_level_reply_notifies_a_follower_but_not_a_stranger(world):
@@ -118,14 +162,14 @@ def test_the_unread_digest_lists_public_posts_only_even_for_a_follower(world, mo
 
 # --- mention notifications are gated like every other notification ---------
 
-def _local_recipient(name):
-    from app.models import User
-    user = User.query.filter_by(user_name=name).first()
-    if user is None:
-        from tests.factories import make_user
-        user = make_user(None, name, local=True)
+def _local_recipient(name, follows=None):
+    """A new local user of its own (never a fixture user, whose follows would decide the outcome), optionally an
+    accepted follower of `follows`."""
+    user = make_user(None, name, local=True)
     user.ap_profile_id = f'https://test.piefed.local/u/{name}'
     db.session.commit()
+    if follows is not None:
+        make_follow(user, follows)
     return user
 
 
@@ -134,13 +178,10 @@ def _mention(user):
 
 
 def test_a_followers_only_reply_edit_mentions_only_a_follower(world):
-    from app.activitypub.util import update_post_reply_from_activity
-    from tests.factories import make_follow
     w = world
     w.reply.instance.software = 'lemmy'
-    follower = _local_recipient('fran')
-    stranger = _local_recipient('sam')
-    db.session.commit()
+    follower = _local_recipient('mia', follows=w.author)
+    stranger = _local_recipient('gus')
 
     update_post_reply_from_activity(w.reply, {'object': {'content': 'hi', 'tag': [_mention(follower), _mention(stranger)]}})
 
@@ -149,19 +190,16 @@ def test_a_followers_only_reply_edit_mentions_only_a_follower(world):
 
 
 def test_a_followers_only_post_edit_mentions_only_a_follower(world):
-    from app.activitypub.util import update_post_from_activity
     w = world
-    _local_recipient('fran'), _local_recipient('sam')
+    follower, stranger = _local_recipient('mia', follows=w.author), _local_recipient('gus')
     update_post_from_activity(w.post, {'object': {'name': 't', 'content': 'x', 'type': 'Note',
-                                                  'tag': [_mention(w.follower), _mention(w.stranger)]}})
+                                                  'tag': [_mention(follower), _mention(stranger)]}})
 
-    assert _notified(w.follower) == 1
-    assert _notified(w.stranger) == 0
+    assert _notified(follower) == 1
+    assert _notified(stranger) == 0
 
 
 def test_a_created_followers_only_reply_mentions_only_a_follower(world, monkeypatch):
-    from app.activitypub.util import create_post_reply
-    from app.models import PostReply
     w = world
     w.author.instance.software = 'lemmy'
     original = PostReply.new.__func__
@@ -173,7 +211,7 @@ def test_a_created_followers_only_reply_mentions_only_a_follower(world, monkeypa
         return reply
 
     monkeypatch.setattr(PostReply, 'new', classmethod(new_followers_only))
-    follower, stranger = _local_recipient('fran'), _local_recipient('sam')
+    follower, stranger = _local_recipient('mia', follows=w.author), _local_recipient('gus')
     document = {'id': 'https://m.example/create/1', 'object': {
         'id': 'https://m.example/note/1', 'type': 'Note', 'content': '<p>hello</p>',
         'to': ['https://www.w3.org/ns/activitystreams#Public'], 'cc': [],
@@ -188,7 +226,6 @@ def test_a_created_followers_only_reply_mentions_only_a_follower(world, monkeypa
 
 
 def test_a_local_followers_only_post_mentions_only_a_follower(db_session):
-    from tests.factories import make_follow, make_user
     from tests.test_shared_tasks_send_post import _seed, _send
     s = _seed(body='hello @fran@test.piefed.local and @sam@test.piefed.local')
     follower = make_user(s.instance, 'fran', local=True)
@@ -204,7 +241,6 @@ def test_a_local_followers_only_post_mentions_only_a_follower(db_session):
 
 
 def test_a_local_followers_only_reply_mentions_only_a_follower(db_session):
-    from tests.factories import make_follow, make_user
     from tests.test_shared_tasks_send_reply import _seed, _send
     s = _seed(body='hello @fran@test.piefed.local and @sam@test.piefed.local')
     follower = make_user(s.instance, 'fran', local=True)

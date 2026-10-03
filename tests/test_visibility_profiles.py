@@ -5,9 +5,11 @@ from flask import current_app, g
 from flask_login import login_user
 
 from app import db
+from app.constants import NOTIF_POST, NOTIF_REPLY
 from app.models import Language, PostBookmark, PostVote, PostReplyBookmark, Site, UserFollower
 from app.user.utils import _get_user_posts, _get_user_post_replies, _get_user_posts_and_replies
-from tests.factories import make_visibility_world, make_post_reply, bearer
+from tests.factories import (bearer, grant_permission, make_notification_subscription, make_post_reply, make_user,
+                             make_visibility_world)
 from tests.test_visibility_single_object import client_as
 
 
@@ -64,6 +66,37 @@ def test_profile_shows_followers_only_to_follower_and_author(app, world, who):
     posts, replies, o_posts, o_replies = profile(app, w, getattr(w, who))
     assert w.post.id in posts and w.post.id in o_posts
     assert w.reply.id in replies and w.reply.id in o_replies
+
+
+def test_profile_hides_followers_only_from_an_admin_too(app, world):
+    """D19: an administrator is not an accepted follower, so the profile gives them what it gives a stranger."""
+    w = world
+    admin = make_user(w.stranger.instance, 'ada', local=True)
+    db.session.commit()
+    grant_permission(admin, 'administer all communities')
+    posts, replies, o_posts, o_replies = profile(app, w, admin)
+    assert w.post.id not in posts and w.post.id not in o_posts
+    assert w.reply.id not in replies and w.reply.id not in o_replies
+    assert w.public_post.id in posts and w.public_post.id in o_posts
+
+
+@pytest.mark.parametrize('who, shown', [('follower', True), ('stranger', False)])
+def test_alerts_page_lists_a_subscription_to_a_followers_only_object_only_to_a_viewer(app, world, who, shown):
+    """The viewer subscribed before they could (or could no longer) see the object: the alerts page follows the
+    predicate, not the subscription."""
+    w = world
+    viewer = getattr(w, who)
+    make_notification_subscription(viewer, w.post.id, NOTIF_POST)
+    make_notification_subscription(viewer, w.public_post.id, NOTIF_POST)
+    make_notification_subscription(viewer, w.reply.id, NOTIF_REPLY)
+    client = client_as(app, viewer)
+    posts = client.get('/alerts')
+    assert posts.status_code == 200
+    assert (f'/post/{w.post.id}"' in posts.get_data(as_text=True)) == shown
+    assert f'/post/{w.public_post.id}' in posts.get_data(as_text=True)
+    comments = client.get('/alerts/comments/all')
+    assert comments.status_code == 200
+    assert ('secret reply' in comments.get_data(as_text=True)) == shown
 
 
 def test_profile_rss_shows_neither(app, world):
