@@ -16,7 +16,7 @@ from app import celery, db
 from app.discovery.filters import clean_https_url, clean_name
 from app.discovery.podcast import podcast_community_for
 from app.models import Post, User
-from app.utils import get_request, get_task_session, patch_db_session
+from app.utils import get_request_capped, get_task_session, patch_db_session
 
 MAX_FEED_BYTES = 2 * 1024 * 1024
 MAX_CREDITS = 20
@@ -93,19 +93,10 @@ _FEED_ACCEPT = 'application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;
 
 def fetch_feed(rss_url: str) -> bytes | None:
     try:
-        response = get_request(rss_url, headers={'Accept': _FEED_ACCEPT})
+        status, body = get_request_capped(rss_url, MAX_FEED_BYTES, headers={'Accept': _FEED_ACCEPT})
     except httpx.HTTPError:
         return None
-    try:
-        if response.status_code != 200:
-            return None
-        declared = response.headers.get('Content-Length', '')
-        if declared.isdigit() and int(declared) > MAX_FEED_BYTES:
-            return None
-        body = response.content
-        return body if len(body) <= MAX_FEED_BYTES else None
-    finally:
-        response.close()
+    return body if status == 200 else None
 
 
 def resolve_credit_user(profile_url) -> int | None:
@@ -115,7 +106,9 @@ def resolve_credit_user(profile_url) -> int | None:
         return None
     try:
         actor = ap_util.find_actor_or_create(profile_url)
-    except httpx.HTTPError:
+    except Exception as error:   # a bad actor document or a racing create must cost one credit its link, not the episode its credits
+        current_app.logger.warning(f'discovery: credit profile {profile_url} not resolved: {type(error).__name__}')
+        db.session.rollback()
         return None
     return actor.id if isinstance(actor, User) and not actor.banned else None
 

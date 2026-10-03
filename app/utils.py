@@ -194,6 +194,31 @@ def get_request(uri, params=None, headers=None) -> httpx.Response:
     return response
 
 
+def get_request_capped(uri, max_bytes: int, headers=None) -> tuple[int, bytes | None]:
+    """GET with get_request's guards (uri validation, User-Agent, timeout, no redirects, errors normalised to
+    httpx.HTTPError) that reads the body as a stream and gives up once it passes max_bytes, so a chunked or
+    lying response is never buffered whole. Returns (status_code, body); body is None when over max_bytes.
+    No retry: callers use it for optional, best-effort fetches."""
+    if is_invalid_get_request_uri(uri):
+        current_app.logger.info(f"invalid get request {uri}")
+        raise httpx.HTTPError("HTTPError: invalid uri") from None
+    headers = dict(headers or {})
+    headers['User-Agent'] = f'PieFed/{current_app.config["VERSION"]}; +https://{current_app.config["SERVER_NAME"]}'
+    try:
+        with httpx_client.stream('GET', uri, headers=headers, timeout=10, follow_redirects=False) as response:
+            declared = response.headers.get('Content-Length', '')
+            if declared.isdigit() and int(declared) > max_bytes:
+                return response.status_code, None
+            body = bytearray()
+            for chunk in response.iter_bytes():
+                body.extend(chunk)
+                if len(body) > max_bytes:
+                    return response.status_code, None
+            return response.status_code, bytes(body)
+    except (httpx.InvalidURL, ValueError, httpx.StreamError) as error:
+        raise httpx.HTTPError(f"HTTPError: {str(error)}") from None
+
+
 # Same as get_request except updates instance on failure and does not raise any exceptions
 def get_request_instance(uri, instance: Instance, params=None, headers=None) -> httpx.Response:
     try:
