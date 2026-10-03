@@ -2513,6 +2513,7 @@ class Post(db.Model):
     stop_repeating = db.Column(db.DateTime, index=True)  # No more repeats after this datetime
     emoji_reactions = db.Column(db.JSON)            # a cache of the emoji reactions a post has received, to avoid joins
     post_boosts = db.Column(db.JSON)                # a cache of the boosts(retweets) a microblog post has received, to avoid joins
+    extensions = db.Column(db.JSON)                 # fork per-post data (D8/D24), e.g. {'podcast': {'credits': [...]}}
     tags = db.relationship('Tag', lazy='joined', secondary=post_tag, backref=db.backref('posts', lazy='dynamic'))
     timezone = db.Column(db.String(30))
     archived = db.Column(db.String(100))
@@ -5670,6 +5671,27 @@ class RssFeedItem(db.Model):
     __table_args__ = (
         db.UniqueConstraint('feed_id', 'guid'),
     )
+
+
+class DiscoveryEntry(db.Model):
+    """An actor an opt-in directory lists (interop D24): a PeerTube channel, a Castopod podcast, or a
+    Mastodon/Pixelfed person. Third-party data, stored as plain text and escaped on render; nothing is
+    fetched from `actor_url` or `avatar_url` until someone follows or joins. Built daily by
+    `flask refresh_discovery` (app/discovery/refresh.py), which upserts on `actor_url`.
+    """
+    __tablename__ = 'discovery_entry'
+    id = db.Column(db.Integer, primary_key=True)
+    kind = db.Column(db.String(10), nullable=False, index=True)         # 'community' or 'person'
+    platform = db.Column(db.String(20), nullable=False)                 # 'peertube', 'castopod', 'mastodon', 'pixelfed'
+    actor_url = db.Column(db.String(1024), nullable=False, unique=True, index=True)
+    name = db.Column(db.String(256), nullable=False)
+    host = db.Column(db.String(255), nullable=False, index=True)
+    avatar_url = db.Column(db.String(1024))
+    followers = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    nsfw = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
+    source = db.Column(db.String(50), nullable=False)
+    first_seen = db.Column(db.DateTime, nullable=False, default=utcnow)
+    last_seen = db.Column(db.DateTime, nullable=False, default=utcnow, index=True)
 
 
 def _large_community_subscribers() -> float:
