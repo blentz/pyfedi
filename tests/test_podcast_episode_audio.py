@@ -161,3 +161,36 @@ def test_an_unauthorised_episode_fetch_is_signed(db_session, http_mock, monkeypa
 
     assert signed == [EPISODE]
     assert post.url == AUDIO
+
+
+def _update(post, content):
+    from app.activitypub.util import update_post_from_activity
+    update_post_from_activity(post, {
+        'id': f'{post.ap_id}/update', 'type': 'Update',
+        'object': {'id': post.ap_id, 'type': 'Note', 'content': content,
+                   'attributedTo': post.author.ap_profile_id, 'to': [PUBLIC], 'cc': []}})
+
+
+def test_an_update_of_an_episode_note_keeps_its_audio_and_cover(db_session, http_mock):
+    from app.constants import POST_TYPE_LINK
+    http_mock.get(EPISODE).respond(200, json=_episode())
+    http_mock.get(COVER).respond(404)
+    post = _ingest(ANNOUNCEMENT)
+    assert post.url == AUDIO
+
+    _update(post, ANNOUNCEMENT.replace('New episode is out!', 'New episode is out! (edited)'))
+
+    assert 'edited' in post.body
+    assert post.type == POST_TYPE_LINK
+    assert post.url == AUDIO
+    assert post.image is not None and post.image.source_url == COVER
+
+
+def test_an_update_that_no_longer_links_the_episode_drops_the_audio(db_session, http_mock):
+    http_mock.get(EPISODE).respond(200, json=_episode())
+    http_mock.get(COVER).respond(404)
+    post = _ingest(ANNOUNCEMENT)
+
+    _update(post, '<p>this is no longer an episode announcement</p>')
+
+    assert post.url != AUDIO
