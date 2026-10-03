@@ -9,8 +9,9 @@ import pytest
 from flask import current_app, g
 
 from app import db
-from app.models import Language, Notification, NotificationSubscription, Post, PostBookmark, PostReply, \
-    PostReplyBookmark, PostReplyVote, PostVote, Report, Site
+from app.models import CommunityBlock, InstanceBlock, Language, Notification, NotificationSubscription, \
+    PollChoiceVote, Post, PostBookmark, PostReply, PostReplyBookmark, PostReplyVote, PostVote, Reminder, Report, Site, \
+    UserBlock, read_posts
 from tests.factories import make_visibility_world, bearer
 from tests.test_visibility_single_object import client_as, MISSING
 
@@ -34,13 +35,13 @@ def world(app, db_session, monkeypatch):
 
 
 TABLES = (PostVote, PostReplyVote, PostBookmark, PostReplyBookmark, NotificationSubscription, PostReply, Report,
-          Notification)
+          Notification, UserBlock, CommunityBlock, InstanceBlock, Reminder, PollChoiceVote, read_posts)
 
 
 def snapshot(w):
     """Row counts of every table an interaction writes to, and the columns of the two hidden objects."""
     db.session.expire_all()
-    counts = {t.__name__: db.session.query(t).count() for t in TABLES}
+    counts = {getattr(t, '__name__', None) or t.name: db.session.query(t).count() for t in TABLES}
     objects = {}
     for obj in (db.session.get(Post, w.post.id), db.session.get(PostReply, w.reply.id)):
         objects[type(obj).__name__] = {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
@@ -123,6 +124,7 @@ WEB_REFUSED_ONLY = [
 @pytest.mark.parametrize('method, url', WEB_REFUSED_ONLY, ids=[u[1] for u in WEB_REFUSED_ONLY])
 def test_other_state_changing_routes_are_not_found_for_stranger(app, world, method, url):
     w = world
+    template = url
     url = fill(url, w)
     before = snapshot(w)
     stranger = send(app, w.stranger, method, url)
@@ -131,21 +133,33 @@ def test_other_state_changing_routes_are_not_found_for_stranger(app, world, meth
     # Not hidden from the follower: whatever the route then says, it is not the hidden-object 404 at the gate.
     # (A route may 404 for a reason of its own, so the control is the call that reaches past the gate.)
     from app.post import routes
-    gate_calls = []
+    gated = set()
 
-    def spy(real):
+    def spy(real, record):
         def wrapper(*args, **kwargs):
             real(*args, **kwargs)  # raises NotFound for a hidden object, so a recorded call is a call that passed
-            gate_calls.append(args or kwargs)
+            gated.update(record(*args, **kwargs))
         return wrapper
 
-    with patch.object(routes, 'refuse_invisible', spy(routes.refuse_invisible)), \
-            patch.object(routes, 'refuse_invisible_ids', spy(routes.refuse_invisible_ids)):
+    def of_object(obj):
+        return {(type(obj).__name__, obj.id)}
+
+    def of_ids(post_id=None, reply_id=None):
+        return {('Post', post_id), ('PostReply', reply_id)} - {('Post', None), ('PostReply', None)}
+
+    with patch.object(routes, 'refuse_invisible', spy(routes.refuse_invisible, of_object)), \
+            patch.object(routes, 'refuse_invisible_ids', spy(routes.refuse_invisible_ids, of_ids)):
         try:
             send(app, w.follower, method, url)
         except Exception:
             pass  # a route handed a bare form may fail further on; the gate was already passed
-    assert gate_calls
+    assert gated
+    # The gate must be the one for what the url names: a route that names the hidden reply checks the reply itself,
+    # not only the public post above it, and a route that names the hidden post checks the post.
+    if '{r}' in template:
+        assert ('PostReply', w.reply.id) in gated, gated
+    if '{p}' in template:
+        assert ('Post', w.post.id) in gated, gated
 
 
 def test_anonymous_hidden_nsfw_post_is_404_not_a_login_redirect(app, world):
@@ -170,7 +184,7 @@ API_ACTIONS = [
     ('comment_save', 'put', '/api/alpha/comment/save', {'save': True}, 'comment_id'),
     ('comment_subscribe', 'put', '/api/alpha/comment/subscribe', {'subscribe': True}, 'comment_id'),
     ('comment_report', 'post', '/api/alpha/comment/report', {'reason': 'spam'}, 'comment_id'),
-    ('comment_create', 'post', '/api/alpha/comment', {'body': 'hello there', 'parent_id': '{r}'}, 'post_id'),
+    ('comment_create', 'post', '/api/alpha/comment', {'body': 'hello there'}, 'post_id'),
     ('comment_create_under_hidden_parent', 'post', '/api/alpha/comment', {'body': 'hello there', 'post_id': '{pp}'},
      'parent_id'),
 ]
@@ -202,16 +216,12 @@ def call_api(app, w, user, method, path, body, key, target):
         if isinstance(v, str) and v.isdigit():
             payload[k] = int(v)
     payload[key] = target
-    if 'comment_id' not in payload and key == 'post_id' and path.endswith('/api/alpha/comment'):
-        pass
     return getattr(app.test_client(), method)(path, json=payload, headers={'Authorization': bearer(user)})
 
 
 def target_for(w, key, name):
     if key == 'post_id':
         return w.post.id if 'create' not in name else w.public_post.id
-    if key == 'parent_id':
-        return w.reply.id
     return w.reply.id
 
 
@@ -223,8 +233,7 @@ def test_api_action_on_hidden_object_is_a_not_found_and_changes_nothing(app, wor
     hidden_target = target_for(w, key, name)
     if name == 'comment_create':
         # a reply to the hidden post: the post is the hidden thing
-        body = {'body': 'hello there'}
-        key, hidden_target = 'post_id', w.post.id
+        hidden_target = w.post.id
     if name == 'comment_create_under_hidden_parent':
         body = {'body': 'hello there', 'post_id': w.public_post.id}
     hidden = call_api(app, w, w.stranger, method, path, body, key, hidden_target)
@@ -242,8 +251,7 @@ def test_api_action_goes_through_for_follower(app, world, name, method, path, bo
     before = snapshot(w)
     target = target_for(w, key, name)
     if name == 'comment_create':
-        body = {'body': 'hello there'}
-        key, target = 'post_id', w.post.id
+        target = w.post.id
     if name == 'comment_create_under_hidden_parent':
         body = {'body': 'hello there', 'post_id': w.public_post.id}
     response = call_api(app, w, w.follower, method, path, body, key, target)
