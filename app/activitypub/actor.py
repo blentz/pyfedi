@@ -11,6 +11,7 @@ from sqlalchemy import or_, func
 from app import cache, db
 from app.activitypub.util import get_request, signed_get_request, actor_json_to_model, refresh_user_profile, \
     refresh_community_profile, refresh_feed_profile, extract_domain_and_actor, normalise_actor_string
+from app.discovery.podcast import podcast_community_for
 from app.models import User, Community, Feed, Site
 from app.utils import utcnow, get_setting, actor_contains_blocked_words, actor_profile_contains_blocked_words, \
     instance_banned, low_value_reposters, instance_allowed
@@ -19,6 +20,15 @@ from app.utils import utcnow, get_setting, actor_contains_blocked_words, actor_p
 def find_local_community(actor_url: str) -> Community:
     """Find a local community by URL."""
     return db.session.query(Community).filter(Community.ap_profile_id == actor_url).first()
+
+
+def podcast_twin_refused(community: Community) -> bool:
+    """D24: a podcast's Community shares its id with a User; a ban or deletion of that User hides the Community.
+    Remote Group communities carry no user_id, so they pay no extra query."""
+    if community is None or not community.user_id:
+        return False
+    owner = db.session.get(User, community.user_id)
+    return owner is not None and owner.ap_profile_id == community.ap_profile_id and (owner.banned or owner.deleted)
 
 
 def find_local_feed(actor_url: str) -> Feed:
@@ -300,6 +310,8 @@ def create_actor_from_remote(actor_address: str, community_only=False,
 
     if actor_json:
         actor_model = actor_json_to_model(actor_json, address, server)
+        if community_only and isinstance(actor_model, User):
+            actor_model = podcast_community_for(actor_model)  # D24: a podcast's Community twin, None once banned
 
         if community_only and not isinstance(actor_model, Community):
             return None
@@ -341,7 +353,11 @@ def find_actor_by_url(actor_url, community_only=False, feed_only=False, allow_ba
 
     # For remote actors
     if actor_url.startswith('https://') or actor_url.startswith('http://'):
-        actor = find_remote_actor(actor_url)
+        # D24: a Castopod podcast is a User and a Community with one id; a community lookup wants the Community
+        community = find_local_community(actor_url) if community_only else None
+        if podcast_twin_refused(community):
+            return False  # banned actor found
+        actor = community or find_remote_actor(actor_url)
 
         if actor:
             if not validate_remote_actor(actor_url, actor):
