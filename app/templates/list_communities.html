@@ -388,6 +388,7 @@
             <p class="mt-4">
                 {{ _('No communities match your search.') }}
             </p>
+            {% include 'discovery/_fallback.html' %}
         {% endif -%}
     {% endif -%}
 {% endblock -%}

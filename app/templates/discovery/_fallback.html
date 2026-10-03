@@ -1,0 +1,19 @@
+{% if discovered %}
+<section class="discovery_fallback mt-4" aria-labelledby="discovery_fallback_heading">
+    <h2 id="discovery_fallback_heading" class="h5">{{ _('Elsewhere in the fediverse') }}</h2>
+    <p class="text-muted small">{{ _('Not on this server yet. Opening one fetches it from its home server.') }}</p>
+    <ul class="list-unstyled">
+    {% for entry in discovered %}
+        <li class="d-flex align-items-center gap-2 mb-2 discovery_entry">
+            <span class="badge text-bg-secondary platform_badge">{{ {'peertube': 'PeerTube', 'castopod': 'Castopod', 'mastodon': 'Mastodon', 'pixelfed': 'Pixelfed'}.get(entry.platform, entry.platform) }}</span>
+            <span class="fw-semibold text-break">{{ entry.name }}</span>
+            <small class="text-muted">{{ entry.host }}</small>
+            <form method="post" action="{{ url_for('main.discovery_resolve', entry_id=entry.id) }}" class="ms-auto">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-sm btn-primary">{% if entry.kind == 'community' %}{{ _('Open to join') }}{% else %}{{ _('Open to follow') }}{% endif %}</button>
+            </form>
+        </li>
+    {% endfor %}
+    </ul>
+</section>
+{% endif %}

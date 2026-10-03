@@ -11,6 +11,8 @@ from sqlalchemy import or_, desc, text
 from app import db
 from app.community.forms import InstanceAddPeopleForm
 from app.constants import *
+from app.discovery import KIND_PERSON
+from app.discovery.search import discovery_fallback, viewer_allows_nsfw
 from app.instance import bp
 from app.instance.util import is_fedi_handle, bulk_follow
 from app.models import Instance, User, Post, read_posts, AllowedInstances, BannedInstances, utcnow
@@ -164,6 +166,9 @@ def instance_people(instance_domain):
     # Pagination
     people = people.paginate(page=page, per_page=100 if current_user.is_authenticated and not low_bandwidth else 50,
                              error_out=False)
+    # Interop D24: nobody here matched the search, so offer opt-in directory people
+    discovered = discovery_fallback(KIND_PERSON, search, allow_nsfw=viewer_allows_nsfw(current_user, g.site)) \
+        if search and page == 1 and people.total == 0 else []
     next_url = url_for('instance.instance_people', page=people.next_num, q=search,
                        instance_domain=instance_domain) if people.has_next else None
     prev_url = url_for('instance.instance_people', page=people.prev_num, q=search,
@@ -171,7 +176,7 @@ def instance_people(instance_domain):
 
     return render_template('instance/people.html', people=people, instance=instance, next_url=next_url,
                            prev_url=prev_url, currently_following=following_user_ids(current_user.get_id()),
-                           q=search,
+                           q=search, discovered=discovered,
                            title=_('People from %(instance)s', instance=instance.domain) if instance else _('People'),
                            )
 
