@@ -102,13 +102,20 @@ def test_an_open_object_is_federated(db_session, sent, name, task, kind, remote)
 @pytest.mark.parametrize('remote', [False, True], ids=['local-community', 'remote-community'])
 @pytest.mark.parametrize('name, task, kind', TASKS, ids=[t[0] for t in TASKS])
 def test_a_followers_only_object_is_not_federated(db_session, sent, name, task, kind, remote):
+    """R-a: a remote community is the object's home and already holds it, so its own inbox is still sent the
+    activity; only a local community's fan-out to its followers is skipped."""
     w = scene(db_session, remote)
     task(None, w.stranger.id, target_of(w, kind, open_=False))
-    assert sent == [], name
+    assert sent == (['https://c.example/c/c1/inbox'] if remote else []), name
 
 
-@pytest.mark.parametrize('remote', [False, True], ids=['local-community', 'remote-community'])
-@pytest.mark.parametrize('visibility, federated', [('public', True), ('unlisted', True), ('followers', False)])
+# R-a: for a remote community a followers-only object's activity still goes to the community's own inbox
+WHO_HEARS = [(False, 'public', True), (False, 'unlisted', True), (False, 'followers', False),
+             (True, 'public', True), (True, 'unlisted', True), (True, 'followers', True)]
+WHO_HEARS_IDS = [f"{'remote' if r else 'local'}-community-{v}" for r, v, _ in WHO_HEARS]
+
+
+@pytest.mark.parametrize('remote, visibility, federated', WHO_HEARS, ids=WHO_HEARS_IDS)
 def test_the_author_deleting_their_own_post_or_reply(db_session, remote, visibility, federated):
     w = scene(db_session, remote)
     w.post.visibility = w.reply.visibility = visibility
@@ -119,10 +126,11 @@ def test_the_author_deleting_their_own_post_or_reply(db_session, remote, visibil
         delete_post_from_community_task(w.post.id, w.stranger.id)
         delete_post_reply_from_community_task(w.reply.id, w.stranger.id)
     assert bool(direct.call_count + announce.call_count) is federated
+    if remote:
+        assert announce.call_count == 0
 
 
-@pytest.mark.parametrize('remote', [False, True], ids=['local-community', 'remote-community'])
-@pytest.mark.parametrize('visibility, federated', [('public', True), ('unlisted', True), ('followers', False)])
+@pytest.mark.parametrize('remote, visibility, federated', WHO_HEARS, ids=WHO_HEARS_IDS)
 def test_a_web_reply_restore(app, world, remote, visibility, federated):  # noqa: F811
     w = world
     w.community.local_only = False
