@@ -14,11 +14,12 @@ Audit of hint-less lookups that can meet a podcast id (app/activitypub/routes.py
 from types import SimpleNamespace
 
 import pytest
+from cachelib import SimpleCache
 
 from app import cache, db
 from app.activitypub.actor import create_actor_from_remote, find_actor_by_url
 from app.activitypub.routes import process_inbox_request
-from app.activitypub.util import actor_json_to_model, find_actor_or_create
+from app.activitypub.util import actor_json_to_model, find_actor_or_create, find_actor_or_create_cached
 from app.models import Community, CommunityMember, User, UserFollower
 from tests.factories import make_community_join_request, make_follow, make_instance, make_site, make_user, \
     peer_actor_json, peer_instance
@@ -120,3 +121,14 @@ def test_a_fetched_podcast_whose_user_is_banned_yields_no_community(podcast, htt
     http_mock.get(PODCAST).respond(json=podcast_document())
 
     assert create_actor_from_remote(PODCAST, community_only=True) is None
+
+
+@pytest.mark.parametrize('field', ['banned', 'deleted'])
+def test_a_cached_podcast_community_is_refused_once_its_user_is_banned_or_deleted(app, podcast, field, monkeypatch):
+    monkeypatch.setitem(app.extensions['cache'], cache, SimpleCache())  # conftest's NullCache would never hit
+    assert find_actor_or_create_cached(PODCAST, community_only=True) == podcast.community  # now cached
+
+    setattr(podcast.user, field, True)
+    db.session.commit()
+
+    assert not find_actor_or_create_cached(PODCAST, community_only=True)
