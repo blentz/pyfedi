@@ -232,15 +232,42 @@ def podcast_credits(post) -> list | None:
     return stored if isinstance(stored, list) and stored else None
 
 
-def _credit_link(credit: dict) -> dict:
-    """A credit links only when it was verified at resolve time (the profile vouched for the podcast)."""
-    href = None
+def _verified_user(credit: dict):
+    """The PieFed user a credit links to: only when it was verified at resolve time (the profile vouched for the
+    podcast) and the account is still neither banned nor deleted."""
     user_id = credit.get('user_id')
     if credit.get('verified') is True and isinstance(user_id, int) and not isinstance(user_id, bool):
         user = db.session.get(User, user_id)
         if user is not None and not user.banned and not user.deleted:
-            href = f'/u/{user.link()}'
-    return {'name': credit.get('name') or '', 'href': href, 'local': href is not None}
+            return user
+    return None
+
+
+def _credit_link(credit: dict) -> dict:
+    """A linked credit shows the verified user's own display name, never the feed's (a sock-puppet could otherwise
+    be labelled as a famous name); an unlinked one shows the feed's name as plain text."""
+    user = _verified_user(credit)
+    if user is None:
+        return {'name': credit.get('name') or '', 'href': None, 'local': False}
+    return {'name': user.display_name(), 'href': f'/u/{user.link()}', 'local': True}
+
+
+def podcast_api_credits(post) -> list | None:
+    """The credits for the API: a verified credit carries its user reference, an unverified one only name and role."""
+    stored = podcast_credits(post)
+    if stored is None:
+        return None
+    exposed = []
+    for credit in stored:
+        if not isinstance(credit, dict) or credit.get('role') not in ('host', 'guest'):
+            continue
+        user = _verified_user(credit)
+        if user is None:
+            exposed.append({'name': credit.get('name') or '', 'role': credit['role']})
+        else:
+            exposed.append({'name': user.display_name(), 'role': credit['role'], 'image': credit.get('image'),
+                            'profile_url': credit.get('profile_url'), 'user_id': user.id})
+    return exposed or None
 
 
 def podcast_byline(post) -> dict | None:

@@ -89,11 +89,17 @@ def test_without_credits_there_is_no_byline_and_the_poster_remains(app, world, m
 
 def test_a_verified_credit_links_to_its_profile_but_a_banned_one_does_not(world):
     post = with_credits(world, credits=[verified('Ann Host', world.ann)])
-    assert podcast_byline(post)['hosts'] == [{'name': 'Ann Host', 'href': f'/u/{world.ann.link()}', 'local': True}]
+    assert podcast_byline(post)['hosts'] == [{'name': world.ann.display_name(), 'href': f'/u/{world.ann.link()}', 'local': True}]
 
     world.ann.banned = True
     db.session.commit()
     assert podcast_byline(post)['hosts'] == [{'name': 'Ann Host', 'href': None, 'local': False}]
+
+
+def test_a_verified_credit_shows_the_users_own_name_not_the_feeds(world):
+    post = with_credits(world, credits=[verified('Famous Name', world.ann)])
+
+    assert [h['name'] for h in podcast_byline(post)['hosts']] == [world.ann.display_name()]
 
 
 def test_a_stored_user_id_without_the_verified_flag_does_not_link(world):
