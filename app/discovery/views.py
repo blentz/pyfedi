@@ -5,6 +5,7 @@ from flask_babel import _
 from app import db
 from app.activitypub.util import find_actor_or_create
 from app.discovery import KIND_COMMUNITY
+from app.discovery.credits import podcast_byline
 from app.main import bp
 from app.models import Community, DiscoveryEntry, User
 from app.utils import login_required
@@ -27,3 +28,6 @@ def discovery_resolve(entry_id):
     if entry.kind == KIND_COMMUNITY:
         return redirect(url_for('main.list_communities'))
     return redirect(url_for('instance.instance_people', instance_domain='all'))
+
+
+bp.app_template_global('podcast_byline')(podcast_byline)   # D24: the post byline for a podcast episode
