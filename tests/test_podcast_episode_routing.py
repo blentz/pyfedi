@@ -7,7 +7,9 @@ import pytest
 from app.activitypub.routes import process_new_content
 from app.activitypub.util import actor_json_to_model
 from app.discovery.podcast import podcast_community_for
-from app.models import Post, PostReply
+from app import db
+from flask import current_app as app
+from app.models import ActivityPubLog, Community, Post, PostReply
 from tests.factories import make_site, peer_actor_json, peer_instance, seed_community_owner
 
 PEER = 'peer.example'
@@ -78,3 +80,23 @@ def test_the_episode_audio_still_arrives(world, http_mock):
     post = Post.query.one()
     assert post.url == AUDIO
     assert post.community_id == podcast_community_for(world.podcast).id
+
+
+def test_a_banned_podcast_community_drops_its_episode(world, monkeypatch):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    podcast_community_for(world.podcast).banned = True
+    db.session.commit()
+
+    process_new_content(world.podcast, None, False, create(world.podcast, f'https://{PEER}/n/5'), False)
+
+    assert Post.query.count() == 0
+    assert ActivityPubLog.query.filter_by(result='ignored').count() == 1
+
+
+def test_a_podcast_without_a_community_row_goes_to_microblogs(world):
+    Community.query.filter_by(ap_profile_id=world.podcast.ap_profile_id).delete()
+    db.session.commit()
+
+    process_new_content(world.podcast, None, False, create(world.podcast, f'https://{PEER}/n/6'), False)
+
+    assert Post.query.one().community.name == 'microblogs'
