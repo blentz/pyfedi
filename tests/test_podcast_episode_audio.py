@@ -107,12 +107,63 @@ def test_a_non_audio_media_type_is_refused(db_session, http_mock):
     assert _ingest(ANNOUNCEMENT).url != AUDIO
 
 
-def test_audio_hosted_elsewhere_is_refused(db_session, http_mock):
+CDN_AUDIO = 'https://cdn.op3.example/e/peer.example/media/ep1.mp3'
+
+
+def test_audio_on_another_https_host_is_accepted(db_session, http_mock):
+    """R-b: we store a url for the browser and never fetch the audio, so a CDN, S3 or OP3 prefix is fine."""
     episode = _episode()
-    episode['audio']['url']['href'] = 'https://elsewhere.example/ep1.mp3'
+    episode['audio']['url']['href'] = CDN_AUDIO
+    http_mock.get(EPISODE).respond(200, json=episode)
+    http_mock.get(COVER).respond(404)
+
+    post = _ingest(ANNOUNCEMENT)
+
+    assert post.url == CDN_AUDIO
+    assert post.domain.name == 'cdn.op3.example'
+
+
+def test_audio_over_plain_http_is_refused(db_session, http_mock):
+    episode = _episode()
+    episode['audio']['url']['href'] = 'http://cdn.op3.example/ep1.mp3'
     http_mock.get(EPISODE).respond(200, json=episode)
 
-    assert _ingest(ANNOUNCEMENT).url != 'https://elsewhere.example/ep1.mp3'
+    assert _ingest(ANNOUNCEMENT).url != 'http://cdn.op3.example/ep1.mp3'
+
+
+def test_audio_on_a_banned_domain_leaves_the_post_as_it_is(db_session, http_mock):
+    from app import db
+    from app.models import Domain
+    db.session.add(Domain(name='cdn.op3.example', banned=True))
+    db.session.commit()
+    episode = _episode()
+    episode['audio']['url']['href'] = CDN_AUDIO
+    http_mock.get(EPISODE).respond(200, json=episode)
+
+    post = _ingest(ANNOUNCEMENT)
+
+    assert post.url != CDN_AUDIO
+    assert post.image is None
+
+
+def test_the_audio_url_joins_the_cross_posts_of_that_url(db_session, http_mock):
+    """The fetch runs as a task after ingest has computed cross posts for the Note's own link."""
+    from app import db
+    from app.activitypub.util import fetch_castopod_episode_audio_task
+    from tests.factories import make_post
+    http_mock.get(EPISODE).respond(404)
+    post = _ingest(ANNOUNCEMENT)
+    other = make_post(post.community, post.author, f'https://{PEER}/@mypodcast/posts/2')
+    other.url = AUDIO
+    db.session.commit()
+    http_mock.get(EPISODE).respond(200, json=_episode())
+    http_mock.get(COVER).respond(404)
+
+    fetch_castopod_episode_audio_task(post.id, EPISODE)
+
+    db.session.expire_all()
+    assert post.url == AUDIO
+    assert other.id in (post.cross_posts or [])
 
 
 def test_a_transport_error_leaves_the_post_as_it_is(db_session, http_mock, monkeypatch):
