@@ -12,6 +12,7 @@ from sqlalchemy.orm.exc import NoResultFound
 from app import cache, db
 from app.activitypub.util import active_month, normalise_actor_string
 from app.constants import *
+import app.discovery.credits as discovery_credits   # the module, not names: app.discovery.credits imports this package indirectly
 from app.models import ChatMessage, Community, Language, Instance, Post, PostReply, User, utcnow, \
     AllowedInstances, BannedInstances, utcnow, Site, Feed, FeedItem, Topic, CommunityFlair, \
     UserNote, Poll, Event, PollChoice, Conversation, Report, File, post_file
@@ -136,6 +137,9 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
         if post.content_warning and not post.deleted:
             # Fork extension: the warning a peer sent as `summary`, for a client that collapses the body under it
             v1.setdefault('extensions', {})['content_warning'] = post.content_warning
+        if not post.deleted and (credits := discovery_credits.podcast_api_credits(post)):
+            # Fork extension (D24): a Castopod episode's hosts and guests; the creator stays the podcast account
+            v1.setdefault('extensions', {})['podcast'] = {'credits': credits}
 
         v1['tags'] = tags_to_string(post) or ''
         v1['flair'] = flair_to_string(post) or ''

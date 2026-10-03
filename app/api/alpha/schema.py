@@ -396,9 +396,22 @@ class GalleryImage(DefaultSchema):
     height = fields.Integer(allow_none=True)
 
 
+class PodcastCredit(DefaultSchema):
+    name = fields.String(required=True)
+    role = fields.String(required=True, metadata={"description": "'host' or 'guest'"})
+    image = fields.String(allow_none=True, metadata={"format": "url"})
+    profile_url = fields.String(allow_none=True, metadata={"format": "url", "description": "Present only for a credit whose profile vouches for the podcast"})
+    user_id = fields.Integer(allow_none=True, metadata={"description": "The PieFed user, present only for a credit whose profile vouches for the podcast"})
+
+
+class PodcastExtension(DefaultSchema):
+    credits = fields.List(fields.Nested(PodcastCredit), metadata={"description": "Hosts, then guests, from the podcast's RSS <podcast:person> tags."})
+
+
 class PostExtensions(DefaultSchema):
     gallery = fields.List(fields.Nested(GalleryImage), metadata={"description": "The images of a multi-image post after the first, in order. Fork extension; Lemmy clients ignore it."})
     content_warning = fields.String(metadata={"description": "The warning the post's body and images should be collapsed under. Present only when there is one. Fork extension; Lemmy clients ignore it."})
+    podcast = fields.Nested(PodcastExtension, metadata={"description": "A Castopod episode's credits. Fork extension; Lemmy clients ignore it."})
 
 
 class CommentExtensions(DefaultSchema):
