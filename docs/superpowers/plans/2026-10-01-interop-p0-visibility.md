@@ -932,3 +932,18 @@ Deferred:
 - Friendica-style Link + several images gets no gallery (Mbin rule): FIXED at c3f545df9.
 - Castopod episodes have no audio player: FIXED at b96bb0524 (the announcement Note's episode link is fetched as a PodcastEpisode; audio becomes the post url, the cover its image; players for .mp3/.m4a/.ogg/.oga/.opus/.wav/.aac/.flac).
 - Migration b5d2c8e1f7a3 was amended to add `post.gallery_count`; a database already at that revision needs `ALTER TABLE post ADD COLUMN gallery_count integer NOT NULL DEFAULT 0`.
+
+## Final-review fix wave (2026-10-02, after WP-E)
+
+Rulings recorded:
+- R-a: moderation activities (lock, sticky, delete, restore) and votes about a followers-only object may still be sent directly to a REMOTE community's own inbox (it is the content's home and already holds it); only a local community's fan-out to its followers is skipped. Applied at 5de575f7b (tasks, the author's own deletion, the web reply restore); votes at 980d46ac3.
+- R-b: Castopod audio may live on any https host that `url_is_storable` accepts (we store a url for the browser and never fetch the audio), so CDN/S3/OP3 prefixes work. Applied at 91e0c93d3 (a banned Domain leaves the post as it was; the post's domain follows the audio url; cross posts are recomputed when the url changes).
+- R-c: squashing the red intermediate commits needs a history rewrite and is not part of this wave.
+
+Side-fixes made during WP-D D1 (5cc642a9d), recorded here because they were not on any list: the `reminders` CLI command (`flask reminders`, as `publish-scheduled-posts` has) was added so the reminders cron step is testable; `migrate_post_notifs` now subscribes a reply's own author (`reply.user_id`), where it used the leftover `post` loop variable.
+
+Fixed in this wave:
+- Purge list: a post with no `post.image` (gallery-only match) no longer fails to render, and a followers-only row shows no image. FIXED at 325673d00. The purge page reached from a followers-only post no longer names it in its `<head>` oEmbed link to an admin who cannot view it. FIXED at 334cfb9b5.
+- A vote on a followers-only object in a local community is not announced to its following instances. FIXED at 980d46ac3.
+- An Update of a Castopod episode Note keeps the audio url, type and cover. FIXED at 269a6b2bd.
+- Tests: the weight -1 blocked-image memory is excluded from the purge list (f0985a995); profile RSS honours a content warning, reply_view variants 4 and 5 carry `extensions.content_warning`, and a followers-only post's Delete still reaches the author's own followers (1319871e9).
