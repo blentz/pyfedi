@@ -18,6 +18,7 @@ from app.models import ActivityBatch
 from app.shared.tasks import adds, deletes, likes, locks, removes
 from tests.factories import (
     make_community_member,
+    make_follow,
     make_instance,
     make_user,
     make_visibility_world,
@@ -188,3 +189,19 @@ def test_a_vote_in_a_remote_community_still_goes_to_its_inbox(db_session, monkey
     monkeypatch.setattr('app.shared.tasks.likes.send_post_request', recorder)
     likes.vote_for_post(None, w.stranger.id, target_of(w, 'post', open_), None, 'upvote')
     assert recorder == ['https://c.example/c/c1/inbox']
+
+
+@pytest.mark.parametrize('remote', [False, True], ids=['local-community', 'remote-community'])
+def test_the_author_deleting_a_followers_only_post_still_tells_their_own_followers(db_session, sent, remote):
+    """E9 skips the community fan-out, not delete_object's send to the author's followers: they are the audience a
+    followers-only post was delivered to."""
+    w = scene(db_session, remote)
+    home = make_instance('g.example')
+    home.inbox = 'https://g.example/inbox'
+    make_follow(w.stranger, make_user(home, 'reader'), is_inward=True)
+    w.post.user_id = w.stranger.id
+    db.session.commit()
+
+    deletes.delete_post(None, w.stranger.id, w.post.id)
+
+    assert sent == (['https://c.example/c/c1/inbox'] if remote else []) + ['https://g.example/inbox']

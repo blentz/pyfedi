@@ -101,3 +101,28 @@ def test_a_warning_is_escaped_in_the_feed(seeded):
 
     text = client.get(f'/community/{community.name}/feed').get_data(as_text=True)
     assert '<b>x</b>' not in text
+
+
+def _feed_author(alice):
+    """The profile feed finds a local account by its profile id (as tests/test_user_profile_feed.py's author)."""
+    alice.ap_profile_id = f'https://test.piefed.local/u/{alice.user_name}'
+    db.session.commit()
+
+
+def test_the_profile_feed_carries_the_warning_not_the_body(seeded):
+    client, community, alice = seeded
+    _feed_author(alice)
+    warned_post(community, alice, status=2)
+
+    response = client.get(f'/u/{alice.user_name}/feed')
+    assert response.status_code == 200
+    assert '<item>' in response.get_data(as_text=True)
+    assert_only_the_warning(response.get_data(as_text=True))
+
+
+def test_the_profile_feed_keeps_the_body_without_a_warning(seeded):
+    client, community, alice = seeded
+    _feed_author(alice)
+    warned_post(community, alice, warning=None, status=2)
+
+    assert 'the secret body' in client.get(f'/u/{alice.user_name}/feed').get_data(as_text=True)

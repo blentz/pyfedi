@@ -371,6 +371,9 @@ def test_api_reply_view_offers_the_content_warning_under_extensions(app, communi
 
     assert reply_view(reply=reply, variant=1)['extensions'] == {'content_warning': 'heavy'}
     assert reply_view(reply=reply, variant=3)['comment']['extensions'] == {'content_warning': 'heavy'}
+    # every other variant that serialises the comment does it through variant 3
+    assert reply_view(reply=reply, variant=4)['comment_view']['comment']['extensions'] == {'content_warning': 'heavy'}
+    assert reply_view(reply=reply, variant=5)['comment']['comment']['extensions'] == {'content_warning': 'heavy'}
 
 
 def test_api_reply_view_has_no_extensions_without_a_warning(app, community, author):
