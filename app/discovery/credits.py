@@ -5,7 +5,9 @@ matching item's role="guest" tags. The feed is untrusted: refused above MAX_FEED
 declares a DOCTYPE or ENTITY, and parsed by the stdlib (expat) parser, which resolves no external entities.
 The DOCTYPE refusal is made by expat itself, so no encoding (UTF-16, UTF-32, BOM) can hide a declaration.
 """
+import re
 import xml.etree.ElementTree as ElementTree
+from urllib.parse import urlsplit
 from xml.parsers import expat
 
 import httpx
@@ -16,7 +18,7 @@ from app import celery, db
 from app.discovery.filters import clean_https_url, clean_name
 from app.discovery.podcast import podcast_community_for
 from app.models import Post, User
-from app.utils import get_request_capped, get_task_session, patch_db_session
+from app.utils import get_request, get_request_capped, get_task_session, patch_db_session
 
 MAX_FEED_BYTES = 2 * 1024 * 1024
 MAX_CREDITS = 20
@@ -113,6 +115,66 @@ def resolve_credit_user(profile_url) -> int | None:
     return actor.id if isinstance(actor, User) and not actor.banned else None
 
 
+def _normal_url(value) -> str | None:
+    """scheme and host lower-cased, trailing slash ignored; None for anything that is not an http(s) URL."""
+    if not isinstance(value, str):
+        return None
+    parts = urlsplit(value.strip())
+    if parts.scheme.lower() not in ('http', 'https') or not parts.hostname:
+        return None
+    query = f'?{parts.query}' if parts.query else ''
+    return f'{parts.scheme.lower()}://{parts.netloc.lower()}{parts.path.rstrip("/")}{query}'
+
+
+def _urls_in(text) -> set:
+    """Every URL in a string, whether bare, in an HTML anchor or in a Markdown link."""
+    if not isinstance(text, str):
+        return set()
+    return {u for u in (_normal_url(m) for m in re.findall(r'https?://[^\s"\'<>)\]]+', text)) if u}
+
+
+def _document_urls(document) -> set:
+    """The URLs an actor document gives in `url`, `alsoKnownAs` and its profile-field `attachment`."""
+    if not isinstance(document, dict):
+        return set()
+    found = set()
+    for key in ('url', 'alsoKnownAs'):
+        values = document.get(key)
+        for value in values if isinstance(values, list) else [values]:
+            found |= _urls_in(value.get('href') if isinstance(value, dict) else value)
+    attachment = document.get('attachment')
+    for entry in attachment if isinstance(attachment, list) else []:
+        if isinstance(entry, dict):
+            found |= _urls_in(entry.get('value')) | _urls_in(entry.get('href'))
+    return found
+
+
+def _podcast_urls(podcast) -> set:
+    return {u for u in (_normal_url(podcast.ap_profile_id), _normal_url(podcast.ap_public_url)) if u}
+
+
+def credit_vouches(user_id, podcast) -> bool:
+    """True when the credited account's own profile links back to the podcast. Its stored URL and profile fields
+    are read first; alsoKnownAs is not stored, so a remote account's actor document is fetched once more."""
+    wanted = _podcast_urls(podcast)
+    user = db.session.get(User, user_id) if isinstance(user_id, int) else None
+    if not wanted or user is None or user.banned or user.deleted:
+        return False
+    stored = _urls_in(user.ap_public_url)
+    for field in user.extra_fields:
+        stored |= _urls_in(field.text)
+    if wanted & stored:
+        return True
+    if user.ap_id is None or not user.ap_profile_id:   # a local account has no remote document to read
+        return False
+    try:
+        response = get_request(user.ap_profile_id, headers={'Accept': 'application/activity+json'})
+        document = response.json() if response.status_code == 200 else None
+    except (httpx.HTTPError, ValueError):
+        return False
+    return bool(wanted & _document_urls(document))
+
+
 def store_credits(post: Post, credits: list) -> None:
     if not credits:
         return
@@ -147,7 +209,14 @@ def fetch_episode_credits_task(post_id, episode_url):
                     return
                 credits = parse_feed_credits(feed, episode_url)
                 for credit in credits:
-                    credit['user_id'] = resolve_credit_user(credit['profile_url'])
+                    # Only a profile that vouches back keeps its link; anyone else is a plain name, because
+                    # the feed's say-so would let a podcast credit (and so link to) any account.
+                    user_id = resolve_credit_user(credit['profile_url'])
+                    verified = user_id is not None and credit_vouches(user_id, post.author)
+                    credit['user_id'] = user_id if verified else None
+                    credit['profile_url'] = credit['profile_url'] if verified else None
+                    if verified:
+                        credit['verified'] = True
                 store_credits(post, credits)
         except Exception:
             session.rollback()
@@ -164,25 +233,21 @@ def podcast_credits(post) -> list | None:
 
 
 def _credit_link(credit: dict) -> dict:
+    """A credit links only when it was verified at resolve time (the profile vouched for the podcast)."""
     href = None
     user_id = credit.get('user_id')
-    if isinstance(user_id, int) and not isinstance(user_id, bool):
+    if credit.get('verified') is True and isinstance(user_id, int) and not isinstance(user_id, bool):
         user = db.session.get(User, user_id)
         if user is not None and not user.banned and not user.deleted:
             href = f'/u/{user.link()}'
-    local = href is not None
-    if href is None:
-        href = clean_https_url(credit.get('profile_url'))
-    return {'name': credit.get('name') or '', 'href': href, 'local': local}
+    return {'name': credit.get('name') or '', 'href': href, 'local': href is not None}
 
 
 def podcast_byline(post) -> dict | None:
-    """What the post byline shows for a podcast episode: hosts, then guests. None without credits."""
+    """The credits to show after a podcast episode's poster: hosts, then guests. None without credits.
+    The poster is always shown by the template; the credits never stand in for it."""
     stored = podcast_credits(post)
     if stored is None:
         return None
-    hosts = [_credit_link(c) for c in stored if isinstance(c, dict) and c.get('role') == 'host']
-    guests = [_credit_link(c) for c in stored if isinstance(c, dict) and c.get('role') == 'guest']
-    if not hosts:
-        hosts = [{'name': post.author.display_name(), 'href': f'/u/{post.author.link()}', 'local': True}]
-    return {'hosts': hosts, 'guests': guests}
+    return {'hosts': [_credit_link(c) for c in stored if isinstance(c, dict) and c.get('role') == 'host'],
+            'guests': [_credit_link(c) for c in stored if isinstance(c, dict) and c.get('role') == 'guest']}

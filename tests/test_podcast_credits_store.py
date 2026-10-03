@@ -10,7 +10,7 @@ from app import cache, db
 from app.utils import get_request_capped
 from app.activitypub.util import actor_json_to_model, create_post
 from app.discovery import credits
-from app.discovery.credits import MAX_FEED_BYTES, fetch_episode_credits_task, resolve_credit_user, store_credits
+from app.discovery.credits import MAX_FEED_BYTES, credit_vouches, fetch_episode_credits_task, resolve_credit_user, store_credits
 from app.discovery.podcast import podcast_community_for
 from app.models import Post, User
 from tests.factories import make_banned_instance, make_post, make_site, peer_actor_json, peer_instance
@@ -76,12 +76,56 @@ def test_plain_http_and_banned_instances_are_never_fetched(app, db_session, http
 def test_the_task_stores_hosts_and_guests_with_their_users(world, http_mock, monkeypatch):
     http_mock.get(FEED_URL).respond(200, content=FIXTURE.read_bytes(), headers={'Content-Type': 'application/rss+xml'})
     monkeypatch.setattr(credits, 'resolve_credit_user', {'https://social.example/@ann': 77}.get)
+    monkeypatch.setattr(credits, 'credit_vouches', lambda user_id, podcast: True)
 
     fetch_episode_credits_task(world.post.id, EP1)
 
     saved = stored(world.post.id)['podcast']['credits']
     assert [(c['name'], c['role'], c['user_id']) for c in saved] == [
         ('Ann Host', 'host', 77), ('Ben Cohost', 'host', None), ('Cara Guest', 'guest', None)]
+    assert saved[0]['verified'] is True and 'verified' not in saved[1]
+
+
+def test_a_credit_whose_profile_does_not_vouch_keeps_only_its_name(world, http_mock, monkeypatch):
+    http_mock.get(FEED_URL).respond(200, content=FIXTURE.read_bytes())
+    monkeypatch.setattr(credits, 'resolve_credit_user', {'https://social.example/@ann': 77}.get)
+    monkeypatch.setattr(credits, 'credit_vouches', lambda user_id, podcast: False)
+
+    fetch_episode_credits_task(world.post.id, EP1)
+
+    ann = stored(world.post.id)['podcast']['credits'][0]
+    assert (ann['name'], ann['user_id'], ann['profile_url']) == ('Ann Host', None, None) and 'verified' not in ann
+
+
+def ann_user(document):
+    peer_instance('social.example')
+    return actor_json_to_model(peer_actor_json('Person', name='ann', server='social.example', fields=document),
+                               'ann', 'social.example')
+
+
+@pytest.mark.parametrize('fields,expected', [
+    ({'alsoKnownAs': [ACTOR + '/']}, True),
+    ({'alsoKnownAs': ['https://POD.example/@mypodcast']}, True),
+    ({'url': [{'type': 'Link', 'href': ACTOR}]}, True),
+    ({'attachment': [{'type': 'PropertyValue', 'name': 'Show',
+                      'value': f'<a href="{ACTOR}" rel="me">My Podcast</a>'}]}, True),
+    ({'attachment': [{'type': 'Link', 'href': ACTOR}]}, True),
+    ({'alsoKnownAs': ['https://pod.example/@other']}, False),
+    ({'attachment': [{'type': 'PropertyValue', 'name': 'Show', 'value': 'https://pod.example/@mypodcastfake'}]}, False),
+    ({}, False)])
+def test_a_profile_vouches_when_it_links_the_podcast(world, http_mock, fields, expected):
+    ann = ann_user({})
+    document = peer_actor_json('Person', name='ann', server='social.example', fields=fields)
+    http_mock.get(ann.ap_profile_id).respond(json=document)
+
+    assert credit_vouches(ann.id, world.podcast) is expected
+
+
+def test_a_failed_vouch_fetch_is_not_a_vouch(world, http_mock):
+    ann = ann_user({})
+    http_mock.get(ann.ap_profile_id).respond(500)
+
+    assert credit_vouches(ann.id, world.podcast) is False
 
 
 @pytest.mark.parametrize('answer', [dict(status_code=500), dict(status_code=200, text='<html>not a feed</html>'),
@@ -139,6 +183,7 @@ def test_a_lookup_that_blows_up_costs_only_that_credit_its_link(world, http_mock
 
     monkeypatch.setattr('app.activitypub.util.find_actor_or_create', lookup)
     monkeypatch.setattr(credits, 'User', SimpleNamespace)   # the stub actor stands in for a User
+    monkeypatch.setattr(credits, 'credit_vouches', lambda user_id, podcast: True)
 
     fetch_episode_credits_task(world.post.id, EP1)
 
