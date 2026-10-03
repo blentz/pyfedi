@@ -3,3 +3,4 @@
 source venv/bin/activate > /dev/null 2>&1
 export FLASK_APP=pyfedi.py
 flask daily-maintenance
+flask refresh_discovery
