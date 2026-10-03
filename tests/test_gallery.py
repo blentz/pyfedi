@@ -398,6 +398,22 @@ def test_the_blocked_images_purge_list_still_considers_the_primary_image(ingest)
     assert posts_with_blocked_images() == [post.id]
 
 
+def test_an_album_with_a_remembered_blocked_image_is_not_on_the_purge_list(ingest, hashing):
+    """The weight -1 row only remembers an image that was dropped; the album no longer shows it, so the
+    blocked hash it carries does not make the post purgeable."""
+    from app.activitypub.util import update_post_from_activity
+    from app.models import GALLERY_BLOCKED_WEIGHT, post_file
+    from app.utils import posts_with_blocked_images
+    post = ingest(album(image(FIRST, 'a'), image(THIRD, 'c')))
+    hashing.blocked = SECOND
+    update_post_from_activity(post, an_update(image(FIRST, 'a'), image(SECOND, 'b'), image(THIRD, 'c')))
+    remembered = db.session.execute(post_file.select().where(post_file.c.post_id == post.id,
+                                                             post_file.c.weight == GALLERY_BLOCKED_WEIGHT)).all()
+    assert len(remembered) == 1 and db.session.get(File, remembered[0].file_id).hash == BLOCKED_HASH
+
+    assert posts_with_blocked_images() == []
+
+
 def test_an_unchanged_album_with_a_dropped_blocked_image_is_a_no_op(ingest, hashing):
     from app.activitypub.util import update_post_from_activity
     post = ingest(album(image(FIRST, 'a'), image(THIRD, 'c')))
