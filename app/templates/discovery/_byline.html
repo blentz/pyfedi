@@ -1,8 +1,9 @@
 {% macro credit_link(credit) -%}
-{% if credit.href %}<a href="{{ credit.href }}"{% if not credit.local %} rel="nofollow ugc noopener" target="_blank"{% endif %}>{{ credit.name }}</a>{% else %}{{ credit.name }}{% endif %}
+{% if credit.href %}<a href="{{ credit.href }}">{{ credit.name }}</a>{% else %}{{ credit.name }}{% endif %}
 {%- endmacro -%}
-<span class="podcast_byline">{{ _('Hosted by') }}
+<span class="podcast_byline text-muted">{% if byline.hosts %}{{ _('hosted by') }}
 {% for credit in byline.hosts %}{{ credit_link(credit) }}{% if not loop.last %}, {% endif %}{% endfor %}
-{%- if byline.guests %} · {{ _('with guest') if byline.guests | length == 1 else _('with guests') }}
+{%- endif %}
+{%- if byline.guests %}{% if byline.hosts %} · {% endif %}{{ _('with guest') if byline.guests | length == 1 else _('with guests') }}
 {% for credit in byline.guests %}{{ credit_link(credit) }}{% if not loop.last %}, {% endif %}{% endfor %}
 {%- endif %}</span>

@@ -1,6 +1,5 @@
 """Interop D24, decision 5: the post byline reads "Hosted by A, B · with guest C" from the credits, and
 falls back to the podcast's own name when there are none."""
-import copy
 from types import SimpleNamespace
 
 import pytest
@@ -46,48 +45,67 @@ def page(app, post, monkeypatch):
     return client_as(app, viewer).get(f'/post/{post.id}').get_data(as_text=True)
 
 
-CREDITS = (credit('Ann Host', profile_url='https://social.example/@ann'),
-           credit('Ben Cohost', profile_url='https://ben.example/about'),
-           credit('Cara Guest', role='guest'))
+HOSTILE = '"><script>x</script>'
+
+
+def verified(name, user, role='host'):
+    return {**credit(name, role=role, profile_url='https://social.example/@ann', user_id=user.id), 'verified': True}
 
 
 @pytest.mark.parametrize('microblog', [True, False])
-def test_the_byline_names_hosts_and_guests(app, world, monkeypatch, microblog):
-    credits = copy.deepcopy(list(CREDITS))
-    credits[0]['user_id'] = world.ann.id
+def test_the_poster_stays_and_the_credits_follow_it(app, world, monkeypatch, microblog):
+    credits = [verified('Ann Host', world.ann), credit('Ben Cohost'), credit('Cara Guest', role='guest')]
     html = page(app, with_credits(world, microblog=microblog, credits=credits), monkeypatch)
 
-    assert 'Hosted by' in html
+    poster = html.index(f'href="/u/{world.podcast.link()}"')   # the podcast account, via render_username
+    assert poster < html.index('podcast_byline')
+    assert 'hosted by' in html and 'with guest' in html and 'Cara Guest' in html
     assert f'href="/u/{world.ann.link()}"' in html
-    assert 'href="https://ben.example/about"' in html
-    assert 'with guest' in html and 'Cara Guest' in html
 
 
-def test_without_credits_the_byline_is_the_podcast(app, world, monkeypatch):
+def test_an_unverified_credit_is_plain_text_even_for_a_real_user(app, world, monkeypatch):
+    credits = [credit('Ann Host', profile_url='https://social.example/@ann', user_id=world.ann.id),
+               credit('Ben Cohost', profile_url='https://ben.example/about')]
+    html = page(app, with_credits(world, credits=credits), monkeypatch)
+    byline = html[html.index('podcast_byline'):]
+    byline = byline[:byline.index('</span>')]
+
+    assert 'Ann Host' in byline and 'Ben Cohost' in byline
+    assert '<a ' not in byline and 'ben.example' not in html and f'/u/{world.ann.link()}' not in byline
+
+
+def test_a_hostile_credit_name_is_escaped(app, world, monkeypatch):
+    html = page(app, with_credits(world, credits=[credit(HOSTILE)]), monkeypatch)
+
+    assert '<script>x</script>' not in html and '&lt;script&gt;x&lt;/script&gt;' in html
+
+
+def test_without_credits_there_is_no_byline_and_the_poster_remains(app, world, monkeypatch):
     html = page(app, with_credits(world), monkeypatch)
 
-    assert 'podcast_byline' not in html and 'Hosted by' not in html
-    assert f'href="/u/{world.podcast.link()}"' in html   # the ordinary username, i.e. the podcast itself
+    assert 'podcast_byline' not in html
+    assert f'href="/u/{world.podcast.link()}"' in html
 
 
-def test_a_banned_users_credit_links_to_their_profile_url_instead(world):
+def test_a_verified_credit_links_to_its_profile_but_a_banned_one_does_not(world):
+    post = with_credits(world, credits=[verified('Ann Host', world.ann)])
+    assert podcast_byline(post)['hosts'] == [{'name': 'Ann Host', 'href': f'/u/{world.ann.link()}', 'local': True}]
+
     world.ann.banned = True
     db.session.commit()
-    post = with_credits(world, credits=[credit('Ann Host', profile_url='https://social.example/@ann',
-                                               user_id=world.ann.id)])
-
-    assert podcast_byline(post)['hosts'] == [{'name': 'Ann Host', 'href': 'https://social.example/@ann',
-                                              'local': False}]
+    assert podcast_byline(post)['hosts'] == [{'name': 'Ann Host', 'href': None, 'local': False}]
 
 
-def test_guests_without_hosts_are_hosted_by_the_podcast(world):
-    post = with_credits(world, credits=[credit('Cara Guest', role='guest')])
+def test_a_stored_user_id_without_the_verified_flag_does_not_link(world):
+    post = with_credits(world, credits=[credit('Ann Host', user_id=world.ann.id)])
 
-    byline = podcast_byline(post)
+    assert podcast_byline(post)['hosts'] == [{'name': 'Ann Host', 'href': None, 'local': False}]
 
-    assert byline['hosts'] == [{'name': world.podcast.display_name(), 'href': f'/u/{world.podcast.link()}',
-                                'local': True}]
-    assert byline['guests'] == [{'name': 'Cara Guest', 'href': None, 'local': False}]
+
+def test_guests_without_hosts_have_no_hosts_line(world):
+    byline = podcast_byline(with_credits(world, credits=[credit('Cara Guest', role='guest')]))
+
+    assert byline == {'hosts': [], 'guests': [{'name': 'Cara Guest', 'href': None, 'local': False}]}
 
 
 def test_no_credits_means_no_byline(world):
