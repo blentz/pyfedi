@@ -9,7 +9,7 @@ from flask_wtf.csrf import generate_csrf
 
 from app import db
 from app.constants import POST_TYPE_IMAGE
-from app.models import BlockedImage, Post, PostReply
+from app.models import BlockedImage, File, Post, PostReply
 from tests.factories import bearer, grant_permission
 from tests.test_visibility_moderation import world  # noqa: F401 -- the fixture
 from tests.test_visibility_single_object import client_as
@@ -161,6 +161,27 @@ def test_an_admin_blocks_the_image_of_a_followers_only_post_without_recording_it
     note = BlockedImage.query.one().note
     assert SECRET not in note
     assert client_as(app, w.admin).get(f'/post/{w.post.id}/block_image_purge_posts').status_code == 200
+
+
+def test_the_purge_page_lists_a_followers_only_post_without_its_content_or_image(app, hidden):
+    """D2: the purge list the admin lands on after blocking the image (the real query, not a stub) offers the post
+    for deletion and shows nothing of it: no title, body, author or image."""
+    w = hidden
+    grant_permission(w.admin, 'change instance settings')
+    image = File(source_url='https://m.example/secret-cover.png', file_path='s.png', hash='1' * 256)
+    db.session.add(image)
+    db.session.add(BlockedImage(hash='1' * 256, file_name='secret-cover.png'))
+    db.session.commit()
+    w.post.image_id = image.id
+    db.session.commit()
+
+    response = client_as(app, w.admin).get(f'/post/{w.post.id}/block_image_purge_posts')
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert f'value="{w.post.id}"' in html
+    for leaked in (SECRET, 'secret body', 'secret-cover', 'alice'):
+        assert leaked not in html
 
 
 # --- the API ---------------------------------------------------------------
