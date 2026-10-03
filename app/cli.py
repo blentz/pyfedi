@@ -58,12 +58,15 @@ from app.shared.tasks.maintenance import (
     archive_old_posts, archive_old_users, cleanup_old_read_posts, refresh_instance_chooser, clean_up_tmp
 )
 from app.utils import move_file_to_s3
+from app.discovery.cli import register_discovery_commands
 import app as app_pkg
 
 logger = logging.getLogger(__name__)
 
 
 def register(app):
+    register_discovery_commands(app)   # fork (interop D24): flask refresh_discovery
+
     @app.cli.group()
     def translate():
         """Translation and localization commands."""
