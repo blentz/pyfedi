@@ -1,0 +1,53 @@
+"""Pre-load PeerTube channels and Castopod podcasts (interop D24, goal (a)). Always a manual admin
+action; runs as a Celery task; idempotent, because a community this instance already knows is skipped;
+each subscription goes through the existing join path, do_subscribe(admin_preload=True)."""
+from sqlalchemy import exists, func
+
+from app import celery, db
+from app.activitypub.util import find_actor_or_create
+from app.community.routes import do_subscribe
+from app.discovery import KIND_COMMUNITY
+from app.models import Community, DiscoveryEntry
+from app.utils import instance_banned
+
+PRELOAD_PLATFORMS = ('peertube', 'castopod')
+# Subscribe as user 1, the first instance admin, as the lemmyverse pre-load does (see admin_federation_preload)
+PRELOAD_USER_ID = 1
+
+
+def preload_candidates(count: int, platforms) -> list[DiscoveryEntry]:
+    wanted = [platform for platform in (platforms or []) if platform in PRELOAD_PLATFORMS]
+    if not wanted or count is None or count < 1:
+        return []
+    known = exists().where(Community.ap_profile_id == func.lower(DiscoveryEntry.actor_url))
+    query = db.session.query(DiscoveryEntry).filter(DiscoveryEntry.kind == KIND_COMMUNITY,
+                                                    DiscoveryEntry.platform.in_(wanted),
+                                                    DiscoveryEntry.nsfw == False, ~known) \
+        .order_by(DiscoveryEntry.followers.desc(), DiscoveryEntry.name)
+    candidates = []
+    for entry in query:
+        if instance_banned(entry.host):
+            continue
+        candidates.append(entry)
+        if len(candidates) >= count:
+            break
+    return candidates
+
+
+@celery.task
+def preload_discovered_communities(entry_ids, user_id):
+    results = []
+    for entry_id in entry_ids:
+        entry = db.session.get(DiscoveryEntry, entry_id)
+        if entry is None or entry.kind != KIND_COMMUNITY:
+            results.append({'entry': entry_id, 'status': 'gone'})
+            continue
+        if db.session.query(Community.id).filter(Community.ap_profile_id == entry.actor_url.lower()).first():
+            results.append({'entry': entry_id, 'status': 'already known'})
+            continue
+        community = find_actor_or_create(entry.actor_url, community_only=True)
+        if not isinstance(community, Community):
+            results.append({'entry': entry_id, 'status': 'not found'})
+            continue
+        results.append(do_subscribe(community.ap_id, user_id, admin_preload=True))
+    return results

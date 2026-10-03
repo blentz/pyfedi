@@ -1,0 +1,127 @@
+"""Interop D24, goal (a): an admin pre-loads PeerTube channels and Castopod podcasts the way the
+lemmyverse pre-load does for Lemmy communities: preview, then subscribe through the join path."""
+from types import SimpleNamespace
+
+import pytest
+
+from app import db
+from app.discovery import preload
+from app.discovery.preload import preload_candidates, preload_discovered_communities
+from app.models import Community, DiscoveryEntry
+from tests.discovery_fixtures import add_entry, admin, fresh_cache  # noqa: F401
+from tests.factories import make_banned_instance, make_community, make_instance, make_user
+
+pytestmark = pytest.mark.usefixtures('site', 'fresh_cache')
+
+PAGE = '/admin/federation/discovery'
+
+
+@pytest.fixture
+def world(app, db_session):
+    instance = make_instance('world.example', software='piefed')
+    founder = make_user(instance, 'worldfounder', local=True)
+    add_entry('Bigchan', followers=900)
+    add_entry('Midchan', followers=500)
+    add_entry('Tinychan', followers=10)
+    add_entry('Zqpodshow', followers=700, platform='castopod', url='https://pod.example/@pod', host='pod.example')
+    add_entry('Ann', followers=999, platform='mastodon', kind='person', url='https://m.example/users/ann',
+              host='m.example')
+    add_entry('Spicy', followers=950, nsfw=True)
+    known = add_entry('Known', followers=800, url='https://known.example/video-channels/Known')
+    make_community('known', host='known.example')
+    community = Community.query.filter_by(name='known').one()
+    community.ap_profile_id = 'https://known.example/video-channels/known'   # stored lower-case, as ingest stores it
+    db.session.commit()
+    return SimpleNamespace(founder=founder, known=known)
+
+
+def test_candidates_honour_n_and_the_platform_filter(world):
+    assert [e.name for e in preload_candidates(2, ['peertube'])] == ['Bigchan', 'Midchan']
+    assert [e.name for e in preload_candidates(10, ['castopod'])] == ['Zqpodshow']
+    assert [e.name for e in preload_candidates(10, ['peertube', 'castopod'])] == ['Bigchan', 'Zqpodshow', 'Midchan', 'Tinychan']
+
+
+def test_candidates_never_include_people_nsfw_known_or_unknown_platforms(world):
+    names = [e.name for e in preload_candidates(50, ['peertube', 'castopod', 'mastodon'])]
+
+    assert 'Ann' not in names and 'Spicy' not in names
+    assert 'Known' not in names   # known case-insensitively: the entry says /Known, the community /known
+
+
+def test_candidates_skip_a_host_banned_after_the_refresh(world):
+    make_banned_instance('bigchan.example')
+
+    assert 'Bigchan' not in [e.name for e in preload_candidates(10, ['peertube'])]
+
+
+def test_subscribe_joins_each_new_community_once_and_skips_known_ones(world, monkeypatch):
+    resolved, joined = [], []
+
+    def resolve(actor_url, community_only=False):
+        resolved.append((actor_url, community_only))
+        name = actor_url.rstrip('/').rsplit('/', 1)[-1].lower()
+        community = make_community(name, host=f'{name}.example')
+        community.ap_id = f'{name}@{name}.example'
+        db.session.commit()
+        return community
+
+    monkeypatch.setattr(preload, 'find_actor_or_create', resolve)
+    monkeypatch.setattr(preload, 'do_subscribe', lambda actor, user_id, admin_preload=False:
+                        joined.append((actor, user_id, admin_preload)) or {'community': actor, 'status': 'joined'})
+    big = DiscoveryEntry.query.filter_by(name='Bigchan').one()
+
+    results = preload_discovered_communities([big.id, world.known.id, 999999], world.founder.id)
+
+    assert resolved == [(big.actor_url, True)]
+    assert joined == [('bigchan@bigchan.example', world.founder.id, True)]
+    assert [r['status'] for r in results] == ['joined', 'already known', 'gone']
+
+
+def test_an_actor_that_does_not_resolve_to_a_community_is_reported(world, monkeypatch):
+    monkeypatch.setattr(preload, 'find_actor_or_create', lambda actor_url, community_only=False: None)
+    monkeypatch.setattr(preload, 'do_subscribe', lambda *a, **k: pytest.fail('nothing to join'))
+    small = DiscoveryEntry.query.filter_by(name='Tinychan').one()
+
+    assert preload_discovered_communities([small.id], world.founder.id) == [{'entry': small.id, 'status': 'not found'}]
+
+
+def test_the_preview_lists_the_candidates_and_subscribes_nobody(world, admin, monkeypatch):
+    client, token = admin
+    monkeypatch.setattr('app.discovery.admin_views.preload_discovered_communities',
+                        SimpleNamespace(delay=lambda *a: pytest.fail('a preview must not subscribe')))
+
+    page = client.post(PAGE, data={'preload_count': '2', 'preload_platforms': ['peertube'],
+                                   'preload_preview': 'go', 'csrf_token': token}).get_data(as_text=True)
+
+    assert '<td>Bigchan</td>' in page and '<td>Midchan</td>' in page
+    assert 'Tinychan' not in page and 'Zqpodshow' not in page
+
+
+def test_subscribe_hands_the_candidate_ids_to_the_celery_task(world, admin, monkeypatch):
+    client, token = admin
+    queued = []
+    monkeypatch.setattr('app.discovery.admin_views.preload_discovered_communities',
+                        SimpleNamespace(delay=lambda entry_ids, user_id: queued.append((entry_ids, user_id))))
+
+    response = client.post(PAGE, data={'preload_count': '2', 'preload_platforms': ['peertube', 'castopod'],
+                                       'preload_subscribe': 'go', 'csrf_token': token})
+
+    big = DiscoveryEntry.query.filter_by(name='Bigchan').one()
+    pod = DiscoveryEntry.query.filter_by(name='Zqpodshow').one()
+    assert response.status_code == 302
+    assert queued == [([big.id, pod.id], preload.PRELOAD_USER_ID)]
+
+
+@pytest.mark.parametrize('count', ['0', '201'])
+def test_a_count_outside_one_to_two_hundred_is_refused(world, admin, monkeypatch, count):
+    client, token = admin
+    queued = []
+    monkeypatch.setattr('app.discovery.admin_views.preload_discovered_communities',
+                        SimpleNamespace(delay=lambda *a: queued.append(a)))
+
+    response = client.post(PAGE, data={'preload_count': count, 'preload_platforms': ['peertube'],
+                                       'preload_subscribe': 'go', 'csrf_token': token})
+
+    assert response.status_code == 200          # re-rendered with the form error, not a redirect
+    assert 'Number must be between 1 and 200' in response.get_data(as_text=True)
+    assert queued == []
