@@ -3345,8 +3345,9 @@ def fetch_castopod_episode_audio_task(post_id, episode_url):
         audio_url = _as_url(link.get('href'), 1024)
         if not audio_url or not str(link.get('mediaType', '')).startswith('audio/') or not url_is_storable(audio_url):
             return
-        # the episode and its audio are served by the podcast's own host
-        if host_of(audio_url) != host_of(episode_url):
+        # R-b: the audio may be on any https host (a CDN, S3, an OP3 prefix): we store a url for the browser and never
+        # fetch the audio ourselves
+        if urlparse(audio_url).scheme != 'https':
             return
         session = get_task_session()
         try:
@@ -3354,16 +3355,22 @@ def fetch_castopod_episode_audio_task(post_id, episode_url):
                 post = session.get(Post, post_id)
                 if post is None or post.deleted:
                     return
-                post.url = audio_url
-                post.type = POST_TYPE_LINK
                 domain = domain_from_url(audio_url)
-                if domain and not domain.banned and post.domain_id is None:
+                if domain is None or domain.banned:
+                    return
+                url_changed = post.url != audio_url
+                if post.domain_id != domain.id:
+                    adjust_domain_post_count(post, -1)
                     domain.post_count += 1
                     post.domain = domain
+                post.url = audio_url
+                post.type = POST_TYPE_LINK
                 image_url = image_url_from(episode.get('image'))
                 if image_url and post.image_id is None:
                     post.image = File(source_url=image_url)
                 session.commit()
+                if url_changed:
+                    post.calculate_cross_posts(url_changed=True)
                 if post.image_id and get_setting('cache_remote_images_locally', True):
                     make_image_sizes(post.image_id, 170, 512, 'posts', post.community.low_quality)
         except Exception:
