@@ -17,7 +17,7 @@ THE NORMALISATION IS HUNK-DIRECTED, NOT A BLIND remove-to-add REWRITE, and the
 runnable recipe is at the END OF THIS FILE rather than here, because it contains
 regex escapes a docstring would eat. Two hunks defeat a blind rewrite:
 `unsticky_post` -> `sticky_post` is the deletion of an `un` PREFIX, not a
-substitution of the token `remove`; and `:22` -- "For Announce, remove @context
+substitution of the token `remove`; and `:23` -- "For Announce, remove @context
 from inner object" -- carries the English word `remove` IDENTICALLY IN BOTH
 FILES, so rewriting it changes a line that never differed. A blind rewrite
 manufactures two spurious differences on a pair that has not diverged, which is
@@ -305,7 +305,7 @@ def test_the_twins_are_structurally_identical(db_session):
 
     THIS TEST IS THE AUTHORITATIVE FORM OF THE NORMALISATION. The four rules
     below are the four `-e` clauses of the shell recipe at the end of this
-    file, in the same order and with the same `22!` line address; the shell
+    file, in the same order and with the same `23!` line address; the shell
     form is the by-hand convenience for reading the difference SET, and if the
     two ever disagree this one is right and the comment is stale.
 
@@ -343,13 +343,13 @@ def test_the_twins_are_structurally_identical(db_session):
 
     def normalise(src):
         """`removes.py` rewritten into `adds.py`'s names. Line-addressed,
-        because `:22`'s English word `remove` is identical in both files."""
+        because `:23`'s English word `remove` is identical in both files."""
         out = []
         for number, line in enumerate(src.splitlines(keepends=True), start=1):
             line = re.sub(r'\bunsticky_post\b', 'sticky_post', line)
             line = re.sub(r'\bremove_([a-z]*)', r'add_\1', line)
             line = re.sub(r'\bRemove\b', 'Add', line)
-            if number != 22:
+            if number != 23:
                 line = re.sub(r'\bremove\b', 'add', line)
             out.append(line)
         return ''.join(out)
@@ -1182,9 +1182,9 @@ def test_unsticky_post_closes_the_session_on_the_happy_path(
 #
 #   1. `unsticky_post` -> `sticky_post` is the deletion of an `un` PREFIX. No
 #      substitution of `remove` can produce it, so :27 still differs.
-#   2. :22 -- "For Announce, remove @context from inner object" -- carries the
+#   2. :23 -- "For Announce, remove @context from inner object" -- carries the
 #      English word `remove` IDENTICALLY IN BOTH FILES. Rewriting it changes a
-#      line that never differed, so :22 differs afterwards when it did not
+#      line that never differed, so :23 differs afterwards when it did not
 #      before.
 #
 # A blind rewrite therefore reports TWO spurious differences on a pair that has
@@ -1194,15 +1194,15 @@ def test_unsticky_post_closes_the_session_on_the_happy_path(
 #   sed -e 's/\bunsticky_post\b/sticky_post/g' \
 #       -e 's/\bremove_\([a-z]*\)/add_\1/g' \
 #       -e 's/\bRemove\b/Add/g' \
-#       -e '22!s/\bremove\b/add/g' \
+#       -e '23!s/\bremove\b/add/g' \
 #       app/shared/tasks/removes.py | diff - app/shared/tasks/adds.py
 #
-# The `22!` address is the whole of point 2 and is the part that looks like a
+# The `23!` address is the whole of point 2 and is the part that looks like a
 # typo. It is not.
 #
 # THIS SHELL FORM IS THE CONVENIENCE; THE TEST IS AUTHORITATIVE.
 # test_the_twins_are_structurally_identical applies these same four rules in
-# the same order as four `re.sub` calls -- including the `22!` line address --
+# the same order as four `re.sub` calls -- including the `23!` line address --
 # and asserts the normalised `removes.py` equals `adds.py` byte for byte, on
 # top of the line count and the ast extents. If this comment and that test ever
 # disagree, THE TEST IS RIGHT and this block is stale; keep them in step by
