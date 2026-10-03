@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:podcast="https://podcastindex.org/namespace/1.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <channel>
+    <title>My Podcast</title>
+    <link>https://pod.example/@mypodcast</link>
+    <generator>Castopod - https://castopod.org/</generator>
+    <podcast:person role="host" img="https://pod.example/media/ann.jpg" href="https://social.example/@ann">Ann Host</podcast:person>
+    <podcast:person role="co-host" href="https://ben.example/about">Ben Cohost</podcast:person>
+    <podcast:person role="producer">Pat Producer</podcast:person>
+    <item>
+      <title>Episode 1: Hello</title>
+      <link>https://pod.example/@mypodcast/episodes/ep-1</link>
+      <guid isPermaLink="false">0d9c2f5e-ep-1</guid>
+      <podcast:person role="guest" href="https://social.example/@cara">Cara Guest</podcast:person>
+      <podcast:person role="host">Ann Host</podcast:person>
+    </item>
+    <item>
+      <title>Episode 2</title>
+      <link>https://pod.example/@mypodcast/episodes/ep-2</link>
+      <guid>https://pod.example/@mypodcast/episodes/ep-2</guid>
+      <podcast:person role="guest">Dan Other</podcast:person>
+    </item>
+  </channel>
+</rss>
