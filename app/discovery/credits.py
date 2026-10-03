@@ -265,8 +265,11 @@ def podcast_api_credits(post) -> list | None:
         if user is None:
             exposed.append({'name': credit.get('name') or '', 'role': credit['role']})
         else:
-            exposed.append({'name': user.display_name(), 'role': credit['role'], 'image': credit.get('image'),
-                            'profile_url': credit.get('profile_url'), 'user_id': user.id})
+            # Every identifying field comes from the verified user, never the feed (a feed could otherwise
+            # put any picture or address beside a genuine identity).
+            avatar = user.avatar.medium_url() if user.avatar_id else None
+            exposed.append({'name': user.display_name(), 'role': credit['role'], 'image': avatar or None,
+                            'profile_url': user.public_url(), 'user_id': user.id})
     return exposed or None
 
 
