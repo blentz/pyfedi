@@ -39,6 +39,8 @@ Full cross-compatibility with Mastodon, PeerTube, Pixelfed and Castopod. "Full" 
 - **D22 Enforcement is not seeing (amends D19).** Moderator and admin removal actions skip the visibility gate. Views stay gated. Removal acknowledgements, the delete-confirmation page and modlog entries for non-open content are neutral to anyone who can't view it. The modlog keeps the target user, and shows it only to admins for non-open entries.
 - **D23 Mentions.** Mention notifications obey the visibility predicate. Follow-up: store each object's addressees and add an addressee arm to the predicate, because Mastodon shows followers-only posts to the people they mention.
 
+- **D24 Discovery seeding and Castopod podcasts as communities (2026-10-03).** A new instance gets routes to Mastodon, Pixelfed, PeerTube and Castopod: an admin pre-load of PeerTube channels and Castopod podcasts, and a search index of those plus opt-in Mastodon/Pixelfed people, fed by public directories (SepiaSearch, Podcast Index with admin-entered key and secret, joinmastodon + per-server directories, FediDB + Pixelfed directories). A podcast is a community, an episode is a post, and the authors shown are the podcast's hosts and per-episode guests (credits from RSS `podcast:person`). Suggested follows for users are future work. Design: `docs/superpowers/specs/2026-10-03-discovery-seeding-design.md`.
+
 ### Extensibility
 
 - **D8 Content kind.** The unit of extension is a content kind, one registered bundle of:
