@@ -1,0 +1,11 @@
+{"total": 3, "data": [
+  {"id": 1, "url": "https://tube.example/video-channels/linux_videos", "name": "linux_videos",
+   "displayName": "Linux Videos", "host": "tube.example", "followersCount": 4581, "videosCount": 469,
+   "avatars": [{"url": "https://tube.example/lazy-static/avatars/small.png", "width": 48},
+               {"url": "https://tube.example/lazy-static/avatars/big.png", "width": 600}]},
+  {"id": 2, "url": "https://video.example/video-channels/cooking", "name": "cooking",
+   "displayName": "Cooking Together", "host": "video.example", "followersCount": 120, "videosCount": 30,
+   "avatars": []},
+  {"id": 3, "url": "https://other.example/video-channels/spoofed", "name": "spoofed",
+   "displayName": "Spoofed", "host": "tube.example", "followersCount": 9999, "avatars": []}
+]}
