@@ -8,7 +8,15 @@ The DOCTYPE refusal is made by expat itself, so no encoding (UTF-16, UTF-32, BOM
 import xml.etree.ElementTree as ElementTree
 from xml.parsers import expat
 
+import httpx
+from flask import current_app
+
+import app.activitypub.util as ap_util   # the module, not names: app.activitypub.util imports this module
+from app import celery, db
 from app.discovery.filters import clean_https_url, clean_name
+from app.discovery.podcast import podcast_community_for
+from app.models import Post, User
+from app.utils import get_request, get_task_session, patch_db_session
 
 MAX_FEED_BYTES = 2 * 1024 * 1024
 MAX_CREDITS = 20
@@ -78,3 +86,78 @@ def parse_feed_credits(feed_bytes: bytes, episode_url: str) -> list[dict]:
                         credits.append(credit)
             break
     return credits[:MAX_CREDITS]
+
+
+_FEED_ACCEPT = 'application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.1'
+
+
+def fetch_feed(rss_url: str) -> bytes | None:
+    try:
+        response = get_request(rss_url, headers={'Accept': _FEED_ACCEPT})
+    except httpx.HTTPError:
+        return None
+    try:
+        if response.status_code != 200:
+            return None
+        declared = response.headers.get('Content-Length', '')
+        if declared.isdigit() and int(declared) > MAX_FEED_BYTES:
+            return None
+        body = response.content
+        return body if len(body) <= MAX_FEED_BYTES else None
+    finally:
+        response.close()
+
+
+def resolve_credit_user(profile_url) -> int | None:
+    """The PieFed User a credit's href names when it is a fediverse account, else None. find_actor_or_create
+    applies the usual guards (banned and non-allowlisted instances, blocked words, get_request's SSRF guard)."""
+    if clean_https_url(profile_url) is None:
+        return None
+    try:
+        actor = ap_util.find_actor_or_create(profile_url)
+    except httpx.HTTPError:
+        return None
+    return actor.id if isinstance(actor, User) and not actor.banned else None
+
+
+def store_credits(post: Post, credits: list) -> None:
+    if not credits:
+        return
+    extensions = dict(post.extensions) if isinstance(post.extensions, dict) else {}
+    extensions['podcast'] = {'credits': credits}
+    post.extensions = extensions   # a new dict: db.JSON does not track in-place changes
+    db.session.commit()
+
+
+def fetch_episode_credits(post: Post, episode_url: str) -> None:
+    if current_app.debug:
+        fetch_episode_credits_task(post.id, episode_url)
+    else:
+        fetch_episode_credits_task.delay(post.id, episode_url)
+
+
+@celery.task
+def fetch_episode_credits_task(post_id, episode_url):
+    """Any failure leaves the post without credits; the byline then falls back to the podcast's name."""
+    with current_app.app_context():
+        session = get_task_session()
+        try:
+            with patch_db_session(session):
+                post = session.get(Post, post_id)
+                if post is None or post.deleted:
+                    return
+                community = podcast_community_for(post.author)
+                if community is None or not community.rss_url:
+                    return
+                feed = fetch_feed(community.rss_url)
+                if feed is None:
+                    return
+                credits = parse_feed_credits(feed, episode_url)
+                for credit in credits:
+                    credit['user_id'] = resolve_credit_user(credit['profile_url'])
+                store_credits(post, credits)
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
