@@ -1,0 +1,43 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% from 'bootstrap5/form.html' import render_form %}
+{% set active_child = 'admin_federation' %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+<div class="row">
+    <div class="col">
+        <h1>{{ _('Discovery: channels, podcasts and people') }}</h1>
+
+        <h2 class="h4 mt-4">{{ _('Podcast Index credentials') }}</h2>
+        <p id="podcastindex_status">{% if credentials_configured %}{{ _('Status: configured') }}{% else %}{{ _('Status: not set') }}{% endif %}</p>
+        <p>{{ _('Castopod podcasts are found through the Podcast Index API. The key and secret are stored on this server and are never shown again; leave a field blank to keep what is stored.') }}</p>
+        {{ render_form(credentials_form) }}
+
+        {% if preload_form is not none %}
+            {% include 'admin/_discovery_preload.html' %}
+        {% endif %}
+
+        <h2 class="h4 mt-4">{{ _('Data sources') }}</h2>
+        <p class="discovery_attribution">
+            {{ _('Directory data comes from') }}
+            <a href="https://sepiasearch.org/" rel="noopener">SepiaSearch</a> (PeerTube),
+            <a href="https://podcastindex.org/" rel="noopener">Podcast Index</a> (Castopod),
+            <a href="https://joinmastodon.org/" rel="noopener">joinmastodon.org</a> {{ _("and each server's opt-in profile directory") }} (Mastodon),
+            <a href="https://fedidb.org/" rel="noopener">FediDB</a> {{ _("and each server's opt-in directory") }} (Pixelfed).
+            {{ _('None of them grants a bulk-use licence, so this instance samples them politely, once a day.') }}
+        </p>
+    </div>
+</div>
+<hr />
+<div class="row">
+    <div class="col">
+        {% include 'admin/_nav.html' %}
+    </div>
+</div>
+<hr />
+{% endblock %}
