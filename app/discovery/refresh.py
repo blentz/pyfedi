@@ -14,6 +14,7 @@ from app.models import DiscoveryEntry, utcnow
 EXPIRY_DAYS = 30
 MAX_PER_HOST = 20
 MAX_PER_SOURCE = 500
+HOST_LIMIT = 255  # DiscoveryEntry.host is String(255)
 
 FETCHERS = {
     peertube.SOURCE: peertube.fetch_peertube_channels,
@@ -37,7 +38,7 @@ def clean_entries(entries, exclude) -> list[dict]:
         actor_url = clean_https_url(entry.get('actor_url'))
         name = clean_name(entry.get('name'))
         host = entry.get('host').strip().lower() if isinstance(entry.get('host'), str) else ''
-        if actor_url is None or name is None or urlparse(actor_url).hostname != host:
+        if actor_url is None or name is None or len(host) > HOST_LIMIT or urlparse(actor_url).hostname != host:
             continue
         if actor_url in seen or per_host.get(host, 0) >= MAX_PER_HOST or exclude(host) or is_bad_name(name):
             continue
@@ -91,6 +92,11 @@ def refresh_discovery(now=None) -> dict:
             db.session.rollback()
             results[source] = 'failed'
             continue
-        results[source] = upsert_entries(clean_entries(fetched, exclude), now)
+        try:
+            results[source] = upsert_entries(clean_entries(fetched, exclude), now)
+        except Exception:
+            current_app.logger.exception(f'discovery: {source} could not be stored')
+            db.session.rollback()
+            results[source] = 'failed'
     results['expired'] = expire_entries(now)
     return results
