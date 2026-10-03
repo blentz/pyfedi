@@ -570,7 +570,9 @@ def delete_post_from_community_task(post_id, user_id):
                 post.deleted_by = user.id
                 session.commit()
 
-                if not community.local_only and is_open(post):  # E9: a followers-only post never reached the followers
+                # E9: a followers-only post never reached a local community's followers; a remote community, its
+                # home, is still sent the Delete (R-a)
+                if not community.local_only and (is_open(post) or not community.is_local()):
                     delete_json = {
                         'id': f"{current_app.config['SERVER_URL']}/activities/delete/{gibberish(15)}",
                         'type': 'Delete',
@@ -640,8 +642,9 @@ def delete_post_reply_from_community_task(post_reply_id, user_id):
                 post_reply.deleted_by = user.id
                 session.commit()
 
-                # federate delete (E9: not for a followers-only reply, which never reached the followers)
-                if not post.community.local_only and is_open(post_reply):
+                # federate delete (E9: not to a local community's followers for a followers-only reply, which never
+                # reached them; a remote community, its home, is still sent it -- R-a)
+                if not post.community.local_only and (is_open(post_reply) or not post.community.is_local()):
                     delete_json = {
                         'id': f"{current_app.config['SERVER_URL']}/activities/delete/{gibberish(15)}",
                         'type': 'Delete',

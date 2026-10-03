@@ -2487,8 +2487,9 @@ def post_reply_restore(post_id: int, comment_id: int):
         db.session.commit()
         flash(_('Comment restored.'))
 
-        # Federate un-delete (E9: not for a followers-only reply, which never reached the followers)
-        if not post.community.local_only and is_open(post_reply):
+        # Federate un-delete (E9: not to a local community's followers for a followers-only reply, which never
+        # reached them; a remote community, its home, is still sent it -- R-a)
+        if not post.community.local_only and (is_open(post_reply) or not post.community.is_local()):
             delete_json = {
                 "actor": current_user.public_url(),
                 "to": ["https://www.w3.org/ns/activitystreams#Public"],

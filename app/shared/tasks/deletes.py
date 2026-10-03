@@ -175,8 +175,9 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
     domains_sent_to = []
 
     # a local_only community federates nothing itself; only the author's followers (below) are reached. Nor does a
-    # followers-only object (E9): it never reached the community's followers, so its Delete and Undo do not either.
-    if community.local_only or not is_open(object):
+    # followers-only object in a local community (E9): it never reached the community's followers, so its Delete and
+    # Undo do not either. A remote community is its home and already holds it, so its inbox is still sent them (R-a).
+    if community.local_only or (community.is_local() and not is_open(object)):
         pass
     elif community.is_local():
         if is_restore:
