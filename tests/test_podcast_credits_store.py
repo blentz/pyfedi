@@ -1,11 +1,13 @@
 """Interop D24, decisions 6 and 7: credits are fetched from the podcast's feed after an episode arrives,
 fediverse hrefs are linked to their PieFed User, and the result lives in post.extensions['podcast']."""
+import gzip
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from app import cache, db
+from app.utils import get_request_capped
 from app.activitypub.util import actor_json_to_model, create_post
 from app.discovery import credits
 from app.discovery.credits import MAX_FEED_BYTES, fetch_episode_credits_task, resolve_credit_user, store_credits
@@ -160,3 +162,31 @@ def test_a_feed_without_a_content_length_is_not_read_past_the_cap(world, http_mo
 
     assert stored(world.post.id) is None
     assert len(pulled) * len(chunk) <= MAX_FEED_BYTES + 2 * len(chunk)
+
+
+def test_a_feed_trickled_past_the_deadline_is_abandoned(app, http_mock, monkeypatch):
+    now = [1000.0]
+    real_time = __import__('time')
+    monkeypatch.setattr('app.utils.time', SimpleNamespace(monotonic=lambda: now[0],
+                                                          **{n: getattr(real_time, n) for n in dir(real_time)
+                                                             if n != 'monotonic'}))
+    pulled = []
+
+    def trickle():
+        for _ in range(1000):
+            pulled.append(1)
+            now[0] += 5   # five fake seconds per byte
+            yield b'x'
+
+    http_mock.get(FEED_URL).respond(200, content=trickle())
+
+    assert get_request_capped(FEED_URL, MAX_FEED_BYTES, max_seconds=15) == (200, None)
+    assert len(pulled) <= 5
+
+
+def test_a_compressed_feed_is_refused_undecoded(app, http_mock):
+    route = http_mock.get(FEED_URL).respond(200, content=gzip.compress(b'<rss></rss>'),
+                                            headers={'Content-Encoding': 'gzip'})
+
+    assert get_request_capped(FEED_URL, MAX_FEED_BYTES) == (200, None)
+    assert route.calls.last.request.headers['Accept-Encoding'] == 'identity'
