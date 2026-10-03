@@ -28,7 +28,13 @@ def channel_to_entry(channel) -> dict | None:
     if not isinstance(channel, dict):
         return None
     url, host = channel.get('url'), channel.get('host')
-    if not isinstance(url, str) or not isinstance(host, str) or urlparse(url).hostname != host.lower():
+    if not isinstance(url, str) or not isinstance(host, str) or not sources.is_hostname(host.lower()):
+        return None
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    if parsed.scheme != 'https' or parsed.hostname != host.lower():
         return None
     name = channel.get('displayName') or channel.get('name')
     return sources.make_entry(kind=KIND_COMMUNITY, platform='peertube', actor_url=url,
