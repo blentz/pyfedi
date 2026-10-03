@@ -35,6 +35,14 @@ def can_view(obj, viewer_id: Optional[int]) -> bool:
     return viewer_id == obj.user_id or _follows(viewer_id, obj.user_id)
 
 
+def is_open(obj) -> bool:
+    """True when `obj` may be shown to anyone (public or unlisted). The outbound mirror of the inbound relay gates:
+    a followers-only object was never sent to a community's followers, so no activity about it is either. An object
+    with no `visibility` (a user, a community) counts as open, as a NULL value does in `can_view`."""
+    visibility = getattr(obj, 'visibility', None)
+    return visibility is None or visibility in OPEN_VISIBILITIES
+
+
 def post_title_for(post, viewer_id: Optional[int]) -> str:
     """A post's title as a notification, subscription name or page title tells it to `viewer_id`. Someone who may not
     view the post learns that one exists (its link still 404s for them), not what it is called."""

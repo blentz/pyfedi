@@ -2,6 +2,7 @@ from app import celery
 from app.activitypub.signature import default_context, post_request, send_post_request
 from app.models import Community, Post, User
 from app.utils import gibberish, instance_banned, get_task_session, patch_db_session
+from app.visibility import is_open
 
 from flask import current_app
 
@@ -61,6 +62,9 @@ def add_object(session, user_id, object, community_id=None):
         community = session.query(Community).filter_by(id=community_id).one()
 
     if community.local_only or community.private or not (community.instance_id and community.instance.online()):
+        return
+
+    if not is_open(object):  # E9: it never reached the community's followers, so nothing about it does either
         return
 
     add_id = f"{current_app.config['SERVER_URL']}/activities/add/{gibberish(15)}"

@@ -2,8 +2,16 @@ from sqlalchemy import text
 
 from app import db
 from app.models import Post, PostReply
-from app.visibility import (can_view, listable_clause, listable_sql, mark_restricted, visible_to_clause,
-                            visible_to_sql, RestrictedReply)
+from app.visibility import (
+    RestrictedReply,
+    can_view,
+    is_open,
+    listable_clause,
+    listable_sql,
+    mark_restricted,
+    visible_to_clause,
+    visible_to_sql,
+)
 from tests.factories import make_visibility_world
 
 
@@ -108,3 +116,12 @@ def test_mark_restricted_keeps_children(db_session):
     assert marked[0]['restricted'] is True
     assert marked[0]['replies'][0]['comment'] is w.public_child
     assert not marked[0]['replies'][0].get('restricted')
+
+
+def test_is_open_is_true_for_public_unlisted_null_and_things_with_no_visibility(db_session):
+    w = make_visibility_world()
+    for value, expected in (('public', True), ('unlisted', True), (None, True), ('followers', False),
+                            ('direct', False), ('bogus', False)):
+        w.post.visibility = value
+        assert is_open(w.post) is expected, value
+    assert is_open(w.author) and is_open(w.community)
