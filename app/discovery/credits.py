@@ -154,3 +154,35 @@ def fetch_episode_credits_task(post_id, episode_url):
             raise
         finally:
             session.close()
+
+
+def podcast_credits(post) -> list | None:
+    extensions = post.extensions if isinstance(post.extensions, dict) else {}
+    podcast = extensions.get('podcast')
+    stored = podcast.get('credits') if isinstance(podcast, dict) else None
+    return stored if isinstance(stored, list) and stored else None
+
+
+def _credit_link(credit: dict) -> dict:
+    href = None
+    user_id = credit.get('user_id')
+    if isinstance(user_id, int) and not isinstance(user_id, bool):
+        user = db.session.get(User, user_id)
+        if user is not None and not user.banned and not user.deleted:
+            href = f'/u/{user.link()}'
+    local = href is not None
+    if href is None:
+        href = clean_https_url(credit.get('profile_url'))
+    return {'name': credit.get('name') or '', 'href': href, 'local': local}
+
+
+def podcast_byline(post) -> dict | None:
+    """What the post byline shows for a podcast episode: hosts, then guests. None without credits."""
+    stored = podcast_credits(post)
+    if stored is None:
+        return None
+    hosts = [_credit_link(c) for c in stored if isinstance(c, dict) and c.get('role') == 'host']
+    guests = [_credit_link(c) for c in stored if isinstance(c, dict) and c.get('role') == 'guest']
+    if not hosts:
+        hosts = [{'name': post.author.display_name(), 'href': f'/u/{post.author.link()}', 'local': True}]
+    return {'hosts': hosts, 'guests': guests}
