@@ -30,6 +30,20 @@ def podcast_community_for(user) -> Community | None:
                                               Community.banned == False).first()
 
 
+def podcast_route_for(user) -> Community | None | bool:
+    """Where a top-level Note from `user` with no community goes: the podcast's Community; None when the user has
+    no Community twin at all (a person, so the caller keeps its microblogs routing); False when a twin exists but
+    is banned or its User is banned or deleted (the caller drops the Note rather than leak it into microblogs)."""
+    if user is None or user.is_local() or not user.ap_profile_id:
+        return None
+    twin = db.session.query(Community).filter(Community.ap_profile_id == user.ap_profile_id).first()
+    if twin is None:
+        return None
+    if twin.banned or user.banned or user.deleted:
+        return False
+    return twin
+
+
 def ensure_podcast_community(user: User, actor_json: dict) -> Community | None:
     """Find or create the Community for a remote podcast user, keeping its rss_url current. None for a local,
     banned or deleted user (no Community is created for them), for an existing Community that is banned,
