@@ -33,6 +33,7 @@ from app.activitypub.util import users_total, active_half_year, active_month, lo
 # app.activitypub.signature before show_community is defined (U-circular-import)
 import app.community.routes as community_routes
 from app.community.util import send_to_remote_instance, send_to_remote_instance_fast
+from app.discovery.podcast import podcast_community_for
 from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
 # app.activitypub before show_feed is defined (import cycle: feed.routes)
@@ -2606,8 +2607,10 @@ def process_new_content(user, community, store_ap_json, request_json, announced)
     activity_json = {**activity_json, 'id': shorten_string(activity_json['id'], 100)}
 
     if community is None:
-        # community was not found earlier - this means the incoming post is from a microblogging platform
-        community = find_microblogging_community()  # set community to the microblogging community
+        # community was not found earlier - this means the incoming post is from a microblogging platform,
+        # or (D24) a top-level episode from a Castopod podcast, which belongs in the podcast's own community.
+        # Replies keep the existing routing (controller ruling P8).
+        community = (None if in_reply_to else podcast_community_for(user)) or find_microblogging_community()
 
     if not in_reply_to:  # Creating a new post
         post = Post.get_by_ap_id(ap_id)
