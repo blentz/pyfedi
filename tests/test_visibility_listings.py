@@ -6,16 +6,25 @@ followers-only post by its permalink (Task 4), but no listing offers it.
 """
 import json
 import re
-import uuid
+from datetime import timedelta
 
 import pytest
 from flask import current_app, g
 
 from app import db
 from app.activitypub.util import record_boost
-from app.models import Domain, Language, Post, Site, Tag, post_tag
-from tests.factories import (bearer, feed_ids, make_follow, make_instance, make_post, make_post_reply,
-                             make_user, make_visibility_world)
+from app.constants import POST_TYPE_EVENT
+from app.models import Domain, Event, Language, Site, Tag, Topic, post_tag, utcnow
+from tests.factories import (
+    bearer,
+    feed_ids,
+    make_follow,
+    make_instance,
+    make_post,
+    make_post_reply,
+    make_user,
+    make_visibility_world,
+)
 from tests.test_visibility_single_object import client_as
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -107,7 +116,6 @@ def test_community_comments_page_omits_hidden_replies(app, world):
 
 
 def test_topic_comments_omit_hidden_replies(app, world):
-    from app.models import Topic
     w = world
     topic = Topic(name='news', machine_name='news', num_communities=1, show_posts_in_children=False)
     db.session.add(topic)
@@ -238,9 +246,6 @@ def test_a_follower_of_the_booster_who_also_follows_the_author_sees_the_boost(ap
 
 
 def test_community_ical_omits_non_public_events(app, world):
-    from datetime import timedelta
-    from app.constants import POST_TYPE_EVENT
-    from app.models import Event, utcnow
     w = world
     for post in (w.public_post, w.followers_post, w.unlisted_post):
         post.type = POST_TYPE_EVENT
@@ -331,7 +336,6 @@ def test_tag_cloud_counts_and_relates_public_posts_only(app, two_tags, who):
 
 @pytest.mark.parametrize('who', ['follower', 'stranger', None])
 def test_tag_cloud_of_a_topic_counts_public_posts_only(app, two_tags, who):
-    from app.models import Topic
     w = two_tags
     topic = Topic(name='news', machine_name='news', num_communities=1, show_posts_in_children=False)
     db.session.add(topic)

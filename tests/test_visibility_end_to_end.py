@@ -2,9 +2,11 @@
 from unittest.mock import patch
 
 import pytest
-from flask import current_app, g
+from flask import g
 
 from app import db
+from app.activitypub.routes import process_new_content
+from app.activitypub.util import create_post
 from app.models import Language, Site
 from tests.factories import feed_ids, make_visibility_world
 from tests.test_visibility_ingest import FOLLOWERS, PUBLIC, note_activity
@@ -13,7 +15,6 @@ from tests.test_visibility_single_object import client_as
 
 @pytest.fixture
 def stored(app, db_session, monkeypatch):
-    from app.activitypub.util import create_post
     w = make_visibility_world()
     site = db.session.get(Site, 1)
     site.private_instance = False
@@ -55,7 +56,6 @@ def test_activitypub_url_is_404(app, stored):
 
 @pytest.mark.parametrize('to, cc, relayed', [([FOLLOWERS], [], False), ([PUBLIC], [FOLLOWERS], True)])
 def test_a_followers_only_create_is_not_relayed_to_the_communitys_followers(app, db_session, to, cc, relayed):
-    from app.activitypub.routes import process_new_content
     w = make_visibility_world()
     activity = note_activity(to, cc)
     activity['object']['id'] = 'https://m.example/users/alice/statuses/88'

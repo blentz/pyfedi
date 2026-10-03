@@ -6,8 +6,21 @@ import pytest
 from flask import current_app, g
 
 from app import db
-from app.models import Language, Site
-from tests.factories import bearer, make_post_reply, make_visibility_world
+from app.activitypub import routes as activitypub_routes
+from app.models import Language, ModLog, PollChoiceVote, Site, Topic, read_posts
+from app.nntp.server import _reply_to_info
+from app.utils import add_to_modlog, set_setting
+from tests.factories import (
+    bearer,
+    grant_permission,
+    make_community_member,
+    make_post,
+    make_post_reply,
+    make_post_reply_bookmark,
+    make_post_reply_vote,
+    make_user,
+    make_visibility_world,
+)
 from tests.test_visibility_single_object import MISSING, client_as
 
 SECRET_TITLE = 'Secret Parent Title'
@@ -94,8 +107,6 @@ def _web_surfaces(w, who):
 
 @pytest.fixture
 def swept(world):
-    from app.models import Topic
-    from tests.factories import make_post_reply_bookmark, make_post_reply_vote
     w = world
     topic = Topic(name='news', machine_name='news', num_communities=1, show_posts_in_children=False)
     db.session.add(topic)
@@ -137,7 +148,6 @@ def test_a_visible_reply_never_carries_its_hidden_parent_on_the_web(app, swept, 
 
 
 def test_the_nntp_subject_of_a_reply_does_not_name_a_hidden_parent(app, swept):
-    from app.nntp.server import _reply_to_info
     w = swept
     info = _reply_to_info(w.open_reply, 'piefed.test', 1)
     assert SECRET_TITLE not in info.subject
@@ -209,9 +219,6 @@ def test_a_reply_stub_carries_neutral_objects_not_nulls(app, world, path, params
 # R3 / I1
 @pytest.fixture
 def modlogged(world):
-    from app.models import ModLog
-    from app.utils import add_to_modlog, set_setting
-    from tests.factories import grant_permission, make_user
     w = world
     set_setting('public_modlog', True)
     w.admin = make_user(w.stranger.instance, 'ada', local=True)
@@ -264,7 +271,6 @@ def test_the_api_modlog_shows_an_admin_the_target_user(app, modlogged):
 
 
 def test_the_web_modlog_filter_does_not_match_hidden_entries_for_a_non_admin(app, modlogged):
-    from app.models import ModLog
     w = modlogged
 
     def shown(user):
@@ -281,7 +287,6 @@ def test_the_web_modlog_filter_does_not_match_hidden_entries_for_a_non_admin(app
 
 # I2
 def test_the_moderator_comments_page_obeys_the_predicate(app, world):
-    from tests.factories import make_community_member
     w = world
     make_community_member(w.stranger, w.community, is_moderator=True)
     make_community_member(w.follower, w.community, is_moderator=True)
@@ -298,7 +303,6 @@ def test_the_moderator_comments_page_obeys_the_predicate(app, world):
 
 # I3
 def test_check_url_already_posted_obeys_the_predicate(app, world):
-    from tests.factories import make_post
     w = world
     url = 'https://news.example/story'
     hidden = make_post(w.community, w.author, 'https://m.example/s/9', title='hidden link')
@@ -317,8 +321,6 @@ def test_check_url_already_posted_obeys_the_predicate(app, world):
 
 # I5
 def test_a_poll_vote_on_a_followers_only_poll_is_not_relayed(app, db_session, monkeypatch):
-    from app.activitypub import routes as activitypub_routes
-    from app.models import PollChoiceVote
     from tests.test_inbox_dispatch_votes import _seed_poll_scenario
     voter, post, choice = _seed_poll_scenario()
     post.visibility = 'followers'
@@ -333,7 +335,6 @@ def test_a_poll_vote_on_a_followers_only_poll_is_not_relayed(app, db_session, mo
 
 # M2
 def test_mark_as_read_skips_missing_and_hidden_ids_in_a_batch(app, world):
-    from app.models import read_posts
     w = world
     response = client_as(app, None).post('/api/alpha/post/mark_as_read',
                                           json={'post_ids': [w.public_post.id, w.post.id, MISSING], 'read': True},

@@ -7,13 +7,32 @@ from unittest.mock import patch
 
 import pytest
 from flask import current_app, g
+from flask import session as flask_session
+from flask_wtf.csrf import generate_csrf
 
 from app import db
-from app.models import CommunityBlock, InstanceBlock, Language, Notification, NotificationSubscription, \
-    PollChoiceVote, Post, PostBookmark, PostReply, PostReplyBookmark, PostReplyVote, PostVote, Reminder, Report, Site, \
-    UserBlock, read_posts
-from tests.factories import make_visibility_world, bearer
-from tests.test_visibility_single_object import client_as, MISSING
+from app.models import (
+    CommunityBlock,
+    InstanceBlock,
+    Language,
+    Notification,
+    NotificationSubscription,
+    PollChoiceVote,
+    Post,
+    PostBookmark,
+    PostReply,
+    PostReplyBookmark,
+    PostReplyVote,
+    PostVote,
+    Reminder,
+    Report,
+    Site,
+    UserBlock,
+    read_posts,
+)
+from app.post import routes
+from tests.factories import bearer, make_visibility_world
+from tests.test_visibility_single_object import MISSING, client_as
 
 
 @pytest.fixture
@@ -66,8 +85,6 @@ WEB_ACTIONS = [
 
 def send(app, user, method, url, data=None):
     """The request as `user`, with a real CSRF token: every POST needs one or it is a 400 before the route runs."""
-    from flask import session as flask_session
-    from flask_wtf.csrf import generate_csrf
 
     client = client_as(app, user)
     g.pop('csrf_token', None)  # generate_csrf caches in g; a cached token writes nothing to this request's session
@@ -132,7 +149,6 @@ def test_other_state_changing_routes_are_not_found_for_stranger(app, world, meth
     assert snapshot(w) == before
     # Not hidden from the follower: whatever the route then says, it is not the hidden-object 404 at the gate.
     # (A route may 404 for a reason of its own, so the control is the call that reaches past the gate.)
-    from app.post import routes
     gated = set()
 
     def spy(real, record):

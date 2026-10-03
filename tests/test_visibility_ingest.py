@@ -1,6 +1,17 @@
+import inspect
+
 import pytest
 
-from tests.factories import make_community, make_instance, make_post, make_site, make_user
+from app.activitypub import routes
+from app.activitypub.util import create_post, create_post_reply
+from app.models import Post, PostReply
+from tests.factories import (
+    make_community,
+    make_instance,
+    make_post,
+    make_site,
+    make_user,
+)
 
 FOLLOWERS = 'https://m.example/users/alice/followers'
 PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
@@ -40,8 +51,6 @@ def note_activity(visibility_to, visibility_cc):
 
 def test_followers_only_post_is_stored_as_followers(db_session, author, log_spy):
     """A followers-only post is stored, with visibility 'followers'"""
-    from app.activitypub.util import create_post
-    from app.models import Post
     community = make_community()
     make_site()  # Post.new() -> blocked_phrases() looks up Site id 1 unconditionally
 
@@ -54,8 +63,6 @@ def test_followers_only_post_is_stored_as_followers(db_session, author, log_spy)
 
 def test_direct_post_is_refused(db_session, author, log_spy):
     """A direct post is not stored"""
-    from app.activitypub.util import create_post
-    from app.models import Post
     community = make_community()
 
     result = create_post(False, community, note_activity(['https://m.example/users/bob'], []), author)
@@ -67,8 +74,6 @@ def test_direct_post_is_refused(db_session, author, log_spy):
 
 def test_public_post_is_accepted(db_session, author, log_spy):
     """A public post is stored"""
-    from app.activitypub.util import create_post
-    from app.models import Post
     community = make_community()
     make_site()  # Post.new() -> blocked_phrases() looks up Site id 1 unconditionally
 
@@ -80,8 +85,6 @@ def test_public_post_is_accepted(db_session, author, log_spy):
 
 def test_unlisted_post_is_accepted(db_session, author, log_spy):
     """An unlisted post is stored"""
-    from app.activitypub.util import create_post
-    from app.models import Post
     community = make_community()
     make_site()  # Post.new() -> blocked_phrases() looks up Site id 1 unconditionally
 
@@ -93,8 +96,6 @@ def test_unlisted_post_is_accepted(db_session, author, log_spy):
 
 def test_followers_only_reply_is_stored_as_followers(db_session, author, log_spy):
     """A followers-only reply is stored, with visibility 'followers'"""
-    from app.activitypub.util import create_post_reply
-    from app.models import PostReply
     community = make_community()
     make_site()
     parent = make_post(community, author, 'https://m.example/users/alice/statuses/9')
@@ -111,8 +112,6 @@ def test_followers_only_reply_is_stored_as_followers(db_session, author, log_spy
 
 def test_direct_reply_is_refused(db_session, author, log_spy):
     """A direct reply is not stored"""
-    from app.activitypub.util import create_post_reply
-    from app.models import PostReply
     community = make_community()
     parent = make_post(community, author, 'https://m.example/users/alice/statuses/9')
 
@@ -128,7 +127,6 @@ def test_direct_reply_is_refused(db_session, author, log_spy):
 
 def test_post_and_reply_refusal_reasons_differ(db_session, author, log_spy):
     """Refusal reasons distinguish posts from replies, so logs are diagnosable"""
-    from app.activitypub.util import create_post, create_post_reply
     community = make_community()
     parent = make_post(community, author, 'https://m.example/users/alice/statuses/9')
 
@@ -149,8 +147,6 @@ def test_direct_message_path_is_unaffected(db_session, author):
     Guards the ordering: if a future change moves the Create dispatch above
     process_chat, direct messages would start being refused instead of delivered.
     """
-    import inspect
-    from app.activitypub import routes
 
     source = inspect.getsource(routes.process_inbox_request)
     chat_at = source.index('process_chat')

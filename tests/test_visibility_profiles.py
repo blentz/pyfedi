@@ -6,10 +6,29 @@ from flask_login import login_user
 
 from app import db
 from app.constants import NOTIF_POST, NOTIF_REPLY
-from app.models import Language, PostBookmark, PostVote, PostReplyBookmark, Site, UserFollower
-from app.user.utils import _get_user_posts, _get_user_post_replies, _get_user_posts_and_replies
-from tests.factories import (bearer, grant_permission, make_notification_subscription, make_post_reply, make_user,
-                             make_visibility_world)
+from app.models import (
+    Language,
+    PostBookmark,
+    PostReplyBookmark,
+    PostVote,
+    Site,
+    UserFollower,
+)
+from app.user.utils import (
+    _get_user_post_replies,
+    _get_user_posts,
+    _get_user_posts_and_replies,
+)
+from tests.factories import (
+    bearer,
+    grant_permission,
+    make_community,
+    make_community_member,
+    make_notification_subscription,
+    make_post_reply,
+    make_user,
+    make_visibility_world,
+)
 from tests.test_visibility_single_object import client_as
 
 
@@ -221,7 +240,6 @@ def test_api_post_list_by_person_obeys_the_predicate(app, world, path):
 # --- D5 / D10 (residuals WP-D): private communities and community-less rows on a profile ---------
 
 def _private_community_with_public_post(w):
-    from tests.factories import make_community, make_community_member
     private = make_community('hush')
     private.private = True
     w.public_post.community_id = private.id
@@ -232,7 +250,6 @@ def _private_community_with_public_post(w):
 
 
 def test_a_member_of_a_private_community_sees_its_content_on_a_profile(app, world):
-    from tests.factories import make_community_member
     w = world
     private = _private_community_with_public_post(w)
     make_community_member(w.stranger, private)
@@ -253,7 +270,6 @@ def test_a_non_member_still_does_not_see_private_community_content_on_a_profile(
 
 
 def test_a_banned_member_does_not_see_private_community_content_on_a_profile(app, world):
-    from tests.factories import make_community_member
     w = world
     private = _private_community_with_public_post(w)
     make_community_member(w.stranger, private).is_banned = True
@@ -266,7 +282,6 @@ def test_a_banned_member_does_not_see_private_community_content_on_a_profile(app
 
 @pytest.mark.parametrize('who', ['stranger', None, 'author'])
 def test_rows_with_no_community_are_not_dropped_from_a_profile(app, world, who):
-    from tests.factories import make_community, make_community_member
     w = world
     private = make_community('hush')  # NULL NOT IN (a non-empty set) is NULL, which drops the row
     private.private = True

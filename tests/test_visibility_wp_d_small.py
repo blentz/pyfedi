@@ -2,8 +2,11 @@
 from unittest.mock import patch
 
 import pytest
+from flask import render_template
 
 from app import db
+from app.post.util import convert_archived_replies_to_tree
+from app.visibility import RestrictedReply
 from tests.factories import make_post_reply, make_visibility_world
 from tests.test_visibility_interactions import send
 
@@ -55,8 +58,6 @@ def test_blocking_the_instance_of_a_visible_reply_still_works(app, world):
 # --- D6: the D18 placeholder honours THREAD_CUTOFF_DEPTH and is hidable like the teaser ------------
 
 def _placeholder_html(app, depth, cutoff=5):
-    from flask import render_template
-    from app.visibility import RestrictedReply
     parent = RestrictedReply(id=10, depth=depth, parent_id=None, post_id=3)
     child = RestrictedReply(id=11, depth=depth + 1, parent_id=10, post_id=3)
     with app.test_request_context('/'):
@@ -90,7 +91,6 @@ def test_a_placeholder_hides_with_its_collapsed_parent(app, db_session):
 # --- D9: an archived stub with no id is skipped, not a KeyError ---------------------------------------
 
 def test_a_malformed_archived_stub_is_skipped(app, world):
-    from app.post.util import convert_archived_replies_to_tree
     w = world
     archived = [
         {'visibility': 'followers', 'depth': 0, 'replies': []},  # no id: written by nothing this code knows
