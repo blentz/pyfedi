@@ -194,25 +194,30 @@ def get_request(uri, params=None, headers=None) -> httpx.Response:
     return response
 
 
-def get_request_capped(uri, max_bytes: int, headers=None) -> tuple[int, bytes | None]:
+def get_request_capped(uri, max_bytes: int, headers=None, max_seconds: float = 15) -> tuple[int, bytes | None]:
     """GET with get_request's guards (uri validation, User-Agent, timeout, no redirects, errors normalised to
     httpx.HTTPError) that reads the body as a stream and gives up once it passes max_bytes, so a chunked or
-    lying response is never buffered whole. Returns (status_code, body); body is None when over max_bytes.
+    lying response is never buffered whole. The whole download also has a wall-clock deadline (max_seconds), and
+    only an identity-encoded body is read (raw bytes), so a compressed body cannot expand past the cap. Returns (status_code, body); body is None when over max_bytes.
     No retry: callers use it for optional, best-effort fetches."""
     if is_invalid_get_request_uri(uri):
         current_app.logger.info(f"invalid get request {uri}")
         raise httpx.HTTPError("HTTPError: invalid uri") from None
     headers = dict(headers or {})
     headers['User-Agent'] = f'PieFed/{current_app.config["VERSION"]}; +https://{current_app.config["SERVER_NAME"]}'
+    headers['Accept-Encoding'] = 'identity'
+    deadline = time.monotonic() + max_seconds
     try:
         with httpx_client.stream('GET', uri, headers=headers, timeout=10, follow_redirects=False) as response:
+            if response.headers.get('Content-Encoding', 'identity').strip().lower() not in ('', 'identity'):
+                return response.status_code, None
             declared = response.headers.get('Content-Length', '')
             if declared.isdigit() and int(declared) > max_bytes:
                 return response.status_code, None
             body = bytearray()
-            for chunk in response.iter_bytes():
+            for chunk in response.iter_raw():
                 body.extend(chunk)
-                if len(body) > max_bytes:
+                if len(body) > max_bytes or time.monotonic() > deadline:
                     return response.status_code, None
             return response.status_code, bytes(body)
     except (httpx.InvalidURL, ValueError, httpx.StreamError) as error:
