@@ -3,6 +3,8 @@ domains, PeerTube isolation-list hosts; and how third-party names and urls are c
 import re
 from urllib.parse import urlparse
 
+from flask import current_app
+
 from app import cache, db
 from app.models import Domain
 from app.utils import get_setting, instance_allowed, instance_banned, retrieve_peertube_block_list, url_is_storable
@@ -20,7 +22,11 @@ _NSFW = re.compile(r'\bnsfw\b|\b18\+|\bporn', re.IGNORECASE)
 def peertube_isolated_hosts() -> frozenset:
     """Hosts on the PeerTube isolation list (https://peertube_isolation.frama.io/). Empty when the list
     cannot be fetched: `flask init-db` already copied it into banned_instances, which is checked anyway."""
-    listing = retrieve_peertube_block_list()
+    try:
+        listing = retrieve_peertube_block_list()
+    except Exception:  # the upstream helper only guards its HTTP call, not malformed JSON
+        current_app.logger.exception('discovery: PeerTube isolation list unreadable, treated as empty')
+        listing = None
     return frozenset(line.strip().lower() for line in (listing or '').split('\n') if line.strip())
 
 
@@ -46,8 +52,12 @@ def clean_name(value, limit: int = NAME_LIMIT) -> str | None:
 def clean_https_url(value, limit: int = URL_LIMIT) -> str | None:
     if not isinstance(value, str) or len(value) > limit:
         return None
-    parsed = urlparse(value)
-    if parsed.scheme != 'https' or not parsed.hostname or not url_is_storable(value):
+    try:
+        parsed = urlparse(value)
+        hostname = parsed.hostname
+    except ValueError:
+        return None
+    if parsed.scheme != 'https' or not hostname or not url_is_storable(value):
         return None
     return value
 

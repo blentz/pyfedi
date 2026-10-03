@@ -171,3 +171,49 @@ def test_an_overlong_actor_url_is_skipped_not_fatal(app, db_session, only):
 
     assert result['sepiasearch'] == 1
     assert [row.name for row in DiscoveryEntry.query.all()] == ['Fine']
+
+
+def test_a_malformed_url_is_dropped_not_fatal(app, db_session):
+    rows = [entry(name='Bad actor', actor_url='https://[bad/a'),
+            entry(name='Bad avatar', host='b.example', avatar='https://[bad/a')]
+
+    cleaned = clean_entries(rows, nobody_excluded)
+
+    assert [(e['name'], e['avatar']) for e in cleaned] == [('Bad avatar', None)]
+
+
+def test_a_source_that_cannot_be_stored_leaves_the_others_and_expiry_running(app, db_session, only, monkeypatch):
+    db.session.add(DiscoveryEntry(kind='community', platform='peertube', actor_url='https://old.example/video-channels/a',
+                                  name='Old', host='old.example', source='sepiasearch',
+                                  first_seen=NOW - timedelta(days=40), last_seen=NOW - timedelta(days=31)))
+    db.session.commit()
+    only('sepiasearch', [entry(name='Fine')])
+    only('joinmastodon', [entry(name='Ann', host='m.example', kind='person', platform='mastodon',
+                                actor_url='https://m.example/users/ann', source='joinmastodon')])
+    real = refresh.upsert_entries
+
+    def upsert(entries, now):
+        if entries and entries[0]['source'] == 'sepiasearch':
+            raise RuntimeError('db down')
+        return real(entries, now)
+    monkeypatch.setattr(refresh, 'upsert_entries', upsert)
+
+    result = refresh_discovery(now=NOW)
+
+    assert result['sepiasearch'] == 'failed'
+    assert result['joinmastodon'] == 1
+    assert result['expired'] == 1
+
+
+def test_an_overlong_host_is_skipped(app, db_session):
+    host = 'a' * 250 + '.example'
+
+    assert clean_entries([entry(name='Long', host=host)], nobody_excluded) == []
+
+
+def test_an_isolation_list_that_raises_is_empty(app, monkeypatch):
+    def broken():
+        raise ValueError('bad json')
+    monkeypatch.setattr(filters, 'retrieve_peertube_block_list', broken)
+
+    assert filters.peertube_isolated_hosts() == frozenset()
