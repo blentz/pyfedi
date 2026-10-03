@@ -50,12 +50,16 @@ real multi-author posts across PieFed; any bulk mirroring of directory data.
    rendered back (the page shows "configured" / "not set"), and never logged.
 5. **Castopod authorship:** a podcast actor gets a `User` row (the technical owner) and a `Community` row
    with the same actor URL (`ap_profile_id` is unique per table, not across tables). `Post.user_id`
-   stays the podcast actor so the per-author machinery keeps working; the page and API show **credits**
-   instead.
+   stays the podcast actor, and the page always shows the podcast account as the poster, followed by
+   the **credits** (amended 2026-10-03 after a security review: credits are claims made by the podcast's
+   own feed, so they must never replace or hide the real poster).
 6. **Credits:** an ordered list `{name, role, image, profile_url, user_id}` from the podcast's RSS
    `podcast:person` tags: channel-level tags are hosts, item-level tags (`role="guest"`) are guests; the
-   item is matched to the episode by link or GUID. A credit whose `href` resolves to a fediverse account
-   (https only, webfinger or actor fetch with the usual guards) links to that PieFed `User`.
+   item is matched to the episode by link or GUID. A credit links to a fediverse account only when that
+   account **vouches back**: its actor document links the podcast (the podcast actor URL or its web URL
+   appears in the actor's `url`, `alsoKnownAs`, or a profile-field `attachment`). An unverified credit is
+   shown as a plain name, never linked, so a feed cannot attribute an episode to a real person's profile
+   without that person's consent.
 7. **Storage:** a new table `discovery_entry`, and a `Post.extensions` JSON column (the first piece of
    D8's content-kind layout), both added by one fork migration revising the current head. Credits live
    in `Post.extensions["podcast"]["credits"]`; the API exposes `post.extensions.podcast.credits`. The
@@ -87,7 +91,7 @@ real multi-author posts across PieFed; any bulk mirroring of directory data.
   - episode Notes from that actor are filed in its community instead of `microblogs`;
   - the episode audio/cover feature (WP-C) keeps working;
   - credits are parsed from the RSS feed and stored on the post;
-  - the post byline shows "Hosted by A, B · with guest C" instead of the owner;
+  - the post byline shows the podcast account, then "hosted by A, B · with guest C" (verified credits linked, others plain names);
   - every actor lookup that does not pass a type hint (`Accept`, `Undo`, inbox routing,
     `find_actor_by_url` callers) is audited so it resolves the right row for a dual actor.
 
