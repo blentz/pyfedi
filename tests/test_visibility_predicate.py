@@ -37,6 +37,16 @@ def test_direct_and_unknown_values_are_never_visible(db_session):
         assert not can_view(w.post, w.author.id + 1000)
 
 
+def test_unknown_value_denies_the_author_and_an_accepted_follower(db_session):
+    """Only `followers` unlocks for the author or a follower; a value nothing knows about is shut to everyone."""
+    w = make_visibility_world()
+    for obj in (w.post, w.reply):
+        for value in ('direct', 'bogus', ''):
+            obj.visibility = value
+            for viewer in (None, w.author.id, w.follower.id, w.pending.id, w.stranger.id):
+                assert not can_view(obj, viewer), (type(obj).__name__, value, viewer)
+
+
 def test_null_counts_as_public(db_session):
     w = make_visibility_world()
     w.post.visibility = None
@@ -48,6 +58,17 @@ def test_clause_matches_python_predicate(db_session):
     for viewer in (None, w.follower.id, w.pending.id, w.stranger.id, w.author.id):
         ids = {p.id for p in Post.query.filter(visible_to_clause(Post, viewer))}
         assert (w.post.id in ids) == can_view(w.post, viewer), viewer
+
+
+def test_clause_matches_python_predicate_for_posts_and_replies_and_every_value(db_session):
+    w = make_visibility_world()
+    for model, obj in ((Post, w.post), (PostReply, w.reply)):
+        for value in ('followers', 'public', 'unlisted', 'direct', 'bogus'):
+            obj.visibility = value
+            db.session.flush()
+            for viewer in (None, w.follower.id, w.pending.id, w.stranger.id, w.author.id):
+                ids = {o.id for o in model.query.filter(visible_to_clause(model, viewer))}
+                assert (obj.id in ids) == can_view(obj, viewer), (model.__name__, value, viewer)
 
 
 def test_sql_matches_python_predicate(db_session):
