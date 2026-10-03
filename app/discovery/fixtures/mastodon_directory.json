@@ -1,0 +1,12 @@
+[
+  {"id": "1", "username": "ann", "acct": "ann", "display_name": "Ann Example", "discoverable": true, "bot": false,
+   "uri": "https://mastodon.example/users/ann", "url": "https://mastodon.example/@ann",
+   "avatar": "https://mastodon.example/avatars/ann.png", "followers_count": 340},
+  {"id": "2", "username": "hidden", "acct": "hidden", "display_name": "Not Listed", "discoverable": false,
+   "bot": false, "uri": "https://mastodon.example/users/hidden", "followers_count": 9000},
+  {"id": "3", "username": "newsbot", "acct": "newsbot", "display_name": "News Bot", "discoverable": true,
+   "bot": true, "uri": "https://mastodon.example/users/newsbot", "followers_count": 50},
+  {"id": "4", "username": "ben", "acct": "ben", "display_name": "", "discoverable": true, "bot": false,
+   "url": "https://mastodon.example/@ben", "avatar": "https://mastodon.example/avatars/ben.png",
+   "followers_count": 12}
+]
