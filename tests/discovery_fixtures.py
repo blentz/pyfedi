@@ -2,6 +2,7 @@
 import pytest
 
 from app import cache, db
+from app.models import DiscoveryEntry, utcnow
 from tests.factories import grant_permission, make_instance, make_user
 from tests.test_admin_federation import csrf, login
 
@@ -32,3 +33,14 @@ def admin(app, db_session):
     client = app.test_client()
     login(client, user)
     return client, csrf(app, client)
+
+
+def add_entry(name, followers=1, platform='peertube', kind='community', nsfw=False, host=None, url=None):
+    """Store one DiscoveryEntry; host and actor url default from the name."""
+    host = host or f'{name.lower()}.example'
+    entry = DiscoveryEntry(kind=kind, platform=platform, actor_url=url or f'https://{host}/video-channels/{name.lower()}',
+                           name=name, host=host, followers=followers, nsfw=nsfw, source='test',
+                           first_seen=utcnow(), last_seen=utcnow())
+    db.session.add(entry)
+    db.session.commit()
+    return entry
