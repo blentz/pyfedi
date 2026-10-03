@@ -39,9 +39,19 @@ def test_verified_credit_carries_user_reference_and_users_own_name(world):
 
     view = post_view(post=post, variant=1)
     assert view['extensions']['podcast']['credits'][0] == {
-        'name': ann.display_name(), 'role': 'host', 'image': 'https://pod.example/ann.jpg',
-        'profile_url': 'https://social.example/@ann', 'user_id': ann.id}
+        'name': ann.display_name(), 'role': 'host', 'image': None,
+        'profile_url': ann.public_url(), 'user_id': ann.id}
     assert 'Famous Name' not in str(view['extensions'])
+
+
+def test_a_feed_image_or_profile_url_never_appears(world):
+    post, podcast, ann = world
+    credits = credits_for(ann)
+    credits[0]['profile_url'] = 'https://evil.example/fake'
+    store(post, credits)
+
+    shown = str(post_view(post=post, variant=1)['extensions'])
+    assert 'pod.example/ann.jpg' not in shown and 'evil.example' not in shown and 'pod.example/c.jpg' not in shown
 
 
 def test_unverified_credit_is_name_and_role_only(world):
