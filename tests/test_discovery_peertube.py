@@ -40,9 +40,11 @@ def test_a_channel_whose_url_is_not_on_its_host_is_dropped(app):
 def test_malformed_rows_are_skipped_not_fatal(app, http_mock):
     """Review focus 1."""
     rows = [None, 'a string', {'url': 42, 'host': 'tube.example'},
+            {'url': 'https://[::1/x', 'host': 'tube.example'},
+            {'url': 'http://tube.example/video-channels/plain', 'host': 'tube.example', 'name': 'plain'},
             {'url': 'https://tube.example/video-channels/ok', 'host': 'tube.example', 'name': 'ok',
              'followersCount': 'many', 'avatars': 'nope'}]
-    http_mock.get(SEPIASEARCH_URL).respond(json={'total': 4, 'data': rows})
+    http_mock.get(SEPIASEARCH_URL).respond(json={'total': 6, 'data': rows})
 
     entries = fetch_peertube_channels(nobody_excluded)
 
