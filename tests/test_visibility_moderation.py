@@ -5,8 +5,14 @@ import pytest
 from flask import current_app, g
 
 from app import db
-from app.models import Language, Post, PostReply, Site
-from tests.factories import bearer, grant_permission, make_user, make_visibility_world
+from app.models import File, Language, ModLog, Post, PostReply, Site
+from tests.factories import (
+    bearer,
+    grant_permission,
+    make_post_reply,
+    make_user,
+    make_visibility_world,
+)
 from tests.test_visibility_single_object import client_as
 
 
@@ -85,7 +91,6 @@ def test_api_removal(app, world, path, key, data, model, attr):
 
 
 def test_purge_list_stubs_a_followers_only_post(app, world):
-    from app.models import File
     w = world
     image = File(source_url='https://m.example/i.png', file_path='i.png', hash='0' * 256)
     db.session.add(image)
@@ -105,7 +110,6 @@ def test_purge_list_stubs_a_followers_only_post(app, world):
 
 
 def test_remove_ack_for_a_reply_on_a_followers_only_post_leaks_nothing(app, world):
-    from tests.factories import make_post_reply
     w = world
     w.post.title = 'Parent Secret Title'
     w.post.body = 'parent secret body'
@@ -145,7 +149,6 @@ def test_delete_confirmation_page_does_not_name_the_hidden_post(app, world):
 
 
 def test_the_modlog_does_not_name_removed_followers_only_content(app, world):
-    from app.models import ModLog
     w = world
     w.post.title = 'Modlog Secret Title'
     w.reply.body = 'modlog secret reply'
