@@ -1,0 +1,7 @@
+{"@context": ["https://www.w3.org/ns/activitystreams", "https://w3id.org/security/v1"],
+ "type": "Podcast", "id": "https://pod.example/@mypodcast", "preferredUsername": "mypodcast", "name": "My Podcast",
+ "summary": "<p>A podcast about the fediverse.</p>",
+ "inbox": "https://pod.example/@mypodcast/inbox", "outbox": "https://pod.example/@mypodcast/outbox",
+ "followers": "https://pod.example/@mypodcast/followers", "rssFeed": "https://pod.example/@mypodcast/feed.xml",
+ "publicKey": {"id": "https://pod.example/@mypodcast#main-key", "owner": "https://pod.example/@mypodcast",
+               "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nnot-a-real-key\n-----END PUBLIC KEY-----\n"}}
