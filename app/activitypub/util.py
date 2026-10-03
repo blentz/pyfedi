@@ -45,6 +45,7 @@ from app.utils import get_request, allowlist_html, get_setting, ap_datetime, mar
     instance_community_ids, banned_instances, communities_run_by_inactive_mods, inspect_image_c2pa, \
     url_is_storable, can_create_post, can_create_post_reply, retrieve_image_hash, hash_matches_blocked_image
 import app.activitypub.actor as activitypub_actor
+import app.discovery.credits as discovery_credits   # the module: app.discovery.credits imports this one
 import urllib.parse
 from app.utils import site_language_id
 from app.visibility import OPEN_VISIBILITIES, can_view, post_title_for
@@ -3334,6 +3335,7 @@ def fetch_castopod_episode_audio(post: Post, episode_url: str):
         fetch_castopod_episode_audio_task(post.id, episode_url)
     else:
         fetch_castopod_episode_audio_task.delay(post.id, episode_url)
+    discovery_credits.fetch_episode_credits(post, episode_url)  # D24: the episode's hosts and guests
 
 
 @celery.task
