@@ -1,8 +1,13 @@
 import pytest
 
+from unittest.mock import patch
+
+from app import db
+from app.api.alpha import views
 from app.post.util import post_replies, get_comment_branch
 from app.visibility import RestrictedReply
-from tests.factories import make_visibility_world, bearer
+from tests.factories import bearer, grant_permission, make_community_member, make_post_reply, make_user, \
+    make_visibility_world
 from tests.test_visibility_single_object import client_as, world  # noqa: F401  (world is a fixture)
 
 
@@ -152,10 +157,6 @@ def test_restricted_reply_carries_its_path(app, db_session):
 @pytest.mark.parametrize('path', ['/api/alpha/post/replies', '/api/alpha/comment/list'])
 def test_api_builds_the_neutral_post_and_community_once_per_thread(app, world, path):
     """D7 (residuals WP-D): every stub in one post's thread shares one neutral community and post."""
-    from unittest.mock import patch
-    from app import db
-    from app.api.alpha import views
-    from tests.factories import make_post_reply
     w = world
     for n in range(3):
         hidden = make_post_reply(w.public_post, w.author, f'secret {n}')
@@ -172,3 +173,65 @@ def test_api_builds_the_neutral_post_and_community_once_per_thread(app, world, p
 
     assert stubs(response.json['comments']) == 4
     assert neutral.call_count == 1
+
+
+def test_admin_and_moderator_get_the_placeholder_too(app, db_session):
+    """D19: being able to moderate a community is not being able to see a followers-only reply in it."""
+    w = make_visibility_world()
+    admin = make_user(w.stranger.instance, 'ada', local=True)
+    moderator = make_user(w.stranger.instance, 'mo', local=True)
+    db.session.commit()
+    grant_permission(admin, 'administer all communities')
+    make_community_member(moderator, w.community, is_moderator=True)
+    for viewer in (admin, moderator):
+        entry = next(e for e in post_replies(w.public_post, 'new', viewer) if e['comment'].id == w.reply.id)
+        assert isinstance(entry['comment'], RestrictedReply), viewer.user_name
+        assert entry['restricted'] is True
+        assert entry['replies'][0]['comment'].body == 'public child'
+
+
+@pytest.mark.parametrize('sort_by', ['hot', 'top', 'new', 'old'])
+def test_every_sort_order_marks_the_hidden_reply(app, db_session, sort_by):
+    w = make_visibility_world()
+    entry = next(e for e in post_replies(w.public_post, sort_by, w.stranger) if e['comment'].id == w.reply.id)
+    assert isinstance(entry['comment'], RestrictedReply)
+
+
+@pytest.fixture
+def pathed(world):  # noqa: F811
+    """The factory leaves path and root_id empty; the depth-first query walks them, as a real reply has them."""
+    w = world
+    w.reply.path = [0, w.reply.id]
+    w.reply.root_id = w.reply.id
+    w.public_child.path = [0, w.reply.id, w.public_child.id]
+    w.public_child.root_id = w.reply.id
+    db.session.commit()
+    return w
+
+
+@pytest.mark.parametrize('extra', [{}, {'max_depth': 5}, {'max_depth': 1}], ids=['all', 'deep-enough', 'shallow'])
+def test_api_comment_list_depth_first_returns_the_stub(app, pathed, extra):
+    """The depth_first branch builds the page from paths, a different route to the tree than the plain query."""
+    w = pathed
+    response = app.test_client().get('/api/alpha/comment/list', headers={'Authorization': bearer(w.stranger)},
+                                     query_string={'post_id': w.public_post.id, 'depth_first': 'true', **extra})
+    assert response.status_code == 200, response.get_data(as_text=True)
+    assert 'secret reply' not in response.get_data(as_text=True)
+    stub = _find(response.json['comments'], w.reply.id)
+    assert stub['comment']['body'] is None and stub['visibility'] == 'followers'
+    assert _find(response.json['comments'], w.public_child.id)['comment']['body'] == 'public child'
+
+
+def test_api_comment_list_depth_first_shows_a_follower_the_reply(app, pathed):
+    w = pathed
+    response = app.test_client().get('/api/alpha/comment/list', headers={'Authorization': bearer(w.follower)},
+                                     query_string={'post_id': w.public_post.id, 'depth_first': 'true'})
+    assert _find(response.json['comments'], w.reply.id)['comment']['body'] == 'secret reply'
+
+
+def test_api_comment_list_by_parent_id_returns_a_stub_for_the_hidden_parent(app, pathed):
+    w = pathed
+    response = app.test_client().get('/api/alpha/comment/list', headers={'Authorization': bearer(w.stranger)},
+                                     query_string={'parent_id': w.reply.id, 'max_depth': 3})
+    assert response.status_code == 200, response.get_data(as_text=True)
+    assert 'secret reply' not in response.get_data(as_text=True)
