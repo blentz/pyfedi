@@ -125,3 +125,38 @@ def test_an_ingested_episode_announcement_gets_its_credits(world, http_mock, mon
 
     assert episode.called and feed.called
     assert [c['name'] for c in stored(post.id)['podcast']['credits']] == ['Ann Host', 'Ben Cohost', 'Cara Guest']
+
+
+def test_a_lookup_that_blows_up_costs_only_that_credit_its_link(world, http_mock, monkeypatch):
+    http_mock.get(FEED_URL).respond(200, content=FIXTURE.read_bytes())
+
+    def lookup(profile_url, *args, **kwargs):
+        if profile_url == 'https://social.example/@ann':
+            raise KeyError('malformed actor')
+        return SimpleNamespace(id=5, banned=False)
+
+    monkeypatch.setattr('app.activitypub.util.find_actor_or_create', lookup)
+    monkeypatch.setattr(credits, 'User', SimpleNamespace)   # the stub actor stands in for a User
+
+    fetch_episode_credits_task(world.post.id, EP1)
+
+    saved = stored(world.post.id)['podcast']['credits']
+    assert [(c['name'], c['user_id']) for c in saved] == [('Ann Host', None), ('Ben Cohost', 5), ('Cara Guest', 5)]
+
+
+def test_a_feed_without_a_content_length_is_not_read_past_the_cap(world, http_mock):
+    chunk = b' ' * 65536
+    pulled = []
+
+    def body():
+        yield b'<rss>'
+        for _ in range(200):   # 12.5 MB on offer
+            pulled.append(1)
+            yield chunk
+
+    http_mock.get(FEED_URL).respond(200, content=body())
+
+    fetch_episode_credits_task(world.post.id, EP1)
+
+    assert stored(world.post.id) is None
+    assert len(pulled) * len(chunk) <= MAX_FEED_BYTES + 2 * len(chunk)
