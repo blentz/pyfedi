@@ -14,7 +14,8 @@ from app.community.util import (
     delete_post_from_community_task,
     delete_post_reply_from_community_task,
 )
-from app.shared.tasks import adds, deletes, locks, removes
+from app.models import ActivityBatch
+from app.shared.tasks import adds, deletes, likes, locks, removes
 from tests.factories import (
     make_community_member,
     make_instance,
@@ -141,3 +142,41 @@ def test_a_web_reply_restore(app, world, remote, visibility, federated):  # noqa
     db.session.expire_all()
     assert reply.deleted is False
     assert bool(direct.call_count + announce.call_count) is federated
+
+
+# F2: a vote is an activity about its object too. For a local community the Announce of it to each following instance
+# (or the ActivityBatch row a PieFed instance gets instead) is skipped when the object is followers-only.
+VOTES = [
+    ('like', None, 'upvote', None),
+    ('dislike', None, 'downvote', None),
+    ('undo', 'Like', 'upvote', None),
+    ('emoji', None, 'upvote', 'x'),
+]
+
+
+@pytest.mark.parametrize('software', ['mastodon', 'piefed'])
+@pytest.mark.parametrize('kind', ['post', 'reply'])
+@pytest.mark.parametrize('open_', [True, False], ids=['open', 'followers-only'])
+@pytest.mark.parametrize('name, undo, direction, emoji', VOTES, ids=[v[0] for v in VOTES])
+def test_a_vote_in_a_local_community_is_announced_only_for_an_open_object(
+        db_session, monkeypatch, name, undo, direction, emoji, open_, kind, software):
+    w = scene(db_session, remote=False)
+    for instance in w.community.following_instances():
+        instance.software = software
+    db.session.commit()
+    recorder = Sent()
+    monkeypatch.setattr('app.shared.tasks.likes.send_post_request', recorder)
+    task = likes.vote_for_post if kind == 'post' else likes.vote_for_reply
+    task(None, w.stranger.id, target_of(w, kind, open_), undo, direction, emoji=emoji)
+    announced = bool(recorder) or ActivityBatch.query.count() > 0
+    assert announced is open_, name
+
+
+@pytest.mark.parametrize('open_', [True, False], ids=['open', 'followers-only'])
+def test_a_vote_in_a_remote_community_still_goes_to_its_inbox(db_session, monkeypatch, open_):
+    """R-a: the remote community is the object's home and already holds it."""
+    w = scene(db_session, remote=True)
+    recorder = Sent()
+    monkeypatch.setattr('app.shared.tasks.likes.send_post_request', recorder)
+    likes.vote_for_post(None, w.stranger.id, target_of(w, 'post', open_), None, 'upvote')
+    assert recorder == ['https://c.example/c/c1/inbox']
