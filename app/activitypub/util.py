@@ -48,6 +48,7 @@ import app.activitypub.actor as activitypub_actor
 import urllib.parse
 from app.utils import site_language_id
 from app.visibility import OPEN_VISIBILITIES, can_view, post_title_for
+from app.discovery.podcast import ensure_podcast_community
 import app as app_pkg
 
 
@@ -863,6 +864,8 @@ def refresh_user_profile_task(user_id, activity_json=None):
                                 cover_changed = True
 
                     session.commit()
+                    if activity_json.get('type') == 'Podcast':
+                        ensure_podcast_community(user, activity_json)  # D24: a podcast known from before G1/D24
                     if user.avatar_id and avatar_changed and get_setting('cache_remote_images_locally', True):
                         make_image_sizes(user.avatar_id, 40, 250, 'users')
                     if user.cover_id and cover_changed and get_setting('cache_remote_images_locally', True):
@@ -1392,6 +1395,8 @@ def actor_json_to_model(activity_json, address, server):
     if activity_json['type'] in ('Person', 'Service', 'Podcast'):
         user = db.session.query(User).filter(User.ap_profile_id == activity_json['id'].lower()).first()
         if user:
+            if activity_json['type'] == 'Podcast':
+                ensure_podcast_community(user, activity_json)  # D24: a podcast is also a community
             return user
         # D1372. `except KeyError` below catches this value being absent and
         # nothing else, while the same untrusted value being a number or a list
@@ -1491,6 +1496,8 @@ def actor_json_to_model(activity_json, address, server):
             make_image_sizes(user.avatar_id, 40, 250, 'users')
         if user.cover_id and get_setting('cache_remote_images_locally', True):
             make_image_sizes(user.cover_id, 878, None, 'users')
+        if activity_json['type'] == 'Podcast':
+            ensure_podcast_community(user, activity_json)  # D24: a podcast is also a community
         return user
     elif activity_json['type'] == 'Group':
         community = db.session.query(Community).filter(Community.ap_profile_id == activity_json['id'].lower()).first()
