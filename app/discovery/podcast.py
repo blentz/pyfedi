@@ -17,19 +17,30 @@ RSS_URL_LIMIT = 2048   # Community.rss_url is String(2048)
 AP_URL_LIMIT = 255     # Community.ap_outbox_url is String(255)
 
 
+def _refused(user) -> bool:
+    return user is None or user.is_local() or not user.ap_profile_id or user.banned or user.deleted
+
+
 def podcast_community_for(user) -> Community | None:
-    if user is None or user.is_local() or not user.ap_profile_id:
+    """The Community sharing a remote podcast user's ap_profile_id. None for a local, banned or deleted user,
+    and None when that Community is banned: an admin's ban on either row hides the podcast."""
+    if _refused(user):
         return None
     return db.session.query(Community).filter(Community.ap_profile_id == user.ap_profile_id,
                                               Community.banned == False).first()
 
 
 def ensure_podcast_community(user: User, actor_json: dict) -> Community | None:
-    if user is None or user.is_local() or not user.ap_profile_id or not isinstance(actor_json, dict):
+    """Find or create the Community for a remote podcast user, keeping its rss_url current. None for a local,
+    banned or deleted user (no Community is created for them), for an existing Community that is banned,
+    and for a `sensitive` podcast on a site with NSFW off."""
+    if _refused(user) or not isinstance(actor_json, dict):
         return None
     rss_url = clean_https_url(actor_json.get('rssFeed'), RSS_URL_LIMIT)
     community = db.session.query(Community).filter(Community.ap_profile_id == user.ap_profile_id).first()
     if community is not None:
+        if community.banned:
+            return None
         if rss_url and community.rss_url != rss_url:
             community.rss_url = rss_url
             db.session.commit()
@@ -58,5 +69,5 @@ def ensure_podcast_community(user: User, actor_json: dict) -> Community | None:
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
-        return db.session.query(Community).filter(Community.ap_profile_id == user.ap_profile_id).first()
+        return podcast_community_for(user)
     return community

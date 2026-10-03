@@ -2,6 +2,7 @@
 Community, because it is what a reader subscribes to. Both rows carry the same ActivityPub id."""
 from app.activitypub.util import actor_json_to_model, refresh_user_profile_task
 from app.discovery.podcast import ensure_podcast_community, podcast_community_for
+from app import db
 from app.models import Community, User
 from tests.factories import make_site, make_user, peer_actor_json, peer_instance
 
@@ -85,3 +86,47 @@ def test_a_local_user_never_gets_a_podcast_community(app, db_session):
 
     assert ensure_podcast_community(local, {'type': 'Podcast'}) is None
     assert podcast_community_for(local) is None
+
+
+def a_known_podcast_user(**flags):
+    user = make_user(peer_instance(PEER), 'mypodcast')
+    for flag, value in flags.items():
+        setattr(user, flag, value)
+    db.session.commit()
+    return user
+
+
+def test_a_banned_podcast_user_gets_no_community_when_seen_again(app, db_session):
+    user = a_known_podcast_user(banned=True)
+
+    actor_json_to_model(podcast_document(id=user.ap_profile_id), 'mypodcast', PEER)
+
+    assert Community.query.count() == 0
+    assert ensure_podcast_community(user, podcast_document(id=user.ap_profile_id)) is None
+
+
+def test_a_banned_podcast_user_gets_no_community_on_refresh(app, db_session):
+    user = a_known_podcast_user(banned=True)
+
+    refresh_user_profile_task(user.id, podcast_document(id=user.ap_profile_id))
+
+    assert Community.query.count() == 0
+
+
+def test_a_deleted_podcast_user_gets_no_community(app, db_session):
+    user = a_known_podcast_user(deleted=True)
+
+    assert ensure_podcast_community(user, podcast_document(id=user.ap_profile_id)) is None
+    assert Community.query.count() == 0
+
+
+def test_a_banned_podcast_community_is_not_handed_out(app, db_session):
+    peer_instance(PEER)
+    user = actor_json_to_model(podcast_document(), 'mypodcast', PEER)
+    community = Community.query.one()
+    community.banned = True
+    db.session.commit()
+
+    assert ensure_podcast_community(user, podcast_document()) is None
+    assert podcast_community_for(user) is None
+    assert Community.query.count() == 1
