@@ -3,6 +3,7 @@ from app.activitypub.signature import default_context, send_post_request, HttpSi
 from app.models import Post, PostReply, User, ActivityBatch, Community, PollChoiceVote, PollChoice, utcnow
 from app.shared.tasks import task_selector
 from app.utils import user_banned_from_community, gibberish, instance_banned, get_task_session, patch_db_session
+from app.visibility import is_open
 
 from flask import current_app, json
 import app as app_pkg
@@ -106,6 +107,9 @@ def send_vote(user_id, object, vote_to_undo, vote_direction, emoji):
             }
 
         if community.is_local():
+            if not is_open(object):  # E9: it never reached the community's followers, so no vote on it does either
+                return
+
             # Select the appropriate payload
             if vote_to_undo:
                 payload_copy = undo_public.copy()
