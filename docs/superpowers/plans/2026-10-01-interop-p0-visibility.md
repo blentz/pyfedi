@@ -890,35 +890,35 @@ Deferred minor findings from the task and final reviews. None blocks merge.
 - Task 1: minor (deferred): no test pins NOT NULL / index / downgrade.
 - Task 2: minor (deferred): no reply-Update visibility pin (Review Focus 2 names update_post_reply_from_activity); code safe today — fold into Task 11 end-to-end test.
 - Task 3: minor (deferred): unused imports db/PostReply in test_visibility_predicate.py (brief verbatim).
-- Task 3: minor (deferred): clause-equivalence test covers Post/followers only, not PostReply or direct/bogus; unknown-value test uses fabricated viewer, never author/follower.
+- Task 3: minor (deferred): clause-equivalence test covers Post/followers only, not PostReply or direct/bogus; unknown-value test uses fabricated viewer, never author/follower. FIXED at e2fcd3220 (WP-E E2).
 - Task 4: minor (deferred → folded into 4b): anonymous NSFW redirect on show_post precedes refuse_invisible (existence leak); missing follower-200 controls; AP tests lack public positive control; untested paths embed_code/oembed/ical/lazy_replies/cross_post form/post_source.
-- Task 4b: minor (deferred): interactions test TABLES misses UserBlock/CommunityBlock/InstanceBlock/read_posts/reminder/poll votes.
-- Task 4b: minor (deferred): follower spy control weak on post+reply URLs.
-- Task 4b: minor (deferred): dead code in test_visibility_interactions.py (call_api no-op, target_for branch, comment_create parent_id row).
+- Task 4b: minor (deferred): interactions test TABLES misses UserBlock/CommunityBlock/InstanceBlock/read_posts/reminder/poll votes. FIXED at 2f5b8743a (WP-E E1).
+- Task 4b: minor (deferred): follower spy control weak on post+reply URLs. FIXED at 2f5b8743a (WP-E E1).
+- Task 4b: minor (deferred): dead code in test_visibility_interactions.py (call_api no-op, target_for branch, comment_create parent_id row). FIXED at 2f5b8743a (WP-E E1).
 - Task 4b: minor (deferred): post_reply_block_instance gates reply only (siblings gate post too). FIXED at 9e9209004 (WP-D D4).
 - Task 4b: minor (deferred): post_post_mark_as_read N+1 a_visible_post re-authorising per id.
 - Task 4b: minor (deferred): API like/save/subscribe/mark_as_read on missing id now raise not-found instead of prior 404/{"success": false} (client-visible change).
 - Task 4b: minor (deferred): resolve_object remote-resolution branch gate has no direct test; anonymous leg vacuous (endpoint refuses anon).
 - Task 5: minor (deferred): placeholder template ignores THREAD_CUTOFF_DEPTH and lacks `hidable` class. FIXED at 0bfa9b94c (WP-D D6).
 - Task 5: minor (deferred): placeholder position/child_count reveal relative rank of hidden reply.
-- Task 5: minor (deferred): test gaps — depth_first mode, D19 admin/mod placeholder test, max_depth path.
+- Task 5: minor (deferred): test gaps — depth_first mode, D19 admin/mod placeholder test, max_depth path. FIXED at d7c4f2a20 (WP-E E3).
 - Task 5: minor (deferred): RED captured after the fact by stashing.
 - Task 5: minor (deferred): NULL-path legacy rows get approximate stub path ((0,parent_id,id) / 0.{id}); stub language_id 0 / local False placeholders.
-- Task 6: minor (deferred): no test for direct reply stub or unlisted reply keeping body in archive; reply_data['id'] KeyError on malformed stub (KeyError FIXED at ebe877e99, WP-D D9: the stub is skipped).
-- Task 7: minor (deferred): untested sites — search comments, tag_cloud + co-occurrence, tag_posts, get_post_list2, instance /posts logged-in hide_* path.
-- Task 7: minor (deferred): feed_world fixture no-op; inline imports in two tests; test_coverage_tail_224 pins line numbers + stale message.
+- Task 6: minor (deferred): no test for direct reply stub or unlisted reply keeping body in archive; reply_data['id'] KeyError on malformed stub (KeyError FIXED at ebe877e99, WP-D D9: the stub is skipped). Test gap FIXED at d7c4f2a20 (WP-E E3).
+- Task 7: minor (deferred): untested sites — search comments, tag_cloud + co-occurrence, tag_posts, get_post_list2, instance /posts logged-in hide_* path. FIXED at 2512e4800 (WP-E E4).
+- Task 7: minor (deferred): feed_world fixture no-op; inline imports in two tests; test_coverage_tail_224 pins line numbers + stale message. Inline imports FIXED at 2afb50bb5 (WP-E E8); test_coverage_tail_224 still pins line numbers on purpose (it asserts that named source lines are dead arms; no stable anchor exists).
 - Task 7: minor (deferred): FOLLOWED_BOOSTER_SQL has no uf2.is_accepted (pending booster-follow surfaces public boosts; visibility predicate still applies) — final review to triage.
-- Task 8: minor (deferred): no admin-viewer D19 test on profiles; private-community members lose that community's content on profiles (conservative, inconsistent with API) (FIXED at 8928ec5cf, WP-D D5); NULL community_id rows drop for strangers (FIXED at 8928ec5cf, WP-D D10); clumsy test helpers w_id/V; user_alerts untested; long line routes.py:1951.
-- Task 9: minor (deferred): NOTIF_USER/NOTIF_TOPIC/NOTIF_FEED gated but untested; can_view reads db.session inside task session (read-only UserFollower).
-- Task 9: minor (deferred): post-edit mention test relies on fixture user names fran/sam.
-- Task 10: minor (deferred): source-text assertions brittle; first test duplicates test_models_post_reply_new.
+- Task 8: minor (deferred): no admin-viewer D19 test on profiles; private-community members lose that community's content on profiles (conservative, inconsistent with API) (FIXED at 8928ec5cf, WP-D D5); NULL community_id rows drop for strangers (FIXED at 8928ec5cf, WP-D D10); clumsy test helpers w_id/V; user_alerts untested; long line routes.py:1951. Admin-viewer D19 test and user_alerts test FIXED at d0b6c31a7 (WP-E E5).
+- Task 9: minor (deferred): NOTIF_USER/NOTIF_TOPIC/NOTIF_FEED gated but untested; can_view reads db.session inside task session (read-only UserFollower). Tests FIXED at d0b6c31a7 (WP-E E5).
+- Task 9: minor (deferred): post-edit mention test relies on fixture user names fran/sam. FIXED at d0b6c31a7 (WP-E E5).
+- Task 10: minor (deferred): source-text assertions brittle; first test duplicates test_models_post_reply_new. Duplicate removed at 2afb50bb5 (WP-E E8); the source-text assertion is kept.
 - Task 11: minor (deferred): other URL-only relays of followers-only objects (Like/Delete/Flag/Move/Undo-Delete/Undo-vote, poll vote :2788 carries choice text, answer-chosen :2825) disclose existence to community follower instances. FIXED at 15f8c6643 (WP-D D3; the poll-vote arm was already gated).
 - Task 11: minor (deferred): counters include followers-only rows (existence-only).
 - Task 11: minor (deferred): foot import `import app.visibility as visibility_mod` in app/models.py (no repo precedent; could extend existing cycle line via app.activitypub.util re-export). FIXED at 09a6ebaa0 (WP-D D8).
-- Task 11: minor (deferred): relay test covers new-post branch only; unused test imports current_app / make_follow; function-level imports in tests.
-- Task 11: minor (deferred): moderators cannot restore/lock/sticky/block-image content they cannot view (asymmetric with remove exemption) — final review to triage. FIXED at a24130591 (WP-D D2, ruling D22).
+- Task 11: minor (deferred): relay test covers new-post branch only; unused test imports current_app / make_follow; function-level imports in tests. FIXED at 89b42d6eb (WP-E E6; unused imports and function-level imports at 2afb50bb5, E8).
+- Task 11: minor (deferred): moderators cannot restore/lock/sticky/block-image content they cannot view (asymmetric with remove exemption) — final review to triage. FIXED at a24130591 (WP-D D2, ruling D22). Outbound: lock, sticky, delete and restore of a followers-only object no longer federate to the community, FIXED at a8b7443de (WP-E E9).
 - Task 11: minor (deferred): post_reply_delete executes only for is_moderator()/is_admin(), narrower than can_moderate gate (pre-existing).
-- Final: minor (deferred): search sweep surfaces assert absence only (no presence check); reply_stub_view rebuilds community stub per hidden reply (FIXED at 2a18ad458, WP-D D7); notification titles interpolate parent post title for recipients who may not view it (util.py:3313,3355; shared/reply.py:173,637,642; routes.py:2814; cli.py:1168,1788; post/routes.py:1631) (FIXED at 5cc642a9d, WP-D D1); modlog post entries show post.user_id to viewing followers while commenter neutralized (inconsistent, no leak).
+- Final: minor (deferred): search sweep surfaces assert absence only (no presence check); reply_stub_view rebuilds community stub per hidden reply (FIXED at 2a18ad458, WP-D D7); notification titles interpolate parent post title for recipients who may not view it (util.py:3313,3355; shared/reply.py:173,637,642; routes.py:2814; cli.py:1168,1788; post/routes.py:1631) (FIXED at 5cc642a9d, WP-D D1); modlog post entries show post.user_id to viewing followers while commenter neutralized (inconsistent, no leak). Presence check for comment search FIXED at 2512e4800 (WP-E E4).
 
 ## Platform-gap residuals (2026-10-02 local seeding: PeerTube, Pixelfed, Castopod)
 
