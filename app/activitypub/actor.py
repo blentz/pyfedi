@@ -86,6 +86,8 @@ def validate_remote_actor(actor_url, actor=None, allow_banned=False):
     if actor:
         if actor.banned and not allow_banned:
             return False
+        if isinstance(actor, Community) and podcast_twin_refused(actor) and not allow_banned:
+            return False  # D24: a podcast's banned or deleted User hides its Community, cached or not
         if isinstance(actor, User):
             if actor.deleted or actor_profile_contains_blocked_words(actor):
                 return False
@@ -354,10 +356,7 @@ def find_actor_by_url(actor_url, community_only=False, feed_only=False, allow_ba
     # For remote actors
     if actor_url.startswith('https://') or actor_url.startswith('http://'):
         # D24: a Castopod podcast is a User and a Community with one id; a community lookup wants the Community
-        community = find_local_community(actor_url) if community_only else None
-        if podcast_twin_refused(community):
-            return False  # banned actor found
-        actor = community or find_remote_actor(actor_url)
+        actor = (find_local_community(actor_url) if community_only else None) or find_remote_actor(actor_url)
 
         if actor:
             if not validate_remote_actor(actor_url, actor):
