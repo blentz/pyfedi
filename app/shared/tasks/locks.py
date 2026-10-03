@@ -2,6 +2,7 @@ from app import celery
 from app.activitypub.signature import default_context, send_post_request
 from app.models import Post, User, PostReply
 from app.utils import gibberish, instance_banned, get_task_session, patch_db_session
+from app.visibility import is_open
 
 from flask import current_app
 
@@ -87,6 +88,9 @@ def lock_object(session, user_id, object, is_undo=False):
     community = object.community
 
     if community.local_only or community.private or not (community.instance_id and community.instance.online()):
+        return
+
+    if not is_open(object):  # E9: it never reached the community's followers, so nothing about it does either
         return
 
     lock_id = f"{current_app.config['SERVER_URL']}/activities/lock/{gibberish(15)}"

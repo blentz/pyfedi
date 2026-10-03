@@ -37,7 +37,7 @@ from app.models import Post, PostReply, PostReplyValidationError, \
     PostReplyBookmark, CommunityBlock, File, CommunityFlair, UserFlair, BlockedImage, CommunityBan, Language, Event, \
     Reminder, Emoji
 from app.post import bp
-from app.visibility import can_view, post_title_for
+from app.visibility import can_view, is_open, post_title_for
 from app.post.forms import NewReplyForm, ReportPostForm, MeaCulpaForm, CrossPostForm, ConfirmationForm, \
     ConfirmationMultiDeleteForm, EditReplyForm, FlairPostForm, DeleteConfirmationForm, NewReminderForm, \
     ShareMastodonForm, ChooseEmojiForm, MovePostForm
@@ -2487,8 +2487,8 @@ def post_reply_restore(post_id: int, comment_id: int):
         db.session.commit()
         flash(_('Comment restored.'))
 
-        # Federate un-delete
-        if not post.community.local_only:
+        # Federate un-delete (E9: not for a followers-only reply, which never reached the followers)
+        if not post.community.local_only and is_open(post_reply):
             delete_json = {
                 "actor": current_user.public_url(),
                 "to": ["https://www.w3.org/ns/activitystreams#Public"],

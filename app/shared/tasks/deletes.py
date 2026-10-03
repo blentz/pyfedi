@@ -3,6 +3,7 @@ from app.activitypub.signature import default_context, send_post_request
 from app.constants import NOTIF_REPORT, NOTIF_REPORT_ESCALATION
 from app.models import Community, Instance, Post, PostReply, User, UserFollower, File, Notification, ChatMessage
 from app.utils import gibberish, instance_banned, get_task_session, patch_db_session
+from app.visibility import is_open
 
 from flask import current_app
 from sqlalchemy import Integer
@@ -173,8 +174,9 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
 
     domains_sent_to = []
 
-    # a local_only community federates nothing itself; only the author's followers (below) are reached
-    if community.local_only:
+    # a local_only community federates nothing itself; only the author's followers (below) are reached. Nor does a
+    # followers-only object (E9): it never reached the community's followers, so its Delete and Undo do not either.
+    if community.local_only or not is_open(object):
         pass
     elif community.is_local():
         if is_restore:

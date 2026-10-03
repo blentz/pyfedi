@@ -37,6 +37,7 @@ from sqlalchemy import func, desc, text
 import os
 import boto3
 from app.utils import allowlist_html, markdown_to_html, html_to_text
+from app.visibility import is_open
 from app.activitypub.util import find_language_or_create
 
 
@@ -569,7 +570,7 @@ def delete_post_from_community_task(post_id, user_id):
                 post.deleted_by = user.id
                 session.commit()
 
-                if not community.local_only:
+                if not community.local_only and is_open(post):  # E9: a followers-only post never reached the followers
                     delete_json = {
                         'id': f"{current_app.config['SERVER_URL']}/activities/delete/{gibberish(15)}",
                         'type': 'Delete',
@@ -639,8 +640,8 @@ def delete_post_reply_from_community_task(post_reply_id, user_id):
                 post_reply.deleted_by = user.id
                 session.commit()
 
-                # federate delete
-                if not post.community.local_only:
+                # federate delete (E9: not for a followers-only reply, which never reached the followers)
+                if not post.community.local_only and is_open(post_reply):
                     delete_json = {
                         'id': f"{current_app.config['SERVER_URL']}/activities/delete/{gibberish(15)}",
                         'type': 'Delete',
