@@ -16,6 +16,8 @@ from ua_parser import parse as uaparse
 from app import db, cache, limiter, plugins
 from app.activitypub.util import users_total, active_month, local_posts, local_communities, \
     lemmy_site_data, is_activitypub_request, find_microblogging_community
+from app.discovery import KIND_COMMUNITY
+from app.discovery.search import discovery_fallback
 from app.activitypub.signature import default_context, LDSignature, HttpSignature
 from app.admin.util import topics_for_form
 from app.api.alpha.utils.misc import get_resolve_object
@@ -492,6 +494,9 @@ def list_communities():
     communities = communities.paginate(page=page,
                                        per_page=100 if current_user.is_authenticated and not low_bandwidth else 50,
                                        error_out=False)
+    # Interop D24: nothing local matched the search, so offer what the discovery directory knows
+    discovered = discovery_fallback(KIND_COMMUNITY, search_param, allow_nsfw=nsfw != 'no') \
+        if search_param and page == 1 and communities.total == 0 else []
     context = _base_list_communities_context()
     context["next_url"] = url_for('main.list_communities', page=communities.next_num, sort_by=sort_by,
                        **args_dict) if communities.has_next else None
@@ -518,6 +523,7 @@ def list_communities():
         "hide_nsfw": hide_nsfw,
         "create_admin_only": create_admin_only,
         "is_admin": is_admin,
+        "discovered": discovered,
     })
 
     return render_template('list_communities.html', **context)
