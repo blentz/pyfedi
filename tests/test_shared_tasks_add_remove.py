@@ -360,8 +360,8 @@ def test_the_twins_are_structurally_identical(db_session):
     adds_lines, adds_extents = shape(adds_src)
     removes_lines, removes_extents = shape(removes_src)
 
-    assert adds_lines == removes_lines == 100
-    assert adds_extents == removes_extents == [(27, 38), (42, 53), (56, 100)]
+    assert adds_lines == removes_lines == 104
+    assert adds_extents == removes_extents == [(28, 39), (43, 54), (57, 104)]
 
     assert normalise(removes_src) == adds_src, (
         'the twins have DIVERGED beyond the four naming rules. Run the recipe '
