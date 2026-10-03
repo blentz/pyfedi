@@ -1,6 +1,7 @@
 """What every discovery fetcher shares: one polite GET, one entry shape, one failure type (interop D24)."""
 import re
 import time
+from urllib.parse import urlparse
 
 import httpx
 from flask import current_app
@@ -62,3 +63,29 @@ def is_hostname(value) -> bool:
 
 def is_username(value) -> bool:
     return isinstance(value, str) and _USERNAME.fullmatch(value) is not None
+
+
+def display_name(value, username: str) -> str:
+    """The peer's display name, or the username when it has none."""
+    return value if isinstance(value, str) and value.strip() else username
+
+
+def avatar_of(value):
+    """The peer's avatar url when it is a string, else None."""
+    return value if isinstance(value, str) else None
+
+
+def uri_is_on(uri, host: str) -> bool:
+    """True for an https uri whose host is exactly `host`. Anything unparseable is False."""
+    if not isinstance(uri, str):
+        return False
+    try:
+        parsed = urlparse(uri)
+        return parsed.scheme == 'https' and parsed.hostname == host
+    except ValueError:
+        return False
+
+
+def actor_url_on(uri, host: str, username: str) -> str:
+    """The peer's own uri when it is https and on `host`, else the canonical /users/ url on `host`."""
+    return uri if uri_is_on(uri, host) else f'https://{host}/users/{username}'

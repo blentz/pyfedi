@@ -1,0 +1,9 @@
+{"data": [
+  {"id": 10, "name": "Cara Photos", "username": "cara", "url": "https://pixelfed.example/cara",
+   "avatar": "https://pixelfed.example/storage/avatars/cara.jpg", "followers_count": 210, "statuses_count": 40},
+  {"id": 11, "name": null, "username": "dev", "url": "https://pixelfed.example/dev",
+   "avatar": "https://pixelfed.example/storage/avatars/default.jpg", "followers_count": 3}
+ ],
+ "links": {"next": null},
+ "meta": {"path": "https://pixelfed.example/api/landing/v1/directory", "per_page": 20, "next_cursor": null,
+          "prev_cursor": null}}

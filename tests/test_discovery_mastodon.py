@@ -56,10 +56,9 @@ def test_malformed_account_rows_are_skipped_and_good_rows_kept(app, http_mock):
     entries = fetch_mastodon_people(nobody_excluded)
 
     actor_urls = [e['actor_url'] for e in entries]
-    assert 'https://mastodon.example/users/ann' in actor_urls
-    # unusable uris fall back to the canonical one on the directory's own host
-    assert all(url.startswith('https://mastodon.example/users/') for url in actor_urls)
-    assert 'https://[::1/x' not in actor_urls
+    # unusable uris fall back to the canonical one on the directory's own host; bad usernames and
+    # non-discoverable rows are dropped
+    assert actor_urls == ['https://mastodon.example/users/x'] * 3 + ['https://mastodon.example/users/ann']
 
 
 def test_only_the_twenty_busiest_servers_are_asked(app, http_mock, monkeypatch):
