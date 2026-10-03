@@ -39,8 +39,15 @@ def preload_discovered_communities(entry_ids, user_id):
     results = []
     for entry_id in entry_ids:
         entry = db.session.get(DiscoveryEntry, entry_id)
-        if entry is None or entry.kind != KIND_COMMUNITY:
+        if entry is None:
             results.append({'entry': entry_id, 'status': 'gone'})
+            continue
+        # Re-check at run time: the ids were chosen when the admin clicked, and things change before the task runs
+        if entry.kind != KIND_COMMUNITY or entry.platform not in PRELOAD_PLATFORMS:
+            results.append({'entry': entry_id, 'status': 'gone'})
+            continue
+        if entry.nsfw or instance_banned(entry.host):
+            results.append({'entry': entry_id, 'status': 'skipped'})
             continue
         if db.session.query(Community.id).filter(Community.ap_profile_id == entry.actor_url.lower()).first():
             results.append({'entry': entry_id, 'status': 'already known'})
