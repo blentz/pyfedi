@@ -10,7 +10,7 @@ from app import db
 from app.post.util import convert_archived_replies_to_tree, post_replies
 from app.utils import archive_post
 from app.visibility import RestrictedReply
-from tests.factories import bearer
+from tests.factories import bearer, make_post_reply
 from tests.test_visibility_single_object import client_as, world  # noqa: F401  (world is a fixture)
 from tests.test_visibility_reply_tree import _find, csrf_on  # noqa: F401  (csrf_on is a fixture)
 
@@ -26,7 +26,15 @@ def archived(app, world):  # noqa: F811
     # the factory leaves path empty; a real reply gets it from PostReply.new
     w.reply.path = [0, w.reply_id]
     w.public_child.path = [0, w.reply_id, w.child_id]
-    w.public_post.reply_count = 2
+    # a direct reply (never shown) and an unlisted one (open, so it keeps its body), both top level
+    direct = make_post_reply(w.public_post, w.author, 'direct secret')
+    direct.visibility = 'direct'
+    unlisted = make_post_reply(w.public_post, w.author, 'unlisted words')
+    unlisted.visibility = 'unlisted'
+    db.session.commit()
+    direct.path, unlisted.path = [0, direct.id], [0, unlisted.id]
+    w.direct_id, w.unlisted_id = direct.id, unlisted.id
+    w.public_post.reply_count = 4
     db.session.commit()
     archive_post(w.public_post.id, None)
     db.session.expire_all()
@@ -107,3 +115,22 @@ def test_api_replies_on_an_archived_post_return_the_nested_stub(app, archived):
     assert stub['comment']['body'] is None and stub['creator']['id'] == 0 and not stub['creator']['user_name']
     assert stub['replies'][0]['comment']['body'] == 'public child'
     assert SECRET not in response.get_data(as_text=True)
+
+
+def test_a_direct_reply_is_stored_as_a_stub_and_an_unlisted_reply_keeps_its_body(archived):
+    w = archived
+    data = archive_json(w)
+    direct = stored(data['replies'], w.direct_id)
+    assert set(direct) == {'id', 'parent_id', 'depth', 'post_id', 'visibility', 'path', 'replies'}
+    assert direct['visibility'] == 'direct'
+    assert 'direct secret' not in orjson.dumps(data).decode()
+    unlisted = stored(data['replies'], w.unlisted_id)
+    assert unlisted['body'] == 'unlisted words' and unlisted['visibility'] == 'unlisted'
+
+
+def test_the_direct_stub_renders_as_a_placeholder_and_the_unlisted_reply_as_itself(app, archived):
+    w = archived
+    tree = post_replies(w.public_post, 'new', w.follower)
+    by_id = {e['comment'].id: e['comment'] for e in tree}
+    assert isinstance(by_id[w.direct_id], RestrictedReply)
+    assert not isinstance(by_id[w.unlisted_id], RestrictedReply) and by_id[w.unlisted_id].body == 'unlisted words'
