@@ -2,18 +2,21 @@
 Dislike, Delete, Flag, Move, Undo-Delete, Undo-vote, poll vote and answer-chosen -- as process_new_content already
 refuses to relay its Create. Each arm still does its local work; a public object is still relayed."""
 import contextlib
+from unittest.mock import patch
 
 import pytest
 
 from app import db
 from app.activitypub import routes as activitypub_routes
-from app.activitypub.routes import process_downvote, process_poll_vote, process_question_answer, process_upvote
+from app.activitypub.routes import (process_downvote, process_new_content, process_poll_vote,
+                                    process_question_answer, process_upvote)
 from app.models import Poll, PollChoice
 from app.utils import utcnow
 from tests.factories import (inbox_activity, make_community, make_instance, make_post, make_post_reply, make_site,
-                             make_user)
+                             make_user, make_visibility_world)
 from tests.test_inbox_dispatch_lock_delete import record_moderation
 from tests.test_inbox_dispatch_preamble import dispatch
+from tests.test_visibility_ingest import FOLLOWERS, PUBLIC, note_activity
 
 VISIBILITIES = [('public', 1), ('unlisted', 1), ('followers', 0)]
 
@@ -122,3 +125,60 @@ def test_an_answer_chosen(scene, visibility, relays, monkeypatch):
     process_question_answer(scene.author, False, {'id': 'https://peer.example/a/4', 'object': reply.ap_id}, False)
     assert db.session.get(type(reply), reply.id).answer is True
     assert len(scene.announced) == relays
+
+
+# --- process_new_content: the post-Update, new-reply and reply-Update arms (Task 11) ---------------------------
+# The new-post arm is pinned in test_visibility_end_to_end.py. An edit or a reply to followers-only content is
+# stored and notified, never forwarded to the community's followers; the same arm still forwards a public one.
+
+def _content(url, kind, to, cc, **extra):
+    activity = note_activity(to, cc)
+    activity['type'] = kind
+    activity['id'] = f'{url}/activity'
+    activity['object'].update({'id': url, 'attributedTo': 'https://m.example/users/alice', **extra})
+    return activity
+
+
+@contextlib.contextmanager
+def _relay_spy():
+    with patch('app.activitypub.routes.can_create_post', return_value=True), \
+            patch('app.activitypub.routes.can_create_post_reply', return_value=True), \
+            patch('app.activitypub.routes.update_post_from_activity'), \
+            patch('app.activitypub.routes.update_post_reply_from_activity'), \
+            patch('app.activitypub.routes.announce_activity_to_followers') as announce:
+        yield announce
+
+
+@pytest.mark.parametrize('visibility, relays', VISIBILITIES)
+def test_a_post_update(app, db_session, visibility, relays):
+    w = make_visibility_world()
+    post = w.post if visibility == 'followers' else w.public_post
+    post.visibility = visibility
+    db.session.commit()
+    activity = _content(post.ap_id, 'Update', [PUBLIC] if relays else [FOLLOWERS], [])
+    with _relay_spy() as announce:
+        process_new_content(w.author, w.community, False, activity, False)
+    assert announce.call_count == relays
+
+
+@pytest.mark.parametrize('visibility, relays', VISIBILITIES)
+def test_a_reply_update(app, db_session, visibility, relays):
+    w = make_visibility_world()
+    w.reply.ap_id = 'https://m.example/comment/1'
+    w.reply.visibility = visibility
+    db.session.commit()
+    activity = _content(w.reply.ap_id, 'Update', [PUBLIC] if relays else [FOLLOWERS], [],
+                        inReplyTo=w.public_post.ap_id)
+    with _relay_spy() as announce:
+        process_new_content(w.author, w.community, False, activity, False)
+    assert announce.call_count == relays
+
+
+@pytest.mark.parametrize('to, cc, relays', [([FOLLOWERS], [], 0), ([PUBLIC], [FOLLOWERS], 1), ([PUBLIC], [], 1)],
+                         ids=['followers', 'public-addressed-to-followers-too', 'public'])
+def test_a_new_reply(app, db_session, to, cc, relays):
+    w = make_visibility_world()
+    activity = _content('https://m.example/comment/2', 'Create', to, cc, inReplyTo=w.public_post.ap_id)
+    with _relay_spy() as announce:
+        process_new_content(w.author, w.community, False, activity, False)
+    assert announce.call_count == relays
