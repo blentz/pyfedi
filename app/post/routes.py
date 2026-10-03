@@ -2671,7 +2671,10 @@ def post_block_image_purge_posts(post_id: int):
 
     posts = Post.query.filter(Post.id.in_(posts_with_blocked_images()), Post.deleted == False).\
         order_by(desc(Post.posted_at)).all()
-    return render_template('post/post_block_image_purge_posts.html', post=post, posts=posts,
+    # D2: an admin may act on a followers-only post they cannot view, but the page (its <head>'s oEmbed link names the
+    # post's title) does not describe it to them
+    return render_template('post/post_block_image_purge_posts.html',
+                           post=post if can_view(post, current_user.id) else None, posts=posts,
                            title=_('Posts containing blocked images'),
                            referrer=request.args.get('referrer'),
                            roles_with=roles_with('change instance settings'))
