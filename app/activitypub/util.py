@@ -3765,6 +3765,14 @@ def _is_vote_count(value) -> bool:
 
 def update_post_from_activity(post: Post, request_json: dict):
     with app_pkg.redis_client.lock(f"lock:post:{post.id}", timeout=60, blocking_timeout=60):
+        # C1. A Castopod episode Note carries no attachment: the url (audio) and image the post holds came from the
+        # PodcastEpisode it links to. While the Note still opens with that link, the Update keeps them.
+        episode_audio_url = None
+        if post.type == POST_TYPE_LINK and post.url and post.author and not post.author.is_local():
+            episode_url = castopod_episode_url(request_json['object'], post.author.ap_profile_id)
+            if episode_url and post.url != episode_url:
+                episode_audio_url = post.url
+
         # redo body without checking if it's changed
         if 'content' in request_json['object'] and request_json['object']['content'] is not None:
             # prefer Markdown in 'source' in provided
@@ -3816,6 +3824,9 @@ def update_post_from_activity(post: Post, request_json: dict):
             post.microblog = True
             if warning := content_warning_from(request_json['object']):
                 new_title = shorten_string(warning, 255)  # a warning hides the body, so the body must not become the title
+
+        if episode_audio_url:
+            post.url = episode_audio_url  # not the episode page link the microblog branch above took from the content
 
         if old_title != new_title:
             post.title = new_title
@@ -4132,7 +4143,7 @@ def update_post_from_activity(post: Post, request_json: dict):
         # including the '' in rows written before that change -- which is what
         # makes it safe without a migration. An attachment in this Update still
         # overwrites new_url below, so a real url change is still detected.
-        new_url = old_url if post.type == POST_TYPE_EVENT else None
+        new_url = old_url if post.type == POST_TYPE_EVENT or episode_audio_url else None
         # D1397. The `'type' in ...[0]` guard checked ONE element -- as a
         # membership test over whatever that element is, so a string element
         # containing 'type' passed it -- and then every element was subscripted
