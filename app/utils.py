@@ -198,7 +198,10 @@ def get_request_capped(uri, max_bytes: int, headers=None, max_seconds: float = 1
     """GET with get_request's guards (uri validation, User-Agent, timeout, no redirects, errors normalised to
     httpx.HTTPError) that reads the body as a stream and gives up once it passes max_bytes, so a chunked or
     lying response is never buffered whole. The whole download also has a wall-clock deadline (max_seconds), and
-    only an identity-encoded body is read (raw bytes), so a compressed body cannot expand past the cap. Returns (status_code, body); body is None when over max_bytes.
+    only an identity-encoded body is read (raw bytes), so a compressed body cannot expand past the cap. Returns
+    (status_code, body); body is None when over max_bytes or when the body is complete only after the deadline.
+    Limit: DNS resolution is a blocking lookup that neither httpx's timeouts nor the deadline interrupt (the deadline
+    is only checked once the response has started), so a slow resolver can hold the call past max_seconds.
     No retry: callers use it for optional, best-effort fetches."""
     if is_invalid_get_request_uri(uri):
         current_app.logger.info(f"invalid get request {uri}")
@@ -219,6 +222,8 @@ def get_request_capped(uri, max_bytes: int, headers=None, max_seconds: float = 1
                 body.extend(chunk)
                 if len(body) > max_bytes or time.monotonic() > deadline:
                     return response.status_code, None
+            if time.monotonic() > deadline:   # the body ended (or headers came) only after the deadline
+                return response.status_code, None
             return response.status_code, bytes(body)
     except (httpx.InvalidURL, ValueError, httpx.StreamError) as error:
         raise httpx.HTTPError(f"HTTPError: {str(error)}") from None
