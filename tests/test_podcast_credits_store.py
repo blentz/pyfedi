@@ -4,7 +4,9 @@ import gzip
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
+from cachelib import SimpleCache
 
 from app import cache, db
 from app.utils import get_request_capped
@@ -460,3 +462,41 @@ def test_a_public_url_on_the_accounts_own_host_still_names_it(world):
     assert credits._known_user('https://victim.example/@alice') == alice
     assert credits._known_user('https://victim.example/users/alice') == alice
     assert credits._known_user('https://BÜCHER.example/@bob') == bob
+
+
+@pytest.fixture
+def real_cache(app, monkeypatch):
+    """The test config's NullCache memoizes nothing: give this test a real one."""
+    monkeypatch.setitem(app.extensions['cache'], cache, SimpleCache())
+
+
+FEED_ONLY_NAMES = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:podcast="https://podcastindex.org/namespace/1.0"><channel><title>My Podcast</title>
+<podcast:person role="host">Ann Host</podcast:person>
+<item><link>{EP1}</link><podcast:person role="guest">Cara Guest</podcast:person></item>
+<item><link>{ACTOR}/episodes/ep-2</link><podcast:person role="guest">Dan Other</podcast:person></item>
+</channel></rss>""".encode()
+
+
+def test_two_episodes_of_one_podcast_read_the_feed_once(world, http_mock, real_cache):
+    feed = http_mock.get(FEED_URL).respond(200, content=FEED_ONLY_NAMES)
+    second = make_post(world.community, world.podcast, f'{ACTOR}/posts/2', microblog=True)
+
+    fetch_episode_credits_task(world.post.id, EP1)
+    fetch_episode_credits_task(second.id, f'{ACTOR}/episodes/ep-2')
+
+    assert feed.call_count == 1
+    assert [c['name'] for c in stored(world.post.id)['podcast']['credits']] == ['Ann Host', 'Cara Guest']
+    assert [c['name'] for c in stored(second.id)['podcast']['credits']] == ['Ann Host', 'Dan Other']
+
+
+def test_a_failed_feed_fetch_is_not_remembered(world, http_mock, real_cache):
+    feed = http_mock.get(FEED_URL)
+    feed.side_effect = [httpx.Response(500), httpx.Response(200, content=FEED_ONLY_NAMES)]
+
+    fetch_episode_credits_task(world.post.id, EP1)
+    assert stored(world.post.id) is None
+    fetch_episode_credits_task(world.post.id, EP1)
+
+    assert feed.call_count == 2
+    assert [c['name'] for c in stored(world.post.id)['podcast']['credits']] == ['Ann Host', 'Cara Guest']
