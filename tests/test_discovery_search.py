@@ -7,14 +7,12 @@ import pytest
 from flask import g
 
 from app import db
-from app.discovery import views
-import app.discovery.search as search_mod
+from app.discovery import search as search_mod, views
 from app.discovery.search import discovery_fallback, viewer_allows_nsfw
 from app.models import Domain, InstanceBlock, Site
 from tests.discovery_fixtures import add_entry as shared_add_entry, fresh_cache  # noqa: F401
 from tests.factories import make_banned_instance, make_community, make_instance, make_user
 from tests.test_admin_federation import csrf, login
-
 
 pytestmark = pytest.mark.usefixtures('fresh_cache')
 
@@ -194,7 +192,7 @@ def test_resolve_is_post_only_and_only_for_known_entries(env, monkeypatch):
 
     assert env.client.get(f'/discovery/{entry.id}/resolve').status_code == 405
     assert env.client.post('/discovery/999999/resolve', data={'csrf_token': env.token}).status_code == 404
-    assert env.client.post(f'/discovery/{entry.id}/resolve').status_code in (400, 302)
+    assert env.client.post(f'/discovery/{entry.id}/resolve').status_code == 400
 
 
 # ---- M1: the viewer's own blocks and the full instance filter apply to the fallback ----------------------------
@@ -250,3 +248,60 @@ def test_an_instance_people_page_offers_only_that_instances_directory_people(env
         env.client.get('/instance/m.example/people?q=zqann')
 
     assert [e.name for e in render.call_args.kwargs['discovered']] == ['Zqann Here']
+
+
+# ---- C3: exclusions do not under-fill the results -----------------------------------------------------------------
+
+def test_excluded_hosts_do_not_crowd_out_the_limit(app, db_session):
+    for n in range(3):
+        add_entry(f'Zqcrowd banned {n}', host='banned.example', followers=100 + n)
+    add_entry('Zqcrowd fine a', host='a.example', followers=50)
+    add_entry('Zqcrowd fine b', host='b.example', followers=40)
+    make_banned_instance('banned.example')
+
+    assert [e.name for e in discovery_fallback('community', 'zqcrowd', True, limit=2)] == \
+        ['Zqcrowd fine a', 'Zqcrowd fine b']
+
+
+def test_the_fallback_reads_at_most_five_pages(app, db_session):
+    for n in range(10):   # five pages of two rows each, with limit=1
+        add_entry(f'Zqdeep banned {n}', host='banned.example', followers=100 + n)
+    add_entry('Zqdeep fine', host='a.example', followers=1)
+    make_banned_instance('banned.example')
+
+    assert discovery_fallback('community', 'zqdeep', True, limit=1) == []
+    assert [e.name for e in discovery_fallback('community', 'zqdeep', True, limit=2)] == ['Zqdeep fine']
+
+
+def test_resolving_an_entry_on_a_host_banned_after_the_refresh_is_refused(env, monkeypatch):
+    entry = add_entry('Zqbanned', host='banned.example')
+    make_banned_instance('banned.example')
+    monkeypatch.setattr(views, 'find_actor_or_create', lambda *a, **k: pytest.fail('a banned host must not be fetched'))
+
+    response = env.client.post(f'/discovery/{entry.id}/resolve', data={'csrf_token': env.token, 'q': 'zqbanned'})
+
+    assert response.status_code == 302
+    assert response.headers['Location'].endswith('/communities?search=zqbanned')
+
+
+def test_the_failure_redirect_keeps_the_search(env, monkeypatch):
+    community = add_entry('Zqgone')
+    person = add_entry('Zqann Gone', kind='person', platform='mastodon', host='m.example')
+    monkeypatch.setattr(views, 'find_actor_or_create', lambda actor_url, community_only=False: None)
+
+    to_communities = env.client.post(f'/discovery/{community.id}/resolve', data={'csrf_token': env.token, 'q': 'zqgone'})
+    to_people = env.client.post(f'/discovery/{person.id}/resolve', data={'csrf_token': env.token, 'q': 'zqann'})
+
+    assert to_communities.headers['Location'].endswith('/communities?search=zqgone')
+    assert to_people.headers['Location'].endswith('/instance/all/people?q=zqann')
+
+
+def test_the_resolve_form_carries_the_search(env):
+    add_entry('Zqtilvids Linux')
+    add_entry('Zqann Example', kind='person', platform='mastodon', host='m.example')
+
+    communities = env.client.get('/communities?search=zqtilvids').get_data(as_text=True)
+    people = env.client.get('/instance/all/people?q=zqann').get_data(as_text=True)
+
+    assert '<input type="hidden" name="q" value="zqtilvids">' in communities
+    assert '<input type="hidden" name="q" value="zqann">' in people

@@ -9,6 +9,9 @@ from app.models import DiscoveryEntry, Instance
 from app.utils import blocked_or_banned_instances
 
 FALLBACK_LIMIT = 20
+# Pages of limit*2 rows read while the instance filter drops rows. The filter (wildcard bans, allowlist mode)
+# is host_is_excluded's, which SQL cannot repeat exactly, so it runs on each page instead of in the query.
+FALLBACK_PAGES = 5
 
 
 def _contains_pattern(q: str) -> str:
@@ -42,12 +45,19 @@ def discovery_fallback(kind: str, q: str, allow_nsfw: bool, limit: int = FALLBAC
     if host:
         query = query.filter(func.lower(DiscoveryEntry.host) == host.lower())
     blocked = _viewer_blocked_hosts(viewer_id)
+    # id breaks ties, so that consecutive pages neither repeat nor skip a row
+    query = query.order_by(DiscoveryEntry.followers.desc(), DiscoveryEntry.name, DiscoveryEntry.id)
+    page_size = limit * 2
     found = []
-    for entry in query.order_by(DiscoveryEntry.followers.desc(), DiscoveryEntry.name).limit(limit * 2):
-        if (entry.host or '').lower() in blocked or host_is_excluded(entry.host, frozenset()):
-            continue
-        found.append(entry)
-        if len(found) >= limit:
+    for page in range(FALLBACK_PAGES):
+        rows = query.offset(page * page_size).limit(page_size).all()
+        for entry in rows:
+            if (entry.host or '').lower() in blocked or host_is_excluded(entry.host, frozenset()):
+                continue
+            found.append(entry)
+            if len(found) >= limit:
+                return found
+        if len(rows) < page_size:
             break
     return found
 
