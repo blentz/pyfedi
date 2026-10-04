@@ -173,3 +173,54 @@ def test_one_entry_that_blows_up_is_reported_and_the_rest_still_run(world, monke
     results = preload_discovered_communities([big.id, mid.id], world.founder.id)
 
     assert results == [{'entry': big.id, 'status': 'error'}, {'community': 'midchan@midchan.example', 'status': 'joined'}]
+
+
+def test_subscribing_with_nothing_new_enqueues_nothing_and_says_so(world, admin, monkeypatch):
+    client, token = admin
+    queued = []
+    monkeypatch.setattr('app.discovery.admin_views.preload_discovered_communities',
+                        SimpleNamespace(delay=lambda *a: queued.append(a)))
+    pod = DiscoveryEntry.query.filter_by(name='Zqpodshow').one()
+    pod.nsfw = True
+    db.session.commit()
+
+    page = client.post(PAGE, data={'preload_count': '5', 'preload_platforms': ['castopod'],
+                                   'preload_subscribe': 'go', 'csrf_token': token},
+                       follow_redirects=True).get_data(as_text=True)
+
+    assert queued == []
+    assert 'Nothing new to subscribe to' in page
+
+
+@pytest.mark.parametrize('flag', ['deleted', 'banned'])
+def test_subscribe_is_refused_when_the_preload_user_cannot_subscribe(world, admin, monkeypatch, flag):
+    client, token = admin
+    queued = []
+    monkeypatch.setattr('app.discovery.admin_views.preload_discovered_communities',
+                        SimpleNamespace(delay=lambda *a: queued.append(a)))
+    assert world.founder.id == preload.PRELOAD_USER_ID
+    setattr(world.founder, flag, True)
+    db.session.commit()
+
+    page = client.post(PAGE, data={'preload_count': '2', 'preload_platforms': ['peertube'],
+                                   'preload_subscribe': 'go', 'csrf_token': token},
+                       follow_redirects=True).get_data(as_text=True)
+
+    assert queued == []
+    assert 'cannot subscribe' in page
+
+
+@pytest.mark.parametrize('flag', ['deleted', 'banned', 'missing'])
+def test_the_task_subscribes_nothing_for_a_user_that_cannot_subscribe(world, monkeypatch, caplog, flag):
+    monkeypatch.setattr(preload, 'find_actor_or_create', lambda *a, **k: pytest.fail('must not resolve'))
+    monkeypatch.setattr(preload, 'do_subscribe', lambda *a, **k: pytest.fail('must not subscribe'))
+    big = DiscoveryEntry.query.filter_by(name='Bigchan').one()
+    user_id = world.founder.id
+    if flag == 'missing':
+        user_id = 999999
+    else:
+        setattr(world.founder, flag, True)
+        db.session.commit()
+
+    assert preload_discovered_communities([big.id], user_id) == []
+    assert 'cannot subscribe' in caplog.text

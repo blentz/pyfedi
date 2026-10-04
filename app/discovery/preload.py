@@ -8,12 +8,19 @@ from app import celery, db
 from app.activitypub.util import find_actor_or_create
 from app.community.routes import do_subscribe
 from app.discovery import KIND_COMMUNITY
-from app.models import Community, DiscoveryEntry
+from app.models import Community, DiscoveryEntry, User
 from app.utils import instance_banned
 
 PRELOAD_PLATFORMS = ('peertube', 'castopod')
 # Subscribe as user 1, the first instance admin, as the lemmyverse pre-load does (see admin_federation_preload)
 PRELOAD_USER_ID = 1
+
+
+def preload_user_can_subscribe(user_id) -> bool:
+    """The subscribing user exists and is neither deleted nor banned; checked before anything is enqueued and
+    again when the task runs."""
+    user = db.session.get(User, user_id)
+    return user is not None and not user.deleted and not user.banned
 
 
 def preload_candidates(count: int, platforms) -> list[DiscoveryEntry]:
@@ -37,6 +44,10 @@ def preload_candidates(count: int, platforms) -> list[DiscoveryEntry]:
 
 @celery.task
 def preload_discovered_communities(entry_ids, user_id):
+    if not preload_user_can_subscribe(user_id):
+        current_app.logger.error(f'discovery: pre-load not run: user {user_id} cannot subscribe '
+                                 f'(missing, deleted or banned)')
+        return []
     results = []
     for entry_id in entry_ids:
         try:
