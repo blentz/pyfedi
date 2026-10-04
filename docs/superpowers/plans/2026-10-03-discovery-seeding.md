@@ -4732,4 +4732,4 @@ Rulings made in this round (cost if wrong):
 - E9c: podcast web URL from its own actor document (no migration), only https, same host, and a path naming its own account — cost: some false negatives for podcasts whose web URL is elsewhere.
 - F2: seed's credited account is remote on people.example; the feed fixture's href stays social.example (shared with other credit tests) — cost: the seeded verified credit is matched by the seed itself, not by the live host rule.
 
-Still open, for the owner: periodic re-verification of credits (ruling 29); history rewrite of red intermediate commits and earlier "Sonnet" trailers; independent check of the signing digest 3e78f375af4c08655c786763a7e4b65d8ba42893.
+Owner decisions (2026-10-04): credits are not re-verified (ruling 29 stands as a documented limitation); history is not rewritten. Still open: independent check of the signing digest 3e78f375af4c08655c786763a7e4b65d8ba42893.
