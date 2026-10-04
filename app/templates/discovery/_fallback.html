@@ -11,6 +11,7 @@
             <form method="post" action="{{ url_for('main.discovery_resolve', entry_id=entry.id) }}" class="ms-auto">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="q" value="{{ (search if search is defined else q) or '' }}">
+                {% if entry.kind != 'community' and instance is defined and instance %}<input type="hidden" name="instance_domain" value="{{ instance.domain }}">{% endif %}
                 <button type="submit" class="btn btn-sm btn-primary">{% if entry.kind == 'community' %}{{ _('Open to join') }}{% else %}{{ _('Open to follow') }}{% endif %}</button>
             </form>
         </li>

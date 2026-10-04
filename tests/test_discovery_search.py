@@ -305,3 +305,28 @@ def test_the_resolve_form_carries_the_search(env):
 
     assert '<input type="hidden" name="q" value="zqtilvids">' in communities
     assert '<input type="hidden" name="q" value="zqann">' in people
+
+
+# ---- D5: a people search on one instance's page goes back to that instance's page ------------------------------
+
+def test_the_resolve_form_on_an_instance_people_page_carries_the_instance(env):
+    make_instance('m.example')
+    add_entry('Zqann Example', kind='person', platform='mastodon', host='m.example')
+
+    on_instance = env.client.get('/instance/m.example/people?q=zqann').get_data(as_text=True)
+    on_all = env.client.get('/instance/all/people?q=zqann').get_data(as_text=True)
+
+    assert '<input type="hidden" name="instance_domain" value="m.example">' in on_instance
+    assert 'name="instance_domain"' not in on_all
+
+
+@pytest.mark.parametrize('instance_domain, back_to', [('m.example', 'm.example'), ('', 'all'), ('local', 'all'),
+                                                      ('M.example', 'all'), ('m.example/../admin', 'all')])
+def test_the_failure_redirect_keeps_the_instance(env, monkeypatch, instance_domain, back_to):
+    person = add_entry('Zqann Gone', kind='person', platform='mastodon', host='m.example')
+    monkeypatch.setattr(views, 'find_actor_or_create', lambda actor_url, community_only=False: None)
+
+    response = env.client.post(f'/discovery/{person.id}/resolve',
+                               data={'csrf_token': env.token, 'q': 'zqann', 'instance_domain': instance_domain})
+
+    assert response.headers['Location'].endswith(f'/instance/{back_to}/people?q=zqann')
