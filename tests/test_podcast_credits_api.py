@@ -6,6 +6,7 @@ from flask import g
 from app import db
 from app.api.alpha.schema import PostExtensions
 from app.api.alpha.views import _neutral_post, post_view
+from app.constants import VISIBILITY_FOLLOWERS
 from tests.factories import make_community, make_instance, make_post, make_site, make_user
 
 
@@ -95,6 +96,18 @@ def test_a_neutral_post_never_carries_credits(world):
     store(post, credits_for(ann))
 
     assert 'extensions' not in _neutral_post(post)
+
+
+@pytest.mark.parametrize('variant', [1, 2])
+def test_a_post_the_viewer_may_not_see_carries_no_credits_in_its_view(world, variant):
+    post, podcast, ann = world
+    store(post, credits_for(ann))
+    post.visibility = VISIBILITY_FOLLOWERS
+    db.session.commit()
+
+    shown = post_view(post=post, variant=variant, user_id=ann.id)
+    assert 'extensions' not in (shown if variant == 1 else shown['post'])
+    assert 'Famous Name' not in str(shown) and 'Cara Guest' not in str(shown)
 
 
 def test_the_schema_describes_the_credits(world):
