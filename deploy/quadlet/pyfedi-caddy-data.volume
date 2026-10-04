@@ -1,3 +1,0 @@
-# Certificates and the ACME account key: must persist.
-[Volume]
-VolumeName=pyfedi_caddy_data

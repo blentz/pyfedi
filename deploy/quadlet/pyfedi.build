@@ -1,6 +1,0 @@
-# The image web, celery and notifs share (compose: build: {context: ., target: runtime}).
-[Build]
-ImageTag=localhost/pyfedi:latest
-SetWorkingDirectory=/home/rocky/pyfedi
-File=Dockerfile
-Target=runtime
