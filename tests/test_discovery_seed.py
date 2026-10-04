@@ -16,6 +16,7 @@ def test_the_command_refuses_outside_debug_without_force(app, db_session):
     result = app.test_cli_runner().invoke(args=['discovery-seed-fixtures'])
 
     assert 'Refusing' in result.output
+    assert result.exit_code != 0
     assert DiscoveryEntry.query.count() == 0
 
 
