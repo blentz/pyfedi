@@ -51,8 +51,12 @@ def fetch_json(url: str, params: dict | None = None, headers: dict | None = None
         return None
 
 
+ENTRY_KEYS = ('kind', 'platform', 'actor_url', 'name', 'host', 'avatar', 'followers', 'nsfw', 'source')
+
+
 def make_entry(*, kind: str, platform: str, actor_url: str, name: str, host: str, avatar, followers: int,
                nsfw: bool, source: str) -> dict:
+    """One normalised entry: exactly the ENTRY_KEYS."""
     return {'kind': kind, 'platform': platform, 'actor_url': actor_url, 'name': name, 'host': host,
             'avatar': avatar, 'followers': followers, 'nsfw': nsfw, 'source': source}
 

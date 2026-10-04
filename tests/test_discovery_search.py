@@ -95,6 +95,15 @@ def test_the_communities_page_offers_the_directory_when_nothing_local_matches(en
     assert f'/discovery/{entry.id}/resolve' in html
 
 
+def test_a_name_with_html_entities_is_escaped_on_render(env):
+    add_entry('Zqent &amp; &lt;script&gt;alert(1)&lt;/script&gt;')
+
+    html = env.client.get('/communities?search=zqent').get_data(as_text=True)
+
+    assert 'Zqent &amp;amp; &amp;lt;script&amp;gt;alert(1)&amp;lt;/script&amp;gt;' in html
+    assert '<script>alert(1)' not in html
+
+
 def test_a_local_match_means_no_fallback(env):
     add_entry('Zqtilvids Linux')
     community = make_community('zqtilvids')

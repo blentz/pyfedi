@@ -21,19 +21,39 @@ _SPACE = re.compile(r'\s+')
 _NSFW = re.compile(r'\bnsfw\b|\b18\+|\bporn', re.IGNORECASE)
 
 
+class _IsolationListUnreadable(Exception):
+    """Raised inside the memoized read, so that a failed fetch is not cached for a day."""
+
+
 @cache.memoize(timeout=86400)
+def _isolation_list() -> frozenset:
+    listing = retrieve_peertube_block_list()
+    if not listing:   # None for a transport error, '' for any other status; the real list is never empty
+        raise _IsolationListUnreadable
+    return frozenset(line.strip().lower() for line in listing.split('\n') if line.strip())
+
+
 def peertube_isolated_hosts() -> frozenset:
-    """Hosts on the PeerTube isolation list (https://peertube_isolation.frama.io/). Empty when the list
-    cannot be fetched: `flask init-db` already copied it into banned_instances, which is checked anyway."""
+    """Hosts on the PeerTube isolation list (https://peertube_isolation.frama.io/), kept for a day once read.
+    Empty when the list cannot be fetched, and that is not cached, so the next refresh tries again:
+    `flask init-db` already copied the list into banned_instances, which is checked anyway."""
     try:
-        listing = retrieve_peertube_block_list()
+        return _isolation_list()
+    except _IsolationListUnreadable:
+        current_app.logger.info('discovery: PeerTube isolation list unreachable, treated as empty')
     except Exception:  # the upstream helper only guards its HTTP call, not malformed JSON
         current_app.logger.exception('discovery: PeerTube isolation list unreadable, treated as empty')
-        listing = None
-    return frozenset(line.strip().lower() for line in (listing or '').split('\n') if line.strip())
+    return frozenset()
 
 
-def host_is_excluded(host: str, isolated: frozenset) -> bool:
+def banned_domain_names() -> frozenset:
+    """Every banned Domain's name, read once so that a refresh can test each entry's host in memory."""
+    return frozenset(name for (name,) in db.session.query(Domain.name).filter(Domain.banned == True))
+
+
+def host_is_excluded(host: str, isolated: frozenset, banned_domains: frozenset | None = None) -> bool:
+    """True for an empty, isolated, banned or non-allowlisted host, or a banned Domain. `banned_domains`, when
+    given, is banned_domain_names() read up front; without it the Domain table is asked for this host alone."""
     if not host:
         return True
     host = host.strip().lower()
@@ -41,6 +61,8 @@ def host_is_excluded(host: str, isolated: frozenset) -> bool:
         return True
     if get_setting('use_allowlist', False) and not instance_allowed(host):
         return True
+    if banned_domains is not None:
+        return host in banned_domains
     return db.session.query(Domain.id).filter(Domain.name == host, Domain.banned == True).first() is not None
 
 
