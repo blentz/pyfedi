@@ -2851,6 +2851,13 @@ def can_create_post(user, content: Community) -> bool:
     if user.is_rss_bot() or content.is_moderator(user) or user.is_admin():
         return True
 
+    # D24: a Castopod podcast owns its Community twin (same ap_profile_id, user_id is the podcast's User), so it
+    # posts its episodes there whatever the twin's restrictions. Inline rather than app.discovery.podcast, which
+    # imports this module.
+    if content.user_id == user.id and not user.is_local() and user.ap_profile_id and \
+            content.ap_profile_id == user.ap_profile_id:
+        return True
+
     if content.restricted_to_mods:
         return False
 
