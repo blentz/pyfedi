@@ -1,0 +1,25 @@
+[Unit]
+Description=PieFed notifications stream (uvicorn)
+Requires=pyfedi-redis.service
+After=pyfedi-redis.service pyfedi-build.service
+
+[Container]
+ContainerName=piefed_notifs
+Image=pyfedi.build
+Entrypoint=./entrypoint_async.sh
+EnvironmentFile=/home/rocky/pyfedi/.env.docker
+# Caddy reaches it over pf_network; loopback only, for curl on the VPS itself.
+PublishPort=127.0.0.1:8040:8000
+Network=pyfedi.network
+NetworkAlias=piefednotifs
+HealthCmd=pgrep -f uvicorn
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=3
+HealthStartPeriod=20s
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
