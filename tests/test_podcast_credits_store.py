@@ -58,23 +58,66 @@ def serve_actor(http_mock, href, name, server='social.example', actor_type='Pers
                                                             fields=fields or {}))
 
 
+def serve_profile(http_mock, name, fields=None):
+    """A Mastodon-style profile URL whose document's id is elsewhere on the same host: both are served, since the
+    id must be fetched from itself before the document is trusted. Returns (profile route, id route)."""
+    return (serve_actor(http_mock, f'https://social.example/@{name}', name, fields=fields),
+            serve_actor(http_mock, f'https://social.example/u/{name}', name, fields=fields))
+
+
 def rows():
     return User.query.count(), Community.query.count()
 
 
-def test_a_vouching_fediverse_href_resolves_to_a_new_user(world, http_mock):
+def test_a_vouching_actor_id_resolves_to_a_new_user_with_one_fetch(world, http_mock):
     peer_instance('social.example')
-    route = serve_actor(http_mock, 'https://social.example/@ann', 'ann', fields=VOUCH)
+    route = serve_actor(http_mock, 'https://social.example/u/ann', 'ann', fields=VOUCH)
 
-    user_id = verified_credit_user('https://social.example/@ann', world.podcast)
+    user_id = verified_credit_user('https://social.example/u/ann', world.podcast)
 
     assert db.session.get(User, user_id).ap_profile_id == 'https://social.example/u/ann'
     assert route.call_count == 1   # created from the document in hand, not fetched a second time
 
 
+def test_a_vouching_profile_url_is_trusted_once_its_id_answers_for_itself(world, http_mock):
+    peer_instance('social.example')
+    profile, canonical = serve_profile(http_mock, 'ann', fields=VOUCH)
+
+    user_id = verified_credit_user('https://social.example/@ann', world.podcast)
+
+    assert db.session.get(User, user_id).ap_profile_id == 'https://social.example/u/ann'
+    assert profile.call_count == 1 and canonical.call_count == 1
+
+
+def test_a_document_claiming_a_victims_id_links_and_touches_nothing(world, http_mock):
+    victim = ann_user({})   # an existing account; its real document does not vouch
+    victim.title = 'The Real Ann'
+    db.session.commit()
+    http_mock.get('https://evil.example/@ann').respond(json=peer_actor_json(
+        'Person', name='ann', server='social.example', fields={**VOUCH, 'name': 'Spoofed Ann'}))
+    http_mock.get(victim.ap_profile_id).respond(json=peer_actor_json('Person', name='ann', server='social.example'))
+    before = rows()
+
+    assert verified_credit_user('https://evil.example/@ann', world.podcast) is None
+    assert rows() == before
+    db.session.expire_all()
+    assert db.session.get(User, victim.id).title == 'The Real Ann'
+
+
+def test_a_document_claiming_an_unknown_victims_id_creates_nothing(world, http_mock):
+    peer_instance('social.example')
+    http_mock.get('https://evil.example/@ann').respond(json=peer_actor_json('Person', name='ann',
+                                                                            server='social.example', fields=VOUCH))
+    http_mock.get('https://social.example/u/ann').respond(404)
+    before = rows()
+
+    assert verified_credit_user('https://evil.example/@ann', world.podcast) is None
+    assert rows() == before
+
+
 def test_a_person_that_does_not_vouch_creates_nothing(world, http_mock):
     peer_instance('social.example')
-    serve_actor(http_mock, 'https://social.example/@ann', 'ann')
+    serve_profile(http_mock, 'ann')
     before = rows()
 
     assert verified_credit_user('https://social.example/@ann', world.podcast) is None
@@ -84,21 +127,13 @@ def test_a_person_that_does_not_vouch_creates_nothing(world, http_mock):
 @pytest.mark.parametrize('actor_type', ['Group', 'Podcast'])
 def test_a_group_or_another_podcast_creates_no_rows_even_when_it_links_the_podcast(world, http_mock, actor_type):
     peer_instance('social.example')
-    serve_actor(http_mock, 'https://social.example/@club', 'club', actor_type=actor_type,
-                fields={**VOUCH, 'name': 'Club', 'inbox': 'https://social.example/u/club/inbox',
-                        'outbox': 'https://social.example/u/club/outbox'})
+    document = peer_actor_json(actor_type, name='club', server='social.example',
+                               fields={**VOUCH, 'name': 'Club', 'inbox': 'https://social.example/club/inbox',
+                                       'outbox': 'https://social.example/club/outbox'})
+    http_mock.get(document['id']).respond(json=document)
     before = rows()
 
-    assert verified_credit_user('https://social.example/@club', world.podcast) is None
-    assert rows() == before
-
-
-def test_a_document_claiming_another_hosts_id_creates_nothing(world, http_mock):
-    peer_instance('social.example')
-    serve_actor(http_mock, 'https://evil.example/@ann', 'ann', server='social.example', fields=VOUCH)
-    before = rows()
-
-    assert verified_credit_user('https://evil.example/@ann', world.podcast) is None
+    assert verified_credit_user(document['id'], world.podcast) is None
     assert rows() == before
 
 
@@ -115,10 +150,7 @@ def test_an_oversized_actor_document_is_not_read(world, http_mock):
 
 
 def test_plain_http_and_banned_instances_are_never_linked(world, http_mock):
-    make_banned_instance('banned.example')
-    http_mock.get('https://banned.example/@ann').respond(json=peer_actor_json('Person', name='ann',
-                                                                              server='banned.example',
-                                                                              fields=VOUCH))
+    make_banned_instance('banned.example')   # no route: a banned host is never fetched (respx would refuse it)
 
     assert verified_credit_user('http://social.example/@ann', world.podcast) is None
     assert verified_credit_user('https://banned.example/@ann', world.podcast) is None
@@ -156,11 +188,11 @@ FEED_TWICE = f"""<?xml version="1.0" encoding="UTF-8"?>
 def test_duplicate_hrefs_are_fetched_once(world, http_mock):
     peer_instance('social.example')
     http_mock.get(FEED_URL).respond(200, content=FEED_TWICE)
-    route = serve_actor(http_mock, 'https://social.example/@ann', 'ann', fields=VOUCH)
+    profile, canonical = serve_profile(http_mock, 'ann', fields=VOUCH)
 
     fetch_episode_credits_task(world.post.id, EP1)
 
-    assert route.call_count == 1
+    assert profile.call_count == 1 and canonical.call_count == 1
     saved = stored(world.post.id)['podcast']['credits']
     assert len({c['user_id'] for c in saved}) == 1 and all(c.get('verified') for c in saved)
 
@@ -168,9 +200,9 @@ def test_duplicate_hrefs_are_fetched_once(world, http_mock):
 def test_the_task_links_only_vouching_credits_with_one_request_per_distinct_href(world, http_mock):
     peer_instance('social.example')
     http_mock.get(FEED_URL).respond(200, content=FIXTURE.read_bytes(), headers={'Content-Type': 'application/rss+xml'})
-    serve_actor(http_mock, 'https://social.example/@ann', 'ann', fields=VOUCH)    # vouches
+    serve_profile(http_mock, 'ann', fields=VOUCH)                                   # vouches
     http_mock.get('https://ben.example/about').respond(200, text='<html>Ben</html>')   # a web page
-    serve_actor(http_mock, 'https://social.example/@cara', 'cara')                # does not vouch
+    serve_profile(http_mock, 'cara')                                                # does not vouch
     users_before = User.query.count()
 
     fetch_episode_credits_task(world.post.id, EP1)
@@ -182,7 +214,8 @@ def test_the_task_links_only_vouching_credits_with_one_request_per_distinct_href
     assert saved[0]['verified'] is True and 'verified' not in saved[1] and 'verified' not in saved[2]
     assert saved[2]['profile_url'] is None
     assert User.query.count() == users_before + 1                      # Cara, who does not vouch, was not created
-    assert len(http_mock.calls) <= 1 + 3                               # the feed plus one per distinct href
+    # the feed, one fetch per distinct href, and one canonical-id fetch for each of the two profile URLs
+    assert len(http_mock.calls) == 1 + 3 + 2
 
 
 def ann_user(document):
@@ -264,9 +297,9 @@ def test_an_ingested_episode_announcement_gets_its_credits(world, http_mock, mon
 def test_a_lookup_that_blows_up_costs_only_that_credit_its_link(world, http_mock, monkeypatch):
     peer_instance('social.example')
     http_mock.get(FEED_URL).respond(200, content=FIXTURE.read_bytes())
-    serve_actor(http_mock, 'https://social.example/@ann', 'ann', fields=VOUCH)
+    serve_profile(http_mock, 'ann', fields=VOUCH)
     http_mock.get('https://ben.example/about').respond(200, text='<html>Ben</html>')
-    serve_actor(http_mock, 'https://social.example/@cara', 'cara', fields=VOUCH)
+    serve_profile(http_mock, 'cara', fields=VOUCH)
     real = credits.ap_util.actor_json_to_model
 
     def create(document, address, server):

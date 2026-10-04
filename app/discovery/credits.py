@@ -187,21 +187,32 @@ def _known_user(href: str):
     return db.session.query(User).filter(or_(User.ap_profile_id == href.lower(), User.ap_public_url == href)).first()
 
 
-def _creditable(document: dict, href: str, podcast) -> bool:
-    """An actor document a credit may link: a Person or Service (a Podcast only when it is this podcast), whose id
-    is an https URL on the href's own host, so a page cannot pass off another server's account as its own."""
-    actor_id = document.get('id')
-    if clean_https_url(actor_id) is None:
-        return False
-    if (urlsplit(actor_id).hostname or '').lower() != (urlsplit(href).hostname or '').lower():
-        return False
+def _canonical_document(document, fetched_from: str) -> dict | None:
+    """The actor document as its own server serves it. A document fetched from a URL other than its `id` (a
+    profile page, or another server claiming someone else's account) is trusted only after `id` is fetched from
+    its own host and answers with that same id; anything else is no document."""
+    if not isinstance(document, dict) or clean_https_url(document.get('id')) is None:
+        return None
+    actor_id = document['id']
+    if _normal_url(actor_id) == _normal_url(fetched_from):
+        return document
+    canonical = fetch_actor_document(actor_id)
+    if canonical is None or _normal_url(canonical.get('id')) != _normal_url(actor_id):
+        return None
+    return canonical
+
+
+def _creditable(document: dict, podcast) -> bool:
+    """A canonical actor document a credit may link: a Person or Service, or a Podcast only when it is this podcast."""
     kind = document.get('type')
-    return kind in CREDIT_ACTOR_TYPES or (kind == 'Podcast' and _normal_url(actor_id) == _normal_url(podcast.ap_profile_id))
+    return kind in CREDIT_ACTOR_TYPES or (kind == 'Podcast' and
+                                          _normal_url(document['id']) == _normal_url(podcast.ap_profile_id))
 
 
 def _link_actor(document: dict) -> int | None:
-    """The User for a vouching actor document: found, or created from the document already in hand (no second
-    fetch), behind the guards find_actor_or_create applies (banned and non-allowlisted instances, blocked words)."""
+    """The User for a vouching canonical actor document: an existing row is linked by its ap_profile_id and never
+    overwritten; a new one is created from the canonical document already in hand (no further fetch), behind the
+    guards find_actor_or_create applies (banned and non-allowlisted instances, blocked words)."""
     actor_id = document['id']
     actors = ap_util.activitypub_actor
     try:
@@ -221,8 +232,9 @@ def _link_actor(document: dict) -> int | None:
 def verified_credit_user(href, podcast) -> int | None:
     """R4: the PieFed User a credit's href names, only when that profile vouches back for the podcast; verified
     before anything is created. A known account's stored fields are read first (no fetch); otherwise the href's
-    actor document is fetched once, capped, and must be a creditable actor that links the podcast. Only then is
-    the account found or created. A credit that does not vouch creates nothing."""
+    actor document is fetched, capped (and its `id` fetched too when the href is not that id), and the canonical
+    document must be a creditable actor that links the podcast. Only then is the account found or created. A
+    credit that does not vouch creates nothing."""
     href = clean_https_url(href)
     wanted = _podcast_urls(podcast)
     if href is None or not wanted:
@@ -237,8 +249,10 @@ def verified_credit_user(href, podcast) -> int | None:
             return None
     elif (urlsplit(href).hostname or '').lower() == current_app.config['SERVER_NAME'].lower():
         return None
-    document = fetch_actor_document(href)
-    if document is None or not _creditable(document, href, podcast) or not wanted & _document_urls(document):
+    if not ap_util.activitypub_actor.validate_remote_actor(href):   # banned or non-allowlisted hosts are not fetched
+        return None
+    document = _canonical_document(fetch_actor_document(href), href)
+    if document is None or not _creditable(document, podcast) or not wanted & _document_urls(document):
         return None
     return _link_actor(document)
 
