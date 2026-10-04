@@ -33,7 +33,7 @@ from app.activitypub.util import users_total, active_half_year, active_month, lo
 # app.activitypub.signature before show_community is defined (U-circular-import)
 import app.community.routes as community_routes
 from app.community.util import send_to_remote_instance, send_to_remote_instance_fast
-from app.discovery.podcast import podcast_route_for
+from app.discovery.podcast import podcast_person_follow_target, podcast_route_for
 from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
 # app.activitypub before show_feed is defined (import cycle: feed.routes)
@@ -1203,6 +1203,8 @@ def process_inbox_request(request_json, store_ap_json):
                         log_incoming_ap(id, APLOG_ACCEPT, APLOG_FAILURE, saved_json, 'Could not find recipient of Accept')
                         return
 
+                    if person_followed := podcast_person_follow_target(community, requestor_user):  # D24 R2
+                        community, user = None, person_followed
                     if community:
                         join_request = session.query(CommunityJoinRequest).filter_by(user_id=requestor_user.id, community_id=community.id).first()
                         if join_request:
@@ -1284,6 +1286,8 @@ def process_inbox_request(request_json, store_ap_json):
                         log_incoming_ap(id, APLOG_REJECT, APLOG_IGNORED, saved_json, 'Reject of an object that is not a Follow')
                         return
 
+                    if person_followed := podcast_person_follow_target(community, requestor_user):  # D24 R2
+                        community, user = None, person_followed
                     if requestor_user:
                         if community:
                             join_request = session.query(CommunityJoinRequest).filter_by(user_id=requestor_user.id,

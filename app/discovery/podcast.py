@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app import db
 from app.discovery.filters import clean_https_url
-from app.models import Community, Instance, Site, User, utcnow
+from app.models import Community, CommunityJoinRequest, Instance, Site, User, utcnow
 
 RSS_URL_LIMIT = 2048   # Community.rss_url is String(2048)
 AP_URL_LIMIT = 255     # Community.ap_outbox_url is String(255)
@@ -28,6 +28,26 @@ def podcast_community_for(user) -> Community | None:
         return None
     return db.session.query(Community).filter(Community.ap_profile_id == user.ap_profile_id,
                                               Community.banned == False).first()
+
+
+def podcast_twin_user(community) -> User | None:
+    """The podcast User sharing this Community's ap_profile_id, when the Community is a podcast twin; else None.
+    Remote Group communities carry no user_id, so they pay no query."""
+    if community is None or not community.user_id or not community.ap_profile_id:
+        return None
+    owner = db.session.get(User, community.user_id)
+    return owner if owner is not None and owner.ap_profile_id == community.ap_profile_id else None
+
+
+def podcast_person_follow_target(community, requestor) -> User | None:
+    """R2: an Accept/Reject from a podcast that answers a follow of the podcast as a PERSON. The twin User, when
+    `community` is a podcast twin and `requestor` has no join request for it; else None (the community path)."""
+    twin = podcast_twin_user(community)
+    if twin is None or requestor is None:
+        return None
+    joining = db.session.query(CommunityJoinRequest).filter_by(user_id=requestor.id,
+                                                               community_id=community.id).first()
+    return None if joining else twin
 
 
 def podcast_route_for(user) -> Community | None | bool:
