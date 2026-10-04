@@ -6,7 +6,7 @@ import pytest
 
 import app.discovery.podcast as podcast_module
 from app.activitypub.util import actor_json_to_model, refresh_user_profile_task
-from app.discovery.podcast import ensure_podcast_community, podcast_community_for, podcast_route_for
+from app.discovery.podcast import PODCAST_DROP, ensure_podcast_community, podcast_community_for, podcast_route_for
 from app import db
 from app.models import Community, User
 from tests.factories import make_site, make_user, peer_actor_json, peer_instance
@@ -177,7 +177,7 @@ def test_a_banned_or_deleted_podcast_user_with_a_twin_drops_its_episodes(app, db
     Community.query.one().banned = False   # even were the twin itself not banned, the User's state decides
     db.session.commit()
 
-    assert podcast_route_for(user) is False
+    assert podcast_route_for(user) is PODCAST_DROP
 
 
 def test_a_podcast_in_good_standing_routes_to_its_twin(app, db_session):

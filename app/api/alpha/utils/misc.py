@@ -14,7 +14,7 @@ from app.api.alpha.utils.reply import get_reply_list
 from app.api.alpha.views import search_view, post_view, reply_view, user_view, community_view, feed_view, \
     neutral_person, reply_removal_ack_view
 from app.community.util import search_for_community
-from app.discovery.podcast import podcast_route_for, podcast_twin_named_by_other
+from app.discovery.podcast import PODCAST_DROP, podcast_route_for, podcast_twin_named_by_other
 from app.models import Post, PostReply, User, Community, BannedInstances, Feed, ModLog
 from app.user.utils import search_for_user
 from app.visibility import can_view, modlog_open_clause
@@ -424,7 +424,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
     if not community and not ap_json.get('inReplyTo') and author:
         # D24: a top-level episode from a Castopod podcast belongs in the podcast's community, as in the inbox
         route = podcast_route_for(db.session.query(User).filter_by(ap_profile_id=author.lower()).first())
-        if route is False:   # a banned podcast's episode is dropped
+        if route is PODCAST_DROP:   # a banned podcast's episode is dropped
             raise Exception('No object found.')
         community = route
     # if community doesn't already exist, call this function recursively to create it
