@@ -18,8 +18,7 @@ def register_discovery_commands(app) -> None:
     def discovery_seed_fixtures_command(force):
         """Load the discovery fixture files into this database for local validation. Fetches nothing."""
         if not current_app.debug and not force:
-            click.echo('Refusing: this writes fixture rows. Run with FLASK_DEBUG=1, or pass --force.')
-            return
+            raise click.ClickException('Refusing: this writes fixture rows. Run with FLASK_DEBUG=1, or pass --force.')
         result = seed_from_fixtures()
         click.echo(f"entries: {result['entries']}")
         click.echo(f"podcast post: {result['podcast_post']}")
