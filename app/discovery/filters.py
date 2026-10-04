@@ -1,7 +1,9 @@
 """What discovery refuses to store or show (interop D24): banned or non-allowlisted instances, banned
 domains, PeerTube isolation-list hosts; and how third-party names and urls are cleaned."""
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
+
+import httpx
 
 from flask import current_app
 
@@ -39,6 +41,37 @@ def host_is_excluded(host: str, isolated: frozenset) -> bool:
     if get_setting('use_allowlist', False) and not instance_allowed(host):
         return True
     return db.session.query(Domain.id).filter(Domain.name == host, Domain.banned == True).first() is not None
+
+
+def request_host(url) -> str | None:
+    """The host an httpx request for `url` would connect to (IDNA, lower-cased, trailing dot stripped), judged by
+    httpx's own parser so a gate and the request cannot disagree. None -- refuse the URL -- when it carries
+    userinfo or a backslash, when httpx or the stdlib cannot parse it, or when the two parsers name different
+    hosts."""
+    if not isinstance(url, str) or '\\' in url:
+        return None
+    try:
+        target = httpx.URL(url)
+        stdlib_host = urlsplit(url).hostname
+        host = target.raw_host.decode('ascii')
+    except (httpx.InvalidURL, ValueError):   # UnicodeError is a ValueError
+        return None
+    if target.userinfo or not host or stdlib_host is None:
+        return None
+    if target.host.rstrip('.').lower() != stdlib_host.rstrip('.').lower():
+        return None
+    return host.rstrip('.').lower()
+
+
+def url_is_excluded(url) -> bool:
+    """True when a fetch of `url` must not be made: the URL is refused by request_host, or its host (in IDNA or
+    Unicode form) is a banned or non-allowlisted instance or a banned Domain. The PeerTube isolation list is in
+    banned instances already (init-db copies it), so it is not fetched here."""
+    host = request_host(url)
+    if host is None:
+        return True
+    unicode_host = httpx.URL(url).host.rstrip('.').lower()
+    return host_is_excluded(host, frozenset()) or (unicode_host != host and host_is_excluded(unicode_host, frozenset()))
 
 
 def clean_name(value, limit: int = NAME_LIMIT) -> str | None:

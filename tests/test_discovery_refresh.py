@@ -6,6 +6,7 @@ import pytest
 
 from app import db
 from app.discovery import filters, refresh, sources
+from app.discovery.filters import request_host
 from app.discovery.refresh import clean_entries, refresh_discovery
 from app.models import DiscoveryEntry, Domain, utcnow
 from tests.discovery_fixtures import fresh_cache, nobody_excluded  # noqa: F401
@@ -217,3 +218,12 @@ def test_an_isolation_list_that_raises_is_empty(app, monkeypatch):
     monkeypatch.setattr(filters, 'retrieve_peertube_block_list', broken)
 
     assert filters.peertube_isolated_hosts() == frozenset()
+
+
+@pytest.mark.parametrize('url, host', [('https://Ok.Example/x', 'ok.example'), ('https://ok.example./x', 'ok.example'),
+                                       ('https://bücher.example/x', 'xn--bcher-kva.example'),
+                                       ('https://ok.example:8443/x', 'ok.example'),
+                                       ('https://[@ok.example/x', None), ('https://u@ok.example/x', None),
+                                       ('https://a.example\\@ok.example/x', None), ('not a url', None), (None, None)])
+def test_request_host_is_the_host_httpx_connects_to_or_a_refusal(app, url, host):
+    assert request_host(url) == host

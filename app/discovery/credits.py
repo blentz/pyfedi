@@ -17,7 +17,7 @@ from sqlalchemy import func, or_
 
 import app.activitypub.util as ap_util   # the module, not names: app.activitypub.util imports this module
 from app import celery, db
-from app.discovery.filters import clean_https_url, clean_name, host_is_excluded
+from app.discovery.filters import clean_https_url, clean_name, url_is_excluded
 from app.discovery.podcast import podcast_community_for
 from app.models import Post, User
 from app.utils import get_request_capped, get_task_session, patch_db_session
@@ -98,18 +98,8 @@ def parse_feed_credits(feed_bytes: bytes, episode_url: str) -> list[dict]:
 _FEED_ACCEPT = 'application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.1'
 
 
-def _host_refused(url) -> bool:
-    """Banned or non-allowlisted instances and banned Domains are never contacted (the PeerTube isolation list
-    is already in banned instances, copied there by init-db)."""
-    try:
-        host = urlsplit(url).hostname if isinstance(url, str) else None
-    except ValueError:
-        return True
-    return host_is_excluded(host, frozenset())
-
-
 def fetch_feed(rss_url: str) -> bytes | None:
-    if _host_refused(rss_url):
+    if url_is_excluded(rss_url):
         return None
     try:
         status, body = get_request_capped(rss_url, MAX_FEED_BYTES, headers={'Accept': _FEED_ACCEPT})
@@ -166,7 +156,7 @@ def _stored_urls(user) -> set:
 def fetch_actor_document(url) -> dict | None:
     """One capped, ActivityPub-flavoured GET of an actor document (get_request's SSRF guards, no redirects), never
     to a refused host."""
-    if _host_refused(url):
+    if url_is_excluded(url):
         return None
     try:
         status, body = get_request_capped(url, MAX_ACTOR_BYTES, headers={'Accept': _ACTOR_ACCEPT})
