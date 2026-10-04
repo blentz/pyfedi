@@ -91,3 +91,30 @@ def test_the_credited_account_belongs_to_its_own_hosts_instance_not_instance_1(a
     credited = User.query.filter_by(ap_profile_id='https://people.example/users/ann').one()
     assert credited.instance_id == Instance.query.filter_by(domain='people.example').one().id
     assert credited.instance_id not in (1, local.id)
+
+
+def test_the_help_names_everything_the_command_creates(app, db_session):
+    cli.register(app)
+
+    result = app.test_cli_runner().invoke(args=['discovery-seed-fixtures', '--help'])
+
+    help_text = ' '.join(result.output.split())
+    for created in ('discovery entries', 'podcast user', 'podcast community', 'episode post', 'credited remote user'):
+        assert created in help_text
+
+
+def test_the_output_lists_everything_the_command_created(app, db_session, http_mock):
+    cli.register(app)
+
+    result = app.test_cli_runner().invoke(args=['discovery-seed-fixtures', '--force'])
+
+    community = Community.query.filter_by(ap_profile_id='https://pod.example/@mypodcast').one()
+    post = Post.query.one()
+    credited = User.query.filter_by(ap_profile_id='https://people.example/users/ann').one()
+    assert result.output.splitlines() == [
+        'discovery entries: 8',
+        f'podcast user: {post.user_id}',
+        f'podcast community: {community.id}',
+        f'episode post: {post.id}',
+        f'credited remote user: {credited.id}',
+    ]

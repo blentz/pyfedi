@@ -16,9 +16,12 @@ def register_discovery_commands(app) -> None:
     @app.cli.command('discovery-seed-fixtures')
     @click.option('--force', is_flag=True, help='Seed even though the app is not in debug mode.')
     def discovery_seed_fixtures_command(force):
-        """Load the discovery fixture files into this database for local validation. Fetches nothing."""
+        """Load the discovery fixture files into this database for local validation. Fetches nothing.
+
+        Creates the discovery entries, the podcast user and its podcast community, one episode post with credits,
+        and the credited remote user (ann@people.example) whose profile vouches for the podcast."""
         if not current_app.debug and not force:
             raise click.ClickException('Refusing: this writes fixture rows. Run with FLASK_DEBUG=1, or pass --force.')
         result = seed_from_fixtures()
-        click.echo(f"entries: {result['entries']}")
-        click.echo(f"podcast post: {result['podcast_post']}")
+        for created, row in result.items():
+            click.echo(f'{created}: {row}')

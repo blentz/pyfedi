@@ -109,4 +109,9 @@ def seed_from_fixtures(fixtures: Path = FIXTURES) -> dict:
     entries = clean_entries(fixture_entries(fixtures), lambda host: host_is_excluded(host, frozenset()))
     count = upsert_entries(entries, utcnow())
     post = seed_podcast(fixtures)
-    return {'entries': count, 'podcast_post': post.id if post is not None else None}
+    credited = db.session.query(User).filter_by(ap_profile_id=SEEDED_HOST_ACTOR).first()
+    return {'discovery entries': count,
+            'podcast user': post.user_id if post is not None else None,
+            'podcast community': post.community_id if post is not None else None,
+            'episode post': post.id if post is not None else None,
+            'credited remote user': credited.id if credited is not None else None}
