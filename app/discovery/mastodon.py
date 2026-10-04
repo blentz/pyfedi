@@ -1,6 +1,8 @@
 """Mastodon people (interop D24): the top MAX_SERVERS servers from joinmastodon.org, then one page of
 each server's local profile directory. The directory lists only accounts that opted in (`discoverable`);
 a row that says otherwise, or a bot, is dropped here as well."""
+from flask import current_app
+
 from app.discovery import KIND_PERSON, sources
 
 SERVERS_URL = 'https://api.joinmastodon.org/servers'
@@ -55,6 +57,7 @@ def fetch_mastodon_people(exclude) -> list[dict]:
         accounts = sources.fetch_json(f'https://{domain}/api/v1/directory',
                                       params={'local': 'true', 'order': 'active', 'limit': DIRECTORY_LIMIT})
         if not isinstance(accounts, list):
+            current_app.logger.info(f'discovery: {SOURCE}: {domain} directory is not a list, skipped')
             continue
         for account in accounts:
             entry = account_to_entry(account, domain)
