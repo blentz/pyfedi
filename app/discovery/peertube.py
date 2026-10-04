@@ -2,6 +2,8 @@
 by followers, so up to MAX_PAGES pages are read and ranked here."""
 from urllib.parse import urlparse
 
+from flask import current_app
+
 from app.discovery import KIND_COMMUNITY, sources
 
 SEPIASEARCH_URL = 'https://sepiasearch.org/api/v1/search/video-channels'
@@ -54,6 +56,7 @@ def fetch_peertube_channels(exclude) -> list[dict]:
         if not isinstance(data, list):
             if page == 0:
                 raise sources.DiscoverySourceError(f'{SOURCE}: no channel list')
+            current_app.logger.info(f'discovery: {SOURCE} page {page + 1} unreadable, paging stopped')
             break
         for channel in data:
             entry = channel_to_entry(channel)
