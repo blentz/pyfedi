@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Run the test suite against disposable containers.
+# Run the test suite against disposable containers. The stack lives only as
+# long as the run: it is started here and removed on exit, pass or fail.
 #
 #   ./run_tests.sh                      # everything
 #   ./run_tests.sh tests/test_foo.py -v # passed straight through to pytest
-#   ./run_tests.sh --down               # stop and remove the containers
+#   ./run_tests.sh --down               # remove a stack left by a killed run
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -34,6 +35,26 @@ wait_for_postgres() {
     printf '\n'
     return 1
 }
+
+# One run at a time per checkout. The stack is shared by name, so a second
+# concurrent run would have it torn down underneath it when the first one exits.
+# The second run waits here instead. The lock lives in the git dir, which is
+# per-worktree, so other checkouts still run in parallel. (No flock on macOS:
+# the runs are then not serialised, as before.)
+if command -v flock >/dev/null 2>&1; then
+    exec 9>"$(git rev-parse --git-dir)/run_tests.lock"
+    if ! flock -n 9; then
+        echo "run_tests.sh: another run in this checkout holds the test stack; waiting." >&2
+        flock 9
+    fi
+fi
+
+# The stack must not outlive the run. EXIT fires on success, failure and
+# Ctrl-C alike; `down` also stops a pytest still running inside test-runner.
+teardown() {
+    $COMPOSE down >/dev/null 2>&1 || echo "run_tests.sh: could not remove the test stack; run ./run_tests.sh --down" >&2
+}
+trap teardown EXIT
 
 if ! $COMPOSE up -d; then
     echo "run_tests.sh: could not start the test stack. See the output above." >&2
@@ -73,12 +94,10 @@ fi
 
 # Tests run inside test-runner: there is no host Python environment.
 #
-# This repository has ~269 migrations. `flask db upgrade` is a fast no-op while
-# the database persists between runs, which is the normal case. It replays in
-# full -- measured at about 8 seconds, not the minutes its count suggests --
-# after `--down`, because that leaves an empty database behind. (It used to
-# replay after the staleness reset described above as well; that reset was
-# removed with the TRUNCATE teardown, so `--down` is now the only trigger.)
+# This repository has ~269 migrations. Every run starts from an empty tmpfs
+# database, so they replay in full each time -- measured at about 8 seconds, not
+# the minutes their count suggests. That is the price of a stack that does not
+# outlive the run.
 echo "Applying migrations..."
 $COMPOSE exec -T test-runner flask db upgrade
 
@@ -140,8 +159,11 @@ names_a_subset() {
 # "5 failed, 7073 passed" -- 4,800 tests short -- followed by an INTERNALERROR
 # from its own scheduler. A short count is not a pass, and this makes it say so.
 if [ "$WORKERS" -gt 1 ] && ! names_a_subset "$@"; then
-    exec $COMPOSE exec -T test-runner pytest -n "$WORKERS" --dist loadgroup \
-        --max-worker-restart 0 "$@"
+    set -- -n "$WORKERS" --dist loadgroup --max-worker-restart 0 "$@"
 fi
 
-exec $COMPOSE exec -T test-runner pytest "$@"
+# Not `exec`: the shell has to survive pytest so the EXIT trap removes the stack.
+# pytest's exit status is still the script's.
+status=0
+$COMPOSE exec -T test-runner pytest "$@" || status=$?
+exit "$status"
