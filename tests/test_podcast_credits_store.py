@@ -1,6 +1,7 @@
 """Interop D24, decisions 6 and 7: credits are fetched from the podcast's feed after an episode arrives,
 fediverse hrefs are linked to their PieFed User, and the result lives in post.extensions['podcast']."""
 import gzip
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -366,12 +367,22 @@ def test_storing_keeps_other_keys_of_the_podcast_extension(world):
                                                              'credits': [{'name': 'Ann Host', 'role': 'host'}]}}
 
 
+def test_a_body_that_ends_after_the_deadline_is_abandoned(app, http_mock, monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr('app.utils.time', SimpleNamespace(**{**vars(time), 'monotonic': lambda: now[0]}))
+
+    def late_end():
+        yield b'<rss></rss>'
+        now[0] += 60   # the last byte came in time; the end of the body did not
+
+    http_mock.get(FEED_URL).respond(200, content=late_end())
+
+    assert get_request_capped(FEED_URL, MAX_FEED_BYTES, max_seconds=15) == (200, None)
+
+
 def test_a_feed_trickled_past_the_deadline_is_abandoned(app, http_mock, monkeypatch):
     now = [1000.0]
-    real_time = __import__('time')
-    monkeypatch.setattr('app.utils.time', SimpleNamespace(monotonic=lambda: now[0],
-                                                          **{n: getattr(real_time, n) for n in dir(real_time)
-                                                             if n != 'monotonic'}))
+    monkeypatch.setattr('app.utils.time', SimpleNamespace(**{**vars(time), 'monotonic': lambda: now[0]}))
     pulled = []
 
     def trickle():
