@@ -345,7 +345,7 @@ def test_a_handled_chat_stops_the_arm_from_treating_it_as_content(app, db_sessio
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, sender, recipient = seed_chat_pair()
     record_moderation(monkeypatch, 'publish_sse_event')
-    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: None)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: None)
     calls = record_moderation(monkeypatch, 'ensure_domains_match')
 
     activity = inbox_activity(sender, activity_type='Create',
@@ -365,7 +365,7 @@ def test_a_content_less_page_reaching_process_chat_is_logged_as_a_page(app, db_s
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, sender, recipient = seed_chat_pair()
-    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: None)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: None)
 
     activity = inbox_activity(sender, activity_type='Create',
                               object={'type': 'Page', 'to': recipient.ap_profile_id,
@@ -384,7 +384,7 @@ def test_a_page_delivered_as_a_message_is_logged_under_create(app, db_session, m
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, sender, recipient = seed_chat_pair()
     record_moderation(monkeypatch, 'publish_sse_event')
-    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: None)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: None)
 
     dispatch(inbox_activity(sender, activity_type='Create',
                             object={'type': 'Page', 'to': recipient.ap_profile_id,
@@ -401,7 +401,7 @@ def test_an_unhandled_chat_lets_the_arm_continue_to_the_domain_check(app, db_ses
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, sender, recipient = seed_chat_pair()
-    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: None)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: None)
     monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: False)
 
     activity = inbox_activity(sender, activity_type='Create',

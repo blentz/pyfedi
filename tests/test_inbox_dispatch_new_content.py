@@ -103,7 +103,7 @@ def _double_the_gate(monkeypatch, community):
     `announced` is True -- see `announced_activity`'s docstring for the real
     mechanism.
     """
-    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: community)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: community)
     monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
 
 
@@ -191,7 +191,7 @@ def test_a_missing_community_falls_back_to_the_microblogging_community(app, db_s
     microblog = make_community(name='microblog', host='peer.example')
     db.session.commit()
 
-    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: None)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: None)
     monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
     monkeypatch.setattr(activitypub_routes, 'process_chat', lambda *a, **k: False)
     monkeypatch.setattr(activitypub_routes, 'find_microblogging_community', lambda: microblog)

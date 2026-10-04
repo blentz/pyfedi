@@ -171,7 +171,7 @@ def test_breaking_any_one_conjunct_leaves_the_poll_path(app, db_session, monkeyp
         else:
             obj[key] = value
 
-    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: None)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: None)
     monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
     monkeypatch.setattr(activitypub_routes, 'process_chat', lambda *a, **k: False)
     calls = record_moderation(monkeypatch, 'process_new_content')
@@ -192,7 +192,7 @@ def test_a_poll_shaped_note_for_an_unknown_post_falls_through_to_content(app, db
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, voter, post, poll, choice = seed_poll_post()
-    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: None)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: None)
     monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
     calls = record_moderation(monkeypatch, 'process_new_content')
 
@@ -216,7 +216,7 @@ def test_a_poll_shaped_note_on_a_post_with_no_poll_falls_through_to_content(app,
     voter = make_user(instance, 'voter')
     post = make_post(community, author, 'https://peer.example/post/1')
     db.session.commit()
-    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: None)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: None)
     monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
     calls = record_moderation(monkeypatch, 'process_new_content')
 
@@ -359,7 +359,7 @@ def test_an_unresolvable_community_falls_back_to_process_chat_and_returns(app, d
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance = make_instance('peer.example')
     author = make_user(instance, 'author')
-    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: None)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: None)
     monkeypatch.setattr(activitypub_routes, 'process_chat', lambda *a, **k: True)
     calls = record_moderation(monkeypatch, 'ensure_domains_match')
 
@@ -376,7 +376,7 @@ def test_a_falsy_process_chat_continues_into_the_domain_check(app, db_session, m
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance = make_instance('peer.example')
     author = make_user(instance, 'author')
-    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: None)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: None)
     monkeypatch.setattr(activitypub_routes, 'process_chat', lambda *a, **k: False)
     monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: False)
 
@@ -395,7 +395,7 @@ def test_a_mismatched_domain_is_refused(app, db_session, monkeypatch):
     instance = seed_community_owner('peer.example')
     community = make_community(host='peer.example')
     author = make_user(instance, 'author')
-    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: community)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: community)
     monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: False)
     calls = record_moderation(monkeypatch, 'process_new_content')
 
@@ -416,7 +416,7 @@ def test_a_remote_create_into_a_local_only_community_is_refused(app, db_session,
     community.local_only = True
     db.session.commit()
     author = make_user(instance, 'author')
-    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: community)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: community)
     monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
     calls = record_moderation(monkeypatch, 'process_new_content')
 
@@ -440,7 +440,7 @@ def test_a_remote_create_into_a_non_local_only_community_proceeds_to_content(app
     community.local_only = False
     db.session.commit()
     author = make_user(instance, 'author')
-    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: community)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: community)
     monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
     calls = record_moderation(monkeypatch, 'process_new_content')
 
@@ -463,7 +463,7 @@ def test_each_new_content_type_reaches_process_new_content(app, db_session, monk
     instance = seed_community_owner('peer.example')
     community = make_community(host='peer.example')
     author = make_user(instance, 'author')
-    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: community)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: community)
     monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
     calls = record_moderation(monkeypatch, 'process_new_content')
 
@@ -482,7 +482,7 @@ def test_an_unacceptable_object_type_names_itself_in_the_failure(app, db_session
     instance = seed_community_owner('peer.example')
     community = make_community(host='peer.example')
     author = make_user(instance, 'author')
-    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: community)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: community)
     monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
 
     dispatch(create_activity(author, {'type': 'Tombstone', 'id': 'https://peer.example/x/1'}))
@@ -502,7 +502,7 @@ def test_a_create_of_a_group_is_unacceptable_because_the_group_branch_requires_u
     instance = seed_community_owner('peer.example')
     community = make_community(host='peer.example')
     author = make_user(instance, 'author')
-    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: community)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: community)
     monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
     calls = record_moderation(monkeypatch, 'refresh_community_profile')
 
@@ -525,7 +525,7 @@ def _seed_video_post(host='peer.example'):
 def test_a_peertube_video_edit_by_its_owner_updates_the_post(app, db_session, monkeypatch):
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, owner, post = _seed_video_post()
-    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: community)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: community)
     monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
     calls = record_moderation(monkeypatch, 'update_post_from_activity')
 
@@ -543,7 +543,7 @@ def test_a_peertube_video_edit_by_another_user_is_denied(app, db_session, monkey
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, owner, post = _seed_video_post()
     interloper = make_user(instance, 'interloper')
-    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: community)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: community)
     monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
     calls = record_moderation(monkeypatch, 'update_post_from_activity')
 
@@ -557,7 +557,7 @@ def test_a_peertube_video_edit_by_another_user_is_denied(app, db_session, monkey
 def test_a_peertube_video_edit_for_an_unknown_post_is_refused(app, db_session, monkeypatch):
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, owner, post = _seed_video_post()
-    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: community)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: community)
     monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
 
     dispatch(create_activity(owner, {'type': 'Video', 'id': 'https://peer.example/videos/watch/404'},
@@ -585,7 +585,7 @@ def test_a_group_update_from_a_non_moderator_of_a_LOCAL_community_is_refused(app
     instance = seed_community_owner('peer.example')
     local_community = make_community(host=app.config['SERVER_NAME'])
     outsider = make_user(instance, 'outsider')
-    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: local_community)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: local_community)
     monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
     calls = record_moderation(monkeypatch, 'refresh_community_profile')
 
@@ -625,7 +625,7 @@ def test_a_group_update_of_a_REMOTE_community_refreshes_without_announcing(app, 
     remote_community.ap_id = 'https://peer.example/c/microblogs'
     db.session.commit()
     editor = make_user(instance, 'editor')
-    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: remote_community)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: remote_community)
     monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
     calls = record_moderation(monkeypatch, 'refresh_community_profile',
                               'announce_activity_to_followers')
@@ -666,7 +666,7 @@ def test_a_group_update_from_a_LOCAL_communitys_moderator_refreshes_and_announce
     local_community = make_community(host=app.config['SERVER_NAME'])
     editor = make_user(instance, 'editor')
     make_community_member(editor, local_community, is_moderator=True)
-    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: local_community)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: local_community)
     monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
     calls = record_moderation(monkeypatch, 'refresh_community_profile',
                               'announce_activity_to_followers')
