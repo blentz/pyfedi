@@ -163,7 +163,7 @@ def fetch_actor_document(url) -> dict | None:
     try:
         status, body = get_request_capped(url, MAX_ACTOR_BYTES, headers={'Accept': _ACTOR_ACCEPT})
         document = json.loads(body) if status == 200 and body else None
-    except (httpx.HTTPError, json.JSONDecodeError, UnicodeDecodeError):
+    except (httpx.HTTPError, json.JSONDecodeError, UnicodeDecodeError, RecursionError):   # RecursionError: deep nesting
         return None
     return document if isinstance(document, dict) else None
 
