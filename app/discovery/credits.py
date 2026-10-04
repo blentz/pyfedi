@@ -189,6 +189,29 @@ def _podcast_urls(podcast) -> set:
     return {u for u in (_normal_url(podcast.ap_profile_id), _normal_url(podcast.ap_public_url)) if u}
 
 
+def _podcast_web_urls(podcast) -> set:
+    """The podcast's web URLs (its actor document's `url`), each only when it is https on the actor id's own host and
+    not the actor id itself: the podcast writes its own `url`, so another host there would let it vouch for whoever
+    links that host. Remembered for FEED_CACHE_SECONDS; a failed fetch gives none and is not remembered."""
+    key = f'discovery:podcast-web-urls:{podcast.ap_profile_id}'
+    cached = cache.get(key)
+    if cached is not None:
+        return set(cached)
+    document = fetch_actor_document(podcast.ap_profile_id)
+    if document is None:
+        return set()
+    actor_id, actor_host = _normal_url(podcast.ap_profile_id), ascii_host(podcast.ap_profile_id)
+    values = document.get('url')
+    found = set()
+    for value in values if isinstance(values, list) else [values]:
+        href = clean_https_url(value.get('href') if isinstance(value, dict) else value)
+        if href is not None and actor_host is not None and ascii_host(href) == actor_host and \
+                _normal_url(href) not in (None, actor_id):
+            found.add(_normal_url(href))
+    cache.set(key, sorted(found), timeout=FEED_CACHE_SECONDS)
+    return found
+
+
 def _stored_urls(user) -> set:
     stored = _urls_in(user.ap_public_url)
     for field in user.extra_fields:
@@ -299,14 +322,15 @@ def _link_actor(document: dict) -> int | None:
     return actor.id if isinstance(actor, User) and not actor.banned and not actor.deleted else None
 
 
-def verified_credit_user(href, podcast) -> int | None:
+def verified_credit_user(href, podcast, wanted: set | None = None) -> int | None:
     """R4: the PieFed User a credit's href names, only when that profile vouches back for the podcast; verified
     before anything is created. A known account's stored fields are read first (no fetch); otherwise the href's
     actor document is fetched, capped (and its `id` fetched too when the href is not that id), and the canonical
     document must be a creditable actor that links the podcast. Only then is the account found or created. A
-    credit that does not vouch creates nothing."""
+    credit that does not vouch creates nothing. `wanted` is the podcast URLs a profile may link (default: its actor
+    URL)."""
     href = clean_https_url(href)
-    wanted = _podcast_urls(podcast)
+    wanted = _podcast_urls(podcast) if wanted is None else wanted
     if href is None or not wanted:
         return None
     known = _known_user(href)
@@ -362,12 +386,15 @@ def fetch_episode_credits_task(post_id, episode_url):
                     return
                 credits = episode_credits(parsed, episode_url)
                 linked = {}   # one lookup (and at most one fetch) per distinct href
+                wanted = None   # the podcast's actor and web URLs, read once and only when a credit has an href
                 for credit in credits:
                     # Only a profile that vouches back keeps its link; anyone else is a plain name, because
                     # the feed's say-so would let a podcast credit (and so link to) any account.
                     href = _normal_url(credit['profile_url'])
                     if href is not None and href not in linked:
-                        linked[href] = verified_credit_user(credit['profile_url'], post.author)
+                        if wanted is None:
+                            wanted = _podcast_urls(post.author) | _podcast_web_urls(post.author)
+                        linked[href] = verified_credit_user(credit['profile_url'], post.author, wanted)
                     user_id = linked.get(href) if href is not None else None
                     verified = user_id is not None
                     credit['user_id'] = user_id if verified else None
