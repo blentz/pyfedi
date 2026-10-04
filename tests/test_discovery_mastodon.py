@@ -1,5 +1,6 @@
 """Interop D24: Mastodon people from the top joinmastodon servers' opt-in profile directories."""
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -92,6 +93,17 @@ def test_a_server_whose_directory_fails_is_skipped(app, http_mock):
     http_mock.get(DIRECTORY).respond(json=json.loads(FIXTURE.read_text()))
 
     assert len(fetch_mastodon_people(nobody_excluded)) == 2
+
+
+def test_a_directory_answer_that_is_not_a_list_is_logged_and_skipped(app, http_mock, caplog):
+    caplog.set_level(logging.INFO)
+    http_mock.get(SERVERS_URL).respond(json=[{'domain': 'a.example', 'last_week_users': 2},
+                                             {'domain': 'mastodon.example', 'last_week_users': 1}])
+    http_mock.get('https://a.example/api/v1/directory').respond(json={'error': 'directory disabled'})
+    http_mock.get(DIRECTORY).respond(json=json.loads(FIXTURE.read_text()))
+
+    assert len(fetch_mastodon_people(nobody_excluded)) == 2
+    assert 'discovery: joinmastodon: a.example directory is not a list, skipped' in caplog.text
 
 
 def test_malformed_server_rows_are_ignored(app):
