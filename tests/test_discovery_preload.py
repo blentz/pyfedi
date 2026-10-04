@@ -152,3 +152,24 @@ def test_the_task_skips_an_entry_flagged_nsfw_after_enqueue(world, monkeypatch):
     db.session.commit()
 
     assert preload_discovered_communities([mid.id], world.founder.id) == [{'entry': mid.id, 'status': 'skipped'}]
+
+
+def test_one_entry_that_blows_up_is_reported_and_the_rest_still_run(world, monkeypatch):
+    big = DiscoveryEntry.query.filter_by(name='Bigchan').one()
+    mid = DiscoveryEntry.query.filter_by(name='Midchan').one()
+
+    def resolve(actor_url, community_only=False):
+        if actor_url == big.actor_url:
+            raise RuntimeError('peer answered garbage')
+        community = make_community('midchan', host='midchan.example')
+        community.ap_id = 'midchan@midchan.example'
+        db.session.commit()
+        return community
+
+    monkeypatch.setattr(preload, 'find_actor_or_create', resolve)
+    monkeypatch.setattr(preload, 'do_subscribe', lambda actor, user_id, admin_preload=False:
+                        {'community': actor, 'status': 'joined'})
+
+    results = preload_discovered_communities([big.id, mid.id], world.founder.id)
+
+    assert results == [{'entry': big.id, 'status': 'error'}, {'community': 'midchan@midchan.example', 'status': 'joined'}]
