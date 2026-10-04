@@ -6,6 +6,7 @@ import pytest
 
 from app.activitypub.routes import process_new_content
 from app.activitypub.util import actor_json_to_model
+from app.api.alpha.utils.misc import get_resolve_object
 from app.discovery.podcast import podcast_community_for
 from app import db
 from flask import current_app as app
@@ -100,3 +101,40 @@ def test_a_podcast_without_a_community_row_goes_to_microblogs(world):
     process_new_content(world.podcast, None, False, create(world.podcast, f'https://{PEER}/n/6'), False)
 
     assert Post.query.one().community.name == 'microblogs'
+
+
+def test_the_api_resolves_a_podcasts_own_episode_into_its_community(world, http_mock):
+    note_id = f'https://{PEER}/@mypodcast/posts/9'
+    note = create(world.podcast, note_id)['object']
+    http_mock.get(note_id).respond(json=note)
+
+    post = get_resolve_object(None, {'q': note_id}, user_id=1, recursive=True)
+
+    assert isinstance(post, Post)
+    assert post.community_id == podcast_community_for(world.podcast).id
+    assert post.user_id == world.podcast.id
+
+
+def test_the_api_resolves_a_podcasts_episode_addressed_to_itself_into_its_community(world, http_mock):
+    note_id = f'https://{PEER}/@mypodcast/posts/10'
+    note = create(world.podcast, note_id)['object']
+    note['cc'] = [world.podcast.ap_profile_id]
+    http_mock.get(note_id).respond(json=note)
+
+    post = get_resolve_object(None, {'q': note_id}, user_id=1, recursive=True)
+
+    assert post.community_id == podcast_community_for(world.podcast).id
+
+
+def test_the_api_keeps_a_third_partys_note_naming_a_podcast_out_of_its_community(world, http_mock):
+    note_id = f'https://{PEER}/@alice/posts/11'
+    note = create(world.alice, note_id)['object']
+    note['cc'] = [world.podcast.ap_profile_id]   # a mention of the podcast, as a person
+    http_mock.get(note_id).respond(json=note)
+
+    try:
+        get_resolve_object(None, {'q': note_id}, user_id=1, recursive=True)
+    except Exception:
+        pass
+
+    assert Post.query.filter_by(community_id=podcast_community_for(world.podcast).id).count() == 0
