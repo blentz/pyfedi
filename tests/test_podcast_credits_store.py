@@ -143,6 +143,14 @@ def test_an_ordinary_web_page_resolves_to_nobody(world, http_mock):
     assert verified_credit_user('https://ben.example/about', world.podcast) is None
 
 
+def test_an_actor_document_that_is_not_utf8_or_not_json_is_none(world, http_mock):
+    http_mock.get('https://social.example/@ann').respond(200, content=b'{"name": "\xff"}')
+    http_mock.get('https://social.example/@ben').respond(200, content=b'{"name": ')
+
+    assert credits.fetch_actor_document('https://social.example/@ann') is None
+    assert credits.fetch_actor_document('https://social.example/@ben') is None
+
+
 def test_an_oversized_actor_document_is_not_read(world, http_mock):
     http_mock.get('https://social.example/@ann').respond(200, content=b'{' + b' ' * (credits.MAX_ACTOR_BYTES + 1))
 

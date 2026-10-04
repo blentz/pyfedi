@@ -49,7 +49,9 @@ def _declares_a_dtd(feed_bytes: bytes) -> bool:
     scanner.EntityDeclHandler = _refuse_declaration
     try:
         scanner.Parse(feed_bytes, True)
-    except (_Declaration, ValueError):  # ValueError: an encoding expat cannot read, so it cannot be vetted
+    # An encoding expat cannot read cannot be vetted: pyexpat raises LookupError for an unknown encoding name and a
+    # plain ValueError ("multi-byte encodings are not supported") for a multi-byte one.
+    except (_Declaration, LookupError, ValueError):
         return True
     except expat.ExpatError:
         return False
@@ -73,7 +75,7 @@ def parse_feed_credits(feed_bytes: bytes, episode_url: str) -> list[dict]:
         return []
     try:
         root = ElementTree.fromstring(feed_bytes)
-    except (ElementTree.ParseError, expat.ExpatError, ValueError):
+    except ElementTree.ParseError:   # an unreadable encoding was refused above, so only a parse error is left
         return []
     channel = root.find('channel')
     if channel is None:
@@ -161,7 +163,7 @@ def fetch_actor_document(url) -> dict | None:
     try:
         status, body = get_request_capped(url, MAX_ACTOR_BYTES, headers={'Accept': _ACTOR_ACCEPT})
         document = json.loads(body) if status == 200 and body else None
-    except (httpx.HTTPError, ValueError):   # ValueError covers JSON and Unicode decoding errors
+    except (httpx.HTTPError, json.JSONDecodeError, UnicodeDecodeError):
         return None
     return document if isinstance(document, dict) else None
 
