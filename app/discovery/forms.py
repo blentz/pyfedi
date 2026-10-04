@@ -7,10 +7,17 @@ from wtforms.validators import Length, NumberRange, Optional
 from wtforms.widgets import CheckboxInput, ListWidget
 
 
+def _strip(value):
+    return value.strip() if isinstance(value, str) else value
+
+
 class PodcastIndexCredentialsForm(FlaskForm):
-    # PasswordField never renders its value back, which is what makes these write-only
-    podcastindex_api_key = PasswordField(_l('Podcast Index API key'), validators=[Optional(), Length(max=128)])
-    podcastindex_api_secret = PasswordField(_l('Podcast Index API secret'), validators=[Optional(), Length(max=128)])
+    # PasswordField never renders its value back, which is what makes these write-only. Filters run before the
+    # validators, so the length limit applies to what is stored, not to the padding around it.
+    podcastindex_api_key = PasswordField(_l('Podcast Index API key'), filters=[_strip],
+                                         validators=[Optional(), Length(max=128)])
+    podcastindex_api_secret = PasswordField(_l('Podcast Index API secret'), filters=[_strip],
+                                            validators=[Optional(), Length(max=128)])
     podcastindex_save = SubmitField(_l('Save credentials'))
     podcastindex_remove = SubmitField(_l('Remove credentials'))
 
