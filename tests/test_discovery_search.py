@@ -8,8 +8,9 @@ from flask import g
 
 from app import db
 from app.discovery import views
+import app.discovery.search as search_mod
 from app.discovery.search import discovery_fallback, viewer_allows_nsfw
-from app.models import Site
+from app.models import Domain, InstanceBlock, Site
 from tests.discovery_fixtures import add_entry as shared_add_entry, fresh_cache  # noqa: F401
 from tests.factories import make_banned_instance, make_community, make_instance, make_user
 from tests.test_admin_federation import csrf, login
@@ -185,3 +186,58 @@ def test_resolve_is_post_only_and_only_for_known_entries(env, monkeypatch):
     assert env.client.get(f'/discovery/{entry.id}/resolve').status_code == 405
     assert env.client.post('/discovery/999999/resolve', data={'csrf_token': env.token}).status_code == 404
     assert env.client.post(f'/discovery/{entry.id}/resolve').status_code in (400, 302)
+
+
+# ---- M1: the viewer's own blocks and the full instance filter apply to the fallback ----------------------------
+
+def test_a_host_the_viewer_blocked_is_hidden_from_them_only(app, db_session):
+    make_instance('local.example')   # instance 1, which a local user belongs to
+    blocker = make_user(None, 'blocker', local=True)
+    add_entry('Zqblocked', host='blocked.example')
+    blocked = make_instance('blocked.example')
+    db.session.add(InstanceBlock(user_id=blocker.id, instance_id=blocked.id))
+    db.session.commit()
+
+    assert discovery_fallback('community', 'zqblocked', True, viewer_id=blocker.id) == []
+    assert [e.name for e in discovery_fallback('community', 'zqblocked', True)] == ['Zqblocked']
+
+
+def test_a_banned_domain_is_hidden(app, db_session):
+    add_entry('Zqdomain', host='bad.example')
+    db.session.add(Domain(name='bad.example', banned=True))
+    db.session.commit()
+
+    assert discovery_fallback('community', 'zqdomain', True) == []
+
+
+def test_allowlist_mode_hides_hosts_off_the_list(app, db_session, monkeypatch):
+    add_entry('Zqallowed', host='allowed.example')
+    add_entry('Zqnotallowed', host='other.example')
+    monkeypatch.setattr(search_mod, 'host_is_excluded', lambda host, isolated: host != 'allowed.example')
+
+    assert [e.name for e in discovery_fallback('community', 'zqallowed', True)] == ['Zqallowed']
+    assert discovery_fallback('community', 'zqnotallowed', True) == []
+
+
+def test_the_communities_page_passes_the_viewer(env):
+    add_entry('Zqblocked Linux', host='blocked.example')
+    db.session.add(InstanceBlock(user_id=env.user.id, instance_id=make_instance('blocked.example').id))
+    db.session.commit()
+
+    with patch('app.main.routes.render_template', return_value='rendered') as render:
+        env.client.get('/communities?search=zqblocked')
+
+    assert render.call_args.kwargs['discovered'] == []
+
+
+# ---- M2: an instance's people page offers only that instance's directory people ---------------------------------
+
+def test_an_instance_people_page_offers_only_that_instances_directory_people(env):
+    make_instance('m.example')
+    add_entry('Zqann Here', kind='person', platform='mastodon', host='m.example')
+    add_entry('Zqann Elsewhere', kind='person', platform='mastodon', host='n.example')
+
+    with patch('app.instance.routes.render_template', return_value='rendered') as render:
+        env.client.get('/instance/m.example/people?q=zqann')
+
+    assert [e.name for e in render.call_args.kwargs['discovered']] == ['Zqann Here']

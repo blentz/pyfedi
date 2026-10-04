@@ -167,7 +167,9 @@ def instance_people(instance_domain):
     people = people.paginate(page=page, per_page=100 if current_user.is_authenticated and not low_bandwidth else 50,
                              error_out=False)
     # Interop D24: nobody here matched the search, so offer opt-in directory people
-    discovered = discovery_fallback(KIND_PERSON, search, allow_nsfw=viewer_allows_nsfw(current_user, g.site)) \
+    discovered = discovery_fallback(KIND_PERSON, search, allow_nsfw=viewer_allows_nsfw(current_user, g.site),
+                                    viewer_id=current_user.id if current_user.is_authenticated else None,
+                                    host=instance.domain if instance else None) \
         if search and page == 1 and people.total == 0 else []
     next_url = url_for('instance.instance_people', page=people.next_num, q=search,
                        instance_domain=instance_domain) if people.has_next else None
