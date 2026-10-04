@@ -27,7 +27,7 @@ def test_the_seed_loads_every_platform_and_a_podcast_with_credits(app, db_sessio
 
     assert result.exception is None, result.exception
     assert sorted({entry.platform for entry in DiscoveryEntry.query}) == ['castopod', 'mastodon', 'peertube', 'pixelfed']
-    assert DiscoveryEntry.query.count() == 7
+    assert DiscoveryEntry.query.count() == 8
     community = Community.query.filter_by(ap_profile_id='https://pod.example/@mypodcast').one()
     post = Post.query.filter_by(community_id=community.id).one()
     assert [(c['name'], c['role']) for c in post.extensions['podcast']['credits']] == [
@@ -54,6 +54,6 @@ def test_seeding_twice_changes_nothing(app, db_session, http_mock):
     second = seed_from_fixtures()
 
     assert first == second
-    assert DiscoveryEntry.query.count() == 7
+    assert DiscoveryEntry.query.count() == 8
     assert Post.query.count() == 1
     assert User.query.filter_by(user_name='ann').count() == 1

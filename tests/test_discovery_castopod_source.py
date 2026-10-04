@@ -13,7 +13,9 @@ from app.utils import set_setting
 from tests.discovery_fixtures import nobody_excluded
 
 FIXTURE = Path(__file__).resolve().parent.parent / 'app' / 'discovery' / 'fixtures' / 'castopod_podcastindex.json'
-TRENDING = f'{PODCASTINDEX_API}/podcasts/trending'
+VALUE = f'{PODCASTINDEX_API}/podcasts/bytag'
+NEW = f'{PODCASTINDEX_API}/recent/newfeeds'
+SEARCH = f'{PODCASTINDEX_API}/search/byterm'
 EPISODES = f'{PODCASTINDEX_API}/episodes/byfeedid'
 NOW = 1700000000
 # sha1('KEYabcSECRETxyz1700000000'), computed once outside the implementation and pasted in.
@@ -36,12 +38,19 @@ def credentials(app, db_session):
     cache.clear()
 
 
+def serve_lists(http_mock, value=None, new=None, search=None):
+    """Each list answers with the given feeds; an omitted list answers empty."""
+    return tuple(http_mock.get(url).respond(json={'status': 'true', 'feeds': feeds or []})
+                 for url, feeds in ((VALUE, value), (NEW, new), (SEARCH, search)))
+
+
 def serve_fixture(http_mock):
     fixture = json.loads(FIXTURE.read_text())
-    trending = http_mock.get(TRENDING).respond(json=fixture['trending'])
-    episodes_101 = http_mock.get(EPISODES, params={'id': '101'}).respond(json=fixture['episodes']['101'])
-    episodes_103 = http_mock.get(EPISODES, params={'id': '103'}).respond(json=fixture['episodes']['103'])
-    return trending, episodes_101, episodes_103
+    lists = tuple(http_mock.get(url).respond(json=fixture['lists'][name])
+                  for url, name in ((VALUE, 'value'), (NEW, 'new'), (SEARCH, 'search')))
+    episodes = {feed_id: http_mock.get(EPISODES, params={'id': feed_id}).respond(json=answer)
+                for feed_id, answer in fixture['episodes'].items()}
+    return lists, episodes
 
 
 def test_without_credentials_nothing_is_fetched(app, db_session, http_mock):
@@ -57,16 +66,26 @@ def test_the_signature_is_sha1_of_key_secret_and_time():
 
 
 def test_every_request_is_signed(credentials, http_mock):
-    trending, episodes_101, _episodes_103 = serve_fixture(http_mock)
+    (value, new, search), episodes = serve_fixture(http_mock)
 
     fetch_castopod_podcasts(nobody_excluded)
 
-    for request in (trending.calls.last.request, episodes_101.calls.last.request):
+    for route in (value, new, search, episodes['101']):
+        request = route.calls.last.request
         assert request.headers['X-Auth-Key'] == 'KEYabc'
         assert request.headers['X-Auth-Date'] == str(NOW)
         assert request.headers['Authorization'] == EXPECTED_AUTHORIZATION
         assert request.headers['User-Agent'].startswith('PieFed/')
-    assert trending.calls.last.request.url.params['max'] == '200'
+
+
+def test_the_three_lists_that_surface_castopod_are_read(credentials, http_mock):
+    (value, new, search), _episodes = serve_fixture(http_mock)
+
+    fetch_castopod_podcasts(nobody_excluded)
+
+    assert dict(value.calls.last.request.url.params) == {'podcast-value': '', 'max': '1000'}
+    assert dict(new.calls.last.request.url.params) == {'max': '1000'}
+    assert dict(search.calls.last.request.url.params) == {'q': 'castopod', 'max': '1000'}
 
 
 def test_only_podcasts_with_an_activitypub_social_interact_are_kept(credentials, http_mock):
@@ -76,18 +95,45 @@ def test_only_podcasts_with_an_activitypub_social_interact_are_kept(credentials,
 
     assert entries == [{'kind': 'community', 'platform': 'castopod', 'actor_url': 'https://pod.example/@mypodcast',
                         'name': 'My Podcast', 'host': 'pod.example', 'avatar': 'https://pod.example/media/cover.jpg',
-                        'followers': 9, 'nsfw': False, 'source': 'podcastindex'}]
+                        'followers': 9, 'nsfw': False, 'source': 'podcastindex'},
+                       {'kind': 'community', 'platform': 'castopod', 'actor_url': 'https://radio.example/@morning',
+                        'name': 'Morning Show', 'host': 'radio.example',
+                        'avatar': 'https://radio.example/media/morning.jpg',
+                        'followers': 0, 'nsfw': False, 'source': 'podcastindex'}]
+
+
+def test_a_feed_on_two_lists_is_looked_up_once(credentials, http_mock):
+    _lists, episodes = serve_fixture(http_mock)
+
+    fetch_castopod_podcasts(nobody_excluded)
+
+    assert episodes['101'].call_count == 1
+
+
+def test_one_failing_list_does_not_abort_the_source(credentials, http_mock):
+    fixture = json.loads(FIXTURE.read_text())
+    http_mock.get(VALUE).mock(side_effect=httpx.ConnectError('refused'))
+    http_mock.get(NEW).respond(json=fixture['lists']['new'])
+    http_mock.get(SEARCH).respond(500)
+    for feed_id in ('103', '104'):   # 101 is listed only by the failing lists
+        http_mock.get(EPISODES, params={'id': feed_id}).respond(json=fixture['episodes'][feed_id])
+
+    entries = fetch_castopod_podcasts(nobody_excluded)
+
+    assert [entry['actor_url'] for entry in entries] == ['https://radio.example/@morning']
 
 
 def test_an_excluded_podcast_host_is_dropped(credentials, http_mock):
     serve_fixture(http_mock)
 
-    assert fetch_castopod_podcasts(lambda host: host == 'pod.example') == []
+    entries = fetch_castopod_podcasts(lambda host: host == 'pod.example')
+
+    assert [entry['actor_url'] for entry in entries] == ['https://radio.example/@morning']
 
 
 def test_episode_lookups_are_capped(credentials, http_mock):
     feeds = [{'id': i, 'url': f'https://c{i}.example/@show/feed.xml', 'title': f'Show {i}'} for i in range(50)]
-    http_mock.get(TRENDING).respond(json={'feeds': feeds})
+    serve_lists(http_mock, value=feeds)
     route = http_mock.get(EPISODES).respond(json={'items': []})
 
     fetch_castopod_podcasts(nobody_excluded)
@@ -101,7 +147,7 @@ def test_malformed_rows_are_skipped_not_fatal(credentials, http_mock):
              {'id': 7, 'url': 5}, {'id': 8, 'url': 'https://b.example/@b/feed.xml', 'title': 'B'},
              {'id': 101, 'url': 'https://pod.example/@mypodcast/feed.xml', 'title': 'My Podcast',
               'trendScore': 'many', 'artwork': 12}]
-    http_mock.get(TRENDING).respond(json={'feeds': feeds})
+    serve_lists(http_mock, value=feeds)
     http_mock.get(EPISODES, params={'id': '8'}).respond(json={'items': [None, 'x', {'socialInteract': 'no'},
                                                                          {'socialInteract': [None, 3, {
                                                                              'protocol': 'activitypub',
@@ -116,16 +162,20 @@ def test_malformed_rows_are_skipped_not_fatal(credentials, http_mock):
 
 def test_a_failing_episode_lookup_does_not_abort_the_source(credentials, http_mock):
     fixture = json.loads(FIXTURE.read_text())
-    http_mock.get(TRENDING).respond(json=fixture['trending'])
+    serve_lists(http_mock, value=fixture['lists']['value']['feeds'], new=fixture['lists']['new']['feeds'])
     http_mock.get(EPISODES, params={'id': '101'}).respond(500)
     http_mock.get(EPISODES, params={'id': '103'}).respond(json=fixture['episodes']['103'])
+    http_mock.get(EPISODES, params={'id': '104'}).respond(json=fixture['episodes']['104'])
 
-    assert fetch_castopod_podcasts(nobody_excluded) == []
+    entries = fetch_castopod_podcasts(nobody_excluded)
+
+    assert [entry['actor_url'] for entry in entries] == ['https://radio.example/@morning']
 
 
-def test_a_failing_index_is_a_source_error_and_the_secret_is_never_logged(credentials, http_mock, caplog):
+def test_every_list_failing_is_a_source_error_and_the_secret_is_never_logged(credentials, http_mock, caplog):
     caplog.set_level(logging.DEBUG)
-    http_mock.get(TRENDING).mock(side_effect=httpx.ConnectError('refused'))
+    for url in (VALUE, NEW, SEARCH):
+        http_mock.get(url).mock(side_effect=httpx.ConnectError('refused'))
 
     with pytest.raises(sources.DiscoverySourceError) as raised:
         fetch_castopod_podcasts(nobody_excluded)
@@ -145,3 +195,29 @@ def test_a_failing_index_is_a_source_error_and_the_secret_is_never_logged(creden
 ])
 def test_is_castopod_feed(feed, expected):
     assert castopod.is_castopod_feed(feed) is expected
+
+
+def social_interact(**tag):
+    return [{'socialInteract': [dict({'protocol': 'activitypub'}, **tag)]}]
+
+
+FEED = 'https://radio.example/@morning/feed.xml'
+
+
+@pytest.mark.parametrize('items, expected', [
+    # Castopod leaves accountUrl empty and names the account by accountId: the actor is https://host/@handle
+    (social_interact(accountId='@morning@radio.example', accountUrl=''), 'https://radio.example/@morning'),
+    (social_interact(accountId='@morning@radio.example'), 'https://radio.example/@morning'),
+    # an accountUrl, when present, wins
+    (social_interact(accountId='@morning@radio.example', accountUrl='https://radio.example/@other'),
+     'https://radio.example/@other'),
+    # an accountId on another host than the feed's names someone else's account
+    (social_interact(accountId='@morning@elsewhere.example', accountUrl=''), None),
+    (social_interact(accountId='morning@radio.example'), None),
+    (social_interact(accountId='@mor/ning@radio.example'), None),
+    (social_interact(accountId='@morning@radio.example\n'), None),
+    (social_interact(accountId=7), None),
+    (social_interact(protocol='twitter', accountId='@morning@radio.example'), None),
+])
+def test_actor_url_from_social_interact(items, expected):
+    assert castopod.actor_url_from_social_interact(items, FEED) == expected

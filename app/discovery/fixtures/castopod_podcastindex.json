@@ -1,16 +1,13 @@
-{"trending": {"status": "true", "feeds": [
-   {"id": 101, "url": "https://pod.example/@mypodcast/feed.xml", "title": "My Podcast",
-    "artwork": "https://pod.example/media/cover.jpg", "trendScore": 9, "explicit": false},
-   {"id": 102, "url": "https://feeds.example/other.rss", "title": "Not Castopod", "trendScore": 30},
-   {"id": 103, "url": "https://cast.example/@late/feed.xml", "title": "Late Night",
-    "artwork": "https://cast.example/late.jpg", "trendScore": 4, "explicit": true}
- ]},
+{"lists": {
+  "value": {"status": "true", "feeds": [
+    {"id": 101, "url": "https://pod.example/@mypodcast/feed.xml", "title": "My Podcast", "artwork": "https://pod.example/media/cover.jpg", "trendScore": 9, "explicit": false},
+    {"id": 102, "url": "https://feeds.example/other.rss", "title": "Not Castopod", "trendScore": 30}]},
+  "new": {"status": "true", "feeds": [
+    {"id": 103, "url": "https://cast.example/@late/feed.xml", "title": "Late Night", "image": "https://cast.example/late.jpg"},
+    {"id": 104, "url": "https://radio.example/@morning/feed.xml", "title": "Morning Show", "image": "https://radio.example/media/morning.jpg"}]},
+  "search": {"status": "true", "feeds": [
+    {"id": 101, "url": "https://pod.example/@mypodcast/feed.xml", "title": "My Podcast", "artwork": "https://pod.example/media/cover.jpg", "trendScore": 9, "explicit": false}]}},
  "episodes": {
-   "101": {"status": "true", "items": [{"id": 1, "title": "Episode 1",
-            "link": "https://pod.example/@mypodcast/episodes/ep-1",
-            "socialInteract": [{"url": "https://pod.example/@mypodcast/episodes/ep-1", "protocol": "activitypub",
-                                "accountId": "@mypodcast@pod.example",
-                                "accountUrl": "https://pod.example/@mypodcast"}]}]},
-   "103": {"status": "true", "items": [{"id": 2, "title": "Pilot",
-            "socialInteract": [{"protocol": "twitter", "accountUrl": "https://twitter.example/late"}]}]}
- }}
+  "101": {"status": "true", "items": [{"id": 1, "title": "Episode 1", "link": "https://pod.example/@mypodcast/episodes/ep-1", "socialInteract": [{"url": "https://pod.example/@mypodcast/episodes/ep-1", "protocol": "activitypub", "accountId": "@mypodcast@pod.example", "accountUrl": "https://pod.example/@mypodcast"}]}]},
+  "103": {"status": "true", "items": [{"id": 2, "title": "Pilot", "socialInteract": [{"protocol": "twitter", "accountUrl": "https://twitter.example/late"}]}]},
+  "104": {"status": "true", "items": [{"id": 3, "title": "Wake up", "socialInteract": [{"uri": "https://radio.example/@morning/posts/1", "protocol": "activitypub", "accountId": "@morning@radio.example", "accountUrl": "", "priority": 1}]}]}}}
