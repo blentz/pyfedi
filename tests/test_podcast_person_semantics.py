@@ -7,9 +7,9 @@ import pytest
 import app.activitypub.routes as routes_mod
 from app import cache, db
 from app.activitypub.routes import process_inbox_request
-from app.activitypub.util import actor_json_to_model
+from app.activitypub.util import actor_json_to_model, find_community
 from app.discovery.podcast import podcast_twin_user
-from app.models import Community, CommunityMember, User, UserFollower, UserFollowRequest
+from app.models import Community, CommunityMember, Post, User, UserFollower, UserFollowRequest
 from tests.factories import make_community, make_community_join_request, make_site, make_user, \
     make_user_follow_request, peer_actor_json, peer_instance, seed_community_owner
 
@@ -111,3 +111,33 @@ def test_a_podcast_boost_of_someone_elses_post_is_a_microblog_boost(app, world, 
                            'object': f'https://{PEER}/users/alice/statuses/1'}, True)
 
     assert seen == [None]   # the microblog-boost path, not a post filed in the podcast's community
+
+
+# ---- F3: a third party's mention of a podcast is not a post in the podcast's community --------------------------
+
+def note_create(author_id, note_id, cc):
+    obj = {'id': note_id, 'type': 'Note', 'content': '<p>hello @mypodcast</p>', 'attributedTo': author_id,
+           'to': ['https://www.w3.org/ns/activitystreams#Public'], 'cc': cc}
+    return {'id': f'{note_id}/activity', 'type': 'Create', 'actor': author_id,
+            'to': ['https://www.w3.org/ns/activitystreams#Public'], 'cc': cc, 'object': obj}
+
+
+def test_find_community_skips_a_podcast_twin_named_by_someone_else(world):
+    assert find_community(note_create(world.alice.ap_profile_id, f'https://{PEER}/n/1', [PODCAST])) is None
+    assert find_community(note_create(world.alice.ap_profile_id, f'https://{PEER}/n/1', [PODCAST])['object']) is None
+
+
+def test_find_community_keeps_a_podcast_twin_named_by_the_podcast_itself(world):
+    assert find_community(note_create(PODCAST, f'https://{PEER}/n/2', [PODCAST])) == world.community
+
+
+def test_a_mention_of_a_podcast_by_another_user_lands_in_microblogs(world):
+    process_inbox_request(note_create(world.alice.ap_profile_id, f'https://{PEER}/n/3', [PODCAST]), True)
+
+    assert Post.query.one().community.name == 'microblogs'
+
+
+def test_an_episode_from_the_podcast_still_lands_in_its_community(world):
+    process_inbox_request(note_create(PODCAST, f'https://{PEER}/n/4', [f'{PODCAST}/followers']), True)
+
+    assert Post.query.one().community_id == world.community.id
