@@ -11,12 +11,13 @@ from cachelib import SimpleCache
 
 from app import cache, db
 from app.utils import get_request_capped
+from app.activitypub.signature import RsaKeys
 from app.activitypub.util import actor_json_to_model, create_post
 from app.discovery import credits
 from app.discovery.credits import MAX_FEED_BYTES, credit_vouches, fetch_episode_credits_task, store_credits, \
     verified_credit_user
 from app.discovery.podcast import podcast_community_for
-from app.models import Community, Domain, Post, User, UserExtraField
+from app.models import Community, Domain, Post, Site, User, UserExtraField
 from tests.factories import make_banned_instance, make_post, make_site, make_user, peer_actor_json, peer_instance
 
 PEER = 'pod.example'
@@ -521,3 +522,46 @@ def test_a_failed_feed_fetch_is_not_remembered(world, http_mock, real_cache):
 
     assert feed.call_count == 2
     assert [c['name'] for c in stored(world.post.id)['podcast']['credits']] == ['Ann Host', 'Cara Guest']
+
+
+@pytest.fixture
+def site_key(world):
+    site = db.session.get(Site, 1)
+    site.private_key, site.public_key = RsaKeys.generate_keypair()
+    db.session.commit()
+
+
+def refuses_unsigned(status, document=None, content=None):
+    def answer(request):
+        if 'Signature' not in request.headers:
+            return httpx.Response(status)
+        return httpx.Response(200, json=document) if content is None else httpx.Response(200, content=content)
+    return answer
+
+
+@pytest.mark.parametrize('status', [401, 403])
+def test_an_actor_that_refuses_an_unsigned_fetch_is_asked_again_signed(world, http_mock, site_key, status):
+    ann = ann_user({})
+    route = http_mock.get(ann.ap_profile_id)
+    route.side_effect = refuses_unsigned(status, peer_actor_json('Person', name='ann', server='social.example',
+                                                                 fields=VOUCH))
+
+    assert credit_vouches(ann.id, world.podcast) is True
+    assert route.call_count == 2
+
+
+def test_a_signed_retry_is_held_to_the_same_cap(world, http_mock, site_key):
+    ann = ann_user({})
+    route = http_mock.get(ann.ap_profile_id)
+    route.side_effect = refuses_unsigned(401, content=b'{' + b' ' * (credits.MAX_ACTOR_BYTES + 1))
+
+    assert credit_vouches(ann.id, world.podcast) is False
+    assert route.call_count == 2
+
+
+def test_other_refusals_are_not_retried_signed(world, http_mock, site_key):
+    ann = ann_user({})
+    route = http_mock.get(ann.ap_profile_id).respond(404)
+
+    assert credit_vouches(ann.id, world.podcast) is False
+    assert route.call_count == 1
