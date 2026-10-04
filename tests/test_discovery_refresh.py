@@ -4,8 +4,10 @@ import logging
 from datetime import timedelta
 
 import pytest
+from cachelib import SimpleCache
+from sqlalchemy import event
 
-from app import db
+from app import cache, db
 from app.discovery import filters, refresh, sources
 from app.discovery.filters import request_host
 from app.discovery.refresh import clean_entries, refresh_discovery
@@ -271,3 +273,74 @@ def test_request_host_refuses_a_host_that_only_httpx_maps_to_another(app, url):
     (evil.example), which the stdlib -- and anything judging its host -- does not; a fullwidth letter or a ligature
     fails strict IDNA 2008 encoding."""
     assert request_host(url) is None
+
+
+@pytest.fixture
+def real_cache(app, monkeypatch):
+    """The test config's NullCache memoizes nothing: give this test a real one."""
+    monkeypatch.setitem(app.extensions['cache'], cache, SimpleCache())
+
+
+def test_a_failed_isolation_list_is_not_cached_and_a_good_one_is(app, monkeypatch, real_cache):
+    answers = iter([None, '', 'a.example', 'b.example'])   # '' is the helper's answer to a non-200
+    monkeypatch.setattr(filters, 'retrieve_peertube_block_list', lambda: next(answers))
+
+    assert filters.peertube_isolated_hosts() == frozenset()               # failed: the next refresh retries
+    assert filters.peertube_isolated_hosts() == frozenset()
+    assert filters.peertube_isolated_hosts() == frozenset({'a.example'})  # read, and kept for a day
+    assert filters.peertube_isolated_hosts() == frozenset({'a.example'})
+
+
+def test_an_isolation_list_that_raises_is_not_cached(app, monkeypatch, real_cache):
+    answers = iter([ValueError('bad json'), 'a.example'])
+
+    def listing():
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+    monkeypatch.setattr(filters, 'retrieve_peertube_block_list', listing)
+
+    assert filters.peertube_isolated_hosts() == frozenset()
+    assert filters.peertube_isolated_hosts() == frozenset({'a.example'})
+
+
+def test_a_cleaned_entry_keeps_only_the_entry_keys(app, db_session):
+    cleaned = clean_entries([entry(id=99, first_seen='1970-01-01', extra='<script>')], nobody_excluded)
+
+    assert set(cleaned[0]) == set(sources.ENTRY_KEYS)
+    assert set(sources.make_entry(kind='community', platform='peertube', actor_url='https://t.example/c', name='n',
+                                  host='t.example', avatar=None, followers=0, nsfw=False, source='s')) \
+        == set(sources.ENTRY_KEYS)
+
+
+def test_banned_domains_are_read_once_per_refresh(app, db_session, only):
+    db.session.add(Domain(name='blockeddomain.example', banned=True))
+    db.session.commit()
+    only('sepiasearch', [entry(name=f'Fine {i}', host=f'h{i}.example') for i in range(5)]
+         + [entry(name='Blocked', host='blockeddomain.example')])
+    domain_queries = []
+
+    def count(conn, cursor, statement, parameters, context, executemany):
+        if 'FROM domain' in statement:
+            domain_queries.append(statement)
+    event.listen(db.engine, 'before_cursor_execute', count)
+    try:
+        refresh_discovery(now=NOW)
+    finally:
+        event.remove(db.engine, 'before_cursor_execute', count)
+
+    assert sorted(row.name for row in DiscoveryEntry.query.all()) == [f'Fine {i}' for i in range(5)]
+    assert len(domain_queries) == 1
+
+
+def test_names_with_html_entities_are_stored_as_sent(app, db_session, only):
+    """Directory names are plain text: an entity is literal text, not markup, so it is stored unchanged and
+    escaped again on render (see test_discovery_search)."""
+    only('sepiasearch', [entry(name='Tom &amp; Jerry', slug='tj'),
+                         entry(name='&lt;script&gt;alert(1)&lt;/script&gt; Videos', slug='s')])
+
+    refresh_discovery(now=NOW)
+
+    assert sorted(row.name for row in DiscoveryEntry.query.all()) == [
+        '&lt;script&gt;alert(1)&lt;/script&gt; Videos', 'Tom &amp; Jerry']

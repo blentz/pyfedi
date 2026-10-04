@@ -8,8 +8,8 @@ from sqlalchemy.dialects.postgresql import insert
 from app import db
 from app.community.util import is_bad_name
 from app.discovery import KIND_COMMUNITY, KIND_PERSON, PLATFORMS, castopod, mastodon, peertube, pixelfed, sources
-from app.discovery.filters import URL_LIMIT, clean_https_url, clean_name, host_is_excluded, looks_nsfw, \
-    peertube_isolated_hosts
+from app.discovery.filters import URL_LIMIT, banned_domain_names, clean_https_url, clean_name, host_is_excluded, \
+    looks_nsfw, peertube_isolated_hosts
 from app.models import DiscoveryEntry, utcnow
 
 EXPIRY_DAYS = 30
@@ -51,7 +51,8 @@ def clean_entries(entries, exclude) -> list[dict]:
             continue
         seen.add(actor_url)
         per_host[host] = per_host.get(host, 0) + 1
-        kept.append({**entry, 'actor_url': actor_url, 'name': name, 'host': host,
+        known = {key: entry.get(key) for key in sources.ENTRY_KEYS}   # a peer's extra keys are not carried on
+        kept.append({**known, 'actor_url': actor_url, 'name': name, 'host': host,
                      'avatar': clean_https_url(entry.get('avatar')),
                      'followers': sources.as_count(entry.get('followers')),
                      'nsfw': entry.get('nsfw') is True or looks_nsfw(name)})
@@ -82,9 +83,10 @@ def expire_entries(now) -> int:
 def refresh_discovery(now=None) -> dict:
     now = now or utcnow()
     isolated = peertube_isolated_hosts()
+    banned_domains = banned_domain_names()
 
     def exclude(host):
-        return host_is_excluded(host, isolated)
+        return host_is_excluded(host, isolated, banned_domains)
 
     results = {}
     for source, fetch in FETCHERS.items():
