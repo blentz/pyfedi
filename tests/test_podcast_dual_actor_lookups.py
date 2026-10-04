@@ -87,6 +87,7 @@ def test_an_accept_from_the_podcast_admits_the_join_request(app, podcast):
                                       'type': 'Follow', 'actor': joiner.ap_profile_id, 'object': PODCAST}}, True)
 
     assert CommunityMember.query.filter_by(user_id=joiner.id, community_id=podcast.community.id).count() == 1
+    assert UserFollower.query.count() == 0   # a join, not a follow of the podcast as a person
 
 
 def test_an_undo_follow_sent_by_the_podcast_is_the_users(app, podcast):
@@ -132,3 +133,23 @@ def test_a_cached_podcast_community_is_refused_once_its_user_is_banned_or_delete
     db.session.commit()
 
     assert not find_actor_or_create_cached(PODCAST, community_only=True)
+
+
+def a_banned_community_with_a_live_user(podcast):
+    podcast.community.banned = True
+    db.session.commit()
+    assert not podcast.user.banned and not podcast.user.deleted
+
+
+def test_a_community_lookup_of_a_banned_podcast_community_with_a_live_user_finds_nothing(podcast):
+    a_banned_community_with_a_live_user(podcast)
+
+    assert not find_actor_by_url(PODCAST, community_only=True)
+    assert find_actor_by_url(PODCAST) == podcast.user   # the author stays
+
+
+def test_a_fetched_podcast_whose_community_is_banned_yields_no_community(podcast, http_mock):
+    a_banned_community_with_a_live_user(podcast)
+    http_mock.get(PODCAST).respond(json=podcast_document())
+
+    assert create_actor_from_remote(PODCAST, community_only=True) is None
