@@ -198,6 +198,22 @@ def test_an_overlong_actor_url_is_logged(app, db_session, caplog):
     assert long_url not in caplog.text   # the length and host are enough; the url itself may be huge
 
 
+def test_an_actor_url_over_the_byte_cap_is_skipped_and_logged(app, db_session, only, caplog):
+    """1000 non-ASCII characters fit the 1024-character cap but are about 3000 bytes in UTF-8, over the unique
+    index's limit of about 2704: one such row would fail the source's whole upsert. Distinct characters, so
+    Postgres cannot compress the index entry under the limit."""
+    slug = ''.join(chr(0x4e00 + i) for i in range(1000))
+    caplog.set_level(logging.INFO)
+    only('sepiasearch', [entry(name='Too many bytes', actor_url=f'https://tube.example/c/{slug}'),
+                         entry(name='Fine')])
+
+    result = refresh_discovery(now=NOW)
+
+    assert result['sepiasearch'] == 1
+    assert [row.name for row in DiscoveryEntry.query.all()] == ['Fine']
+    assert 'over-long actor_url' in caplog.text
+
+
 def test_a_malformed_url_is_dropped_not_fatal(app, db_session):
     rows = [entry(name='Bad actor', actor_url='https://[bad/a'),
             entry(name='Bad avatar', host='b.example', avatar='https://[bad/a')]

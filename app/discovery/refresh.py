@@ -27,6 +27,11 @@ FETCHERS = {
 _UPDATED = ('kind', 'platform', 'name', 'host', 'avatar_url', 'followers', 'nsfw', 'source', 'last_seen')
 
 
+def _utf8_length(value: str) -> int:
+    # surrogatepass: a lone surrogate from a peer's JSON is measured here rather than raising
+    return len(value.encode('utf-8', 'surrogatepass'))
+
+
 def clean_entries(entries, exclude) -> list[dict]:
     """Validated, filtered, de-duplicated and capped copies of one source's entries, in source order."""
     kept, per_host, seen = [], {}, set()
@@ -36,11 +41,13 @@ def clean_entries(entries, exclude) -> list[dict]:
         if not isinstance(entry, dict) or entry.get('kind') not in (KIND_COMMUNITY, KIND_PERSON) \
                 or entry.get('platform') not in PLATFORMS:
             continue
-        if isinstance(entry.get('actor_url'), str) and len(entry['actor_url']) > URL_LIMIT:
-            # DiscoveryEntry.actor_url is String(URL_LIMIT) under a unique index: one such row would fail the
-            # source's whole upsert, so it is dropped here. The url itself is not logged; it may be huge.
+        if isinstance(entry.get('actor_url'), str) and _utf8_length(entry['actor_url']) > URL_LIMIT:
+            # DiscoveryEntry.actor_url is String(URL_LIMIT) under a unique B-tree index, whose entries are limited
+            # to about 2704 bytes: one such row would fail the source's whole upsert, so it is dropped here. Bytes,
+            # not characters, because a multi-byte url within URL_LIMIT characters can still exceed the index.
+            # The url itself is not logged; it may be huge.
             current_app.logger.info(f'discovery: {entry.get("source")} entry skipped: over-long actor_url '
-                                    f'({len(entry["actor_url"])} characters)')
+                                    f'({_utf8_length(entry["actor_url"])} bytes)')
             continue
         actor_url = clean_https_url(entry.get('actor_url'))
         name = clean_name(entry.get('name'))
