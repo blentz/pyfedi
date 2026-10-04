@@ -1,7 +1,10 @@
 """Interop D24 (spec D4): a Castopod Podcast actor is a User, because it authors the episodes, and a
 Community, because it is what a reader subscribes to. Both rows carry the same ActivityPub id."""
+from types import SimpleNamespace
+
 import pytest
 
+import app.discovery.podcast as podcast_module
 from app.activitypub.util import actor_json_to_model, refresh_user_profile_task
 from app.discovery.podcast import ensure_podcast_community, podcast_community_for, podcast_route_for
 from app import db
@@ -182,3 +185,98 @@ def test_a_podcast_in_good_standing_routes_to_its_twin(app, db_session):
     user = actor_json_to_model(podcast_document(), 'mypodcast', PEER)
 
     assert podcast_route_for(user) == Community.query.one()
+
+
+# ---- D1: an existing podcast community follows its actor document ---------------------------------------------
+
+def an_enabled_nsfw_site():
+    site = make_site()
+    site.enable_nsfw = True
+    db.session.commit()
+
+
+def a_changed_document(**fields):
+    return podcast_document(name='Renamed Podcast', summary='<p>New about</p>', sensitive=True,
+                            outbox=f'{ACTOR}/outbox2', rssFeed=f'https://{PEER}/@mypodcast/feed2.xml', **fields)
+
+
+def assert_resynced(community):
+    assert community.title == 'Renamed Podcast'
+    assert community.description == 'New about'
+    assert 'New about' in community.description_html
+    assert community.nsfw is True
+    assert community.ap_outbox_url == f'{ACTOR}/outbox2'
+    assert community.rss_url == f'https://{PEER}/@mypodcast/feed2.xml'
+
+
+def test_seeing_the_podcast_again_resyncs_its_community_from_the_document(app, db_session):
+    an_enabled_nsfw_site()
+    peer_instance(PEER)
+    actor_json_to_model(podcast_document(), 'mypodcast', PEER)
+
+    actor_json_to_model(a_changed_document(), 'mypodcast', PEER)
+
+    assert_resynced(Community.query.one())
+
+
+def test_a_refresh_resyncs_the_podcast_community_from_the_document(app, db_session):
+    an_enabled_nsfw_site()
+    peer_instance(PEER)
+    user = actor_json_to_model(podcast_document(), 'mypodcast', PEER)
+
+    refresh_user_profile_task(user.id, a_changed_document(id=user.ap_profile_id))
+
+    assert_resynced(Community.query.one())
+
+
+def test_a_resync_cleans_the_document_as_creation_does(app, db_session):
+    peer_instance(PEER)
+    user = actor_json_to_model(podcast_document(), 'mypodcast', PEER)
+
+    ensure_podcast_community(user, podcast_document(name='  [deleted] ', summary='<script>x</script><p>ok</p>',
+                                                    outbox='http://peer.example/outbox'))
+
+    community = Community.query.one()
+    assert community.title == 'mypodcast'
+    assert '<script>' not in community.description_html
+    assert community.ap_outbox_url == f'{ACTOR}/outbox'   # a document's bad outbox does not erase a good one
+
+
+def test_a_resync_leaves_the_ban_alone(app, db_session):
+    peer_instance(PEER)
+    user = actor_json_to_model(podcast_document(), 'mypodcast', PEER)
+    Community.query.one().banned = True
+    db.session.commit()
+
+    assert ensure_podcast_community(user, a_changed_document()) is None
+
+    community = Community.query.one()
+    assert community.banned is True and community.title == 'My Podcast'
+
+
+class _FirstCommunityLookupMisses:
+    """The session, except that the first Community lookup finds nothing: another worker's insert lands between
+    ensure_podcast_community's lookup and its commit."""
+    def __init__(self, session):
+        self._session, self._missed = session, False
+
+    def query(self, *entities):
+        if entities == (Community,) and not self._missed:
+            self._missed = True
+            return SimpleNamespace(filter=lambda *criteria: SimpleNamespace(first=lambda: None))
+        return self._session.query(*entities)
+
+    def __getattr__(self, name):
+        return getattr(self._session, name)
+
+
+def test_a_community_created_concurrently_is_handed_out_after_the_insert_fails(app, db_session, monkeypatch):
+    peer_instance(PEER)
+    user = actor_json_to_model(podcast_document(), 'mypodcast', PEER)
+    existing_id = Community.query.one().id
+    monkeypatch.setattr(podcast_module, 'db', SimpleNamespace(session=_FirstCommunityLookupMisses(db.session)))
+
+    community = ensure_podcast_community(user, podcast_document())
+
+    assert community.id == existing_id
+    assert Community.query.count() == 1
