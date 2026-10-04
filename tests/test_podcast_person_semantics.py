@@ -123,12 +123,30 @@ def note_create(author_id, note_id, cc):
 
 
 def test_find_community_skips_a_podcast_twin_named_by_someone_else(world):
-    assert find_community(note_create(world.alice.ap_profile_id, f'https://{PEER}/n/1', [PODCAST])) is None
-    assert find_community(note_create(world.alice.ap_profile_id, f'https://{PEER}/n/1', [PODCAST])['object']) is None
+    activity = note_create(world.alice.ap_profile_id, f'https://{PEER}/n/1', [PODCAST])
+    assert find_community(activity, author=world.alice) is None
+    assert find_community(activity['object'], author=world.alice.ap_profile_id) is None
+    assert find_community(activity) is None   # no verified author is not the podcast
 
 
 def test_find_community_keeps_a_podcast_twin_named_by_the_podcast_itself(world):
-    assert find_community(note_create(PODCAST, f'https://{PEER}/n/2', [PODCAST])) == world.community
+    activity = note_create(PODCAST, f'https://{PEER}/n/2', [PODCAST])
+    assert find_community(activity, author=world.podcast) == world.community
+    assert find_community(activity['object'], author=PODCAST) == world.community
+
+
+def test_find_community_ignores_an_unverified_claim_of_podcast_authorship(world):
+    activity = note_create(PODCAST, f'https://{PEER}/n/9', [PODCAST])   # actor and attributedTo both say the podcast
+    assert find_community(activity, author=world.alice) is None          # but alice signed it
+
+
+def test_a_third_party_note_attributed_to_the_podcast_too_stays_in_microblogs(world):
+    activity = note_create(world.alice.ap_profile_id, f'https://{PEER}/n/5', [PODCAST])
+    activity['object']['attributedTo'] = [world.alice.ap_profile_id, PODCAST]
+
+    process_inbox_request(activity, True)   # alice is the signed actor
+
+    assert Post.query.one().community.name == 'microblogs'
 
 
 def test_a_mention_of_a_podcast_by_another_user_lands_in_microblogs(world):

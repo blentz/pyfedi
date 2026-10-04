@@ -52,26 +52,17 @@ def podcast_person_follow_target(community, requestor) -> User | None:
     return None if joining else twin
 
 
-def _author_ids(activity_json: dict) -> set[str]:
-    ids = set()
-    layers = [activity_json, activity_json.get('object')]
-    for layer in (l for l in layers if isinstance(l, dict)):
-        for key in ('actor', 'attributedTo'):
-            values = layer.get(key)
-            for value in values if isinstance(values, list) else [values]:
-                value = value.get('id') if isinstance(value, dict) else value
-                if isinstance(value, str):
-                    ids.add(value.lower())
-    return ids
-
-
-def podcast_twin_named_by_other(community, activity_json) -> bool:
-    """R2: True when `community` is a podcast twin found in an activity's addressing and the activity's author is
-    not the podcast itself -- a third party mentioning the podcast as a person, which keeps the microblogs routing."""
+def podcast_twin_named_by_other(community, author) -> bool:
+    """R2: True when `community` is a podcast twin found in an activity's addressing and the activity's VERIFIED
+    author -- the signed sender the inbox resolved (a User), or the actor id of an object fetched from its own
+    host -- is not the podcast itself: a third party mentioning the podcast as a person keeps the microblogs
+    routing. The activity's own actor/attributedTo fields are never consulted: anyone can write the podcast's id
+    there. No verified author counts as someone else."""
     twin = podcast_twin_user(community)
-    if twin is None or not isinstance(activity_json, dict):
+    if twin is None:
         return False
-    return twin.ap_profile_id.lower() not in _author_ids(activity_json)
+    author_id = author.ap_profile_id if isinstance(author, User) else author
+    return not (isinstance(author_id, str) and author_id.lower() == twin.ap_profile_id.lower())
 
 
 def podcast_route_for(user) -> Community | None | bool:
