@@ -27,9 +27,9 @@ def polite_pause() -> None:
 
 def fetch_json(url: str, params: dict | None = None, headers: dict | None = None):
     """The decoded JSON body of a 200 answer, or None for a transport error, any other status, a body over
-    MAX_DIRECTORY_BYTES, or a body that is not JSON. Goes through get_request_capped, so the SSRF guards apply,
-    redirects are not followed and the body is never buffered past the cap. Logs the url only: request headers may
-    carry credentials."""
+    MAX_DIRECTORY_BYTES, or a body that is not JSON; each of those is logged at info. Goes through
+    get_request_capped, so the SSRF guards apply, redirects are not followed and the body is never buffered past
+    the cap. Logs the url only, without its params or headers: request headers may carry credentials."""
     try:
         target = str(httpx.URL(url, params=params)) if params else url
         status, body = get_request_capped(target, MAX_DIRECTORY_BYTES, headers=dict(headers or {}))
@@ -38,11 +38,16 @@ def fetch_json(url: str, params: dict | None = None, headers: dict | None = None
         return None
     except ValueError:   # httpx.URL refuses a malformed url
         return None
-    if status != 200 or body is None:
+    if status != 200:
+        current_app.logger.info(f'discovery: {url} answered {status}')
+        return None
+    if body is None:
+        current_app.logger.info(f'discovery: {url} answered with a body over the cap')
         return None
     try:
         return json.loads(body)
     except ValueError:   # not JSON, or not decodable text
+        current_app.logger.info(f'discovery: {url} answered 200 with no readable JSON')
         return None
 
 

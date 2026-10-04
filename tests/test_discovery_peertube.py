@@ -1,5 +1,6 @@
 """Interop D24: PeerTube channels from SepiaSearch, and the helpers every fetcher shares."""
 import json
+import logging
 from pathlib import Path
 
 import httpx
@@ -86,6 +87,34 @@ def test_an_unreadable_index_is_a_source_error(app, http_mock):
         fetch_peertube_channels(nobody_excluded)
 
 
+def test_a_page_that_fails_mid_run_is_logged_and_ends_paging(app, http_mock, caplog):
+    caplog.set_level(logging.INFO)
+    route = http_mock.get(SEPIASEARCH_URL)
+    route.side_effect = [httpx.Response(200, json=a_page(peertube.PAGE_SIZE)), httpx.Response(502)]
+
+    entries = fetch_peertube_channels(nobody_excluded)
+
+    assert len(entries) == peertube.PAGE_SIZE
+    assert route.call_count == 2
+    assert f'discovery: {SEPIASEARCH_URL} answered 502' in caplog.text
+    assert 'discovery: sepiasearch page 2 unreadable, paging stopped' in caplog.text
+
+
+def test_fetch_json_logs_a_failed_answer_with_the_url_only(app, http_mock, caplog):
+    caplog.set_level(logging.DEBUG)
+    http_mock.get('https://dir.example/x').respond(503)
+    http_mock.get('https://html.example/x').respond(200, text='<html></html>')
+
+    assert sources.fetch_json('https://dir.example/x', params={'limit': 80}, headers={'X-Auth-Key': 'KEYabc'}) is None
+    assert sources.fetch_json('https://html.example/x') is None
+
+    assert 'discovery: https://dir.example/x answered 503' in caplog.text
+    assert 'discovery: https://html.example/x answered 200 with no readable JSON' in caplog.text
+    assert 'KEYabc' not in caplog.text
+    ours = ' '.join(record.getMessage() for record in caplog.records if record.name != 'httpx')
+    assert 'limit' not in ours   # the url as asked for, without its query
+
+
 def test_fetch_json_answers_none_for_a_transport_error(app, http_mock):
     http_mock.get('https://down.example/x').mock(side_effect=httpx.ConnectError('refused'))
 
@@ -120,3 +149,10 @@ def test_as_count(value, expected):
                                              ('localhost', False), ('tube.example\n', False), (None, False)])
 def test_is_hostname(value, expected):
     assert sources.is_hostname(value) is expected
+
+
+@pytest.mark.parametrize('value, expected', [('ann', True), ('Ann_B.c-1', True), ('a' * 64, True), ('a' * 65, False),
+                                             ('', False), ('ann@m.example', False), ('a/b', False), ('ann\n', False),
+                                             ('än', False), (None, False), (42, False)])
+def test_is_username(value, expected):
+    assert sources.is_username(value) is expected
