@@ -1,11 +1,12 @@
-"""The discovery fallback for community and people search (interop D24, goal (b)): used only when
-nothing local matches. NSFW entries need the viewer's permission; a host banned since the last refresh
-is hidden."""
-from sqlalchemy import func, or_
+"""The discovery directory section of community and people search (interop D24, goal (b)): shown on the first
+page below the local results, leaving out what this server already knows. NSFW entries need the viewer's
+permission; a host banned since the last refresh is hidden."""
+from sqlalchemy import exists, func, or_
 
 from app import db
+from app.discovery import KIND_COMMUNITY
 from app.discovery.filters import host_is_excluded
-from app.models import DiscoveryEntry, Instance
+from app.models import Community, DiscoveryEntry, Instance, User
 from app.utils import blocked_or_banned_instances
 
 FALLBACK_LIMIT = 20
@@ -29,7 +30,8 @@ def _viewer_blocked_hosts(viewer_id) -> set:
 
 def discovery_fallback(kind: str, q: str, allow_nsfw: bool, limit: int = FALLBACK_LIMIT, viewer_id: int = None,
                        host: str = None) -> list:
-    """Directory entries matching `q`, without the hosts the viewer blocked or is banned from, and through the
+    """Directory entries matching `q` that this server does not know yet (no Community, for a community entry, or
+    User, for a person, with that actor id), without the hosts the viewer blocked or is banned from, and through the
     full instance filter (banned instances, allowlist mode, banned Domains). `host` restricts them to one instance.
     The PeerTube isolation list is applied at refresh time (and copied into banned instances by init-db), so it is
     not fetched on a request."""
@@ -40,6 +42,10 @@ def discovery_fallback(kind: str, q: str, allow_nsfw: bool, limit: int = FALLBAC
     query = db.session.query(DiscoveryEntry).filter(
         DiscoveryEntry.kind == kind,
         or_(DiscoveryEntry.name.ilike(pattern, escape='\\'), DiscoveryEntry.actor_url.ilike(pattern, escape='\\')))
+    # Opening an entry creates its row here; from then on it is a local result, so it is not offered twice.
+    # ap_profile_id is stored lower-cased (actor_json_to_model), so only the entry side is folded and the index serves.
+    known = Community if kind == KIND_COMMUNITY else User
+    query = query.filter(~exists().where(known.ap_profile_id == func.lower(DiscoveryEntry.actor_url)))
     if not allow_nsfw:
         query = query.filter(DiscoveryEntry.nsfw == False)
     if host:

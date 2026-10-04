@@ -83,8 +83,10 @@ real multi-author posts across PieFed; any bulk mirroring of directory data.
 - **Admin page** (where the lemmyverse pre-load lives): Podcast Index key/secret fields; a "Pre-load
   channels & podcasts" control (choose N and platforms, preview, then subscribe); attribution text
   naming every data source.
-- **Search:** community search (`/communities`) and people search (`/search?search_for=people`) fall back to `discovery_entry` when nothing local
-  matches. Results show a platform badge and a join/follow button that resolves the actor through
+- **Search:** community search (`/communities`) and people search (`/search?search_for=people`) show, on their first page and below the local
+  results, the `discovery_entry` rows matching the query that this server does not know yet (no Community or User with
+  that actor id). Amended 2026-10-04: the earlier "only when nothing local matches" rule hid the whole directory once
+  one result had been opened, because opening it made it local. Results show a platform badge and a join/follow button that resolves the actor through
   `find_actor_or_create`.
 - **Castopod mapping:**
   - creating a `Podcast` actor also creates its `Community` row;
@@ -125,7 +127,7 @@ real multi-author posts across PieFed; any bulk mirroring of directory data.
 - **Refresh:** idempotent upsert, 30-day expiry, cleaning of names and URLs.
 - **Admin:** credentials saved but never rendered back; pre-load preview honours N and the platform
   filter; subscribe calls the join path once per new community and skips known ones; attribution shown.
-- **Search:** local results first, then discovery fallback; NSFW hidden by default; join/follow resolves
+- **Search:** local results first, then the directory entries not known here; NSFW hidden by default; join/follow resolves
   the actor.
 - **Castopod:** a `Podcast` actor gets both rows; an episode lands in the podcast's community; credits
   match the RSS hosts and guests; a fediverse `href` links to its `User`; a broken feed leaves no

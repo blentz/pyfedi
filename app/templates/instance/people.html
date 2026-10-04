@@ -81,7 +81,6 @@
                     <div class="w-100">
                         <p>{{ _('No people found. Perhaps %(domain)s does not know about them yet? Try adding them.', domain=instance_domain) }}</p>
                         <p><a href="/instance/add_people" class="btn btn-primary">{{ _('Add remote people') }}</a></p>
-                        {% include 'discovery/_fallback.html' %}
                     </div>
                 {% endfor %}
             </div>
@@ -97,6 +96,7 @@
                     </a>
                 {% endif -%}
             </nav>
+            {% include 'discovery/_fallback.html' %}
         {% else %}
             <p>{{ _('No people to show') }}</p>
         {% endif %}
