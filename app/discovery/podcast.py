@@ -6,6 +6,8 @@ carry the same ap_profile_id; that column is unique per table, not across tables
 app.discovery.filters (models and app.utils), so app/activitypub/* can import this at module top without
 a cycle.
 """
+from urllib.parse import urlsplit
+
 from flask import current_app
 from sqlalchemy import event, text
 from sqlalchemy.exc import IntegrityError
@@ -79,13 +81,26 @@ def podcast_route_for(user) -> Community | None | bool:
     return twin
 
 
+def _own_host_feed(user, value) -> str | None:
+    """The podcast's rssFeed, only when it is an https URL on the podcast actor's own host (hostnames compared
+    case-insensitively): the feed decides whose accounts an episode credits, so another host may not supply it."""
+    rss_url = clean_https_url(value, RSS_URL_LIMIT)
+    if rss_url is None:
+        return None
+    try:
+        feed_host, actor_host = urlsplit(rss_url).hostname, urlsplit(user.ap_profile_id).hostname
+    except ValueError:
+        return None
+    return rss_url if feed_host and actor_host and feed_host.lower() == actor_host.lower() else None
+
+
 def ensure_podcast_community(user: User, actor_json: dict) -> Community | None:
     """Find or create the Community for a remote podcast user, keeping its rss_url current. None for a local,
     banned or deleted user (no Community is created for them), for an existing Community that is banned,
     and for a `sensitive` podcast on a site with NSFW off."""
     if _refused(user) or not isinstance(actor_json, dict):
         return None
-    rss_url = clean_https_url(actor_json.get('rssFeed'), RSS_URL_LIMIT)
+    rss_url = _own_host_feed(user, actor_json.get('rssFeed'))
     community = db.session.query(Community).filter(Community.ap_profile_id == user.ap_profile_id).first()
     if community is not None:
         if community.banned:
