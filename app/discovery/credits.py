@@ -5,6 +5,7 @@ matching item's role="guest" tags. The feed is untrusted: refused above MAX_FEED
 declares a DOCTYPE or ENTITY, and parsed by the stdlib (expat) parser, which resolves no external entities.
 The DOCTYPE refusal is made by expat itself, so no encoding (UTF-16, UTF-32, BOM) can hide a declaration.
 """
+import json
 import re
 import xml.etree.ElementTree as ElementTree
 from urllib.parse import urlsplit
@@ -12,19 +13,23 @@ from xml.parsers import expat
 
 import httpx
 from flask import current_app
+from sqlalchemy import func, or_
 
 import app.activitypub.util as ap_util   # the module, not names: app.activitypub.util imports this module
 from app import celery, db
 from app.discovery.filters import clean_https_url, clean_name
 from app.discovery.podcast import podcast_community_for
 from app.models import Post, User
-from app.utils import get_request, get_request_capped, get_task_session, patch_db_session
+from app.utils import get_request_capped, get_task_session, patch_db_session
 
 MAX_FEED_BYTES = 2 * 1024 * 1024
 MAX_CREDITS = 20
 CREDIT_NAME_LIMIT = 100
 PODCAST_NAMESPACE = 'https://podcastindex.org/namespace/1.0'
 HOST_ROLES = ('host', 'co-host')
+MAX_ACTOR_BYTES = 256 * 1024
+CREDIT_ACTOR_TYPES = ('Person', 'Service')
+_ACTOR_ACCEPT = 'application/activity+json, application/ld+json; profile="https://www.w3.org/ns/activitystreams"'
 
 _PERSON = f'{{{PODCAST_NAMESPACE}}}person'
 
@@ -101,20 +106,6 @@ def fetch_feed(rss_url: str) -> bytes | None:
     return body if status == 200 else None
 
 
-def resolve_credit_user(profile_url) -> int | None:
-    """The PieFed User a credit's href names when it is a fediverse account, else None. find_actor_or_create
-    applies the usual guards (banned and non-allowlisted instances, blocked words, get_request's SSRF guard)."""
-    if clean_https_url(profile_url) is None:
-        return None
-    try:
-        actor = ap_util.find_actor_or_create(profile_url)
-    except Exception as error:   # a bad actor document or a racing create must cost one credit its link, not the episode its credits
-        current_app.logger.warning(f'discovery: credit profile {profile_url} not resolved: {type(error).__name__}')
-        db.session.rollback()
-        return None
-    return actor.id if isinstance(actor, User) and not actor.banned else None
-
-
 def _normal_url(value) -> str | None:
     """scheme and host lower-cased, trailing slash ignored; None for anything that is not an http(s) URL."""
     if not isinstance(value, str):
@@ -153,6 +144,23 @@ def _podcast_urls(podcast) -> set:
     return {u for u in (_normal_url(podcast.ap_profile_id), _normal_url(podcast.ap_public_url)) if u}
 
 
+def _stored_urls(user) -> set:
+    stored = _urls_in(user.ap_public_url)
+    for field in user.extra_fields:
+        stored |= _urls_in(field.text)
+    return stored
+
+
+def fetch_actor_document(url) -> dict | None:
+    """One capped, ActivityPub-flavoured GET of an actor document (get_request's SSRF guards, no redirects)."""
+    try:
+        status, body = get_request_capped(url, MAX_ACTOR_BYTES, headers={'Accept': _ACTOR_ACCEPT})
+        document = json.loads(body) if status == 200 and body else None
+    except (httpx.HTTPError, ValueError):   # ValueError covers JSON and Unicode decoding errors
+        return None
+    return document if isinstance(document, dict) else None
+
+
 def credit_vouches(user_id, podcast) -> bool:
     """True when the credited account's own profile links back to the podcast. Its stored URL and profile fields
     are read first; alsoKnownAs is not stored, so a remote account's actor document is fetched once more."""
@@ -160,19 +168,79 @@ def credit_vouches(user_id, podcast) -> bool:
     user = db.session.get(User, user_id) if isinstance(user_id, int) else None
     if not wanted or user is None or user.banned or user.deleted:
         return False
-    stored = _urls_in(user.ap_public_url)
-    for field in user.extra_fields:
-        stored |= _urls_in(field.text)
-    if wanted & stored:
+    if wanted & _stored_urls(user):
         return True
     if user.ap_id is None or not user.ap_profile_id:   # a local account has no remote document to read
         return False
-    try:
-        response = get_request(user.ap_profile_id, headers={'Accept': 'application/activity+json'})
-        document = response.json() if response.status_code == 200 else None
-    except (httpx.HTTPError, ValueError):
+    return bool(wanted & _document_urls(fetch_actor_document(user.ap_profile_id)))
+
+
+def _known_user(href: str):
+    """The User a credit's href already names: a remote account by actor id or profile URL, a local one by /u/name."""
+    parts = urlsplit(href)
+    if (parts.hostname or '').lower() == current_app.config['SERVER_NAME'].lower():
+        local = re.fullmatch(r'/u/([A-Za-z0-9_]+)/?', parts.path)
+        if local is None:
+            return None
+        return db.session.query(User).filter(func.lower(User.user_name) == local.group(1).lower(),
+                                             User.ap_id == None).first()
+    return db.session.query(User).filter(or_(User.ap_profile_id == href.lower(), User.ap_public_url == href)).first()
+
+
+def _creditable(document: dict, href: str, podcast) -> bool:
+    """An actor document a credit may link: a Person or Service (a Podcast only when it is this podcast), whose id
+    is an https URL on the href's own host, so a page cannot pass off another server's account as its own."""
+    actor_id = document.get('id')
+    if clean_https_url(actor_id) is None:
         return False
-    return bool(wanted & _document_urls(document))
+    if (urlsplit(actor_id).hostname or '').lower() != (urlsplit(href).hostname or '').lower():
+        return False
+    kind = document.get('type')
+    return kind in CREDIT_ACTOR_TYPES or (kind == 'Podcast' and _normal_url(actor_id) == _normal_url(podcast.ap_profile_id))
+
+
+def _link_actor(document: dict) -> int | None:
+    """The User for a vouching actor document: found, or created from the document already in hand (no second
+    fetch), behind the guards find_actor_or_create applies (banned and non-allowlisted instances, blocked words)."""
+    actor_id = document['id']
+    actors = ap_util.activitypub_actor
+    try:
+        if not actors.validate_remote_actor(actor_id):
+            return None
+        actor = actors.find_actor_by_url(actor_id)
+        if actor is None:
+            server, address = ap_util.extract_domain_and_actor(actor_id)
+            actor = ap_util.actor_json_to_model(document, address, server)
+    except Exception as error:   # a bad actor document or a racing create must cost one credit its link, not the episode its credits
+        current_app.logger.warning(f'discovery: credit profile {actor_id} not linked: {type(error).__name__}')
+        db.session.rollback()
+        return None
+    return actor.id if isinstance(actor, User) and not actor.banned and not actor.deleted else None
+
+
+def verified_credit_user(href, podcast) -> int | None:
+    """R4: the PieFed User a credit's href names, only when that profile vouches back for the podcast; verified
+    before anything is created. A known account's stored fields are read first (no fetch); otherwise the href's
+    actor document is fetched once, capped, and must be a creditable actor that links the podcast. Only then is
+    the account found or created. A credit that does not vouch creates nothing."""
+    href = clean_https_url(href)
+    wanted = _podcast_urls(podcast)
+    if href is None or not wanted:
+        return None
+    known = _known_user(href)
+    if known is not None:
+        if known.banned or known.deleted:
+            return None
+        if wanted & _stored_urls(known):
+            return known.id
+        if known.ap_id is None:   # a local account: nothing remote to read
+            return None
+    elif (urlsplit(href).hostname or '').lower() == current_app.config['SERVER_NAME'].lower():
+        return None
+    document = fetch_actor_document(href)
+    if document is None or not _creditable(document, href, podcast) or not wanted & _document_urls(document):
+        return None
+    return _link_actor(document)
 
 
 def store_credits(post: Post, credits: list) -> None:
@@ -208,11 +276,15 @@ def fetch_episode_credits_task(post_id, episode_url):
                 if feed is None:
                     return
                 credits = parse_feed_credits(feed, episode_url)
+                linked = {}   # one lookup (and at most one fetch) per distinct href
                 for credit in credits:
                     # Only a profile that vouches back keeps its link; anyone else is a plain name, because
                     # the feed's say-so would let a podcast credit (and so link to) any account.
-                    user_id = resolve_credit_user(credit['profile_url'])
-                    verified = user_id is not None and credit_vouches(user_id, post.author)
+                    href = _normal_url(credit['profile_url'])
+                    if href is not None and href not in linked:
+                        linked[href] = verified_credit_user(credit['profile_url'], post.author)
+                    user_id = linked.get(href) if href is not None else None
+                    verified = user_id is not None
                     credit['user_id'] = user_id if verified else None
                     credit['profile_url'] = credit['profile_url'] if verified else None
                     if verified:
