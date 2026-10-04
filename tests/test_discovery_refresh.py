@@ -227,3 +227,16 @@ def test_an_isolation_list_that_raises_is_empty(app, monkeypatch):
                                        ('https://a.example\\@ok.example/x', None), ('not a url', None), (None, None)])
 def test_request_host_is_the_host_httpx_connects_to_or_a_refusal(app, url, host):
     assert request_host(url) == host
+
+
+@pytest.mark.parametrize('url', ['https://bücher.example/feed', 'https://xn--bcher-kva.example/feed',
+                                 'https://BÜCHER.example./feed', 'https://XN--BCHER-KVA.example/feed'])
+def test_request_host_accepts_an_internationalised_host_in_either_form(app, url):
+    assert request_host(url) == 'xn--bcher-kva.example'
+
+
+@pytest.mark.parametrize('url', ['https://[@ok.example/x', 'https://u@ok.example/x', 'https://a.example\\@ok.example/x',
+                                 'https://u@bücher.example/feed', 'https://xn--bcher-kva.example@ok.example/feed',
+                                 'https://u@xn--bcher-kva.example/feed', 'not a url', None])
+def test_request_host_still_refuses_userinfo_and_parser_disagreement(app, url):
+    assert request_host(url) is None

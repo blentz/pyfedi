@@ -68,9 +68,12 @@ def request_host(url) -> str | None:
         return None
     if target.userinfo or not host or stdlib_host is None:
         return None
-    if target.host.rstrip('.').lower() != stdlib_host.rstrip('.').lower():
+    host = host.rstrip('.').lower()
+    # both sides in IDNA ASCII form: httpx's `host` is Unicode, while the stdlib keeps whichever form the URL used
+    stdlib_authority = f'[{stdlib_host}]' if ':' in stdlib_host else stdlib_host
+    if ascii_host(f'https://{stdlib_authority}/') != host:
         return None
-    return host.rstrip('.').lower()
+    return host
 
 
 def url_is_excluded(url) -> bool:
