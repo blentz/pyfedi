@@ -1,5 +1,5 @@
-"""Interop D24, goal (b): when nothing local matches, community search and people search offer what the
-discovery directory knows, with a platform badge and a button that resolves the actor."""
+"""Interop D24, goal (b): community search and people search offer, below the local results, what the discovery
+directory knows and this server does not, with a platform badge and a button that resolves the actor."""
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -102,14 +102,64 @@ def test_a_name_with_html_entities_is_escaped_on_render(env):
     assert '<script>alert(1)' not in html
 
 
-def test_a_local_match_means_no_fallback(env):
+def test_a_local_match_still_offers_the_directory_below_it(env):
     add_entry('Zqtilvids Linux')
     community = make_community('zqtilvids')
-    community.title = 'Zqtilvids'
+    community.title = 'Zqtilvids Local'
+    db.session.commit()
+
+    html = env.client.get('/communities?search=zqtilvids').get_data(as_text=True)
+
+    assert 'Zqtilvids Local' in html
+    assert 'Zqtilvids Linux' in html
+    assert html.index('Zqtilvids Local') < html.index('discovery_fallback_heading')
+
+
+def test_an_entry_already_known_here_is_not_offered_again(env):
+    """Opening a directory result creates its community here; a later search shows it once, as a local result,
+    and still offers the rest of the directory."""
+    opened = add_entry('Zqpeertube Opened')
+    add_entry('Zqpeertube Other')
+    community = make_community('zqpeertube_opened')
+    community.title = 'Zqpeertube Opened'
+    community.ap_profile_id = opened.actor_url   # stored lower-cased, as actor_json_to_model does
+    opened.actor_url = opened.actor_url.replace('zqpeertube', 'ZqPeerTube')   # the directory may spell it otherwise
     db.session.commit()
 
     with patch('app.main.routes.render_template', return_value='rendered') as render:
-        env.client.get('/communities?search=zqtilvids')
+        env.client.get('/communities?search=zqpeertube')
+
+    assert [e.name for e in render.call_args.kwargs['discovered']] == ['Zqpeertube Other']
+
+
+def test_a_known_person_is_not_offered_again(app, db_session):
+    known = add_entry('Zqknown Person', kind='person', platform='mastodon', host='m.example')
+    add_entry('Zqknown Other', kind='person', platform='mastodon', host='m.example')
+    person = make_user(make_instance('m.example', software='mastodon'), 'zqknown', local=False)
+    person.ap_profile_id = known.actor_url
+    db.session.commit()
+
+    assert [e.name for e in discovery_fallback('person', 'zqknown', allow_nsfw=False)] == ['Zqknown Other']
+
+
+def test_people_search_with_a_local_match_still_offers_directory_people(env):
+    add_entry('Zqmixed Remote', kind='person', platform='mastodon', host='m.example')
+    local = make_user(make_instance('m2.example', software='mastodon'), 'zqmixed', local=False)
+    local.searchable = True
+    db.session.commit()
+
+    with patch('app.instance.routes.render_template', return_value='rendered') as render:
+        env.client.get('/instance/all/people?q=zqmixed')
+
+    assert render.call_args.kwargs['people'].total >= 1
+    assert [e.name for e in render.call_args.kwargs['discovered']] == ['Zqmixed Remote']
+
+
+def test_the_directory_is_offered_on_the_first_page_only(env):
+    add_entry('Zqpaged Channel')
+
+    with patch('app.main.routes.render_template', return_value='rendered') as render:
+        env.client.get('/communities?search=zqpaged&page=2')
 
     assert render.call_args.kwargs['discovered'] == []
 

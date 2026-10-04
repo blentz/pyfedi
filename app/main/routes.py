@@ -494,10 +494,10 @@ def list_communities():
     communities = communities.paginate(page=page,
                                        per_page=100 if current_user.is_authenticated and not low_bandwidth else 50,
                                        error_out=False)
-    # Interop D24: nothing local matched the search, so offer what the discovery directory knows
+    # Interop D24: below the local results, offer what the discovery directory knows and this server does not
     discovered = discovery_fallback(KIND_COMMUNITY, search_param, allow_nsfw=nsfw != 'no',
                                     viewer_id=current_user.id if current_user.is_authenticated else None) \
-        if search_param and page == 1 and communities.total == 0 else []
+        if search_param and page == 1 else []
     context = _base_list_communities_context()
     context["next_url"] = url_for('main.list_communities', page=communities.next_num, sort_by=sort_by,
                        **args_dict) if communities.has_next else None
