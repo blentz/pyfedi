@@ -213,6 +213,7 @@ def test_duplicate_hrefs_are_fetched_once(world, http_mock):
     http_mock.get(FEED_URL).respond(200, content=FEED_TWICE)
     profile, canonical = serve_profile(http_mock, 'ann', fields=VOUCH)
 
+    http_mock.get(ACTOR).respond(404)   # the podcast's document, read once per run
     fetch_episode_credits_task(world.post.id, EP1)
 
     assert profile.call_count == 1 and canonical.call_count == 1
@@ -228,6 +229,7 @@ def test_the_task_links_only_vouching_credits_with_one_request_per_distinct_href
     serve_profile(http_mock, 'cara')                                                # does not vouch
     users_before = User.query.count()
 
+    no_web_url = http_mock.get(ACTOR).respond(404)   # the podcast's document, read once per run
     fetch_episode_credits_task(world.post.id, EP1)
 
     saved = stored(world.post.id)['podcast']['credits']
@@ -237,8 +239,9 @@ def test_the_task_links_only_vouching_credits_with_one_request_per_distinct_href
     assert saved[0]['verified'] is True and 'verified' not in saved[1] and 'verified' not in saved[2]
     assert saved[2]['profile_url'] is None
     assert User.query.count() == users_before + 1                      # Cara, who does not vouch, was not created
-    # the feed, one fetch per distinct href, and one canonical-id fetch for each of the two profile URLs
-    assert len(http_mock.calls) == 1 + 3 + 2
+    # the feed, the podcast's own document, one fetch per distinct href, and one canonical-id fetch for each of
+    # the two profile URLs
+    assert len(http_mock.calls) == 1 + 1 + 3 + 2 and no_web_url.call_count == 1
 
 
 def ann_user(document):
@@ -305,7 +308,8 @@ def test_storing_keeps_other_extensions(world):
 def test_an_ingested_episode_announcement_gets_its_credits(world, http_mock, monkeypatch):
     episode = http_mock.get(EP1).respond(404)   # no audio this time; the credits do not depend on it
     feed = http_mock.get(FEED_URL).respond(200, content=FIXTURE.read_bytes())
-    monkeypatch.setattr(credits, 'verified_credit_user', lambda profile_url, podcast: None)
+    monkeypatch.setattr(credits, 'verified_credit_user', lambda profile_url, podcast, wanted=None: None)
+    http_mock.get(ACTOR).respond(404)   # the podcast's own document: no web URL this time
     note_id = f'{ACTOR}/posts/2'
     activity = {'id': f'{note_id}/activity', 'type': 'Create', 'to': [PUBLIC], 'cc': [],
                 'object': {'id': note_id, 'type': 'Note', 'attributedTo': ACTOR, 'to': [PUBLIC], 'cc': [],
@@ -332,6 +336,7 @@ def test_a_lookup_that_blows_up_costs_only_that_credit_its_link(world, http_mock
 
     monkeypatch.setattr(credits.ap_util, 'actor_json_to_model', create)
 
+    http_mock.get(ACTOR).respond(404)   # the podcast's document, read once per run
     fetch_episode_credits_task(world.post.id, EP1)
 
     saved = stored(world.post.id)['podcast']['credits']
@@ -417,6 +422,7 @@ def test_a_credit_on_a_banned_host_is_never_contacted_and_stays_a_plain_name(wor
     http_mock.get('https://ben.example/about').respond(200, text='<html>Ben</html>')
     # no route for social.example: a request there would fail the test (respx refuses unmocked requests)
 
+    http_mock.get(ACTOR).respond(404)   # the podcast's document, read once per run
     fetch_episode_credits_task(world.post.id, EP1)
 
     saved = stored(world.post.id)['podcast']['credits']
@@ -574,3 +580,48 @@ def test_a_known_remote_account_whose_stored_field_links_the_podcast_vouches_wit
 
     assert credit_vouches(ann.id, world.podcast) is True
     assert len(http_mock.calls) == 0
+
+
+FEED_ANN = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:podcast="https://podcastindex.org/namespace/1.0"><channel><title>My Podcast</title>
+<podcast:person role="host" href="https://social.example/u/ann">Ann Host</podcast:person>
+<item><link>{EP1}</link></item>
+</channel></rss>""".encode()
+WEB = f'https://{PEER}/shows/my-podcast'
+
+
+def serve_podcast(http_mock, url):
+    """The podcast's own actor document, read once per run for its web URL."""
+    return http_mock.get(ACTOR).respond(json=peer_actor_json('Person', name='mypodcast', server=PEER, fields={
+        'id': ACTOR, 'type': 'Podcast', 'name': 'My Podcast', 'rssFeed': FEED_URL, 'url': url}))
+
+
+def ann_credit_after_a_run(world, http_mock, links):
+    peer_instance('social.example')
+    http_mock.get(FEED_URL).respond(200, content=FEED_ANN)
+    serve_actor(http_mock, 'https://social.example/u/ann', 'ann', fields={'alsoKnownAs': [links]})
+    fetch_episode_credits_task(world.post.id, EP1)
+    return stored(world.post.id)['podcast']['credits'][0]
+
+
+@pytest.mark.parametrize('url', [WEB, [WEB], {'type': 'Link', 'href': WEB},
+                                 [{'type': 'Link', 'href': 'https://other.example/x'}, WEB]])
+def test_a_profile_linking_the_podcasts_same_host_web_url_is_verified(world, http_mock, url):
+    podcast = serve_podcast(http_mock, url)
+
+    credit = ann_credit_after_a_run(world, http_mock, WEB)
+
+    assert credit.get('verified') is True and podcast.call_count == 1
+
+
+@pytest.mark.parametrize('url', ['https://victim.example/me', 'http://pod.example/shows/my-podcast'])
+def test_a_podcast_web_url_off_its_host_or_not_https_verifies_nobody(world, http_mock, url):
+    serve_podcast(http_mock, url)
+
+    assert 'verified' not in ann_credit_after_a_run(world, http_mock, url)
+
+
+def test_a_failed_podcast_fetch_still_verifies_by_the_actor_id(world, http_mock):
+    http_mock.get(ACTOR).respond(500)
+
+    assert ann_credit_after_a_run(world, http_mock, ACTOR).get('verified') is True
