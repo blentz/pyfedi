@@ -93,6 +93,27 @@ def test_the_admin_nav_links_here(admin):
     assert f'<a href="{PAGE}">Discovery</a>' in page
 
 
+def test_the_admin_tab_bar_has_a_discovery_tab_after_federation(admin):
+    client, _ = admin
+    page = client.get('/admin/instances').get_data(as_text=True)
+
+    federation = page.index('id="federation-tab"')
+    discovery = page.index('id="discovery-tab"')
+    assert federation < discovery < page.index('id="instances-tab"')
+    tab = page[page.rindex('<a ', 0, discovery):page.index('</a>', discovery)]
+    assert f'href="{PAGE}"' in tab and 'active' not in tab
+
+
+def test_the_discovery_tab_is_the_active_one_on_this_page(admin):
+    client, _ = admin
+    page = client.get(PAGE).get_data(as_text=True)
+
+    discovery = page.index('id="discovery-tab"')
+    assert 'nav-link active' in page[page.rindex('<a ', 0, discovery):discovery]
+    federation = page.index('id="federation-tab"')
+    assert 'active' not in page[page.rindex('<a ', 0, federation):federation]
+
+
 def test_an_admin_gets_the_page(admin):
     client, _token = admin
 
