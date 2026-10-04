@@ -33,7 +33,7 @@ from app.activitypub.util import users_total, active_half_year, active_month, lo
 # app.activitypub.signature before show_community is defined (U-circular-import)
 import app.community.routes as community_routes
 from app.community.util import send_to_remote_instance, send_to_remote_instance_fast
-from app.discovery.podcast import podcast_person_follow_target, podcast_route_for, podcast_twin_user
+from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
 from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
 # app.activitypub before show_feed is defined (import cycle: feed.routes)
@@ -2617,7 +2617,7 @@ def process_new_content(user, community, store_ap_json, request_json, announced)
         # or (D24) a top-level episode from a Castopod podcast, which belongs in the podcast's own community.
         # Replies keep the existing routing (controller ruling P8).
         route = None if in_reply_to else podcast_route_for(user)
-        if route is False:   # a banned podcast's episode is dropped, not leaked into microblogs
+        if route is PODCAST_DROP:   # a banned podcast's episode is dropped, not leaked into microblogs
             log_incoming_ap(id, APLOG_CREATE, APLOG_IGNORED, saved_json, 'Podcast community is banned')
             return
         community = route or find_microblogging_community()

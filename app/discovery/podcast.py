@@ -22,6 +22,9 @@ from app.utils import allowlist_html, html_to_text, markdown_to_html
 RSS_URL_LIMIT = 2048   # Community.rss_url is String(2048)
 AP_URL_LIMIT = 255     # Community.ap_outbox_url is String(255)
 
+# podcast_route_for's answer for a Note to drop: a sentinel, not False, so no caller can mistake it for None.
+PODCAST_DROP = object()
+
 
 def _refused(user) -> bool:
     return user is None or user.is_local() or not user.ap_profile_id or user.banned or user.deleted
@@ -69,17 +72,18 @@ def podcast_twin_named_by_other(community, author) -> bool:
     return not (isinstance(author_id, str) and author_id.lower() == twin.ap_profile_id.lower())
 
 
-def podcast_route_for(user) -> Community | None | bool:
+def podcast_route_for(user) -> Community | None | object:
     """Where a top-level Note from `user` with no community goes: the podcast's Community; None when the user has
-    no Community twin at all (a person, so the caller keeps its microblogs routing); False when a twin exists but
-    is banned or its User is banned or deleted (the caller drops the Note rather than leak it into microblogs)."""
+    no Community twin at all (a person, so the caller keeps its microblogs routing); PODCAST_DROP when a twin
+    exists but is banned or its User is banned or deleted (the caller drops the Note rather than leak it into
+    microblogs)."""
     if user is None or user.is_local() or not user.ap_profile_id:
         return None
     twin = db.session.query(Community).filter(Community.ap_profile_id == user.ap_profile_id).first()
     if twin is None:
         return None
     if twin.banned or user.banned or user.deleted:
-        return False
+        return PODCAST_DROP
     return twin
 
 
