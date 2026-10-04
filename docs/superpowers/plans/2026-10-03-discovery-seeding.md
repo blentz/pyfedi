@@ -4618,3 +4618,75 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 )"
 ```
+
+## Execution record (2026-10-04)
+
+Final state: 44 commits 00c1ec9f0..HEAD; full suite 18035 passed, 3 skipped. Rulings made during execution:
+
+- Ruling: P1 File Structure omits app/templates/admin/_discovery_preload.html — Task 9 creates it; no action — cost if wrong: none.
+- Ruling: P2 T3/T4 add a malformed account/profile-row test each (rows null/string/numeric url skipped, good rows kept) — Review Focus 1 promises it — cost if wrong: one extra test each.
+- Ruling: P3 T5 fixed_clock fixture requests `app` (or the cache clear moves into an app-context fixture) so pure tests run alone — cost if wrong: none.
+- Ruling: P4 T8 permission test also asserts the route exists for an admin (200) and that a non-admin gets 403/redirect explicitly, not merely != 200 — so it fails before implementation — cost if wrong: none.
+- Ruling: P5 T9 count-range test asserts the refusal (form error / 400 and no task enqueued) — cost if wrong: none.
+- Ruling: P6 T10 keep resolve-then-redirect to the actor page (one click to resolve, ordinary Join/Follow there) — avoids duplicating join/follow logic in the fork; spec intent ("button that resolves the actor") met — cost if wrong: one extra click per discovery result.
+- Ruling: P7 T11 reuse filters.clean_https_url instead of a private _https_url, and rss_url must pass url_is_storable (Global Constraints) — cost if wrong: none.
+- Ruling: P8 T13 route only top-level episode Notes (no inReplyTo) to the podcast community; replies keep the existing reply routing; add a test for a podcast actor's reply — spec covers episodes only — cost if wrong: podcast actor replies stay where they are today.
+- Ruling: P9 T14 decode the feed (honouring BOM/declared encoding) before the DOCTYPE/ENTITY check, or check the parsed tree's DTD via expat handlers; refuse UTF-16/32 feeds containing a DOCTYPE; test with a UTF-16 feed — cost if wrong: none.
+- Ruling: P10 T16 no-credits test asserts a byline-specific marker (not the community title) and fails before implementation; tests copy CREDITS per case (no module-constant mutation); _byline.html uses one macro for a credit link — cost if wrong: none.
+- Ruling: P11 shared test fixtures (nobody_excluded, fresh_cache, admin, add_entry) go in tests/conftest.py or a tests/discovery_fixtures.py helper module the first time a second task needs them; normaliser shared lines extracted in app/discovery/sources.py when T4 lands (T4 implementer refactors T3's copy) — cost if wrong: minor churn.
+- Ruling: P12 T5 signing test pins a hard-coded expected digest for fixed key/secret/time — cost if wrong: none.
+- Ruling: P13 commit trailer stays `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` per plan and repo history (session reminder names Opus 5.5 for my commits) — cost if wrong: trailer label only.
+- Ruling: T2 plan-mandated channel_to_entry crash on malformed string url (urlparse ValueError) — fix with guard returning None plus https-scheme and is_hostname checks; add malformed-row case — Review Focus 1 (one bad row never aborts a source) outranks verbatim brief code — cost if wrong: none.
+- Ruling: T4 accept partial P11 — Pixelfed actor url is canonical https://{host}/users/{username} (profile url is a page, not the actor), so actor_url_on stays Mastodon-only; display_name/avatar_of shared — cost if wrong: one helper used once.
+- Ruling: T9 brief's ngettext(..., num=...) raises TypeError — implementer dropped the num kwarg — cost if wrong: none (test caught it).
+- Ruling: T11 ensure_podcast_community returns None for a banned/deleted podcast User AND for an existing banned Community row (consistent with podcast_community_for; pre-load/search can't revive a banned podcast) — cost if wrong: none.
+- Ruling: T12 accept deviation — community lookup refuses a podcast Community whose User twin is banned/deleted (podcast_twin_refused; create_actor_from_remote uses podcast_community_for) — extends T11 ruling (ban on either row hides the podcast) — cost if wrong: a podcast with a banned author account can't be followed as a community.
+- Ruling: T12 ⚠️ unhinted lookup of a podcast whose Community is banned still returns the User — intended: author lookups (posts, replies, follows of the person) are governed by the User row's own ban state — cost if wrong: a banned podcast community's author still federates as a person until the User is banned too.
+- Ruling: T13 an episode whose podcast Community exists but is banned is DROPPED (logged), not rerouted to microblogs — a community ban hides the podcast; when no Community row exists (never created, e.g. NSFW refused) the episode keeps today's microblogs routing — cost if wrong: banned podcasts' episodes vanish instead of appearing in microblogs (intended).
+- Ruling: T14 UTF-32 feeds yield no credits (expat can't read UTF-32, so the DTD scan can't vet it; refused as unvettable) — UTF-32 RSS is vanishingly rare; safety of the DTD refusal outranks it — cost if wrong: a UTF-32 Castopod feed shows the podcast name instead of credits.
+- Task 16: background security review flagged attribution spoofing (byline replaced the poster; feed-controlled credits linked real profiles). USER DECISION: podcast account always shown as poster; a credit links to a profile only when the profile vouches back (actor url/alsoKnownAs/attachment links the podcast); otherwise plain name. Spec amended (D24 decision 5/6). Into Task 16 fix round 1 (touches Task 15 resolve step too).
+- Ruling: a verified credit displays the verified user's own display name (feed-supplied name dropped for verified credits) in the byline AND the API — closes the residual "sock-puppet labelled as a famous name" spoof; folded into Task 17 (which builds the API credits) as a carry-in touching _credit_link too — cost if wrong: hosts show their account names rather than the names the feed gives them.
+- Ruling: verified credits take image AND profile_url from the verified User (avatar, canonical public URL), never from the feed — completes the anti-spoof rule — cost if wrong: hosts show their account avatar, not the podcast's chosen picture.
+- Ruling: podcast actor acting as a person keeps person semantics (follows, boosts, third-party mentions never use the twin) via one helper podcast_twin_user — cost if wrong: none (restores pre-D24 behaviour).
+- Ruling: User ban/delete mirrored onto twin Community.banned in one place; unban mirrors unban — cost if wrong: an admin who banned only the community and then unbans the user un-bans the community too.
+- Ruling: credits verify before creating any actor; one capped fetch per distinct href; Person/Service only — cost if wrong: fewer linked credits (fail closed).
+- Ruling: also fix M1 search fallback viewer blocks, M2 people fallback instance_domain, M3 rssFeed same-host only, M4 capped directory reads, M5 pre-load per-entry isolation, M6 route test, M7 non-zero seed refusal.
+- Ruling: OPEN-FOR-USER verification snapshot recorded as known limitation (render re-checks ban/deleted and live name/avatar/URL; withdrawn vouch stays linked on old episodes) — user had not answered; cost if wrong: a re-verify job later.
+- Ruling: accept F3 variant (skip a third-party-mentioned twin and keep searching addressing, not return None) — same outcome as pre-D24 — cost if wrong: none.
+- Ruling: accept F4 event-based mirroring incl. ban-expiry raw-SQL call; unban mirrors unban (as earlier ruling) — cost if wrong: separately banned twin un-banned on user unban.
+- Ruling: accept F5 profile-URL href costing 2 requests (canonical re-fetch is the security fix) — cost if wrong: one extra request per web-URL credit.
+- Ruling: accept F1 precedence (join request wins when both exist) — cost if wrong: the person-follow stays pending in that rare case.
+- Final: parked — API resolve_object of a podcast's own episode now fails (find_community called without author) — Ruling: real, minor, deferred to follow-up; inbox and web search unaffected — cost if wrong: API clients can't resolve a podcast episode by URL.
+- Final: parked — punycode hosts always refused by request_host (httpx host Unicode vs stdlib punycode) — Ruling: real, fails closed, deferred — cost if wrong: credits/feeds dropped on IDN hosts.
+- Final: parked — _known_user matches a remote User by self-declared ap_public_url, so a vouching actor can claim another person's profile URL as its own and turn that credit verified (linked to itself) — Ruling: real, minor spoof residue, deferred to follow-up with highest priority of the three (require host(href) == host(matched row ap_profile_id)) — cost if wrong: a vouching actor can take credit under another person's profile link.
+
+Parked after the final fix wave and deferred minors:
+
+- Task 1: minor (deferred → carry to Task 6): refresh must skip over-long actor_url (unique B-tree index on String(1024)) instead of aborting the batch.
+- Task 1: minor (deferred): followers default path untested.
+- Task 2: minor (deferred): non-200 / mid-run page failure not logged; is_username untested.
+- Task 3: minor (deferred → folded into Task 4 refactor): dead `except DiscoverySourceError` in mastodon.py; malformed-account test should assert exact actor_url list; non-list directory not logged.
+- Task 4: minor (deferred): pixelfed_hosts doesn't de-duplicate FediDB domains (Task 6 upsert dedups actor_url); Pixelfed pacing untested; malformed meta untested.
+- Task 5: minor (deferred): avatar inline instead of sources.avatar_of; _https_host drops port; redundant second _https_host call.
+- Task 6: minor (deferred): failed isolation-list fetch memoized empty for 24h; extra keys survive **entry copy; Domain ban query per entry; HTML-entity name cases untested.
+- Task 8: minor (deferred): blank-save flashes "saved"; status needs both halves (half-set shows "not set"); Length(max=128) before strip.
+- Task 9: minor (deferred): no per-entry try/except in subscribe task (one raising entry aborts batch); zero-candidate subscribe enqueues empty task; PRELOAD_USER_ID=1 unchecked.
+- Task 10: minor (deferred): banned-host filter after limit*2 can under-fill results; CSRF test accepts (400,302); no resolve-path test for host banned after refresh; import order; failure redirect drops q.
+- Task 11: minor (deferred): existing community not resynced beyond rss_url (title/description/nsfw/outbox stale); IntegrityError race branch untested; no docstrings.
+- Task 12: minor (deferred): no test for banned Community + live User via find_actor_by_url(community_only)/create_actor_from_remote; Accept test doesn't assert no UserFollower.
+- Task 13: minor (deferred): restricted_to_mods/private on a podcast community silently drops episodes (logged), untested; Update-keeps-community untested.
+- Task 13: minor (deferred): banned/deleted User-with-twin branch of podcast_route_for untested; tri-state return needs `is False` callers.
+- Task 14: minor (deferred): broad ValueError catches; no test documenting clean UTF-32 → [].
+- Task 15: minor (deferred): TDD order — implementation written before tests; RED covered only the seam test.
+- Task 15: minor (deferred): 2 MB cap is post-download (get_request not streaming); feed refetched per episode (no memo / already-stored check); extensions['podcast'] replaced not merged; deleted resolved user not excluded; duplicate profile_url resolved per credit.
+- Task 15: minor (deferred): debug-sync path commits via request session while Post belongs to task session (pre-existing pattern); unexpected non-HTTP errors from fetch drop all credits.
+- Task 15: minor (deferred): long docstring line; __import__ hack in deadline test; body finishing after deadline still returned; DNS time outside httpx timeouts.
+- Task 16: OPEN FOR USER: verification is a one-time snapshot at episode create; a profile that later withdraws its vouch stays linked on old episodes (revocation needs a re-check job or render-time check).
+- Task 16: minor (deferred): vouch fetch unsigned (401 → false negative); vouch fetch uses get_request not get_request_capped; podcast web url (actor `url`) not accepted (false negatives); stored-field vouch path untested; no task-level test with real credit_vouches.
+- Task 17: minor (deferred): no RED capture (tests written alongside); full suite not re-run after the import fix (Task 18 full run confirms).
+- Task 17: minor (deferred): no post_view-level test for a hidden post (only _neutral_post directly).
+- Task 18: minor (deferred): seed hardcodes instance_id=1; reuses an existing local `ann`, creates a passwordless local user `ann` under --force; refusal exits 0; help text omits created user/community/post.
+- Final: parked — API resolve_object of a podcast's own episode now fails (find_community called without author) — Ruling: real, minor, deferred to follow-up; inbox and web search unaffected — cost if wrong: API clients can't resolve a podcast episode by URL.
+- Final: parked — punycode hosts always refused by request_host (httpx host Unicode vs stdlib punycode) — Ruling: real, fails closed, deferred — cost if wrong: credits/feeds dropped on IDN hosts.
+- Final: parked — _known_user matches a remote User by self-declared ap_public_url, so a vouching actor can claim another person's profile URL as its own and turn that credit verified (linked to itself) — Ruling: real, minor spoof residue, deferred to follow-up with highest priority of the three (require host(href) == host(matched row ap_profile_id)) — cost if wrong: a vouching actor can take credit under another person's profile link.
+- Final: out-of-scope — Add/Remove now skip podcast twins (harmless for Castopod); url_is_excluded omits PeerTube isolation list hosts added after init.
