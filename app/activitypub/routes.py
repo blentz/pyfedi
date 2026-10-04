@@ -1387,7 +1387,7 @@ def process_inbox_request(request_json, store_ap_json):
                                                     'Poll vote for an unknown choice')
                                 return
                         if not announced and not community:
-                            community = find_community(request_json)
+                            community = find_community(request_json, author=user)  # D24 R2: the signed sender
                             if not community:
                                 if process_chat(user, store_ap_json, core_activity, session):
                                     return

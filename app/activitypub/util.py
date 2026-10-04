@@ -5348,9 +5348,9 @@ def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
         return None
 
     # find the community the post was submitted to
-    community = find_community(post_data)
+    community = find_community(post_data, author=actor)  # actor: attributedTo, on the fetched object's own host
     if not community and nodebb:
-        community = find_community(topic_post_data)  # use 'audience' from topic if post has no info for how it got there
+        community = find_community(topic_post_data, author=actor)  # use 'audience' from topic if post has no info for how it got there
     # find the post's author
     user = find_actor_or_create(actor)
     if user and community and post_data:
@@ -5522,7 +5522,8 @@ def log_incoming_ap(id, aplog_type, aplog_result, saved_json, message=None, sess
             current_app.logger.info(f'piefed.social activity: {id} Type: {aplog_type[1]}, Result: {aplog_result[1]}, {message}')
 
 
-def find_community(request_json):
+def find_community(request_json, author=None):
+    # author: the verified sender (a User) or the actor id of an object fetched from its own host; D24 R2
     # Create/Update from platform that included Community in 'audience', 'cc', or 'to' in outer or inner object
     # Also works for manually retrieved posts
     locations = ['audience', 'cc', 'to', 'target']
@@ -5537,13 +5538,13 @@ def find_community(request_json):
                 if isinstance(potential_id, str):
                     if not potential_id.startswith('https://www.w3.org') and not potential_id.endswith('/followers'):
                         potential_community = db.session.query(Community).filter_by(ap_profile_id=potential_id.lower()).first()
-                        if potential_community and not podcast_twin_named_by_other(potential_community, request_json):  # D24 R2
+                        if potential_community and not podcast_twin_named_by_other(potential_community, author):  # D24 R2
                             return potential_community
                 if isinstance(potential_id, list):
                     for c in potential_id:
                         if isinstance(c, str) and not c.startswith('https://www.w3.org') and not c.endswith('/followers'):
                             potential_community = db.session.query(Community).filter_by(ap_profile_id=c.lower()).first()
-                            if potential_community and not podcast_twin_named_by_other(potential_community, request_json):  # D24 R2
+                            if potential_community and not podcast_twin_named_by_other(potential_community, author):  # D24 R2
                                 return potential_community
 
     # D1397. `request_json['object'] if 'object' in request_json` -- unguarded,
