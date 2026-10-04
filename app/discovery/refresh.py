@@ -8,7 +8,8 @@ from sqlalchemy.dialects.postgresql import insert
 from app import db
 from app.community.util import is_bad_name
 from app.discovery import KIND_COMMUNITY, KIND_PERSON, PLATFORMS, castopod, mastodon, peertube, pixelfed, sources
-from app.discovery.filters import clean_https_url, clean_name, host_is_excluded, looks_nsfw, peertube_isolated_hosts
+from app.discovery.filters import URL_LIMIT, clean_https_url, clean_name, host_is_excluded, looks_nsfw, \
+    peertube_isolated_hosts
 from app.models import DiscoveryEntry, utcnow
 
 EXPIRY_DAYS = 30
@@ -34,6 +35,12 @@ def clean_entries(entries, exclude) -> list[dict]:
             break
         if not isinstance(entry, dict) or entry.get('kind') not in (KIND_COMMUNITY, KIND_PERSON) \
                 or entry.get('platform') not in PLATFORMS:
+            continue
+        if isinstance(entry.get('actor_url'), str) and len(entry['actor_url']) > URL_LIMIT:
+            # DiscoveryEntry.actor_url is String(URL_LIMIT) under a unique index: one such row would fail the
+            # source's whole upsert, so it is dropped here. The url itself is not logged; it may be huge.
+            current_app.logger.info(f'discovery: {entry.get("source")} entry skipped: over-long actor_url '
+                                    f'({len(entry["actor_url"])} characters)')
             continue
         actor_url = clean_https_url(entry.get('actor_url'))
         name = clean_name(entry.get('name'))

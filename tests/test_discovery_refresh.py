@@ -1,5 +1,6 @@
 """Interop D24: the daily refresh cleans what the directories send, filters it, caps it, upserts it on
 actor_url, and forgets what nobody has listed for 30 days."""
+import logging
 from datetime import timedelta
 
 import pytest
@@ -172,6 +173,17 @@ def test_an_overlong_actor_url_is_skipped_not_fatal(app, db_session, only):
 
     assert result['sepiasearch'] == 1
     assert [row.name for row in DiscoveryEntry.query.all()] == ['Fine']
+
+
+def test_an_overlong_actor_url_is_logged(app, db_session, caplog):
+    long_url = f'https://tube.example/video-channels/{"x" * filters.URL_LIMIT}'
+    caplog.set_level(logging.INFO)
+
+    cleaned = clean_entries([entry(name='Too long', actor_url=long_url), entry(name='Fine')], nobody_excluded)
+
+    assert [e['name'] for e in cleaned] == ['Fine']
+    assert 'over-long actor_url' in caplog.text
+    assert long_url not in caplog.text   # the length and host are enough; the url itself may be huge
 
 
 def test_a_malformed_url_is_dropped_not_fatal(app, db_session):
