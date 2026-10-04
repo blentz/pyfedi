@@ -4,6 +4,7 @@ import re
 from urllib.parse import urlparse, urlsplit
 
 import httpx
+import idna
 
 from flask import current_app
 
@@ -53,6 +54,19 @@ def ascii_host(url) -> str | None:
     return host.rstrip('.').lower() or None
 
 
+def strict_ascii_host(host: str) -> str | None:
+    """`host` as the stdlib parsed it, in lower-case IDNA ASCII form with NO mapping: an ASCII host is only
+    lower-cased; a non-ASCII one is split on '.' alone and each label strictly IDNA 2008 encoded, so an ideographic
+    full stop or a fullwidth letter -- which httpx's UTS46 mapping would fold into another host -- is refused (None)."""
+    host = host.rstrip('.')
+    if host.isascii():
+        return host.lower()
+    try:
+        return b'.'.join(idna.alabel(label) for label in host.split('.')).decode('ascii').lower()
+    except (idna.IDNAError, UnicodeError):   # InvalidCodepoint and the other refusals are IDNAErrors
+        return None
+
+
 def request_host(url) -> str | None:
     """The host an httpx request for `url` would connect to (IDNA, lower-cased, trailing dot stripped), judged by
     httpx's own parser so a gate and the request cannot disagree. None -- refuse the URL -- when it carries
@@ -69,9 +83,7 @@ def request_host(url) -> str | None:
     if target.userinfo or not host or stdlib_host is None:
         return None
     host = host.rstrip('.').lower()
-    # both sides in IDNA ASCII form: httpx's `host` is Unicode, while the stdlib keeps whichever form the URL used
-    stdlib_authority = f'[{stdlib_host}]' if ':' in stdlib_host else stdlib_host
-    if ascii_host(f'https://{stdlib_authority}/') != host:
+    if strict_ascii_host(stdlib_host) != host:
         return None
     return host
 
