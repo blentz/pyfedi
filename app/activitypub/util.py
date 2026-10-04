@@ -49,7 +49,7 @@ import app.discovery.credits as discovery_credits   # the module: app.discovery.
 import urllib.parse
 from app.utils import site_language_id
 from app.visibility import OPEN_VISIBILITIES, can_view, post_title_for
-from app.discovery.podcast import ensure_podcast_community
+from app.discovery.podcast import ensure_podcast_community, podcast_twin_named_by_other
 import app as app_pkg
 
 
@@ -5537,13 +5537,13 @@ def find_community(request_json):
                 if isinstance(potential_id, str):
                     if not potential_id.startswith('https://www.w3.org') and not potential_id.endswith('/followers'):
                         potential_community = db.session.query(Community).filter_by(ap_profile_id=potential_id.lower()).first()
-                        if potential_community:
+                        if potential_community and not podcast_twin_named_by_other(potential_community, request_json):  # D24 R2
                             return potential_community
                 if isinstance(potential_id, list):
                     for c in potential_id:
                         if isinstance(c, str) and not c.startswith('https://www.w3.org') and not c.endswith('/followers'):
                             potential_community = db.session.query(Community).filter_by(ap_profile_id=c.lower()).first()
-                            if potential_community:
+                            if potential_community and not podcast_twin_named_by_other(potential_community, request_json):  # D24 R2
                                 return potential_community
 
     # D1397. `request_json['object'] if 'object' in request_json` -- unguarded,

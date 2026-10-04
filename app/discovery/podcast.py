@@ -50,6 +50,28 @@ def podcast_person_follow_target(community, requestor) -> User | None:
     return None if joining else twin
 
 
+def _author_ids(activity_json: dict) -> set[str]:
+    ids = set()
+    layers = [activity_json, activity_json.get('object')]
+    for layer in (l for l in layers if isinstance(l, dict)):
+        for key in ('actor', 'attributedTo'):
+            values = layer.get(key)
+            for value in values if isinstance(values, list) else [values]:
+                value = value.get('id') if isinstance(value, dict) else value
+                if isinstance(value, str):
+                    ids.add(value.lower())
+    return ids
+
+
+def podcast_twin_named_by_other(community, activity_json) -> bool:
+    """R2: True when `community` is a podcast twin found in an activity's addressing and the activity's author is
+    not the podcast itself -- a third party mentioning the podcast as a person, which keeps the microblogs routing."""
+    twin = podcast_twin_user(community)
+    if twin is None or not isinstance(activity_json, dict):
+        return False
+    return twin.ap_profile_id.lower() not in _author_ids(activity_json)
+
+
 def podcast_route_for(user) -> Community | None | bool:
     """Where a top-level Note from `user` with no community goes: the podcast's Community; None when the user has
     no Community twin at all (a person, so the caller keeps its microblogs routing); False when a twin exists but
