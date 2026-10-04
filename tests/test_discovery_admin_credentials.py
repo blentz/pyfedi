@@ -79,6 +79,20 @@ def test_the_preload_page_links_here(admin):
     assert PAGE in client.get('/admin/federation/preload').get_data(as_text=True)
 
 
+def test_the_federation_page_links_here(admin):
+    client, _ = admin
+    page = client.get('/admin/federation').get_data(as_text=True)
+
+    assert f'<a href="{PAGE}">Discover PeerTube channels and Castopod podcasts</a>' in page
+
+
+def test_the_admin_nav_links_here(admin):
+    client, _ = admin
+    page = client.get('/admin/instances').get_data(as_text=True)
+
+    assert f'<a href="{PAGE}">Discovery</a>' in page
+
+
 def test_an_admin_gets_the_page(admin):
     client, _token = admin
 
