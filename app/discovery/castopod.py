@@ -55,7 +55,8 @@ def is_castopod_feed(feed) -> bool:
 
 
 def _https_host(url):
-    """The hostname of a well-formed https url naming a real host, else None."""
+    """The hostname of a well-formed https url naming a real host, else None. Never a port: an entry's host is a
+    bare hostname by design, because it is matched against instance and domain bans, which name hosts."""
     if not isinstance(url, str):
         return None
     try:
@@ -103,11 +104,10 @@ def podcast_to_entry(feed, actor_url: str) -> dict | None:
     host = _https_host(actor_url)
     if not isinstance(feed, dict) or host is None:
         return None
-    image = feed.get('artwork') or feed.get('image')
     title = feed.get('title')
     return sources.make_entry(kind=KIND_COMMUNITY, platform='castopod', actor_url=actor_url,
                               name=title if isinstance(title, str) else '', host=host,
-                              avatar=image if isinstance(image, str) else None,
+                              avatar=sources.avatar_of(feed.get('artwork') or feed.get('image')),
                               followers=sources.as_count(feed.get('trendScore')), nsfw=feed.get('explicit') is True,
                               source=SOURCE)
 
@@ -148,9 +148,7 @@ def fetch_castopod_podcasts(exclude) -> list[dict]:
         episodes = _signed_json('/episodes/byfeedid', {'id': feed['id'], 'max': 1}, api_key, api_secret)
         actor_url = actor_url_from_social_interact(episodes.get('items') if isinstance(episodes, dict) else None,
                                                    feed.get('url'))
-        if actor_url is None or exclude(_https_host(actor_url)):
-            continue
-        entry = podcast_to_entry(feed, actor_url)
-        if entry is not None:
+        entry = podcast_to_entry(feed, actor_url) if actor_url is not None else None
+        if entry is not None and not exclude(entry['host']):
             entries.append(entry)
     return entries
