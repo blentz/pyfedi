@@ -1,7 +1,9 @@
 """Interop D24 (spec D4): a Castopod Podcast actor is a User, because it authors the episodes, and a
 Community, because it is what a reader subscribes to. Both rows carry the same ActivityPub id."""
+import pytest
+
 from app.activitypub.util import actor_json_to_model, refresh_user_profile_task
-from app.discovery.podcast import ensure_podcast_community, podcast_community_for
+from app.discovery.podcast import ensure_podcast_community, podcast_community_for, podcast_route_for
 from app import db
 from app.models import Community, User
 from tests.factories import make_site, make_user, peer_actor_json, peer_instance
@@ -130,3 +132,53 @@ def test_a_banned_podcast_community_is_not_handed_out(app, db_session):
     assert ensure_podcast_community(user, podcast_document()) is None
     assert podcast_community_for(user) is None
     assert Community.query.count() == 1
+
+
+# ---- M3: a feed is taken only from the podcast's own host ------------------------------------------------------
+
+@pytest.mark.parametrize('feed', ['https://elsewhere.example/@mypodcast/feed.xml',
+                                  'https://peer.example.evil.example/feed.xml'])
+def test_a_feed_on_another_host_is_not_kept(app, db_session, feed):
+    peer_instance(PEER)
+
+    actor_json_to_model(podcast_document(rssFeed=feed), 'mypodcast', PEER)
+
+    assert Community.query.one().rss_url is None
+
+
+def test_a_feed_on_the_podcasts_own_host_is_kept_whatever_its_case(app, db_session):
+    peer_instance(PEER)
+
+    actor_json_to_model(podcast_document(rssFeed='https://PEER.example/@mypodcast/feed.xml'), 'mypodcast', PEER)
+
+    assert Community.query.one().rss_url == 'https://PEER.example/@mypodcast/feed.xml'
+
+
+def test_an_existing_feed_is_not_replaced_by_one_on_another_host(app, db_session):
+    peer_instance(PEER)
+    actor_json_to_model(podcast_document(), 'mypodcast', PEER)
+
+    actor_json_to_model(podcast_document(rssFeed='https://elsewhere.example/feed.xml'), 'mypodcast', PEER)
+
+    assert Community.query.one().rss_url == FEED
+
+
+# ---- M6: podcast_route_for with a twin whose User is banned or deleted ------------------------------------------
+
+@pytest.mark.parametrize('field', ['banned', 'deleted'])
+def test_a_banned_or_deleted_podcast_user_with_a_twin_drops_its_episodes(app, db_session, field):
+    peer_instance(PEER)
+    user = actor_json_to_model(podcast_document(), 'mypodcast', PEER)
+    setattr(user, field, True)
+    db.session.commit()
+    Community.query.one().banned = False   # even were the twin itself not banned, the User's state decides
+    db.session.commit()
+
+    assert podcast_route_for(user) is False
+
+
+def test_a_podcast_in_good_standing_routes_to_its_twin(app, db_session):
+    peer_instance(PEER)
+    user = actor_json_to_model(podcast_document(), 'mypodcast', PEER)
+
+    assert podcast_route_for(user) == Community.query.one()
