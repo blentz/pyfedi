@@ -14,7 +14,7 @@
         <h1>{{ _('Discovery: channels, podcasts and people') }}</h1>
 
         <h2 class="h4 mt-4">{{ _('Podcast Index credentials') }}</h2>
-        <p id="podcastindex_status">{% if credentials_configured %}{{ _('Status: configured') }}{% else %}{{ _('Status: not set') }}{% endif %}</p>
+        <p id="podcastindex_status">{{ credentials_status }}</p>
         <p>{{ _('Castopod podcasts are found through the Podcast Index API. The key and secret are stored on this server and are never shown again; leave a field blank to keep what is stored.') }}</p>
         {{ render_form(credentials_form) }}
 

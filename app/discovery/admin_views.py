@@ -10,8 +10,16 @@ from app.discovery.preload import PRELOAD_USER_ID, preload_candidates, preload_d
 from app.utils import get_setting, login_required, permission_required, render_template, roles_with, set_setting
 
 
-def _credentials_configured() -> bool:
-    return bool(get_setting(SETTING_KEY, '') and get_setting(SETTING_SECRET, ''))
+def _credentials_status() -> str:
+    """Which halves of the pair are stored, never the values."""
+    has_key, has_secret = bool(get_setting(SETTING_KEY, '')), bool(get_setting(SETTING_SECRET, ''))
+    if has_key and has_secret:
+        return _('Status: configured')
+    if has_key:
+        return _('Status: incomplete: API secret missing')
+    if has_secret:
+        return _('Status: incomplete: API key missing')
+    return _('Status: not set')
 
 
 @bp.route('/federation/discovery', methods=['GET', 'POST'])
@@ -23,9 +31,13 @@ def admin_federation_discovery():
     candidates = None
 
     if credentials_form.podcastindex_save.data and credentials_form.validate_on_submit():
-        # A blank field means "leave it": the stored values are never sent back to the browser to resubmit
-        api_key = (credentials_form.podcastindex_api_key.data or '').strip()
-        api_secret = (credentials_form.podcastindex_api_secret.data or '').strip()
+        # A blank field means "leave it": the stored values are never sent back to the browser to resubmit.
+        # The form has already stripped both.
+        api_key = credentials_form.podcastindex_api_key.data or ''
+        api_secret = credentials_form.podcastindex_api_secret.data or ''
+        if not api_key and not api_secret:
+            flash(_('No credentials entered.'), 'warning')
+            return redirect(url_for('admin.admin_federation_discovery'))
         if api_key:
             set_setting(SETTING_KEY, api_key)
         if api_secret:
@@ -53,5 +65,5 @@ def admin_federation_discovery():
 
     return render_template('admin/federation_discovery.html', title=_('Federation settings - discovery'),
                            credentials_form=credentials_form, preload_form=preload_form, candidates=candidates,
-                           credentials_configured=_credentials_configured(),
+                           credentials_status=_credentials_status(),
                            roles_with=roles_with('change instance settings'))

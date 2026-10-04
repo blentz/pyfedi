@@ -113,3 +113,42 @@ def test_someone_without_the_permission_is_refused_and_nothing_is_stored(app, db
     assert posted.status_code == 302 and posted.headers['Location'].endswith('/auth/permission_denied')
     assert get_setting(SETTING_KEY) == 'unchanged'
     assert get_setting(SETTING_SECRET, '') != 'stolen'
+
+
+def test_saving_with_both_fields_blank_changes_nothing_and_says_so(admin):
+    client, token = admin
+    set_setting(SETTING_KEY, 'STOREDkey')
+    set_setting(SETTING_SECRET, 'STOREDsecret')
+
+    page = client.post(PAGE, data={'podcastindex_api_key': '  ', 'podcastindex_api_secret': '',
+                                   'podcastindex_save': 'go', 'csrf_token': token},
+                       follow_redirects=True).get_data(as_text=True)
+
+    assert 'No credentials entered' in page and 'credentials saved' not in page
+    assert get_setting(SETTING_KEY) == 'STOREDkey' and get_setting(SETTING_SECRET) == 'STOREDsecret'
+
+
+@pytest.mark.parametrize('key, secret, status', [
+    ('STOREDkey', 'STOREDsecret', 'Status: configured'),
+    ('STOREDkey', '', 'Status: incomplete: API secret missing'),
+    ('', 'STOREDsecret', 'Status: incomplete: API key missing'),
+    ('', '', 'Status: not set'),
+])
+def test_the_status_names_a_half_set_pair_and_never_the_values(admin, key, secret, status):
+    client, _token = admin
+    set_setting(SETTING_KEY, key)
+    set_setting(SETTING_SECRET, secret)
+
+    page = client.get(PAGE).get_data(as_text=True)
+
+    assert status in page
+    assert 'STOREDkey' not in page and 'STOREDsecret' not in page
+
+
+def test_the_length_limit_is_checked_after_padding_is_stripped(admin):
+    client, token = admin
+
+    save(client, token, '   ' + 'K' * 128 + '   ', '  ' + 'S' * 128 + '  ')
+
+    assert get_setting(SETTING_KEY) == 'K' * 128
+    assert get_setting(SETTING_SECRET) == 'S' * 128
