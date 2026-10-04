@@ -1,0 +1,22 @@
+[Unit]
+Description=PieFed Caddy (TLS via Let's Encrypt)
+Requires=pyfedi-web.service pyfedi-notifs.service
+After=pyfedi-web.service pyfedi-notifs.service
+
+[Container]
+ContainerName=pyfedi_caddy
+Image=docker.io/library/caddy:2
+PublishPort=80:80
+PublishPort=443:443
+# HTTP/3
+PublishPort=443:443/udp
+Volume=/home/rocky/pyfedi/Caddyfile:/etc/caddy/Caddyfile:z
+Volume=pyfedi-caddy-data.volume:/data
+Volume=pyfedi-caddy-config.volume:/config
+Network=pyfedi.network
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

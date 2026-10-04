@@ -1,0 +1,28 @@
+[Unit]
+Description=PieFed web (gunicorn)
+Requires=pyfedi-db.service pyfedi-redis.service
+After=pyfedi-db.service pyfedi-redis.service pyfedi-build.service
+
+[Container]
+ContainerName=piefed_app1
+Image=pyfedi.build
+EnvironmentFile=/home/rocky/pyfedi/.env.docker
+Volume=/home/rocky/pyfedi/gunicorn.conf.py:/app/gunicorn.conf.py:z
+Volume=/home/rocky/pyfedi/media:/app/app/static/media:z
+Volume=/home/rocky/pyfedi/logs:/app/logs:z
+Volume=/home/rocky/pyfedi/tmp:/app/app/static/tmp:z
+# Caddy reaches web over pf_network; loopback only, for curl on the VPS itself.
+PublishPort=127.0.0.1:8030:5000
+Network=pyfedi.network
+NetworkAlias=web
+HealthCmd=pgrep -f gunicorn
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=3
+HealthStartPeriod=20s
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

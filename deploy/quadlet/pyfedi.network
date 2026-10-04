@@ -1,0 +1,17 @@
+# PieFed on rootful podman with quadlet: the units in this directory replace
+# `podman-compose -f compose.yaml -f compose.prod.yaml up -d --build` on the VPS.
+#
+# Install (as root on the VPS; paths assume the checkout is /home/rocky/pyfedi):
+#   cp deploy/quadlet/* /etc/containers/systemd/
+#   systemctl daemon-reload
+#   systemctl start pyfedi-build.service      # builds localhost/pyfedi:latest
+#   systemctl start pyfedi-caddy.service      # pulls in web, notifs, db, redis
+#   systemctl start pyfedi-celery.service pyfedi-adminer.service
+# The [Install] sections start every service at boot. Stop the podman-compose stack
+# first: both use the container names piefed_app1, piefed_celery1 and piefed_notifs.
+# Check the generated units with: /usr/libexec/podman/quadlet -dryrun
+#
+# After `git pull`: systemctl restart pyfedi-build.service, then restart web, celery and notifs.
+
+[Network]
+NetworkName=pf_network

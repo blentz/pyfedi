@@ -1,0 +1,25 @@
+[Unit]
+Description=PieFed Celery worker
+Requires=pyfedi-db.service pyfedi-redis.service
+After=pyfedi-db.service pyfedi-redis.service pyfedi-build.service
+
+[Container]
+ContainerName=piefed_celery1
+Image=pyfedi.build
+Entrypoint=./entrypoint_celery.sh
+EnvironmentFile=/home/rocky/pyfedi/.env.docker
+Volume=/home/rocky/pyfedi/media:/app/app/static/media:z
+Volume=/home/rocky/pyfedi/logs:/app/logs:z
+Volume=/home/rocky/pyfedi/tmp:/app/app/static/tmp:z
+Network=pyfedi.network
+HealthCmd=celery -A celery_worker_docker.celery inspect ping
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=3
+HealthStartPeriod=20s
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
