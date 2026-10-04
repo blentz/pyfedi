@@ -16,7 +16,7 @@ from flask import current_app
 from sqlalchemy import func
 
 import app.activitypub.util as ap_util   # the module, not names: app.activitypub.util imports this module
-from app import celery, db
+from app import cache, celery, db
 from app.discovery.filters import ascii_host, clean_https_url, clean_name, url_is_excluded
 from app.discovery.podcast import podcast_community_for
 from app.models import Post, User
@@ -24,6 +24,7 @@ from app.utils import get_request_capped, get_task_session, patch_db_session
 
 MAX_FEED_BYTES = 2 * 1024 * 1024
 MAX_CREDITS = 20
+FEED_CACHE_SECONDS = 600
 CREDIT_NAME_LIMIT = 100
 PODCAST_NAMESPACE = 'https://podcastindex.org/namespace/1.0'
 HOST_ROLES = ('host', 'co-host')
@@ -58,8 +59,8 @@ def _declares_a_dtd(feed_bytes: bytes) -> bool:
     return False
 
 
-def _same_episode(value, episode_url: str) -> bool:
-    return isinstance(value, str) and value.strip().rstrip('/') == episode_url.strip().rstrip('/')
+def _episode_key(value) -> str | None:
+    return value.strip().rstrip('/') if isinstance(value, str) else None
 
 
 def _credit(person, role: str) -> dict | None:
@@ -70,31 +71,56 @@ def _credit(person, role: str) -> dict | None:
             'profile_url': clean_https_url(person.get('href')), 'user_id': None}
 
 
-def parse_feed_credits(feed_bytes: bytes, episode_url: str) -> list[dict]:
+def _is_host(role) -> bool:
+    return (role or 'host').strip().lower() in HOST_ROLES   # no role means host
+
+
+def _is_guest(role) -> bool:
+    return (role or '').strip().lower() == 'guest'
+
+
+def _people(people, role: str, wanted) -> list[dict]:
+    credits = []
+    for person in people:
+        if wanted(person.get('role')):
+            credit = _credit(person, role)
+            if credit is not None:
+                credits.append(credit)
+    return credits[:MAX_CREDITS]
+
+
+def parse_feed(feed_bytes: bytes) -> dict:
+    """The feed's credits for every episode: {'hosts': [...], 'guests': {episode link or GUID: [...]}}. An item's
+    link and GUID both name it; the first item that names an episode is that episode's."""
+    parsed = {'hosts': [], 'guests': {}}
     if not feed_bytes or len(feed_bytes) > MAX_FEED_BYTES or _declares_a_dtd(feed_bytes):
-        return []
+        return parsed
     try:
         root = ElementTree.fromstring(feed_bytes)
     except ElementTree.ParseError:   # an unreadable encoding was refused above, so only a parse error is left
-        return []
+        return parsed
     channel = root.find('channel')
     if channel is None:
-        return []
-    credits = []
-    for person in channel.findall(_PERSON):
-        if (person.get('role') or 'host').strip().lower() in HOST_ROLES:
-            credit = _credit(person, 'host')
-            if credit is not None:
-                credits.append(credit)
+        return parsed
+    parsed['hosts'] = _people(channel.findall(_PERSON), 'host', _is_host)
     for item in channel.findall('item'):
-        if _same_episode(item.findtext('link'), episode_url) or _same_episode(item.findtext('guid'), episode_url):
-            for person in item.findall(_PERSON):
-                if (person.get('role') or '').strip().lower() == 'guest':
-                    credit = _credit(person, 'guest')
-                    if credit is not None:
-                        credits.append(credit)
-            break
-    return credits[:MAX_CREDITS]
+        guests = None
+        for key in (_episode_key(item.findtext('link')), _episode_key(item.findtext('guid'))):
+            if key is not None and key not in parsed['guests']:
+                if guests is None:
+                    guests = _people(item.findall(_PERSON), 'guest', _is_guest)
+                parsed['guests'][key] = guests
+    return parsed
+
+
+def episode_credits(parsed: dict, episode_url: str) -> list[dict]:
+    """One episode's hosts then guests from a parse_feed result, as new dicts the caller may change."""
+    guests = parsed['guests'].get(_episode_key(episode_url), [])
+    return [dict(credit) for credit in parsed['hosts'] + guests][:MAX_CREDITS]
+
+
+def parse_feed_credits(feed_bytes: bytes, episode_url: str) -> list[dict]:
+    return episode_credits(parse_feed(feed_bytes), episode_url)
 
 
 _FEED_ACCEPT = 'application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.1'
@@ -108,6 +134,20 @@ def fetch_feed(rss_url: str) -> bytes | None:
     except httpx.HTTPError:
         return None
     return body if status == 200 else None
+
+
+def feed_credits(rss_url: str) -> dict | None:
+    """parse_feed of the podcast's feed, remembered for FEED_CACHE_SECONDS per feed URL so a podcast's episodes
+    share one fetch. None when the feed could not be fetched, which is not remembered."""
+    key = f'discovery:feed-credits:{rss_url}'
+    parsed = cache.get(key)
+    if parsed is None:
+        feed = fetch_feed(rss_url)
+        if feed is None:
+            return None
+        parsed = parse_feed(feed)
+        cache.set(key, parsed, timeout=FEED_CACHE_SECONDS)
+    return parsed
 
 
 def _normal_url(value) -> str | None:
@@ -299,10 +339,10 @@ def fetch_episode_credits_task(post_id, episode_url):
                 community = podcast_community_for(post.author)
                 if community is None or not community.rss_url:
                     return
-                feed = fetch_feed(community.rss_url)
-                if feed is None:
+                parsed = feed_credits(community.rss_url)
+                if parsed is None:
                     return
-                credits = parse_feed_credits(feed, episode_url)
+                credits = episode_credits(parsed, episode_url)
                 linked = {}   # one lookup (and at most one fetch) per distinct href
                 for credit in credits:
                     # Only a profile that vouches back keeps its link; anyone else is a plain name, because
