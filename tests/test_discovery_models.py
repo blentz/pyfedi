@@ -50,6 +50,18 @@ def test_an_entry_round_trips_with_its_defaults(app, db_session):
     assert stored.first_seen is not None and stored.last_seen is not None
 
 
+def test_followers_defaults_to_zero_in_the_model_and_the_table(app, db_session):
+    db.session.add(DiscoveryEntry(kind='community', platform='peertube', actor_url='https://t.example/video-channels/a',
+                                  name='Model default', host='t.example', source='sepiasearch'))
+    db.session.execute(text("INSERT INTO discovery_entry (kind, platform, actor_url, name, host, source, first_seen, "
+                            "last_seen) VALUES ('community', 'peertube', 'https://t.example/video-channels/b', "
+                            "'Server default', 't.example', 'sepiasearch', now(), now())"))
+    db.session.commit()
+    db.session.expire_all()
+
+    assert {row.name: row.followers for row in DiscoveryEntry.query.all()} == {'Model default': 0, 'Server default': 0}
+
+
 def test_actor_url_is_unique(app, db_session):
     db.session.add(an_entry())
     db.session.commit()

@@ -53,6 +53,16 @@ def test_an_upsert_is_idempotent_and_keeps_first_seen(app, db_session, only):
     assert row.last_seen == NOW
 
 
+def test_an_entry_without_followers_is_stored_with_zero(app, db_session, only):
+    missing = entry(name='No count')
+    del missing['followers']
+    only('sepiasearch', [missing, entry(name='Bad count', slug='bad', followers='12')])
+
+    refresh_discovery(now=NOW)
+
+    assert {row.name: row.followers for row in DiscoveryEntry.query.all()} == {'No count': 0, 'Bad count': 0}
+
+
 def test_entries_not_seen_for_thirty_days_expire(app, db_session, only):
     db.session.add_all([
         DiscoveryEntry(kind='community', platform='peertube', actor_url='https://old.example/video-channels/a',
