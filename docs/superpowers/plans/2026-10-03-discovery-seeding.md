@@ -4690,3 +4690,46 @@ Parked after the final fix wave and deferred minors:
 - Final: parked — punycode hosts always refused by request_host (httpx host Unicode vs stdlib punycode) — Ruling: real, fails closed, deferred — cost if wrong: credits/feeds dropped on IDN hosts.
 - Final: parked — _known_user matches a remote User by self-declared ap_public_url, so a vouching actor can claim another person's profile URL as its own and turn that credit verified (linked to itself) — Ruling: real, minor spoof residue, deferred to follow-up with highest priority of the three (require host(href) == host(matched row ap_profile_id)) — cost if wrong: a vouching actor can take credit under another person's profile link.
 - Final: out-of-scope — Add/Remove now skip podcast twins (harmless for Castopod); url_is_excluded omits PeerTube isolation list hosts added after init.
+
+## Follow-up round (2026-10-04): parked defects and deferred minors
+
+All four parked defects and every deferred minor above were worked through, one commit per finding, test first; 35 commits a5b44b1b6..6c7a5a12e, full suite 18199 passed, 3 skipped. Findings that turned out to be fixed already are marked with the commit that fixed them.
+
+Parked defects:
+- `_known_user` spoof residue: FIXED at d86e63131 (an `ap_public_url` match counts only on the host of the row's `ap_profile_id`).
+- API `resolve_object` of a podcast's own episode: FIXED at 8314708ca (author passed as the inbox does; podcast routing; a third party's mention of a twin skipped).
+- IDN hosts refused by `request_host`: FIXED at f8029df65, tightened at 5009fbcbf after a security review (stdlib host compared without IDNA mapping, label by label, so `。`/`．`/`｡` dot variants are refused).
+- Discovery admin page unreachable from the nav: FIXED at 622c3b17f.
+- Castopod discovery found nothing live (accountId-only socialInteract; no Castopod in trending): FIXED at a5b44b1b6.
+
+Deferred minors:
+- Task 1: over-long actor_url logged when skipped 9bc56b4f0 (skip already at 2008fe340); byte-length cap 0d641ef85; followers default tested ba7c582dc.
+- Task 2: failures logged, is_username tested 536248880.
+- Task 3: non-list directory logged 2f11bcd27; dead except and exact-list assert already fixed at 9ad42f454.
+- Task 4: FediDB hosts de-duplicated, pacing and malformed meta tested 04c5ff76e.
+- Task 5: avatar_of, single host parse, port-less host documented c793d0141.
+- Task 6: isolation-list failure not cached, entry keys only, banned domains read once, entity names tested 8678cc669.
+- Task 8: credentials form strip/blank/half-set status 01990a1d9.
+- Task 9: per-entry isolation already fixed at 2f5e5cd7a; empty or impossible pre-load not enqueued 035f5ce6a.
+- Task 10: search fill, CSRF code, banned-since-refresh resolve, import order, q kept c2359afd9; instance page kept 4b44e3235.
+- Task 11: existing podcast community resynced, race tested 20578ffcc.
+- Task 12: banned community with live user and Accept tests 41cb47814.
+- Task 13: podcast owner posts into its restricted or private twin bad14aedc, narrowed after a security review to keep community and instance bans 2cf80d441; PODCAST_DROP sentinel 551763500.
+- Task 14: narrower catches 0dab5eb45; hostile-input fuzz after a security review, deep JSON caught aa69872bf.
+- Task 15: feed credits cached 10 min effd3430f; podcast extension merged d7d416096; deadline after body and DNS limit documented 95d7df329; deleted/banned users, per-href memo already fixed at e79cf992e; per-credit failure and streaming cap already fixed at 1f9b279e9; debug-sync session pattern predates D24, no change; TDD-order note is process only.
+- Task 16: signed retry on 401/403 4eb40bb67; stored-field vouch tested 20642ac91; podcast web URL as vouch target 79bcedb85, narrowed after a security review to the podcast's own account path on its own host 91b3d6294; capped fetch already fixed at e79cf992e.
+- Task 17: hidden post's API view carries no credits e782f13ba; RED/full-suite notes are process only.
+- Task 18: credited seed account is a remote fixture user c7dbd8a4b, instance test 2cf81c74a; help and output list what is created 6c7a5a12e; refusal exit already fixed at 728848d47.
+
+Rulings made in this round (cost if wrong):
+- Castopod sources: value-tagged + new feeds + "castopod" search replace trending; accountId gives https://host/@handle only on the feed's host (user decision) — cost: few podcasts until new feeds accumulate.
+- A2 wider reading accepted: resolve path routes like the inbox and skips a third party's twin mention — cost: none.
+- IDN: label-by-label strict IDNA instead of idna.encode — cost: an exotic host form is refused (fails closed).
+- B8: parsers must never raise on hostile input — cost: none.
+- C1 status strings, C2 user-1 check, C3 paged fill (no SQL) — cost: up to 5 extra small queries per fallback search.
+- D1: resynced community keeps nsfw from the document even on an NSFW-off site, like any remote community refresh — cost: a podcast turning sensitive is flagged, not dropped.
+- D3: podcast owner exemption limited to restricted_to_mods and private — cost: none.
+- E9c: podcast web URL from its own actor document (no migration), only https, same host, and a path naming its own account — cost: some false negatives for podcasts whose web URL is elsewhere.
+- F2: seed's credited account is remote on people.example; the feed fixture's href stays social.example (shared with other credit tests) — cost: the seeded verified credit is matched by the seed itself, not by the live host rule.
+
+Still open, for the owner: periodic re-verification of credits (ruling 29); history rewrite of red intermediate commits and earlier "Sonnet" trailers; independent check of the signing digest 3e78f375af4c08655c786763a7e4b65d8ba42893.
