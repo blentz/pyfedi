@@ -565,3 +565,12 @@ def test_other_refusals_are_not_retried_signed(world, http_mock, site_key):
 
     assert credit_vouches(ann.id, world.podcast) is False
     assert route.call_count == 1
+
+
+def test_a_known_remote_account_whose_stored_field_links_the_podcast_vouches_without_a_fetch(world, http_mock):
+    ann = ann_user({})
+    db.session.add(UserExtraField(user_id=ann.id, label='Show', text=f'<a href="{ACTOR}">My Podcast</a>'))
+    db.session.commit()
+
+    assert credit_vouches(ann.id, world.podcast) is True
+    assert len(http_mock.calls) == 0
