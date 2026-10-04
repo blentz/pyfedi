@@ -6,7 +6,8 @@ from flask_babel import _, ngettext
 from app.admin import bp
 from app.discovery.castopod import SETTING_KEY, SETTING_SECRET
 from app.discovery.forms import DiscoveryPreloadForm, PodcastIndexCredentialsForm
-from app.discovery.preload import PRELOAD_USER_ID, preload_candidates, preload_discovered_communities
+from app.discovery.preload import PRELOAD_USER_ID, preload_candidates, preload_discovered_communities, \
+    preload_user_can_subscribe
 from app.utils import get_setting, login_required, permission_required, render_template, roles_with, set_setting
 
 
@@ -54,6 +55,13 @@ def admin_federation_discovery():
         candidates = preload_candidates(preload_form.preload_count.data, preload_form.preload_platforms.data)
         if preload_form.preload_subscribe.data:
             entry_ids = [entry.id for entry in candidates]
+            if not entry_ids:
+                flash(_('Nothing new to subscribe to.'), 'warning')
+                return redirect(url_for('admin.admin_federation_discovery'))
+            if not preload_user_can_subscribe(PRELOAD_USER_ID):
+                flash(_('User %(id)d, who subscribes for the pre-load, cannot subscribe: the account is missing, '
+                        'deleted or banned.', id=PRELOAD_USER_ID), 'error')
+                return redirect(url_for('admin.admin_federation_discovery'))
             if current_app.debug:
                 preload_discovered_communities(entry_ids, PRELOAD_USER_ID)
             else:
