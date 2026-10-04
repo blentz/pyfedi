@@ -6,7 +6,7 @@ from flask import current_app, g
 from sqlalchemy import desc
 
 from app.activitypub.util import find_actor_or_create, remote_object_to_json, actor_json_to_model, \
-    find_community, create_resolved_object, normalise_actor_string
+    find_community, create_resolved_object, normalise_actor_string, host_of
 from app.api.alpha.utils.community import get_community_list
 from app.api.alpha.utils.post import get_post_list
 from app.api.alpha.utils.user import get_user_list
@@ -14,6 +14,7 @@ from app.api.alpha.utils.reply import get_reply_list
 from app.api.alpha.views import search_view, post_view, reply_view, user_view, community_view, feed_view, \
     neutral_person, reply_removal_ack_view
 from app.community.util import search_for_community
+from app.discovery.podcast import podcast_route_for, podcast_twin_named_by_other
 from app.models import Post, PostReply, User, Community, BannedInstances, Feed, ModLog
 from app.user.utils import search_for_user
 from app.visibility import can_view, modlog_open_clause
@@ -80,6 +81,21 @@ def feed_view_arguments(user_id):
         arguments["blocked_community_ids"] = []
         arguments["blocked_instance_ids"] = []
     return arguments
+
+
+def _own_host_author(ap_json):
+    """The object's attributedTo actor id when it is on the host the object was fetched from -- the author
+    resolve_remote_post hands find_community (D24 R2) -- or None. The attributedTo walk is create_resolved_object's."""
+    attributed_to = ap_json.get('attributedTo')
+    if isinstance(attributed_to, dict):
+        attributed_to = [attributed_to]
+    if isinstance(attributed_to, list):
+        first = next((a for a in attributed_to if isinstance(a, str) or
+                      (isinstance(a, dict) and a.get('type') in ('Person', 'Podcast'))), None)
+        attributed_to = first.get('id') if isinstance(first, dict) else first
+    if isinstance(attributed_to, str) and host_of(attributed_to) and host_of(attributed_to) == host_of(ap_json['id']):
+        return attributed_to
+    return None
 
 
 def get_resolve_object(auth, data, user_id=None, recursive=False):
@@ -403,7 +419,14 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
                                  **(feed_dict or feed_view_arguments(user_id)))
 
     # a post or a reply
-    community = find_community(ap_json)
+    author = _own_host_author(ap_json)
+    community = find_community(ap_json, author=author)  # D24 R2: a podcast's own episode names its twin community
+    if not community and not ap_json.get('inReplyTo') and author:
+        # D24: a top-level episode from a Castopod podcast belongs in the podcast's community, as in the inbox
+        route = podcast_route_for(db.session.query(User).filter_by(ap_profile_id=author.lower()).first())
+        if route is False:   # a banned podcast's episode is dropped
+            raise Exception('No object found.')
+        community = route
     # if community doesn't already exist, call this function recursively to create it
     if not community:
         locations = ['audience', 'cc', 'to']
@@ -413,14 +436,16 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
                 if isinstance(potential_id, str):
                     if not potential_id.startswith('https://www.w3.org') and not potential_id.endswith('/followers'):
                         potential_community = get_resolve_object(None, {"q": potential_id}, user_id, True)
-                        if isinstance(potential_community, Community):
+                        if isinstance(potential_community, Community) and \
+                                not podcast_twin_named_by_other(potential_community, author):  # D24 R2
                             community = potential_community
                             break
                 if isinstance(potential_id, list):
                     for c in potential_id:
                         if not c.startswith('https://www.w3.org') and not c.endswith('/followers'):
                             potential_community = get_resolve_object(None, {"q": c}, user_id, True)
-                            if isinstance(potential_community, Community):
+                            if isinstance(potential_community, Community) and \
+                                    not podcast_twin_named_by_other(potential_community, author):  # D24 R2
                                 community = potential_community
                                 break
 
