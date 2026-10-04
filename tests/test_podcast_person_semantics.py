@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import app.activitypub.routes as routes_mod
 from app import cache, db
 from app.activitypub.routes import process_inbox_request
 from app.activitypub.util import actor_json_to_model
@@ -98,3 +99,15 @@ def test_an_accept_of_a_join_request_still_admits_the_join(app, world):
     assert CommunityMember.query.filter_by(user_id=joiner.id, community_id=world.community.id).count() == 1
     assert UserFollower.query.count() == 0
 
+
+# ---- F2: a podcast's boost is a person's boost ------------------------------------------------------------------
+
+def test_a_podcast_boost_of_someone_elses_post_is_a_microblog_boost(app, world, monkeypatch):
+    seen = []
+    monkeypatch.setattr(routes_mod, 'process_announce_of_uri',
+                        lambda request_json, community, id, store: seen.append(community))
+
+    process_inbox_request({'id': f'{PODCAST}/activities/announce/1', 'type': 'Announce', 'actor': PODCAST,
+                           'object': f'https://{PEER}/users/alice/statuses/1'}, True)
+
+    assert seen == [None]   # the microblog-boost path, not a post filed in the podcast's community

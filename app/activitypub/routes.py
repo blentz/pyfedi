@@ -33,7 +33,7 @@ from app.activitypub.util import users_total, active_half_year, active_month, lo
 # app.activitypub.signature before show_community is defined (U-circular-import)
 import app.community.routes as community_routes
 from app.community.util import send_to_remote_instance, send_to_remote_instance_fast
-from app.discovery.podcast import podcast_person_follow_target, podcast_route_for
+from app.discovery.podcast import podcast_person_follow_target, podcast_route_for, podcast_twin_user
 from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
 # app.activitypub before show_feed is defined (import cycle: feed.routes)
@@ -970,6 +970,8 @@ def process_inbox_request(request_json, store_ap_json):
 
                 # Announce: take care of inner objects that are just a URL (PeerTube, a.gup.pe), or find the user if the inner object is a dict
                 if request_json['type'] == 'Announce':
+                    if twin := podcast_twin_user(community):   # D24 R2: a podcast's boost is a person's, not its community's
+                        community, user = None, twin
                     if isinstance(request_json['object'], str):
                         # process_announce_of_uri logs its own outcome on every path
                         # (see its docstring), so there is nothing left to log here.
