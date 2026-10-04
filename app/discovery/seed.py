@@ -1,7 +1,7 @@
 """Local validation data for discovery and Castopod (interop D24). Reads app/discovery/fixtures only and
 fetches nothing: the directory rows go through the same normalisers and cleaning as a real refresh, and
 the podcast through the same actor and post ingest as federation. Credits are stored in the shape the
-live fetch leaves: one credit is verified (a seeded local account whose profile links the podcast), the
+live fetch leaves: one credit is verified (a seeded remote account whose profile links the podcast), the
 rest are names only."""
 import json
 from pathlib import Path
@@ -19,8 +19,10 @@ FIXTURES = Path(__file__).resolve().parent / 'fixtures'
 EPISODE_URL = 'https://pod.example/@mypodcast/episodes/ep-1'
 EPISODE_NOTE_ID = 'https://pod.example/@mypodcast/posts/1'
 PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
-SEEDED_HOST_PROFILE = 'https://social.example/@ann'   # the feed href that stands for the seeded local account
+SEEDED_HOST_PROFILE = 'https://social.example/@ann'   # the feed href that stands for the seeded fixture account
 SEEDED_HOST_NAME = 'ann'
+SEEDED_HOST_DOMAIN = 'people.example'
+SEEDED_HOST_ACTOR = f'https://{SEEDED_HOST_DOMAIN}/users/{SEEDED_HOST_NAME}'
 
 
 def _json(fixtures: Path, name: str):
@@ -52,11 +54,16 @@ def _instance(domain: str, software: str) -> Instance:
 
 
 def _seeded_host(podcast) -> User:
-    """A local account whose profile field links the podcast, so a credit naming it vouches back."""
-    user = db.session.query(User).filter_by(user_name=SEEDED_HOST_NAME, ap_id=None).first()
+    """A remote fixture account whose profile field links the podcast, so a credit naming it vouches back. It is never
+    a local login account: the seed finds only its own row, by actor id, and reads or changes no other user."""
+    user = db.session.query(User).filter_by(ap_profile_id=SEEDED_HOST_ACTOR).first()
     if user is None:
-        user = User(user_name=SEEDED_HOST_NAME, email='seed-ann@example.invalid', title='Ann Host', verified=True,
-                    banned=False, instance_id=1)
+        instance = _instance(SEEDED_HOST_DOMAIN, 'mastodon')
+        user = User(user_name=SEEDED_HOST_NAME, title='Ann Host', verified=True, banned=False,
+                    instance_id=instance.id, ap_id=f'{SEEDED_HOST_NAME}@{SEEDED_HOST_DOMAIN}',
+                    ap_domain=SEEDED_HOST_DOMAIN, ap_profile_id=SEEDED_HOST_ACTOR,
+                    ap_public_url=f'https://{SEEDED_HOST_DOMAIN}/@{SEEDED_HOST_NAME}',
+                    ap_inbox_url=f'{SEEDED_HOST_ACTOR}/inbox')
         db.session.add(user)
         db.session.flush()
         db.session.add(UserExtraField(user_id=user.id, label='Podcast', text=podcast.ap_profile_id))
@@ -65,7 +72,7 @@ def _seeded_host(podcast) -> User:
 
 
 def _seeded_credits(credits: list, podcast) -> list:
-    """The credits as the live fetch stores them, without its network: the one that names the seeded local
+    """The credits as the live fetch stores them, without its network: the one that names the seeded remote
     account is verified when that account vouches back; every other is a plain name."""
     host = _seeded_host(podcast)
     for credit in credits:
