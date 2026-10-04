@@ -13,7 +13,7 @@ from app.discovery import credits
 from app.discovery.credits import MAX_FEED_BYTES, credit_vouches, fetch_episode_credits_task, store_credits, \
     verified_credit_user
 from app.discovery.podcast import podcast_community_for
-from app.models import Community, Post, User, UserExtraField
+from app.models import Community, Domain, Post, User, UserExtraField
 from tests.factories import make_banned_instance, make_post, make_site, peer_actor_json, peer_instance
 
 PEER = 'pod.example'
@@ -361,3 +361,40 @@ def test_a_compressed_feed_is_refused_undecoded(app, http_mock):
 
     assert get_request_capped(FEED_URL, MAX_FEED_BYTES) == (200, None)
     assert route.calls.last.request.headers['Accept-Encoding'] == 'identity'
+
+
+@pytest.mark.parametrize('refuse', ['instance', 'domain'])
+def test_a_credit_on_a_banned_host_is_never_contacted_and_stays_a_plain_name(world, http_mock, refuse):
+    if refuse == 'instance':
+        make_banned_instance('social.example')
+    else:
+        db.session.add(Domain(name='social.example', banned=True))
+        db.session.commit()
+    http_mock.get(FEED_URL).respond(200, content=FIXTURE.read_bytes())
+    http_mock.get('https://ben.example/about').respond(200, text='<html>Ben</html>')
+    # no route for social.example: a request there would fail the test (respx refuses unmocked requests)
+
+    fetch_episode_credits_task(world.post.id, EP1)
+
+    saved = stored(world.post.id)['podcast']['credits']
+    assert [(c['name'], c['user_id'], c['profile_url']) for c in saved] == [
+        ('Ann Host', None, None), ('Ben Cohost', None, None), ('Cara Guest', None, None)]
+    assert all(call.request.url.host != 'social.example' for call in http_mock.calls)
+
+
+def test_a_canonical_id_on_a_banned_host_is_never_fetched(world, http_mock):
+    make_banned_instance('victim.example')
+    http_mock.get('https://social.example/@ann').respond(json=peer_actor_json('Person', name='ann',
+                                                                              server='victim.example', fields=VOUCH))
+
+    assert verified_credit_user('https://social.example/@ann', world.podcast) is None
+    assert all(call.request.url.host != 'victim.example' for call in http_mock.calls)
+
+
+def test_a_feed_on_a_banned_domain_is_never_fetched(world, http_mock):
+    db.session.add(Domain(name=PEER, banned=True))
+    db.session.commit()
+
+    fetch_episode_credits_task(world.post.id, EP1)
+
+    assert stored(world.post.id) is None and len(http_mock.calls) == 0
