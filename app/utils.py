@@ -2852,13 +2852,12 @@ def can_create_post(user, content: Community) -> bool:
         return True
 
     # D24: a Castopod podcast owns its Community twin (same ap_profile_id, user_id is the podcast's User), so it
-    # posts its episodes there whatever the twin's restrictions. Inline rather than app.discovery.podcast, which
-    # imports this module.
-    if content.user_id == user.id and not user.is_local() and user.ap_profile_id and \
-            content.ap_profile_id == user.ap_profile_id:
-        return True
+    # posts its episodes there even when the twin is restricted_to_mods or private; every other check still
+    # applies. Inline rather than app.discovery.podcast, which imports this module.
+    is_podcast_owner = content.user_id == user.id and not user.is_local() and bool(user.ap_profile_id) and \
+        content.ap_profile_id == user.ap_profile_id
 
-    if content.restricted_to_mods:
+    if content.restricted_to_mods and not is_podcast_owner:
         return False
 
     if content.local_only and not user.is_local():
@@ -2867,7 +2866,7 @@ def can_create_post(user, content: Community) -> bool:
     # Private communities are invite-only (Community.private, app/models.py:594):
     # only members may post. Placed after the moderator/admin early return above,
     # alongside the ban checks, so the existing mod/admin model is preserved.
-    if content.private and content.id not in community_membership_private(user.id):
+    if content.private and not is_podcast_owner and content.id not in community_membership_private(user.id):
         return False
 
     if content.id in communities_banned_from(user.id):
