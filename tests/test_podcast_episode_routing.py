@@ -11,7 +11,8 @@ from app.discovery.podcast import podcast_community_for
 from app import db
 from flask import current_app as app
 from app.models import ActivityPubLog, Community, Post, PostReply
-from tests.factories import make_site, peer_actor_json, peer_instance, seed_community_owner
+from tests.factories import ban_user_from_community, make_instance_ban, make_site, peer_actor_json, peer_instance, \
+    seed_community_owner
 
 PEER = 'peer.example'
 PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
@@ -174,3 +175,23 @@ def test_an_update_to_an_episode_keeps_it_in_the_podcast_community(world):
     post = Post.query.one()
     assert post.community_id == podcast_community_for(world.podcast).id
     assert 'edited episode' in post.body_html
+
+
+def test_a_podcast_banned_from_its_own_community_is_refused(world):
+    community = podcast_community_for(world.podcast)
+    community.restricted_to_mods = True
+    db.session.commit()
+    ban_user_from_community(world.podcast, community)
+
+    process_new_content(world.podcast, None, False, create(world.podcast, f'https://{PEER}/n/23'), False)
+
+    assert Post.query.count() == 0
+
+
+def test_a_podcast_banned_from_its_communitys_instance_is_refused(world):
+    community = podcast_community_for(world.podcast)
+    make_instance_ban(world.podcast, community.instance)
+
+    process_new_content(world.podcast, None, False, create(world.podcast, f'https://{PEER}/n/24'), False)
+
+    assert Post.query.count() == 0
