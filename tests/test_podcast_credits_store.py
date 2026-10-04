@@ -151,6 +151,17 @@ def test_an_actor_document_that_is_not_utf8_or_not_json_is_none(world, http_mock
     assert credits.fetch_actor_document('https://social.example/@ben') is None
 
 
+@pytest.mark.parametrize('body', [b'{"name": "\xff"}', b'\xff\xfe\xfd', b'{"name": ', b'<html>Ben</html>', b'',
+                                  b'[' * 100000 + b']' * 100000, b'{"a":' * 100000 + b'1' + b'}' * 100000,
+                                  b'"\\ud800"', b'1e999999', b'NaN', b'{"\x00": 1}'],
+                         ids=['invalid utf-8', 'junk', 'truncated', 'html', 'empty', 'deep array', 'deep object',
+                              'lone surrogate', 'huge number', 'nan', 'nul key'])
+def test_a_hostile_actor_document_never_raises(world, http_mock, body):
+    http_mock.get('https://social.example/@ann').respond(200, content=body)
+
+    assert credits.fetch_actor_document('https://social.example/@ann') is None
+
+
 def test_an_oversized_actor_document_is_not_read(world, http_mock):
     http_mock.get('https://social.example/@ann').respond(200, content=b'{' + b' ' * (credits.MAX_ACTOR_BYTES + 1))
 

@@ -2,6 +2,8 @@
 people are hosts; the matching item's role="guest" people are guests. The feed is untrusted."""
 from pathlib import Path
 
+import pytest
+
 from app.discovery.credits import MAX_CREDITS, MAX_FEED_BYTES, parse_feed_credits
 
 FIXTURE = Path(__file__).resolve().parent.parent / 'app' / 'discovery' / 'fixtures' / 'castopod_feed.xml'
@@ -112,3 +114,30 @@ def test_credits_are_capped(app):
     people = ''.join(f'<podcast:person>Host {i}</podcast:person>' for i in range(30))
 
     assert len(parse_feed_credits(feed(people), EP1)) == MAX_CREDITS == 20
+
+
+def _declared(enc):
+    return feed('<podcast:person>Ann</podcast:person>').decode().replace('UTF-8', enc)
+
+
+HOSTILE_FEEDS = {
+    'empty': b'',
+    'junk': b'\xff\xfe\xfd',
+    'utf-16 bom': _declared('UTF-16').encode('utf-16'),
+    'unknown encoding': _declared('bogus').encode(),
+    'utf-7': _declared('utf-7').encode(),
+    'shift_jis': _declared('Shift_JIS').encode(),
+    'nul byte': feed('<podcast:person>A\x00nn</podcast:person>'),
+    'utf-8 body declared iso-8859-1': _declared('iso-8859-1').replace('Ann', 'Änn').encode(),
+    'deep nest': b'<rss><channel>' + b'<a>' * 200000 + b'</a>' * 200000 + b'</channel></rss>',
+    'utf-32': _declared('UTF-32').encode('utf-32'),
+    'utf-32 without a declaration': feed('<podcast:person>Ann</podcast:person>').decode()
+                                    .replace('<?xml version="1.0" encoding="UTF-8"?>', '').encode('utf-32'),
+    'encoding name with a nul': _declared('utf\x00-8').encode(),
+    'empty encoding name': _declared('').encode(),
+}
+
+
+@pytest.mark.parametrize('body', HOSTILE_FEEDS.values(), ids=HOSTILE_FEEDS.keys())
+def test_hostile_feed_bytes_never_raise(app, body):
+    assert isinstance(parse_feed_credits(body, EP1), list)
