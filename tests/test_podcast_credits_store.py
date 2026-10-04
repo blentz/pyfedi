@@ -398,3 +398,24 @@ def test_a_feed_on_a_banned_domain_is_never_fetched(world, http_mock):
     fetch_episode_credits_task(world.post.id, EP1)
 
     assert stored(world.post.id) is None and len(http_mock.calls) == 0
+
+
+@pytest.mark.parametrize('href', ['https://[@banned.example/u/ann', 'https://user@banned.example/u/ann',
+                                  'https://user@social.example/u/ann', 'https://social.example\\@banned.example/u/ann',
+                                  'https://banned.example./u/ann', 'https://BANNED.example:443/u/ann'])
+def test_a_crafted_or_banned_credit_url_is_refused_without_a_request(world, http_mock, href):
+    make_banned_instance('banned.example')
+    # no routes: any request would fail the test (respx refuses unmocked requests)
+
+    assert verified_credit_user(href, world.podcast) is None
+    assert len(http_mock.calls) == 0
+
+
+def test_a_feed_on_a_banned_host_with_a_trailing_dot_is_never_fetched(world, http_mock):
+    make_banned_instance(PEER)
+    world.community.rss_url = f'https://{PEER}./@mypodcast/feed.xml'
+    db.session.commit()
+
+    fetch_episode_credits_task(world.post.id, EP1)
+
+    assert stored(world.post.id) is None and len(http_mock.calls) == 0
