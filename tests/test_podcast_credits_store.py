@@ -587,13 +587,14 @@ FEED_ANN = f"""<?xml version="1.0" encoding="UTF-8"?>
 <podcast:person role="host" href="https://social.example/u/ann">Ann Host</podcast:person>
 <item><link>{EP1}</link></item>
 </channel></rss>""".encode()
-WEB = f'https://{PEER}/shows/my-podcast'
+WEB = f'{ACTOR}/about'   # under the actor id's own path
 
 
-def serve_podcast(http_mock, url):
+def serve_podcast(http_mock, url, handle='mypodcast'):
     """The podcast's own actor document, read once per run for its web URL."""
     return http_mock.get(ACTOR).respond(json=peer_actor_json('Person', name='mypodcast', server=PEER, fields={
-        'id': ACTOR, 'type': 'Podcast', 'name': 'My Podcast', 'rssFeed': FEED_URL, 'url': url}))
+        'id': ACTOR, 'type': 'Podcast', 'name': 'My Podcast', 'rssFeed': FEED_URL, 'url': url,
+        'preferredUsername': handle}))
 
 
 def ann_credit_after_a_run(world, http_mock, links):
@@ -625,3 +626,18 @@ def test_a_failed_podcast_fetch_still_verifies_by_the_actor_id(world, http_mock)
     http_mock.get(ACTOR).respond(500)
 
     assert ann_credit_after_a_run(world, http_mock, ACTOR).get('verified') is True
+
+
+@pytest.mark.parametrize('url', [f'https://{PEER}/@myshow', f'https://{PEER}/@MyShow/'])
+def test_a_web_url_naming_the_podcasts_own_handle_is_verified(world, http_mock, url):
+    serve_podcast(http_mock, url, handle='myshow')
+
+    assert ann_credit_after_a_run(world, http_mock, url).get('verified') is True
+
+
+@pytest.mark.parametrize('url', [f'https://{PEER}/@other', f'https://{PEER}/shows/other', f'{ACTOR}/about?x=1',
+                                 f'{ACTOR}/about#top', f'{ACTOR}/../@other', f'{ACTOR}extra'])
+def test_a_same_host_web_url_that_does_not_name_this_podcast_verifies_nobody(world, http_mock, url):
+    serve_podcast(http_mock, url)
+
+    assert 'verified' not in ann_credit_after_a_run(world, http_mock, url)

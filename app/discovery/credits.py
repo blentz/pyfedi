@@ -189,10 +189,28 @@ def _podcast_urls(podcast) -> set:
     return {u for u in (_normal_url(podcast.ap_profile_id), _normal_url(podcast.ap_public_url)) if u}
 
 
+def _names_the_podcast(href: str, podcast, document: dict) -> bool:
+    """True when a same-host web URL's path names this podcast's own account: /@ + the document's own
+    preferredUsername (any case), or the actor id's path or a path under it. A query, fragment or dot segment
+    disqualifies it, since one server hosts many accounts and another's page must not count as this one's."""
+    if '?' in href or '#' in href:
+        return False
+    path = urlsplit(href).path
+    if any(segment in ('.', '..') or segment.lower().startswith('%2e') for segment in path.split('/')):
+        return False
+    path = path.rstrip('/')
+    handle = document.get('preferredUsername')
+    if isinstance(handle, str) and re.fullmatch(r'[A-Za-z0-9_.-]+', handle) and path.lower() == f'/@{handle}'.lower():
+        return True
+    own = urlsplit(podcast.ap_profile_id).path.rstrip('/')
+    return bool(own) and (path == own or path.startswith(own + '/'))
+
+
 def _podcast_web_urls(podcast) -> set:
-    """The podcast's web URLs (its actor document's `url`), each only when it is https on the actor id's own host and
-    not the actor id itself: the podcast writes its own `url`, so another host there would let it vouch for whoever
-    links that host. Remembered for FEED_CACHE_SECONDS; a failed fetch gives none and is not remembered."""
+    """The podcast's web URLs (its actor document's `url`), each only when it is https on the actor id's own host,
+    names this podcast's own account there (_names_the_podcast) and is not the actor id itself: the podcast writes
+    its own `url`, so it must not be able to vouch for whoever links another host or another account's page.
+    Remembered for FEED_CACHE_SECONDS; a failed fetch gives none and is not remembered."""
     key = f'discovery:podcast-web-urls:{podcast.ap_profile_id}'
     cached = cache.get(key)
     if cached is not None:
@@ -206,7 +224,7 @@ def _podcast_web_urls(podcast) -> set:
     for value in values if isinstance(values, list) else [values]:
         href = clean_https_url(value.get('href') if isinstance(value, dict) else value)
         if href is not None and actor_host is not None and ascii_host(href) == actor_host and \
-                _normal_url(href) not in (None, actor_id):
+                _names_the_podcast(href, podcast, document) and _normal_url(href) not in (None, actor_id):
             found.add(_normal_url(href))
     cache.set(key, sorted(found), timeout=FEED_CACHE_SECONDS)
     return found
