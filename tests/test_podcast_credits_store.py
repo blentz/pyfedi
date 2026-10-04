@@ -14,7 +14,7 @@ from app.discovery.credits import MAX_FEED_BYTES, credit_vouches, fetch_episode_
     verified_credit_user
 from app.discovery.podcast import podcast_community_for
 from app.models import Community, Domain, Post, User, UserExtraField
-from tests.factories import make_banned_instance, make_post, make_site, peer_actor_json, peer_instance
+from tests.factories import make_banned_instance, make_post, make_site, make_user, peer_actor_json, peer_instance
 
 PEER = 'pod.example'
 ACTOR = f'https://{PEER}/@mypodcast'
@@ -419,3 +419,25 @@ def test_a_feed_on_a_banned_host_with_a_trailing_dot_is_never_fetched(world, htt
     fetch_episode_credits_task(world.post.id, EP1)
 
     assert stored(world.post.id) is None and len(http_mock.calls) == 0
+
+
+def test_a_public_url_naming_another_host_does_not_claim_that_profile(world):
+    mallory = make_user(peer_instance('evil.example'), 'mallory')
+    mallory.ap_public_url = 'https://victim.example/@alice'   # self-declared: anyone can write anyone's url here
+    db.session.commit()
+
+    assert credits._known_user('https://victim.example/@alice') is None
+
+
+def test_a_public_url_on_the_accounts_own_host_still_names_it(world):
+    alice = make_user(peer_instance('Victim.Example'), 'alice')
+    alice.ap_profile_id = 'https://victim.example/users/alice'
+    alice.ap_public_url = 'https://victim.example/@alice'
+    bob = make_user(peer_instance('bücher.example'), 'bob')
+    bob.ap_profile_id = 'https://xn--bcher-kva.example/users/bob'
+    bob.ap_public_url = 'https://BÜCHER.example/@bob'
+    db.session.commit()
+
+    assert credits._known_user('https://victim.example/@alice') == alice
+    assert credits._known_user('https://victim.example/users/alice') == alice
+    assert credits._known_user('https://BÜCHER.example/@bob') == bob

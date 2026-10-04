@@ -13,11 +13,11 @@ from xml.parsers import expat
 
 import httpx
 from flask import current_app
-from sqlalchemy import func, or_
+from sqlalchemy import func
 
 import app.activitypub.util as ap_util   # the module, not names: app.activitypub.util imports this module
 from app import celery, db
-from app.discovery.filters import clean_https_url, clean_name, url_is_excluded
+from app.discovery.filters import ascii_host, clean_https_url, clean_name, url_is_excluded
 from app.discovery.podcast import podcast_community_for
 from app.models import Post, User
 from app.utils import get_request_capped, get_task_session, patch_db_session
@@ -181,7 +181,8 @@ def credit_vouches(user_id, podcast) -> bool:
 
 
 def _known_user(href: str):
-    """The User a credit's href already names: a remote account by actor id or profile URL, a local one by /u/name."""
+    """The User a credit's href already names: a remote account by actor id or profile URL, a local one by /u/name.
+    A profile URL is self-declared, so it names an account only on the host that serves the account's actor id."""
     parts = urlsplit(href)
     if (parts.hostname or '').lower() == current_app.config['SERVER_NAME'].lower():
         local = re.fullmatch(r'/u/([A-Za-z0-9_]+)/?', parts.path)
@@ -189,7 +190,12 @@ def _known_user(href: str):
             return None
         return db.session.query(User).filter(func.lower(User.user_name) == local.group(1).lower(),
                                              User.ap_id == None).first()
-    return db.session.query(User).filter(or_(User.ap_profile_id == href.lower(), User.ap_public_url == href)).first()
+    user = db.session.query(User).filter(User.ap_profile_id == href.lower()).first()
+    if user is not None:
+        return user
+    host = ascii_host(href)
+    return next((user for user in db.session.query(User).filter(User.ap_public_url == href)
+                 if host is not None and ascii_host(user.ap_profile_id) == host), None)
 
 
 def _canonical_document(document, fetched_from: str) -> dict | None:

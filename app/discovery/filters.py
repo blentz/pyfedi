@@ -43,6 +43,16 @@ def host_is_excluded(host: str, isolated: frozenset) -> bool:
     return db.session.query(Domain.id).filter(Domain.name == host, Domain.banned == True).first() is not None
 
 
+def ascii_host(url) -> str | None:
+    """The host of `url` in lower-case IDNA ASCII form, trailing dot stripped, as httpx reads it. None when httpx
+    cannot parse it or it has no host. Only a comparison helper: request_host is the gate for a fetch."""
+    try:
+        host = httpx.URL(url).raw_host.decode('ascii')
+    except (httpx.InvalidURL, TypeError, ValueError):   # UnicodeError is a ValueError
+        return None
+    return host.rstrip('.').lower() or None
+
+
 def request_host(url) -> str | None:
     """The host an httpx request for `url` would connect to (IDNA, lower-cased, trailing dot stripped), judged by
     httpx's own parser so a gate and the request cannot disagree. None -- refuse the URL -- when it carries
