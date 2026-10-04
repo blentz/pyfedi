@@ -80,6 +80,20 @@ def test_an_encoded_doctype_cannot_slip_past_the_refusal(app):
     assert [c['name'] for c in parse_feed_credits(clean, EP1)] == ['Ann']
 
 
+def test_a_clean_utf32_feed_gives_no_credits(app):
+    """Expat cannot read UTF-32 at all, so even a clean UTF-32 feed is unreadable and credits nobody."""
+    clean = feed('<podcast:person>Ann</podcast:person>').decode().replace('UTF-8', 'UTF-32')
+
+    assert parse_feed_credits(clean.encode('utf-32'), EP1) == []
+
+
+def test_a_feed_in_an_encoding_expat_cannot_read_gives_no_credits(app):
+    """pyexpat raises LookupError for an unknown encoding name and ValueError for a multi-byte one."""
+    for enc in ('bogus', 'Shift_JIS', 'big5', 'utf-7'):
+        text = feed('<podcast:person>Ann</podcast:person>').decode().replace('UTF-8', enc)
+        assert parse_feed_credits(text.encode(), EP1) == [], enc
+
+
 def test_a_feed_over_two_megabytes_is_refused(app):
     padded = FIXTURE.read_bytes().replace(b'</channel>', b'<!--' + b'x' * MAX_FEED_BYTES + b'--></channel>')
 
