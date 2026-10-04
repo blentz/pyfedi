@@ -138,3 +138,39 @@ def test_the_api_keeps_a_third_partys_note_naming_a_podcast_out_of_its_community
         pass
 
     assert Post.query.filter_by(community_id=podcast_community_for(world.podcast).id).count() == 0
+
+
+# ---- D3: a podcast owns its community; a restricted or private twin still takes its episodes -------------------
+
+@pytest.mark.parametrize('restriction', ['restricted_to_mods', 'private'])
+def test_a_podcast_posts_its_episode_into_its_restricted_community(world, restriction):
+    setattr(podcast_community_for(world.podcast), restriction, True)
+    db.session.commit()
+
+    process_new_content(world.podcast, None, False, create(world.podcast, f'https://{PEER}/n/20'), False)
+
+    assert Post.query.one().community_id == podcast_community_for(world.podcast).id
+
+
+@pytest.mark.parametrize('restriction', ['restricted_to_mods', 'private'])
+def test_someone_else_stays_out_of_a_restricted_podcast_community(world, restriction):
+    community = podcast_community_for(world.podcast)
+    setattr(community, restriction, True)
+    db.session.commit()
+
+    process_new_content(world.alice, community, False, create(world.alice, f'https://{PEER}/n/21'), False)
+
+    assert Post.query.count() == 0
+
+
+def test_an_update_to_an_episode_keeps_it_in_the_podcast_community(world):
+    note_id = f'https://{PEER}/n/22'
+    process_new_content(world.podcast, None, False, create(world.podcast, note_id), False)
+    update = create(world.podcast, note_id, content='<p>edited episode</p>')
+    update['type'], update['id'] = 'Update', f'{note_id}/update'
+
+    process_new_content(world.podcast, None, False, update, False)
+
+    post = Post.query.one()
+    assert post.community_id == podcast_community_for(world.podcast).id
+    assert 'edited episode' in post.body_html
