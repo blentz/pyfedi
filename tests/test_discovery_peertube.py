@@ -98,6 +98,19 @@ def test_fetch_json_answers_none_for_a_body_that_is_not_json(app, http_mock):
     assert sources.fetch_json('https://html.example/x') is None
 
 
+def test_fetch_json_refuses_a_body_over_the_cap(app, http_mock):
+    http_mock.get('https://big.example/x').respond(200, content=b'[' + b' ' * sources.MAX_DIRECTORY_BYTES + b']')
+
+    assert sources.fetch_json('https://big.example/x') is None
+
+
+def test_fetch_json_sends_its_params_and_headers(app, http_mock):
+    route = http_mock.get('https://dir.example/x', params={'limit': '80'}).respond(json={'ok': True})
+
+    assert sources.fetch_json('https://dir.example/x', params={'limit': 80}, headers={'X-Auth-Key': 'k'}) == {'ok': True}
+    assert route.calls.last.request.headers['X-Auth-Key'] == 'k'
+
+
 @pytest.mark.parametrize('value, expected', [(5, 5), (0, 0), (-1, 0), ('5', 0), (True, 0), (None, 0), (2.5, 0)])
 def test_as_count(value, expected):
     assert sources.as_count(value) == expected

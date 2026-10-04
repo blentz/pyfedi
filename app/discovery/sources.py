@@ -1,4 +1,5 @@
 """What every discovery fetcher shares: one polite GET, one entry shape, one failure type (interop D24)."""
+import json
 import re
 import time
 from urllib.parse import urlparse
@@ -6,9 +7,10 @@ from urllib.parse import urlparse
 import httpx
 from flask import current_app
 
-from app.utils import get_request
+from app.utils import get_request_capped
 
 POLITE_DELAY_SECONDS = 1.0
+MAX_DIRECTORY_BYTES = 5 * 1024 * 1024
 
 _HOSTNAME = re.compile(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+')
 _USERNAME = re.compile(r'[A-Za-z0-9_.-]{1,64}')
@@ -24,23 +26,24 @@ def polite_pause() -> None:
 
 
 def fetch_json(url: str, params: dict | None = None, headers: dict | None = None):
-    """The decoded JSON body of a 200 answer, or None for a transport error, any other status, or a body
-    that is not JSON. Goes through get_request, so the SSRF guards apply and redirects are not followed.
-    Logs the url only: request headers may carry credentials."""
+    """The decoded JSON body of a 200 answer, or None for a transport error, any other status, a body over
+    MAX_DIRECTORY_BYTES, or a body that is not JSON. Goes through get_request_capped, so the SSRF guards apply,
+    redirects are not followed and the body is never buffered past the cap. Logs the url only: request headers may
+    carry credentials."""
     try:
-        response = get_request(url, params=params, headers=dict(headers or {}))
+        target = str(httpx.URL(url, params=params)) if params else url
+        status, body = get_request_capped(target, MAX_DIRECTORY_BYTES, headers=dict(headers or {}))
     except httpx.HTTPError as error:
         current_app.logger.info(f'discovery: {url} failed: {type(error).__name__}')
         return None
+    except ValueError:   # httpx.URL refuses a malformed url
+        return None
+    if status != 200 or body is None:
+        return None
     try:
-        if response.status_code != 200:
-            return None
-        try:
-            return response.json()
-        except ValueError:
-            return None
-    finally:
-        response.close()
+        return json.loads(body)
+    except ValueError:   # not JSON, or not decodable text
+        return None
 
 
 def make_entry(*, kind: str, platform: str, actor_url: str, name: str, host: str, avatar, followers: int,
