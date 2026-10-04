@@ -33,9 +33,10 @@ def fixture_entries(fixtures: Path = FIXTURES) -> list[dict]:
     entries += [pixelfed.profile_to_entry(p, 'pixelfed.example')
                 for p in _json(fixtures, 'pixelfed_directory.json')['data']]
     podcastindex = _json(fixtures, 'castopod_podcastindex.json')
-    for feed in podcastindex['trending']['feeds']:
+    feeds = {feed['id']: feed for listed in podcastindex['lists'].values() for feed in listed['feeds']}
+    for feed in feeds.values():
         episodes = podcastindex['episodes'].get(str(feed['id']))
-        actor_url = castopod.actor_url_from_social_interact(episodes['items']) if episodes else None
+        actor_url = castopod.actor_url_from_social_interact(episodes['items'], feed['url']) if episodes else None
         if actor_url:
             entries.append(castopod.podcast_to_entry(feed, actor_url))
     return [entry for entry in entries if entry]

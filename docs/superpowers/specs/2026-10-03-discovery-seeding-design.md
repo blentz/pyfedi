@@ -41,7 +41,7 @@ real multi-author posts across PieFed; any bulk mirroring of directory data.
    | Platform | Source | Consent |
    |---|---|---|
    | PeerTube channels | SepiaSearch `GET https://sepiasearch.org/api/v1/search/video-channels` (no auth; `url`, `host`, `followersCount`, `videosCount`; cannot sort by followers, so rank client-side) | Public publisher channels |
-   | Castopod podcasts | Podcast Index API, only when the admin has entered an API key and secret: trending feeds that look like Castopod, then their episodes' `socialInteract` with `protocol: activitypub` gives the actor URL (Podcast Index reports `socialInteract` on episodes, not feeds) | Publisher opts in via the feed tag |
+   | Castopod podcasts | Podcast Index API, only when the admin has entered an API key and secret: feeds that look like Castopod on the value-tagged (`/podcasts/bytag?podcast-value`), new-feeds (`/recent/newfeeds`) and `castopod` search (`/search/byterm`) lists, then their episodes' `socialInteract` with `protocol: activitypub` gives the actor: `accountUrl`, or, because Castopod leaves it empty, `https://host/@handle` from `accountId` when that host is the feed's own (Podcast Index reports `socialInteract` on episodes, not feeds). Amended 2026-10-04: the trending list held no Castopod show (0 of 1000) and cannot be filtered by platform | Publisher opts in via the feed tag |
    | Mastodon people | Top 20 servers from `https://api.joinmastodon.org/servers`, then each server's `GET /api/v1/directory?local=true&order=active&limit=80` | Only `discoverable` accounts are listed |
    | Pixelfed people | Pixelfed hosts from FediDB `https://api.fedidb.org/v1/servers?software=pixelfed`, then each host's `GET /api/landing/v1/directory` (404 = disabled by the admin; skip the host) | Only `is_suggestable` public accounts are listed |
 
@@ -99,7 +99,7 @@ real multi-author posts across PieFed; any bulk mirroring of directory data.
 
 - **Network:** every fetch uses `get_request` (SSRF guards, redirects off) with a short timeout.
   Per-run budgets: PeerTube at most 5 pages; Mastodon at most 20 servers × 1 directory page of 80;
-  Pixelfed at most 20 servers × 2 pages; Podcast Index at most 200 results. Calls to the same host are
+  Pixelfed at most 20 servers × 2 pages; Podcast Index at most 1000 results from each of its three lists and 40 episode lookups. Calls to the same host are
   spaced well under each published rate limit. A failing source is logged and skipped; its previous
   entries remain until the 30-day expiry.
 - **Consent:** people come only from opt-in directories. Nothing is fetched from a banned instance, a
