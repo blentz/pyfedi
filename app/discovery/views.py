@@ -7,6 +7,7 @@ from app.activitypub.util import find_actor_or_create
 from app.discovery import KIND_COMMUNITY
 from app.discovery.credits import podcast_byline
 from app.discovery.filters import host_is_excluded
+from app.discovery.sources import is_hostname
 from app.main import bp
 from app.models import Community, DiscoveryEntry, User
 from app.utils import login_required
@@ -33,11 +34,14 @@ def discovery_resolve(entry_id):
 
 
 def _back_to_search(entry):
-    """The search the viewer came from, with their search text (the form's `q`) kept."""
+    """The search the viewer came from, with their search text (the form's `q`) and, for people, the instance whose
+    page it was (the form's `instance_domain`, taken only when it is a plain hostname) kept."""
     q = (request.form.get('q') or '').strip() or None
     if entry.kind == KIND_COMMUNITY:
         return redirect(url_for('main.list_communities', search=q))
-    return redirect(url_for('instance.instance_people', instance_domain='all', q=q))
+    instance_domain = request.form.get('instance_domain')
+    return redirect(url_for('instance.instance_people',
+                            instance_domain=instance_domain if is_hostname(instance_domain) else 'all', q=q))
 
 
 bp.app_template_global('podcast_byline')(podcast_byline)   # D24: the post byline for a podcast episode
