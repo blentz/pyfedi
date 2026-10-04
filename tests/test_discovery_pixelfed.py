@@ -71,6 +71,43 @@ def test_junk_host_rows_are_ignored(app):
     assert pixelfed_hosts(['not', 'a', 'dict']) == []
 
 
+def test_fedidb_hosts_are_de_duplicated_case_insensitively_in_first_order(app, http_mock):
+    assert pixelfed_hosts(fedidb('b.example', 'A.example', 'B.Example ', 'a.example', 'c.example')) == [
+        'b.example', 'a.example', 'c.example']
+
+    http_mock.get(FEDIDB_URL).respond(json=fedidb('pixelfed.example', 'Pixelfed.Example'))
+    route = http_mock.get(DIRECTORY).respond(json={'data': [{'username': 'one'}], 'meta': {'next_cursor': None}})
+
+    assert [e['name'] for e in fetch_pixelfed_people(nobody_excluded)] == ['one']
+    assert route.call_count == 1
+
+
+def test_calls_are_paced_across_pages_and_hosts(app, http_mock, monkeypatch):
+    pauses = []
+    monkeypatch.setattr(sources, 'polite_pause', lambda: pauses.append(len(http_mock.calls)))
+    http_mock.get(FEDIDB_URL).respond(json=fedidb('pixelfed.example', 'off.example', 'third.example'))
+    http_mock.get(DIRECTORY, params={'cursor': 'abc'}).respond(json={'data': [], 'meta': {'next_cursor': None}})
+    http_mock.get(DIRECTORY).respond(json={'data': [], 'meta': {'next_cursor': 'abc'}})
+    http_mock.get('https://off.example/api/landing/v1/directory').respond(404)
+    http_mock.get('https://third.example/api/landing/v1/directory').respond(json={'data': [], 'meta': {}})
+
+    fetch_pixelfed_people(nobody_excluded)
+
+    # FediDB, then four directory calls: a pause before every directory call but the first
+    assert len(http_mock.calls) == 5
+    assert pauses == [2, 3, 4]
+
+
+@pytest.mark.parametrize('meta', [None, 'abc', ['abc'], {}, {'next_cursor': 42}, {'next_cursor': ''},
+                                  {'next_cursor': ['abc']}])
+def test_a_malformed_meta_ends_the_host_and_keeps_its_rows(app, http_mock, meta):
+    http_mock.get(FEDIDB_URL).respond(json=fedidb('pixelfed.example'))
+    route = http_mock.get(DIRECTORY).respond(json={'data': [{'username': 'one'}], 'meta': meta})
+
+    assert [e['name'] for e in fetch_pixelfed_people(nobody_excluded)] == ['one']
+    assert route.call_count == 1
+
+
 def test_malformed_profile_rows_are_skipped_and_good_rows_kept(app, http_mock):
     """Review focus 1: no single malformed row aborts the source. The actor url is built from the host and
     username, so a bad `url` field cannot leak into it."""

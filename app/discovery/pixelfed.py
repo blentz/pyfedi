@@ -11,6 +11,7 @@ FEDIDB_LIMIT = 40
 
 
 def pixelfed_hosts(payload) -> list[str]:
+    """FediDB's host names, lower-cased, junk rows and repeats dropped, in FediDB's order."""
     data = payload.get('data') if isinstance(payload, dict) else None
     if not isinstance(data, list):
         return []
@@ -18,7 +19,7 @@ def pixelfed_hosts(payload) -> list[str]:
     for row in data:
         if isinstance(row, dict) and isinstance(row.get('domain'), str):
             domain = row['domain'].strip().lower()
-            if sources.is_hostname(domain):
+            if sources.is_hostname(domain) and domain not in hosts:
                 hosts.append(domain)
     return hosts
 
