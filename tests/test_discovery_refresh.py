@@ -240,3 +240,12 @@ def test_request_host_accepts_an_internationalised_host_in_either_form(app, url)
                                  'https://u@xn--bcher-kva.example/feed', 'not a url', None])
 def test_request_host_still_refuses_userinfo_and_parser_disagreement(app, url):
     assert request_host(url) is None
+
+
+@pytest.mark.parametrize('url', ['https://evil。example/', 'https://evil．example/', 'https://evil｡example/', 'https://ｅｖｉｌ.example/',
+                                 'https://ﬁle.example/'])
+def test_request_host_refuses_a_host_that_only_httpx_maps_to_another(app, url):
+    """httpx's IDNA encoder reads an ideographic, fullwidth or halfwidth full stop as a label separator
+    (evil.example), which the stdlib -- and anything judging its host -- does not; a fullwidth letter or a ligature
+    fails strict IDNA 2008 encoding."""
+    assert request_host(url) is None
