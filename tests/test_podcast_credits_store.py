@@ -356,6 +356,16 @@ def test_a_feed_without_a_content_length_is_not_read_past_the_cap(world, http_mo
     assert len(pulled) * len(chunk) <= MAX_FEED_BYTES + 2 * len(chunk)
 
 
+def test_storing_keeps_other_keys_of_the_podcast_extension(world):
+    world.post.extensions = {'other': 1, 'podcast': {'chapters': ['intro'], 'credits': [{'name': 'Old'}]}}
+    db.session.commit()
+
+    store_credits(world.post, [{'name': 'Ann Host', 'role': 'host'}])
+
+    assert stored(world.post.id) == {'other': 1, 'podcast': {'chapters': ['intro'],
+                                                             'credits': [{'name': 'Ann Host', 'role': 'host'}]}}
+
+
 def test_a_feed_trickled_past_the_deadline_is_abandoned(app, http_mock, monkeypatch):
     now = [1000.0]
     real_time = __import__('time')

@@ -314,8 +314,9 @@ def store_credits(post: Post, credits: list) -> None:
     if not credits:
         return
     extensions = dict(post.extensions) if isinstance(post.extensions, dict) else {}
-    extensions['podcast'] = {'credits': credits}
-    post.extensions = extensions   # a new dict: db.JSON does not track in-place changes
+    podcast = extensions.get('podcast')
+    extensions['podcast'] = {**(podcast if isinstance(podcast, dict) else {}), 'credits': credits}
+    post.extensions = extensions   # new dicts: db.JSON does not track in-place changes
     db.session.commit()
 
 
