@@ -5,7 +5,7 @@ import pytest
 from app import cli
 from app.discovery.credits import podcast_api_credits, podcast_byline
 from app.discovery.seed import seed_from_fixtures
-from app.models import Community, DiscoveryEntry, Post, User
+from app.models import Community, DiscoveryEntry, Instance, Post, User
 from tests.factories import make_instance, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -79,3 +79,15 @@ def test_the_seed_creates_no_local_user(app, db_session, http_mock):
     seed_from_fixtures()
 
     assert User.query.filter(User.ap_id == None).count() == 0
+
+
+def test_the_credited_account_belongs_to_its_own_hosts_instance_not_instance_1(app, db_session, http_mock):
+    make_instance('filler.example')
+    local = make_instance(app.config['SERVER_NAME'], software='piefed')
+    assert local.id != 1
+
+    seed_from_fixtures()
+
+    credited = User.query.filter_by(ap_profile_id='https://people.example/users/ann').one()
+    assert credited.instance_id == Instance.query.filter_by(domain='people.example').one().id
+    assert credited.instance_id not in (1, local.id)
