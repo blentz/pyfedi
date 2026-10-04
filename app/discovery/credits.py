@@ -17,9 +17,10 @@ from sqlalchemy import func
 
 import app.activitypub.util as ap_util   # the module, not names: app.activitypub.util imports this module
 from app import cache, celery, db
+from app.activitypub.signature import HttpSignature
 from app.discovery.filters import ascii_host, clean_https_url, clean_name, url_is_excluded
 from app.discovery.podcast import podcast_community_for
-from app.models import Post, User
+from app.models import Post, Site, User
 from app.utils import get_request_capped, get_task_session, patch_db_session
 
 MAX_FEED_BYTES = 2 * 1024 * 1024
@@ -195,13 +196,29 @@ def _stored_urls(user) -> set:
     return stored
 
 
+def _signed_headers(url) -> dict | None:
+    """The headers of a GET of url signed as this instance's actor, as signed_get_request sends them; None when the
+    site has no key."""
+    site = db.session.get(Site, 1)
+    if site is None or not site.private_key:
+        return None
+    # send_via_async: sign only, so the GET itself goes through get_request_capped's cap and deadline
+    _uri, headers, _body = HttpSignature.signed_request(url, None, site.private_key,
+                                                        f"{current_app.config['SERVER_URL']}/actor#main-key",
+                                                        method='get', send_via_async=True)
+    return headers
+
+
 def fetch_actor_document(url) -> dict | None:
     """One capped, ActivityPub-flavoured GET of an actor document (get_request's SSRF guards, no redirects), never
-    to a refused host."""
+    to a refused host. A server that refuses it unsigned (401 or 403, authorized fetch) is asked once more, signed,
+    under the same cap."""
     if url_is_excluded(url):
         return None
     try:
         status, body = get_request_capped(url, MAX_ACTOR_BYTES, headers={'Accept': _ACTOR_ACCEPT})
+        if status in (401, 403) and (signed := _signed_headers(url)) is not None:
+            status, body = get_request_capped(url, MAX_ACTOR_BYTES, headers=signed)
         document = json.loads(body) if status == 200 and body else None
     except (httpx.HTTPError, json.JSONDecodeError, UnicodeDecodeError, RecursionError):   # RecursionError: deep nesting
         return None
