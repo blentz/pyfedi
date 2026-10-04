@@ -7,7 +7,9 @@ app.discovery.filters (models and app.utils), so app/activitypub/* can import th
 a cycle.
 """
 from flask import current_app
+from sqlalchemy import event, text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import object_session
 
 from app import db
 from app.discovery.filters import clean_https_url
@@ -127,3 +129,47 @@ def ensure_podcast_community(user: User, actor_json: dict) -> Community | None:
         db.session.rollback()
         return podcast_community_for(user)
     return community
+
+
+def sync_podcast_twin_ban(user, banned=None, deleted=None) -> None:
+    """R3: mirror a remote podcast User's ban or deletion onto its Community twin (banned = banned or deleted), so
+    every community read path hides it without a check of its own. An unban mirrors back. `banned`/`deleted` are
+    the values being assigned when called from the attribute events below, which fire before the assignment."""
+    session = object_session(user)
+    if session is None or user.ap_id is None or not user.ap_profile_id or user.id is None:
+        return
+    banned = user.banned if banned is None else banned
+    deleted = user.deleted if deleted is None else deleted
+    with session.no_autoflush:
+        twin = session.query(Community).filter(Community.ap_profile_id == user.ap_profile_id,
+                                               Community.user_id == user.id).first()
+    if twin is not None:
+        twin.banned = bool(banned or deleted)
+
+
+# Attribute events rather than a call at each site: a remote User is banned or deleted from ~10 ORM sites (admin
+# ban/delete, actor Delete, refresh finding the actor gone, purge, Block from a site admin, unban), and these
+# catch all of them, plus any added later, with no seam in upstream files. active_history loads the old value so
+# an assignment that changes nothing (an unban of an unbanned user) leaves the twin alone. Raw-SQL writes bypass
+# the ORM: admin delete bans through the ORM first, and the ban-expiry task calls
+# unban_podcast_twins_of_expired_bans below.
+@event.listens_for(User.banned, 'set', active_history=True)
+def _user_banned_set(target, value, oldvalue, initiator):
+    if bool(value) != bool(oldvalue):
+        sync_podcast_twin_ban(target, banned=value)
+
+
+@event.listens_for(User.deleted, 'set', active_history=True)
+def _user_deleted_set(target, value, oldvalue, initiator):
+    if bool(value) != bool(oldvalue):
+        sync_podcast_twin_ban(target, deleted=value)
+
+
+def unban_podcast_twins_of_expired_bans(session, cutoff) -> None:
+    """R3 for the raw-SQL ban-expiry task: unban the twins of podcast Users whose temporary ban ends now. Run it
+    before the User update, which it mirrors (same predicate)."""
+    session.execute(text(
+        'UPDATE community SET banned = false FROM "user" u '
+        'WHERE community.user_id = u.id AND community.ap_profile_id = u.ap_profile_id AND u.ap_id IS NOT NULL '
+        'AND u.banned IS TRUE AND u.deleted IS NOT TRUE AND u.banned_until < :cutoff AND u.banned_until IS NOT NULL'
+    ), {'cutoff': cutoff})

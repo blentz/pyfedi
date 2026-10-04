@@ -24,6 +24,7 @@ from app.utils import communities_banned_from, joined_communities, moderating_co
 from app.models import flush_cdn_cache
 from app.activitypub.util import extract_domain_and_actor
 from app.community.util import search_for_community
+from app.discovery.podcast import unban_podcast_twins_of_expired_bans
 
 
 @celery.task
@@ -402,9 +403,11 @@ def unban_expired_users():
     """Unban users after ban expires"""
     session = get_task_session()
     try:
+        cutoff = utcnow()
+        unban_podcast_twins_of_expired_bans(session, cutoff)  # D24 R3
         session.execute(text(
             'UPDATE "user" SET banned = false WHERE banned is true AND banned_until < :cutoff AND banned_until is not null'
-        ), {'cutoff': utcnow()})
+        ), {'cutoff': cutoff})
         session.commit()
     except Exception:
         session.rollback()
