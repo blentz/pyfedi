@@ -48,7 +48,11 @@ real multi-author posts across PieFed; any bulk mirroring of directory data.
 4. **No credentials:** every source is public, so the admin enters none. Amended 2026-10-05: the Podcast
    Index key and secret fields were removed with that source; settings rows already stored are left as they are.
 5. **Castopod authorship:** a podcast actor gets a `User` row (the technical owner) and a `Community` row
-   with the same actor URL (`ap_profile_id` is unique per table, not across tables). `Post.user_id`
+   with the same actor URL (`ap_profile_id` is unique per table, not across tables). The Community's
+   `ap_id` is `name@host`, lower-case, built as for a remote Group from the podcast's `preferredUsername` and
+   domain, never copied from the User (amended 2026-10-05: a podcast found by its handle has a User `ap_id` of
+   `@name@host`, which gave the community the url `/c/@name@host`); every resync rebuilds it, which repairs rows
+   stored the old way. `Post.user_id`
    stays the podcast actor, and the page always shows the podcast account as the poster, followed by
    the **credits** (amended 2026-10-03 after a security review: credits are claims made by the podcast's
    own feed, so they must never replace or hide the real poster).

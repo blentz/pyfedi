@@ -3,6 +3,7 @@ Community, because it is what a reader subscribes to. Both rows carry the same A
 from types import SimpleNamespace
 
 import pytest
+from flask import url_for
 
 import app.discovery.podcast as podcast_module
 from app.activitypub.util import actor_json_to_model, refresh_user_profile_task
@@ -280,3 +281,50 @@ def test_a_community_created_concurrently_is_handed_out_after_the_insert_fails(a
 
     assert community.id == existing_id
     assert Community.query.count() == 1
+
+
+KALIMERA_HOST = 'pirate.mxtthxw.art'
+KALIMERA = f'https://{KALIMERA_HOST}/@thekalimerashow'
+
+
+def kalimera_document():
+    return peer_actor_json('Person', name='thekalimerashow', server=KALIMERA_HOST,
+                           fields={'id': KALIMERA, 'type': 'Podcast', 'name': 'The Kalimera Show',
+                                   'inbox': f'{KALIMERA}/inbox', 'outbox': f'{KALIMERA}/outbox'})
+
+
+def test_a_twin_gets_a_remote_groups_ap_id_not_the_users(app, db_session):
+    """A podcast found by its handle is stored with a User ap_id of '@name@host'; its twin is 'name@host', as
+    actor_json_to_model stores every other remote community."""
+    peer_instance(KALIMERA_HOST)
+
+    user = actor_json_to_model(kalimera_document(), '@thekalimerashow', KALIMERA_HOST)
+
+    community = Community.query.one()
+    assert user.ap_id == '@thekalimerashow@pirate.mxtthxw.art'
+    assert community.ap_id == 'thekalimerashow@pirate.mxtthxw.art'
+
+
+def test_a_twin_stored_with_the_old_at_prefixed_ap_id_is_corrected_on_resync(app, db_session):
+    peer_instance(KALIMERA_HOST)
+    actor_json_to_model(kalimera_document(), '@thekalimerashow', KALIMERA_HOST)
+    community = Community.query.one()
+    community.ap_id = '@thekalimerashow@pirate.mxtthxw.art'
+    db.session.commit()
+
+    actor_json_to_model(kalimera_document(), '@thekalimerashow', KALIMERA_HOST)
+
+    assert Community.query.one().ap_id == 'thekalimerashow@pirate.mxtthxw.art'
+
+
+def test_the_twins_link_and_url_have_no_at_prefix_and_resolve_to_it(app, db_session):
+    peer_instance(KALIMERA_HOST)
+    actor_json_to_model(kalimera_document(), '@thekalimerashow', KALIMERA_HOST)
+    community = Community.query.one()
+
+    with app.test_request_context():
+        url = url_for('activitypub.community_profile', actor=community.link())
+
+    assert community.link() == 'thekalimerashow@pirate.mxtthxw.art'
+    assert url == '/c/thekalimerashow@pirate.mxtthxw.art'
+    assert Community.query.filter_by(ap_id=community.link(), banned=False).one().id == community.id
