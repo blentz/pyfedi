@@ -50,6 +50,7 @@ import urllib.parse
 from app.utils import site_language_id
 from app.visibility import OPEN_VISIBILITIES, can_view, post_title_for
 from app.discovery.podcast import ensure_podcast_community, podcast_twin_named_by_other
+from app.interop.workarounds import is_castopod_podcast
 import app as app_pkg
 
 
@@ -865,7 +866,7 @@ def refresh_user_profile_task(user_id, activity_json=None):
                                 cover_changed = True
 
                     session.commit()
-                    if activity_json.get('type') == 'Podcast':
+                    if is_castopod_podcast(activity_json, user.instance):
                         ensure_podcast_community(user, activity_json)  # D24: a podcast known from before G1/D24
                     if user.avatar_id and avatar_changed and get_setting('cache_remote_images_locally', True):
                         make_image_sizes(user.avatar_id, 40, 250, 'users')
@@ -1392,11 +1393,12 @@ def actor_json_to_model(activity_json, address, server):
     server_host = host_of(f'//{server}')
     if not id_host or id_host != server_host:
         return None
-    # G1. Castopod's podcast actor has the custom type 'Podcast'; it authors Notes like a person.
+    # G1. Castopod's podcast actor has the custom type 'Podcast'; it authors Notes like a person. Castopod 1.13-1.15
+    # publish it as a Person instead, which is_castopod_podcast recognises by the server's software (D12 workaround).
     if activity_json['type'] in ('Person', 'Service', 'Podcast'):
         user = db.session.query(User).filter(User.ap_profile_id == activity_json['id'].lower()).first()
         if user:
-            if activity_json['type'] == 'Podcast':
+            if is_castopod_podcast(activity_json, user.instance):
                 ensure_podcast_community(user, activity_json)  # D24: a podcast is also a community
             return user
         # D1372. `except KeyError` below catches this value being absent and
@@ -1497,7 +1499,7 @@ def actor_json_to_model(activity_json, address, server):
             make_image_sizes(user.avatar_id, 40, 250, 'users')
         if user.cover_id and get_setting('cache_remote_images_locally', True):
             make_image_sizes(user.cover_id, 878, None, 'users')
-        if activity_json['type'] == 'Podcast':
+        if is_castopod_podcast(activity_json, user.instance):
             ensure_podcast_community(user, activity_json)  # D24: a podcast is also a community
         return user
     elif activity_json['type'] == 'Group':

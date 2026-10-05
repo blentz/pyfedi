@@ -14,7 +14,8 @@ from app.community.routes import do_subscribe
 from app.community.util import search_for_community
 from app.constants import POST_TYPE_IMAGE
 from app.models import User, Community, Instance, CommunityMember, Post, Topic
-from app.utils import gibberish, topic_tree, get_request, store_files_in_s3, ensure_directory_exists, guess_mime_type, get_task_session, patch_db_session, sanitize_svg_bytes
+from app.utils import gibberish, topic_tree, get_request, store_files_in_s3, ensure_directory_exists, guess_mime_type, get_task_session, patch_db_session, sanitize_svg_bytes, \
+    remote_instance_software
 import shutil
 from app.email import send_email
 
@@ -557,39 +558,3 @@ def fetch_mastodon_directory(remote_url: str, max_pages: int = 20) -> List[dict]
             break
 
     return accounts
-
-
-def remote_instance_software(remote_url: str) -> str:
-    """Return a remote instance's software name, lowercased, from its nodeinfo.
-
-    Raises if nodeinfo is missing, malformed, or advertises no schema 2.0/2.1
-    link, so the caller can report that rather than failing further downstream on
-    an endpoint the software does not have.
-    """
-    response = get_request(f'{remote_url}/.well-known/nodeinfo')
-    try:
-        nodeinfo = response.json()
-    finally:
-        response.close()
-
-    schemas = ('http://nodeinfo.diaspora.software/ns/schema/2.0',
-               'http://nodeinfo.diaspora.software/ns/schema/2.1')
-    instanceinfo_url = None
-    for link in (nodeinfo or {}).get('links', []):
-        if isinstance(link, dict) and link.get('rel') in schemas:
-            instanceinfo_url = link.get('href')
-
-    if not instanceinfo_url:
-        raise Exception(f'{remote_url} advertises no nodeinfo 2.0 or 2.1 endpoint')
-
-    response = get_request(instanceinfo_url)
-    try:
-        instanceinfo = response.json()
-    finally:
-        response.close()
-
-    name = ((instanceinfo or {}).get('software') or {}).get('name')
-    if not name:
-        raise Exception(f'{remote_url} nodeinfo does not name its software')
-
-    return name.lower()

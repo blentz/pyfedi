@@ -4398,6 +4398,66 @@ def instance_software(domain: str):
     return instance.software.lower() if instance else ''
 
 
+def remote_instance_software(remote_url: str) -> str:
+    """Return a remote instance's software name, lowercased, from its nodeinfo.
+
+    Raises if nodeinfo is missing, malformed, or advertises no schema 2.0/2.1
+    link, so the caller can report that rather than failing further downstream on
+    an endpoint the software does not have.
+
+    When /.well-known/nodeinfo gives no 2.0/2.1 link, NodeInfo2
+    (/.well-known/x-nodeinfo2, `server.software`) is read instead: Castopod
+    1.13.5 answers /.well-known/nodeinfo with 404 and serves only NodeInfo2
+    (interop D24, observed 2026-10-04 on casto.bitcoinaudible.de).
+    """
+    response = get_request(f'{remote_url}/.well-known/nodeinfo')
+    try:
+        nodeinfo = response.json()
+    except ValueError:   # a 404 page in HTML: no nodeinfo 2.x, so NodeInfo2 below
+        nodeinfo = None
+    finally:
+        response.close()
+
+    schemas = ('http://nodeinfo.diaspora.software/ns/schema/2.0',
+               'http://nodeinfo.diaspora.software/ns/schema/2.1')
+    instanceinfo_url = None
+    links = nodeinfo.get('links') if isinstance(nodeinfo, dict) else None
+    for link in links if isinstance(links, list) else []:
+        if isinstance(link, dict) and link.get('rel') in schemas:
+            instanceinfo_url = link.get('href')
+
+    if not instanceinfo_url:
+        return _nodeinfo2_software(remote_url)
+
+    response = get_request(instanceinfo_url)
+    try:
+        instanceinfo = response.json()
+    finally:
+        response.close()
+
+    name = ((instanceinfo or {}).get('software') or {}).get('name')
+    if not name:
+        raise Exception(f'{remote_url} nodeinfo does not name its software')
+
+    return name.lower()
+
+
+def _nodeinfo2_software(remote_url: str) -> str:
+    """remote_instance_software's fallback: `server.software` from NodeInfo2, lowercased; raises when absent."""
+    response = get_request(f'{remote_url}/.well-known/x-nodeinfo2')
+    try:
+        document = response.json()
+    except ValueError:
+        document = None
+    finally:
+        response.close()
+    server = document.get('server') if isinstance(document, dict) else None
+    name = server.get('software') if isinstance(server, dict) else None
+    if not isinstance(name, str) or not name:
+        raise Exception(f'{remote_url} advertises no nodeinfo 2.0 or 2.1 endpoint and no NodeInfo2 software')
+    return name.lower()
+
+
 # ----------------------------------------------------------------------
 # Return contents of referrer with a fallback
 def referrer(default: str = None) -> str:
