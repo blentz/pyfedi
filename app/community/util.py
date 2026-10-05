@@ -311,6 +311,14 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                                 # Log the error but continue processing other posts
                                 print(f"Error creating post: {e}")
                                 continue
+                            if not session.is_active:
+                                # create_post can swallow a failed flush (a PeerTube announce id longer than its
+                                # column, say) and return None. Without this rollback the next entry's first query
+                                # raised PendingRollbackError and ended the whole backfill with nothing stored.
+                                session.rollback()
+                                current_app.logger.warning(f'Backfill of {community.ap_profile_id} skipped '
+                                                           f'{activity.get("id")}: it could not be stored')
+                                continue
                             if post:
                                 if 'published' in activity:
                                     post.posted_at = activity['published']

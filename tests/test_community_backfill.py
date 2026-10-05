@@ -22,7 +22,7 @@ from flask import g
 from app import db
 from app.community.util import retrieve_mods_and_backfill
 from app.models import Community, CommunityMember, Site
-from tests.factories import make_community
+from tests.factories import make_community, make_instance, make_user
 
 MODS_URL = 'https://remote.test/c/faraway/moderators'
 OUTBOX_URL = 'https://remote.test/c/faraway/outbox'
@@ -145,3 +145,34 @@ class TestAPeertubeChannel:
                                                  'object':
                                                  'https://remote.test/v/1'}]},
                   'https://remote.test/v/1': None})
+
+
+class TestOneEntryThatBreaksTheSession:
+    """hell.cloud, 2026-10-05: a PeerTube video whose announce id outgrew its column failed at flush inside
+    create_post, which swallowed the error and returned None. The session was left needing a rollback, so the next
+    entry's first query raised PendingRollbackError and ended the whole backfill with nothing stored."""
+
+    def test_the_next_entry_is_still_processed(self, env):
+        author = make_user(make_instance('remote.test', software='lemmy'), 'a', local=False)
+        entries = [{'type': 'Create', 'id': f'https://remote.test/activities/{n}',
+                    'object': {'id': f'https://remote.test/p/{n}', 'type': 'Page', 'attributedTo': 'https://remote.test/u/a'}}
+                   for n in (1, 2)]
+        created = []
+
+        def create_post(store, community, request_json, user, announce_id=None):
+            created.append(request_json['id'])
+            if len(created) == 1:   # a failed flush, swallowed, as create_post does
+                db.session.add(CommunityMember(community_id=None, user_id=None))
+                try:
+                    db.session.flush()
+                except Exception:
+                    pass
+            return None
+
+        with patch('app.community.util.create_post', side_effect=create_post), \
+                patch('app.community.util.find_actor_or_create', return_value=author), \
+                patch('app.community.util.can_create_post', return_value=True):
+            backfill(env.community, {MODS_URL: EMPTY_MODS,
+                                     OUTBOX_URL: {'type': 'OrderedCollection', 'orderedItems': entries}})
+
+        assert created == ['https://remote.test/activities/1', 'https://remote.test/activities/2']
