@@ -145,6 +145,11 @@
             {% else -%}
                 {% if content_type == "posts" or content_type == 'events' -%}
                     {% if posts or sticky_posts %}
+                        {% if not sticky_posts and not posts.items and backfill_in_progress(community.id) -%}
+                            <p class="alert alert-info backfill_in_progress">
+                                {{ _('Fetching recent posts from %(host)s. They will appear here within a minute or two; refresh the page to see them.', host=community.ap_domain) }}
+                            </p>
+                        {% endif -%}
                         <div class="post_list">
                             {% if sticky_posts -%}
                                 {% for post in sticky_posts -%}

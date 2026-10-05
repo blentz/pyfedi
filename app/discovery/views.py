@@ -5,7 +5,7 @@ from flask_babel import _
 from app import db
 from app.activitypub.util import find_actor_or_create
 from app.discovery import KIND_COMMUNITY
-from app.discovery.backfill import queue_backfill
+from app.discovery.backfill import backfill_in_progress, queue_backfill
 from app.discovery.credits import podcast_byline
 from app.discovery.filters import host_is_excluded
 from app.discovery.sources import is_hostname
@@ -50,3 +50,4 @@ def _back_to_search(entry):
 
 
 bp.app_template_global('podcast_byline')(podcast_byline)   # D24: the post byline for a podcast episode
+bp.app_template_global('backfill_in_progress')(backfill_in_progress)   # D24: an empty community being filled
