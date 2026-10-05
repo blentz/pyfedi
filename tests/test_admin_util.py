@@ -456,6 +456,10 @@ class TestReadingTheDirectory:
 class TestAskingWhatSoftwareAnInstanceRuns:
     WELL_KNOWN = 'https://remote.test/.well-known/nodeinfo'
     INFO = 'https://remote.test/nodeinfo/2.0'
+    NODEINFO2 = 'https://remote.test/.well-known/x-nodeinfo2'   # read when no 2.x link is usable (interop D24)
+
+    def no_nodeinfo2(self, http_mock):
+        http_mock.get(self.NODEINFO2).mock(return_value=httpx.Response(404, json=''))
 
     def nodeinfo(self, rel='http://nodeinfo.diaspora.software/ns/schema/2.0'):
         return {'links': [{'rel': rel, 'href': self.INFO}]}
@@ -477,6 +481,7 @@ class TestAskingWhatSoftwareAnInstanceRuns:
 
     def test_an_instance_that_advertises_no_schema_we_know(self, env,
                                                            http_mock):
+        self.no_nodeinfo2(http_mock)
         http_mock.get(self.WELL_KNOWN).mock(return_value=httpx.Response(
             200, json=self.nodeinfo(
                 'http://nodeinfo.diaspora.software/ns/schema/1.0')))
@@ -484,12 +489,14 @@ class TestAskingWhatSoftwareAnInstanceRuns:
             remote_instance_software('https://remote.test')
 
     def test_one_that_advertises_nothing_at_all(self, env, http_mock):
+        self.no_nodeinfo2(http_mock)
         http_mock.get(self.WELL_KNOWN).mock(
             return_value=httpx.Response(200, json={}))
         with pytest.raises(Exception, match='no nodeinfo'):
             remote_instance_software('https://remote.test')
 
     def test_one_whose_links_are_not_objects(self, env, http_mock):
+        self.no_nodeinfo2(http_mock)
         http_mock.get(self.WELL_KNOWN).mock(
             return_value=httpx.Response(200, json={'links': ['nonsense']}))
         with pytest.raises(Exception, match='no nodeinfo'):
