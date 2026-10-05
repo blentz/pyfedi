@@ -124,3 +124,80 @@ def test_the_backfill_task_does_nothing_for_a_community_that_is_gone(app, db_ses
     monkeypatch.setattr(backfill, 'retrieve_mods_and_backfill', lambda *a, **k: pytest.fail('nothing to backfill'))
 
     backfill.backfill_discovered_community(987654)
+
+
+@pytest.fixture
+def real_cache(app, monkeypatch):
+    """The tests run on NullCache; the in-progress flag needs a cache that keeps what it is given."""
+    from cachelib import SimpleCache
+    from app import cache
+    monkeypatch.setitem(app.extensions['cache'], cache, SimpleCache())
+
+
+def test_a_queued_backfill_is_in_progress_until_the_task_ends(app, db_session, site, real_cache, monkeypatch):
+    make_user(make_instance('world.example', software='piefed'), 'zqfounder', local=True)
+    community = make_community('zqbackfill', host='tube.example')
+    db.session.commit()
+    monkeypatch.setattr(backfill.backfill_discovered_community, 'delay', lambda community_id: None)
+    monkeypatch.setattr(backfill, 'remote_object_to_json', lambda uri: None)
+    monkeypatch.setattr(backfill, 'retrieve_mods_and_backfill', lambda *a, **k: None)
+
+    backfill.queue_backfill(community.id)
+    assert backfill.backfill_in_progress(community.id)
+
+    backfill.backfill_discovered_community(community.id)
+    assert not backfill.backfill_in_progress(community.id)
+
+
+def test_a_failing_backfill_still_ends_the_in_progress_state(app, db_session, site, real_cache, monkeypatch):
+    make_user(make_instance('world.example', software='piefed'), 'zqfounder', local=True)
+    community = make_community('zqbackfill', host='tube.example')
+    db.session.commit()
+    monkeypatch.setattr(backfill.backfill_discovered_community, 'delay', lambda community_id: None)
+    monkeypatch.setattr(backfill, 'remote_object_to_json', lambda uri: None)
+
+    def boom(*a, **k):
+        raise RuntimeError('peer answered garbage')
+    monkeypatch.setattr(backfill, 'retrieve_mods_and_backfill', boom)
+
+    backfill.queue_backfill(community.id)
+    with pytest.raises(RuntimeError):
+        backfill.backfill_discovered_community(community.id)
+    assert not backfill.backfill_in_progress(community.id)
+
+
+def test_an_empty_community_being_backfilled_says_its_posts_are_on_the_way(env, real_cache, monkeypatch):
+    community = make_community('zqfilling', host='tube.example')
+    community.ap_id = 'zqfilling@tube.example'
+    db.session.commit()
+    monkeypatch.setattr(backfill.backfill_discovered_community, 'delay', lambda community_id: None)
+    backfill.queue_backfill(community.id)
+
+    html = env.client.get(f'/c/{community.link()}').get_data(as_text=True)
+
+    assert 'Fetching recent posts from tube.example' in html
+
+
+def test_an_empty_community_not_being_backfilled_shows_no_hint(env, real_cache):
+    community = make_community('zqquiet', host='tube.example')
+    community.ap_id = 'zqquiet@tube.example'
+    db.session.commit()
+
+    html = env.client.get(f'/c/{community.link()}').get_data(as_text=True)
+
+    assert 'Fetching recent posts' not in html
+
+
+def test_the_hint_goes_once_the_community_has_posts(env, real_cache, monkeypatch):
+    from tests.factories import make_post
+    community = make_community('zqfilled', host='tube.example')
+    community.ap_id = 'zqfilled@tube.example'
+    db.session.commit()
+    make_post(community, make_user(make_instance('tube.example', software='peertube'), 'zqauthor'), 'https://tube.example/videos/watch/zq1', title='Zqvideo')
+    monkeypatch.setattr(backfill.backfill_discovered_community, 'delay', lambda community_id: None)
+    backfill.queue_backfill(community.id)
+
+    html = env.client.get(f'/c/{community.link()}').get_data(as_text=True)
+
+    assert 'Zqvideo' in html
+    assert 'Fetching recent posts' not in html
