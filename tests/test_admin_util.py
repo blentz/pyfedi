@@ -510,6 +510,40 @@ class TestAskingWhatSoftwareAnInstanceRuns:
         with pytest.raises(Exception, match='does not name its software'):
             remote_instance_software('https://remote.test')
 
+    # Security review: the 2.x href is followed only when it is https on remote_url's own host (interop D24).
+
+    def test_an_off_host_href_is_not_requested_and_nodeinfo2_is_read(self, env, http_mock):
+        elsewhere = http_mock.get('https://elsewhere.test/nodeinfo/2.0').mock(
+            return_value=httpx.Response(200, json={'software': {'name': 'mastodon'}}))
+        http_mock.get(self.WELL_KNOWN).mock(return_value=httpx.Response(200, json={'links': [
+            {'rel': 'http://nodeinfo.diaspora.software/ns/schema/2.0',
+             'href': 'https://elsewhere.test/nodeinfo/2.0'}]}))
+        http_mock.get(self.NODEINFO2).mock(return_value=httpx.Response(
+            200, json={'server': {'software': 'Castopod'}}))
+        http_mock._assert_all_called = False   # `elsewhere` must stay uncalled
+        assert remote_instance_software('https://remote.test') == 'castopod'
+        assert elsewhere.call_count == 0
+
+    def test_an_http_href_is_not_requested(self, env, http_mock):
+        plain = http_mock.get('http://remote.test/nodeinfo/2.0').mock(
+            return_value=httpx.Response(200, json={'software': {'name': 'mastodon'}}))
+        http_mock.get(self.WELL_KNOWN).mock(return_value=httpx.Response(200, json={'links': [
+            {'rel': 'http://nodeinfo.diaspora.software/ns/schema/2.0',
+             'href': 'http://remote.test/nodeinfo/2.0'}]}))
+        self.no_nodeinfo2(http_mock)
+        http_mock._assert_all_called = False
+        with pytest.raises(Exception, match='no nodeinfo'):
+            remote_instance_software('https://remote.test')
+        assert plain.call_count == 0
+
+    def test_a_same_host_href_differing_only_in_case_and_trailing_dot_is_read(self, env, http_mock):
+        http_mock.get(self.WELL_KNOWN).mock(return_value=httpx.Response(200, json={'links': [
+            {'rel': 'http://nodeinfo.diaspora.software/ns/schema/2.0',
+             'href': 'https://Remote.Test./nodeinfo/2.0'}]}))
+        http_mock.get('https://remote.test./nodeinfo/2.0').mock(
+            return_value=httpx.Response(200, json={'software': {'name': 'Mastodon'}}))
+        assert remote_instance_software('https://remote.test') == 'mastodon'
+
     def test_one_whose_software_block_is_empty(self, env, http_mock):
         http_mock.get(self.WELL_KNOWN).mock(
             return_value=httpx.Response(200, json=self.nodeinfo()))

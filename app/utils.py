@@ -4428,7 +4428,7 @@ def remote_instance_software(remote_url: str, timeout: float | None = None) -> s
     instanceinfo_url = None
     links = nodeinfo.get('links') if isinstance(nodeinfo, dict) else None
     for link in links if isinstance(links, list) else []:
-        if isinstance(link, dict) and link.get('rel') in schemas:
+        if isinstance(link, dict) and link.get('rel') in schemas and _nodeinfo_href_on_host(link.get('href'), remote_url):
             instanceinfo_url = link.get('href')
 
     if not instanceinfo_url:
@@ -4441,6 +4441,17 @@ def remote_instance_software(remote_url: str, timeout: float | None = None) -> s
         raise Exception(f'{remote_url} nodeinfo does not name its software')
 
     return name.lower()
+
+
+def _nodeinfo_href_on_host(href, remote_url: str) -> bool:
+    """True when a nodeinfo 2.x `href` is https on remote_url's own host (lower-case, no trailing dot): a host may
+    not make this server fetch a URL on another host (interop D24 security review). Otherwise the NodeInfo2 path runs,
+    as when no 2.x link exists."""
+    if not isinstance(href, str) or not href.lower().startswith('https://'):
+        return False
+    href_host = (url_host(href) or '').lower().rstrip('.')
+    own_host = (url_host(remote_url) or '').lower().rstrip('.')
+    return bool(href_host) and href_host == own_host
 
 
 def _nodeinfo_json(uri: str, deadline: float | None):
