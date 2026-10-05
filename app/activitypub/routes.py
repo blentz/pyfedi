@@ -2129,7 +2129,6 @@ def process_inbox_request(request_json, store_ap_json):
             session.close()
 
 
-@celery.task
 def process_announced_objects(request_json, objects, id, saved_json, store_ap_json):
     """Process each object of an Announce of a list or OrderedCollection as its own single-object Announce.
 
@@ -2149,6 +2148,7 @@ def process_announced_objects(request_json, objects, id, saved_json, store_ap_js
         process_inbox_request(fake_activity, store_ap_json)  # Process the Announce (with single object) as normal
 
 
+@celery.task
 def process_delete_request(request_json, store_ap_json):
     with current_app.app_context():
         session = get_task_session()
