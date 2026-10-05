@@ -76,8 +76,9 @@ real multi-author posts across PieFed; any bulk mirroring of directory data.
   - `peertube.py`, `castopod.py`, `mastodon.py`, `pixelfed.py`: one fetcher each, returning normalised
     entries `{kind: community|person, platform, actor_url, name, host, avatar, followers, nsfw, source}`.
   - `refresh.py`: runs the fetchers; filters out banned instances, blocked domains, hosts on the
-    PeerTube isolation list and names failing `is_bad_name`; tags NSFW; caps entries per host and per
-    source (500, or 2500 for index.castopod.org so its whole index is kept); upserts into `discovery_entry` (unique on `actor_url`); deletes entries not seen for 30
+    PeerTube isolation list and names failing `is_bad_name`; tags NSFW; caps entries per host (20, or
+    100 for index.castopod.org, whose big hosts list 60-90 podcasts) and per source (500, or 2500 for
+    index.castopod.org so its whole index is kept); upserts into `discovery_entry` (unique on `actor_url`); deletes entries not seen for 30
     days.
 - **`discovery_entry` table:** `id`, `kind`, `platform`, `actor_url` (unique), `name`, `host`,
   `avatar_url`, `followers`, `nsfw`, `source`, `first_seen`, `last_seen`.

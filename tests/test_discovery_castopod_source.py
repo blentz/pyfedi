@@ -177,3 +177,18 @@ def test_the_whole_index_is_kept_past_the_usual_per_source_cap(app, db_session, 
     assert refresh.MAX_PER_SOURCE == 500
     assert refresh.SOURCE_LIMITS == {castopod.SOURCE: 2500}
     assert results[castopod.SOURCE] == 600
+
+
+def test_the_index_keeps_up_to_100_podcasts_per_server(app, db_session, http_mock, monkeypatch):
+    """Owner's ruling 2026-10-05: big Castopod hosts list 60-90 podcasts (pod.graffitiradio.fr has 86); the default
+    20-per-host cap dropped 346 of the index's 1859. Other sources keep 20."""
+    for source in list(refresh.FETCHERS):
+        monkeypatch.setitem(refresh.FETCHERS, source, lambda exclude: [])
+    monkeypatch.setitem(refresh.FETCHERS, castopod.SOURCE, fetch_castopod_podcasts)
+    http_mock.get(CASTOPOD_INDEX_URL).respond(json=[podcast(f'show{i}', host='big.example') for i in range(120)])
+
+    results = refresh.refresh_discovery()
+
+    assert results[castopod.SOURCE] == 100
+    assert refresh.host_limit(castopod.SOURCE) == 100
+    assert refresh.host_limit('sepiasearch') == refresh.MAX_PER_HOST == 20

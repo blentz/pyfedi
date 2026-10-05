@@ -17,6 +17,8 @@ MAX_PER_HOST = 20
 MAX_PER_SOURCE = 500
 # index.castopod.org lists about 1900 podcasts, and the whole index is kept
 SOURCE_LIMITS = {castopod.SOURCE: 2500}
+# Big Castopod hosts list 60-90 podcasts each (owner's ruling 2026-10-05); every other source keeps MAX_PER_HOST
+HOST_LIMITS = {castopod.SOURCE: 100}
 HOST_LIMIT = 255  # DiscoveryEntry.host is String(255)
 
 FETCHERS = {
@@ -38,10 +40,16 @@ def source_limit(source: str) -> int:
     return SOURCE_LIMITS.get(source, MAX_PER_SOURCE)
 
 
-def clean_entries(entries, exclude, limit: int | None = None) -> list[dict]:
+def host_limit(source: str) -> int:
+    return HOST_LIMITS.get(source, MAX_PER_HOST)
+
+
+def clean_entries(entries, exclude, limit: int | None = None, per_host_limit: int | None = None) -> list[dict]:
     """Validated, filtered, de-duplicated and capped copies of one source's entries, in source order. At most
-    `limit` are kept, MAX_PER_SOURCE when it is not given."""
+    `limit` are kept (MAX_PER_SOURCE when it is not given), and at most `per_host_limit` from one host
+    (MAX_PER_HOST when it is not given)."""
     limit = MAX_PER_SOURCE if limit is None else limit
+    per_host_limit = MAX_PER_HOST if per_host_limit is None else per_host_limit
     kept, per_host, seen = [], {}, set()
     for entry in entries:
         if len(kept) >= limit:
@@ -62,7 +70,7 @@ def clean_entries(entries, exclude, limit: int | None = None) -> list[dict]:
         host = entry.get('host').strip().lower() if isinstance(entry.get('host'), str) else ''
         if actor_url is None or name is None or len(host) > HOST_LIMIT or urlparse(actor_url).hostname != host:
             continue
-        if actor_url in seen or per_host.get(host, 0) >= MAX_PER_HOST or exclude(host) or is_bad_name(name):
+        if actor_url in seen or per_host.get(host, 0) >= per_host_limit or exclude(host) or is_bad_name(name):
             continue
         seen.add(actor_url)
         per_host[host] = per_host.get(host, 0) + 1
@@ -117,7 +125,7 @@ def refresh_discovery(now=None) -> dict:
             results[source] = 'failed'
             continue
         try:
-            results[source] = upsert_entries(clean_entries(fetched, exclude, source_limit(source)), now)
+            results[source] = upsert_entries(clean_entries(fetched, exclude, source_limit(source), host_limit(source)), now)
         except Exception:
             current_app.logger.exception(f'discovery: {source} could not be stored')
             db.session.rollback()
