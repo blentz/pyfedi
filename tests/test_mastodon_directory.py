@@ -197,14 +197,15 @@ class TestRemoteInstanceSoftware(unittest.TestCase):
         return fake_get, calls
 
     def _run(self, payloads):
+        import app.utils as app_utils   # remote_instance_software lives in app.utils (interop D24)
         from app.admin import util as admin_util
         fake_get, calls = self._stub(payloads)
-        original = admin_util.get_request
-        admin_util.get_request = fake_get
+        original = app_utils.get_request
+        app_utils.get_request = fake_get
         try:
             return admin_util.remote_instance_software('https://mastodon.cloud'), calls
         finally:
-            admin_util.get_request = original
+            app_utils.get_request = original
 
     def test_reads_software_name_from_schema_2_0(self):
         nodeinfo = {'links': [{'rel': 'http://nodeinfo.diaspora.software/ns/schema/2.0',
@@ -226,11 +227,18 @@ class TestRemoteInstanceSoftware(unittest.TestCase):
         software, _ = self._run([nodeinfo, {'software': {'name': 'Mastodon'}}])
         self.assertEqual(software, 'mastodon')
 
-    def test_no_recognised_schema_link_raises(self):
+    def test_no_recognised_schema_link_and_no_nodeinfo2_raises(self):
         nodeinfo = {'links': [{'rel': 'http://example.com/other', 'href': 'https://x/y'}]}
-        with self.assertRaises(Exception):
-            self._run([nodeinfo])
+        with self.assertRaisesRegex(Exception, 'no NodeInfo2 software'):
+            self._run([nodeinfo, {}])
 
     def test_missing_links_raises_rather_than_keyerror_escaping(self):
-        with self.assertRaises(Exception):
-            self._run([{'nope': True}])
+        with self.assertRaisesRegex(Exception, 'no NodeInfo2 software'):
+            self._run([{'nope': True}, ''])
+
+    def test_no_nodeinfo_2_falls_back_to_nodeinfo2(self):
+        """Castopod 1.13.5 answers /.well-known/nodeinfo with 404 `""` and serves only NodeInfo2."""
+        nodeinfo2 = {'version': '1.0', 'server': {'name': 'Castopod', 'software': 'Castopod', 'version': '1.13.5'}}
+        software, calls = self._run(['', nodeinfo2])
+        self.assertEqual(software, 'castopod')
+        self.assertEqual(calls[1], 'https://mastodon.cloud/.well-known/x-nodeinfo2')

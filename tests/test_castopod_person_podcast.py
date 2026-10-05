@@ -1,0 +1,179 @@
+"""Interop D24 / D12 workaround `castopod_person_is_podcast`: real Castopod servers (1.13.4-1.15.5) publish a
+podcast's actor as type `Person`, not `Podcast`. Castopod federates only podcasts, so a Person whose own host runs
+Castopod is a podcast: it gets a User and a Community twin, and its episode Notes go to the twin."""
+from types import SimpleNamespace
+
+import httpx
+import pytest
+
+from app import db
+from app.activitypub.routes import process_new_content
+from app.activitypub.util import actor_json_to_model, find_actor_or_create, refresh_user_profile_task
+from app.discovery.podcast import podcast_community_for
+from app.interop.workarounds import WORKAROUNDS, is_castopod_podcast
+from app.models import Community, Instance, Post, User
+from tests.factories import make_instance, make_site, seed_community_owner
+
+CASTO = 'casto.example'
+MASTO = 'masto.example'
+PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
+PEM = '-----BEGIN PUBLIC KEY-----\nnot-a-real-key\n-----END PUBLIC KEY-----\n'
+
+
+def castopod_person(name='mypodcast', server=CASTO, **fields):
+    """A Castopod 1.13-1.15 podcast actor document, trimmed from https://casto.bitcoinaudible.de/@BitcoinAudibleDE:
+    type Person, no rssFeed, Castopod's nodeInfo2Url."""
+    actor = f'https://{server}/@{name}'
+    document = {'@context': ['https://www.w3.org/ns/activitystreams', 'https://w3id.org/security/v1'],
+                'id': actor, 'type': 'Person', 'to': [PUBLIC], 'name': 'My Podcast', 'preferredUsername': name,
+                'summary': '<p>A podcast about the fediverse.</p>',
+                'inbox': f'{actor}/inbox', 'outbox': f'{actor}/outbox', 'followers': f'{actor}/followers',
+                'url': actor, 'nodeInfo2Url': f'https://{server}/.well-known/x-nodeinfo2',
+                'publicKey': {'id': f'{actor}#main-key', 'owner': actor, 'publicKeyPem': PEM}}
+    document.update(fields)
+    return document
+
+
+def episode(author, note_id):
+    return {'id': f'{note_id}/activity', 'type': 'Create', 'actor': author.ap_profile_id, 'to': [PUBLIC], 'cc': [],
+            'object': {'id': note_id, 'type': 'Note', 'content': '<p>new episode</p>',
+                       'attributedTo': author.ap_profile_id, 'to': [PUBLIC], 'cc': []}}
+
+
+@pytest.fixture
+def world(app, db_session):
+    seed_community_owner('local.example')   # instance 1 and user 1, which the microblogs community needs
+    make_site()
+    return SimpleNamespace(casto=make_instance(CASTO, 'castopod'), masto=make_instance(MASTO, 'mastodon'))
+
+
+def test_the_workaround_is_registered_with_its_versions_and_reason():
+    entry = WORKAROUNDS['castopod_person_is_podcast']
+    assert entry.software == 'castopod'
+    assert entry.versions == ('1.13.4', '1.15.5')
+    assert entry.reason and entry.observed
+
+
+def test_a_person_on_a_castopod_server_gets_a_user_and_a_twin(world):
+    user = actor_json_to_model(castopod_person(), 'mypodcast', CASTO)
+
+    assert isinstance(user, User) and user.bot is False
+    twin = podcast_community_for(user)
+    assert twin is not None and twin.ap_profile_id == user.ap_profile_id
+    assert twin.ap_outbox_url == f'https://{CASTO}/@mypodcast/outbox'
+
+
+def test_an_episode_from_a_castopod_person_lands_in_its_twin(world):
+    user = actor_json_to_model(castopod_person(), 'mypodcast', CASTO)
+
+    process_new_content(user, None, False, episode(user, f'https://{CASTO}/@mypodcast/posts/1'), False)
+
+    post = Post.query.one()
+    assert post.community_id == podcast_community_for(user).id
+    assert post.user_id == user.id
+
+
+def test_a_person_on_a_mastodon_server_stays_a_person(world):
+    user = actor_json_to_model(castopod_person(name='alice', server=MASTO), 'alice', MASTO)
+
+    assert Community.query.filter(Community.ap_profile_id == user.ap_profile_id).count() == 0
+    process_new_content(user, None, False, episode(user, f'https://{MASTO}/@alice/posts/1'), False)
+    assert Post.query.one().community.name == 'microblogs'
+
+
+def test_an_actor_on_another_host_than_the_castopod_server_is_not_a_podcast(world):
+    assert is_castopod_podcast(castopod_person(server='elsewhere.example'), world.casto) is False
+    assert is_castopod_podcast(castopod_person(), world.casto) is True
+
+
+def test_a_service_on_a_castopod_server_is_not_a_podcast(world):
+    assert is_castopod_podcast(castopod_person(type='Service'), world.casto) is False
+
+
+def test_the_podcast_type_is_still_a_podcast_anywhere(world):
+    assert is_castopod_podcast(castopod_person(type='Podcast'), world.masto) is True
+    assert is_castopod_podcast(castopod_person(type='Podcast'), None) is True
+    assert is_castopod_podcast(castopod_person(), None) is False
+
+
+def test_unknown_software_is_read_from_nodeinfo_once_and_stored(app, db_session, http_mock):
+    instance = make_instance(CASTO, 'unknown')
+    well_known = http_mock.get(f'https://{CASTO}/.well-known/nodeinfo').respond(json={'links': [
+        {'rel': 'http://nodeinfo.diaspora.software/ns/schema/2.0', 'href': f'https://{CASTO}/nodeinfo/2.0'}]})
+    node = http_mock.get(f'https://{CASTO}/nodeinfo/2.0').respond(json={'software': {'name': 'Castopod'}})
+
+    assert is_castopod_podcast(castopod_person(), instance) is True
+    assert is_castopod_podcast(castopod_person(), instance) is True
+
+    assert well_known.call_count == 1 and node.call_count == 1
+    assert db.session.get(Instance, instance.id).software == 'castopod'
+
+
+def test_unknown_software_falls_back_to_nodeinfo2_which_castopod_1_13_serves(app, db_session, http_mock):
+    """casto.bitcoinaudible.de (Castopod 1.13.5) answers /.well-known/nodeinfo with 404 `""` and serves only
+    /.well-known/x-nodeinfo2, the actor's nodeInfo2Url."""
+    instance = make_instance(CASTO, 'unknown')
+    http_mock.get(f'https://{CASTO}/.well-known/nodeinfo').respond(404, json='')
+    node2 = http_mock.get(f'https://{CASTO}/.well-known/x-nodeinfo2').respond(json={
+        'version': '1.0', 'server': {'baseUrl': f'https://{CASTO}/', 'name': 'Castopod', 'software': 'Castopod',
+                                     'version': '1.13.5'}, 'protocols': ['activitypub']})
+
+    assert is_castopod_podcast(castopod_person(), instance) is True
+    assert node2.call_count == 1
+    assert db.session.get(Instance, instance.id).software == 'castopod'
+
+
+def test_unreadable_nodeinfo_leaves_the_person_a_person(app, db_session, http_mock):
+    instance = make_instance(CASTO, 'unknown')
+    http_mock.get(f'https://{CASTO}/.well-known/nodeinfo').mock(side_effect=httpx.ConnectError('down'))
+
+    assert is_castopod_podcast(castopod_person(), instance) is False
+    assert db.session.get(Instance, instance.id).software == 'unknown'
+
+
+def test_a_dormant_instance_is_not_asked_for_nodeinfo(app, db_session, http_mock):
+    instance = make_instance(CASTO, 'unknown')
+    instance.dormant = True
+    db.session.commit()
+
+    assert is_castopod_podcast(castopod_person(), instance) is False
+
+
+def known_person(world):
+    """A Castopod podcast stored before this workaround: a User with no twin."""
+    world.casto.software = 'unknown-at-the-time'
+    db.session.commit()
+    user = actor_json_to_model(castopod_person(), 'mypodcast', CASTO)
+    assert podcast_community_for(user) is None
+    world.casto.software = 'castopod'
+    db.session.commit()
+    return user
+
+
+def test_a_community_lookup_repairs_a_stored_podcast_user_without_a_twin(world, http_mock):
+    user = known_person(world)
+    http_mock.get(f'https://{CASTO}/@mypodcast').respond(json=castopod_person())
+
+    community = find_actor_or_create(f'https://{CASTO}/@mypodcast', community_only=True)
+
+    assert isinstance(community, Community)
+    assert community.ap_profile_id == user.ap_profile_id and community.user_id == user.id
+    assert User.query.filter(User.ap_profile_id == user.ap_profile_id).count() == 1
+
+
+@pytest.mark.parametrize('flag', ['banned', 'deleted'])
+def test_a_banned_or_deleted_podcast_user_still_yields_no_community(world, flag):
+    user = known_person(world)
+    setattr(user, flag, True)
+    db.session.commit()
+
+    assert find_actor_or_create(f'https://{CASTO}/@mypodcast', community_only=True) is None
+    assert Community.query.filter(Community.ap_profile_id == user.ap_profile_id).count() == 0
+
+
+def test_a_refresh_of_a_stored_castopod_person_creates_its_twin(world):
+    user = known_person(world)
+
+    refresh_user_profile_task(user.id, castopod_person())
+
+    assert podcast_community_for(db.session.get(User, user.id)) is not None
