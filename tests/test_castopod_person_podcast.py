@@ -5,11 +5,13 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from cachelib import SimpleCache
 
-from app import db
+from app import cache, db
 from app.activitypub.routes import process_new_content
 from app.activitypub.util import actor_json_to_model, find_actor_or_create, refresh_user_profile_task
 from app.discovery.podcast import podcast_community_for
+import app.interop.workarounds as workarounds
 from app.interop.workarounds import WORKAROUNDS, is_castopod_podcast
 from app.models import Community, Instance, Post, User
 from tests.factories import make_instance, make_site, seed_community_owner
@@ -177,3 +179,89 @@ def test_a_refresh_of_a_stored_castopod_person_creates_its_twin(world):
     refresh_user_profile_task(user.id, castopod_person())
 
     assert podcast_community_for(db.session.get(User, user.id)) is not None
+
+
+# Security review of a035710ec: a host whose nodeinfo fails must not cost a blocking request per actor.
+
+@pytest.fixture
+def real_cache(app, monkeypatch):
+    """conftest's NullCache forgets every write; a real cache for the remembered failure."""
+    monkeypatch.setitem(app.extensions['cache'], cache, SimpleCache())
+    return cache
+
+
+def three_people(server=CASTO):
+    for name in ('one', 'two', 'three'):
+        actor_json_to_model(castopod_person(name=name, server=server), name, server)
+
+
+def test_a_failing_nodeinfo_is_read_once_across_three_actors(app, db_session, http_mock, real_cache):
+    instance = make_instance(CASTO, 'unknown')
+    well_known = http_mock.get(f'https://{CASTO}/.well-known/nodeinfo').mock(side_effect=httpx.ConnectError('down'))
+
+    three_people()
+
+    assert well_known.call_count == 1
+    assert Community.query.count() == 0
+    assert db.session.get(Instance, instance.id).software == 'unknown'
+
+
+def test_a_remembered_failure_expires_and_nodeinfo_is_read_again(app, db_session, http_mock, real_cache):
+    make_instance(CASTO, 'unknown')
+    well_known = http_mock.get(f'https://{CASTO}/.well-known/nodeinfo').mock(side_effect=httpx.ConnectError('down'))
+    three_people()
+
+    real_cache.delete(f'interop:nodeinfo-failed:{CASTO}')   # the 24-hour window has passed
+    actor_json_to_model(castopod_person(name='four'), 'four', CASTO)
+
+    assert well_known.call_count == 2
+
+
+def test_the_failure_is_remembered_for_a_day(app, db_session, http_mock, monkeypatch):
+    make_instance(CASTO, 'unknown')
+    http_mock.get(f'https://{CASTO}/.well-known/nodeinfo').mock(side_effect=httpx.ConnectError('down'))
+    stored = {}
+    monkeypatch.setattr(workarounds.cache, 'set', lambda key, value, timeout=None: stored.update({key: timeout}))
+
+    actor_json_to_model(castopod_person(), 'mypodcast', CASTO)
+
+    assert stored == {f'interop:nodeinfo-failed:{CASTO}': 24 * 60 * 60}
+
+
+def test_a_successful_read_is_not_repeated_across_three_actors(app, db_session, http_mock, real_cache):
+    make_instance(CASTO, 'unknown')
+    well_known = http_mock.get(f'https://{CASTO}/.well-known/nodeinfo').respond(json={'links': [
+        {'rel': 'http://nodeinfo.diaspora.software/ns/schema/2.0', 'href': f'https://{CASTO}/nodeinfo/2.0'}]})
+    http_mock.get(f'https://{CASTO}/nodeinfo/2.0').respond(json={'software': {'name': 'castopod'}})
+
+    three_people()
+
+    assert well_known.call_count == 1
+    assert Community.query.count() == 3
+
+
+def test_the_read_is_capped_at_five_seconds(app, db_session, monkeypatch):
+    instance = make_instance(CASTO, 'unknown')
+    calls = []
+    monkeypatch.setattr(workarounds, 'remote_instance_software',
+                        lambda url, **kwargs: calls.append(kwargs) or 'castopod')
+
+    is_castopod_podcast(castopod_person(), instance)
+
+    assert calls == [{'timeout': 5}]
+
+
+def test_a_capped_nodeinfo_read_gives_each_request_only_the_time_left(app, monkeypatch):
+    import app.utils as app_utils
+    seen = []
+
+    def capped(uri, max_bytes, headers=None, max_seconds=15):
+        seen.append(max_seconds)
+        return 200, (b'{"links": [{"rel": "http://nodeinfo.diaspora.software/ns/schema/2.0", "href": "https://x/n"}]}'
+                     if len(seen) == 1 else b'{"software": {"name": "Castopod"}}')
+
+    monkeypatch.setattr(app_utils, 'get_request_capped', capped)
+    monkeypatch.setattr(app_utils, 'get_request', lambda *a, **k: pytest.fail('uncapped get_request'))
+
+    assert app_utils.remote_instance_software('https://x', timeout=5) == 'castopod'
+    assert len(seen) == 2 and all(0 < seconds <= 5 for seconds in seen)

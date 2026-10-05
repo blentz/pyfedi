@@ -211,7 +211,8 @@ def get_request_capped(uri, max_bytes: int, headers=None, max_seconds: float = 1
     headers['Accept-Encoding'] = 'identity'
     deadline = time.monotonic() + max_seconds
     try:
-        with httpx_client.stream('GET', uri, headers=headers, timeout=10, follow_redirects=False) as response:
+        with httpx_client.stream('GET', uri, headers=headers, timeout=min(10, max_seconds),
+                                follow_redirects=False) as response:
             if response.headers.get('Content-Encoding', 'identity').strip().lower() not in ('', 'identity'):
                 return response.status_code, None
             declared = response.headers.get('Content-Length', '')
@@ -4398,7 +4399,10 @@ def instance_software(domain: str):
     return instance.software.lower() if instance else ''
 
 
-def remote_instance_software(remote_url: str) -> str:
+NODEINFO_MAX_BYTES = 64 * 1024   # a nodeinfo document is a few hundred bytes
+
+
+def remote_instance_software(remote_url: str, timeout: float | None = None) -> str:
     """Return a remote instance's software name, lowercased, from its nodeinfo.
 
     Raises if nodeinfo is missing, malformed, or advertises no schema 2.0/2.1
@@ -4409,14 +4413,15 @@ def remote_instance_software(remote_url: str) -> str:
     (/.well-known/x-nodeinfo2, `server.software`) is read instead: Castopod
     1.13.5 answers /.well-known/nodeinfo with 404 and serves only NodeInfo2
     (interop D24, observed 2026-10-04 on casto.bitcoinaudible.de).
+
+    `timeout`, in seconds, caps the whole read (every request together, no retry,
+    through get_request_capped); None keeps get_request's own timeouts and retry.
     """
-    response = get_request(f'{remote_url}/.well-known/nodeinfo')
+    deadline = None if timeout is None else time.monotonic() + timeout
     try:
-        nodeinfo = response.json()
+        nodeinfo = _nodeinfo_json(f'{remote_url}/.well-known/nodeinfo', deadline)
     except ValueError:   # a 404 page in HTML: no nodeinfo 2.x, so NodeInfo2 below
         nodeinfo = None
-    finally:
-        response.close()
 
     schemas = ('http://nodeinfo.diaspora.software/ns/schema/2.0',
                'http://nodeinfo.diaspora.software/ns/schema/2.1')
@@ -4427,13 +4432,9 @@ def remote_instance_software(remote_url: str) -> str:
             instanceinfo_url = link.get('href')
 
     if not instanceinfo_url:
-        return _nodeinfo2_software(remote_url)
+        return _nodeinfo2_software(remote_url, deadline)
 
-    response = get_request(instanceinfo_url)
-    try:
-        instanceinfo = response.json()
-    finally:
-        response.close()
+    instanceinfo = _nodeinfo_json(instanceinfo_url, deadline)
 
     name = ((instanceinfo or {}).get('software') or {}).get('name')
     if not name:
@@ -4442,15 +4443,30 @@ def remote_instance_software(remote_url: str) -> str:
     return name.lower()
 
 
-def _nodeinfo2_software(remote_url: str) -> str:
+def _nodeinfo_json(uri: str, deadline: float | None):
+    """The decoded JSON at `uri`; ValueError when it is not JSON. With a deadline (time.monotonic()), one
+    capped request in the time left, else get_request."""
+    if deadline is None:
+        response = get_request(uri)
+        try:
+            return response.json()
+        finally:
+            response.close()
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise httpx.HTTPError(f'HTTPError: no time left to read {uri}')
+    _status, body = get_request_capped(uri, NODEINFO_MAX_BYTES, max_seconds=remaining)
+    if body is None:
+        raise httpx.HTTPError(f'HTTPError: {uri} too large or too slow')
+    return json.loads(body)
+
+
+def _nodeinfo2_software(remote_url: str, deadline: float | None = None) -> str:
     """remote_instance_software's fallback: `server.software` from NodeInfo2, lowercased; raises when absent."""
-    response = get_request(f'{remote_url}/.well-known/x-nodeinfo2')
     try:
-        document = response.json()
+        document = _nodeinfo_json(f'{remote_url}/.well-known/x-nodeinfo2', deadline)
     except ValueError:
         document = None
-    finally:
-        response.close()
     server = document.get('server') if isinstance(document, dict) else None
     name = server.get('software') if isinstance(server, dict) else None
     if not isinstance(name, str) or not name:
