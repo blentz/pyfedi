@@ -311,3 +311,81 @@ def test_a_banned_instance_still_refuses_the_podcast_in_its_twin(world, monkeypa
     monkeypatch.setattr(app_utils, 'instance_banned', lambda domain: True)
 
     assert app_utils.can_create_post(user, podcast_community_for(user)) is False
+
+
+# Owner ruling: a podcast's own episode Note in its twin is titled with the episode link's text, not the text up to
+# its first period. Trimmed from https://casto.bitcoinaudible.de/@BitcoinAudibleDE/posts/34e64381-... (2026-10-04).
+
+BA = 'casto.bitcoinaudible.de'
+BA_ACTOR = f'https://{BA}/@BitcoinAudibleDE'
+BA_EPISODE = f'{BA_ACTOR}/episodes/208-martin-connor-bitcoin-das-ultimative-kollateral'
+BA_NOTE = {'@context': 'https://www.w3.org/ns/activitystreams',
+           'id': f'{BA_ACTOR}/posts/34e64381-eebb-4b68-b5af-7f97691c389c', 'type': 'Note',
+           'content': f'<a href="{BA_EPISODE}">208. Martin Connor - Bitcoin, das ultimative Kollateral</a><br/>',
+           'published': '2026-02-04T10:40:24+00:00', 'to': [PUBLIC], 'cc': [f'{BA_ACTOR}/followers'],
+           'attributedTo': BA_ACTOR}
+
+
+@pytest.fixture
+def bitcoin_audible(world):
+    make_instance(BA, 'castopod')
+    return actor_json_to_model(castopod_person(name='BitcoinAudibleDE', server=BA), 'BitcoinAudibleDE', BA)
+
+
+def deliver(author, note):
+    note = dict(note, attributedTo=author.ap_profile_id)
+    process_new_content(author, None, False, {'id': f"{note['id']}/activity", 'type': 'Create',
+                                              'actor': author.ap_profile_id, 'to': [PUBLIC], 'cc': [],
+                                              'object': note}, False)
+    return Post.query.filter_by(ap_id=note['id']).one()
+
+
+def test_a_podcast_episode_is_titled_with_its_episode_link_text(bitcoin_audible, http_mock):
+    http_mock.get(BA_EPISODE).respond(404)   # C1's audio fetch
+
+    post = deliver(bitcoin_audible, BA_NOTE)
+
+    assert post.community_id == podcast_community_for(bitcoin_audible).id
+    assert post.title == '208. Martin Connor - Bitcoin, das ultimative Kollateral'
+
+
+def test_the_episode_link_may_be_the_notes_url_and_its_text_is_collapsed_and_capped(bitcoin_audible):
+    page = f'https://{BA}/somewhere/else'
+    note = dict(BA_NOTE, id=f'{BA_ACTOR}/posts/2', url=page,
+                content=f'<p><a href="https://{BA}/other">Not. This</a> <a href="{page}">  Folge\n 209.  '
+                        + 'x' * 300 + '</a></p>')
+
+    post = deliver(bitcoin_audible, note)
+
+    from app.utils import shorten_string
+    assert post.title == shorten_string('Folge 209. ' + 'x' * 300, 255)   # capped as Post.new caps a warning title
+
+
+def test_a_podcast_note_without_an_episode_link_keeps_todays_title(bitcoin_audible):
+    note = dict(BA_NOTE, id=f'{BA_ACTOR}/posts/3',
+                content=f'<p><a href="https://{BA}/@BitcoinAudibleDE/about">208. About us</a> and more</p>')
+
+    assert deliver(bitcoin_audible, note).title == '208'
+
+
+def test_a_persons_note_with_the_same_shape_keeps_todays_title(world, http_mock):
+    alice = actor_json_to_model(castopod_person(name='alice', server=MASTO), 'alice', MASTO)
+    episode_page = f'https://{MASTO}/@alice/episodes/208-x'
+    http_mock.get(episode_page).respond(404)   # C1's audio fetch looks at any author's own-host episode link
+    note = dict(BA_NOTE, id=f'https://{MASTO}/@alice/posts/1',
+                content=f'<a href="{episode_page}">208. Martin Connor - Bitcoin</a><br/>')
+
+    post = deliver(alice, note)
+
+    assert post.community.name == 'microblogs' and post.title == '208'
+
+
+def test_an_update_of_a_podcast_episode_keeps_the_episode_title(bitcoin_audible, http_mock):
+    from app.activitypub.util import update_post_from_activity
+    http_mock.get(BA_EPISODE).respond(404)
+    post = deliver(bitcoin_audible, BA_NOTE)
+
+    update_post_from_activity(post, {'id': f"{BA_NOTE['id']}/update", 'type': 'Update',
+                                     'object': dict(BA_NOTE, attributedTo=bitcoin_audible.ap_profile_id)})
+
+    assert post.title == '208. Martin Connor - Bitcoin, das ultimative Kollateral'
