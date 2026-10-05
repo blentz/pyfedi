@@ -100,10 +100,23 @@ def _own_host_feed(user, value) -> str | None:
     return rss_url if feed_host and actor_host and feed_host.lower() == actor_host.lower() else None
 
 
+def _twin_ap_id(user, actor_json) -> str | None:
+    """name@host, lower-case, as actor_json_to_model builds a remote Group's ap_id: from the podcast's
+    preferredUsername (else its user_name) and its domain. Never the User's ap_id, which keeps whatever address the
+    actor was looked up by (a podcast found by its handle is stored as '@name@host')."""
+    name = actor_name_from_ap(actor_json) or user.user_name
+    try:
+        domain = user.ap_domain or urlsplit(user.ap_profile_id).hostname
+    except ValueError:
+        domain = None
+    return f'{name.lower()}@{domain.lower()}' if name and domain else None
+
+
 def _document_fields(user, actor_json) -> dict:
     """The Community fields taken from the podcast's actor document, cleaned as the User's own name and summary are
     when the actor is created or refreshed. An outbox or feed the document does not supply validly is left out, so
-    a resync keeps the one already stored."""
+    a resync keeps the one already stored. The ap_id is rebuilt on every resync, so a twin stored with the User's
+    '@name@host' is corrected the next time the podcast is seen."""
     title = actor_name_from_ap(actor_json, 'name', limit=256)
     if title and title.strip().lower() == '[deleted]':
         title = ''
@@ -120,6 +133,9 @@ def _document_fields(user, actor_json) -> dict:
         about = html_to_text(about_html)
     fields = {'title': title or user.user_name, 'description': about or '', 'description_html': about_html or '',
               'nsfw': actor_json.get('sensitive') is True}
+    ap_id = _twin_ap_id(user, actor_json)
+    if ap_id:
+        fields['ap_id'] = ap_id
     outbox = clean_https_url(actor_json.get('outbox'), AP_URL_LIMIT)
     if outbox:
         fields['ap_outbox_url'] = outbox
@@ -131,8 +147,8 @@ def _document_fields(user, actor_json) -> dict:
 
 def ensure_podcast_community(user: User, actor_json: dict) -> Community | None:
     """Find or create the Community for a remote podcast user. An existing Community is resynced from the actor
-    document (title, description, nsfw, outbox, rss_url); its ban state is never touched. None for a local, banned
-    or deleted user (no Community is created for them), for an existing Community that is banned, and for a new
+    document (title, description, nsfw, outbox, rss_url, ap_id); its ban state is never touched. None for a local,
+    banned or deleted user (no Community is created for them), for an existing Community that is banned, and for a new
     `sensitive` podcast on a site with NSFW off."""
     if _refused(user) or not isinstance(actor_json, dict):
         return None
@@ -147,6 +163,8 @@ def ensure_podcast_community(user: User, actor_json: dict) -> Community | None:
                 setattr(community, name, value)
             db.session.commit()
         return community
+    if 'ap_id' not in fields:   # with no ap_id the Community would read as a local one
+        return None
     if fields['nsfw']:
         site = db.session.get(Site, 1)   # not g.site: this runs from Celery too
         if site is None or not site.enable_nsfw:
@@ -155,7 +173,7 @@ def ensure_podcast_community(user: User, actor_json: dict) -> Community | None:
     community = Community(name=user.user_name, title=fields['title'],
                           description=fields['description'], description_html=fields['description_html'],
                           nsfw=fields['nsfw'], user_id=user.id, instance_id=user.instance_id,
-                          ap_id=user.ap_id, ap_profile_id=user.ap_profile_id, ap_public_url=user.ap_public_url,
+                          ap_id=fields['ap_id'], ap_profile_id=user.ap_profile_id, ap_public_url=user.ap_public_url,
                           ap_followers_url=user.ap_followers_url, ap_inbox_url=user.ap_inbox_url,
                           ap_outbox_url=fields.get('ap_outbox_url'),
                           ap_preferred_username=user.ap_preferred_username, ap_domain=user.ap_domain,
