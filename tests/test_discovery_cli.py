@@ -9,14 +9,14 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def test_the_command_prints_each_sources_outcome(app, db_session, monkeypatch):
     monkeypatch.setattr('app.discovery.cli.refresh_discovery',
-                        lambda: {'sepiasearch': 3, 'podcastindex': 'failed', 'expired': 1})
+                        lambda: {'sepiasearch': 3, 'castopod-index': 'failed', 'expired': 1})
     cli.register(app)   # pyfedi.py registers the commands; the test app has none
 
     result = app.test_cli_runner().invoke(args=['refresh_discovery'])
 
     assert result.exception is None, result.exception
     assert 'sepiasearch: 3' in result.output
-    assert 'podcastindex: failed' in result.output
+    assert 'castopod-index: failed' in result.output
     assert 'expired: 1' in result.output
 
 
