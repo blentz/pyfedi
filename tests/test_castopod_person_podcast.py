@@ -265,3 +265,49 @@ def test_a_capped_nodeinfo_read_gives_each_request_only_the_time_left(app, monke
 
     assert app_utils.remote_instance_software('https://x', timeout=5) == 'castopod'
     assert len(seen) == 2 and all(0 < seconds <= 5 for seconds in seen)
+
+
+# Owner ruling: a podcast posting into its own twin is exempt from the new-account cap ("3 posts in the first 24h").
+
+def a_fresh_podcast_with_five_posts():
+    user = actor_json_to_model(castopod_person(), 'mypodcast', CASTO)
+    user.post_count = 5
+    db.session.commit()
+    assert user.created_very_recently()
+    return user
+
+
+def test_a_fresh_podcast_past_the_new_account_cap_may_post_into_its_twin(world):
+    from app.utils import can_create_post
+    user = a_fresh_podcast_with_five_posts()
+
+    assert can_create_post(user, podcast_community_for(user)) is True
+
+
+def test_a_fresh_podcast_past_the_cap_may_not_post_into_another_community(world):
+    from app.utils import can_create_post
+    from tests.factories import make_community
+    user = a_fresh_podcast_with_five_posts()
+
+    assert can_create_post(user, make_community('elsewhere')) is False
+
+
+def test_an_ordinary_new_remote_user_stays_capped(world):
+    from app.utils import can_create_post
+    from tests.factories import make_community
+    alice = actor_json_to_model(castopod_person(name='alice', server=MASTO), 'alice', MASTO)
+    alice.post_count = 5
+    db.session.commit()
+
+    assert can_create_post(alice, make_community('elsewhere')) is False
+    alice.post_count = 2
+    db.session.commit()
+    assert can_create_post(alice, make_community('another')) is True
+
+
+def test_a_banned_instance_still_refuses_the_podcast_in_its_twin(world, monkeypatch):
+    import app.utils as app_utils
+    user = a_fresh_podcast_with_five_posts()
+    monkeypatch.setattr(app_utils, 'instance_banned', lambda domain: True)
+
+    assert app_utils.can_create_post(user, podcast_community_for(user)) is False

@@ -2836,6 +2836,13 @@ def can_create_post(user, content: Community) -> bool:
     if user.ban_posts:
         return False
 
+    # D24: a Castopod podcast owns its Community twin (same ap_profile_id, user_id is the podcast's User), so it
+    # posts its episodes there even when the twin is restricted_to_mods or private, and a newly seen podcast is not
+    # held to the new-account cap there (its backfill brings up to 50 episodes at once); every other check still
+    # applies. Inline rather than app.discovery.podcast, which imports this module.
+    is_podcast_owner = content.user_id == user.id and not user.is_local() and bool(user.ap_profile_id) and \
+        content.ap_profile_id == user.ap_profile_id
+
     if user.is_local():
         if not user.verified or user.private_key is None:
             return False
@@ -2848,7 +2855,7 @@ def can_create_post(user, content: Community) -> bool:
         else:
             if instance_banned(user.ap_domain):   # don't allow posts from defederated instances
                 return False
-        if user.created_very_recently() and user.post_count > 3:    # new users can only do 3 posts in their first 24h
+        if user.created_very_recently() and user.post_count > 3 and not is_podcast_owner:    # new users can only do 3 posts in their first 24h
             return False
 
     if content.banned:
@@ -2856,12 +2863,6 @@ def can_create_post(user, content: Community) -> bool:
 
     if user.is_rss_bot() or content.is_moderator(user) or user.is_admin():
         return True
-
-    # D24: a Castopod podcast owns its Community twin (same ap_profile_id, user_id is the podcast's User), so it
-    # posts its episodes there even when the twin is restricted_to_mods or private; every other check still
-    # applies. Inline rather than app.discovery.podcast, which imports this module.
-    is_podcast_owner = content.user_id == user.id and not user.is_local() and bool(user.ap_profile_id) and \
-        content.ap_profile_id == user.ap_profile_id
 
     if content.restricted_to_mods and not is_podcast_owner:
         return False
