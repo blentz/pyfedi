@@ -25,14 +25,15 @@ def polite_pause() -> None:
     time.sleep(POLITE_DELAY_SECONDS)
 
 
-def fetch_json(url: str, params: dict | None = None, headers: dict | None = None):
+def fetch_json(url: str, params: dict | None = None, headers: dict | None = None,
+               max_bytes: int = MAX_DIRECTORY_BYTES):
     """The decoded JSON body of a 200 answer, or None for a transport error, any other status, a body over
-    MAX_DIRECTORY_BYTES, or a body that is not JSON; each of those is logged at info. Goes through
-    get_request_capped, so the SSRF guards apply, redirects are not followed and the body is never buffered past
-    the cap. Logs the url only, without its params or headers: request headers may carry credentials."""
+    max_bytes (MAX_DIRECTORY_BYTES unless a source needs more), or a body that is not JSON; each of those is logged
+    at info. Goes through get_request_capped, so the SSRF guards apply, redirects are not followed and the body is
+    never buffered past the cap. Logs the url only, without its params or headers: request headers may carry credentials."""
     try:
         target = str(httpx.URL(url, params=params)) if params else url
-        status, body = get_request_capped(target, MAX_DIRECTORY_BYTES, headers=dict(headers or {}))
+        status, body = get_request_capped(target, max_bytes, headers=dict(headers or {}))
     except httpx.HTTPError as error:
         current_app.logger.info(f'discovery: {url} failed: {type(error).__name__}')
         return None

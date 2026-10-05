@@ -41,13 +41,12 @@ real multi-author posts across PieFed; any bulk mirroring of directory data.
    | Platform | Source | Consent |
    |---|---|---|
    | PeerTube channels | SepiaSearch `GET https://sepiasearch.org/api/v1/search/video-channels` (no auth; `url`, `host`, `followersCount`, `videosCount`; cannot sort by followers, so rank client-side) | Public publisher channels |
-   | Castopod podcasts | Podcast Index API, only when the admin has entered an API key and secret: feeds that look like Castopod on the value-tagged (`/podcasts/bytag?podcast-value`), new-feeds (`/recent/newfeeds`) and `castopod` search (`/search/byterm`) lists, then their episodes' `socialInteract` with `protocol: activitypub` gives the actor: `accountUrl`, or, because Castopod leaves it empty, `https://host/@handle` from `accountId` when that host is the feed's own (Podcast Index reports `socialInteract` on episodes, not feeds). Amended 2026-10-04: the trending list held no Castopod show (0 of 1000) and cannot be filtered by platform | Publisher opts in via the feed tag |
+   | Castopod podcasts | index.castopod.org's public export `GET https://index.castopod.org/podcastindex.json` (no auth; a JSON list of every Castopod podcast, about 4 MB): every entry whose `dead` is not 1 and whose `link` is a clean https Castopod actor `https://host/@handle` (also its ActivityPub id), ordered by `popularityScore`; `explicit` 1 is NSFW. Amended 2026-10-05 (owner's decision): replaces the Podcast Index API, which needed an admin key and secret and a per-podcast `socialInteract` check, and found about 7 podcasts | Publishing on Castopod is the opt-in |
    | Mastodon people | Top 20 servers from `https://api.joinmastodon.org/servers`, then each server's `GET /api/v1/directory?local=true&order=active&limit=80` | Only `discoverable` accounts are listed |
    | Pixelfed people | Pixelfed hosts from FediDB `https://api.fedidb.org/v1/servers?software=pixelfed`, then each host's `GET /api/landing/v1/directory` (404 = disabled by the admin; skip the host) | Only `is_suggestable` public accounts are listed |
 
-4. **Podcast Index credentials:** the admin UI has write-only fields for the API key and API secret
-   (requests are signed with SHA-1 of key + secret + unix time). They are stored as site settings, never
-   rendered back (the page shows "configured" / "not set"), and never logged.
+4. **No credentials:** every source is public, so the admin enters none. Amended 2026-10-05: the Podcast
+   Index key and secret fields were removed with that source; settings rows already stored are left as they are.
 5. **Castopod authorship:** a podcast actor gets a `User` row (the technical owner) and a `Community` row
    with the same actor URL (`ap_profile_id` is unique per table, not across tables). `Post.user_id`
    stays the podcast actor, and the page always shows the podcast account as the poster, followed by
@@ -74,13 +73,13 @@ real multi-author posts across PieFed; any bulk mirroring of directory data.
     entries `{kind: community|person, platform, actor_url, name, host, avatar, followers, nsfw, source}`.
   - `refresh.py`: runs the fetchers; filters out banned instances, blocked domains, hosts on the
     PeerTube isolation list and names failing `is_bad_name`; tags NSFW; caps entries per host and per
-    source; upserts into `discovery_entry` (unique on `actor_url`); deletes entries not seen for 30
+    source (500, or 2500 for index.castopod.org so its whole index is kept); upserts into `discovery_entry` (unique on `actor_url`); deletes entries not seen for 30
     days.
 - **`discovery_entry` table:** `id`, `kind`, `platform`, `actor_url` (unique), `name`, `host`,
   `avatar_url`, `followers`, `nsfw`, `source`, `first_seen`, `last_seen`.
 - **Scheduling:** `flask refresh_discovery` CLI command, called from `daily.sh` (the existing daily
   cron). Never runs on a request.
-- **Admin page** (where the lemmyverse pre-load lives): Podcast Index key/secret fields; a "Pre-load
+- **Admin page** (where the lemmyverse pre-load lives): a "Pre-load
   channels & podcasts" control (choose N and platforms, preview, then subscribe); attribution text
   naming every data source.
 - **Search:** community search (`/communities`) and people search (`/search?search_for=people`) show, on their first page and below the local
@@ -101,7 +100,8 @@ real multi-author posts across PieFed; any bulk mirroring of directory data.
 
 - **Network:** every fetch uses `get_request` (SSRF guards, redirects off) with a short timeout.
   Per-run budgets: PeerTube at most 5 pages; Mastodon at most 20 servers × 1 directory page of 80;
-  Pixelfed at most 20 servers × 2 pages; Podcast Index at most 1000 results from each of its three lists and 40 episode lookups. Calls to the same host are
+  Pixelfed at most 20 servers × 2 pages; index.castopod.org one GET of its export, capped at 16 MB (the other
+  directories at 5 MB). Calls to the same host are
   spaced well under each published rate limit. A failing source is logged and skipped; its previous
   entries remain until the 30-day expiry.
 - **Consent:** people come only from opt-in directories. Nothing is fetched from a banned instance, a
@@ -122,10 +122,10 @@ real multi-author posts across PieFed; any bulk mirroring of directory data.
 ### Testing
 
 - **Fetchers:** fixture JSON through `http_mock`, no live network. Cover normalisation, opt-out
-  handling (`discoverable=false`, Pixelfed directory 404), blocklists, budgets and paging, Podcast Index
-  signing (checked against a computed value), and a failing source keeping existing entries.
+  handling (`discoverable=false`, Pixelfed directory 404), blocklists, budgets and paging, the index.castopod.org
+  export (dead and non-Castopod entries skipped, popularity order, its 16 MB cap applying to it alone), and a failing source keeping existing entries.
 - **Refresh:** idempotent upsert, 30-day expiry, cleaning of names and URLs.
-- **Admin:** credentials saved but never rendered back; pre-load preview honours N and the platform
+- **Admin:** no credentials form; pre-load preview honours N and the platform
   filter; subscribe calls the join path once per new community and skips known ones; attribution shown.
 - **Search:** local results first, then the directory entries not known here; NSFW hidden by default; join/follow resolves
   the actor.

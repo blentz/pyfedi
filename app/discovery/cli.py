@@ -9,7 +9,7 @@ from app.discovery.seed import seed_from_fixtures
 def register_discovery_commands(app) -> None:
     @app.cli.command('refresh_discovery')
     def refresh_discovery_command():
-        """Refresh the discovery directory from SepiaSearch, Podcast Index, Mastodon and Pixelfed directories."""
+        """Refresh the discovery directory from SepiaSearch, index.castopod.org, Mastodon and Pixelfed directories."""
         for source, outcome in refresh_discovery().items():
             click.echo(f'{source}: {outcome}')
 

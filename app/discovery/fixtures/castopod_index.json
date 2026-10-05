@@ -1,0 +1,17 @@
+[
+ {"id": 101, "title": "Morning Show", "url": "https://radio.example/@morning/feed.xml", "link": "https://radio.example/@morning",
+  "host": "radio.example", "imageUrl": "https://radio.example/media/morning.jpg", "explicit": 0, "dead": 0, "popularityScore": 3,
+  "episodeCount": 12, "lastHttpStatus": 200, "generator": "Castopod - https://castopod.org/", "language": "en", "description": "Wake up."},
+ {"id": 102, "title": "My Podcast", "url": "https://pod.example/@mypodcast/feed.xml", "link": "https://pod.example/@mypodcast",
+  "host": "pod.example", "imageUrl": "https://pod.example/media/cover.jpg", "explicit": 0, "dead": 0, "popularityScore": 9,
+  "episodeCount": 1, "lastHttpStatus": 200, "generator": "Castopod - https://castopod.org/", "language": "en", "description": "A podcast about the fediverse."},
+ {"id": 103, "title": "Gone Quiet", "url": "https://cast.example/@gone/feed.xml", "link": "https://cast.example/@gone",
+  "host": "cast.example", "imageUrl": "https://cast.example/gone.jpg", "explicit": 0, "dead": 1, "popularityScore": 20,
+  "episodeCount": 4, "lastHttpStatus": 404, "generator": "Castopod - https://castopod.org/", "language": "en", "description": "No longer published."},
+ {"id": 104, "title": "Not On Castopod", "url": "https://feeds.example/other.rss", "link": "https://feeds.example/shows/other",
+  "host": "feeds.example", "imageUrl": "https://feeds.example/other.jpg", "explicit": 0, "dead": 0, "popularityScore": 15,
+  "episodeCount": 30, "lastHttpStatus": 200, "generator": "Other", "language": "en", "description": "Not a Castopod page."},
+ {"id": 105, "title": "Late Night", "url": "http://late.example/@late/feed.xml", "link": "http://late.example/@late",
+  "host": "late.example", "imageUrl": "http://late.example/late.jpg", "explicit": 1, "dead": 0, "popularityScore": 7,
+  "episodeCount": 8, "lastHttpStatus": 200, "generator": "Castopod - https://castopod.org/", "language": "en", "description": "Plain http."}
+]

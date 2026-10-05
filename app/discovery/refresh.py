@@ -15,6 +15,8 @@ from app.models import DiscoveryEntry, utcnow
 EXPIRY_DAYS = 30
 MAX_PER_HOST = 20
 MAX_PER_SOURCE = 500
+# index.castopod.org lists about 1900 podcasts, and the whole index is kept
+SOURCE_LIMITS = {castopod.SOURCE: 2500}
 HOST_LIMIT = 255  # DiscoveryEntry.host is String(255)
 
 FETCHERS = {
@@ -32,11 +34,17 @@ def _utf8_length(value: str) -> int:
     return len(value.encode('utf-8', 'surrogatepass'))
 
 
-def clean_entries(entries, exclude) -> list[dict]:
-    """Validated, filtered, de-duplicated and capped copies of one source's entries, in source order."""
+def source_limit(source: str) -> int:
+    return SOURCE_LIMITS.get(source, MAX_PER_SOURCE)
+
+
+def clean_entries(entries, exclude, limit: int | None = None) -> list[dict]:
+    """Validated, filtered, de-duplicated and capped copies of one source's entries, in source order. At most
+    `limit` are kept, MAX_PER_SOURCE when it is not given."""
+    limit = MAX_PER_SOURCE if limit is None else limit
     kept, per_host, seen = [], {}, set()
     for entry in entries:
-        if len(kept) >= MAX_PER_SOURCE:
+        if len(kept) >= limit:
             break
         if not isinstance(entry, dict) or entry.get('kind') not in (KIND_COMMUNITY, KIND_PERSON) \
                 or entry.get('platform') not in PLATFORMS:
@@ -109,7 +117,7 @@ def refresh_discovery(now=None) -> dict:
             results[source] = 'failed'
             continue
         try:
-            results[source] = upsert_entries(clean_entries(fetched, exclude), now)
+            results[source] = upsert_entries(clean_entries(fetched, exclude, source_limit(source)), now)
         except Exception:
             current_app.logger.exception(f'discovery: {source} could not be stored')
             db.session.rollback()
