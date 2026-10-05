@@ -8,6 +8,7 @@ from app import celery, db
 from app.activitypub.util import find_actor_or_create
 from app.community.routes import do_subscribe
 from app.discovery import KIND_COMMUNITY
+from app.discovery.backfill import queue_backfill
 from app.models import Community, DiscoveryEntry, User
 from app.utils import instance_banned
 
@@ -73,4 +74,5 @@ def _preload_one(entry_id, user_id) -> dict:
     community = find_actor_or_create(entry.actor_url, community_only=True)
     if not isinstance(community, Community):
         return {'entry': entry_id, 'status': 'not found'}
+    queue_backfill(community.id)   # created just now (known ones returned above): fill it
     return do_subscribe(community.ap_id, user_id, admin_preload=True)
