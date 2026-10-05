@@ -13,6 +13,13 @@ from tests.factories import make_banned_instance, make_community, make_instance,
 
 pytestmark = pytest.mark.usefixtures('site', 'fresh_cache')
 
+
+@pytest.fixture(autouse=True)
+def no_backfill(monkeypatch):
+    """A community these tests create would be backfilled from its remote outbox; that is
+    tests/test_discovery_backfill.py's subject, not theirs."""
+    monkeypatch.setattr(preload, 'queue_backfill', lambda community_id: None)
+
 PAGE = '/admin/federation/discovery'
 
 

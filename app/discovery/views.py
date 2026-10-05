@@ -5,6 +5,7 @@ from flask_babel import _
 from app import db
 from app.activitypub.util import find_actor_or_create
 from app.discovery import KIND_COMMUNITY
+from app.discovery.backfill import queue_backfill
 from app.discovery.credits import podcast_byline
 from app.discovery.filters import host_is_excluded
 from app.discovery.sources import is_hostname
@@ -24,8 +25,12 @@ def discovery_resolve(entry_id):
     if host_is_excluded(entry.host, frozenset()):   # banned (or off the allowlist) since the last refresh
         flash(_('%(name)s is on an instance this site does not federate with.', name=entry.name), 'warning')
         return _back_to_search(entry)
+    known = entry.kind == KIND_COMMUNITY and \
+        db.session.query(Community.id).filter(Community.ap_profile_id == entry.actor_url.lower()).first() is not None
     actor = find_actor_or_create(entry.actor_url, community_only=entry.kind == KIND_COMMUNITY)
     if isinstance(actor, Community):
+        if not known:   # created by this fetch: fill it as adding a community by name does
+            queue_backfill(actor.id)
         return redirect(url_for('activitypub.community_profile', actor=actor.link()))
     if isinstance(actor, User):
         return redirect(url_for('activitypub.user_profile', actor=actor.link()))

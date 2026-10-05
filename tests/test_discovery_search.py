@@ -17,6 +17,13 @@ from tests.test_admin_federation import csrf, login
 pytestmark = pytest.mark.usefixtures('fresh_cache')
 
 
+@pytest.fixture(autouse=True)
+def no_backfill(monkeypatch):
+    """A community these tests create would be backfilled from its remote outbox; that is
+    tests/test_discovery_backfill.py's subject, not theirs."""
+    monkeypatch.setattr(views, 'queue_backfill', lambda community_id: None)
+
+
 def add_entry(name, kind='community', platform='peertube', nsfw=False, host='tube.example', followers=1):
     """The shared helper, with a fixed default host and a url that is safe for any name."""
     path = 'video-channels' if kind == 'community' else 'users'
