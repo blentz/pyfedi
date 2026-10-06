@@ -2,7 +2,9 @@
 results from the wider network" and the admin allows it: the search text leaves this server. Results are cached ten
 minutes per query; a failure shows nothing and is not cached."""
 import hashlib
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunsplit
+
+from flask import current_app
 
 from app import cache, db
 from app.discovery import sources
@@ -26,16 +28,18 @@ def video_from(raw) -> dict | None:
         return None
     if not isinstance(title, str) or not title.strip():
         return None
+    if '\\' in url or any(ord(c) <= 0x20 or ord(c) == 0x7f for c in url):
+        return None
     try:
         parsed = urlparse(url)
-        url_host = parsed.hostname
     except ValueError:
         return None
-    if parsed.scheme != 'https' or url_host != host.lower():
+    if parsed.scheme != 'https' or parsed.netloc.lower() != host.lower():
         return None
-    return {'url': url, 'title': title.strip(), 'channel': sources.display_name(raw['channel'].get('displayName'),
-                                                                              host.lower()),
-            'host': host.lower(), 'nsfw': raw.get('nsfw') is True}
+    host = host.lower()
+    return {'url': urlunsplit(('https', host, parsed.path, parsed.query, '')), 'title': title.strip(),
+            'channel': sources.display_name(raw['channel'].get('displayName'), host), 'host': host,
+            'nsfw': raw.get('nsfw') is True}
 
 
 def _cache_key(q: str) -> str:
@@ -51,6 +55,8 @@ def _videos_for(q: str) -> list:
                                  max_bytes=MAX_BYTES, max_seconds=TIMEOUT_SECONDS)
     data = payload.get('data') if isinstance(payload, dict) else None
     if not isinstance(data, list):
+        if payload is not None:
+            current_app.logger.info('discovery: sepiasearch video search answered with no data list')
         return []
     videos = [video for video in map(video_from, data) if video is not None]
     cache.set(key, videos, timeout=CACHE_SECONDS)
@@ -63,7 +69,7 @@ def search_videos(q: str, allow_nsfw: bool) -> list:
         return []
     videos = [v for v in _videos_for(q) if (allow_nsfw or not v['nsfw']) and not host_is_excluded(v['host'], frozenset())]
     if videos:
-        stored = {ap_id.lower() for (ap_id,) in db.session.query(Post.ap_id).filter(
-            db.func.lower(Post.ap_id).in_([v['url'].lower() for v in videos]))}
-        videos = [v for v in videos if v['url'].lower() not in stored]
+        stored = {ap_id for (ap_id,) in db.session.query(Post.ap_id).filter(
+            Post.ap_id.in_([v['url'] for v in videos]))}
+        videos = [v for v in videos if v['url'] not in stored]
     return videos[:RESULT_LIMIT]

@@ -2,9 +2,9 @@
 import pytest
 from cachelib import SimpleCache
 
-from app import cache, db
+from app import cache
 from app.discovery import external_search, sources
-from app.discovery.external_search import CACHE_SECONDS, search_videos, video_from
+from app.discovery.external_search import search_videos, video_from
 from tests.discovery_fixtures import fresh_cache  # noqa: F401
 from tests.factories import make_banned_instance, make_community, make_instance, make_post, make_user
 
@@ -13,7 +13,7 @@ pytestmark = pytest.mark.usefixtures('site', 'fresh_cache')
 
 @pytest.fixture(autouse=True)
 def real_cache(app, monkeypatch):
-    """The test config's NullCache would make the cache assertions pass whether or not anything was cached."""
+    """The test config's NullCache would make the cache-hit test fail."""
     monkeypatch.setitem(app.extensions['cache'], cache, SimpleCache())
 
 
@@ -110,7 +110,15 @@ def test_at_most_ten(db_session, answers):
     raw(url=5),
     raw(name=''),
     raw(name=None),
-    raw(url='https://[::1/x')])
+    raw(url='https://[::1/x'),
+    raw(url='https://evil.example\\@tube.example/x'),
+    raw(url='https://user@tube.example/x'),
+    raw(url='https://tube.example:8443/x'),
+    raw(url='https://tube.example:evil/x'),
+    raw(url=' https://tube.example/x'),
+    raw(url='\x00https://tube.example/x'),
+    raw(url='https://tube.example/x\n'),
+    raw(url='https://evil.example\t@tube.example/x')])
 def test_malformed_rows_are_dropped(bad):
     assert video_from(bad) is None
 
@@ -131,3 +139,11 @@ def test_fetch_json_passes_max_seconds_to_the_capped_get(monkeypatch, app):
     with app.app_context():
         assert sources.fetch_json('https://x.example/', max_seconds=3) == {}
     assert seen['s'] == 3
+
+
+def test_a_payload_with_no_data_list_is_logged_without_the_query(db_session, answers, caplog):
+    answers.payload = {'nodata': []}
+    with caplog.at_level('INFO'):
+        assert search_videos('secretquery', allow_nsfw=False) == []
+    assert 'sepiasearch video search answered with no data list' in caplog.text
+    assert 'secretquery' not in caplog.text
