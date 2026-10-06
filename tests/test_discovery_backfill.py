@@ -185,3 +185,17 @@ def test_the_hint_goes_once_the_community_has_posts(env, real_cache, monkeypatch
 
     assert 'Zqvideo' in html
     assert 'Fetching recent posts' not in html
+
+
+def test_in_debug_the_backfill_runs_inline_and_clears_the_in_progress_state(app, db_session, site, real_cache, monkeypatch):
+    make_user(make_instance('world.example', software='piefed'), 'zqfounder', local=True)
+    community = make_community('zqdebug', host='tube.example')
+    db.session.commit()
+    ran = []
+    monkeypatch.setattr(app, 'debug', True)
+    monkeypatch.setattr(backfill, 'run_backfill', ran.append)
+
+    backfill.queue_backfill(community.id)
+
+    assert ran == [community.id]
+    assert not backfill.backfill_in_progress(community.id)
