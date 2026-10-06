@@ -156,8 +156,8 @@ def reconcile_sync() -> dict:
                 row = held.get(entry.actor_url.lower())
                 if row is not None:
                     if _needs_refollow(row, now):
-                        send_instance_follow(row, db.session.get(Community, row.community_id))
-                        summary['refollowed'] += 1
+                        if send_instance_follow(row, db.session.get(Community, row.community_id)):
+                            summary['refollowed'] += 1
                 elif added < ADDS_PER_HOST_PER_RUN and _add(entry):
                     added += 1
             summary['added'] += added

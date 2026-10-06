@@ -22,7 +22,7 @@ def register_discovery_commands(app) -> None:
         click.echo(f"added: {summary['added']}")
         click.echo(f"dropped: {summary['dropped']}")
         click.echo(f"refollowed: {summary['refollowed']}")
-        click.echo(f"failed hosts: {', '.join(summary['failed_hosts'])}")
+        click.echo(f"failed hosts: {', '.join(summary['failed_hosts']) or 'none'}")
         click.echo(f'polls queued: {enqueue_polls()}')
 
     @app.cli.command('discovery-seed-fixtures')
