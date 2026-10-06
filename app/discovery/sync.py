@@ -9,7 +9,7 @@ from sqlalchemy import func
 from app import celery, db
 from app.activitypub.util import find_actor_or_create
 from app.discovery import KIND_COMMUNITY, SYNC_NONE, SYNC_PENDING
-from app.discovery.backfill import queue_backfill, run_backfill
+from app.discovery.backfill import backfill_in_progress, queue_backfill, run_backfill
 from app.discovery.filters import host_is_excluded
 from app.discovery.instance_actor import send_instance_follow, send_instance_undo
 from app.models import Community, DiscoveryEntry, DiscoverySync, utcnow
@@ -171,15 +171,18 @@ def reconcile_sync() -> dict:
 def enqueue_polls() -> int:
     """One poll per synced community; one host sees at most one poll every POLL_SPACING_SECONDS."""
     per_host = {}
-    rows = db.session.query(DiscoverySync).order_by(DiscoverySync.community_id).all()
-    for row in rows:
+    queued = 0
+    for row in db.session.query(DiscoverySync).order_by(DiscoverySync.community_id).all():
+        if backfill_in_progress(row.community_id):   # the first backfill is still running
+            continue
         slot = per_host.get(_host(row.follow_target), 0)
         per_host[_host(row.follow_target)] = slot + 1
         if current_app.debug:
             poll_synced_community(row.community_id)
         else:
             poll_synced_community.apply_async(args=[row.community_id], countdown=slot * POLL_SPACING_SECONDS)
-    return len(rows)
+        queued += 1
+    return queued
 
 
 @celery.task
