@@ -19,6 +19,13 @@
         <input class="form-check-input" type="checkbox" id="media" name="media" value="1" {{ 'checked' if media else '' }}>
         <label class="form-check-label" for="media">{{ _('Videos & Podcasts only') }}</label>
     </div>
+    {% if external_allowed %}
+    <div class="form-check">
+        <input class="form-check-input" type="checkbox" id="external" name="external" value="1" {{ 'checked' if external else '' }}>
+        <label class="form-check-label" for="external">{{ _('Include results from the wider network') }}</label>
+        <div class="form-text">{{ _('Your search text is sent to sepiasearch.org to find PeerTube videos on other servers.') }}</div>
+    </div>
+    {% endif %}
     <div class="form-group"><label class="form-control-label" for="sort_by" aria-label="{{ _('Sort results') }}">{{ _('Sort by') }}</label>
         <select class="form-control form-select" id="sort_by" name="sort_by">
             <option value="" {{ 'selected' if sort_by | default('') == '' else '' }}>{{ _('Relevance') }}</option>

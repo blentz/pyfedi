@@ -64,7 +64,7 @@ def test_the_form_has_the_checkbox(posts):
     assert 'name="media"' in html and 'checked' in html
 
 
-def test_paging_links_keep_media_and_external(posts):
+def test_paging_links_keep_media_and_external(posts, monkeypatch):
     """Anonymous page size is 50 (hardcoded in run_search), so 52 matching posts give a second page."""
     instance = make_instance('tube2.example', software='peertube')
     community = make_community('c_tube2', host='tube2.example')
@@ -74,6 +74,7 @@ def test_paging_links_keep_media_and_external(posts):
         searchable_post(community, author, f'https://tube2.example/p/{i}', f'zqword {i}')
     db.session.commit()
 
+    monkeypatch.setattr('app.search.routes.search_videos', lambda q, allow_nsfw: [])  # no network in a paging test
     seen = captured(posts, q='zqword', media='1', external='1')
 
     assert 'media=1' in seen['next_url'] and 'external=1' in seen['next_url']

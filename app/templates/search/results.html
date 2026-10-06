@@ -26,6 +26,7 @@
                 {% endfor %}
             </div>
         {% endif -%}
+        {% include 'discovery/_wider_videos.html' %}
         {% if replies -%}
             <div class="post_list comments">
                 {% for post_reply in replies.items %}

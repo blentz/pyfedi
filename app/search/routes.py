@@ -8,7 +8,9 @@ from app.activitypub.util import resolve_remote_post_from_search
 from app.community.forms import RetrieveRemotePost
 from app.community.util import search_for_community
 from app.constants import POST_STATUS_REVIEWING
+from app.discovery.external_search import search_videos
 from app.discovery.media import media_post_clause
+from app.discovery.search import viewer_allows_nsfw
 from app.models import Post, Language, Community, Instance, PostReply
 from app.search import bp
 from app.visibility import listable_clause
@@ -45,7 +47,8 @@ def run_search():
     # name; a value that is not a number filters nothing rather than crashing
     minimum_upvote_value = request.args.get('minimum_upvote', type=int)
     media = request.args.get('media', '') == '1'          # D24: videos and podcasts only
-    external = request.args.get('external', '') == '1'    # D24: also ask the wider network (Task 14)
+    external_allowed = get_setting('discovery_external_search', True)
+    external = external_allowed and request.args.get('external', '') == '1'   # D24: off unless ticked
 
     community_id = request.args.get('community_id', 0, int)
     if community_id == 0 and community:
@@ -62,6 +65,7 @@ def run_search():
 
     if q != '' or type != 0 or language_id != 0 or community_id != 0 or nsfw != '' or minimum_upvote != '' or media:
         posts = None
+        wider_videos = []
         # set beside posts and replies, or a search_for naming neither branch
         # reaches the render with both names unbound
         next_url = prev_url = None
@@ -133,6 +137,8 @@ def run_search():
             flags = {'media': '1' if media else None, 'external': '1' if external else None}
             next_url = url_for('search.run_search', page=posts.next_num, q=q, **flags) if posts.has_next else None
             prev_url = url_for('search.run_search', page=posts.prev_num, q=q, **flags) if posts.has_prev and page != 1 else None
+            if external and q and page == 1:
+                wider_videos = search_videos(q, allow_nsfw=viewer_allows_nsfw(current_user, g.site))
 
         replies = None
         if search_for == 'comments':
@@ -213,7 +219,8 @@ def run_search():
                                community_results=communities, q=q,
                                community_str=community, community_id=community_id, language_id=language_id,
                                search_for=search_for, sort_by=sort_by, type=type,
-                               software=software, media=media, external=external, nsfw=nsfw, minimum_upvote=minimum_upvote,
+                               software=software, media=media, external=external, external_allowed=external_allowed,
+                               wider_videos=wider_videos, nsfw=nsfw, minimum_upvote=minimum_upvote,
                                languages=languages, instance_software=instance_software,
                                next_url=next_url, prev_url=prev_url, show_post_community=True,
                                recently_upvoted=recently_upvoted,
@@ -231,6 +238,7 @@ def run_search():
 
         return render_template('search/start.html', title=_('Search'), communities=communities.all(),
                                languages=languages, instance_software=instance_software,
+                               external_allowed=external_allowed,
                                is_admin=current_user.is_authenticated and current_user.is_admin(),
                                is_staff=current_user.is_authenticated and current_user.is_staff(),
                                default_user_add_remote=get_setting("allow_default_user_add_remote_community", True)
