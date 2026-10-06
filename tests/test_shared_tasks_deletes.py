@@ -1305,3 +1305,40 @@ def test_a_pm_to_a_local_recipient_sends_nothing(db_session, http_mock):
     delete_pm(None, message.id)
 
     assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_the_blocked_image_batch_removes_every_album_image_from_disk(db_session, http_mock):
+    """An album's other images may be the blocked one, so deleting the post
+    unlinks each gallery file as well as the post's own image. The row that
+    only REMEMBERS a blocked gallery image (`GALLERY_BLOCKED_WEIGHT`) is not
+    part of the album and is left alone."""
+    from app.models import GALLERY_BLOCKED_WEIGHT, post_file
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    _follower(s, http_mock)
+    paths = []
+    try:
+        files = []
+        for weight in (0, 1, GALLERY_BLOCKED_WEIGHT):
+            fd, path = tempfile.mkstemp(suffix='.png')
+            os.close(fd)
+            paths.append(path)
+            files.append((make_file(file_path=path), weight))
+        db.session.commit()
+        for file, weight in files:
+            db.session.execute(post_file.insert().values(
+                post_id=s.post.id, file_id=file.id, weight=weight))
+        db.session.commit()
+        assert all(os.path.isfile(path) for path in paths)
+
+        delete_posts_with_blocked_images([s.post.id], s.user.id, False)
+
+        db.session.expire_all()
+        assert s.post.deleted is True
+        assert not os.path.isfile(paths[0])
+        assert not os.path.isfile(paths[1])
+        assert os.path.isfile(paths[2])
+    finally:
+        for path in paths:
+            if os.path.isfile(path):
+                os.remove(path)
