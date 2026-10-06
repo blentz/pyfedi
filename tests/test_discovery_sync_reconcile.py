@@ -257,3 +257,17 @@ def test_sync_tasks_run_on_the_background_queue(app, task):
     assert getattr(sync, task).name == name
     routes = celery.conf.CELERY_ROUTES
     assert any(fnmatch(name, pattern) and route == {'queue': 'background'} for pattern, route in routes.items())
+
+
+def test_a_community_mid_backfill_gets_no_poll(db_session, fed, monkeypatch, app):
+    set_setting('discovery_sync_per_host', 2)
+    chans('tube.example', 2)
+    reconcile_sync()
+    busy, idle = [r.community_id for r in DiscoverySync.query.order_by(DiscoverySync.community_id)]
+    ran = []
+    monkeypatch.setattr(app, 'debug', True)
+    monkeypatch.setattr(sync, 'poll_synced_community', ran.append)
+    monkeypatch.setattr(sync, 'backfill_in_progress', lambda community_id: community_id == busy)
+
+    assert enqueue_polls() == 1
+    assert ran == [idle]
