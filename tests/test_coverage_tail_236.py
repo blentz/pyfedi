@@ -241,6 +241,11 @@ class TestDeletingAPostFromACommunity:
 
 
 class TestAnIconUploadThisSiteWillNotAccept:
+    """An icon with a disallowed extension gets a 400 from the check at the top of
+    `save_icon_file`. The trailing `else: abort(400)` that used to document an unreachable
+    arm was deleted as dead code (5038acd18).
+    """
+
 
     def test_a_disallowed_extension_is_refused_before_anything_is_written(self, env):
         """The first `abort(400)`. It happens before `icon_file.save(...)`, so a file with
@@ -257,21 +262,17 @@ class TestAnIconUploadThisSiteWillNotAccept:
 
         assert saved == []
 
-    def test_the_trailing_else_cannot_be_reached(self, env):
-        """`save_icon_file` ends with `if file_ext.lower() in allowed_extensions: ... else:
-        abort(400)` -- and the identical test at the top of the function has already
-        aborted for every extension that is not in that list. The trailing `else` is
-        therefore unreachable, which this row states rather than leaving it looking
-        untested.
-
-        Recorded, not deleted: it is the same refusal the function uses everywhere else,
-        and removing it would make a future edit above it silently fall through.
+    def test_the_extension_refusal_is_the_only_extension_abort(self, env):
+        """`save_icon_file` once ended with `if file_ext.lower() in allowed_extensions: ... else:
+        abort(400)`, which the check at the top had already made unreachable. It was deleted
+        as dead code (5038acd18). The refusal above (test_a_disallowed_extension_is_refused_
+        before_anything_is_written) is now the only place an extension is turned away, so
+        the source must hold exactly one extension guard and no `else: abort(400)` after it.
         """
         import inspect
 
         from app.community import util
 
         source = inspect.getsource(util.save_icon_file)
-        guards = source.count('if file_ext.lower() not in allowed_extensions')
-        assert guards == 1
-        assert 'else:\n        abort(400)' in source
+        assert source.count('if file_ext.lower() not in allowed_extensions') == 1
+        assert 'else:\n        abort(400)' not in source
