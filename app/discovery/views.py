@@ -1,6 +1,7 @@
 """Discovery routes on the main blueprint (interop D24)."""
 from flask import abort, flash, redirect, request, url_for
 from flask_babel import _
+from flask_login import current_user
 
 from app import db
 from app.activitypub.util import find_actor_or_create, resolve_remote_post_from_search
@@ -12,7 +13,7 @@ from app.discovery.filters import host_is_excluded
 from app.discovery.sources import is_hostname
 from app.main import bp
 from app.models import Community, DiscoveryEntry, User
-from app.utils import login_required
+from app.utils import login_required, show_ban_message
 
 
 @bp.route('/discovery/<int:entry_id>/resolve', methods=['POST'])
@@ -20,6 +21,8 @@ from app.utils import login_required
 def discovery_resolve(entry_id):
     """Fetch a directory entry's actor (find_actor_or_create, with its usual guards) and open its page here,
     where the ordinary Join or Follow button is. This is the first time anything is fetched from it."""
+    if current_user.banned:   # as retrieve_remote_post refuses: a banned user cannot make this server fetch
+        return show_ban_message()
     entry = db.session.get(DiscoveryEntry, entry_id)
     if entry is None:
         abort(404)
@@ -59,6 +62,8 @@ bp.app_template_global('backfill_in_progress')(backfill_in_progress)   # D24: an
 def discovery_video_resolve():
     """Open a wider-network search result here (interop D24): fetch the video through the authenticated resolve path
     (PERM-1) and go to its post. The url came from the viewer's form, so it gets the same check as a search result's."""
+    if current_user.banned:
+        return show_ban_message()
     q = (request.form.get('q') or '').strip() or None
     cleaned = clean_video_url((request.form.get('url') or '').strip())
     if cleaned is None:

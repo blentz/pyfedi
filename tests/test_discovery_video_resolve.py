@@ -7,7 +7,7 @@ from flask import g
 from app import db
 from app.discovery import views
 from app.models import Site
-from tests.discovery_fixtures import fresh_cache  # noqa: F401
+from tests.discovery_fixtures import add_entry, fresh_cache  # noqa: F401
 from tests.factories import make_banned_instance, make_community, make_instance, make_post, make_user
 from tests.test_admin_federation import csrf, login
 
@@ -77,3 +77,34 @@ def test_anonymous_viewers_are_sent_to_log_in(app, db_session, monkeypatch):
     monkeypatch.setattr(views, 'resolve_remote_post_from_search', lambda uri: pytest.fail('fetched'))
     response = app.test_client().post('/discovery/video/resolve', data={'url': URL})
     assert response.status_code == 302 and 'login' in response.headers['Location']
+
+
+def test_the_resolver_gets_the_rebuilt_url(env, monkeypatch):
+    seen = []
+    monkeypatch.setattr(views, 'resolve_remote_post_from_search', lambda uri: seen.append(uri))
+
+    env.client.post('/discovery/video/resolve', data={'csrf_token': env.token, 'url': 'https://TUBE.example/videos/watch/1'})
+
+    assert seen == ['https://tube.example/videos/watch/1']
+
+
+def test_a_banned_user_cannot_make_the_server_fetch_a_video(env, monkeypatch):
+    env.user.banned = True
+    db.session.commit()
+    monkeypatch.setattr(views, 'resolve_remote_post_from_search', lambda uri: pytest.fail('fetched'))
+
+    response = env.client.post('/discovery/video/resolve', data={'csrf_token': env.token, 'url': URL})
+
+    assert response.status_code == 302 and '/search' not in response.headers['Location']
+
+
+def test_a_banned_user_cannot_make_the_server_fetch_a_directory_entry(env, monkeypatch):
+    entry = add_entry('Chan', platform='peertube', kind='community', host='tube.example',
+                      url='https://tube.example/video-channels/chan')
+    env.user.banned = True
+    db.session.commit()
+    monkeypatch.setattr(views, 'find_actor_or_create', lambda *a, **k: pytest.fail('fetched'))
+
+    response = env.client.post(f'/discovery/{entry.id}/resolve', data={'csrf_token': env.token})
+
+    assert response.status_code == 302 and '/search' not in response.headers['Location']
