@@ -99,7 +99,8 @@ called from `daily.sh` after `refresh_discovery`, and on demand from the admin "
    - Insert the row, then send Follow (below).
 4. **Retry.** Rows in `pending` with `followed_at` older than 7 days, or in `none`, get their Follow sent
    again.
-5. **Isolation.** Each host runs in its own SAVEPOINT (D364 pattern). One host's failure is logged and
+5. **Isolation.** Each host runs in its own `try`/`rollback`, not a SAVEPOINT, because
+   `find_actor_or_create` commits and would end a SAVEPOINT early. One host's failure is logged and
    rolled back. It never stops the other hosts.
 6. **Poll.** After reconcile, enqueue `poll_synced_community(community_id)` for every row, on the
    `background` queue. Polls of the same host are staggered by `countdown` so that one host sees at
@@ -114,6 +115,10 @@ path as `retrieve_mods_and_backfill` and stops at the first item already stored 
 `last_error` (truncated to 255) and logs. There is no in-task retry (D738/D775): the next daily run
 retries. An entry that cannot be stored is skipped, as in the backfill (8a049a57e). A row whose
 community has gone is deleted.
+
+A community with no outbox URL still runs the featured-posts and reply-count steps: the backfill returns
+`'no outbox'` at the end and does not return early. The stop-at-known check reads a Create's string
+`object` as the post URL. A poll whose row was dropped mid-poll ends quietly.
 
 ## Federation (instance actor)
 
@@ -146,14 +151,24 @@ each Accepts and then pushes new content to `/inbox` or `/actor/inbox`. The owne
 hosts before it runs. A platform that refuses an `Application` follower falls back to poll-only: its
 rows stay in `none`, the reconcile never sends it a Follow, and that is recorded in this spec.
 
+**Outcome.** The live spike has not run. It waits for the owner to choose a public instance and the
+target hosts. Until it runs, both platforms send Follows from `/actor`. If a platform refuses
+`Application` followers, its rows stay `pending` and are re-sent weekly, and the poll keeps their
+content arriving. `POLL_ONLY_PLATFORMS` is added only if the spike shows a refusal, so no code assumes
+one before the evidence.
+
 ## User-facing surfaces
 
-- **Media predicate.** One helper, `media_community_clause()` in `app/discovery/sync.py`, is true when
+- **Media predicate.** One helper, `media_community_clause()` in `app/discovery/media.py`, is true when
   the community's `Instance.software`, lowercased, is `peertube` or `castopod`. The feed, post search
-  and community browse all use it.
+  and community browse all use it. It lives in `media.py`, not `sync.py`, so the feed and search
+  modules do not import Celery and ActivityPub code. `platform_community_clause(platform)` and
+  `media_community_clause()` share one instance-id select, and the community browse filter uses the
+  first.
 - **Home feed.** `view_filter == 'media'` in `home_page` (`app/main/routes.py`), with the same private
   and low-quality guards as `popular`. It works for anonymous users and gets a "Videos & Podcasts" item
-  in `_view_filter_nav.html`.
+  in `_view_filter_nav.html`. It also requires `c.show_all is true`: the feed is a subset of All, so a
+  silenced instance stays out.
 - **Post search** (`app/search/routes.py`):
   - The "Videos & Podcasts only" checkbox (`media=1`) applies the media predicate.
   - The "Include results from the wider network" toggle (`external=1`, off by default) renders only
@@ -166,13 +181,25 @@ rows stay in `none`, the reconcile never sends it a Follow, and that is recorded
     - Drops videos already stored here (matched by `Post.ap_id` against the video URL), videos on banned
       hosts, and NSFW videos (always NSFW-free for anonymous users, following D798; otherwise the user's
       `hide_nsfw`).
-  - The results render as a "From the wider network" block below the local results.
-  - Timeouts, HTTP errors and bad JSON hide the block and log at info level. They are never a 500.
+  - A video URL must be https, and its authority must be exactly the channel's host: no userinfo, no
+    port, no backslash, no control or space characters. The URL is rebuilt from its parsed parts. One
+    helper, `clean_video_url`, serves both the result list and the resolve route. This closes a parser
+    differential: `https://evil.example\@tube.example/` reads as tube.example in Python but as
+    evil.example in browsers.
+  - The already-stored filter matches `Post.ap_id` exactly, so it uses the existing index. PeerTube ids
+    are case-preserved.
+  - The results render as a "From the wider network" block below the local results. The block shows no
+    thumbnails: a thumbnail would make the viewer's browser fetch from every listed host, which leaks
+    their IP.
+  - Timeouts, HTTP errors and bad JSON hide the block and log at info level. They are never a 500. A
+    200 answer with no `data` list logs at info too. The search text is never logged.
   - Both flags travel in the query string and survive pagination.
 - **Opening an external result.**
   - Logged in: a POST with CSRF goes to `/discovery/video/resolve`. It resolves through the existing
     authenticated resolve path (PERM-1) and redirects to the local post. If it fails, it flashes "couldn't
     reach that server" (D720) and returns to the search.
+  - Both discovery routes (`/discovery/<id>/resolve` and `/discovery/video/resolve`) refuse a banned user
+    with `show_ban_message()` before fetching anything, the same as `retrieve_remote_post`.
   - Anonymous: the result is a plain link to the remote video URL.
 - **Community search and browse.** Communities whose instance is PeerTube or Castopod get a platform
   badge. `list_communities` gains a `platform` filter (All / PeerTube / Castopod) using the same
