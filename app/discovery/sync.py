@@ -79,8 +79,7 @@ def poll_synced_community(community_id: int) -> None:
     if row is None:
         return
     if _unusable(db.session.get(Community, community_id)):
-        db.session.delete(row)
-        db.session.commit()
+        drop_row(row)
         return
     try:
         outcome = run_backfill(community_id, stop_at_known=True)
