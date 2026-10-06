@@ -8,6 +8,7 @@ from app.activitypub.util import resolve_remote_post_from_search
 from app.community.forms import RetrieveRemotePost
 from app.community.util import search_for_community
 from app.constants import POST_STATUS_REVIEWING
+from app.discovery.media import media_post_clause
 from app.models import Post, Language, Community, Instance, PostReply
 from app.search import bp
 from app.visibility import listable_clause
@@ -43,6 +44,8 @@ def run_search():
     # the template re-renders the raw string, so the parsed value is its own
     # name; a value that is not a number filters nothing rather than crashing
     minimum_upvote_value = request.args.get('minimum_upvote', type=int)
+    media = request.args.get('media', '') == '1'          # D24: videos and podcasts only
+    external = request.args.get('external', '') == '1'    # D24: also ask the wider network (Task 14)
 
     community_id = request.args.get('community_id', 0, int)
     if community_id == 0 and community:
@@ -57,7 +60,7 @@ def run_search():
             if community_obj:
                 community_id = community_obj.id
 
-    if q != '' or type != 0 or language_id != 0 or community_id != 0 or nsfw != '' or minimum_upvote != '':
+    if q != '' or type != 0 or language_id != 0 or community_id != 0 or nsfw != '' or minimum_upvote != '' or media:
         posts = None
         # set beside posts and replies, or a search_for naming neither branch
         # reaches the render with both names unbound
@@ -116,6 +119,8 @@ def run_search():
                 posts = posts.filter(Post.language_id == language_id)
             if software:
                 posts = posts.join(Instance, Post.instance_id == Instance.id).filter(Instance.software == software)
+            if media:
+                posts = posts.filter(media_post_clause())
             if sort_by == 'date':
                 posts = posts.order_by(desc(Post.posted_at))
             elif sort_by == 'top':
@@ -125,8 +130,9 @@ def run_search():
                                    per_page=100 if current_user.is_authenticated and not low_bandwidth else 50,
                                    error_out=False)
 
-            next_url = url_for('search.run_search', page=posts.next_num, q=q) if posts.has_next else None
-            prev_url = url_for('search.run_search', page=posts.prev_num, q=q) if posts.has_prev and page != 1 else None
+            flags = {'media': '1' if media else None, 'external': '1' if external else None}
+            next_url = url_for('search.run_search', page=posts.next_num, q=q, **flags) if posts.has_next else None
+            prev_url = url_for('search.run_search', page=posts.prev_num, q=q, **flags) if posts.has_prev and page != 1 else None
 
         replies = None
         if search_for == 'comments':
@@ -207,7 +213,7 @@ def run_search():
                                community_results=communities, q=q,
                                community_str=community, community_id=community_id, language_id=language_id,
                                search_for=search_for, sort_by=sort_by, type=type,
-                               software=software, nsfw=nsfw, minimum_upvote=minimum_upvote,
+                               software=software, media=media, external=external, nsfw=nsfw, minimum_upvote=minimum_upvote,
                                languages=languages, instance_software=instance_software,
                                next_url=next_url, prev_url=prev_url, show_post_community=True,
                                recently_upvoted=recently_upvoted,
