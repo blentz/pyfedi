@@ -494,6 +494,26 @@ def test_a_first_message_creates_the_conversation(app, db_session, monkeypatch):
     assert Conversation.find_existing_conversation(recipient=recipient, sender=sender) is not None
 
 
+def test_a_chat_message_with_empty_string_content_is_stored(app, db_session, monkeypatch):
+    """An empty string IS a string, so it passes the content-type guard; there
+    is nothing to scan for blocked phrases, so the scan is skipped and the
+    message is stored as sent (cf. the non-string cases, which are refused)."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair()
+    sender.created = utcnow() - timedelta(days=2)
+    db.session.commit()
+    record_moderation(monkeypatch, 'publish_sse_event')
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id,
+                           content='', id='https://peer.example/pm/empty'))
+
+    db.session.expire_all()
+    message = db_session.query(ChatMessage).one()
+    assert message.body_html == ''
+    assert message.ap_id == 'https://peer.example/pm/empty'
+    assert ActivityPubLog.query.one().result == 'success'
+
+
 def test_a_new_message_is_stored_with_both_body_forms_and_notifies(app, db_session, monkeypatch):
     """The create path. `body_html` keeps the sent markup and `body` is its
     text rendering via `html_to_text`, so both are asserted — storing only one

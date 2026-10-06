@@ -555,6 +555,37 @@ def test_a_move_whose_post_is_unknown_locally_is_resolved_remotely(app, db_sessi
     assert ActivityPubLog.query.one().result == 'success'
 
 
+def test_a_move_whose_origin_community_cannot_be_resolved_changes_nothing(app, db_session, monkeypatch):
+    """A Move needs both communities. With an origin this server cannot
+    resolve, the post must stay where it is and no remote search is attempted
+    for it, even though the mover is the post's own author."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, origin_community, target_community, post, author = _seed_move_scenario()
+    author.ap_fetched_at = utcnow()
+    db.session.commit()
+    unknown_origin = 'https://elsewhere.example/c/ghost'
+
+    real_find = activitypub_routes.find_actor_or_create_cached
+
+    def find(actor, *args, **kwargs):
+        if actor == unknown_origin:
+            return None
+        return real_find(actor, *args, **kwargs)
+
+    resolve_calls = []
+    monkeypatch.setattr(activitypub_routes, 'find_actor_or_create_cached', find)
+    monkeypatch.setattr(activitypub_routes, 'resolve_remote_post_from_search',
+                        lambda uri: resolve_calls.append(uri))
+    monkeypatch.setattr(activitypub_routes, 'announce_activity_to_followers', lambda *a, **k: None)
+
+    dispatch(inbox_activity(author, activity_type='Move', object=post.ap_id,
+                            origin=unknown_origin, target=target_community.ap_profile_id))
+
+    db.session.expire_all()
+    assert db.session.get(Post, post.id).community_id == origin_community.id
+    assert resolve_calls == []
+
+
 # --- Step 3: QuoteRequest, routes.py:1880-1884, and its unguarded read ---
 
 

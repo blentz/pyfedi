@@ -905,6 +905,53 @@ def test_a_user_who_cannot_reply_is_refused_and_their_content_deleted(app, db_se
     assert log.exception_message == 'User cannot create reply in Community'
 
 
+def test_a_refused_reply_in_a_remote_community_is_logged_without_a_delete(app, db_session, monkeypatch):
+    """The remote-community side of 'Reply creation refused'. The Delete sent
+    back to correct the sender is only for a community THIS server hosts (it is
+    the authority that can tell peers to drop it); for a remote community the
+    refusal is logged and nothing is sent."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    community.ap_id = f'{community.name}@peer.example'
+    parent = make_post(community, author, 'https://peer.example/post/1')
+    db.session.commit()
+    assert not community.is_local()
+    _double_the_gate(monkeypatch, community)
+    _permit_and_return_reply(monkeypatch, None)
+    calls = record_moderation(monkeypatch, 'proactively_delete_content')
+
+    dispatch(direct_activity(author, content_object('https://peer.example/comment/new',
+                                                    in_reply_to=parent.ap_id)))
+
+    assert calls['proactively_delete_content'] == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Reply creation refused'
+
+
+def test_a_user_who_cannot_reply_in_a_remote_community_is_refused_without_a_delete(
+        app, db_session, monkeypatch):
+    """The remote-community side of 'User cannot create reply in Community':
+    refused and logged, but no Delete is sent for a community we do not host."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    community.ap_id = f'{community.name}@peer.example'
+    parent = make_post(community, author, 'https://peer.example/post/1')
+    db.session.commit()
+    assert not community.is_local()
+    _double_the_gate(monkeypatch, community)
+    monkeypatch.setattr(activitypub_routes, 'can_create_post_reply', lambda user, content: False)
+    calls = record_moderation(monkeypatch, 'proactively_delete_content')
+
+    dispatch(direct_activity(author, content_object('https://peer.example/comment/new',
+                                                    in_reply_to=parent.ap_id)))
+
+    assert calls['proactively_delete_content'] == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'User cannot create reply in Community'
+
+
 def test_the_id_truncation_leaves_the_callers_activity_untouched(app, db_session, monkeypatch):
     """The over-long id is still truncated, but into a copy: the dict the
     caller owns is not written back into. For an ANNOUNCED activity
