@@ -73,7 +73,8 @@ def test_an_answer_whose_follow_object_has_no_id_matches_by_target(pending):
     assert db.session.get(DiscoverySync, community.id).follow_state == SYNC_ACCEPTED
 
 
-def test_an_accept_signed_by_another_host_is_ignored(pending):
+@pytest.mark.parametrize('kind', ['Accept', 'Reject'])
+def test_an_answer_signed_by_another_host_is_ignored(pending, kind):
     """Review Focus 1: anyone can name our uuid; only the followed host may answer."""
     row, community = pending
     other = make_instance('evil.example', software='peertube')
@@ -82,21 +83,24 @@ def test_an_accept_signed_by_another_host_is_ignored(pending):
     impostor.ap_fetched_at = utcnow()
     db.session.commit()
 
-    dispatch(answer(impostor, 'Accept', follow_activity(row)))
+    dispatch(answer(impostor, kind, follow_activity(row)))
 
     db.session.expire_all()
     assert db.session.get(DiscoverySync, community.id).follow_state == SYNC_PENDING
     assert ActivityPubLog.query.one().result == 'ignored'
 
 
-def test_an_answer_to_an_instance_actor_follow_we_do_not_hold_is_ignored(pending):
+@pytest.mark.parametrize('kind', ['Accept', 'Reject'])
+def test_an_answer_to_an_instance_actor_follow_we_do_not_hold_is_ignored(pending, kind):
     row, community = pending
     follow = follow_activity(row)
     follow['id'] = f"{current_app.config['SERVER_URL']}/activities/follow/{uuid.uuid4()}"
 
-    dispatch(answer(community, 'Accept', follow))
+    dispatch(answer(community, kind, follow))
 
     assert ActivityPubLog.query.one().result == 'ignored'
+    db.session.expire_all()
+    assert db.session.get(DiscoverySync, community.id).follow_state == SYNC_PENDING
 
 
 def test_a_users_join_request_string_accept_still_takes_the_old_path(pending):
