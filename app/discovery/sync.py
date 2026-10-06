@@ -120,7 +120,7 @@ def _needs_refollow(row, now) -> bool:
                                                  or row.followed_at < now - timedelta(days=FOLLOW_RETRY_DAYS))
 
 
-def _add(entry) -> bool:
+def _add(entry, held) -> bool:
     community = db.session.query(Community).filter(Community.ap_profile_id == entry.actor_url.lower()).first()
     if community is None:
         community = find_actor_or_create(entry.actor_url, community_only=True)
@@ -134,6 +134,7 @@ def _add(entry) -> bool:
     row = DiscoverySync(community_id=community.id, entry_id=entry.id, follow_target=entry.actor_url)
     db.session.add(row)
     db.session.commit()
+    held[row.follow_target.lower()] = row
     send_instance_follow(row, community)
     return True
 
@@ -142,19 +143,18 @@ def reconcile_sync() -> dict:
     desired = desired_entries()
     wanted = {entry.actor_url.lower() for entries in desired.values() for entry in entries}
     summary = {'added': 0, 'dropped': 0, 'refollowed': 0, 'failed_hosts': []}
-    rows = {row.community_id: row for row in db.session.query(DiscoverySync)}
-    for row in list(rows.values()):
+    held = {}
+    for row in db.session.query(DiscoverySync).all():
         community = db.session.get(Community, row.community_id)
-        if _unusable(community) or community.ap_profile_id not in wanted:
+        if _unusable(community) or row.follow_target.lower() not in wanted:
             try:
                 drop_row(row)
+                summary['dropped'] += 1
             except Exception:
                 current_app.logger.exception(f'discovery sync: dropping community {row.community_id} failed')
                 db.session.rollback()
-                continue
-            del rows[row.community_id]
-            summary['dropped'] += 1
-    held = {db.session.get(Community, cid).ap_profile_id: row for cid, row in rows.items()}
+        else:
+            held[row.follow_target.lower()] = row
     now = utcnow()
     for host in sorted(desired):
         try:
@@ -165,7 +165,7 @@ def reconcile_sync() -> dict:
                     if _needs_refollow(row, now):
                         if send_instance_follow(row, db.session.get(Community, row.community_id)):
                             summary['refollowed'] += 1
-                elif added < ADDS_PER_HOST_PER_RUN and _add(entry):
+                elif added < ADDS_PER_HOST_PER_RUN and _add(entry, held):
                     added += 1
             summary['added'] += added
         except Exception:
