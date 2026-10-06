@@ -767,130 +767,129 @@ def save_icon_file(icon_file, directory='communities') -> File:
         import pillow_avif  # NOQA  # lazy: registers Pillow's AVIF plugin only on the AVIF path
 
     # resize if necessary or if using MEDIA_IMAGE_FORMAT
-    if file_ext.lower() in allowed_extensions:
-        # Process the image based on file type
-        if file_ext.lower() == '.svg':  # svgs don't need to be resized
-            img_width = None
-            img_height = None
-            thumbnail_width = None
-            thumbnail_height = None
-            final_ext = file_ext.lower()
-            thumbnail_ext = file_ext.lower()
-            final_place_thumbnail = final_place
-        elif file_ext.lower() == '.gif':  # handle animated gifs specially
+    # (the extension check at the top of this function already aborts for anything not in allowed_extensions)
+    # Process the image based on file type
+    if file_ext.lower() == '.svg':  # svgs don't need to be resized
+        img_width = None
+        img_height = None
+        thumbnail_width = None
+        thumbnail_height = None
+        final_ext = file_ext.lower()
+        thumbnail_ext = file_ext.lower()
+        final_place_thumbnail = final_place
+    elif file_ext.lower() == '.gif':  # handle animated gifs specially
+        img = Image.open(final_place)
+        img_width = img.width
+        img_height = img.height
+
+        # Use scale_gif for resizing animated GIFs
+        if img.width > 250 or img.height > 250:
+            scale_gif(final_place, (250, 250))
             img = Image.open(final_place)
             img_width = img.width
             img_height = img.height
 
-            # Use scale_gif for resizing animated GIFs
-            if img.width > 250 or img.height > 250:
-                scale_gif(final_place, (250, 250))
-                img = Image.open(final_place)
-                img_width = img.width
-                img_height = img.height
+        # Create thumbnail
+        final_ext = file_ext.lower()
+        thumbnail_ext = '.gif'
+        final_place_thumbnail = os.path.join(local_directory, new_filename + '_thumbnail.gif')
+        scale_gif(final_place, (40, 40), final_place_thumbnail)
+        img_thumb = Image.open(final_place_thumbnail)
+        thumbnail_width = img_thumb.width
+        thumbnail_height = img_thumb.height
+    else:  # handle regular images (jpg, png, webp, heic, etc.)
+        img = Image.open(final_place)
+        img = ImageOps.exif_transpose(img)
+        img_width = img.width
+        img_height = img.height
 
-            # Create thumbnail
-            final_ext = file_ext.lower()
-            thumbnail_ext = '.gif'
-            final_place_thumbnail = os.path.join(local_directory, new_filename + '_thumbnail.gif')
-            scale_gif(final_place, (40, 40), final_place_thumbnail)
-            img_thumb = Image.open(final_place_thumbnail)
-            thumbnail_width = img_thumb.width
-            thumbnail_height = img_thumb.height
-        else:  # handle regular images (jpg, png, webp, heic, etc.)
-            img = Image.open(final_place)
-            img = ImageOps.exif_transpose(img)
-            img_width = img.width
-            img_height = img.height
+        image_format = current_app.config['MEDIA_IMAGE_FORMAT']
+        image_quality = current_app.config['MEDIA_IMAGE_QUALITY']
+        thumbnail_image_format = current_app.config['MEDIA_IMAGE_THUMBNAIL_FORMAT']
+        thumbnail_image_quality = current_app.config['MEDIA_IMAGE_THUMBNAIL_QUALITY']
 
-            image_format = current_app.config['MEDIA_IMAGE_FORMAT']
-            image_quality = current_app.config['MEDIA_IMAGE_QUALITY']
-            thumbnail_image_format = current_app.config['MEDIA_IMAGE_THUMBNAIL_FORMAT']
-            thumbnail_image_quality = current_app.config['MEDIA_IMAGE_THUMBNAIL_QUALITY']
+        final_ext = file_ext.lower()
+        thumbnail_ext = file_ext.lower()
 
-            final_ext = file_ext.lower()
-            thumbnail_ext = file_ext.lower()
+        if image_format == 'AVIF' or thumbnail_image_format == 'AVIF':
+            import pillow_avif  # NOQA  # lazy: registers Pillow's AVIF plugin only on the AVIF path
 
-            if image_format == 'AVIF' or thumbnail_image_format == 'AVIF':
-                import pillow_avif  # NOQA  # lazy: registers Pillow's AVIF plugin only on the AVIF path
-
-            if img.width > 250 or img.height > 250 or image_format or thumbnail_image_format:
-                img = img.convert('RGB' if (image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg']) else 'RGBA')
-                img.thumbnail((250, 250), resample=Image.LANCZOS)
-
-                kwargs = {}
-                if image_format:
-                    kwargs['format'] = image_format.upper()
-                    final_ext = '.' + image_format.lower()
-                    final_place = os.path.splitext(final_place)[0] + final_ext
-                if image_quality:
-                    kwargs['quality'] = int(image_quality)
-                img.save(final_place, optimize=True, **kwargs)
-
-                img_width = img.width
-                img_height = img.height
-            # save a second, smaller, version as a thumbnail
-            img = img.convert('RGB' if thumbnail_image_format == 'JPEG' else 'RGBA')
-            img.thumbnail((40, 40), resample=Image.LANCZOS)
+        if img.width > 250 or img.height > 250 or image_format or thumbnail_image_format:
+            img = img.convert('RGB' if (image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg']) else 'RGBA')
+            img.thumbnail((250, 250), resample=Image.LANCZOS)
 
             kwargs = {}
-            if thumbnail_image_format:
-                kwargs['format'] = thumbnail_image_format.upper()
-                thumbnail_ext = '.' + thumbnail_image_format.lower()
-                final_place_thumbnail = os.path.splitext(final_place_thumbnail)[0] + thumbnail_ext
-            if thumbnail_image_quality:
-                kwargs['quality'] = int(thumbnail_image_quality)
-            img.save(final_place_thumbnail, optimize=True, **kwargs)
+            if image_format:
+                kwargs['format'] = image_format.upper()
+                final_ext = '.' + image_format.lower()
+                final_place = os.path.splitext(final_place)[0] + final_ext
+            if image_quality:
+                kwargs['quality'] = int(image_quality)
+            img.save(final_place, optimize=True, **kwargs)
 
-            thumbnail_width = img.width
-            thumbnail_height = img.height
+            img_width = img.width
+            img_height = img.height
+        # save a second, smaller, version as a thumbnail
+        img = img.convert('RGB' if thumbnail_image_format == 'JPEG' else 'RGBA')
+        img.thumbnail((40, 40), resample=Image.LANCZOS)
 
-        # Create the File object
-        file = File(file_path=final_place, file_name=new_filename + final_ext, alt_text=f'{directory} icon',
-                    width=img_width, height=img_height, thumbnail_width=thumbnail_width,
-                    thumbnail_height=thumbnail_height, thumbnail_path=final_place_thumbnail)
-        db.session.add(file)
+        kwargs = {}
+        if thumbnail_image_format:
+            kwargs['format'] = thumbnail_image_format.upper()
+            thumbnail_ext = '.' + thumbnail_image_format.lower()
+            final_place_thumbnail = os.path.splitext(final_place_thumbnail)[0] + thumbnail_ext
+        if thumbnail_image_quality:
+            kwargs['quality'] = int(thumbnail_image_quality)
+        img.save(final_place_thumbnail, optimize=True, **kwargs)
 
-        # Move uploaded files to S3 if needed
-        if store_files_in_s3():
-            session = boto3.session.Session()
-            s3 = session.client(
-                service_name='s3',
-                region_name=current_app.config['S3_REGION'],
-                endpoint_url=current_app.config['S3_ENDPOINT'],
-                aws_access_key_id=current_app.config['S3_ACCESS_KEY'],
-                aws_secret_access_key=current_app.config['S3_ACCESS_SECRET'],
-            )
-            # Upload main image
-            s3_path = f'{s3_directory}/{new_filename}{final_ext}'
-            extra_args = {'ContentType': guess_mime_type(final_place)}
+        thumbnail_width = img.width
+        thumbnail_height = img.height
+
+    # Create the File object
+    file = File(file_path=final_place, file_name=new_filename + final_ext, alt_text=f'{directory} icon',
+                width=img_width, height=img_height, thumbnail_width=thumbnail_width,
+                thumbnail_height=thumbnail_height, thumbnail_path=final_place_thumbnail)
+    db.session.add(file)
+
+    # Move uploaded files to S3 if needed
+    if store_files_in_s3():
+        session = boto3.session.Session()
+        s3 = session.client(
+            service_name='s3',
+            region_name=current_app.config['S3_REGION'],
+            endpoint_url=current_app.config['S3_ENDPOINT'],
+            aws_access_key_id=current_app.config['S3_ACCESS_KEY'],
+            aws_secret_access_key=current_app.config['S3_ACCESS_SECRET'],
+        )
+        # Upload main image
+        s3_path = f'{s3_directory}/{new_filename}{final_ext}'
+        extra_args = {'ContentType': guess_mime_type(final_place)}
+        if current_app.config.get('S3_STORAGE_CLASS'):
+            extra_args['StorageClass'] = current_app.config['S3_STORAGE_CLASS']
+        if current_app.config.get('S3_PUBLIC_ACL'):
+            extra_args['ACL'] = 'public-read'
+        s3.upload_file(final_place, current_app.config['S3_BUCKET'], s3_path, ExtraArgs=extra_args)
+        file.file_path = f"https://{current_app.config['S3_PUBLIC_URL']}/{s3_path}"
+
+        # Upload thumbnail (if different from main image)
+        if final_place_thumbnail != final_place:
+            s3_thumbnail_path = f'{s3_directory}/{new_filename}_thumbnail{thumbnail_ext}'
+            extra_args = {'ContentType': guess_mime_type(final_place_thumbnail)}
             if current_app.config.get('S3_STORAGE_CLASS'):
                 extra_args['StorageClass'] = current_app.config['S3_STORAGE_CLASS']
             if current_app.config.get('S3_PUBLIC_ACL'):
                 extra_args['ACL'] = 'public-read'
-            s3.upload_file(final_place, current_app.config['S3_BUCKET'], s3_path, ExtraArgs=extra_args)
-            file.file_path = f"https://{current_app.config['S3_PUBLIC_URL']}/{s3_path}"
+            s3.upload_file(final_place_thumbnail, current_app.config['S3_BUCKET'], s3_thumbnail_path, ExtraArgs=extra_args)
+            file.thumbnail_path = f"https://{current_app.config['S3_PUBLIC_URL']}/{s3_thumbnail_path}"
+            os.unlink(final_place_thumbnail)
+        else:
+            file.thumbnail_path = file.file_path
 
-            # Upload thumbnail (if different from main image)
-            if final_place_thumbnail != final_place:
-                s3_thumbnail_path = f'{s3_directory}/{new_filename}_thumbnail{thumbnail_ext}'
-                extra_args = {'ContentType': guess_mime_type(final_place_thumbnail)}
-                if current_app.config.get('S3_STORAGE_CLASS'):
-                    extra_args['StorageClass'] = current_app.config['S3_STORAGE_CLASS']
-                if current_app.config.get('S3_PUBLIC_ACL'):
-                    extra_args['ACL'] = 'public-read'
-                s3.upload_file(final_place_thumbnail, current_app.config['S3_BUCKET'], s3_thumbnail_path, ExtraArgs=extra_args)
-                file.thumbnail_path = f"https://{current_app.config['S3_PUBLIC_URL']}/{s3_thumbnail_path}"
-                os.unlink(final_place_thumbnail)
-            else:
-                file.thumbnail_path = file.file_path
+        s3.close()
+        os.unlink(final_place)
 
-            s3.close()
-            os.unlink(final_place)
-
-        return file
-    else:
-        abort(400)
+    return file
+    return file
 
 
 def save_banner_file(banner_file, directory='communities') -> File:
