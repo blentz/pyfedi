@@ -5712,6 +5712,14 @@ class DiscoverySync(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
 
 
+class DiscoveryExclusion(db.Model):
+    """An actor URL (lower-cased) the proactive sync must never follow again, because an admin deleted the community
+    it resolved to (interop D24). Written by app/discovery/sync.py's forget_synced_community."""
+    __tablename__ = 'discovery_exclusion'
+    actor_url = db.Column(db.String(1024), primary_key=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+
+
 def _large_community_subscribers() -> float:
     # average number of subscribers in the top 15% communities
 
