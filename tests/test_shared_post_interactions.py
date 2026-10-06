@@ -2067,3 +2067,56 @@ def test_resubmitting_multiple_mode_choices_does_not_federate_again(db_session, 
     assert len(calls) == 2, \
         'the repeat submission federated votes that were never recorded'
     assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 2
+
+
+def test_bookmarking_a_post_that_does_not_resolve_raises_no_result_found(db_session):
+    """D1125: `mark_post_read` INSERTs into a foreign-keyed table, so an id that
+    resolves to no post must raise `NoResultFound` (which the web route answers
+    404) before anything is written, not surface as a ForeignKeyViolation."""
+    from sqlalchemy.orm.exc import NoResultFound
+    s = seed_post_context()
+
+    with pytest.raises(NoResultFound):
+        bookmark_post(s.post.id + 1000, SRC_API, auth=bearer(s.voter))
+
+    assert db.session.query(PostBookmark).count() == 0
+    assert db.session.execute(read_posts.select()).fetchall() == []
+
+
+def test_removing_a_bookmark_of_a_post_that_does_not_resolve_raises_no_result_found(db_session):
+    """D1125's other half: the un-bookmark of an unknown post id is a
+    `NoResultFound`, not a 200 saying "This post was not bookmarked"."""
+    from sqlalchemy.orm.exc import NoResultFound
+    s = seed_post_context()
+    bookmark_post(s.post.id, SRC_API, auth=bearer(s.voter))
+
+    with pytest.raises(NoResultFound):
+        remove_bookmark_post(s.post.id + 1000, SRC_API, auth=bearer(s.voter))
+
+    assert db.session.query(PostBookmark).filter_by(
+        post_id=s.post.id, user_id=s.voter.id).count() == 1
+
+
+def test_a_web_multiple_mode_vote_naming_only_foreign_choices_records_nothing(db_session, app):
+    """D415: when every submitted choice belongs to another poll the membership
+    filter leaves an empty list; the vote returns without recording anything
+    and without touching the foreign poll's counters."""
+    s = seed_post_context()
+    _seed_poll(s, mode='multiple', choices=('a', 'b'))
+    other_post = make_post(s.community, s.author, 'https://local.example/p/other')
+    from datetime import timedelta
+    from app.models import utcnow
+    db.session.add(Poll(post_id=other_post.id, mode='multiple', local_only=False,
+                        end_poll=utcnow() + timedelta(days=1)))
+    db.session.add(PollChoice(post_id=other_post.id, choice_text='foreign',
+                              sort_order=0, num_votes=0))
+    db.session.commit()
+    foreign = db.session.query(PollChoice).filter_by(post_id=other_post.id).one()
+
+    with web_ctx(app, s.voter):
+        result = vote_for_poll(s.post.id, [str(foreign.id)], SRC_WEB)
+
+    assert result is None
+    assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 0
+    db.session.refresh(foreign)
+    assert foreign.num_votes == 0
