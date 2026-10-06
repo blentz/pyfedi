@@ -28,6 +28,7 @@ import pytest
 
 from app import db
 from app.models import Community, Feed, Site, User, markdown_source
+from tests.app_source import app_trees
 
 
 class TestTheMarkdownAPeerOffers:
@@ -233,7 +234,7 @@ class TestWhenAPeerSaysItWasCreated:
             datetime(2023, 12, 31, 19, 0)
 
 
-def code_lines(path):
+def code_lines(source, tree):
     """Every line of a source file that is really code, numbered from 1.
 
     Lines inside a string literal and lines carrying a comment are left out.
@@ -246,9 +247,8 @@ def code_lines(path):
     import io
     import tokenize
 
-    source = path.read_text(encoding='utf8')
     skip = set()
-    for node in ast.walk(ast.parse(source)):
+    for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             skip.update(range(node.lineno, node.end_lineno + 1))
     for token in tokenize.generate_tokens(io.StringIO(source).readline):
@@ -278,8 +278,8 @@ class TestNoPeerStringReachesADateTimeColumnUnparsed:
         from pathlib import Path
 
         offenders = []
-        for path in sorted(Path('app').rglob('*.py')):
-            for number, line in code_lines(path):
+        for path, source, tree in app_trees():
+            for number, line in code_lines(source, tree):
                 if 'parse_ap_timestamp' in line:
                     continue
                 for name in self.SOURCES:
@@ -297,8 +297,8 @@ class TestNoPeerSourceIsSubscriptedDirectly:
         from pathlib import Path
 
         offenders = []
-        for path in sorted(Path('app').rglob('*.py')):
-            for number, line in code_lines(path):
+        for path, source, tree in app_trees():
+            for number, line in code_lines(source, tree):
                 if "['source'][" not in line:
                     continue
                 # Writing INTO our own outgoing document is not reading a peer's:

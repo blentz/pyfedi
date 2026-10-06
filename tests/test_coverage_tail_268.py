@@ -30,6 +30,7 @@ from app import db
 from app.community.util import retrieve_mods_and_backfill
 from app.models import Community, CommunityMember, Post, PostReply, Site, User
 from tests.factories import make_community, make_instance, make_user
+from tests.app_source import app_trees
 
 MODS_URL = 'https://remote.test/c/faraway/moderators'
 OUTBOX_URL = 'https://remote.test/c/faraway/outbox'
@@ -490,8 +491,8 @@ class TestNobodyCatchesThePsycopg2IntegrityError:
         import pathlib
 
         offenders = []
-        for path in sorted(pathlib.Path('app').rglob('*.py')):
-            for node in ast.walk(ast.parse(path.read_text())):
+        for path, _source, tree in app_trees():
+            for node in ast.walk(tree):
                 if isinstance(node, ast.ImportFrom) and (node.module or '').startswith('psycopg2'):
                     for alias in node.names:
                         if alias.name == 'IntegrityError':

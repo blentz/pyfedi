@@ -33,6 +33,7 @@ import pytest
 from app.activitypub.util import create_post
 from app.models import Post
 from tests.factories import make_community, make_instance, make_site, make_user
+from tests.app_source import app_trees
 
 PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
 FOLLOWERS = 'https://m.example/users/alice/followers'
@@ -145,8 +146,8 @@ def test_post_new_is_reached_only_through_create_post():
     # comments (app/activitypub/util.py's activitypub_visibility, app/models.py's
     # ScheduledPost), and a scan that counted those could never reach 1.
     callers = []
-    for path in sorted(app_dir.rglob('*.py')):
-        for node in ast.walk(ast.parse(path.read_text())):
+    for path, _source, tree in app_trees():
+        for node in ast.walk(tree):
             if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                     and node.func.attr == 'new' and isinstance(node.func.value, ast.Name)
                     and node.func.value.id == 'Post'):

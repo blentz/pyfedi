@@ -29,6 +29,7 @@ from app.activitypub.util import post_to_activity, post_to_page, refresh_user_pr
 from app.models import File, Language, User, utcnow
 from tests.factories import (make_community, make_post, make_user, seed_community_owner,
                              seed_signing_site)
+from tests.app_source import app_trees
 
 PEER = 'peer.example'
 
@@ -320,8 +321,7 @@ class TestNothingShellsOutToOpensslForAKey:
         import pathlib
 
         offenders = []
-        for path in sorted(pathlib.Path('app').rglob('*.py')):
-            tree = ast.parse(path.read_text())
+        for path, _source, tree in app_trees():
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call):
                     continue

@@ -19,6 +19,7 @@ one; it must never go up.
 """
 import ast
 import pathlib
+from tests.app_source import app_trees
 
 APP = pathlib.Path(__file__).resolve().parent.parent / 'app'
 
@@ -29,10 +30,7 @@ TAGS = ('# lazy:', '# cycle:')
 def function_level_imports():
     """(path, lineno, tagged) for every import inside a function or lambda body."""
     found = []
-    for path in sorted(APP.rglob('*.py')):
-        if '__pycache__' in path.parts:
-            continue
-        source = path.read_text(encoding='utf8')
+    for path, source, tree in app_trees():
         lines = source.splitlines()
 
         def tagged(lineno):
@@ -48,7 +46,7 @@ def function_level_imports():
                 visit(child, in_function or isinstance(
                     child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)))
 
-        visit(ast.parse(source), False)
+        visit(tree, False)
     return found
 
 

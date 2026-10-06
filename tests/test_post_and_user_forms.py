@@ -27,6 +27,7 @@ from app.models import Site
 from app.post.forms import NewReminderForm, ReportPostForm
 from app.user.forms import ProfileForm, ReportUserForm
 from tests.factories import make_instance, make_user
+from tests.app_source import app_trees
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -197,10 +198,8 @@ def test_every_inline_validator_names_a_field_that_exists():
 
     root = Path(__file__).resolve().parent.parent
     unwired = []
-    for path in sorted((root / 'app').rglob('*.py')):
-        if '__pycache__' in path.parts:
-            continue
-        for node in ast.walk(ast.parse(path.read_text())):
+    for path, _source, tree in app_trees():
+        for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef):
                 continue
             fields = set()

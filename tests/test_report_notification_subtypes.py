@@ -42,10 +42,12 @@ import pathlib
 import re
 
 import pytest
+from tests.app_source import APP, app_trees
 
 TEMPLATE = pathlib.Path('app/templates/user/notifs/20.html')
-SOURCES = [p for p in pathlib.Path('app').rglob('*.py')
-           if p.name != 'cli.py' and p.parts[1] != 'nntp']
+UTIL = APP / 'activitypub' / 'util.py'
+SOURCES = [(p, src, tree) for p, src, tree in app_trees()
+           if p.name != 'cli.py' and p.relative_to(APP).parts[0] != 'nntp']
 
 
 def template_blocks() -> dict:
@@ -64,11 +66,9 @@ def template_blocks() -> dict:
 def producers() -> list:
     """[(path, lineno, subtype, keys of the nearest targets_data above)]."""
     found = []
-    for path in SOURCES:
-        src = path.read_text()
+    for path, src, tree in SOURCES:
         if 'subtype' not in src:
             continue
-        tree = ast.parse(src)
         dicts = [(n.lineno, {k.value for k in n.value.keys
                              if isinstance(k, ast.Constant)
                              and isinstance(k.value, str)})
@@ -93,7 +93,7 @@ def producers() -> list:
 
 def branch_ranges(function_name: str) -> dict:
     """{the isinstance test: (first line, last line)} for one function's chain."""
-    tree = ast.parse(pathlib.Path('app/activitypub/util.py').read_text())
+    tree = next(t for p, _s, t in app_trees() if p == UTIL)
     for fn in ast.walk(tree):
         if isinstance(fn, ast.FunctionDef) and fn.name == function_name:
             out = {}

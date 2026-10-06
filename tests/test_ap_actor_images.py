@@ -30,6 +30,7 @@ from app.activitypub.util import (image_url_from, refresh_community_profile_task
 from app.models import Community, Feed, User
 from tests.factories import (make_community, make_feed, make_instance, make_user,
                              seed_community_owner)
+from tests.app_source import app_trees
 
 PEER = 'peer.example'
 A_PNG = 'https://peer.example/media/a.png'
@@ -351,9 +352,8 @@ class TestTheHandReadingIsGone:
             return held
 
         offenders = []
-        for path in sorted(Path('app').rglob('*.py')):
-            source = path.read_text(encoding='utf8')
-            prose = prose_lines(ast.parse(source))
+        for path, source, tree in app_trees():
+            prose = prose_lines(tree)
             for number, line in enumerate(source.splitlines(), start=1):
                 stripped = line.strip()
                 if stripped.startswith('#') or number in prose:
