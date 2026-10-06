@@ -134,3 +134,16 @@ def test_an_undo_transport_failure_is_logged_not_raised(synced, monkeypatch, cap
     send_instance_undo(row, community)
 
     assert 'undo' in caplog.text.lower()
+
+
+def test_an_undo_that_cannot_be_signed_is_logged_not_raised(synced, monkeypatch, caplog):
+    row, community = synced
+    row.follow_uuid = 'abc'
+
+    def no_key():
+        raise AttributeError('no site key')
+    monkeypatch.setattr(instance_actor, '_signing', no_key)
+
+    send_instance_undo(row, community)
+
+    assert 'undo' in caplog.text.lower()
