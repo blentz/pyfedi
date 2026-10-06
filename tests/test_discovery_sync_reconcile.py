@@ -259,6 +259,64 @@ def test_sync_tasks_run_on_the_background_queue(app, task):
     assert any(fnmatch(name, pattern) and route == {'queue': 'background'} for pattern, route in routes.items())
 
 
+def test_an_entry_whose_url_differs_from_the_canonical_id_is_not_cycled(db_session, fed, monkeypatch):
+    set_setting('discovery_sync_per_host', 1)
+    entry = add_entry('Alias', host='tube.example', followers=5, url='https://tube.example/c/Alias')
+
+    def resolve(actor_url, community_only=False):
+        community = make_community('alias', host='tube.example')
+        community.ap_profile_id = 'https://tube.example/video-channels/alias'
+        db.session.commit()
+        return community
+    monkeypatch.setattr(sync, 'find_actor_or_create', resolve)
+
+    assert reconcile_sync()['added'] == 1
+    fed['follow'].clear()
+    summary = reconcile_sync()
+
+    assert summary == {'added': 0, 'dropped': 0, 'refollowed': 0, 'failed_hosts': []}
+    assert fed['undo'] == [] and fed['follow'] == []
+    assert [r.entry_id for r in DiscoverySync.query] == [entry.id]
+
+
+def test_two_entries_resolving_to_one_community_give_one_row_and_no_failed_host(db_session, fed, monkeypatch):
+    set_setting('discovery_sync_per_host', 3)
+    add_entry('A', host='tube.example', followers=30, url='https://tube.example/c/a')
+    add_entry('B', host='tube.example', followers=20, url='https://tube.example/c/b')
+    other = add_entry('C', host='tube.example', followers=10, url='https://tube.example/c/c')
+    shared = make_community('shared', host='tube.example')
+    real_resolve = sync.find_actor_or_create
+    monkeypatch.setattr(sync, 'find_actor_or_create',
+                        lambda url, community_only=False: shared if url.endswith(('/a', '/b')) else
+                        real_resolve(url, community_only=community_only))
+
+    summary = reconcile_sync()
+
+    assert summary['failed_hosts'] == [] and summary['added'] == 2
+    assert {r.community_id for r in DiscoverySync.query} == {shared.id,
+                                                             Community.query.filter_by(name='c').one().id}
+    assert len(fed['follow']) == 2 and other.actor_url in fed['follow']
+
+
+def test_one_row_failing_to_drop_does_not_abort_the_reconcile(db_session, fed, monkeypatch):
+    set_setting('discovery_sync_per_host', 3)
+    entries = chans('tube.example', 3)
+    reconcile_sync()
+    set_setting('discovery_sync_per_host', 1)
+
+    def undo(row, community):
+        if row.follow_target == entries[1].actor_url:
+            raise RuntimeError('signing blew up')
+        fed['undo'].append(row.follow_target)
+    monkeypatch.setattr(sync, 'send_instance_undo', undo)
+
+    summary = reconcile_sync()
+
+    assert summary['dropped'] == 1 and fed['undo'] == [entries[2].actor_url]
+    assert {r.entry_id for r in DiscoverySync.query} == {entries[0].id, entries[1].id}
+    assert summary['failed_hosts'] == []
+
+
 def test_a_community_mid_backfill_gets_no_poll(db_session, fed, monkeypatch, app):
     set_setting('discovery_sync_per_host', 2)
     chans('tube.example', 2)
@@ -283,41 +341,3 @@ def test_refollowed_counts_only_follows_that_were_sent(db_session, fed, monkeypa
     monkeypatch.setattr(sync, 'send_instance_follow', lambda row, community: False)
 
     assert reconcile_sync()['refollowed'] == 0
-
-
-def test_one_row_failing_to_drop_does_not_abort_the_reconcile(db_session, fed, monkeypatch):
-    set_setting('discovery_sync_per_host', 3)
-    entries = chans('tube.example', 3)
-    reconcile_sync()
-    set_setting('discovery_sync_per_host', 1)
-
-    def undo(row, community):
-        if row.follow_target == entries[1].actor_url:
-            raise RuntimeError('signing blew up')
-        fed['undo'].append(row.follow_target)
-    monkeypatch.setattr(sync, 'send_instance_undo', undo)
-
-    summary = reconcile_sync()
-
-    assert summary['dropped'] == 1 and fed['undo'] == [entries[2].actor_url]
-    assert {r.entry_id for r in DiscoverySync.query} == {entries[0].id, entries[1].id}
-    assert summary['failed_hosts'] == []
-
-
-def test_two_entries_resolving_to_one_community_give_one_row_and_no_failed_host(db_session, fed, monkeypatch):
-    set_setting('discovery_sync_per_host', 3)
-    add_entry('A', host='tube.example', followers=30, url='https://tube.example/c/a')
-    add_entry('B', host='tube.example', followers=20, url='https://tube.example/c/b')
-    other = add_entry('C', host='tube.example', followers=10, url='https://tube.example/c/c')
-    shared = make_community('shared', host='tube.example')
-    real_resolve = sync.find_actor_or_create
-    monkeypatch.setattr(sync, 'find_actor_or_create',
-                        lambda url, community_only=False: shared if url.endswith(('/a', '/b')) else
-                        real_resolve(url, community_only=community_only))
-
-    summary = reconcile_sync()
-
-    assert summary['failed_hosts'] == [] and summary['added'] == 2
-    assert {r.community_id for r in DiscoverySync.query} == {shared.id,
-                                                             Community.query.filter_by(name='c').one().id}
-    assert len(fed['follow']) == 2 and other.actor_url in fed['follow']
