@@ -1447,3 +1447,185 @@ def test_an_at_query_that_names_nobody_here(app, env):
             get_resolve_object(token(user), {'q': name})
 
     assert str(refused.value) == 'No object found.'
+
+
+# --------------------------------------------------------------------------
+# Coverage floor: the remaining branches of get_resolve_object, _own_host_author
+# and get_suggestion
+# --------------------------------------------------------------------------
+
+REMOTE_X = 'https://remote.example/x'
+
+
+def resolve_document(user, document, *, community=None, **patches):
+    """Resolve REMOTE_X as `document`, with find_community answering `community`; any other name in
+    app.api.alpha.utils.misc can be replaced through `patches`."""
+    from app.api.alpha.utils.misc import get_resolve_object
+
+    patches.setdefault('remote_object_to_json', lambda query: document)
+    patches.setdefault('find_community', lambda *a, **k: community)
+    with patch.multiple('app.api.alpha.utils.misc', **patches):
+        return get_resolve_object(token(user), {'q': REMOTE_X})
+
+
+@pytest.mark.parametrize('attributed_to', [
+    {'id': 'https://remote.example/users/author', 'type': 'Person'},
+    [{'id': 'https://remote.example/users/author', 'type': 'Person'}],
+    ['https://remote.example/users/author'],
+])
+def test_an_object_attributed_to_an_actor_on_its_own_host_names_that_author(app, attributed_to):
+    """The attributedTo may be one actor object, a list of them or a list of ids; D24 R2 hands the author on."""
+    from app.api.alpha.utils.misc import _own_host_author
+
+    assert _own_host_author({'id': REMOTE_X, 'attributedTo': attributed_to}) == 'https://remote.example/users/author'
+
+
+def test_an_author_on_another_host_is_not_the_object_s_author(app):
+    from app.api.alpha.utils.misc import _own_host_author
+
+    assert _own_host_author({'id': REMOTE_X, 'attributedTo': {'id': 'https://elsewhere.example/u/a',
+                                                              'type': 'Person'}}) is None
+
+
+def test_a_banned_podcasts_episode_is_dropped(app, env):
+    """D24: a top-level episode whose podcast twin is banned is not resolved into microblogs."""
+    user, author, community, post, reply, baseline = env
+    from app.models import Instance
+    instance = Instance.query.filter_by(domain='remote.example').first()
+    if instance is None:
+        instance = Instance(domain='remote.example')
+        db.session.add(instance)
+        db.session.commit()
+    podcast = make_user(instance, 'thepodcast')
+    twin = make_community('thepodcast', host='remote.example')
+    twin.ap_profile_id = podcast.ap_profile_id
+    twin.banned = True
+    db.session.commit()
+
+    with pytest.raises(Exception) as refused:
+        resolve_document(user, {'id': REMOTE_X, 'type': 'Note', 'attributedTo': podcast.ap_profile_id})
+
+    assert str(refused.value) == 'No object found.'
+
+
+def test_an_audience_that_is_not_a_community_is_not_taken_for_one(app, env):
+    """The audience resolves to a post here, so it cannot supply the community; with no other source the
+    document is not found."""
+    user, author, community, post, reply, baseline = env
+
+    with pytest.raises(Exception) as refused:
+        resolve_document(user, {'id': REMOTE_X, 'type': 'Page', 'audience': post.ap_id})
+
+    assert str(refused.value) == 'No object found.'
+
+
+def test_a_parent_that_resolves_to_nothing_gives_no_community(app, env):
+    """The parent is resolved recursively; when that answers nothing the reply has no community."""
+    from app.api.alpha.utils import misc
+
+    user, author, community, post, reply, baseline = env
+    real = misc.get_resolve_object
+
+    def only_the_outer_call(auth, data, user_id=None, recursive=False):
+        return None if recursive else real(auth, data, user_id, recursive)
+
+    with patch.object(misc, 'get_resolve_object', only_the_outer_call):
+        with pytest.raises(Exception) as refused:
+            resolve_document(user, {'id': REMOTE_X, 'type': 'Note',
+                                    'inReplyTo': 'https://remote.example/parent'})
+
+    assert str(refused.value) == 'No object found.'
+
+
+def test_an_object_the_caller_may_not_view_is_not_found(app, env):
+    user, author, community, post, reply, baseline = env
+
+    with pytest.raises(Exception) as refused:
+        resolve_document(user, {'id': REMOTE_X, 'type': 'Page'}, community=community,
+                         create_resolved_object=lambda *a, **k: post, can_view=lambda *a, **k: False)
+
+    assert str(refused.value) == 'No object found.'
+
+
+def test_a_created_object_that_is_neither_post_nor_reply_is_not_found(app, env):
+    from app.api.alpha.utils.misc import get_resolve_object
+
+    user, author, community, post, reply, baseline = env
+
+    with patch('app.api.alpha.utils.misc.remote_object_to_json',
+               return_value={'id': REMOTE_X, 'type': 'Page'}), \
+            patch('app.api.alpha.utils.misc.find_community', return_value=community), \
+            patch('app.api.alpha.utils.misc.create_resolved_object', return_value=object()):
+        with pytest.raises(Exception) as refused:
+            get_resolve_object(token(user), {'q': REMOTE_X}, recursive=True)
+
+    assert str(refused.value) == 'No object found.'
+
+
+@pytest.mark.parametrize('query,finder', [
+    ('!faraway@remote.example', 'search_for_community'),
+    ('@someone@remote.example', 'search_for_user'),
+    ('~somefeed@remote.example', 'search_for_feed'),
+])
+def test_a_hint_that_finds_nothing_falls_through_to_the_fetch(app, env, query, finder):
+    """A !, @ or ~ query nobody answers to goes on to the actor fetch and the document fetch."""
+    from app.api.alpha.utils.misc import get_resolve_object
+
+    user, author, community, post, reply, baseline = env
+
+    with patch(f'app.api.alpha.utils.misc.{finder}', return_value=None), \
+            patch('app.api.alpha.utils.misc.find_actor_or_create', return_value=None) as fetched, \
+            patch('app.api.alpha.utils.misc.remote_object_to_json', return_value=None) as asked:
+        with pytest.raises(Exception) as refused:
+            get_resolve_object(token(user), {'q': query})
+
+    assert str(refused.value) == 'No object found.'
+    asked.assert_called_once()
+
+
+def test_an_actor_fetch_that_answers_something_unexpected_falls_through(app, env):
+    from app.api.alpha.utils.misc import get_resolve_object
+
+    user, author, community, post, reply, baseline = env
+
+    with patch('app.api.alpha.utils.misc.find_actor_or_create', return_value=object()), \
+            patch('app.api.alpha.utils.misc.remote_object_to_json', return_value=None):
+        with pytest.raises(Exception) as refused:
+            get_resolve_object(token(user), {'q': 'https://remote.example/c/faraway'})
+
+    assert str(refused.value) == 'No object found.'
+
+
+@pytest.mark.parametrize('model', [None, object()])
+def test_an_actor_document_that_makes_no_known_actor_falls_through(app, env, model):
+    """actor_json_to_model answering nothing (or something that is not an actor) leaves a Group document with
+    no community to be posted into."""
+    user, author, community, post, reply, baseline = env
+
+    with patch('app.api.alpha.utils.misc.actor_json_to_model', return_value=model):
+        with pytest.raises(Exception) as refused:
+            resolve_document(user, {'id': REMOTE_X, 'type': 'Group', 'preferredUsername': 'Faraway'})
+
+    assert str(refused.value) == 'No object found.'
+
+
+def test_a_suggestion_lists_a_person_once(app, env):
+    """Two accounts that print as the same handle are one suggestion, not two."""
+    from app.api.alpha.utils.misc import get_suggestion
+    from app.models import Instance
+
+    user, author, community, post, reply, baseline = env
+    instance = Instance.query.filter_by(domain='remote.example').first()
+    if instance is None:
+        instance = Instance(domain='remote.example')
+        db.session.add(instance)
+        db.session.commit()
+    twins = [make_user(instance, 'dupname'), make_user(instance, 'dupname2')]
+    for twin in twins:
+        twin.ap_id = 'dupname@remote.example'
+        make_post_reply(post, twin, body='hi')
+    db.session.commit()
+
+    answer = get_suggestion({'q': '@dupname', 'post_id': post.id})
+
+    assert answer['result'].count('dupname@remote.example') == 1
