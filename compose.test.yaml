@@ -19,6 +19,11 @@ services:
       - full_page_writes=off
       - -c
       - synchronous_commit=off
+      # The suite's tables are never ANALYZEd, so the planner costs a post query's
+      # dozen eager-loaded joins at ~1M rows and JIT-compiles it: ~2.7s per query
+      # that then runs in milliseconds (tests/test_test_database_settings.py).
+      - -c
+      - jit=off
     tmpfs:
       - /var/lib/postgresql/data
     # No published host ports on purpose. test-runner reaches these services over
