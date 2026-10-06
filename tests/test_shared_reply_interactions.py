@@ -3115,3 +3115,65 @@ class TestRestoreReply:
         assert s.reply.deleted is False
         assert s.reply.deleted_by is None
         assert parent.child_count == 5
+
+
+# --- Coverage floor: the arms the D1125 / D408 work left without a witness ---
+
+def test_bookmarking_a_reply_that_does_not_resolve_raises_no_result_found(db_session):
+    """D1125: the web routes catch `NoResultFound` to answer 404, so an id that
+    resolves to no reply must raise exactly that rather than insert a bookmark
+    pointing at nothing."""
+    from sqlalchemy.orm.exc import NoResultFound
+    s = _seed_reply()
+
+    with pytest.raises(NoResultFound):
+        bookmark_reply(s.reply.id + 1000, SRC_API, auth=bearer(s.user))
+
+    assert PostReplyBookmark.query.count() == 0
+
+
+def test_removing_a_bookmark_of_a_reply_that_does_not_resolve_raises_no_result_found(db_session):
+    """D1125's other half: the un-bookmark route has the same 404 handler, so
+    an unknown reply id raises `NoResultFound` before any bookmark lookup."""
+    from sqlalchemy.orm.exc import NoResultFound
+    s = _seed_reply()
+    make_post_reply_bookmark(s.user, s.reply)
+
+    with pytest.raises(NoResultFound):
+        remove_bookmark_reply(s.reply.id + 1000, SRC_API, auth=bearer(s.user))
+
+    assert PostReplyBookmark.query.filter_by(post_reply_id=s.reply.id).count() == 1
+
+
+def test_a_web_reversal_with_no_existing_vote_is_not_refused_and_records_nothing(db_session, app):
+    """D408's web gate only refuses a reversal when there is a vote whose
+    permission to resolve; with none it falls through to the buttons rather
+    than a refusal, and no vote row appears."""
+    make_site()
+    s = _seed_reply()
+    try:
+        with web_ctx(app, s.user):
+            result = vote_for_reply(s.reply.id, 'reversal', True, None, SRC_WEB)
+
+        assert result.status_code == 200
+        assert PostReplyVote.query.filter_by(
+            post_reply_id=s.reply.id, user_id=s.user.id).count() == 0
+    finally:
+        _clear_votes_cast(s.user.id)
+
+
+def test_a_web_user_cannot_restore_another_users_reply(db_session, app):
+    """The web arm of the author check: a signed-in non-author is a 403 and the
+    reply stays deleted (the API arm refuses through `id_match`)."""
+    s = _seed_reply()
+    delete_reply(s.reply.id, SRC_API, auth=bearer(s.user))
+    interloper = make_user(s.reply.author.instance, 'web-interloper', local=True)
+    db.session.commit()
+
+    with web_ctx(app, interloper):
+        with pytest.raises(HTTPException) as exc:
+            restore_reply(s.reply.id, SRC_WEB, auth=None)
+
+    assert exc.value.code == 403
+    db.session.refresh(s.reply)
+    assert s.reply.deleted is True
