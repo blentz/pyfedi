@@ -276,8 +276,8 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
             elif "/p/" in query:
                 # Post url from more recent piefed versions
                 post_pattern = re.compile(r"/p/(\d*)(/|$)")
-            elif "/t/" in query:
-                # Post url from mbin
+            else:
+                # Post url from mbin; the enclosing any(...) guarantees one of /post/, /p/ or /t/ is present
                 post_pattern = re.compile(r"/t/(\d*)(/|$)")
 
             # D1193's fourth site: an `else: post_pattern = None` with an
