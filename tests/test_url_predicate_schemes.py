@@ -34,6 +34,7 @@ import pathlib
 import pytest
 
 from app.utils import is_image_url, is_video_hosting_site, is_video_url
+from tests.app_source import app_trees
 
 APP = pathlib.Path(__file__).resolve().parent.parent / 'app'
 
@@ -165,8 +166,7 @@ def _extension_sniffing_functions():
     prints every site rather than the first (fact 820).
     """
     found = []
-    for path in sorted(APP.rglob('*.py')):
-        tree = ast.parse(path.read_text())
+    for path, _source, tree in app_trees():
         for fn in [n for n in ast.walk(tree)
                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
             # Every list/tuple literal in the function whose elements all look like file

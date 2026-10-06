@@ -29,6 +29,7 @@ from app.activitypub.actor import (create_actor_from_remote, fetch_actor_from_we
                                    schedule_actor_refresh, validate_remote_actor)
 from app.models import Community, Feed, Site, User
 from tests.factories import make_community, make_instance, make_local_feed, make_user
+from tests.app_source import app_trees
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -843,8 +844,8 @@ def test_only_the_housekeeping_celery_tasks_ask_for_a_retry(app, db_session):
                 'refresh_community_profile_task', 'refresh_feed_profile_task',
                 'new_instance_profile_task', 'monitor_healthy_instances'}
     seen = {}
-    for path in Path('app').rglob('*.py'):
-        for node in ast.walk(ast.parse(path.read_text(encoding='utf8'))):
+    for path, _source, tree in app_trees():
+        for node in ast.walk(tree):
             if not isinstance(node, ast.FunctionDef):
                 continue
             for call in ast.walk(node):
