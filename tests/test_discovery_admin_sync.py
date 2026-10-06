@@ -2,7 +2,7 @@
 import pytest
 
 from app import db
-from app.discovery import SYNC_ACCEPTED, admin_views
+from app.discovery import SYNC_ACCEPTED, SYNC_NONE, SYNC_PENDING, SYNC_REJECTED, admin_views
 from app.models import DiscoverySync, utcnow
 from app.utils import get_setting, set_setting
 from tests.discovery_fixtures import admin, fresh_cache  # noqa: F401
@@ -79,9 +79,39 @@ def test_the_status_table_lists_each_synced_community(admin):
 
     html = client.get(PAGE).get_data(as_text=True)
 
-    assert 'tube.example' in html and 'accepted' in html and 'outbox unreadable' in html
+    assert 'tube.example' in html and 'Following' in html and 'outbox unreadable' in html
 
 
 def test_an_empty_status_table_says_so(admin):
     client, _ = admin
     assert 'Nothing is synced yet.' in client.get(PAGE).get_data(as_text=True)
+
+
+STATE_LABELS = {SYNC_NONE: 'Not followed yet', SYNC_PENDING: 'Waiting for an answer', SYNC_ACCEPTED: 'Following',
+                SYNC_REJECTED: 'Refused'}
+
+
+@pytest.mark.parametrize('state', STATE_LABELS)
+def test_each_follow_state_reads_as_its_label_not_its_raw_value(admin, state):
+    client, _ = admin
+    community = make_community('statechan', host='tube.example')
+    db.session.add(DiscoverySync(community_id=community.id, follow_target='https://tube.example/video-channels/s',
+                                 follow_state=state))
+    db.session.commit()
+
+    html = client.get(PAGE).get_data(as_text=True)
+
+    assert f'<td>{STATE_LABELS[state]}</td>' in html
+    assert f'<td>{state}</td>' not in html
+
+
+def test_the_community_title_links_to_its_page(admin):
+    client, _ = admin
+    community = make_community('linkchan', host='tube.example')
+    community.ap_id = 'linkchan@tube.example'
+    db.session.add(DiscoverySync(community_id=community.id, follow_target='https://tube.example/video-channels/l'))
+    db.session.commit()
+
+    html = client.get(PAGE).get_data(as_text=True)
+
+    assert '<a href="/c/linkchan@tube.example">linkchan</a>' in html

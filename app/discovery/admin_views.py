@@ -5,6 +5,7 @@ from flask_babel import _
 
 from app import db
 from app.admin import bp
+from app.discovery import SYNC_ACCEPTED, SYNC_NONE, SYNC_PENDING, SYNC_REJECTED
 from app.discovery.forms import DiscoverySyncForm, DiscoverySyncNowForm
 from app.discovery.sync import reconcile_sync_task, sync_per_host, sync_platforms
 from app.models import Community, DiscoverySync
@@ -37,4 +38,6 @@ def admin_federation_discovery():
         .order_by(Community.ap_domain, Community.name).all()
     return render_template('admin/federation_discovery.html', title=_('Federation settings - discovery'),
                            sync_form=sync_form, now_form=now_form, synced=synced,
+                           sync_none=SYNC_NONE, sync_pending=SYNC_PENDING, sync_accepted=SYNC_ACCEPTED,
+                           sync_rejected=SYNC_REJECTED,
                            roles_with=roles_with('change instance settings'))
