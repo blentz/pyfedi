@@ -147,3 +147,8 @@ def test_a_payload_with_no_data_list_is_logged_without_the_query(db_session, ans
         assert search_videos('secretquery', allow_nsfw=False) == []
     assert 'sepiasearch video search answered with no data list' in caplog.text
     assert 'secretquery' not in caplog.text
+
+
+def test_a_url_keeps_its_path_parameters():
+    assert external_search.clean_video_url('https://tube.example/videos/watch/1;x?y=1') == (
+        'https://tube.example/videos/watch/1;x?y=1', 'tube.example')
