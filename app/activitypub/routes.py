@@ -34,6 +34,7 @@ from app.activitypub.util import users_total, active_half_year, active_month, lo
 import app.community.routes as community_routes
 from app.community.util import send_to_remote_instance, send_to_remote_instance_fast
 from app.discovery import SYNC_ACCEPTED, SYNC_REJECTED
+from app.discovery.instance_answers import instance_actor_answer, record_answer
 from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
 from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
@@ -1191,8 +1192,6 @@ def process_inbox_request(request_json, store_ap_json):
 
                 # Accept: remote server is accepting our previous follow request
                 if core_activity['type'] == 'Accept':
-                    # cycle: app.discovery.instance_actor imports app.activitypub.signature, which loads this module
-                    from app.discovery.instance_actor import instance_actor_answer, record_answer
                     ours, sync_row = instance_actor_answer(core_activity, actor_id)   # D24 proactive sync
                     if ours:
                         if sync_row is None:
@@ -1282,8 +1281,6 @@ def process_inbox_request(request_json, store_ap_json):
 
                 # Reject: remote server is rejecting our previous follow request
                 if core_activity['type'] == 'Reject':
-                    # cycle: app.discovery.instance_actor imports app.activitypub.signature, which loads this module
-                    from app.discovery.instance_actor import instance_actor_answer, record_answer
                     ours, sync_row = instance_actor_answer(core_activity, actor_id)   # D24 proactive sync
                     if ours:
                         if sync_row is None:
