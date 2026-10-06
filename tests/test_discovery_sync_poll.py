@@ -92,3 +92,15 @@ def test_a_row_dropped_mid_poll_ends_quietly(row, monkeypatch):
     poll_synced_community(community_id)
 
     assert db.session.get(DiscoverySync, community_id) is None
+
+
+def test_an_unusable_community_gets_its_peer_an_undo(row, monkeypatch):
+    undone = []
+    monkeypatch.setattr(sync, 'send_instance_undo', lambda r, community: undone.append(r.community_id))
+    stub(monkeypatch)
+    db.session.get(sync.Community, row.community_id).banned = True
+    db.session.commit()
+
+    poll_synced_community(row.community_id)
+
+    assert undone == [row.community_id] and db.session.get(DiscoverySync, row.community_id) is None
