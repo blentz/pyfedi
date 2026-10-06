@@ -12,3 +12,6 @@ SYNC_NONE = 'none'
 SYNC_PENDING = 'pending'
 SYNC_ACCEPTED = 'accepted'
 SYNC_REJECTED = 'rejected'
+
+# Instance.software values whose communities are video channels or podcasts (lower-case)
+MEDIA_SOFTWARE = ('peertube', 'castopod')
