@@ -506,9 +506,8 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
         if community.topic_id:
             community.topic.num_communities = community.topic.communities.count()
         if old_topic_id:
-            old_topic = db.session.get(Topic, old_topic_id)
-            if old_topic:
-                old_topic.num_communities = old_topic.communities.count()
+            old_topic = db.session.get(Topic, old_topic_id)  # no None check: the FK on community.topic_id guarantees the row
+            old_topic.num_communities = old_topic.communities.count()
         db.session.commit()
 
     if not from_scratch:
