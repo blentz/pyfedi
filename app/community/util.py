@@ -136,6 +136,8 @@ def _stored_object_id(announce, by_reference: bool):
     if not isinstance(obj, dict):
         return None
     inner = obj.get('object')
+    if isinstance(inner, str):
+        return inner    # a Create whose object is a url
     if isinstance(inner, dict):
         return inner.get('id') if isinstance(inner.get('id'), str) else None
     return obj.get('id') if isinstance(obj.get('id'), str) else None

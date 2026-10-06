@@ -1,4 +1,6 @@
 """Interop D24 proactive sync: a poll re-walks an outbox newest-first and stops at the first post already here."""
+from types import SimpleNamespace
+
 import pytest
 
 from app import db
@@ -65,24 +67,37 @@ def test_without_stop_at_known_the_walk_goes_past_stored_videos(channel, monkeyp
     assert 'https://tube.example/videos/watch/1' in fetched
 
 
-@pytest.mark.parametrize('item, known_id', [
-    ({'type': 'Announce', 'id': 'a', 'object': {'type': 'Create', 'object': {'id': 'https://l.example/post/9'}}},
-     'https://l.example/post/9'),
-    ({'type': 'Create', 'id': 'c', 'object': {'id': 'https://pod.example/@pod/episodes/9'}},
-     'https://pod.example/@pod/episodes/9')])
-def test_stop_at_known_reads_lemmy_and_castopod_shapes(channel, monkeypatch, item, known_id):
+def lemmy_item(post_id, activity_id):
+    return {'type': 'Announce', 'id': activity_id, 'object': {
+        'type': 'Create', 'object': {'id': post_id, 'attributedTo': 'https://l.example/u/zqauthor'}}}
+
+
+def castopod_item(post_id, activity_id):
+    return {'type': 'Create', 'id': activity_id, 'object': {
+        'id': post_id, 'attributedTo': 'https://l.example/u/zqauthor'}}
+
+
+@pytest.mark.parametrize('shape, known_id, new_id', [
+    (lemmy_item, 'https://l.example/post/9', 'https://l.example/post/8'),
+    (castopod_item, 'https://pod.example/@pod/episodes/9', 'https://pod.example/@pod/episodes/8')])
+@pytest.mark.parametrize('stop_at_known, expected_calls', [(True, 0), (False, 2)])
+def test_stop_at_known_reads_lemmy_and_castopod_shapes(channel, monkeypatch, shape, known_id, new_id,
+                                                      stop_at_known, expected_calls):
     channel.ap_profile_id = 'https://l.example/c/zqchan'   # not a PeerTube channel url
     db.session.commit()
     author = make_user(channel.instance, 'zqauthor')
     make_post(channel, author, known_id)
+    items = [shape(known_id, 'a1'), shape(new_id, 'a2')]
     created = []
     monkeypatch.setattr(util, 'remote_object_to_json',
-                        lambda url: {'type': 'OrderedCollection', 'orderedItems': [item]} if url == OUTBOX else None)
+                        lambda url: {'type': 'OrderedCollection', 'orderedItems': items} if url == OUTBOX else None)
+    monkeypatch.setattr(util, 'find_actor_or_create', lambda *a, **k: SimpleNamespace(is_local=lambda: False))
+    monkeypatch.setattr(util, 'can_create_post', lambda *a, **k: True)
     monkeypatch.setattr(util, 'create_post', lambda *a, **k: created.append(a) or None)
 
-    retrieve_mods_and_backfill(channel.id, 'l.example', 'zqchan', None, stop_at_known=True)
+    retrieve_mods_and_backfill(channel.id, 'l.example', 'zqchan', None, stop_at_known=stop_at_known)
 
-    assert created == []
+    assert len(created) == expected_calls
 
 
 @pytest.mark.parametrize('item, by_reference, expected', [
@@ -93,7 +108,9 @@ def test_stop_at_known_reads_lemmy_and_castopod_shapes(channel, monkeypatch, ite
     ({'object': 5}, False, None),
     ({'object': {'object': {'id': 7}}}, False, None),
     ({'object': {'id': 7}}, False, None),
-    ({'object': {'object': 'not-a-dict', 'id': 'https://l.example/p/1'}}, False, 'https://l.example/p/1')])
+    ({'object': {'object': 'https://l.example/post/9', 'id': 'https://l.example/activities/create/1'}}, False,
+     'https://l.example/post/9'),
+    ({'object': {'object': 'not-a-dict', 'id': 'https://l.example/p/1'}}, False, 'not-a-dict')])
 def test_stored_object_id(item, by_reference, expected):
     from app.community.util import _stored_object_id
     assert _stored_object_id(item, by_reference) == expected
