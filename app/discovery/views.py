@@ -3,10 +3,11 @@ from flask import abort, flash, redirect, request, url_for
 from flask_babel import _
 
 from app import db
-from app.activitypub.util import find_actor_or_create
+from app.activitypub.util import find_actor_or_create, resolve_remote_post_from_search
 from app.discovery import KIND_COMMUNITY
 from app.discovery.backfill import backfill_in_progress, queue_backfill
 from app.discovery.credits import podcast_byline
+from app.discovery.external_search import clean_video_url
 from app.discovery.filters import host_is_excluded
 from app.discovery.sources import is_hostname
 from app.main import bp
@@ -51,3 +52,24 @@ def _back_to_search(entry):
 
 bp.app_template_global('podcast_byline')(podcast_byline)   # D24: the post byline for a podcast episode
 bp.app_template_global('backfill_in_progress')(backfill_in_progress)   # D24: an empty community being filled
+
+
+@bp.route('/discovery/video/resolve', methods=['POST'])
+@login_required
+def discovery_video_resolve():
+    """Open a wider-network search result here (interop D24): fetch the video through the authenticated resolve path
+    (PERM-1) and go to its post. The url came from the viewer's form, so it gets the same check as a search result's."""
+    q = (request.form.get('q') or '').strip() or None
+    cleaned = clean_video_url((request.form.get('url') or '').strip())
+    if cleaned is None:
+        abort(400)
+    url, host = cleaned
+    back = redirect(url_for('search.run_search', q=q, external='1'))
+    if host_is_excluded(host, frozenset()):
+        flash(_('That video is on an instance this site does not federate with.'), 'warning')
+        return back
+    post = resolve_remote_post_from_search(url)
+    if post is None:
+        flash(_("Couldn't reach that server. Please try again later."), 'warning')   # D720
+        return back
+    return redirect(url_for('activitypub.post_ap', post_id=post.id))
