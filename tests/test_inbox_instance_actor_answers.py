@@ -7,7 +7,8 @@ from flask import current_app
 from app import db
 from app.constants import APLOG_ACCEPT
 from app.discovery import SYNC_ACCEPTED, SYNC_PENDING, SYNC_REJECTED
-from app.discovery.instance_actor import follow_activity, instance_actor_answer
+from app.discovery.instance_actor import follow_activity
+from app.discovery.instance_answers import instance_actor_answer
 from app.models import ActivityPubLog, CommunityMember, DiscoverySync, utcnow
 from tests.factories import inbox_activity, make_community, make_community_join_request, make_instance, make_user
 from tests.test_inbox_dispatch_preamble import dispatch
@@ -131,3 +132,9 @@ def test_a_follow_of_ours_with_no_usable_id_or_target_is_ours_but_has_no_row(pen
     follow = {'type': 'Follow', 'actor': follow_activity(row)['actor'], 'object': {'id': community.ap_profile_id}}
 
     assert instance_actor_answer({'object': follow}, community.ap_profile_id) == (True, None)
+
+
+def test_a_signer_whose_host_cannot_be_parsed_matches_no_row():
+    from app.discovery.instance_answers import _host
+    assert _host('https://[::1/actor') == ''
+    assert _host('https://Tube.Example:8443/a') == 'tube.example'

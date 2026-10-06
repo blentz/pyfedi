@@ -5,7 +5,8 @@ from flask import current_app
 from app import db
 from app.discovery import SYNC_NONE, SYNC_PENDING
 from app.discovery import instance_actor
-from app.discovery.instance_actor import follow_activity, instance_actor_url, send_instance_follow, \
+from app.discovery.instance_answers import instance_actor_url
+from app.discovery.instance_actor import follow_activity, send_instance_follow, \
     send_instance_undo
 from app.models import DiscoverySync, Site
 from tests.factories import make_community, make_instance, make_user

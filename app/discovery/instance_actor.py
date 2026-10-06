@@ -6,13 +6,9 @@ from flask import current_app
 
 from app import db
 from app.activitypub.signature import send_post_request
-from app.activitypub.util import host_of
 from app.discovery import SYNC_NONE, SYNC_PENDING
-from app.models import DiscoverySync, Site, utcnow
-
-
-def instance_actor_url() -> str:
-    return f"{current_app.config['SERVER_URL']}/actor"
+from app.discovery.instance_answers import instance_actor_url
+from app.models import Site, utcnow
 
 
 def _signing():
@@ -54,39 +50,3 @@ def send_instance_undo(row, community) -> None:
         send_post_request(community.ap_inbox_url, undo, private_key, key_id, timeout=10)
     except Exception as error:
         current_app.logger.info(f'discovery sync: undo to {community.ap_inbox_url} failed: {type(error).__name__}')
-
-
-def _row_for(follow, signer: str):
-    """The row a Follow (a dict, or its id as a string) names, when `signer` is on the followed actor's host."""
-    row = None
-    follow_id = follow.get('id') if isinstance(follow, dict) else follow
-    if isinstance(follow_id, str) and '/activities/follow/' in follow_id:
-        row = db.session.query(DiscoverySync).filter_by(follow_uuid=follow_id.rsplit('/', 1)[-1]).first()
-    elif isinstance(follow, dict) and isinstance(follow.get('object'), str):
-        row = db.session.query(DiscoverySync).filter(
-            db.func.lower(DiscoverySync.follow_target) == follow['object'].lower()).first()
-    if row is None or host_of(row.follow_target).lower() != host_of(signer).lower():
-        return None
-    return row
-
-
-def instance_actor_answer(activity: dict, signer: str):
-    """(ours, row) for an Accept/Reject. `ours` is True when the answered Follow came from the instance actor: a
-    Follow object whose actor is /actor, or a bare follow id that a sync row holds. `row` is that row, only when the
-    signed `signer` is on the followed actor's host (anyone can name a uuid)."""
-    obj = activity.get('object')
-    if isinstance(obj, dict):
-        if obj.get('actor') != instance_actor_url():
-            return False, None
-        return True, _row_for(obj, signer)
-    if isinstance(obj, str):
-        held = db.session.query(DiscoverySync.community_id).filter_by(follow_uuid=obj.rsplit('/', 1)[-1]).first()
-        if held is None:
-            return False, None
-        return True, _row_for(obj, signer)
-    return False, None
-
-
-def record_answer(row, state: str) -> None:
-    row.follow_state = state
-    db.session.commit()
