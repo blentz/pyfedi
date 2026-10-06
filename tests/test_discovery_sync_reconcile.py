@@ -283,3 +283,22 @@ def test_refollowed_counts_only_follows_that_were_sent(db_session, fed, monkeypa
     monkeypatch.setattr(sync, 'send_instance_follow', lambda row, community: False)
 
     assert reconcile_sync()['refollowed'] == 0
+
+
+def test_one_row_failing_to_drop_does_not_abort_the_reconcile(db_session, fed, monkeypatch):
+    set_setting('discovery_sync_per_host', 3)
+    entries = chans('tube.example', 3)
+    reconcile_sync()
+    set_setting('discovery_sync_per_host', 1)
+
+    def undo(row, community):
+        if row.follow_target == entries[1].actor_url:
+            raise RuntimeError('signing blew up')
+        fed['undo'].append(row.follow_target)
+    monkeypatch.setattr(sync, 'send_instance_undo', undo)
+
+    summary = reconcile_sync()
+
+    assert summary['dropped'] == 1 and fed['undo'] == [entries[2].actor_url]
+    assert {r.entry_id for r in DiscoverySync.query} == {entries[0].id, entries[1].id}
+    assert summary['failed_hosts'] == []

@@ -43,10 +43,10 @@ def send_instance_undo(row, community) -> None:
     """Best-effort: a peer that cannot be told still loses the row, so a dead host never pins it."""
     if not row.follow_uuid or not community.ap_inbox_url:
         return
-    undo = {'type': 'Undo', 'actor': instance_actor_url(), 'object': follow_activity(row),
-            'id': f"{current_app.config['SERVER_URL']}/activities/undo/{uuid.uuid4()}"}
-    private_key, key_id = _signing()
     try:
+        undo = {'type': 'Undo', 'actor': instance_actor_url(), 'object': follow_activity(row),
+                'id': f"{current_app.config['SERVER_URL']}/activities/undo/{uuid.uuid4()}"}
+        private_key, key_id = _signing()
         send_post_request(community.ap_inbox_url, undo, private_key, key_id, timeout=10)
     except Exception as error:
         current_app.logger.info(f'discovery sync: undo to {community.ap_inbox_url} failed: {type(error).__name__}')

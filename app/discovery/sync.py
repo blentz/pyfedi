@@ -144,7 +144,12 @@ def reconcile_sync() -> dict:
     for row in list(rows.values()):
         community = db.session.get(Community, row.community_id)
         if _unusable(community) or community.ap_profile_id not in wanted:
-            drop_row(row)
+            try:
+                drop_row(row)
+            except Exception:
+                current_app.logger.exception(f'discovery sync: dropping community {row.community_id} failed')
+                db.session.rollback()
+                continue
             del rows[row.community_id]
             summary['dropped'] += 1
     held = {db.session.get(Community, cid).ap_profile_id: row for cid, row in rows.items()}
