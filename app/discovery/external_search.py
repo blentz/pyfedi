@@ -2,7 +2,7 @@
 results from the wider network" and the admin allows it: the search text leaves this server. Results are cached ten
 minutes per query; a failure shows nothing and is not cached."""
 import hashlib
-from urllib.parse import urlparse, urlunsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from flask import current_app
 
@@ -24,7 +24,7 @@ def clean_video_url(url) -> tuple[str, str] | None:
     if not isinstance(url, str) or '\\' in url or any(ord(c) <= 0x20 or ord(c) == 0x7f for c in url):
         return None
     try:
-        parsed = urlparse(url)
+        parsed = urlsplit(url)
     except ValueError:
         return None
     host = parsed.netloc.lower()
