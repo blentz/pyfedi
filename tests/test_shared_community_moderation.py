@@ -1280,3 +1280,44 @@ def test_remove_mod_from_community_a_plain_moderator_is_removed_from_a_one_owner
     assert modlog_row.target_user_id == target.id
     assert calls == [('remove_mod', {'user_id': s.user.id, 'mod_id': target.id,
                                      'community_id': s.community.id})]
+
+
+def test_delete_community_web_owner_deletes_and_returns_nothing(app, db_session, monkeypatch):
+    """The web arm of a permitted delete: the community is soft-deleted and the
+    task selected, but nothing is returned (the route does its own flash and
+    redirect), unlike the API arm which returns the caller's id."""
+    s = _seed()
+    member = make_community_member(s.user, s.community, is_moderator=False)
+    member.is_owner = True
+    db.session.commit()
+    calls = []
+    monkeypatch.setattr('app.shared.community.task_selector',
+                        lambda task_key, **kw: calls.append((task_key, kw)))
+
+    with web_ctx(app, s.user):
+        returned = delete_community(s.community.id, SRC_WEB)
+
+    assert returned is None
+    assert s.community.banned is True
+    assert calls == [('delete_community', {'user_id': s.user.id, 'community_id': s.community.id})]
+
+
+def test_restore_community_web_owner_restores_and_returns_nothing(app, db_session, monkeypatch):
+    """The web arm of a permitted restore: the ban is lifted and the task
+    selected, with no return value for the route to consume."""
+    s = _seed()
+    s.community.banned = True
+    db.session.commit()
+    member = make_community_member(s.user, s.community, is_moderator=False)
+    member.is_owner = True
+    db.session.commit()
+    calls = []
+    monkeypatch.setattr('app.shared.community.task_selector',
+                        lambda task_key, **kw: calls.append((task_key, kw)))
+
+    with web_ctx(app, s.user):
+        returned = restore_community(s.community.id, SRC_WEB)
+
+    assert returned is None
+    assert s.community.banned is False
+    assert calls == [('restore_community', {'user_id': s.user.id, 'community_id': s.community.id})]

@@ -173,7 +173,7 @@ from sqlalchemy import event, text
 
 from app import db
 from app.constants import SRC_API, SRC_WEB
-from app.models import Community, CommunityMember, File, Language, User
+from app.models import Community, CommunityMember, File, Language, Topic, User
 # The module object itself, not just the two functions: the final fix round's
 # `authorise_api_user` / `current_user` observations (C2) need the REAL bound
 # function to delegate to before monkeypatch replaces the module global, and
@@ -3094,3 +3094,25 @@ def test_edit_community_field_writes_are_committed_not_merely_flushed(app, db_se
     db.session.rollback()
     assert db.session.get(Community, community_id).title == 'Durable Title'
     assert len(commits) == 1
+
+
+def test_edit_community_giving_a_topicless_community_a_topic_counts_it_in_the_topic(
+        app, db_session, monkeypatch):
+    """A community with no topic that is given one has no previous topic to
+    recount; only the new topic's `num_communities` moves, from 0 to 1."""
+    s = _seed()
+    _seed_und_language()
+    make_community_member(s.user, s.community, is_moderator=True)
+    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
+    monkeypatch.setattr('app.shared.community.is_image_url', lambda url: False)
+    topic = Topic(machine_name='coverage', name='Coverage', num_communities=0)
+    db.session.add(topic)
+    db.session.commit()
+    assert s.community.topic_id is None
+
+    edit_community(_api_input(topic_id=topic.id), s.community, SRC_API, bearer(s.user),
+                   from_scratch=False)
+
+    db.session.refresh(topic)
+    assert s.community.topic_id == topic.id
+    assert topic.num_communities == 1
