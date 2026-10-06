@@ -93,6 +93,61 @@ def test_an_agupe_string_accept_admits_the_join_requests_user(app, db_session, m
     assert ActivityPubLog.query.one().result == 'success'
 
 
+def test_an_accept_whose_actor_is_an_object_with_an_id_is_resolved_by_that_id(app, db_session, monkeypatch):
+    """Discourse sends `actor` as `{'id': <uri>}` rather than the bare URI. The
+    dispatcher unwraps it, so an a.gup.pe-style Accept from such a sender still
+    admits the joiner; if the unwrap were lost the actor lookup would fail and
+    the member would never be added."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    community, instance = _seed_agupe_community()
+    joiner = make_user(instance, 'joiner')
+    join_request = make_community_join_request(joiner, community)
+
+    activity = inbox_activity(
+        community, activity_type='Accept',
+        object=f'https://peer.example/activities/follow/{join_request.uuid}')
+    activity['actor'] = {'id': community.ap_profile_id}
+
+    dispatch(activity)
+
+    assert CommunityMember.query.filter_by(user_id=joiner.id, community_id=community.id).count() == 1
+    assert ActivityPubLog.query.one().result == 'success'
+
+
+def test_an_agupe_string_accept_for_an_unknown_request_is_refused(app, db_session, monkeypatch):
+    """A string Accept whose last path segment names no join request has no
+    requestor to admit, so it is refused rather than guessed at."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    community, instance = _seed_agupe_community()
+
+    dispatch(inbox_activity(
+        community, activity_type='Accept',
+        object='https://peer.example/activities/follow/00000000-0000-0000-0000-000000000000'))
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Could not find recipient of Accept'
+    assert CommunityMember.query.count() == 0
+
+
+def test_an_accept_of_an_object_that_is_not_a_follow_is_refused(app, db_session, monkeypatch):
+    """Only an Accept of a Follow can admit anyone. A typed object of another
+    kind (here a Join) leaves no requestor, and is refused as such."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    community, instance = _seed_agupe_community()
+    joiner = make_user(instance, 'joiner')
+    make_community_join_request(joiner, community)
+
+    dispatch(inbox_activity(
+        community, activity_type='Accept',
+        object={'type': 'Join', 'actor': joiner.ap_profile_id, 'object': community.ap_profile_id}))
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Could not find recipient of Accept'
+    assert CommunityMember.query.count() == 0
+
+
 def test_an_agupe_numeric_style_accept_retries_by_primary_key(app, db_session, monkeypatch):
     """routes.py:1081-1083. Old-style a.gup.pe join requests were identified
     by a bare integer rather than a uuid -- the string object's last path
@@ -991,6 +1046,32 @@ def test_an_agupe_string_reject_cancels_the_join_request(app, db_session, monkey
     activity = inbox_activity(
         community, activity_type='Reject',
         object=f'https://peer.example/activities/follow/{join_request.uuid}')
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    assert ActivityPubLog.query.one().result == 'success'
+    assert CommunityJoinRequest.query.count() == 0
+    assert CommunityMember.query.filter_by(user_id=joiner.id, community_id=community.id).count() == 0
+
+
+def test_an_agupe_numeric_style_reject_retries_by_primary_key(app, db_session, monkeypatch):
+    """Old-style a.gup.pe join requests were identified by a bare integer, not
+    a uuid. The Reject arm's `filter_by(uuid=...)` lookup raises on Postgres
+    for that non-uuid literal, the `except Exception` rolls back the aborted
+    transaction, and the retry by primary key finds the same row, so the
+    Reject still cancels the request and the membership. Without the retry an
+    old-style Reject would be refused and the joiner left a member.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    community, instance = _seed_agupe_community()
+    joiner = make_user(instance, 'joiner')
+    join_request = make_community_join_request(joiner, community)
+    make_community_member(joiner, community)
+
+    activity = inbox_activity(
+        community, activity_type='Reject',
+        object=f'https://peer.example/activities/follow/{join_request.id}')
 
     dispatch(activity)
 

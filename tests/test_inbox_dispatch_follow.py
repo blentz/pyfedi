@@ -698,6 +698,25 @@ def test_a_follow_of_a_local_user_with_auto_accept_creates_an_inward_follower_an
     assert log.result == 'success'
 
 
+def test_a_follow_of_a_local_user_keeps_an_existing_followers_url(app, db_session, monkeypatch):
+    """The `/followers` URL is only backfilled when the local user has none; a
+    stored one (set by an admin import or an earlier follow) must not be
+    rewritten by a new follower arriving."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    record_sends(monkeypatch)
+    remote_user, local_user = _seed_follow_of_local_user(manually_approves=False)
+    local_user.ap_followers_url = 'https://elsewhere.example/followers-of-local'
+    db.session.commit()
+
+    dispatch(inbox_activity(remote_user, activity_type='Follow', object_uri=local_user.public_url()))
+
+    db.session.expire_all()
+    assert db.session.get(type(local_user), local_user.id).ap_followers_url == \
+        'https://elsewhere.example/followers-of-local'
+    assert UserFollower.query.filter_by(local_user_id=local_user.id, remote_user_id=remote_user.id,
+                                        is_inward=True).one().is_accepted is True
+
+
 def test_a_follow_of_a_local_user_needing_manual_approval_records_a_request_and_sends_nothing(
         app, db_session, monkeypatch):
     """routes.py:1030-1071 with `auto_accept` False (`ap_manually_approves_

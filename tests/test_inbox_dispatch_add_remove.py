@@ -326,6 +326,50 @@ def test_the_feed_branchs_success_path_subscribes_non_owners_and_logs_success(
     assert log.result == 'success'
 
 
+def test_the_feed_branch_does_not_subscribe_members_who_are_remote_or_opted_out(
+        app, db_session, monkeypatch):
+    """Adding a community to a feed auto-subscribes only LOCAL feed members who
+    left `feed_auto_follow` on. A local member who turned it off, and a remote
+    member (whose subscriptions are theirs to make), must each be skipped --
+    otherwise an Add would subscribe people who opted out, or try to subscribe
+    an account this server does not own. The FeedItem is still created, so the
+    skip is the loop's, not the branch's.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    make_user(instance, 'community_owner')  # occupies user id=1 for make_community's hardcoded owner
+    community = make_community(name='optoutcomm', host='peer.example')
+    community.ap_fetched_at = utcnow()
+    feed = make_feed(instance)
+    db.session.commit()
+
+    opted_out = make_user(instance, 'optedout', local=True)
+    opted_out.feed_auto_follow = False
+    remote_member = make_user(instance, 'remotemember')
+    db.session.commit()
+    make_feed_member(opted_out, feed)
+    make_feed_member(remote_member, feed)
+
+    do_subscribe_calls = []
+    monkeypatch.setattr(
+        community_routes, 'do_subscribe',
+        lambda *args, **kwargs: do_subscribe_calls.append((args, kwargs)))
+
+    inner_add = {
+        'id': f'{feed.ap_profile_id}/activities/add-optout',
+        'type': 'Add',
+        'actor': feed.ap_profile_id,
+        'object': {'id': community.ap_profile_id},
+        'target': feed.ap_profile_id,
+    }
+
+    dispatch(inbox_activity(feed, activity_type='Announce', object=inner_add))
+
+    assert do_subscribe_calls == []
+    assert FeedItem.query.filter_by(feed_id=feed.id, community_id=community.id).count() == 1
+    assert ActivityPubLog.query.one().result == 'success'
+
+
 def _seed_community_with_mod_and_admin(host='peer.example', name='modcomm'):
     """A Community with two distinguishable actors: a moderator who is NOT
     an instance admin, and an instance admin who is NOT a moderator -- the
@@ -1445,6 +1489,28 @@ def test_remove_permission_denied_is_logged_as_a_remove(
     log = ActivityPubLog.query.one()
     assert log.exception_message == 'Does not have permission'
     assert log.activity_type == APLOG_REMOVE[1]
+
+
+def test_remove_unsticky_with_a_pre_set_featured_url_is_not_backfilled(app, db_session, monkeypatch):
+    """The Remove arm's backfill of `ap_featured_url` is only for a community
+    that has none; a stored URL (a peer whose featured collection is not at
+    `/featured`) must survive, and still be what the target is compared with,
+    case-insensitively."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, moderator, admin = _seed_community_with_mod_and_admin(name='removestickycomm2')
+    preset_featured_url = 'https://peer.example/c/removestickycomm2/PINNED'
+    community.ap_featured_url = preset_featured_url
+    author = make_user(instance, 'removepostauthor2')
+    post = make_post(community, author, ap_id='https://peer.example/post/201')
+    post.sticky = True
+    db.session.commit()
+
+    dispatch(_remove_from_community(community, moderator, post.ap_id, target=preset_featured_url.lower()))
+
+    db.session.expire_all()
+    assert community.ap_featured_url == preset_featured_url
+    assert post.sticky is False
+    assert ActivityPubLog.query.one().result == 'success'
 
 
 def test_remove_unsticky_backfills_ap_featured_url_and_compares_case_insensitively(

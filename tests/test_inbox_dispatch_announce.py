@@ -359,6 +359,37 @@ def test_an_announce_whose_inner_actor_is_banned_is_refused(app, db_session, mon
         f'Blocked or unfound user for Announce object actor {user_url}'
 
 
+def test_an_announce_whose_inner_actor_resolves_to_a_banned_user_is_refused(app, db_session, monkeypatch):
+    """Defence in depth behind D59: `find_actor_or_create_cached` now declines a
+    banned user itself, so the dispatcher's own `user.banned` check can no
+    longer be reached through the real lookup. If a lookup ever did hand back a
+    banned user, the Announce must still be refused with the ban named; this
+    pins that backstop by doubling the lookup at its binding site."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community = _seed_announcing_community()
+    banned_user = make_user(instance, 'bob')
+    banned_user.ap_fetched_at = utcnow()
+    banned_user.banned = True
+    db.session.commit()
+    user_url = banned_user.ap_profile_id
+    banned_id = banned_user.id
+
+    real_find = activitypub_routes.find_actor_or_create_cached
+
+    def find(actor, *args, **kwargs):
+        if actor == user_url:
+            return db.session.get(type(banned_user), banned_id)
+        return real_find(actor, *args, **kwargs)
+
+    monkeypatch.setattr(activitypub_routes, 'find_actor_or_create_cached', find)
+
+    dispatch(inbox_activity(community, activity_type='Announce', object={'actor': user_url}))
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == f'{banned_user.ap_id} is banned'
+
+
 def test_an_announce_whose_inner_actor_is_unfound_is_refused(
         app, db_session, http_mock, monkeypatch):
     """routes.py:920-922. The inner actor URL is well-formed and not blocked

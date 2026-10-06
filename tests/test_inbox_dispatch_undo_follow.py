@@ -140,6 +140,47 @@ def test_undo_follow_of_a_feed_removes_membership_and_join_request(app, db_sessi
     assert log.result == 'success'
 
 
+def test_undo_follow_of_a_feed_with_no_membership_still_deletes_the_join_request(app, db_session, monkeypatch):
+    """The feed branch's two `if`s are independent: a pending join request with
+    no membership behind it (the follow was never accepted) is cleared, and the
+    subscriber count is not decremented for a member who never existed."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    follower = make_user(instance, 'follower')
+    feed = make_feed(instance, 'news')
+    make_feed_join_request(follower, feed)
+    feed.subscriptions_count = 5
+    db.session.commit()
+    feed_id, follower_id = feed.id, follower.id
+
+    dispatch(undo_follow_activity(follower, feed.ap_profile_id))
+
+    db.session.expire_all()
+    assert db.session.query(FeedJoinRequest).filter_by(user_id=follower_id, feed_id=feed_id).first() is None
+    assert db.session.get(type(feed), feed_id).subscriptions_count == 5
+    assert ActivityPubLog.query.one().result == 'success'
+
+
+def test_undo_follow_of_a_feed_with_no_join_request_still_removes_membership(app, db_session, monkeypatch):
+    """The mirror of the test above: a member with no join request row (it was
+    deleted when the follow was accepted) is removed and the count decremented."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    follower = make_user(instance, 'follower')
+    feed = make_feed(instance, 'news')
+    make_feed_member(follower, feed)
+    feed.subscriptions_count = 5
+    db.session.commit()
+    feed_id, follower_id = feed.id, follower.id
+
+    dispatch(undo_follow_activity(follower, feed.ap_profile_id))
+
+    db.session.expire_all()
+    assert db.session.query(FeedMember).filter_by(user_id=follower_id, feed_id=feed_id).first() is None
+    assert db.session.get(type(feed), feed_id).subscriptions_count == 4
+    assert ActivityPubLog.query.one().result == 'success'
+
+
 def test_undo_follow_of_a_local_user_deletes_an_accepted_follower(app, db_session, monkeypatch):
     """The user branch. `make_follow(local_user, remote_user, is_accepted=True)`
     matches the filter the branch applies.
