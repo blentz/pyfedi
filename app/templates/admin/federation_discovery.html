@@ -3,7 +3,7 @@
 {% else -%}
     {% extends "base.html" -%}
 {% endif -%}
-{% from 'bootstrap5/form.html' import render_form %}
+{% from 'bootstrap5/form.html' import render_form, render_field %}
 {% set active_child = 'admin_discovery' %}
 
 {% block app_content %}
@@ -13,9 +13,7 @@
     <div class="col">
         <h1>{{ _('Discovery: channels, podcasts and people') }}</h1>
 
-        {% if preload_form is not none %}
-            {% include 'admin/_discovery_preload.html' %}
-        {% endif %}
+        {% include 'admin/_discovery_sync.html' %}
 
         <h2 class="h4 mt-4">{{ _('Data sources') }}</h2>
         <p class="discovery_attribution">

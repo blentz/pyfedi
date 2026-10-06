@@ -1,0 +1,27 @@
+<h2 class="h4">{{ _('Keep channels and podcasts synced') }}</h2>
+<p>{{ _('Each day this instance follows the most-followed PeerTube channels and Castopod podcasts on every server in the directory, up to the number below per server, and fetches their new posts. 0 turns this off.') }}</p>
+<form method="post" class="mb-3">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {{ render_field(sync_form.sync_per_host) }}
+    {{ render_field(sync_form.sync_platforms) }}
+    {{ render_field(sync_form.sync_external_search) }}
+    {{ render_field(sync_form.sync_save) }}
+</form>
+<form method="post" class="mb-4">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {{ render_field(now_form.sync_now, button_style='secondary') }}
+</form>
+<h3 class="h5">{{ _('Synced now') }}</h3>
+{% if synced %}
+<table class="table table-sm">
+    <thead><tr><th>{{ _('Community') }}</th><th>{{ _('Server') }}</th><th>{{ _('Follow') }}</th><th>{{ _('Followed') }}</th><th>{{ _('Last poll') }}</th><th>{{ _('Last error') }}</th></tr></thead>
+    <tbody>
+    {% for row, community in synced %}
+        <tr><td>{{ community.title }}</td><td>{{ community.ap_domain }}</td><td>{{ row.follow_state }}</td>
+            <td>{{ row.followed_at or '' }}</td><td>{{ row.last_polled_at or '' }}</td><td>{{ row.last_error or '' }}</td></tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>{{ _('Nothing is synced yet.') }}</p>
+{% endif %}
