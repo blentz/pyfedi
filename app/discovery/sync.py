@@ -12,7 +12,7 @@ from app.discovery import KIND_COMMUNITY, SYNC_NONE, SYNC_PENDING
 from app.discovery.backfill import backfill_in_progress, queue_backfill, run_backfill
 from app.discovery.filters import host_is_excluded
 from app.discovery.instance_actor import send_instance_follow, send_instance_undo
-from app.models import Community, DiscoveryEntry, DiscoverySync, utcnow
+from app.models import Community, DiscoveryEntry, DiscoveryExclusion, DiscoverySync, utcnow
 from app.utils import get_setting
 
 SYNC_PLATFORMS = ('peertube', 'castopod')
@@ -41,11 +41,34 @@ def _unusable_community_urls() -> set:
     return {url for (url,) in rows}
 
 
+def _excluded_urls() -> set:
+    """Actor URLs of communities an admin deleted: never synced again."""
+    return {url for (url,) in db.session.query(DiscoveryExclusion.actor_url)}
+
+
+def forget_synced_community(community) -> None:
+    """Call before an admin deletes a community: unfollow it if it is synced and remember its URLs, so the next
+    reconcile does not re-create and re-follow it. The delete cascades the sync row."""
+    row = db.session.get(DiscoverySync, community.id)
+    if row is not None:
+        send_instance_undo(row, community)
+    if community.ap_profile_id and not community.is_local():
+        urls = {community.ap_profile_id.lower()}
+        if row is not None:
+            urls.add(row.follow_target.lower())
+        known = {url for (url,) in db.session.query(DiscoveryExclusion.actor_url)
+                 .filter(DiscoveryExclusion.actor_url.in_(urls))}
+        for url in urls - known:
+            db.session.add(DiscoveryExclusion(actor_url=url))
+    db.session.commit()
+
+
 def desired_entries() -> dict:
     per_host, platforms = sync_per_host(), sync_platforms()
     if per_host == 0 or not platforms:
         return {}
     unusable = _unusable_community_urls()
+    deleted = _excluded_urls()
     query = db.session.query(DiscoveryEntry).filter(DiscoveryEntry.kind == KIND_COMMUNITY,
                                                     DiscoveryEntry.platform.in_(platforms),
                                                     DiscoveryEntry.nsfw == False) \
@@ -56,7 +79,7 @@ def desired_entries() -> dict:
         host = entry.host.lower()
         if host not in excluded:
             excluded[host] = host_is_excluded(host, frozenset())
-        if excluded[host] or entry.actor_url.lower() in unusable:
+        if excluded[host] or entry.actor_url.lower() in unusable or entry.actor_url.lower() in deleted:
             continue
         chosen = desired.setdefault(host, [])
         if len(chosen) < per_host:
@@ -128,6 +151,8 @@ def _add(entry, held) -> bool:
             current_app.logger.info(f'discovery sync: {entry.actor_url} did not resolve to a community')
             return False
     if _unusable(community):   # an alias URL resolves to a banned or deleted community the desired set cannot see
+        return False
+    if community.ap_profile_id and community.ap_profile_id.lower() in _excluded_urls():   # an admin deleted it
         return False
     if db.session.get(DiscoverySync, community.id) is not None:   # another entry already resolved to this community
         return False

@@ -19,6 +19,8 @@ from urllib.parse import urlparse
 from furl import furl
 from wtforms import Label
 
+from app.discovery import sync as discovery_sync
+
 from app import db, celery, cache
 from app.visibility import visible_to_clause
 from app.activitypub.routes import process_inbox_request, process_delete_request, replay_inbox_request, \
@@ -1699,6 +1701,7 @@ def unsubscribe_everyone_then_delete_task(community_id):
                     # todo: federate delete of local community out to all following instances
                     ...
 
+                discovery_sync.forget_synced_community(community)
                 community.delete_dependencies()
                 session.delete(community)  # todo: when a remote community is deleted it will be able to be re-created by using the 'Add remote' function. Not ideal. Consider soft-delete.
                 session.commit()

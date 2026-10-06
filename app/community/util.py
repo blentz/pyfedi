@@ -603,6 +603,8 @@ def delete_community_task(community_id):
                 add_to_modlog('delete_community', actor=current_user, reason=reason, community=community)
 
                 # actually delete the community
+                from app.discovery.sync import forget_synced_community  # cycle: app.discovery.sync imports app.discovery.backfill, which reaches this module while it is mid-import
+                forget_synced_community(community)
                 community.delete_dependencies()
                 session.delete(community)
                 session.commit()
