@@ -36,3 +36,25 @@ def test_daily_sh_runs_the_refresh_after_daily_maintenance():
     lines = [line.strip() for line in (ROOT / 'daily.sh').read_text().splitlines()]
 
     assert lines.index('flask refresh_discovery') > lines.index('flask daily-maintenance')
+
+
+def test_sync_discovery_reconciles_then_queues_polls(app, db_session, monkeypatch):
+    from app.discovery import cli as discovery_cli
+    order = []
+    monkeypatch.setattr(discovery_cli, 'reconcile_sync', lambda: order.append('reconcile') or
+                        {'added': 2, 'dropped': 1, 'refollowed': 0, 'failed_hosts': ['bad.example']})
+    monkeypatch.setattr(discovery_cli, 'enqueue_polls', lambda: order.append('poll') or 3)
+    cli.register(app)   # pyfedi.py registers the commands; the test app has none
+
+    result = app.test_cli_runner().invoke(args=['sync_discovery'])
+
+    assert result.exit_code == 0
+    assert order == ['reconcile', 'poll']
+    assert 'added: 2' in result.output and 'dropped: 1' in result.output
+    assert 'failed hosts: bad.example' in result.output and 'polls queued: 3' in result.output
+
+
+def test_daily_sh_syncs_after_refreshing_the_directory():
+    lines = [line.strip() for line in (ROOT / 'daily.sh').read_text().splitlines()]
+
+    assert lines.index('flask sync_discovery') > lines.index('flask refresh_discovery')
