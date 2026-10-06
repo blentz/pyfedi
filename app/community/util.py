@@ -266,196 +266,198 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
 
                 # download 50 old posts (with Celery, or just 2 without). A paginated outbox is
                 # walked from `first` along `next` until 50 items or BACKFILL_MAX_PAGES pages (D173 follow-up)
-                if not community.ap_outbox_url:
-                    return BACKFILL_NO_OUTBOX
-                outbox_data = remote_object_to_json(community.ap_outbox_url)
-                if not outbox_data:
-                    return BACKFILL_UNREADABLE
-                if 'totalItems' in outbox_data and outbox_data['totalItems'] == 0:
-                    return
-                if 'first' in outbox_data:
-                    outbox_data = _walk_outbox_pages(outbox_data['first'])
+                outcome = None
+                if community.ap_outbox_url:
+                    outbox_data = remote_object_to_json(community.ap_outbox_url)
                     if not outbox_data:
                         return BACKFILL_UNREADABLE
-                max = 50
-                if current_app.debug:
-                    max = 2
-                if 'type' in outbox_data and (outbox_data['type'] == 'OrderedCollection' or outbox_data['type'] == 'OrderedCollectionPage') and 'orderedItems' in outbox_data:
-                    activities_processed = 0
-                    for announce in outbox_data['orderedItems']:
-                        # D1397. Every read below treats this entry as an
-                        # object. A string element made `'object' in announce` a
-                        # substring test and the subscript a TypeError, which
-                        # ended the backfill for the whole community.
-                        announce = _as_dict(announce)
-                        if stop_at_known:
-                            known_id = _stored_object_id(announce, is_peertube or is_guppe)
-                            if known_id and Post.get_by_ap_id(known_id) is not None:
-                                break   # outboxes are newest first: everything after this is here already
-                        activity = None
-                        if is_peertube or is_guppe:
-                            # `.get`, as the branch below tests for: an
-                            # Announce without an `object` was a KeyError
-                            # here, and one malformed entry in a remote
-                            # outbox stopped the whole backfill.
-                            if 'object' not in announce:
+                    if 'totalItems' in outbox_data and outbox_data['totalItems'] == 0:
+                        return
+                    if 'first' in outbox_data:
+                        outbox_data = _walk_outbox_pages(outbox_data['first'])
+                        if not outbox_data:
+                            return BACKFILL_UNREADABLE
+                    max = 50
+                    if current_app.debug:
+                        max = 2
+                    if 'type' in outbox_data and (outbox_data['type'] == 'OrderedCollection' or outbox_data['type'] == 'OrderedCollectionPage') and 'orderedItems' in outbox_data:
+                        activities_processed = 0
+                        for announce in outbox_data['orderedItems']:
+                            # D1397. Every read below treats this entry as an
+                            # object. A string element made `'object' in announce` a
+                            # substring test and the subscript a TypeError, which
+                            # ended the backfill for the whole community.
+                            announce = _as_dict(announce)
+                            if stop_at_known:
+                                known_id = _stored_object_id(announce, is_peertube or is_guppe)
+                                if known_id and Post.get_by_ap_id(known_id) is not None:
+                                    break   # outboxes are newest first: everything after this is here already
+                            activity = None
+                            if is_peertube or is_guppe:
+                                # `.get`, as the branch below tests for: an
+                                # Announce without an `object` was a KeyError
+                                # here, and one malformed entry in a remote
+                                # outbox stopped the whole backfill.
+                                if 'object' not in announce:
+                                    continue
+                                activity = remote_object_to_json(announce['object'])
+                            elif 'object' in announce and 'object' in _as_dict(announce['object']):
+                                activity = announce['object']['object']
+                            elif 'type' in announce and announce['type'] == 'Create':
+                                activity = announce['object']
+                                is_wordpress = True
+                            if not activity:
+                                continue    # `return` here threw away every
+                                            # entry after a malformed one
+                            if is_peertube and mod:
+                                user = mod
+                            elif 'attributedTo' in activity and isinstance(activity['attributedTo'], str):
+                                user = find_actor_or_create(activity['attributedTo'], retry=True)
+                                if not user:
+                                    continue
+                            else:
                                 continue
-                            activity = remote_object_to_json(announce['object'])
-                        elif 'object' in announce and 'object' in _as_dict(announce['object']):
-                            activity = announce['object']['object']
-                        elif 'type' in announce and announce['type'] == 'Create':
-                            activity = announce['object']
-                            is_wordpress = True
-                        if not activity:
-                            continue    # `return` here threw away every
-                                        # entry after a malformed one
-                        if is_peertube and mod:
-                            user = mod
-                        elif 'attributedTo' in activity and isinstance(activity['attributedTo'], str):
-                            user = find_actor_or_create(activity['attributedTo'], retry=True)
-                            if not user:
+                            if user.is_local():
                                 continue
-                        else:
-                            continue
-                        if user.is_local():
-                            continue
-                        if not can_create_post(user, community):  # PERM-3: the inbound Create gate
-                            current_app.logger.warning(f'Backfill of {community.ap_profile_id} skipped '
-                                                       f'{activity.get("id")}: author may not post')
-                            continue
-                        if is_peertube or is_guppe:
-                            request_json = {'id': f"https://{server}/activities/create/{gibberish(15)}", 'object': activity}
-                        elif is_wordpress:
-                            request_json = announce
-                        else:
-                            request_json = announce['object']
-                        try:
-                            post = create_post(True, community, request_json, user, announce['id'])
-                        except Exception as e:
-                            session.rollback()
-                            # Log the error but continue processing other posts
-                            print(f"Error creating post: {e}")
-                            continue
-                        if not session.is_active:
-                            # create_post can swallow a failed flush (a PeerTube announce id longer than its
-                            # column, say) and return None. Without this rollback the next entry's first query
-                            # raised PendingRollbackError and ended the whole backfill with nothing stored.
-                            session.rollback()
-                            current_app.logger.warning(f'Backfill of {community.ap_profile_id} skipped '
-                                                       f'{activity.get("id")}: it could not be stored')
-                            continue
-                        if post:
-                            if 'published' in activity:
-                                post.posted_at = activity['published']
-                                post.last_active = activity['published']
+                            if not can_create_post(user, community):  # PERM-3: the inbound Create gate
+                                current_app.logger.warning(f'Backfill of {community.ap_profile_id} skipped '
+                                                           f'{activity.get("id")}: author may not post')
+                                continue
+                            if is_peertube or is_guppe:
+                                request_json = {'id': f"https://{server}/activities/create/{gibberish(15)}", 'object': activity}
+                            elif is_wordpress:
+                                request_json = announce
+                            else:
+                                request_json = announce['object']
+                            try:
+                                post = create_post(True, community, request_json, user, announce['id'])
+                            except Exception as e:
+                                session.rollback()
+                                # Log the error but continue processing other posts
+                                print(f"Error creating post: {e}")
+                                continue
+                            if not session.is_active:
+                                # create_post can swallow a failed flush (a PeerTube announce id longer than its
+                                # column, say) and return None. Without this rollback the next entry's first query
+                                # raised PendingRollbackError and ended the whole backfill with nothing stored.
+                                session.rollback()
+                                current_app.logger.warning(f'Backfill of {community.ap_profile_id} skipped '
+                                                           f'{activity.get("id")}: it could not be stored')
+                                continue
+                            if post:
+                                if 'published' in activity:
+                                    post.posted_at = activity['published']
+                                    post.last_active = activity['published']
+                                    session.commit()
+
+                                    # create post_replies based on activity['replies'], if it exists
+                                    if 'replies' in activity and isinstance(activity['replies'], str):
+                                        replies = remote_object_to_json(activity['replies'])
+                                        if replies and 'type' in replies and replies['type'] == 'OrderedCollection' and 'orderedItems' in replies:
+                                            for reply_data in replies['orderedItems']:
+                                                # Everything below comes off the
+                                                # wire: an entry with no id, and
+                                                # one with no author, were each a
+                                                # KeyError that killed the task.
+                                                if not isinstance(reply_data, dict) or 'id' not in reply_data:
+                                                    continue
+                                                # Skip if reply already exists
+                                                if session.query(PostReply).filter_by(ap_id=reply_data['id']).first():
+                                                    continue
+
+                                                # Refuse non-public replies, same policy as create_post_reply.
+                                                # reply_data IS the object here (see the synthesised
+                                                # reply_data['object'] below), so classify it directly rather
+                                                # than a nested 'object' key that does not exist yet.
+                                                if activitypub_visibility(reply_data) != 'public':
+                                                    continue
+
+                                                # Find the author of the reply
+                                                if 'attributedTo' not in reply_data:
+                                                    continue
+                                                reply_author = find_actor_or_create(reply_data['attributedTo'], retry=True)
+                                                if not reply_author:
+                                                    continue
+                                                if not can_create_post_reply(reply_author, community):  # PERM-3
+                                                    current_app.logger.warning(f'Backfill of {community.ap_profile_id} skipped '
+                                                                               f'{reply_data["id"]}: author may not reply')
+                                                    continue
+                                                
+                                                # Extract reply content
+                                                body = body_html = ''
+                                                if 'content' in reply_data:
+                                                    if not (reply_data['content'].startswith('<p>') or reply_data['content'].startswith('<blockquote>')):
+                                                        reply_data['content'] = '<p>' + reply_data['content'] + '</p>'
+                                                    body_html = allowlist_html(reply_data['content'])
+                                                    source_markdown = markdown_source(reply_data)  # D1346
+                                                    if source_markdown is not None:
+                                                        body = source_markdown
+                                                        body_html = markdown_to_html(body)
+                                                    else:
+                                                        body = html_to_text(body_html)
+                                                
+                                                # Find parent (post or comment this is replying to)
+                                                in_reply_to = None
+                                                if 'inReplyTo' in reply_data:
+                                                    # Check if replying to the post itself
+                                                    if reply_data['inReplyTo'] == post.ap_id:
+                                                        in_reply_to = None  # Direct reply to post
+                                                    else:
+                                                        # Check if replying to another comment
+                                                        parent_comment = session.query(PostReply).filter_by(ap_id=reply_data['inReplyTo']).first()
+                                                        if parent_comment:
+                                                            in_reply_to = parent_comment
+                                                
+                                                # Get language
+                                                language_id = None
+                                                ap_language = language_from_ap(reply_data.get('language'))  # D1355
+                                                if ap_language is not None:
+                                                    language = find_language_or_create(*ap_language,
+                                                                                       session=session)
+                                                    # A language this instance
+                                                    # has not seen before is
+                                                    # added and not flushed, so
+                                                    # `language.id` was None and
+                                                    # the reply kept no language
+                                                    # at all.
+                                                    session.flush()
+                                                    language_id = language.id
+                                                
+                                                # Check if distinguished
+                                                distinguished = reply_data.get('distinguished', False)
+                                                answer = reply_data.get('answer', False)
+
+                                                # Create the reply
+                                                # D1406, as create_post_reply: this id
+                                                # becomes PostReply.ap_id, which a
+                                                # template renders as an href. This
+                                                # tree came from a fetch, not an
+                                                # inbox, so the check is repeated
+                                                # here rather than inherited.
+                                                if _as_url(reply_data.get('id')) is None:
+                                                    continue
+                                                try:
+                                                    reply_data['object'] = {'id': reply_data['id']}
+                                                    post_reply = PostReply.new(reply_author, post, in_reply_to, body, body_html,
+                                                                               False, language_id, distinguished, answer, reply_data, session=session)
+                                                    session.add(post_reply)
+                                                    community.post_reply_count += 1
+                                                    session.commit()
+                                                except Exception as e:
+                                                    session.rollback()
+                                                    # Log the error but continue processing other replies
+                                                    print(f"Error creating post reply: {e}")
+                                                    continue
+                            activities_processed += 1
+                            if activities_processed >= max:
+                                break
+                        if community.post_count > 0:
+                            newest = session.query(Post).filter(Post.community_id == community.id).order_by(desc(Post.posted_at)).first()
+                            if newest:      # post_count is a counter, not a count
+                                community.last_active = newest.posted_at
                                 session.commit()
-
-                                # create post_replies based on activity['replies'], if it exists
-                                if 'replies' in activity and isinstance(activity['replies'], str):
-                                    replies = remote_object_to_json(activity['replies'])
-                                    if replies and 'type' in replies and replies['type'] == 'OrderedCollection' and 'orderedItems' in replies:
-                                        for reply_data in replies['orderedItems']:
-                                            # Everything below comes off the
-                                            # wire: an entry with no id, and
-                                            # one with no author, were each a
-                                            # KeyError that killed the task.
-                                            if not isinstance(reply_data, dict) or 'id' not in reply_data:
-                                                continue
-                                            # Skip if reply already exists
-                                            if session.query(PostReply).filter_by(ap_id=reply_data['id']).first():
-                                                continue
-
-                                            # Refuse non-public replies, same policy as create_post_reply.
-                                            # reply_data IS the object here (see the synthesised
-                                            # reply_data['object'] below), so classify it directly rather
-                                            # than a nested 'object' key that does not exist yet.
-                                            if activitypub_visibility(reply_data) != 'public':
-                                                continue
-
-                                            # Find the author of the reply
-                                            if 'attributedTo' not in reply_data:
-                                                continue
-                                            reply_author = find_actor_or_create(reply_data['attributedTo'], retry=True)
-                                            if not reply_author:
-                                                continue
-                                            if not can_create_post_reply(reply_author, community):  # PERM-3
-                                                current_app.logger.warning(f'Backfill of {community.ap_profile_id} skipped '
-                                                                           f'{reply_data["id"]}: author may not reply')
-                                                continue
-                                                
-                                            # Extract reply content
-                                            body = body_html = ''
-                                            if 'content' in reply_data:
-                                                if not (reply_data['content'].startswith('<p>') or reply_data['content'].startswith('<blockquote>')):
-                                                    reply_data['content'] = '<p>' + reply_data['content'] + '</p>'
-                                                body_html = allowlist_html(reply_data['content'])
-                                                source_markdown = markdown_source(reply_data)  # D1346
-                                                if source_markdown is not None:
-                                                    body = source_markdown
-                                                    body_html = markdown_to_html(body)
-                                                else:
-                                                    body = html_to_text(body_html)
-                                                
-                                            # Find parent (post or comment this is replying to)
-                                            in_reply_to = None
-                                            if 'inReplyTo' in reply_data:
-                                                # Check if replying to the post itself
-                                                if reply_data['inReplyTo'] == post.ap_id:
-                                                    in_reply_to = None  # Direct reply to post
-                                                else:
-                                                    # Check if replying to another comment
-                                                    parent_comment = session.query(PostReply).filter_by(ap_id=reply_data['inReplyTo']).first()
-                                                    if parent_comment:
-                                                        in_reply_to = parent_comment
-                                                
-                                            # Get language
-                                            language_id = None
-                                            ap_language = language_from_ap(reply_data.get('language'))  # D1355
-                                            if ap_language is not None:
-                                                language = find_language_or_create(*ap_language,
-                                                                                   session=session)
-                                                # A language this instance
-                                                # has not seen before is
-                                                # added and not flushed, so
-                                                # `language.id` was None and
-                                                # the reply kept no language
-                                                # at all.
-                                                session.flush()
-                                                language_id = language.id
-                                                
-                                            # Check if distinguished
-                                            distinguished = reply_data.get('distinguished', False)
-                                            answer = reply_data.get('answer', False)
-
-                                            # Create the reply
-                                            # D1406, as create_post_reply: this id
-                                            # becomes PostReply.ap_id, which a
-                                            # template renders as an href. This
-                                            # tree came from a fetch, not an
-                                            # inbox, so the check is repeated
-                                            # here rather than inherited.
-                                            if _as_url(reply_data.get('id')) is None:
-                                                continue
-                                            try:
-                                                reply_data['object'] = {'id': reply_data['id']}
-                                                post_reply = PostReply.new(reply_author, post, in_reply_to, body, body_html,
-                                                                           False, language_id, distinguished, answer, reply_data, session=session)
-                                                session.add(post_reply)
-                                                community.post_reply_count += 1
-                                                session.commit()
-                                            except Exception as e:
-                                                session.rollback()
-                                                # Log the error but continue processing other replies
-                                                print(f"Error creating post reply: {e}")
-                                                continue
-                        activities_processed += 1
-                        if activities_processed >= max:
-                            break
-                    if community.post_count > 0:
-                        newest = session.query(Post).filter(Post.community_id == community.id).order_by(desc(Post.posted_at)).first()
-                        if newest:      # post_count is a counter, not a count
-                            community.last_active = newest.posted_at
-                            session.commit()
+                else:
+                    outcome = BACKFILL_NO_OUTBOX
                 if community.ap_featured_url:
                     featured_data = remote_object_to_json(community.ap_featured_url)
                     if featured_data and 'type' in featured_data and featured_data['type'] == 'OrderedCollection' and 'orderedItems' in featured_data:
@@ -476,6 +478,7 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                                   WHERE post.community_id = :community_id;
                                  """), {'community_id': community.id})
             session.commit()
+            return outcome
         except Exception:
             session.rollback()
             raise

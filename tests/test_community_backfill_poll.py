@@ -122,6 +122,17 @@ def test_a_community_with_no_outbox_is_reported(channel, monkeypatch):
     assert retrieve_mods_and_backfill(channel.id, 'tube.example', 'zqchan', None) == BACKFILL_NO_OUTBOX
 
 
+def test_a_community_with_no_outbox_still_gets_its_featured_posts(channel, monkeypatch):
+    channel.ap_outbox_url = None
+    channel.ap_featured_url = 'https://tube.example/video-channels/zqchan/featured'
+    db.session.commit()
+    fetched = []
+    monkeypatch.setattr(util, 'remote_object_to_json', lambda url: fetched.append(url))
+
+    assert retrieve_mods_and_backfill(channel.id, 'tube.example', 'zqchan', None) == BACKFILL_NO_OUTBOX
+    assert fetched == [channel.ap_featured_url]
+
+
 def test_run_backfill_passes_stop_at_known_and_returns_the_outcome(channel, monkeypatch):
     calls = []
     monkeypatch.setattr(backfill, 'remote_object_to_json', lambda url: {'type': 'Group'})
