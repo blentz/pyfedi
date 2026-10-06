@@ -269,6 +269,29 @@ class TestTheOutbox:
                          'orderedItems': [an_announce()]}})
         assert titles(env.community) == {'a post'}
 
+    def test_a_page_that_holds_no_items_list_ends_the_walk(self, env):
+        """A later page whose `orderedItems` is not a list stops the walk: the items already read are kept
+        and the page after it is never asked for."""
+        page1, page2, page3 = (f'{OUTBOX}?page={n}' for n in (1, 2, 3))
+        answers = {MODS: EMPTY_MODS,
+                   OUTBOX: {'type': 'OrderedCollection', 'first': page1},
+                   page1: {'type': 'OrderedCollectionPage', 'next': page2, 'orderedItems': [an_announce()]},
+                   page2: {'type': 'OrderedCollectionPage', 'next': page3, 'orderedItems': 'none'},
+                   page3: {'type': 'OrderedCollectionPage', 'orderedItems': [
+                       an_announce(a_post('https://remote.test/p/9', name='never read'))]}}
+        fetched = []
+
+        def fake(url, *args, **kwargs):
+            fetched.append(url)
+            return answers.get(url)
+
+        with patch('app.community.util.remote_object_to_json', side_effect=fake), \
+                patch('app.community.util.sleep', lambda seconds: None):
+            retrieve_mods_and_backfill(env.community.id, 'remote.test', 'faraway')
+
+        assert titles(env.community) == {'a post'}
+        assert page3 not in fetched
+
     def test_a_collection_of_a_type_nobody_knows(self, env):
         backfill(env.community,
                  {MODS: EMPTY_MODS,
@@ -303,6 +326,15 @@ class TestWhatTheRemoteSaysAboutReplies:
                  {MODS: EMPTY_MODS, OUTBOX: outbox(self.announce_with_replies()),
                   REPLIES: replies(a_reply())})
         assert bodies(env.community) == {'a reply'}
+
+    def test_a_reply_with_no_content_is_kept_with_an_empty_body(self, env):
+        """A reply carrying no `content` (an attachment-only note) is still stored, with an empty body."""
+        bare = a_reply()
+        del bare['content']
+        backfill(env.community,
+                 {MODS: EMPTY_MODS, OUTBOX: outbox(self.announce_with_replies()),
+                  REPLIES: replies(bare)})
+        assert bodies(env.community) == {''}
 
     def test_a_collection_with_no_type(self, env):
         """D1285. `replies['type']` was a KeyError, one line before a

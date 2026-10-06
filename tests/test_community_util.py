@@ -123,6 +123,11 @@ class TestTheOlderTagParser:
         assert tags_from_string_old(None) == []
         assert tags_from_string_old('   ') == []
 
+    def test_a_tag_that_cannot_be_made_is_left_out(self, env):
+        """find_hashtag_or_create answering nothing (an unusable name) adds nothing to the list."""
+        with patch('app.community.util.find_hashtag_or_create', return_value=None):
+            assert tags_from_string_old('news,sport') == []
+
     def test_the_same_tag_twice_is_kept_once(self, env):
         """D1282. The dedupe was `tag_to_append not in return_value`, which
         compares OBJECTS, and `find_hashtag_or_create` queries without
@@ -361,6 +366,22 @@ class TestDeletingAReply:
         assert send.call_count == 1
         assert send.call_args.args[1]['object'] == reply.ap_id
 
+    def test_an_instance_that_is_banned_is_not_told(self, env, reply):
+        """Of the instances following a local community, one this instance has banned is skipped."""
+        instance = env.baseline.instance_remote
+        instance.inbox = 'https://remote.test/inbox'
+        instance.dormant = False
+        instance.gone_forever = False
+        remote_user = make_user(instance, 'follower')
+        remote_user.ap_id = 'follower@remote.test'
+        db.session.commit()
+        make_community_member(remote_user, env.community)
+        db.session.commit()
+        with patch('app.community.util.instance_banned', return_value=True), \
+                patch('app.community.util.send_to_remote_instance') as announce:
+            delete_post_reply_from_community_task(reply.id, env.author.id)
+        assert announce.call_count == 0
+
     def test_a_failure_is_rolled_back_and_raised(self, env, reply):
         env.community.ap_id = 'probeland@remote.test'
         env.community.ap_inbox_url = 'https://remote.test/inbox'
@@ -591,6 +612,13 @@ class TestTheHashtagCloud:
         assert hashtags_used_in_communities(None, None) is None
         assert hashtags_used_in_communities([], None) is None
 
+    def test_a_filter_across_several_that_matches_nothing(self, env):
+        """Every keyword of every filter is tried against the tag before it is kept."""
+        self.a_tagged_post(env, 'news')
+        cloud = hashtags_used_in_communities([env.community.id],
+                                             {'first': ['nothing', 'else'], 'second': ['nope']})
+        assert [t['name'] for t in cloud] == ['news']
+
     def test_a_filter_across_several(self, env):
         self.a_tagged_post(env, 'spoilers')
         assert hashtags_used_in_communities([env.community.id],
@@ -764,3 +792,40 @@ class TestTheWebfingerWalk:
                 assert search_for_community('!books@remote.example') is None
 
         assert get.call_count == 1
+
+
+class TestTheCommunityAWebfingerNames:
+    """search_for_community's last step: the actor document becomes a community, and a new one is backfilled."""
+
+    def _walk(self, app, named, debug, monkeypatch):
+        from unittest.mock import MagicMock
+        instance = make_instance('test.piefed.local', software='piefed')
+        make_user(instance, 'founder', local=True)
+        db.session.commit()
+        model = make_community(named) if named else None
+        webfinger = MagicMock()
+        webfinger.status_code = 200
+        webfinger.json.return_value = {'links': [{'rel': 'self', 'type': 'application/activity+json',
+                                                  'href': 'https://remote.example/c/books'}]}
+        actor = MagicMock()
+        actor.status_code = 200
+        actor.json.return_value = {'type': 'Group', 'preferredUsername': 'books'}
+        with app.test_request_context('/'):
+            monkeypatch.setattr(current_app, 'debug', debug)
+            with patch('app.community.util.get_request', side_effect=[webfinger, actor]), \
+                    patch('app.community.util.actor_json_to_model', return_value=model), \
+                    patch('app.community.util.retrieve_mods_and_backfill') as backfill:
+                found = search_for_community('!books@remote.example')
+        return found, backfill, model
+
+    def test_a_group_that_makes_no_community_is_not_found(self, app, db_session, monkeypatch):
+        found, backfill, _ = self._walk(app, None, False, monkeypatch)
+        assert found is None
+        assert backfill.delay.call_count == 0 and backfill.call_count == 0
+
+    def test_in_debug_the_backfill_runs_here_and_now(self, app, db_session, monkeypatch):
+        found, backfill, community = self._walk(app, 'books', True, monkeypatch)
+        assert found.id == community.id
+        backfill.assert_called_once_with(community.id, 'remote.example', 'books',
+                                         {'type': 'Group', 'preferredUsername': 'books'})
+        assert backfill.delay.call_count == 0
