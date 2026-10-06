@@ -6,3 +6,9 @@ upstream or fork, can import it without risking a cycle.
 KIND_COMMUNITY = 'community'
 KIND_PERSON = 'person'
 PLATFORMS = ('peertube', 'castopod', 'mastodon', 'pixelfed')
+
+# discovery_sync.follow_state (proactive sync): no Follow sent yet / sent, unanswered / accepted / refused
+SYNC_NONE = 'none'
+SYNC_PENDING = 'pending'
+SYNC_ACCEPTED = 'accepted'
+SYNC_REJECTED = 'rejected'
