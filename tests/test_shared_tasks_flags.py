@@ -37,7 +37,7 @@ from sqlalchemy.orm.exc import NoResultFound
 
 from app import db
 from app.models import ActivityPubLog
-from app.shared.tasks.flags import report_post, report_reply
+from app.shared.tasks.flags import report_chat, report_post, report_reply
 from tests.factories import (
     make_community, make_instance, make_post, make_post_reply, make_user,
 )
@@ -632,3 +632,86 @@ def test_the_flag_carries_a_top_level_context_and_the_community_audience(
     assert flag['audience'] == s.community.public_url()
     assert flag['to'] == [s.community.public_url()]
     assert flag['id'].startswith('https://test.piefed.local/activities/flag/')
+
+
+def _chat_report_seed(inbox=PEER_INBOX):
+    """A local reporter with keys and a remote reported member whose instance
+    has an inbox. Returns (reporter, reported, reported_instance)."""
+    local = make_instance('test.piefed.local', software='piefed')
+    reporter = make_user(local, 'chat-reporter', local=True, with_keys=True)
+    peer = make_instance('peer.example', software='lemmy')
+    peer.inbox = inbox
+    reported = make_user(peer, 'chat-reported', local=False)
+    db.session.commit()
+    return reporter, reported, peer
+
+
+def test_report_chat_flags_the_reported_member_and_their_messages(db_session, http_mock):
+    """D761: the Flag goes to the reported member's instance, its object being
+    the member's actor followed by the message ids. The positive control for
+    the early returns below, which assert nothing was sent."""
+    reporter, reported, peer = _chat_report_seed()
+    route = http_mock.post(PEER_INBOX).respond(200, json={})
+
+    report_chat(None, reporter.id, reported.id, ['https://test.piefed.local/message/9'], 'abuse')
+
+    flag = _sent_activity(route)
+    assert flag['type'] == 'Flag'
+    assert flag['actor'] == reporter.public_url()
+    assert flag['object'] == [reported.ap_profile_id or reported.public_url(),
+                              'https://test.piefed.local/message/9']
+    assert flag['summary'] == 'abuse'
+
+
+def test_report_chat_with_no_messages_sends_nothing(db_session, http_mock):
+    """A report that names no messages has no object to flag, so it returns
+    before anything is signed or logged."""
+    reporter, reported, peer = _chat_report_seed()
+
+    report_chat(None, reporter.id, reported.id, [], 'abuse')
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+@pytest.mark.parametrize('flag', ['no_inbox', 'dormant', 'gone_forever'])
+def test_report_chat_to_an_undeliverable_instance_sends_nothing(db_session, http_mock, flag):
+    """An instance with no inbox, or one that is dormant or gone for good,
+    cannot take the Flag; the task returns without attempting delivery."""
+    reporter, reported, peer = _chat_report_seed()
+    if flag == 'no_inbox':
+        peer.inbox = None
+    else:
+        setattr(peer, flag, True)
+    db.session.commit()
+
+    report_chat(None, reporter.id, reported.id, ['https://test.piefed.local/message/9'], 'abuse')
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_report_chat_rolls_back_and_re_raises_when_delivery_fails(db_session, monkeypatch):
+    """A failure while sending is not swallowed: the task's own session is
+    rolled back and closed, and the original error reaches the caller so
+    Celery records the task as failed."""
+    import app.shared.tasks.flags as flags_module
+    reporter, reported, peer = _chat_report_seed()
+    events = []
+    real_get_task_session = flags_module.get_task_session
+
+    def spying_session():
+        task_session = real_get_task_session()
+        real_rollback, real_close = task_session.rollback, task_session.close
+        task_session.rollback = lambda: events.append('rollback') or real_rollback()
+        task_session.close = lambda: events.append('close') or real_close()
+        return task_session
+
+    def exploding_send(*args, **kwargs):
+        raise RuntimeError('inbox exploded')
+
+    monkeypatch.setattr(flags_module, 'get_task_session', spying_session)
+    monkeypatch.setattr(flags_module, 'send_post_request', exploding_send)
+
+    with pytest.raises(RuntimeError, match='inbox exploded'):
+        report_chat(None, reporter.id, reported.id, ['https://test.piefed.local/message/9'], 'abuse')
+
+    assert events == ['rollback', 'close']
