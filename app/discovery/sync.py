@@ -85,6 +85,8 @@ def poll_synced_community(community_id: int) -> None:
         db.session.rollback()
         outcome = f'{type(error).__name__}: {error}'
     row = db.session.get(DiscoverySync, community_id)   # the backfill ran on its own task session
+    if row is None:   # a concurrent reconcile dropped it mid-poll
+        return
     row.last_polled_at = utcnow()
     row.last_error = outcome[:ERROR_LIMIT] if outcome else None
     db.session.commit()
