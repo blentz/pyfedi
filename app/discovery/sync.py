@@ -1,12 +1,14 @@
 """Proactive sync of PeerTube channels and Castopod podcasts (interop D24,
 docs/superpowers/specs/2026-10-05-proactive-discovery-sync-design.md). Each remote host's top N directory entries
 are followed by the instance actor and polled daily; the rest are left alone."""
+from flask import current_app
 from sqlalchemy import func
 
-from app import db
+from app import celery, db
 from app.discovery import KIND_COMMUNITY
+from app.discovery.backfill import run_backfill
 from app.discovery.filters import host_is_excluded
-from app.models import Community, DiscoveryEntry
+from app.models import Community, DiscoveryEntry, DiscoverySync, utcnow
 from app.utils import get_setting
 
 SYNC_PLATFORMS = ('peertube', 'castopod')
@@ -56,3 +58,33 @@ def desired_entries() -> dict:
         if len(chosen) < per_host:
             chosen.append(entry)
     return {host: entries for host, entries in desired.items() if entries}
+
+
+ERROR_LIMIT = 255   # discovery_sync.last_error
+
+
+def _unusable(community) -> bool:
+    return community is None or community.banned or community.ap_deleted_at is not None
+
+
+@celery.task
+def poll_synced_community(community_id: int) -> None:
+    """Re-walk one synced outbox, newest first, up to the first post already here. Failures are recorded on the row
+    and left for tomorrow's run: no retry here (D738/D775)."""
+    row = db.session.get(DiscoverySync, community_id)
+    if row is None:
+        return
+    if _unusable(db.session.get(Community, community_id)):
+        db.session.delete(row)
+        db.session.commit()
+        return
+    try:
+        outcome = run_backfill(community_id, stop_at_known=True)
+    except Exception as error:
+        current_app.logger.info(f'discovery sync: poll of community {community_id} failed: {type(error).__name__}')
+        db.session.rollback()
+        outcome = f'{type(error).__name__}: {error}'
+    row = db.session.get(DiscoverySync, community_id)   # the backfill ran on its own task session
+    row.last_polled_at = utcnow()
+    row.last_error = outcome[:ERROR_LIMIT] if outcome else None
+    db.session.commit()
