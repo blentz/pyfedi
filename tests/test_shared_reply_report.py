@@ -1227,3 +1227,25 @@ class TestReportReply:
         for targets in (api_targets, web_targets):
             assert targets['source_instance_id'] is None
             assert targets['source_instance_domain'] is None
+
+
+class TestRemoteCommunityInstanceAlreadyCollected:
+    def test_a_remote_mod_on_the_communitys_instance_is_not_added_twice(self, db_session):
+        """`report_remote` with a REMOTE community: a moderator on the
+        community's own instance already put that instance in the set, so the
+        community arm must not add it again and the Flag goes out once."""
+        s = _seed_for_report()
+        s.community.instance_id = s.remote_instance.id
+        s.community.ap_id = 'reports@remote.example'
+        s.community.ap_profile_id = 'https://remote.example/c/reports'
+        add_moderator(s, s.remote_mod)
+        db.session.commit()
+        assert not s.community.is_local()
+        payload = {'reason': 'spam', 'description': 'd', 'report_remote': True}
+
+        with _recording_task_selector(capture_kwargs=True) as calls:
+            report_reply(s.reply, payload, SRC_API, auth=bearer(s.reporter))
+
+        report_calls = [c for c in calls if c[0] == 'report_reply']
+        assert len(report_calls) == 1
+        assert list(report_calls[0][1]['instance_ids']) == [s.remote_instance.id]
