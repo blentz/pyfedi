@@ -22,17 +22,24 @@ def backfill_in_progress(community_id) -> bool:
     return bool(community_id) and cache.get(_in_progress_key(community_id)) is not None
 
 
+def run_backfill(community_id: int, stop_at_known: bool = False):
+    """Moderators, then the outbox, as a first backfill does; with stop_at_known (a proactive sync poll) the walk ends
+    at the first post already stored. Returns retrieve_mods_and_backfill's outcome, None for a missing community."""
+    community = db.session.get(Community, community_id)
+    if community is None or not community.ap_profile_id:
+        return None
+    # The actor document gives the moderators of a PeerTube channel (attributedTo), which its videos are
+    # attributed to; without it the backfill skips every video.
+    community_json = remote_object_to_json(community.ap_profile_id)
+    return retrieve_mods_and_backfill(community.id, community.ap_domain, community.name,
+                                      community_json if isinstance(community_json, dict) else None,
+                                      stop_at_known=stop_at_known)
+
+
 @celery.task
 def backfill_discovered_community(community_id: int):
     try:
-        community = db.session.get(Community, community_id)
-        if community is None or not community.ap_profile_id:
-            return
-        # The actor document gives the moderators of a PeerTube channel (attributedTo), which its videos are
-        # attributed to; without it the backfill skips every video.
-        community_json = remote_object_to_json(community.ap_profile_id)
-        retrieve_mods_and_backfill(community.id, community.ap_domain, community.name,
-                                   community_json if isinstance(community_json, dict) else None)
+        run_backfill(community_id)
     finally:
         cache.delete(_in_progress_key(community_id))
 

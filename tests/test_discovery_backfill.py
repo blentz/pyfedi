@@ -110,7 +110,7 @@ def test_the_backfill_task_reads_the_actor_and_runs_the_community_backfill(app, 
     fetched, ran = [], []
     monkeypatch.setattr(backfill, 'remote_object_to_json', lambda uri: fetched.append(uri) or actor)
     monkeypatch.setattr(backfill, 'retrieve_mods_and_backfill',
-                        lambda community_id, server, name, community_json=None:
+                        lambda community_id, server, name, community_json=None, stop_at_known=False:
                         ran.append((community_id, server, name, community_json)))
 
     backfill.backfill_discovered_community(community.id)
