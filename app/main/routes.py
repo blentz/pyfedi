@@ -11,13 +11,15 @@ from furl import furl
 from markupsafe import Markup, escape
 from pyld import jsonld
 from sqlalchemy import or_, and_, func
+from sqlalchemy.orm import joinedload
 from ua_parser import parse as uaparse
 
 from app import db, cache, limiter, plugins
 from app.activitypub.util import users_total, active_month, local_posts, local_communities, \
     lemmy_site_data, is_activitypub_request, find_microblogging_community
 from app.discovery import KIND_COMMUNITY
-from app.discovery.media import MEDIA_COMMUNITY_SQL
+from app.discovery import MEDIA_SOFTWARE
+from app.discovery.media import MEDIA_COMMUNITY_SQL, platform_community_clause
 from app.discovery.search import discovery_fallback
 from app.activitypub.signature import default_context, LDSignature, HttpSignature
 from app.admin.util import topics_for_form
@@ -332,6 +334,9 @@ def list_communities():
     nsfw = request.args.get('nsfw', 'all')
     page = request.args.get('page', 1, type=int)
     instance = request.args.get('instance', '')
+    platform = request.args.get('platform', '')
+    if platform not in MEDIA_SOFTWARE:   # D24: anything else filters nothing
+        platform = ''
     low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
     sort_by = request.args.get('sort_by', 'post_reply_count desc')
 
@@ -440,6 +445,8 @@ def list_communities():
     # if filtering by home instance
     if instance:
         communities = communities.filter(Community.ap_domain == instance)
+    if platform:
+        communities = communities.filter(platform_community_clause(platform))
 
     # D1418. `hide_nsfw = False` stood here, throwing away the decision made at the top of
     # this function: an instance with `enable_nsfw` off sets it True, and this line put it
@@ -496,9 +503,10 @@ def list_communities():
     args_dict["language_id"] = language_id
     args_dict["nsfw"] = nsfw
     args_dict["instance"] = instance
+    args_dict["platform"] = platform
 
-    # Pagination
-    communities = communities.paginate(page=page,
+    # Pagination (platform_of reads each row's instance, so load it with the list)
+    communities = communities.options(joinedload(Community.instance)).paginate(page=page,
                                        per_page=100 if current_user.is_authenticated and not low_bandwidth else 50,
                                        error_out=False)
     # Interop D24: below the local results, offer what the discovery directory knows and this server does not
@@ -516,6 +524,7 @@ def list_communities():
         "search": search_param,
         "title": _('Communities'), 
         "intance": instance,
+        "platform": platform,
         "home_select": home_select,
         "topics": topics,
         "languages": languages,
