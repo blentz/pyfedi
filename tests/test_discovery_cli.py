@@ -58,3 +58,15 @@ def test_daily_sh_syncs_after_refreshing_the_directory():
     lines = [line.strip() for line in (ROOT / 'daily.sh').read_text().splitlines()]
 
     assert lines.index('flask sync_discovery') > lines.index('flask refresh_discovery')
+
+
+def test_sync_discovery_says_none_when_no_host_failed(app, db_session, monkeypatch):
+    from app.discovery import cli as discovery_cli
+    monkeypatch.setattr(discovery_cli, 'reconcile_sync',
+                        lambda: {'added': 0, 'dropped': 0, 'refollowed': 0, 'failed_hosts': []})
+    monkeypatch.setattr(discovery_cli, 'enqueue_polls', lambda: 0)
+    cli.register(app)
+
+    result = app.test_cli_runner().invoke(args=['sync_discovery'])
+
+    assert 'failed hosts: none' in result.output

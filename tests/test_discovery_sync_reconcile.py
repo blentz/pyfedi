@@ -271,3 +271,15 @@ def test_a_community_mid_backfill_gets_no_poll(db_session, fed, monkeypatch, app
 
     assert enqueue_polls() == 1
     assert ran == [idle]
+
+
+def test_refollowed_counts_only_follows_that_were_sent(db_session, fed, monkeypatch):
+    set_setting('discovery_sync_per_host', 1)
+    chans('tube.example', 1)
+    reconcile_sync()
+    row = DiscoverySync.query.one()
+    row.follow_state = SYNC_NONE
+    db.session.commit()
+    monkeypatch.setattr(sync, 'send_instance_follow', lambda row, community: False)
+
+    assert reconcile_sync()['refollowed'] == 0
