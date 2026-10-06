@@ -219,6 +219,7 @@ def create_app(config_class=Config):
         'app.user.utils.purge_user_then_delete_task': {'queue': 'background'},
         'app.community.util.retrieve_mods_and_backfill': {'queue': 'background'},
         'app.discovery.backfill.backfill_discovered_community': {'queue': 'background'},
+        'app.discovery.sync.*': {'queue': 'background'},
         'app.community.util.send_to_remote_instance_task': {'queue': 'send'},
         'app.activitypub.signature.post_request': {'queue': 'send'},
         # Maintenance tasks - all go to background queue
