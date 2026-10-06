@@ -1,6 +1,8 @@
 import json
 import os
 import re
+import sys
+import time
 
 # --- One database and one pair of Redis dbs per xdist worker -----------------
 #
@@ -690,6 +692,63 @@ def redis_double(monkeypatch):
         monkeypatch.setattr(f'{module}.get_redis_connection', lambda *args, **kwargs: server)
     monkeypatch.setattr('app.redis_client', server)
     return server
+
+
+class _TimeWithoutSleep:
+    """The `time` module as app code sees it under test: every attribute is looked
+    up on the real module at call time, so a test that patches `time.time` or
+    `time.monotonic` still reaches app code, but `sleep` returns at once."""
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+    @staticmethod
+    def sleep(*args, **kwargs):
+        return None
+
+
+def _no_sleep(*args, **kwargs):
+    return None
+
+
+@pytest.fixture(autouse=True)
+def _no_real_sleeping_in_app(monkeypatch):
+    """No test waits out a retry delay in app code (tests/test_no_real_sleeping.py).
+
+    `get_request` retries after `sleep(random.randint(3, 10))` and the ActivityPub
+    fetch helpers after `time.sleep(3)`; while this was opt-in, every "server never
+    answers" test outside the opted-in files waited 7-17 real seconds. Found from
+    the loaded modules, so a new `from time import sleep` or `import time` under
+    app/ is covered without a list to keep. Only app code is touched: the real
+    `time` module still sleeps, so library polling is unchanged. A test that wants
+    to see a sleep patches it itself, which replaces this patch for that test.
+    """
+    for name, module in list(sys.modules.items()):
+        if module is None or not (name == 'app' or name.startswith('app.')):
+            continue
+        namespace = vars(module)
+        if namespace.get('time') is time:
+            monkeypatch.setattr(module, 'time', _TimeWithoutSleep())
+        if namespace.get('sleep') is time.sleep:
+            monkeypatch.setattr(module, 'sleep', _no_sleep)
+
+
+@pytest.fixture
+def private_static_tree(tmp_path, monkeypatch):
+    """Run the test from a scratch directory holding an empty `app/static`.
+
+    App code writes media relative to the working directory, so what a test
+    provokes lands here instead of in the checkout's served tree, and a
+    before/after walk of `app/static` sees only those files. Walking the real
+    tree (~9,500 files through the container's bind mount) cost about a second
+    per walk -- two per fetch -- which made the media tests 2 to 15 seconds
+    each. A module opts in with
+    `pytestmark = pytest.mark.usefixtures('private_static_tree')`; a test that
+    reads a repo file must then name it by its module's `__file__`.
+    """
+    for directory in ('media/posts', 'tmp'):
+        (tmp_path / 'app' / 'static' / directory).mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
 
 
 @pytest.fixture
