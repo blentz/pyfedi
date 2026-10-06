@@ -18,26 +18,36 @@ CACHE_SECONDS = 600
 MAX_BYTES = 512 * 1024
 
 
+def clean_video_url(url) -> tuple[str, str] | None:
+    """(rebuilt url, host) for a plain https video link, or None. No backslash, control character or space, and the
+    authority is the bare host (no userinfo, no port), so no parser can read another host into it."""
+    if not isinstance(url, str) or '\\' in url or any(ord(c) <= 0x20 or ord(c) == 0x7f for c in url):
+        return None
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    host = parsed.netloc.lower()
+    if parsed.scheme != 'https' or not sources.is_hostname(host):
+        return None
+    return urlunsplit(('https', host, parsed.path, parsed.query, '')), host
+
+
 def video_from(raw) -> dict | None:
     """One SepiaSearch video, or None. Its url must be https on the host its channel names, so a row cannot send a
     click to a third party."""
     if not isinstance(raw, dict) or not isinstance(raw.get('channel'), dict):
         return None
     url, host, title = raw.get('url'), raw['channel'].get('host'), raw.get('name')
-    if not isinstance(url, str) or not isinstance(host, str) or not sources.is_hostname(host.lower()):
+    if not isinstance(host, str) or not sources.is_hostname(host.lower()):
         return None
     if not isinstance(title, str) or not title.strip():
         return None
-    if '\\' in url or any(ord(c) <= 0x20 or ord(c) == 0x7f for c in url):
+    cleaned = clean_video_url(url)
+    if cleaned is None or cleaned[1] != host.lower():
         return None
-    try:
-        parsed = urlparse(url)
-    except ValueError:
-        return None
-    if parsed.scheme != 'https' or parsed.netloc.lower() != host.lower():
-        return None
-    host = host.lower()
-    return {'url': urlunsplit(('https', host, parsed.path, parsed.query, '')), 'title': title.strip(),
+    url, host = cleaned
+    return {'url': url, 'title': title.strip(),
             'channel': sources.display_name(raw['channel'].get('displayName'), host), 'host': host,
             'nsfw': raw.get('nsfw') is True}
 
