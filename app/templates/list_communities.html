@@ -183,6 +183,16 @@
                                             placeholder="{{ _("e.g. piefed.social") }}"
                                             value="{{ instance }}">
                                 </div>
+                                <div class="col-12 col-sm-6 col-lg-4 mb-2 px-1">
+                                    <label for="platform">
+                                        {{ _('Platform') }}:
+                                    </label>
+                                    <select class="form-select form-control-sm" name="platform" id="platform" aria-label="{{ _('Platform') }}">
+                                        <option value="" {{ 'selected' if not platform }}>{{ _('All platforms') }}</option>
+                                        <option value="peertube" {{ 'selected' if platform == 'peertube' }}>PeerTube</option>
+                                        <option value="castopod" {{ 'selected' if platform == 'castopod' }}>Castopod</option>
+                                    </select>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -313,6 +323,7 @@
                                 <a href="/c/{{ community.link() }}" aria-label="{{ _('Browse %(name)s', name=community.display_name()) }}">
                                     {{ community.display_name() }}
                                 </a>
+                                {% set community_kind = community_platform(community) %}{% if community_kind %} <span class="badge text-bg-secondary platform_badge">{{ {'peertube': 'PeerTube', 'castopod': 'Castopod'}[community_kind] }}</span>{% endif %}
                             </th>
                             <td align="center">
                                 {{ community.active_weekly }}

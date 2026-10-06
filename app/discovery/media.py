@@ -11,12 +11,17 @@ _SOFTWARE_LIST = ', '.join(f"'{software}'" for software in MEDIA_SOFTWARE)   # c
 MEDIA_COMMUNITY_SQL = f'c.instance_id IN (SELECT id FROM instance WHERE lower(software) IN ({_SOFTWARE_LIST}))'
 
 
-def _media_instance_ids():
-    return select(Instance.id).where(func.lower(Instance.software).in_(MEDIA_SOFTWARE))
+def _media_instance_ids(platforms=MEDIA_SOFTWARE):
+    return select(Instance.id).where(func.lower(Instance.software).in_(platforms))
 
 
 def media_community_clause():
     return Community.instance_id.in_(_media_instance_ids())
+
+
+def platform_community_clause(platform):
+    """One platform's communities (the browse filter); the same instance-id select as media_community_clause."""
+    return Community.instance_id.in_(_media_instance_ids((platform,)))
 
 
 def media_post_clause():

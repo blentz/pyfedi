@@ -10,6 +10,7 @@ from app.discovery.backfill import backfill_in_progress, queue_backfill
 from app.discovery.credits import podcast_byline
 from app.discovery.external_search import clean_video_url
 from app.discovery.filters import host_is_excluded
+from app.discovery.media import platform_of
 from app.discovery.sources import is_hostname
 from app.main import bp
 from app.models import Community, DiscoveryEntry, User
@@ -55,6 +56,7 @@ def _back_to_search(entry):
 
 bp.app_template_global('podcast_byline')(podcast_byline)   # D24: the post byline for a podcast episode
 bp.app_template_global('backfill_in_progress')(backfill_in_progress)   # D24: an empty community being filled
+bp.app_template_global('community_platform')(platform_of)   # D24: 'peertube', 'castopod' or None, for the list badge
 
 
 @bp.route('/discovery/video/resolve', methods=['POST'])

@@ -3,7 +3,7 @@ import pytest
 from sqlalchemy import text
 
 from app import db
-from app.discovery.media import MEDIA_COMMUNITY_SQL, media_community_clause, media_post_clause, platform_of
+from app.discovery.media import MEDIA_COMMUNITY_SQL, media_community_clause, media_post_clause, platform_community_clause, platform_of
 from app.models import Community, Post
 from tests.factories import make_community, make_instance, make_post, make_user
 
@@ -56,3 +56,8 @@ def test_platform_of_a_community_with_no_instance_or_software(db_session):
     community.instance_id = instance.id
     db.session.commit()
     assert platform_of(community) is None
+
+
+def test_the_platform_clause_matches_one_platform_case_insensitively(three):
+    assert {c.name for c in Community.query.filter(platform_community_clause('peertube'))} == {'c_peertube'}
+    assert {c.name for c in Community.query.filter(platform_community_clause('castopod'))} == {'c_castopod'}
