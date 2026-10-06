@@ -1,42 +1,40 @@
-"""The admin discovery page (interop D24): the channel/podcast pre-load
-(Task 9 of the plan) and the data-source attribution. Lives on the admin blueprint."""
-from flask import current_app, flash, redirect, url_for
-from flask_babel import _, ngettext
+"""The admin discovery page (interop D24): proactive sync settings, the sync status, and the data-source
+attribution. Lives on the admin blueprint."""
+from flask import current_app, flash, redirect, request, url_for
+from flask_babel import _
 
+from app import db
 from app.admin import bp
-from app.discovery.forms import DiscoveryPreloadForm
-from app.discovery.preload import PRELOAD_USER_ID, preload_candidates, preload_discovered_communities, \
-    preload_user_can_subscribe
-from app.utils import login_required, permission_required, render_template, roles_with
+from app.discovery.forms import DiscoverySyncForm, DiscoverySyncNowForm
+from app.discovery.sync import reconcile_sync_task, sync_per_host, sync_platforms
+from app.models import Community, DiscoverySync
+from app.utils import get_setting, login_required, permission_required, render_template, roles_with, set_setting
 
 
 @bp.route('/federation/discovery', methods=['GET', 'POST'])
 @login_required
 @permission_required('change instance settings')
 def admin_federation_discovery():
-    preload_form = DiscoveryPreloadForm()
-    candidates = None
-
-    if (preload_form.preload_preview.data or preload_form.preload_subscribe.data) and preload_form.validate_on_submit():
-        candidates = preload_candidates(preload_form.preload_count.data, preload_form.preload_platforms.data)
-        if preload_form.preload_subscribe.data:
-            entry_ids = [entry.id for entry in candidates]
-            if not entry_ids:
-                flash(_('Nothing new to subscribe to.'), 'warning')
-                return redirect(url_for('admin.admin_federation_discovery'))
-            if not preload_user_can_subscribe(PRELOAD_USER_ID):
-                flash(_('User %(id)d, who subscribes for the pre-load, cannot subscribe: the account is missing, '
-                        'deleted or banned.', id=PRELOAD_USER_ID), 'error')
-                return redirect(url_for('admin.admin_federation_discovery'))
-            if current_app.debug:
-                preload_discovered_communities(entry_ids, PRELOAD_USER_ID)
-            else:
-                preload_discovered_communities.delay(entry_ids, PRELOAD_USER_ID)
-            flash(ngettext('Subscribing to %(num)d channel or podcast in the background.',
-                           'Subscribing to %(num)d channels and podcasts in the background.',
-                           len(entry_ids)))
-            return redirect(url_for('admin.admin_federation_discovery'))
-
+    sync_form, now_form = DiscoverySyncForm(), DiscoverySyncNowForm()
+    if request.method == 'POST' and now_form.sync_now.data and now_form.validate_on_submit():
+        if current_app.debug:
+            reconcile_sync_task()
+        else:
+            reconcile_sync_task.delay()
+        flash(_('Sync started in the background.'))
+        return redirect(url_for('admin.admin_federation_discovery'))
+    if request.method == 'POST' and sync_form.sync_save.data and sync_form.validate_on_submit():
+        set_setting('discovery_sync_per_host', sync_form.sync_per_host.data)
+        set_setting('discovery_sync_platforms', sync_form.sync_platforms.data or [])
+        set_setting('discovery_external_search', bool(sync_form.sync_external_search.data))
+        flash(_('Discovery settings saved. They take effect at the next sync.'))
+        return redirect(url_for('admin.admin_federation_discovery'))
+    if request.method == 'GET':
+        sync_form.sync_per_host.data = sync_per_host()
+        sync_form.sync_platforms.data = sync_platforms()
+        sync_form.sync_external_search.data = get_setting('discovery_external_search', True)
+    synced = db.session.query(DiscoverySync, Community).join(Community, Community.id == DiscoverySync.community_id) \
+        .order_by(Community.ap_domain, Community.name).all()
     return render_template('admin/federation_discovery.html', title=_('Federation settings - discovery'),
-                           preload_form=preload_form, candidates=candidates,
+                           sync_form=sync_form, now_form=now_form, synced=synced,
                            roles_with=roles_with('change instance settings'))

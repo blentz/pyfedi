@@ -6,8 +6,7 @@ import pytest
 from flask import g
 
 from app import db
-from app.discovery import backfill, preload, views
-from app.discovery.preload import preload_discovered_communities
+from app.discovery import backfill, views
 from app.models import Site
 from tests.discovery_fixtures import add_entry, fresh_cache  # noqa: F401
 from tests.factories import make_community, make_instance, make_user
@@ -20,7 +19,6 @@ pytestmark = pytest.mark.usefixtures('fresh_cache')
 def queued(monkeypatch):
     calls = []
     monkeypatch.setattr(views, 'queue_backfill', calls.append)
-    monkeypatch.setattr(preload, 'queue_backfill', calls.append)
     return calls
 
 
@@ -85,20 +83,6 @@ def test_opening_a_person_queues_nothing(env, queued, monkeypatch):
     env.client.post(f'/discovery/{entry.id}/resolve', data={'csrf_token': env.token})
 
     assert queued == []
-
-
-def test_the_preload_backfills_each_community_it_creates(app, db_session, queued, monkeypatch):
-    founder = make_user(make_instance('world.example', software='piefed'), 'zqfounder', local=True)
-    entry = channel_entry()
-    resolve = creating()
-    monkeypatch.setattr(preload, 'find_actor_or_create', resolve)
-    monkeypatch.setattr(preload, 'do_subscribe', lambda actor, user_id, admin_preload=False:
-                        {'community': actor, 'status': 'joined'})
-    monkeypatch.setattr(preload, 'preload_user_can_subscribe', lambda user_id: True)
-
-    preload_discovered_communities([entry.id], founder.id)
-
-    assert queued == [resolve.community.id]
 
 
 def test_the_backfill_task_reads_the_actor_and_runs_the_community_backfill(app, db_session, site, monkeypatch):
