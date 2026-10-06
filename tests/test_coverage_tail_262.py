@@ -34,6 +34,8 @@ from PIL import Image as PILImage
 
 from app.utils import discard_unsanitized_svg, url_to_thumbnail_file
 
+pytestmark = pytest.mark.usefixtures('private_static_tree')
+
 MEDIA_ROOT = 'app/static'
 
 CLEAN_SVG = (b'<svg xmlns="http://www.w3.org/2000/svg">'

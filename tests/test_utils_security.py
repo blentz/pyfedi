@@ -43,6 +43,8 @@ KEEP_DATA_URL_MIME_TYPES = {"image": ["jpeg", "png", "gif", "webp", "avif"]}
 # that write here clean up after themselves.
 MEDIA_ROOT = 'app/static'
 
+pytestmark = pytest.mark.usefixtures('private_static_tree')
+
 
 def files_under(root: str) -> list:
     """Every regular file below `root`, for before/after comparison."""
@@ -1408,7 +1410,8 @@ class TestARemoteServerDoesNotChooseTheFileExtension:
         """The source-level guard: the expression that caused this is gone."""
         from pathlib import Path
 
-        source = Path('app/utils.py').read_text(encoding='utf8')
+        import app.utils
+        source = Path(app.utils.__file__).read_text(encoding='utf8')
         for line in source.splitlines():
             stripped = line.strip()
             if stripped.startswith('#'):

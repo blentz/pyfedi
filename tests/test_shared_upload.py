@@ -34,6 +34,8 @@ from app.models import File
 from app.shared.upload import process_file_delete, process_upload
 from tests.factories import make_instance, make_user
 
+pytestmark = pytest.mark.usefixtures('private_static_tree')
+
 MEDIA_ROOT = 'app/static'
 
 
