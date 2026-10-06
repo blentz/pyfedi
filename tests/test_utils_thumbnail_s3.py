@@ -22,6 +22,8 @@ from moto import mock_aws
 from app.models import s3_key_from_url
 from app.utils import url_to_thumbnail_file
 
+pytestmark = pytest.mark.usefixtures('private_static_tree')
+
 URL = 'https://thumbnails.example/remote.png'
 TMP_ROOT = 'app/static/tmp'
 
