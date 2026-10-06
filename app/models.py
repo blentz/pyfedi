@@ -5696,6 +5696,22 @@ class DiscoveryEntry(db.Model):
     last_seen = db.Column(db.DateTime, nullable=False, default=utcnow, index=True)
 
 
+class DiscoverySync(db.Model):
+    """A community this instance keeps synced on its own (interop D24 proactive sync): followed by the instance
+    actor (/actor) and polled daily. Built by app/discovery/sync.py's reconcile; the community and its posts
+    outlive the row."""
+    __tablename__ = 'discovery_sync'
+    community_id = db.Column(db.Integer, db.ForeignKey('community.id', ondelete='CASCADE'), primary_key=True)
+    entry_id = db.Column(db.Integer, db.ForeignKey('discovery_entry.id', ondelete='SET NULL'), nullable=True)
+    follow_target = db.Column(db.String(1024), nullable=False)   # the actor the Follow goes to, case kept
+    follow_uuid = db.Column(db.String(36), nullable=True, index=True)
+    follow_state = db.Column(db.String(10), nullable=False, default='none', server_default='none')
+    followed_at = db.Column(db.DateTime, nullable=True)
+    last_polled_at = db.Column(db.DateTime, nullable=True)
+    last_error = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+
+
 def _large_community_subscribers() -> float:
     # average number of subscribers in the top 15% communities
 
