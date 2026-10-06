@@ -127,6 +127,8 @@ def _add(entry, held) -> bool:
         if not isinstance(community, Community):
             current_app.logger.info(f'discovery sync: {entry.actor_url} did not resolve to a community')
             return False
+    if _unusable(community):   # an alias URL resolves to a banned or deleted community the desired set cannot see
+        return False
     if db.session.get(DiscoverySync, community.id) is not None:   # another entry already resolved to this community
         return False
     if not community.post_count:

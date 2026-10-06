@@ -279,6 +279,25 @@ def test_an_entry_whose_url_differs_from_the_canonical_id_is_not_cycled(db_sessi
     assert [r.entry_id for r in DiscoverySync.query] == [entry.id]
 
 
+@pytest.mark.parametrize('unusable', [{'banned': True}, {'ap_deleted_at': 'now'}], ids=['banned', 'deleted'])
+def test_an_alias_entry_resolving_to_an_unusable_community_is_never_followed(db_session, fed, monkeypatch, unusable):
+    set_setting('discovery_sync_per_host', 1)
+    add_entry('Alias', host='tube.example', followers=5, url='https://tube.example/c/Alias')
+
+    def resolve(actor_url, community_only=False):
+        community = make_community('alias', host='tube.example')
+        community.ap_profile_id = 'https://tube.example/video-channels/alias'
+        for field, value in unusable.items():
+            setattr(community, field, utcnow() if value == 'now' else value)
+        db.session.commit()
+        return community
+    monkeypatch.setattr(sync, 'find_actor_or_create', resolve)
+
+    assert reconcile_sync()['added'] == 0
+    assert DiscoverySync.query.count() == 0
+    assert fed['follow'] == [] and fed['backfill'] == []
+
+
 def test_two_entries_resolving_to_one_community_give_one_row_and_no_failed_host(db_session, fed, monkeypatch):
     set_setting('discovery_sync_per_host', 3)
     add_entry('A', host='tube.example', followers=30, url='https://tube.example/c/a')
