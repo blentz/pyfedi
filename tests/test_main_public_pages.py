@@ -148,6 +148,14 @@ class TestTheInstanceActor:
         actor = env.client.get('/actor').get_json()
         assert actor['publicKey']['publicKeyPem'] == 'a public key'
 
+    def test_the_actor_has_a_name(self, env):
+        """Castopod builds a stored actor from `$actorPayload->name` with no property check
+        (modules/Fediverse/Helpers/fediverse_helper.php, create_actor_from_uri). Under its
+        production error_reporting a missing `name` is a warning turned exception, so a Follow
+        from an actor without one is refused before it is accepted (interop D24 proactive sync)."""
+        actor = env.client.get('/actor').get_json()
+        assert isinstance(actor.get('name'), str) and actor['name']
+
 
 class TestTheDiagnosticEndpoints:
     """Every `/test_*` route is `@debug_mode_only`, which is a 403 in

@@ -1238,6 +1238,9 @@ def instance_actor():
         'type': 'Application',
         'id': f"{current_app.config['SERVER_URL']}/actor",
         'preferredUsername': f"{current_app.config['SERVER_NAME']}",
+        # Castopod stores a follower from `name` without checking it exists, and refuses the
+        # Follow when it is absent (interop D24: the instance actor follows synced podcasts)
+        'name': f"{current_app.config['SERVER_NAME']}",
         'url': f"{current_app.config['SERVER_URL']}/about",
         'manuallyApprovesFollowers': True,
         'inbox': f"{current_app.config['SERVER_URL']}/actor/inbox",
