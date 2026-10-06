@@ -8,6 +8,7 @@
     {% endif -%}
     <option value="/home/{{ sort }}/local" aria-label="{{ _('Posts on this instance') }}" {{ 'selected="selected"'|safe  if view_filter == 'local' }}>{{ _('Local') }}</option>
     <option value="/home/{{ sort }}/popular" aria-label="{{ _('Posts from popular communities') }}" {{ 'selected="selected"'|safe  if view_filter == 'popular' }}>{{ _('Popular') }}</option>
+    <option value="/home/{{ sort }}/media" aria-label="{{ _('Videos and podcasts') }}" {{ 'selected="selected"'|safe  if view_filter == 'media' }}>{{ _('Videos & Podcasts') }}</option>
     <option value="/home/{{ sort }}/all" aria-label="{{ _('No filter') }}" {{ 'selected="selected"'|safe  if view_filter == 'all' }}>{{ _('All') }}</option>
   </select>
 </div>
@@ -23,6 +24,8 @@
       {{ _('Local') }}
     </a><a href="/home/{{ sort }}/popular" class="btn {{ 'btn-primary' if view_filter == 'popular' else 'btn-outline-secondary' }}" rel="nofollow noindex" title="{{ _('Posts from popular communities') }}">
       {{ _('Popular') }}
+    </a><a href="/home/{{ sort }}/media" class="btn {{ 'btn-primary' if view_filter == 'media' else 'btn-outline-secondary' }}" rel="nofollow noindex" title="{{ _('Videos and podcasts') }}">
+      {{ _('Videos & Podcasts') }}
     </a><a href="/home/{{ sort }}/all" class="btn {{ 'btn-primary' if view_filter == 'all' else 'btn-outline-secondary' }}" rel="nofollow noindex" title="{{ _('No filter') }}">
       {{ _('All') }}
     </a>

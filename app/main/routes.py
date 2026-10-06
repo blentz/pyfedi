@@ -17,6 +17,7 @@ from app import db, cache, limiter, plugins
 from app.activitypub.util import users_total, active_month, local_posts, local_communities, \
     lemmy_site_data, is_activitypub_request, find_microblogging_community
 from app.discovery import KIND_COMMUNITY
+from app.discovery.media import MEDIA_COMMUNITY_SQL
 from app.discovery.search import discovery_fallback
 from app.activitypub.signature import default_context, LDSignature, HttpSignature
 from app.admin.util import topics_for_form
@@ -136,6 +137,12 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag):
             community_sql = 'c.show_popular is true and c.private is false AND c.low_quality is false'
         else:
             community_sql = f'(c.private is false OR c.id IN {private_communities}) AND c.show_popular is true {low_quality_filter}'
+        community_ids = [0]
+    elif view_filter == 'media':   # D24: PeerTube and Castopod only, a subset of All
+        if current_user.is_anonymous:
+            community_sql = f'{MEDIA_COMMUNITY_SQL} AND c.show_all is true AND c.private is false AND c.low_quality is false'
+        else:
+            community_sql = f'(c.private is false OR c.id IN {private_communities}) AND c.show_all is true AND {MEDIA_COMMUNITY_SQL} {low_quality_filter}'
         community_ids = [0]
     elif view_filter == 'all' or current_user.is_anonymous:
         community_ids = [-1]  # Special value to indicate 'All'
