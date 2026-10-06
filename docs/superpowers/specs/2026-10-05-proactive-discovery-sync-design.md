@@ -151,11 +151,31 @@ each Accepts and then pushes new content to `/inbox` or `/actor/inbox`. The owne
 hosts before it runs. A platform that refuses an `Application` follower falls back to poll-only: its
 rows stay in `none`, the reconcile never sends it a Follow, and that is recorded in this spec.
 
-**Outcome.** The live spike has not run. It waits for the owner to choose a public instance and the
-target hosts. Until it runs, both platforms send Follows from `/actor`. If a platform refuses
-`Application` followers, its rows stay `pending` and are re-sent weekly, and the poll keeps their
-content arriving. `POLL_ONLY_PLATFORMS` is added only if the spike shows a refusal, so no code assumes
-one before the evidence.
+**Outcome (2026-10-06): answered from the peers' source instead of a live spike** (owner's call). Both
+platforms accept an `Application` follower, so `POLL_ONLY_PLATFORMS` is not needed.
+
+- **PeerTube** (`server/core/` in Chocobozzz/PeerTube):
+  - `Application` is an allowed actor type (`helpers/custom-validators/activitypub/actor.ts:27`).
+  - A Follow of a channel is auto-accepted. Manual approval applies only to the server actor
+    (`lib/activitypub/process/process-follow.ts:55`).
+  - The Accept is signed by the channel and embeds our Follow with its `id` (`send/send-accept.ts:18-36`).
+  - The Accept goes to our `inbox`, `/actor/inbox`. Later video activities go to our `sharedInbox`, `/inbox`
+    (`send/shared/send-utils.ts:291-295`).
+  - The Follow `object` must equal the channel's AP id `https://host/video-channels/<name>` exactly, with no
+    normalisation (`process-follow.ts:43`). The API's channel `url` is that AP id (`models/video/video-channel.ts:551`).
+  - The outbox is newest-first, paginated 10 per page, with items that are Create or Announce of a video URL
+    (`models/video/video.ts:1044`, `controllers/activitypub/outbox.ts`).
+- **Castopod** (`modules/Fediverse` in ad-aures/castopod):
+  - Any Follow posted to a podcast's inbox is auto-accepted. The `object` is not checked: the target is the
+    inbox's own actor (`Controllers/ActorController.php:149-159`).
+  - The Accept is signed by the podcast and embeds our Follow with its `id`
+    (`Helpers/fediverse_helper.php:65-105`). It goes to our stored `inbox_url`.
+  - Castopod stores no `sharedInbox`, so later episodes go to `/actor/inbox` as well.
+  - The outbox is newest-first, paginated 12 per page (`ActorController.php:271`).
+  - Its signature check requires a `Digest` header, which PieFed sends.
+  - **One blocker, fixed on our side:** `create_actor_from_uri` reads the follower's `name` with no property
+    check (`fediverse_helper.php:280`). Production `error_reporting(E_ALL & ~E_DEPRECATED)` turns the
+    warning into an exception, and `/actor` had no `name`. The instance actor now carries one (805b4781e).
 
 ## User-facing surfaces
 
