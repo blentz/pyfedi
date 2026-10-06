@@ -1,9 +1,10 @@
 """Interop D24 proactive sync: the daily reconcile keeps exactly each host's top N synced."""
 from datetime import timedelta
+from fnmatch import fnmatch
 
 import pytest
 
-from app import db
+from app import celery, db
 from app.discovery import SYNC_ACCEPTED, SYNC_NONE, SYNC_PENDING, sync
 from app.discovery.sync import enqueue_polls, reconcile_sync, reconcile_sync_task
 from app.models import Community, CommunityMember, DiscoverySync, Instance, utcnow
@@ -248,3 +249,11 @@ def test_the_task_reconciles_then_polls(db_session, monkeypatch):
 
 def test_host_of_a_malformed_target_is_empty():
     assert sync._host('nohost') == '' and sync._host('https://Tube.Example/x') == 'tube.example'
+
+
+@pytest.mark.parametrize('task', ['poll_synced_community', 'reconcile_sync_task'])
+def test_sync_tasks_run_on_the_background_queue(app, task):
+    name = f'app.discovery.sync.{task}'
+    assert getattr(sync, task).name == name
+    routes = celery.conf.CELERY_ROUTES
+    assert any(fnmatch(name, pattern) and route == {'queue': 'background'} for pattern, route in routes.items())
