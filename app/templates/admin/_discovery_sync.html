@@ -13,11 +13,13 @@
 </form>
 <h3 class="h5">{{ _('Synced now') }}</h3>
 {% if synced %}
+{% set follow_labels = {sync_none: _('Not followed yet'), sync_pending: _('Waiting for an answer'),
+                        sync_accepted: _('Following'), sync_rejected: _('Refused')} %}
 <table class="table table-sm">
     <thead><tr><th>{{ _('Community') }}</th><th>{{ _('Server') }}</th><th>{{ _('Follow') }}</th><th>{{ _('Followed') }}</th><th>{{ _('Last poll') }}</th><th>{{ _('Last error') }}</th></tr></thead>
     <tbody>
     {% for row, community in synced %}
-        <tr><td>{{ community.title }}</td><td>{{ community.ap_domain }}</td><td>{{ row.follow_state }}</td>
+        <tr><td><a href="{{ url_for('activitypub.community_profile', actor=community.link()) }}">{{ community.title }}</a></td><td>{{ community.ap_domain }}</td><td>{{ follow_labels[row.follow_state] }}</td>
             <td>{{ row.followed_at or '' }}</td><td>{{ row.last_polled_at or '' }}</td><td>{{ row.last_error or '' }}</td></tr>
     {% endfor %}
     </tbody>
