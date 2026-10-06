@@ -1,13 +1,17 @@
 """Proactive sync of PeerTube channels and Castopod podcasts (interop D24,
 docs/superpowers/specs/2026-10-05-proactive-discovery-sync-design.md). Each remote host's top N directory entries
 are followed by the instance actor and polled daily; the rest are left alone."""
+from datetime import timedelta
+
 from flask import current_app
 from sqlalchemy import func
 
 from app import celery, db
-from app.discovery import KIND_COMMUNITY
-from app.discovery.backfill import run_backfill
+from app.activitypub.util import find_actor_or_create
+from app.discovery import KIND_COMMUNITY, SYNC_NONE, SYNC_PENDING
+from app.discovery.backfill import queue_backfill, run_backfill
 from app.discovery.filters import host_is_excluded
+from app.discovery.instance_actor import send_instance_follow, send_instance_undo
 from app.models import Community, DiscoveryEntry, DiscoverySync, utcnow
 from app.utils import get_setting
 
@@ -90,3 +94,97 @@ def poll_synced_community(community_id: int) -> None:
     row.last_polled_at = utcnow()
     row.last_error = outcome[:ERROR_LIMIT] if outcome else None
     db.session.commit()
+
+
+ADDS_PER_HOST_PER_RUN = 10   # a larger N ramps up over several days rather than bursting at one host
+FOLLOW_RETRY_DAYS = 7
+POLL_SPACING_SECONDS = 2
+
+
+def _host(url: str) -> str:
+    return url.split('/')[2].lower() if url.count('/') >= 2 else ''
+
+
+def drop_row(row) -> None:
+    """Unfollow and forget a synced community. The community and its posts stay."""
+    community = db.session.get(Community, row.community_id)
+    if community is not None:
+        send_instance_undo(row, community)
+    db.session.delete(row)
+    db.session.commit()
+
+
+def _needs_refollow(row, now) -> bool:
+    if row.follow_state == SYNC_NONE:
+        return True
+    return row.follow_state == SYNC_PENDING and (row.followed_at is None
+                                                 or row.followed_at < now - timedelta(days=FOLLOW_RETRY_DAYS))
+
+
+def _add(entry) -> bool:
+    community = db.session.query(Community).filter(Community.ap_profile_id == entry.actor_url.lower()).first()
+    if community is None:
+        community = find_actor_or_create(entry.actor_url, community_only=True)
+        if not isinstance(community, Community):
+            current_app.logger.info(f'discovery sync: {entry.actor_url} did not resolve to a community')
+            return False
+    if not community.post_count:
+        queue_backfill(community.id)
+    row = DiscoverySync(community_id=community.id, entry_id=entry.id, follow_target=entry.actor_url)
+    db.session.add(row)
+    db.session.commit()
+    send_instance_follow(row, community)
+    return True
+
+
+def reconcile_sync() -> dict:
+    desired = desired_entries()
+    wanted = {entry.actor_url.lower() for entries in desired.values() for entry in entries}
+    summary = {'added': 0, 'dropped': 0, 'refollowed': 0, 'failed_hosts': []}
+    rows = {row.community_id: row for row in db.session.query(DiscoverySync)}
+    for row in list(rows.values()):
+        community = db.session.get(Community, row.community_id)
+        if _unusable(community) or community.ap_profile_id not in wanted:
+            drop_row(row)
+            del rows[row.community_id]
+            summary['dropped'] += 1
+    held = {db.session.get(Community, cid).ap_profile_id: row for cid, row in rows.items()}
+    now = utcnow()
+    for host in sorted(desired):
+        try:
+            added = 0
+            for entry in desired[host]:
+                row = held.get(entry.actor_url.lower())
+                if row is not None:
+                    if _needs_refollow(row, now):
+                        send_instance_follow(row, db.session.get(Community, row.community_id))
+                        summary['refollowed'] += 1
+                elif added < ADDS_PER_HOST_PER_RUN and _add(entry):
+                    added += 1
+            summary['added'] += added
+        except Exception:
+            current_app.logger.exception(f'discovery sync: reconcile of {host} failed')
+            db.session.rollback()
+            summary['failed_hosts'].append(host)
+    return summary
+
+
+def enqueue_polls() -> int:
+    """One poll per synced community; one host sees at most one poll every POLL_SPACING_SECONDS."""
+    per_host = {}
+    rows = db.session.query(DiscoverySync).order_by(DiscoverySync.community_id).all()
+    for row in rows:
+        slot = per_host.get(_host(row.follow_target), 0)
+        per_host[_host(row.follow_target)] = slot + 1
+        if current_app.debug:
+            poll_synced_community(row.community_id)
+        else:
+            poll_synced_community.apply_async(args=[row.community_id], countdown=slot * POLL_SPACING_SECONDS)
+    return len(rows)
+
+
+@celery.task
+def reconcile_sync_task() -> dict:
+    summary = reconcile_sync()
+    enqueue_polls()
+    return summary
