@@ -78,3 +78,17 @@ def test_a_banned_or_deleted_community_loses_its_row_unpolled(row, monkeypatch, 
     poll_synced_community(row.community_id)
 
     assert calls == [] and db.session.get(DiscoverySync, row.community_id) is None
+
+
+def test_a_row_dropped_mid_poll_ends_quietly(row, monkeypatch):
+    community_id = row.community_id
+
+    def run(cid, stop_at_known=False):
+        db.session.delete(db.session.get(DiscoverySync, cid))   # a concurrent reconcile drops the row
+        db.session.commit()
+        return None
+    monkeypatch.setattr(sync, 'run_backfill', run)
+
+    poll_synced_community(community_id)
+
+    assert db.session.get(DiscoverySync, community_id) is None
