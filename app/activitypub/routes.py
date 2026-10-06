@@ -835,6 +835,13 @@ def shared_inbox():
     return ''
 
 
+@bp.route('/actor/inbox', methods=['POST'])
+def instance_actor_inbox():
+    """/actor's own inbox (interop D24 proactive sync): the actor document advertises it, and a peer that ignores
+    sharedInbox delivers a synced channel's Accept and posts here."""
+    return shared_inbox()
+
+
 @bp.route('/site_inbox', methods=['POST'])
 def site_inbox():
     return shared_inbox()
