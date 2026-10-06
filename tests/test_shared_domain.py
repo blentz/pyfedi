@@ -196,3 +196,33 @@ def test_unblock_domain_refuses_an_unknown_domain(app, db_session):
         unblock_domain('nosuch.example', SRC_API, bearer(s.blocker))
 
     assert db.session.query(DomainBlock).count() == 0
+
+
+def test_block_domain_web_answers_404_for_an_unknown_domain(app, db_session):
+    """D581: the web arm of the unknown-domain refusal is a 404 the route
+    renders, where the API arm raises `domain_not_found`; nothing is written."""
+    from werkzeug.exceptions import HTTPException
+    s = _seed_blocker()
+
+    with web_ctx(app, s.blocker):
+        with pytest.raises(HTTPException) as exc:
+            block_domain('nosuch.example', SRC_WEB)
+
+    assert exc.value.code == 404
+    assert db.session.query(DomainBlock).count() == 0
+
+
+def test_unblock_domain_web_answers_404_for_an_unknown_domain(app, db_session):
+    """D581's unblock twin: the web arm is a 404, and an existing block on a
+    different domain is left alone."""
+    from werkzeug.exceptions import HTTPException
+    s = _seed_blocker()
+    db.session.add(DomainBlock(domain_id=s.domain.id, user_id=s.blocker.id))
+    db.session.commit()
+
+    with web_ctx(app, s.blocker):
+        with pytest.raises(HTTPException) as exc:
+            unblock_domain('nosuch.example', SRC_WEB)
+
+    assert exc.value.code == 404
+    assert db.session.query(DomainBlock).count() == 1
