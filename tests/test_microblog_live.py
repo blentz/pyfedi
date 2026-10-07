@@ -16,7 +16,7 @@ from app import db
 from app.constants import POST_STATUS_REVIEWING
 from app.models import Instance, Language, Post, Site
 from app.utils import utcnow
-from tests.factories import (make_community, make_instance, make_instance_block,
+from tests.factories import (make_community, make_community_member, make_instance, make_instance_block,
                              make_post, make_user, make_user_block)
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -331,6 +331,22 @@ class TestLiveFragment:
 
         assert client.get('/community/general/live/posts?after=0').status_code == 404
 
+    def test_a_private_community_refuses_a_viewer_who_is_not_a_member(self, client, live):
+        live.toot()
+        live.microblogs.private = True
+        db.session.commit()
+        login(client, live.viewer)
+
+        assert client.get(f'{FRAGMENT}?after=0').status_code == 403
+
+    def test_a_private_community_still_serves_its_members(self, client, live):
+        live.toot()
+        live.microblogs.private = True
+        make_community_member(live.viewer, live.microblogs)
+        login(client, live.viewer)
+
+        assert client.get(f'{FRAGMENT}?after=0').status_code == 200
+
     def test_an_unknown_community_has_none_either(self, client, live):
         login(client, live.viewer)
 
@@ -358,8 +374,8 @@ class TestLiveFragment:
                 login(client, live.viewer)
                 limiter.reset()
                 codes = [client.get(f'{FRAGMENT}?after=0').status_code for _ in range(13)]
-                limiter.reset()
         finally:
+            limiter.reset()
             limiter.enabled = False
 
         assert codes[:12] == [204] * 12 and codes[12] == 429
