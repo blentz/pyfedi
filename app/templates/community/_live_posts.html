@@ -1,0 +1,4 @@
+{# The Live view's new teasers, rendered exactly as the community page renders them. #}
+{% for post in posts -%}
+    {% include 'post/_post_teaser.html' -%}
+{% endfor -%}
