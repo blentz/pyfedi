@@ -102,7 +102,7 @@ def test_the_episode_fetch_runs_inline_under_debug(app, db_session, http_mock, m
     http_mock.get(f'https://{PEER}/media/ep1.jpg').respond(404)
     credits = []
     monkeypatch.setattr(ap_util.discovery_credits, 'fetch_episode_credits',
-                        lambda p, url: credits.append((p.id, url)))
+                        lambda p, url, background=False: credits.append((p.id, url)))
     monkeypatch.setitem(app.config, 'DEBUG', True)
 
     fetch_castopod_episode_audio(post, EPISODE)

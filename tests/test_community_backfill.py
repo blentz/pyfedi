@@ -159,7 +159,7 @@ class TestOneEntryThatBreaksTheSession:
                    for n in (1, 2)]
         created = []
 
-        def create_post(store, community, request_json, user, announce_id=None):
+        def create_post(store, community, request_json, user, announce_id=None, backfill=False):
             created.append(request_json['id'])
             if len(created) == 1:   # a failed flush, swallowed, as create_post does
                 db.session.add(CommunityMember(community_id=None, user_id=None))
