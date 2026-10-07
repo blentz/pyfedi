@@ -317,6 +317,16 @@ def parse_ap_timestamp(value):
     return parsed
 
 
+def parse_ap_published(value):
+    """A peer's `published`, as `parse_ap_timestamp` reads it, but never later than now. `posted_at` feeds the hot
+    sort's `ranking`, so an unclamped far-future date would pin a post to the top of every feed. End times and
+    expiries may legitimately be in the future and keep `parse_ap_timestamp`."""
+    parsed = parse_ap_timestamp(value)
+    if parsed is None:
+        return None
+    return min(parsed, utcnow())
+
+
 def property_value_fields(attachment, limit=1024):
     """The (label, text) pairs out of an actor's `attachment`, ready to store.
 
@@ -3868,7 +3878,9 @@ class Post(db.Model):
                 self.update_reaction_cache()
 
             # Calculate new ranking values
-            self.ranking = self.post_ranking(self.score + self.reply_count, self.created_at)
+            # posted_at, not created_at: a backfilled post arrives long after it was published, and the hot sort
+            # would move it back to the top (posted_at is clamped to now where a peer supplies it)
+            self.ranking = self.post_ranking(self.score + self.reply_count, self.posted_at)
             self.ranking_scaled = self.ranking + self.community.scale_by()
 
             db.session.commit()

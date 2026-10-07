@@ -32,7 +32,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
     Licence, UserExtraField, Feed, FeedMember, FeedItem, CommunityFlair, UserFlair, Topic, Event, InstanceBan, Emoji, \
-    UserFollower, PostBoost, QuoteAuthorization, parse_ap_timestamp, image_url_from, markdown_source, \
+    UserFollower, PostBoost, QuoteAuthorization, parse_ap_timestamp, parse_ap_published, image_url_from, markdown_source, \
     _as_text, _as_int, _as_float, _as_dict, _as_url, property_value_fields, public_key_pem, \
     more_info_link, is_more_info_link, more_info_url_from, \
     language_from_ap, adjust_domain_post_count, actor_name_from_ap, PostReplyValidationError, post_file, GALLERY_BLOCKED_WEIGHT
@@ -5220,7 +5220,7 @@ def create_resolved_object(uri, post_data, uri_domain, community, announce_id, s
                     # column, which is a DatatypeMismatch or a DataError at
                     # commit -- `UPDATE post SET posted_at=5` measured -- and the
                     # comment that had just been created goes with it.
-                    published = parse_ap_timestamp(post_data.get('published'))
+                    published = parse_ap_published(post_data.get('published'))
                     if published is not None:
                         post_reply.posted_at = published
                         post_reply.post.last_active = published
@@ -5242,7 +5242,7 @@ def create_resolved_object(uri, post_data, uri_domain, community, announce_id, s
             if activity == 'create':
                 post = create_post(store_ap_json, community, request_json, user, announce_id)
                 if post:
-                    published = parse_ap_timestamp(post_data.get('published'))
+                    published = parse_ap_published(post_data.get('published'))
                     if published is not None:
                         post.posted_at = published
                         post.last_active = published
@@ -5422,7 +5422,7 @@ def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
                 # DateTime column -- and `last_active`, which round 141 made NOT
                 # NULL -- so `published: "whenever"` was a DataError at commit that
                 # poisoned the transaction and lost the post it had just created.
-                published = parse_ap_timestamp(post_data['published'])
+                published = parse_ap_published(post_data['published'])
                 if published is not None:
                     object.posted_at = published
                     if not in_reply_to:

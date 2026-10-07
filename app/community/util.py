@@ -27,7 +27,7 @@ from app.activitypub.util import find_actor_or_create, actor_json_to_model, \
     find_hashtag_or_create, create_post, remote_object_to_json, find_flair, activitypub_visibility, host_of
 from app.community.forms import CreateLinkForm
 from app.constants import SRC_WEB, POST_TYPE_LINK
-from app.models import Community, File, PostReply, Post, utcnow, CommunityMember, Site, _as_dict, parse_ap_timestamp, \
+from app.models import Community, File, PostReply, Post, utcnow, CommunityMember, Site, _as_dict, parse_ap_published, \
     Instance, User, Tag, CommunityFlair, CommunityThemeAllowed, markdown_source, \
     language_from_ap, _as_url
 from app.utils import get_request, gibberish, ensure_directory_exists, ap_datetime, instance_banned, get_task_session, \
@@ -351,7 +351,7 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                                     # Post.new dated and ranked the post by its arrival; date and rank it by when it
                                     # was published, or a backfilled channel sorts by ingestion order (hot = ranking).
                                     # An unreadable date keeps the arrival date rather than reaching the column raw.
-                                    published = parse_ap_timestamp(activity['published'])
+                                    published = parse_ap_published(activity['published'])
                                     if published is not None:
                                         post.posted_at = published
                                         post.last_active = published

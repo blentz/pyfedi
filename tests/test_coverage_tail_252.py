@@ -300,3 +300,25 @@ class TestHowTheModlogDescribesItself:
     def test_a_post_action_link_is_left_alone(self, env):
         assert self._entry(env, 'delete_post', link='post/1').get_correct_link() == \
             'post/1'
+
+
+# --------------------------------------------------------------------------
+# A vote keeps a post ranked by when it was published
+# --------------------------------------------------------------------------
+
+
+def test_a_vote_ranks_a_backfilled_post_by_when_it_was_published(env):
+    """`created_at` is when the content arrived here; `posted_at` is when its server published it. A backfilled
+    post arrives days after it was published, and the hot sort reads `ranking`, so a vote that re-ranked it from
+    `created_at` moved an old video back to the top of the media tab (interop D24)."""
+    from datetime import timedelta
+    env.post.posted_at = utcnow() - timedelta(days=30)
+    env.post.created_at = utcnow()
+    db.session.commit()
+
+    env.post.vote(env.voter, 'upvote', None)
+    db.session.commit()
+    db.session.refresh(env.post)
+
+    assert env.post.ranking == env.post.post_ranking(env.post.score + env.post.reply_count, env.post.posted_at)
+    assert env.post.ranking < env.post.post_ranking(env.post.score + env.post.reply_count, env.post.created_at)
