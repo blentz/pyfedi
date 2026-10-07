@@ -396,3 +396,20 @@ def test_the_run_cap_counts_adds_on_a_host_that_later_fails(db_session, fed, mon
 
     assert DiscoverySync.query.count() == 3
     assert first.actor_url in {row.follow_target for row in DiscoverySync.query}
+
+
+@pytest.mark.parametrize('age_days, resent', [(8, True), (6, False)])
+def test_a_failed_follow_is_retried_after_a_week(db_session, fed, age_days, resent):
+    from app.discovery import SYNC_FAILED
+    set_setting('discovery_sync_per_host', 1)
+    chans('tube.example', 1)
+    reconcile_sync()
+    row = DiscoverySync.query.one()
+    row.follow_state = SYNC_FAILED
+    row.followed_at = utcnow() - timedelta(days=age_days)
+    db.session.commit()
+    fed['follow'].clear()
+
+    reconcile_sync()
+
+    assert len(fed['follow']) == (1 if resent else 0)

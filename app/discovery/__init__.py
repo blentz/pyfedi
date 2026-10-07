@@ -12,6 +12,7 @@ SYNC_NONE = 'none'
 SYNC_PENDING = 'pending'
 SYNC_ACCEPTED = 'accepted'
 SYNC_REJECTED = 'rejected'
+SYNC_FAILED = 'failed'   # the peer refused the Follow's delivery outright (4xx); retried after a week
 
 # Instance.software values whose communities are video channels or podcasts (lower-case)
 MEDIA_SOFTWARE = ('peertube', 'castopod')

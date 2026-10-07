@@ -14,7 +14,8 @@
 <h3 class="h5">{{ _('Synced now') }}</h3>
 {% if synced %}
 {% set follow_labels = {sync_none: _('Not followed yet'), sync_pending: _('Waiting for an answer'),
-                        sync_accepted: _('Following'), sync_rejected: _('Refused')} %}
+                        sync_accepted: _('Following'), sync_rejected: _('Refused'),
+                        sync_failed: _('Could not deliver')} %}
 <table class="table table-sm">
     <thead><tr><th>{{ _('Community') }}</th><th>{{ _('Server') }}</th><th>{{ _('Follow') }}</th><th>{{ _('Followed') }}</th><th>{{ _('Last poll') }}</th><th>{{ _('Last error') }}</th></tr></thead>
     <tbody>

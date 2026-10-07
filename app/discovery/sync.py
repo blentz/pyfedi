@@ -8,7 +8,7 @@ from sqlalchemy import func
 
 from app import celery, db
 from app.activitypub.util import find_actor_or_create, remote_object_to_json
-from app.discovery import KIND_COMMUNITY, SYNC_NONE, SYNC_PENDING
+from app.discovery import KIND_COMMUNITY, SYNC_FAILED, SYNC_NONE, SYNC_PENDING
 from app.discovery.backfill import backfill_in_progress, queue_backfill, run_backfill
 from app.discovery.filters import host_is_excluded
 from app.discovery.instance_actor import send_instance_follow, send_instance_undo
@@ -142,7 +142,7 @@ def drop_row(row) -> None:
 def _needs_refollow(row, now) -> bool:
     if row.follow_state == SYNC_NONE:
         return True
-    return row.follow_state == SYNC_PENDING and (row.followed_at is None
+    return row.follow_state in (SYNC_PENDING, SYNC_FAILED) and (row.followed_at is None
                                                  or row.followed_at < now - timedelta(days=FOLLOW_RETRY_DAYS))
 
 
