@@ -17,9 +17,8 @@ from PIL import Image
 from urllib.parse import urlparse
 from furl import furl
 
-from app.discovery import sync as discovery_sync
-
 from app import db, celery, cache
+from app.discovery import sync as discovery_sync
 from app.visibility import visible_to_clause
 from app.activitypub.routes import process_inbox_request, process_delete_request, replay_inbox_request, \
     SIGNATURE_FAILURE_MESSAGES
@@ -1667,6 +1666,7 @@ def admin_community_delete(community_id):
     community.banned = True  # Unsubscribing everyone could take a long time so until that is completed hide this community from the UI by banning it.
     community.last_active = utcnow()
     db.session.commit()
+    discovery_sync.forget_synced_community(community)   # now, so a reconcile before the task cannot drop the row first
 
     unsubscribe_everyone_then_delete(community.id)
 
