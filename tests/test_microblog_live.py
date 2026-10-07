@@ -379,3 +379,98 @@ class TestLiveFragment:
             limiter.enabled = False
 
         assert codes[:12] == [204] * 12 and codes[12] == 429
+
+
+class TestLivePage:
+
+    def test_the_live_button_shows_for_a_logged_in_viewer_of_microblogs(self, client, live):
+        login(client, live.viewer)
+
+        assert '?sort=live' in client.get('/c/microblogs').get_data(as_text=True)
+
+    def test_no_live_button_for_an_anonymous_visitor(self, client, live):
+        assert '?sort=live' not in client.get('/c/microblogs').get_data(as_text=True)
+
+    def test_no_live_button_on_another_community(self, client, live):
+        make_community('general')
+        login(client, live.viewer)
+
+        assert '?sort=live' not in client.get('/c/general').get_data(as_text=True)
+
+    def test_the_live_page_carries_the_client_contract(self, client, live):
+        posts = [live.toot(), live.toot()]
+        login(client, live.viewer)
+
+        html = client.get('/c/microblogs?sort=live').get_data(as_text=True)
+
+        assert 'id="live_feed"' in html
+        assert f'data-cursor="{max(post.id for post in posts)}"' in html
+        assert 'data-posts-url="/community/microblogs/live/posts"' in html
+        assert 'data-sse-url=""' in html
+        assert 'id="live_status"' in html and 'id="live_pill"' in html
+        assert 'js/live_feed.js' in html
+        assert set(teaser_ids(html)) == {post.id for post in posts}
+
+    def test_an_empty_community_starts_the_cursor_at_zero(self, client, live):
+        login(client, live.viewer)
+
+        assert 'data-cursor="0"' in client.get('/c/microblogs?sort=live').get_data(as_text=True)
+
+    def test_with_a_notification_server_the_page_names_the_live_stream(self, app, client, live, monkeypatch):
+        monkeypatch.setitem(app.config, 'NOTIF_SERVER', 'https://notifs.example')
+        login(client, live.viewer)
+
+        html = client.get('/c/microblogs?sort=live').get_data(as_text=True)
+
+        assert 'data-sse-url="https://notifs.example/live/stream?feed=microblogs"' in html
+
+    @pytest.mark.parametrize('path, as_viewer', [
+        ('/c/microblogs?sort=live', False),
+        ('/c/general?sort=live', True),
+        ('/c/microblogs?sort=live&content_type=comments', True),
+        ('/c/microblogs?sort=live&page=2', True),
+    ])
+    def test_sort_live_falls_back_to_new_where_live_is_not_available(self, client, live, path, as_viewer):
+        make_community('general')
+        if as_viewer:
+            login(client, live.viewer)
+
+        response = client.get(path)
+
+        assert response.status_code == 200
+        assert 'id="live_feed"' not in response.get_data(as_text=True)
+
+    def test_live_leaves_out_sticky_posts(self, client, live):
+        pinned = live.toot(sticky=True)
+        login(client, live.viewer)
+
+        assert pinned.id not in teaser_ids(client.get('/c/microblogs?sort=live').get_data(as_text=True))
+
+    def test_live_forces_the_list_layout(self, client, live):
+        live.microblogs.default_layout = 'masonry'
+        db.session.commit()
+        live.toot()
+        login(client, live.viewer)
+
+        html = client.get('/c/microblogs?sort=live').get_data(as_text=True)
+
+        assert 'id="masonry"' not in html and 'id="live_feed"' in html
+
+    def test_live_works_in_low_bandwidth_mode(self, client, live):
+        live.toot()
+        login(client, live.viewer)
+        client.set_cookie('low_bandwidth', '1')
+
+        assert 'id="live_feed"' in client.get('/c/microblogs?sort=live').get_data(as_text=True)
+
+    def test_older_posts_continue_in_the_new_sort(self, client, live):
+        for _ in range(3):
+            live.toot()
+        live.viewer.page_length = 2
+        db.session.commit()
+        login(client, live.viewer)
+
+        html = client.get('/c/microblogs?sort=live').get_data(as_text=True)
+
+        assert 'Older posts' in html
+        assert re.search(r'href="[^"]*page=2[^"]*sort=new|href="[^"]*sort=new[^"]*page=2', html)
