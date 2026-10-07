@@ -2635,7 +2635,7 @@ class Post(db.Model):
         return db.session.query(cls).filter_by(slug=slug).first()
 
     @classmethod
-    def new(cls, user: User, community: Community, request_json: dict, announce_id=None):
+    def new(cls, user: User, community: Community, request_json: dict, announce_id=None, backfill=False):
         # cycle: app.activitypub.util imports from this module
         from app.activitypub.util import find_language_or_create, find_language, \
             find_hashtag_or_create, \
@@ -3230,13 +3230,15 @@ class Post(db.Model):
             # C1. A Castopod episode announcement is a bare Note; its audio is on the episode object it links to
             if request_json.get('type') != 'Update' and not user.is_local() and \
                     (episode_url := castopod_episode_url(request_json['object'], user.ap_profile_id)):
-                fetch_castopod_episode_audio(post, episode_url)
+                fetch_castopod_episode_audio(post, episode_url, background=backfill)
 
             # Update list of cross posts
             if post.url:
                 post.calculate_cross_posts()
 
-            if post.community_id not in communities_banned_from(user.id) and post.status == POST_STATUS_PUBLISHED:
+            # A backfilled post is old: nobody is told about it as new (D24 proactive sync)
+            if not backfill and post.community_id not in communities_banned_from(user.id) and \
+                    post.status == POST_STATUS_PUBLISHED:
                 notify_about_post(post)
 
             # attach initial upvote to author

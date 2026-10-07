@@ -3261,7 +3261,8 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
         return None
 
 
-def create_post(store_ap_json, community: Community, request_json: dict, user: User, announce_id=None) -> Union[Post, None]:
+def create_post(store_ap_json, community: Community, request_json: dict, user: User, announce_id=None,
+                backfill=False) -> Union[Post, None]:
     saved_json = request_json if store_ap_json else None
     id = request_json['id']
     if community.local_only:
@@ -3295,7 +3296,7 @@ def create_post(store_ap_json, community: Community, request_json: dict, user: U
                         'Object id is not an http(s) url')
         return None
     try:
-        post = Post.new(user, community, request_json, announce_id)
+        post = Post.new(user, community, request_json, announce_id, backfill=backfill)
         return post
     except Exception as ex:
         log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, str(ex))
@@ -3376,12 +3377,16 @@ def podcast_episode_title(note: dict, user, community) -> str | None:
     return None
 
 
-def fetch_castopod_episode_audio(post: Post, episode_url: str):
+def fetch_castopod_episode_audio(post: Post, episode_url: str, background: bool = False):
+    """Fetch the episode's audio and credits. A backfilled episode (`background`) still needs both, but its remote
+    fetches go to the background queue so a backfill never queues ahead of the inbox."""
     if current_app.debug:
         fetch_castopod_episode_audio_task(post.id, episode_url)
+    elif background:
+        fetch_castopod_episode_audio_task.apply_async(args=(post.id, episode_url), queue='background')
     else:
         fetch_castopod_episode_audio_task.delay(post.id, episode_url)
-    discovery_credits.fetch_episode_credits(post, episode_url)  # D24: the episode's hosts and guests
+    discovery_credits.fetch_episode_credits(post, episode_url, background=background)  # D24: hosts and guests
 
 
 @celery.task

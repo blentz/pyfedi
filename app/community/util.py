@@ -332,7 +332,7 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                             else:
                                 request_json = announce['object']
                             try:
-                                post = create_post(True, community, request_json, user, announce['id'])
+                                post = create_post(True, community, request_json, user, announce['id'], backfill=True)
                             except Exception as e:
                                 session.rollback()
                                 # Log the error but continue processing other posts

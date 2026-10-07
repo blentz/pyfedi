@@ -245,3 +245,43 @@ def test_an_update_that_no_longer_links_the_episode_drops_the_audio(db_session, 
     _update(post, '<p>this is no longer an episode announcement</p>')
 
     assert post.url != AUDIO
+
+
+class TestABackfilledEpisodeIsEnrichedOnTheBackgroundQueue:
+    """A backfilled episode still needs its audio and credits, or it has no player, but its two remote fetches go to
+    the `background` queue so a backfill never queues ahead of the instance's inbox (hell.cloud: 36% of a ~17,000-task
+    backlog on the default queue)."""
+
+    def _record(self, monkeypatch):
+        from app.activitypub import util as ap_util
+        from app.discovery import credits
+        calls = []
+        monkeypatch.setattr(ap_util.fetch_castopod_episode_audio_task, 'apply_async',
+                            lambda args, **kwargs: calls.append(('audio', args, kwargs.get('queue'))))
+        monkeypatch.setattr(ap_util.fetch_castopod_episode_audio_task, 'delay',
+                            lambda *args: calls.append(('audio', args, None)))
+        monkeypatch.setattr(credits.fetch_episode_credits_task, 'apply_async',
+                            lambda args, **kwargs: calls.append(('credits', args, kwargs.get('queue'))))
+        monkeypatch.setattr(credits.fetch_episode_credits_task, 'delay',
+                            lambda *args: calls.append(('credits', args, None)))
+        return calls
+
+    def test_a_backfilled_episode_goes_to_the_background_queue(self, app, monkeypatch):
+        from types import SimpleNamespace
+        from app.activitypub.util import fetch_castopod_episode_audio
+        monkeypatch.setattr(app, 'debug', False)
+        calls = self._record(monkeypatch)
+
+        fetch_castopod_episode_audio(SimpleNamespace(id=7), EPISODE, background=True)
+
+        assert calls == [('audio', (7, EPISODE), 'background'), ('credits', (7, EPISODE), 'background')]
+
+    def test_a_live_episode_keeps_the_default_queue(self, app, monkeypatch):
+        from types import SimpleNamespace
+        from app.activitypub.util import fetch_castopod_episode_audio
+        monkeypatch.setattr(app, 'debug', False)
+        calls = self._record(monkeypatch)
+
+        fetch_castopod_episode_audio(SimpleNamespace(id=7), EPISODE)
+
+        assert calls == [('audio', (7, EPISODE), None), ('credits', (7, EPISODE), None)]

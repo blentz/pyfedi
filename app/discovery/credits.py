@@ -379,9 +379,11 @@ def store_credits(post: Post, credits: list) -> None:
     db.session.commit()
 
 
-def fetch_episode_credits(post: Post, episode_url: str) -> None:
+def fetch_episode_credits(post: Post, episode_url: str, background: bool = False) -> None:
     if current_app.debug:
         fetch_episode_credits_task(post.id, episode_url)
+    elif background:   # a backfilled episode: never ahead of the inbox on the default queue
+        fetch_episode_credits_task.apply_async(args=(post.id, episode_url), queue='background')
     else:
         fetch_episode_credits_task.delay(post.id, episode_url)
 
