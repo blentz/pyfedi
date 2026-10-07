@@ -282,3 +282,87 @@ class TestMain:
 
         assert gate.main([cov_path(report(app__a_py=([1], []))), 'base', 'app/no_such_module.py']) == 2
         assert 'no_such_module' in capsys.readouterr().err
+
+
+def branch_report(path, executed, missing, missing_branches):
+    """coverage.json fragment for one file, with branch data."""
+    return {'files': {path: {'executed_lines': executed, 'missing_lines': missing,
+                             'missing_branches': missing_branches}}}
+
+
+class TestUncoveredAddedBranches:
+
+    def test_an_untaken_branch_out_of_an_added_line_is_reported(self):
+        added = {'app/a.py': {3, 4}}
+        data = branch_report('app/a.py', [3, 4, 5], [], [[3, 5], [9, -1]])
+
+        assert gate.uncovered_added_branches(added, data) == {'app/a.py': [(3, 5)]}
+
+    def test_a_branch_out_of_a_line_that_was_not_added_is_not_this_diffs_problem(self):
+        added = {'app/a.py': {3}}
+        data = branch_report('app/a.py', [3, 9], [], [[9, -1]])
+
+        assert gate.uncovered_added_branches(added, data) == {}
+
+    def test_files_the_report_lacks_and_non_python_files_are_skipped(self):
+        added = {'app/b.py': {1}, 'app/t.html': {1}}
+        data = branch_report('app/a.py', [1], [], [[1, 2]])
+
+        assert gate.uncovered_added_branches(added, data) == {}
+
+    def test_an_entry_without_branch_data_counts_nothing_as_missing(self):
+        added = {'app/a.py': {1}}
+
+        assert gate.uncovered_added_branches(added, report(app__a_py=([1], []))) == {}
+
+
+class TestMainBranches:
+
+    def test_an_untaken_branch_fails_and_is_named(self, cov_path, canned_diff, capsys):
+        canned_diff(diff_for('app/a.py', (3, 1)))
+        path = cov_path(branch_report('app/a.py', [3, 4], [], [[3, -1]]))
+
+        assert gate.main([path, 'base', '--branches']) == 1
+        assert 'app/a.py:3: branch to exit was never taken' in capsys.readouterr().err
+
+    def test_a_branch_to_a_line_is_named_by_that_line(self, cov_path, canned_diff, capsys):
+        canned_diff(diff_for('app/a.py', (3, 1)))
+        path = cov_path(branch_report('app/a.py', [3, 4], [], [[3, 7]]))
+
+        assert gate.main([path, 'base', '--branches']) == 1
+        assert 'app/a.py:3: branch to 7 was never taken' in capsys.readouterr().err
+
+    def test_every_branch_taken_passes(self, cov_path, canned_diff):
+        canned_diff(diff_for('app/a.py', (3, 1)))
+        path = cov_path(branch_report('app/a.py', [3, 4], [], []))
+
+        assert gate.main([path, 'base', '--branches']) == 0
+
+    def test_without_the_flag_branches_are_not_judged(self, cov_path, canned_diff):
+        canned_diff(diff_for('app/a.py', (3, 1)))
+        path = cov_path(branch_report('app/a.py', [3, 4], [], [[3, -1]]))
+
+        assert gate.main([path, 'base']) == 0
+
+    def test_the_flag_is_not_read_as_a_path(self, cov_path, canned_diff):
+        seen = canned_diff('')
+
+        gate.main([cov_path(branch_report('app/a.py', [1], [], [])), 'base', '--branches', 'app/community'])
+
+        assert seen == [('base', ['app/community'])]
+
+    def test_a_report_with_no_branch_data_fails_closed_under_the_flag(self, cov_path, canned_diff, capsys):
+        canned_diff(diff_for('app/a.py', (3, 1)))
+        path = cov_path(report(app__a_py=([3], [])))
+
+        assert gate.main([path, 'base', '--branches']) == 2
+        assert '--cov-branch' in capsys.readouterr().err
+
+    def test_lines_and_branches_both_reported_in_one_run(self, cov_path, canned_diff, capsys):
+        canned_diff(diff_for('app/a.py', (3, 2)))
+        path = cov_path(branch_report('app/a.py', [3], [4], [[3, 4]]))
+
+        assert gate.main([path, 'base', '--branches']) == 1
+        err = capsys.readouterr().err
+        assert 'app/a.py:4: added line was not executed' in err
+        assert 'app/a.py:3: branch to 4 was never taken' in err
