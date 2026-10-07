@@ -28,7 +28,7 @@ from app.activitypub.util import find_actor_or_create, actor_json_to_model, \
 from app.community.forms import CreateLinkForm
 from app.constants import SRC_WEB, POST_TYPE_LINK, NOTIF_NEW_POST
 from app.models import Community, File, PostReply, Post, utcnow, CommunityMember, Site, \
-    Instance, User, Tag, CommunityFlair, CommunityThemeAllowed, Notification, markdown_source, language_from_ap, _as_dict, _as_url
+    Instance, User, Tag, CommunityFlair, CommunityThemeAllowed, Notification, markdown_source, language_from_ap, _as_dict, _as_url, parse_ap_timestamp
 from app.utils import get_request, gibberish, ensure_directory_exists, ap_datetime, instance_banned, get_task_session, \
     store_files_in_s3, guess_mime_type, patch_db_session, instance_allowed, get_setting, scale_gif, theme_list, \
     add_to_modlog, role_access, sanitize_svg, can_create_post, can_create_post_reply
@@ -347,8 +347,15 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                                 continue
                             if post:
                                 if 'published' in activity:
-                                    post.posted_at = activity['published']
-                                    post.last_active = activity['published']
+                                    # Post.new dated and ranked the post by its arrival; date and rank it by when it
+                                    # was published, or a backfilled channel sorts by ingestion order (hot = ranking).
+                                    # An unreadable date keeps the arrival date rather than reaching the column raw.
+                                    published = parse_ap_timestamp(activity['published'])
+                                    if published is not None:
+                                        post.posted_at = published
+                                        post.last_active = published
+                                        post.ranking = post.post_ranking(post.score, published)
+                                        post.ranking_scaled = int(post.ranking + community.scale_by())
                                     session.commit()
 
                                     # create post_replies based on activity['replies'], if it exists
