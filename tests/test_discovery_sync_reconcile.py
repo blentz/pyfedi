@@ -361,3 +361,38 @@ def test_refollowed_counts_only_follows_that_were_sent(db_session, fed, monkeypa
     monkeypatch.setattr(sync, 'send_instance_follow', lambda row, community: False)
 
     assert reconcile_sync()['refollowed'] == 0
+
+
+def test_one_run_adds_at_most_fifty_communities_across_all_hosts(db_session, fed):
+    """The per-host ramp bounds one host, not the run: hell.cloud's first sync added ~1000 communities across
+    hundreds of hosts, and their backfills buried the instance's inbox under ~17,000 queued tasks."""
+    set_setting('discovery_sync_per_host', 1)
+    for index in range(60):
+        add_entry(f'Capchan{index:02d}', host=f'cap{index:02d}.example', followers=100 - index)
+
+    assert reconcile_sync()['added'] == 50
+    assert DiscoverySync.query.count() == 50
+    assert len(fed['backfill']) == 50
+    assert reconcile_sync()['added'] == 10
+
+
+def test_the_run_cap_counts_adds_on_a_host_that_later_fails(db_session, fed, monkeypatch):
+    """A host that fails after some adds keeps them (each add commits), so they count against the cap."""
+    set_setting('discovery_sync_per_host', 2)
+    monkeypatch.setattr(sync, 'ADDS_PER_RUN', 3)
+    first = add_entry('Ok1', host='aaa.example', followers=9)
+    add_entry('Boom', host='aaa.example', followers=1)
+    for index in range(3):
+        add_entry(f'Later{index}', host=f'zzz{index}.example', followers=5)
+    real = sync.find_actor_or_create
+
+    def flaky(url, community_only=False):
+        if 'boom' in url:
+            raise RuntimeError('peer exploded')
+        return real(url, community_only=community_only)
+    monkeypatch.setattr(sync, 'find_actor_or_create', flaky)
+
+    reconcile_sync()
+
+    assert DiscoverySync.query.count() == 3
+    assert first.actor_url in {row.follow_target for row in DiscoverySync.query}
