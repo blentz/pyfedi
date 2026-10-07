@@ -41,6 +41,29 @@ services:
     networks:
       - pf_network
 
+  celery_background:
+    # backfills, discovery sync and maintenance, kept off the worker that serves the inbox
+    build:
+      context: .
+      target: builder
+    container_name: piefed_celery_background
+    restart: unless-stopped
+    depends_on:
+      - db
+      - redis
+    env_file:
+     - ./.env.docker
+    environment:
+      CELERY_QUEUES: background
+      CELERY_CONCURRENCY: 2
+    entrypoint: ./entrypoint_celery.sh
+    volumes:
+     - ./media/:/app/app/static/media/
+     - ./logs/:/app/logs/
+     - ./tmp/:/app/app/static/tmp/
+    networks:
+      - pf_network
+
   web:
     build:
       context: .

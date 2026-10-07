@@ -81,6 +81,35 @@ services:
       retries: 3
       start_period: 20s
 
+  celery_background:
+    # backfills, discovery sync and maintenance, kept off the worker that serves the inbox
+    build:
+      context: .
+      target: runtime
+    container_name: piefed_celery_background
+    restart: unless-stopped
+    depends_on:
+      - db
+      - redis
+    env_file:
+     - ./.env.docker
+    environment:
+      CELERY_QUEUES: background
+      CELERY_CONCURRENCY: 2
+    entrypoint: ./entrypoint_celery.sh
+    volumes:
+     - ./media/:/app/app/static/media/:z
+     - ./logs/:/app/logs/:z
+     - ./tmp/:/app/app/static/tmp/:z
+    networks:
+      - pf_network
+    healthcheck:
+      test: ["CMD", "celery", "-A", "celery_worker_docker.celery", "inspect", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
   web:
     build:
       context: .

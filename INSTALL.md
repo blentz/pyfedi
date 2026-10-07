@@ -406,8 +406,10 @@ sudo nano /etc/default/celeryd
 Contents (change paths to suit):
 
 ```
-# The names of the workers. This example creates one workers
-CELERYD_NODES="worker1"
+# The names of the workers. This example creates two: worker1 serves the inbox and outbound delivery,
+# worker2 the background queue (backfills, discovery sync, maintenance), so background work can never
+# hold every slot while incoming activity waits.
+CELERYD_NODES="worker1 worker2"
 
 # The name of the Celery App, should be the same as the python file
 # where the Celery tasks are defined
@@ -422,7 +424,7 @@ CELERYD_LOG_LEVEL=INFO
 
 # Path to celery binary, that is in your virtual environment
 CELERY_BIN=/home/rimu/pyfedi/venv/bin/celery
-CELERYD_OPTS="--autoscale=5,1 --queues=celery,background,send"
+CELERYD_OPTS="--autoscale=5,1 -Q:worker1 celery,send -Q:worker2 background"
 ```
 
 #### Enable and start background services
