@@ -102,3 +102,30 @@ def test_the_listener_subscribes_to_live_channels_and_fans_them_out(monkeypatch)
 
     assert asyncio.run(scenario()) == '{}'
     assert 'live:*' in patterns
+
+
+def test_the_listener_passes_over_a_message_on_a_channel_it_does_not_handle(monkeypatch):
+    class FakePubSub:
+        async def psubscribe(self, *names):
+            pass
+
+        async def listen(self):
+            yield {'type': 'pmessage', 'channel': 'http_posts:1', 'data': '{"urls": []}'}
+            yield {'type': 'pmessage', 'channel': 'other:1', 'data': 'x'}
+            yield {'type': 'pmessage', 'channel': 'live:microblogs', 'data': '{}'}
+            raise asyncio.CancelledError
+
+    class FakeRedis:
+        def pubsub(self):
+            return FakePubSub()
+
+    monkeypatch.setattr(fastapi_server, 'r', FakeRedis())
+
+    async def scenario():
+        q = asyncio.Queue()
+        fastapi_server.live_clients['microblogs'] = {q}
+        with pytest.raises(asyncio.CancelledError):
+            await fastapi_server.redis_listener()
+        return q.get_nowait()
+
+    assert asyncio.run(scenario()) == '{}'

@@ -219,10 +219,10 @@ class TestAnnounceLivePost:
 
         assert published == []
 
-    def test_without_a_notification_server_nothing_is_published(self, app, live, published):
+    def test_without_a_notification_server_nothing_is_published(self, app, live, published, monkeypatch):
         from app.community.live import announce_live_post
 
-        app.config['NOTIF_SERVER'] = ''
+        monkeypatch.setitem(app.config, 'NOTIF_SERVER', '')
         with app.test_request_context():
             announce_live_post(live.toot(), live.microblogs, backfill=False)
 
@@ -476,6 +476,13 @@ class TestLivePage:
         assert re.search(r'href="[^"]*page=2[^"]*sort=new|href="[^"]*sort=new[^"]*page=2', html)
 
 
+def test_the_live_wake_up_is_registered_as_a_post_stored_hook():
+    from app.community.live import announce_live_post
+    from app.models import post_stored_hooks
+
+    assert announce_live_post in post_stored_hooks
+
+
 class TestPostNewAnnounces:
     """Post.new is where an inbound Create becomes a Post; the wake-up goes out after its commit."""
 
@@ -498,8 +505,8 @@ class TestPostNewAnnounces:
         db.session.commit()
         make_community_member(author, community)
         calls = []
-        monkeypatch.setattr('app.community.live.announce_live_post',
-                            lambda post, community, backfill: calls.append((post.id, community.id, backfill)))
+        monkeypatch.setattr('app.models.post_stored_hooks',
+                            [lambda post, community, backfill: calls.append((post.id, community.id, backfill))])
         return SimpleNamespace(community=community, author=author, calls=calls)
 
     def create(self, env, number, backfill=False):
