@@ -903,6 +903,8 @@ def live_posts_fragment(actor):
     community = actor_to_community(actor)
     if community is None or not is_live_community(community):
         abort(404)
+    if community.private and community.id not in community_membership_private(current_user.get_id()):
+        abort(403)
     after = request.args.get('after', type=int)
     if after is None:
         abort(400)
