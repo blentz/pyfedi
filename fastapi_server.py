@@ -99,7 +99,11 @@ async def notifications_stream(user_id: str):
     )
 
 
-async def live_event_stream(feed: str, q: asyncio.Queue):
+async def live_event_stream(feed: str):
+    # Registered here, not in the route: a client that goes away before the body starts must
+    # leave nothing behind. maxsize=1: a pending wake-up already says "fetch now".
+    q = asyncio.Queue(maxsize=1)
+    live_clients.setdefault(feed, set()).add(q)
     try:
         yield ": connected\n\n"
         while True:
@@ -119,10 +123,8 @@ async def live_event_stream(feed: str, q: asyncio.Queue):
 async def live_stream(feed: str):
     if feed not in LIVE_FEEDS:
         return JSONResponse({"error": "Unknown feed"}, status_code=404)
-    q = asyncio.Queue()
-    live_clients.setdefault(feed, set()).add(q)
     return StreamingResponse(
-        live_event_stream(feed, q),
+        live_event_stream(feed),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
     )
@@ -131,7 +133,10 @@ async def live_stream(feed: str):
 async def fan_out_live(channel: str, data: str):
     _, feed = channel.split(":", 1)
     for q in list(live_clients.get(feed, ())):
-        await q.put(data)
+        try:
+            q.put_nowait(data)
+        except asyncio.QueueFull:
+            pass        # a wake-up is already pending for this client
 
 
 async def send_http_posts(all_urls: List, all_headers: List, data_json: str):
