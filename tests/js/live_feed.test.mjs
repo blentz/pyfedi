@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    createLiveFeed, shouldHold, nextBackoff, dedupeNodes, trimCount,
+    createLiveFeed, shouldHold, nextBackoff, dedupeNodes, trimCount, teaserNodes,
     POLL_MS, SAFETY_POLL_MS, COALESCE_MS, MAX_BACKOFF_MS, HIGHLIGHT_MS, MAX_TEASERS, TEASER_SETUPS,
 } from '../../app/static/js/live_feed.js';
 
@@ -121,6 +121,13 @@ test('pure helpers', () => {
     assert.deepEqual(kept.map(node => node.id), ['post_2']);
     assert.equal(trimCount(MAX_TEASERS), 0);
     assert.equal(trimCount(MAX_TEASERS + 3), 3);
+});
+
+test('teaserNodes keeps post_teaser nodes in order and drops the rest', () => {
+    const make = (id, teaser) => { const node = new FakeNode(id); if (teaser) node.classList.add('post_teaser'); return node; };
+    const nodes = [make('post_1', true), make('script', false), make('post_2', true), make('div', false)];
+    assert.deepEqual(teaserNodes(nodes).map(node => node.id), ['post_1', 'post_2']);
+    assert.deepEqual(teaserNodes([]), []);
 });
 
 test('starting visible fetches at once from the cursor, then polls every 15 s', async () => {

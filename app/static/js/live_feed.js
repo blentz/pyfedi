@@ -37,6 +37,11 @@ export function dedupeNodes(seenIds, incoming) {
     });
 }
 
+// The top-level nodes that are post teasers, in order. (`:scope` matches nothing on a DocumentFragment.)
+export function teaserNodes(nodes) {
+    return Array.from(nodes).filter(node => node.classList.contains('post_teaser'));
+}
+
 export function trimCount(length) {
     return Math.max(0, length - MAX_TEASERS);
 }
@@ -221,7 +226,7 @@ if (typeof window !== 'undefined') {
             parse: html => {
                 const template = window.document.createElement('template');
                 template.innerHTML = html;
-                return Array.from(template.content.querySelectorAll(':scope > .post_teaser'));
+                return teaserNodes(Array.from(template.content.children));
             },
             config: {
                 postsUrl: list.dataset.postsUrl,
