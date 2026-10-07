@@ -2,7 +2,7 @@
 import pytest
 
 from app import db
-from app.discovery import SYNC_ACCEPTED, SYNC_NONE, SYNC_PENDING, SYNC_REJECTED, admin_views
+from app.discovery import SYNC_ACCEPTED, SYNC_NONE, SYNC_PENDING, SYNC_REJECTED, admin_views, SYNC_FAILED
 from app.models import DiscoverySync, utcnow
 from app.utils import get_setting, set_setting
 from tests.discovery_fixtures import admin, fresh_cache  # noqa: F401
@@ -88,7 +88,7 @@ def test_an_empty_status_table_says_so(admin):
 
 
 STATE_LABELS = {SYNC_NONE: 'Not followed yet', SYNC_PENDING: 'Waiting for an answer', SYNC_ACCEPTED: 'Following',
-                SYNC_REJECTED: 'Refused'}
+                SYNC_REJECTED: 'Refused', SYNC_FAILED: 'Could not deliver'}
 
 
 @pytest.mark.parametrize('state', STATE_LABELS)
