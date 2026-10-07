@@ -411,6 +411,21 @@ class TestLivePage:
         assert 'js/live_feed.js' in html
         assert set(teaser_ids(html)) == {post.id for post in posts}
 
+    @pytest.mark.parametrize('query', ['flair=x', 'tag=x'])
+    def test_a_filtered_view_is_not_live(self, client, live, query):
+        login(client, live.viewer)
+
+        html = client.get(f'/c/microblogs?sort=live&{query}').get_data(as_text=True)
+
+        assert 'id="live_feed"' not in html
+
+    def test_the_pill_string_reads_right_for_any_count(self, client, live):
+        login(client, live.viewer)
+
+        html = client.get('/c/microblogs?sort=live').get_data(as_text=True)
+
+        assert 'data-str-new-posts="New posts: %d"' in html
+
     def test_an_empty_community_starts_the_cursor_at_zero(self, client, live):
         login(client, live.viewer)
 
@@ -526,3 +541,34 @@ class TestPostNewAnnounces:
         post = self.create(env, 2, backfill=True)
 
         assert env.calls == [(post.id, env.community.id, True)]
+
+    def test_hooks_run_after_the_ai_detection_block(self, app, env, monkeypatch):
+        order = []
+        monkeypatch.setitem(app.config, 'DETECT_AI_ENDPOINT', 'https://ai.example/detect')
+        monkeypatch.setattr('app.models.post_stored_hooks', [lambda post, community, backfill: order.append('hook')])
+        monkeypatch.setattr(type(env.author), 'created_very_recently', lambda self: True)
+
+        def fake_get(url):
+            order.append('ai')
+            return None
+
+        monkeypatch.setattr('app.utils.get_request', fake_get)
+        document = {'id': 'https://remote.test/p/20', 'type': 'Page', 'name': 'a post',
+                    'attributedTo': self.AUTHOR, 'to': [self.PUBLIC], 'published': '2026-01-01T00:00:00Z',
+                    'content': '<p>' + 'long ' * 100 + '</p>'}
+        Post.new(env.author, env.community, {'id': 'https://remote.test/c/20', 'type': 'Create',
+                                             'to': [self.PUBLIC], 'object': document})
+
+        assert order == ['ai', 'hook']
+
+    def test_a_failing_hook_does_not_fail_the_ingest_or_stop_the_next_hook(self, app, env, monkeypatch, caplog):
+        def broken(post, community, backfill):
+            raise RuntimeError('boom')
+
+        monkeypatch.setattr('app.models.post_stored_hooks', [broken, lambda *args: env.calls.append(args)])
+
+        post = self.create(env, 3)
+
+        assert post is not None and len(env.calls) == 1
+        assert sum('boom' in record.getMessage() or record.exc_info is not None
+                   for record in caplog.records if record.levelname == 'ERROR') == 1
