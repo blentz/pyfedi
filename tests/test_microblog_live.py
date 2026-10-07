@@ -474,3 +474,48 @@ class TestLivePage:
 
         assert 'Older posts' in html
         assert re.search(r'href="[^"]*page=2[^"]*sort=new|href="[^"]*sort=new[^"]*page=2', html)
+
+
+class TestPostNewAnnounces:
+    """Post.new is where an inbound Create becomes a Post; the wake-up goes out after its commit."""
+
+    PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
+    AUTHOR = 'https://remote.test/u/tooter'
+
+    @pytest.fixture
+    def env(self, app, api_baseline, monkeypatch):
+        from flask import g
+
+        from tests.factories import make_community_member
+
+        g.admin_ids = []
+        g.site = db.session.get(Site, 1)
+        community = make_community('livenew')
+        author = make_user(api_baseline.instance_remote, 'tooter')
+        author.ap_id = 'tooter@remote.test'
+        author.ap_profile_id = self.AUTHOR
+        author.ap_public_url = self.AUTHOR
+        db.session.commit()
+        make_community_member(author, community)
+        calls = []
+        monkeypatch.setattr('app.community.live.announce_live_post',
+                            lambda post, community, backfill: calls.append((post.id, community.id, backfill)))
+        return SimpleNamespace(community=community, author=author, calls=calls)
+
+    def create(self, env, number, backfill=False):
+        document = {'id': f'https://remote.test/p/{number}', 'type': 'Page', 'name': 'a post',
+                    'attributedTo': self.AUTHOR, 'to': [self.PUBLIC],
+                    'published': '2026-01-01T00:00:00Z', 'content': '<p>body</p>'}
+        return Post.new(env.author, env.community,
+                        {'id': f'https://remote.test/c/{number}', 'type': 'Create', 'to': [self.PUBLIC],
+                         'object': document}, backfill=backfill)
+
+    def test_a_new_post_is_announced_once_after_it_is_stored(self, app, env):
+        post = self.create(env, 1)
+
+        assert env.calls == [(post.id, env.community.id, False)]
+
+    def test_a_backfilled_post_is_passed_as_one(self, app, env):
+        post = self.create(env, 2, backfill=True)
+
+        assert env.calls == [(post.id, env.community.id, True)]
