@@ -290,6 +290,85 @@ def _make_community_results_datalist_html(community_name):
     return f'<option value="{escape(community_name)}"></option>'
 
 
+def community_post_query(community: Community, content_type: str, flair: str = '', tag: str = ''):
+    """The posts `community` shows the current viewer: listable, and filtered by that viewer's
+    settings and blocks. Unsorted and unpaginated, sticky posts included; callers order and page it.
+
+    Shared by the community page and its Live fragment, so the two can never disagree on what a
+    viewer may see. Returns (query, content_filters).
+    """
+    # No Post.private filter: private is the microblog marker (Post.new() sets it
+    # for any titleless object), not a privacy flag -- non-public objects are
+    # refused at ingest by create_post(). Filtering it here hid every microblog
+    # from the community that carries them, e.g. /c/microblogs@piefed.social.
+    posts = Post.query.filter(Post.community_id == community.id, listable_clause(Post))
+
+    if content_type == 'events':
+        posts = posts.filter(Post.type == POST_TYPE_EVENT)
+
+    # filter out nsfw and nsfl if desired
+    if current_user.is_anonymous:
+        if current_app.config['CONTENT_WARNING']:
+            posts = posts.filter(Post.from_bot == False, Post.nsfl == False, Post.deleted == False,
+                                 Post.status > POST_STATUS_REVIEWING, Post.status > POST_STATUS_REVIEWING)
+        else:
+            posts = posts.filter(Post.from_bot == False, Post.nsfw == False, Post.nsfl == False,
+                                 Post.deleted == False,
+                                 Post.status > POST_STATUS_REVIEWING, Post.status > POST_STATUS_REVIEWING)
+        content_filters = {}
+    else:
+        if current_user.ignore_bots == 1:
+            posts = posts.filter(Post.from_bot == False)
+        if current_user.hide_nsfl == 1:
+            posts = posts.filter(Post.nsfl == False)
+        if current_user.hide_nsfw == 1:
+            posts = posts.filter(Post.nsfw == False)
+        if current_user.hide_read_posts and not tag:
+            posts = posts.outerjoin(read_posts, (Post.id == read_posts.c.read_post_id) & (
+                    read_posts.c.user_id == current_user.id))
+            posts = posts.filter(read_posts.c.read_post_id.is_(None))  # Filter where there is no corresponding read post for the current user
+        if current_user.hide_gen_ai == 1:
+            posts = posts.filter(Post.ai_generated == False)
+        posts = posts.outerjoin(hidden_posts, (Post.id == hidden_posts.c.hidden_post_id) & (
+                hidden_posts.c.user_id == current_user.id))
+        posts = posts.filter(hidden_posts.c.hidden_post_id.is_(None))  # Filter where there is no corresponding hidden post for the current user
+        content_filters = user_filters_posts(current_user.id)
+        posts = posts.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING)
+
+        # filter domains and instances
+        if domains_ids := blocked_domains(current_user.id):
+            posts = posts.filter(or_(Post.domain_id.not_in(domains_ids), Post.domain_id == None))
+        if instance_ids := blocked_or_banned_instances(current_user.id):
+            posts = posts.filter(or_(Post.instance_id.not_in(instance_ids), Post.instance_id == None))
+        # filter blocked users
+        if blocked_accounts := blocked_users(current_user.id):
+            posts = posts.filter(Post.user_id.not_in(blocked_accounts))
+
+    # Filter by post flair
+    flair_id = None
+    if flair:
+        flair_id = find_flair_id(flair, community.id)
+        if flair_id:
+            posts = posts.join(post_flair).filter(post_flair.c.flair_id == flair_id)
+
+    # Remove posts with flair the user has blocked
+    if current_user.is_authenticated:
+        blocked_flair = CommunityFlairBlock.query.filter(CommunityFlairBlock.user_id == current_user.id,
+                                                         CommunityFlairBlock.community_id == community.id).all()
+        if blocked_flair:
+            blocked_flair_ids = [bf.community_flair_id for bf in blocked_flair if bf.community_flair_id != flair_id]
+            # sub-query - posts that have any blocked flair
+            blocked_post_ids = db.session.query(post_flair.c.post_id).filter(post_flair.c.flair_id.in_(blocked_flair_ids))
+            posts = posts.filter(Post.id.not_in(blocked_post_ids))
+
+    # Filter by post tag
+    if tag:
+        tag_record = Tag.query.filter(Tag.name == tag.strip()).first()
+        if tag_record:
+            posts = posts.join(post_tag).filter(post_tag.c.tag_id == tag_record.id)
+    return posts, content_filters
+
+
 # @bp.route('/c/<actor>', methods=['GET']) - defined in activitypub/routes.py, which calls this function for user requests. A bit weird.
 @login_required_if_private_instance
 @check_anoobis
@@ -405,77 +484,9 @@ def show_community(community: Community):
     posts = None
     comments = None
     if content_type == 'posts' or content_type == 'events':
-        # No Post.private filter: private is the microblog marker (Post.new() sets it
-        # for any titleless object), not a privacy flag -- non-public objects are
-        # refused at ingest by create_post(). Filtering it here hid every microblog
-        # from the community that carries them, e.g. /c/microblogs@piefed.social.
-        posts = Post.query.filter(Post.community_id == community.id, listable_clause(Post))
+        posts, content_filters = community_post_query(community, content_type, flair, tag)
+        user = None if current_user.is_anonymous else current_user
 
-        if content_type == 'events':
-            posts = posts.filter(Post.type == POST_TYPE_EVENT)
-
-        # filter out nsfw and nsfl if desired
-        if current_user.is_anonymous:
-            if current_app.config['CONTENT_WARNING']:
-                posts = posts.filter(Post.from_bot == False, Post.nsfl == False, Post.deleted == False,
-                                     Post.status > POST_STATUS_REVIEWING, Post.status > POST_STATUS_REVIEWING)
-            else:
-                posts = posts.filter(Post.from_bot == False, Post.nsfw == False, Post.nsfl == False,
-                                     Post.deleted == False,
-                                     Post.status > POST_STATUS_REVIEWING, Post.status > POST_STATUS_REVIEWING)
-            content_filters = {}
-            user = None
-        else:
-            user = current_user
-            if current_user.ignore_bots == 1:
-                posts = posts.filter(Post.from_bot == False)
-            if current_user.hide_nsfl == 1:
-                posts = posts.filter(Post.nsfl == False)
-            if current_user.hide_nsfw == 1:
-                posts = posts.filter(Post.nsfw == False)
-            if current_user.hide_read_posts and not tag:
-                posts = posts.outerjoin(read_posts, (Post.id == read_posts.c.read_post_id) & (
-                        read_posts.c.user_id == current_user.id))
-                posts = posts.filter(read_posts.c.read_post_id.is_(None))  # Filter where there is no corresponding read post for the current user
-            if current_user.hide_gen_ai == 1:
-                posts = posts.filter(Post.ai_generated == False)
-            posts = posts.outerjoin(hidden_posts, (Post.id == hidden_posts.c.hidden_post_id) & (
-                    hidden_posts.c.user_id == current_user.id))
-            posts = posts.filter(hidden_posts.c.hidden_post_id.is_(None))  # Filter where there is no corresponding hidden post for the current user
-            content_filters = user_filters_posts(current_user.id)
-            posts = posts.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING)
-
-            # filter domains and instances
-            if domains_ids := blocked_domains(current_user.id):
-                posts = posts.filter(or_(Post.domain_id.not_in(domains_ids), Post.domain_id == None))
-            if instance_ids := blocked_or_banned_instances(current_user.id):
-                posts = posts.filter(or_(Post.instance_id.not_in(instance_ids), Post.instance_id == None))
-            # filter blocked users
-            if blocked_accounts := blocked_users(current_user.id):
-                posts = posts.filter(Post.user_id.not_in(blocked_accounts))
-
-        # Filter by post flair
-        flair_id = None
-        if flair:
-            flair_id = find_flair_id(flair, community.id)
-            if flair_id:
-                posts = posts.join(post_flair).filter(post_flair.c.flair_id == flair_id)
-
-        # Remove posts with flair the user has blocked
-        if current_user.is_authenticated:
-            blocked_flair = CommunityFlairBlock.query.filter(CommunityFlairBlock.user_id == current_user.id,
-                                                             CommunityFlairBlock.community_id == community.id).all()
-            if blocked_flair:
-                blocked_flair_ids = [bf.community_flair_id for bf in blocked_flair if bf.community_flair_id != flair_id]
-                # sub-query - posts that have any blocked flair
-                blocked_post_ids = db.session.query(post_flair.c.post_id).filter(post_flair.c.flair_id.in_(blocked_flair_ids))
-                posts = posts.filter(Post.id.not_in(blocked_post_ids))
-
-        # Filter by post tag
-        if tag:
-            tag_record = Tag.query.filter(Tag.name == tag.strip()).first()
-            if tag_record:
-                posts = posts.join(post_tag).filter(post_tag.c.tag_id == tag_record.id)
 
         sticky_posts = posts.filter(Post.sticky == True)
         posts = posts.filter(Post.sticky == False)
