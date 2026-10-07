@@ -18,6 +18,14 @@ if [ "${1:-}" = "--down" ]; then
     exit 0
 fi
 
+# The client-side tests (package.json's test:js) need only node, on the host: the test
+# container has none. They take about a second and fail below 100% coverage of live_feed.js.
+if command -v node >/dev/null 2>&1; then
+    npm run --silent test:js
+else
+    echo "run_tests.sh: node not found; the JavaScript tests did not run." >&2
+fi
+
 # Waits for Postgres to accept connections. Returns non-zero if it never does.
 # Called once, at the only place the stack is started. (It used to be called
 # twice -- the second call followed the staleness reset described below, which
