@@ -389,3 +389,46 @@ def test_an_update_of_a_podcast_episode_keeps_the_episode_title(bitcoin_audible,
                                      'object': dict(BA_NOTE, attributedTo=bitcoin_audible.ap_profile_id)})
 
     assert post.title == '208. Martin Connor - Bitcoin, das ultimative Kollateral'
+
+
+def _listed(host, platform='castopod'):
+    from tests.discovery_fixtures import add_entry
+    add_entry('Listed', platform=platform, host=host, url=f'https://{host}/@listed')
+
+
+def test_unreadable_nodeinfo_on_a_host_the_castopod_index_lists_is_castopod(app, db_session, http_mock):
+    """Many Castopod servers answer neither nodeinfo nor NodeInfo2 (hell.cloud: 126 podcasts in one sync never got
+    a community). index.castopod.org lists only Castopod servers, so a host it lists is one, and that is stored."""
+    instance = make_instance(CASTO, 'unknown')
+    http_mock.get(f'https://{CASTO}/.well-known/nodeinfo').mock(side_effect=httpx.ConnectError('down'))
+    _listed(CASTO)
+
+    assert is_castopod_podcast(castopod_person(), instance) is True
+    assert db.session.get(Instance, instance.id).software == 'castopod'
+
+
+def test_a_remembered_failure_still_consults_the_directory(app, db_session, http_mock, real_cache):
+    instance = make_instance(CASTO, 'unknown')
+    real_cache.set(f'interop:nodeinfo-failed:{CASTO}', True)
+    _listed(CASTO)
+
+    assert workarounds.instance_software(instance) == 'castopod'
+
+
+def test_a_directory_entry_for_another_platform_or_host_does_not_count(app, db_session, http_mock, real_cache):
+    instance = make_instance(CASTO, 'unknown')
+    real_cache.set(f'interop:nodeinfo-failed:{CASTO}', True)
+    _listed(CASTO, platform='mastodon')
+    _listed('elsewhere.example')
+
+    assert workarounds.instance_software(instance) == ''
+
+
+def test_a_readable_nodeinfo_wins_over_the_directory(app, db_session, http_mock):
+    instance = make_instance(CASTO, 'unknown')
+    http_mock.get(f'https://{CASTO}/.well-known/nodeinfo').respond(json={'links': [
+        {'rel': 'http://nodeinfo.diaspora.software/ns/schema/2.0', 'href': f'https://{CASTO}/nodeinfo/2.0'}]})
+    http_mock.get(f'https://{CASTO}/nodeinfo/2.0').respond(json={'software': {'name': 'mastodon'}})
+    _listed(CASTO)
+
+    assert workarounds.instance_software(instance) == 'mastodon'

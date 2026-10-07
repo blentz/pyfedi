@@ -12,11 +12,16 @@ from urllib.parse import urlsplit
 from flask import current_app
 
 from app import cache, db
+from app.models import DiscoveryEntry
 from app.utils import remote_instance_software
 
 UNKNOWN_SOFTWARE = ('', 'unknown')   # find_instance_id creates a row with software='unknown' until nodeinfo is read
 NODEINFO_TIMEOUT = 5                 # seconds for the whole read: it runs on the inbox path
 FAILED_READ_TTL = 24 * 60 * 60       # a host whose nodeinfo failed is not asked again for a day
+# Directories that list one platform's servers only (SepiaSearch: PeerTube; index.castopod.org: Castopod), so a host
+# they list runs that software. Read when nodeinfo cannot be: many Castopod servers answer neither nodeinfo nor
+# NodeInfo2, and their podcasts then never got a community (hell.cloud, 2026-10-07: 126 in one sync).
+DIRECTORY_SOFTWARE = ('castopod', 'peertube')
 
 
 @dataclass(frozen=True)
@@ -55,7 +60,7 @@ def instance_software(instance) -> str:
         return ''
     failed_key = f'interop:nodeinfo-failed:{instance.domain.strip().lower()}'
     if cache.get(failed_key):
-        return ''
+        return _software_from_directory(instance)
     try:
         software = remote_instance_software(f'https://{instance.domain}', timeout=NODEINFO_TIMEOUT)
     except Exception as ex:   # transport, status or shape: the software stays unknown
@@ -63,7 +68,7 @@ def instance_software(instance) -> str:
         software = ''
     if software in UNKNOWN_SOFTWARE:
         cache.set(failed_key, True, timeout=FAILED_READ_TTL)
-        return ''
+        return _software_from_directory(instance)
     instance.software = software[:50]   # Instance.software is String(50)
     db.session.commit()
     return instance.software
@@ -83,3 +88,15 @@ def is_castopod_podcast(actor_json, instance) -> bool:
     if not actor_host or actor_host != (instance.domain or '').strip().lower():
         return False
     return instance_software(instance) == WORKAROUNDS['castopod_person_is_podcast'].software
+
+
+def _software_from_directory(instance) -> str:
+    """The platform a single-platform directory lists `instance`'s host under, stored on the row; '' when none does."""
+    domain = instance.domain.strip().lower()
+    row = db.session.query(DiscoveryEntry.platform).filter(db.func.lower(DiscoveryEntry.host) == domain,
+                                                           DiscoveryEntry.platform.in_(DIRECTORY_SOFTWARE)).first()
+    if row is None:
+        return ''
+    instance.software = row.platform
+    db.session.commit()
+    return instance.software
