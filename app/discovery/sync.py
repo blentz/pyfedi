@@ -7,7 +7,7 @@ from flask import current_app
 from sqlalchemy import func
 
 from app import celery, db
-from app.activitypub.util import find_actor_or_create
+from app.activitypub.util import find_actor_or_create, remote_object_to_json
 from app.discovery import KIND_COMMUNITY, SYNC_NONE, SYNC_PENDING
 from app.discovery.backfill import backfill_in_progress, queue_backfill, run_backfill
 from app.discovery.filters import host_is_excluded
@@ -143,10 +143,21 @@ def _needs_refollow(row, now) -> bool:
                                                  or row.followed_at < now - timedelta(days=FOLLOW_RETRY_DAYS))
 
 
+def _exclude_alias(entry) -> None:
+    if db.session.get(DiscoveryExclusion, entry.actor_url.lower()) is None:
+        db.session.add(DiscoveryExclusion(actor_url=entry.actor_url.lower()))
+    db.session.commit()
+
+
 def _add(entry, held) -> bool:
     community = db.session.query(Community).filter(Community.ap_profile_id == entry.actor_url.lower()).first()
-    created = community is None
-    if created:
+    if community is None:
+        # Read the canonical id before any lookup can create the community an admin deleted.
+        document = remote_object_to_json(entry.actor_url)
+        canonical = document.get('id') if isinstance(document, dict) else None
+        if isinstance(canonical, str) and db.session.get(DiscoveryExclusion, canonical.lower()) is not None:
+            _exclude_alias(entry)
+            return False
         community = find_actor_or_create(entry.actor_url, community_only=True)
         if not isinstance(community, Community):
             current_app.logger.info(f'discovery sync: {entry.actor_url} did not resolve to a community')
@@ -154,13 +165,7 @@ def _add(entry, held) -> bool:
     if _unusable(community):   # an alias URL resolves to a banned or deleted community the desired set cannot see
         return False
     if community.ap_profile_id and db.session.get(DiscoveryExclusion, community.ap_profile_id.lower()) is not None:
-        # an admin deleted it: remember the alias too, and undo the re-creation this lookup may have caused
-        if db.session.get(DiscoveryExclusion, entry.actor_url.lower()) is None:
-            db.session.add(DiscoveryExclusion(actor_url=entry.actor_url.lower()))
-        if created:
-            community.delete_dependencies()
-            db.session.delete(community)
-        db.session.commit()
+        _exclude_alias(entry)   # an admin deleted it: what exists is left alone, only not synced
         return False
     if db.session.get(DiscoverySync, community.id) is not None:   # another entry already resolved to this community
         return False

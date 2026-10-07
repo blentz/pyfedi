@@ -43,6 +43,7 @@ def fed(monkeypatch):
         return True
 
     monkeypatch.setattr(sync, 'find_actor_or_create', resolve)
+    monkeypatch.setattr(sync, 'remote_object_to_json', lambda url: None)
     monkeypatch.setattr(sync, 'send_instance_follow', follow)
     monkeypatch.setattr(sync, 'send_instance_undo', lambda row, community: log['undo'].append(row.follow_target))
     monkeypatch.setattr(sync, 'queue_backfill', log['backfill'].append)
