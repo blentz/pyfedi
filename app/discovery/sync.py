@@ -119,6 +119,9 @@ def poll_synced_community(community_id: int) -> None:
 
 
 ADDS_PER_HOST_PER_RUN = 10   # a larger N ramps up over several days rather than bursting at one host
+# ...and the whole run is bounded too: each add queues a backfill whose posts fan out into per-post tasks, and an
+# uncapped first run (hundreds of hosts) buried an instance's inbox under ~17,000 queued tasks
+ADDS_PER_RUN = 50
 FOLLOW_RETRY_DAYS = 7
 POLL_SPACING_SECONDS = 2
 
@@ -200,6 +203,7 @@ def reconcile_sync() -> dict:
         else:
             held[row.follow_target.lower()] = row
     now = utcnow()
+    run_added = 0   # adds commit one by one, so they count even if their host later fails
     for host in sorted(desired):
         try:
             added = 0
@@ -209,8 +213,9 @@ def reconcile_sync() -> dict:
                     if _needs_refollow(row, now):
                         if send_instance_follow(row, db.session.get(Community, row.community_id)):
                             summary['refollowed'] += 1
-                elif added < ADDS_PER_HOST_PER_RUN and _add(entry, held):
+                elif added < ADDS_PER_HOST_PER_RUN and run_added < ADDS_PER_RUN and _add(entry, held):
                     added += 1
+                    run_added += 1
             summary['added'] += added
         except Exception:
             current_app.logger.exception(f'discovery sync: reconcile of {host} failed')
