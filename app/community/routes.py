@@ -27,7 +27,7 @@ from app.community.forms import SearchRemoteCommunity, CreateDiscussionForm, Cre
     EscalateReportForm, ResolveReportForm, CreateVideoForm, CreatePollForm, EditCommunityWikiPageForm, \
     InviteCommunityForm, MoveCommunityForm, EditCommunityFlairForm, SetMyFlairForm, FindAndBanUserCommunityForm, \
     CreateEventForm, InviteAcceptForm, EditCommunityMembership, CommunityRssFeedEdit, DeleteCommunityRssFeedForm
-from app.community.live import is_live_community, live_posts
+from app.community.live import is_live_community, live_available, live_posts
 from app.community.util import search_for_community, actor_to_community, \
     save_icon_file, save_banner_file, \
     delete_post_from_community, delete_post_reply_from_community, \
@@ -422,6 +422,9 @@ def show_community(community: Community):
     if sort is None:
         sort = ''
     low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
+    live = sort == 'live' and live_available(community, current_user, content_type, page)
+    if sort == 'live' and not live:
+        sort = 'new'
     if low_bandwidth:
         post_layout = None
     else:
@@ -429,6 +432,8 @@ def show_community(community: Community):
             post_layout = request.args.get('layout', community.default_layout)
         else:
             post_layout = request.args.get('layout', 'list')
+    if live and post_layout is not None:
+        post_layout = 'list'        # Live inserts teasers into a list; masonry cannot take them
 
     # If nothing has changed since their last visit, return HTTP 304
     current_etag = f"{community.id}{sort}{post_layout}_{hash(community.last_active)}"
@@ -518,7 +523,7 @@ def show_community(community: Community):
         elif sort == 'top_all':
             sticky_posts = sticky_posts.order_by(desc(Post.up_votes - Post.down_votes))
             posts = posts.order_by(desc(Post.up_votes - Post.down_votes))
-        elif sort == 'new':
+        elif sort == 'new' or sort == 'live':
             sticky_posts = sticky_posts.order_by(desc(Post.posted_at))
             posts = posts.order_by(desc(Post.posted_at))
         elif sort == 'old':
@@ -536,7 +541,7 @@ def show_community(community: Community):
         elif post_layout == 'masonry_wide':
             per_page = 300
         posts = posts.paginate(page=page, per_page=per_page, error_out=False)
-        sticky_posts = sticky_posts.all()
+        sticky_posts = [] if live else sticky_posts.all()
     else:   # comments
         content_filters = {}
         # D1005. `Community.replies` is every PostReply in the community, with
@@ -705,7 +710,7 @@ def show_community(community: Community):
     if content_type == 'posts' or content_type == 'events':
         next_url = url_for('activitypub.community_profile',
                            actor=community.ap_id if community.ap_id is not None else community.name,
-                           page=posts.next_num, sort=sort, layout=post_layout,
+                           page=posts.next_num, sort='new' if live else sort, layout=post_layout,
                            content_type=content_type) if posts.has_next else None
         prev_url = url_for('activitypub.community_profile',
                            actor=community.ap_id if community.ap_id is not None else community.name,
@@ -756,6 +761,9 @@ def show_community(community: Community):
                                          community_flair=shared_community.get_comm_flair_list(community),
                                          recently_upvoted=recently_upvoted, recently_downvoted=recently_downvoted,
                                          community_feeds=community_feeds,
+                                         live=live,
+                                         live_button=live_available(community, current_user, content_type, 1),
+                                         live_cursor=max((post.id for post in posts.items), default=0) if live else 0,
                                          user_pronouns=user_pronouns(), hide_community_actions=community.name == 'microblogs',
                                          canonical=community.profile_id(), can_upvote_here=can_upvote(user, community),
                                          can_downvote_here=can_downvote(user, community),

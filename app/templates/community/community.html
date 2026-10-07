@@ -150,7 +150,18 @@
                                 {{ _('Fetching recent posts from %(host)s. They will appear here within a minute or two; refresh the page to see them.', host=community.ap_domain) }}
                             </p>
                         {% endif -%}
-                        <div class="post_list">
+                        {% if live -%}
+                            <div class="position-sticky top-0 z-3 d-flex justify-content-center align-items-center gap-2 py-1">
+                                <span id="live_status" class="badge text-bg-success" aria-live="polite">{{ _('Live') }}</span>
+                                <button type="button" id="live_pill" class="btn btn-primary btn-sm" hidden></button>
+                            </div>
+                        {% endif -%}
+                        <div class="post_list"{% if live %} id="live_feed"
+                             data-posts-url="{{ url_for('community.live_posts_fragment', actor=community.link()) }}"
+                             data-cursor="{{ live_cursor }}"
+                             data-sse-url="{{ notif_server ~ '/live/stream?feed=microblogs' if notif_server else '' }}"
+                             data-str-live="{{ _('Live') }}" data-str-paused="{{ _('Paused') }}"
+                             data-str-new-posts="{{ _('%(num)s new posts', num='%d') }}"{% endif %}>
                             {% if sticky_posts -%}
                                 {% for post in sticky_posts -%}
                                     {% include 'post/_post_teaser.html' -%}
@@ -186,10 +197,13 @@
                 {% endif -%}
                 {% if next_url -%}
                     <a href="{{ next_url }}" class="btn btn-primary" rel='nofollow'>
-                        {{ _('Next page') }} <span aria-hidden="true">&rarr;</span>
+                        {{ _('Older posts') if live else _('Next page') }} <span aria-hidden="true">&rarr;</span>
                     </a>
                 {% endif -%}
             </nav>
+            {% if live -%}
+                <script type="module" src="{{ url_for('static', filename='js/live_feed.js', changed=getmtime('js/live_feed.js')) }}" nonce="{{ nonce }}"></script>
+            {% endif -%}
         {% endif -%}
     </main>
 

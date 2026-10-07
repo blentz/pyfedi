@@ -28,6 +28,13 @@
                                 {{ _('Active') }}
                             </a>
                         </li>
+                        {% if live_button -%}
+                        <li>
+                            <a href="?sort=live" aria-label="{{ _('Live feed of new posts') }}" class="dropdown-item {{ 'active' if sort == 'live' }}" rel="nofollow noindex">
+                                {{ _('Live') }}
+                            </a>
+                        </li>
+                        {% endif -%}
                         <li>
                             <a href="?sort=top_12h&layout={{ post_layout }}&content_type={{ content_type }}&flair={{ flair }}" aria-label="{{ _('Most upvotes in the last 12 hours') }}" class="dropdown-item {{ 'active' if sort == 'top_12h' }}" rel="nofollow noindex">
                                 {{ _('Top 12 hours') }}
@@ -112,6 +119,11 @@
                     <a href="?sort=active&layout={{ post_layout }}&content_type={{ content_type }}&flair={{ flair }}" aria-label="{{ _('Sort by active') }}" class="btn {{ 'btn-primary' if sort == 'active' else 'btn-outline-secondary' }}" rel="nofollow noindex">
                         {{ _('Active') }}
                     </a>
+                    {% if live_button -%}
+                    <a href="?sort=live" aria-label="{{ _('Live feed of new posts') }}" class="btn {{ 'btn-primary' if sort == 'live' else 'btn-outline-secondary' }}" rel="nofollow noindex">
+                        {{ _('Live') }}
+                    </a>
+                    {% endif -%}
                 </div>
             </div>
         </div>
@@ -259,6 +271,13 @@
                                 {{ _('Active') }}
                             </a>
                         </li>
+                        {% if live_button -%}
+                        <li>
+                            <a href="?sort=live" aria-label="{{ _('Live feed of new posts') }}" class="dropdown-item {{ 'active' if sort == 'live' }}" rel="nofollow noindex">
+                                {{ _('Live') }}
+                            </a>
+                        </li>
+                        {% endif -%}
                         <li>
                             <a href="?sort=top_12h&layout={{ post_layout }}&content_type={{ content_type }}" aria-label="{{ _('Most upvotes in the last 12 hours') }}" class="dropdown-item {{ 'active' if sort == 'top_12h' }}" rel="nofollow noindex">
                                 {{ _('Top 12 hours') }}
@@ -343,6 +362,11 @@
                     <a href="?sort=active&layout={{ post_layout }}&content_type={{ content_type }}" aria-label="{{ _('Sort by active') }}" class="btn {{ 'btn-primary' if sort == 'active' else 'btn-outline-secondary' }}" rel="nofollow noindex">
                         {{ _('Active') }}
                     </a>
+                    {% if live_button -%}
+                    <a href="?sort=live" aria-label="{{ _('Live feed of new posts') }}" class="btn {{ 'btn-primary' if sort == 'live' else 'btn-outline-secondary' }}" rel="nofollow noindex">
+                        {{ _('Live') }}
+                    </a>
+                    {% endif -%}
                 </div>
             </div>
         </div>
@@ -467,6 +491,11 @@
         <a href="?sort=active&layout={{ post_layout }}&content_type={{ content_type }}&flair={{ flair }}" aria-label="{{ _('Sort by active') }}" class="btn {{ 'btn-primary' if sort == 'active' else 'btn-outline-secondary' }}" rel="nofollow noindex">
             {{ _('Active') }}
         </a>
+        {% if live_button -%}
+        <a href="?sort=live" aria-label="{{ _('Live feed of new posts') }}" class="btn {{ 'btn-primary' if sort == 'live' else 'btn-outline-secondary' }}" rel="nofollow noindex">
+            {{ _('Live') }}
+        </a>
+        {% endif -%}
     </div>
     <div class="btn-group me-lg-1">
         <a href="?content_type=posts&sort={{ sort }}&layout={{ post_layout }}" aria-label="{{ _('Show posts') }}" class="btn {{ 'btn-primary' if content_type == '' or content_type == 'posts' else 'btn-outline-secondary' }}" rel="nofollow noindex">
