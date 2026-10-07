@@ -377,3 +377,34 @@ test('a fetch already in flight is not doubled, and a pause during it schedules 
     await clock.advance(SAFETY_POLL_MS * 2);
     assert.equal(urls.length, 1);
 });
+
+test('with SSE, a wake-up during backoff waits out the backoff; after a 204 it coalesces at 5 s again', async () => {
+    const { FakeEventSource, instances } = makeEventSource();
+    const { feed, clock, urls } = setup({ sseUrl: '/s', EventSource: FakeEventSource,
+                                          replies: [response(429), response(204)] });
+    feed.start();
+    await settle();
+    assert.equal(urls.length, 1);                            // 429 -> interval 30 s
+    instances[0].onmessage();
+    await clock.advance(POLL_MS * 2 - 1);
+    assert.equal(urls.length, 1);
+    await clock.advance(1);
+    assert.equal(urls.length, 2);                            // 204 -> interval back to 15 s
+    instances[0].onmessage();
+    await clock.advance(COALESCE_MS - 1);
+    assert.equal(urls.length, 2);
+    await clock.advance(1);
+    assert.equal(urls.length, 3);
+});
+
+test('the held buffer is capped at MAX_TEASERS, keeping the newest', async () => {
+    const body = Array.from({ length: MAX_TEASERS + 5 }, (_, i) => `n${i}`).join(',');
+    const { feed, list, pill } = setup({ scrollY: 500, replies: [response(200, { body, cursor: '9' })] });
+    feed.start();
+    await settle();
+    assert.equal(pill.textContent, `${MAX_TEASERS} new posts`);
+    pill.fire('click');
+    assert.equal(list.children.length, MAX_TEASERS);
+    assert.equal(list.ids()[0], 'n0');
+    assert.equal(list.ids()[MAX_TEASERS - 1], `n${MAX_TEASERS - 1}`);
+});

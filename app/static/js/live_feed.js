@@ -95,7 +95,7 @@ export function createLiveFeed({ list, pill, status, fetch, EventSource, documen
         const nodes = dedupeNodes(seen, parse(html));
         if (nodes.length === 0) return;
         if (shouldHold(window.scrollY)) {
-            held = nodes.concat(held);
+            held = nodes.concat(held).slice(0, MAX_TEASERS);
             pill.textContent = config.strings.newPosts.replace('%d', held.length);
             pill.hidden = false;
         } else {
@@ -130,7 +130,9 @@ export function createLiveFeed({ list, pill, status, fetch, EventSource, documen
 
     function requestFetch() {
         if (coalesceTimer !== null) return;
-        const wait = Math.max(0, lastFetch + COALESCE_MS - now());
+        // While backing off (429, errors) a wake-up must not fetch sooner than the backoff allows.
+        const gap = interval > POLL_MS ? interval : COALESCE_MS;
+        const wait = Math.max(0, lastFetch + gap - now());
         coalesceTimer = setTimeout(() => { coalesceTimer = null; fetchNow(); }, wait);
     }
 
