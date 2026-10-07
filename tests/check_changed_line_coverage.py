@@ -7,7 +7,12 @@ coverage.py measured and did not execute is a failure.
 
 Usage, after a run that wrote coverage.json:
 
-    python tests/check_changed_line_coverage.py coverage.json <base-ref> [paths...]
+    python tests/check_changed_line_coverage.py coverage.json <base-ref> [--branches] [paths...]
+
+With --branches it also fails every branch coverage.py measured out of an added
+line that no test took (`missing_branches`, written when the run used
+--cov-branch or `branch = True`). A report with no branch data at all is an
+error under --branches, not a pass.
 
 It runs `git diff --unified=0 <base-ref>..HEAD` over the given paths (all of
 app/ when none are given), collects each added line, and reports the ones
@@ -112,6 +117,27 @@ def uncovered_added_lines(added, coverage_data):
     return uncovered, unmeasured
 
 
+def uncovered_added_branches(added, coverage_data):
+    """{path: sorted [(line, destination)]} for each untaken branch out of an added line.
+
+    A destination below zero is coverage.py's "exit from the function"."""
+    files = repo_relative_files(coverage_data['files'])
+    uncovered = {}
+    for path in sorted(added):
+        entry = files.get(path)
+        if entry is None or not path.endswith('.py'):
+            continue
+        hit = sorted((source, destination) for source, destination in entry.get('missing_branches', [])
+                     if source in added[path])
+        if hit:
+            uncovered[path] = hit
+    return uncovered
+
+
+def has_branch_data(coverage_data):
+    return any('missing_branches' in entry for entry in coverage_data['files'].values())
+
+
 def describe_report(path):
     """One line naming the report and when it was written, for staleness."""
     modified = datetime.datetime.fromtimestamp(os.path.getmtime(path))
@@ -120,6 +146,8 @@ def describe_report(path):
 
 
 def main(argv):
+    branches = '--branches' in argv
+    argv = [argument for argument in argv if argument != '--branches']
     if len(argv) < 2:
         print(__doc__, file=sys.stderr)
         return 2
@@ -145,6 +173,10 @@ def main(argv):
               file=sys.stderr)
         return 2
 
+    if branches and not has_branch_data(coverage_data):
+        print(f'ERROR: {report_path} has no branch data; run the tests with --cov-branch.', file=sys.stderr)
+        return 2
+
     for path in paths:
         if not os.path.exists(path):
             print(f'ERROR: path {path} does not exist; git would diff nothing for it.', file=sys.stderr)
@@ -168,11 +200,20 @@ def main(argv):
         for number in lines:
             print(f'{path}:{number}: added line was not executed by any test', file=sys.stderr)
 
-    if uncovered:
+    missed = uncovered_added_branches(added, coverage_data) if branches else {}
+    for path, pairs in missed.items():
+        for source, destination in pairs:
+            target = 'exit' if destination < 0 else destination
+            print(f'{path}:{source}: branch to {target} was never taken', file=sys.stderr)
+
+    if uncovered or missed:
         total = sum(len(lines) for lines in uncovered.values())
-        print(f'{total} added line(s) in {len(uncovered)} file(s) were not executed.', file=sys.stderr)
+        branch_total = sum(len(pairs) for pairs in missed.values())
+        print(f'{total} added line(s) not executed, {branch_total} branch(es) out of added lines not taken.',
+              file=sys.stderr)
         return 1
-    print(f'Every added line since {base_ref} that coverage measured was executed.')
+    print(f'Every added line since {base_ref} that coverage measured was executed'
+          f'{" and every branch out of one was taken" if branches else ""}.')
     return 0
 
 
