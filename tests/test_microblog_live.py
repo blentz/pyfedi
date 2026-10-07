@@ -408,6 +408,8 @@ class TestLivePage:
         assert 'data-posts-url="/community/microblogs/live/posts"' in html
         assert 'data-sse-url=""' in html
         assert 'id="live_status"' in html and 'id="live_pill"' in html
+        assert 'position-fixed' in re.search(r'<button[^>]*id="live_pill"[^>]*>', html).group(0)
+        assert 'position-sticky top-0' not in html
         assert 'js/live_feed.js' in html
         assert set(teaser_ids(html)) == {post.id for post in posts}
 
