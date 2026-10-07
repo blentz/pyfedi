@@ -734,3 +734,13 @@ class TestWhatIsCountedAtTheEnd:
         db.session.commit()
         backfill(env.community, {MODS: EMPTY_MODS, OUTBOX: outbox()})
         assert titles(env.community) == set()
+
+
+def test_a_future_published_date_cannot_rank_a_backfilled_post_above_now(env):
+    """A peer's `published` decides a backfilled post's rank; a date in the future would pin it to the top."""
+    from app.models import utcnow
+    backfill(env.community, {MODS: EMPTY_MODS,
+                             OUTBOX: outbox(an_announce(a_post(published='2999-01-01T00:00:00Z')))})
+    post = Post.query.filter_by(community_id=env.community.id).one()
+    assert post.posted_at <= utcnow()
+    assert post.ranking <= post.post_ranking(post.score, utcnow())

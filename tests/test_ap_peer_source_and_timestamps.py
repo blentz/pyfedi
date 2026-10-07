@@ -500,3 +500,25 @@ class TestTheThreeConstructorsThemselves:
 
         assert isinstance(community, Community)
         assert community.description_html == '<p>the html</p>'
+
+
+class TestAPublishedDateIsNeverInTheFuture:
+    """`posted_at` feeds the hot sort's `ranking`, so a peer that claims a far-future `published` would pin its
+    post to the top of every feed. `parse_ap_published` is `parse_ap_timestamp` clamped to now; an end time or an
+    expiry may be in the future and keeps the unclamped parser."""
+
+    def test_a_past_date_is_kept(self, app):
+        from datetime import datetime
+        from app.models import parse_ap_published
+        assert parse_ap_published('2020-06-01T12:00:00Z') == datetime(2020, 6, 1, 12, 0, 0)
+
+    def test_a_future_date_is_now(self, app):
+        from datetime import timedelta
+        from app.models import parse_ap_published, utcnow
+        before = utcnow()
+        clamped = parse_ap_published('2999-01-01T00:00:00Z')
+        assert before <= clamped <= utcnow() + timedelta(seconds=1)
+
+    def test_an_unreadable_date_is_none(self, app):
+        from app.models import parse_ap_published
+        assert parse_ap_published('not a date') is None
