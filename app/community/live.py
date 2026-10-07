@@ -9,7 +9,8 @@ from flask import current_app
 from sqlalchemy import desc
 
 from app.constants import POST_STATUS_REVIEWING, VISIBILITY_PUBLIC
-from app.models import Post
+from app.models import Post, post_stored_hooks
+from app import utils
 from app.utils import utcnow
 
 LIVE_COMMUNITY = 'microblogs'
@@ -42,8 +43,10 @@ def announce_live_post(post, community, backfill: bool) -> None:
         return
     if post.visibility != VISIBILITY_PUBLIC or post.status <= POST_STATUS_REVIEWING or post.deleted:
         return
-    from app import utils      # looked up at call time, so a test's replacement is the one called
     try:
         utils.publish_sse_event(LIVE_CHANNEL, '{}')
     except Exception as exc:
         current_app.logger.warning(f'Live feed wake-up not sent: {exc}')
+
+
+post_stored_hooks.append(announce_live_post)

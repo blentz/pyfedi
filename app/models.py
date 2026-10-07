@@ -2458,6 +2458,11 @@ class ActivityLog(db.Model):
     timestamp = db.Column(db.DateTime, index=True, default=utcnow)
 
 
+# Called as hook(post, community, backfill) after Post.new has stored a post. A module that
+# imports this one (and so cannot be imported from here) registers itself by appending.
+post_stored_hooks = []
+
+
 class Post(db.Model):
     query_class = FullTextSearchQuery
     id = db.Column(db.Integer, primary_key=True)
@@ -3250,9 +3255,8 @@ class Post(db.Model):
             post.generate_slug(community)
             db.session.commit()
 
-            # Wake any open Live view of the microblogs community (app/community/live.py)
-            from app.community import live  # cycle: app.community.live imports from this module
-            live.announce_live_post(post, community, backfill)
+            for hook in post_stored_hooks:      # e.g. the Live view wake-up, app/community/live.py
+                hook(post, community, backfill)
 
             # check new accounts to see if their comments are AI generated
             # D1332. `len(post.body)` was `TypeError: object of type 'NoneType'
