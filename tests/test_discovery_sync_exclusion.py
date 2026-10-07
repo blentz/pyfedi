@@ -23,6 +23,11 @@ def founder(db_session):
     make_user(make_instance('test.piefed.local', software='piefed'), 'founder', local=True)
 
 
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    monkeypatch.setattr(sync, 'remote_object_to_json', lambda url: None)
+
+
 @pytest.fixture
 def undone(monkeypatch):
     sent = []
@@ -134,27 +139,45 @@ def test_a_community_found_before_the_lookup_is_kept_when_its_url_is_excluded(db
     assert db.session.get(Community, community.id) is not None
 
 
-def test_an_alias_lookup_that_re_created_a_deleted_community_removes_it_again(db_session, monkeypatch):
+def test_an_alias_whose_actor_id_is_excluded_is_refused_before_any_lookup(db_session, monkeypatch):
     set_setting('discovery_sync_per_host', 5)
     entry = add_entry('Alias', host='tube.example')
     db.session.add(DiscoveryExclusion(actor_url='https://tube.example/c/real'))
     db.session.commit()
-    follows = []
-
-    def recreate(url, community_only=False):
-        community = make_community('real', host='tube.example')
-        community.ap_id = 'real@tube.example'
-        db.session.commit()
-        return community
-
-    monkeypatch.setattr(sync, 'find_actor_or_create', recreate)
-    monkeypatch.setattr(sync, 'send_instance_follow', lambda row, c: follows.append(row))
+    looked_up = []
+    monkeypatch.setattr(sync, 'remote_object_to_json', lambda url: {'id': 'https://Tube.example/c/Real'})
+    monkeypatch.setattr(sync, 'find_actor_or_create', lambda url, community_only=False: looked_up.append(url))
 
     assert reconcile_sync()['added'] == 0
-    assert follows == [] and Community.query.filter_by(name='real').count() == 0
+    assert looked_up == [] and Community.query.filter_by(name='real').count() == 0
     assert entry.actor_url.lower() in excluded()
-    reconcile_sync()   # the alias is now excluded itself: no second lookup
-    assert Community.query.filter_by(name='real').count() == 0
+    reconcile_sync()   # the alias is excluded itself now: not even fetched
+    assert looked_up == []
+
+
+def test_an_existing_community_reached_through_an_alias_is_never_deleted(db_session, monkeypatch):
+    set_setting('discovery_sync_per_host', 5)
+    entry = add_entry('Alias', host='tube.example')
+    community = remote_community('real')
+    community.post_count = 3
+    db.session.add(DiscoveryExclusion(actor_url=community.ap_profile_id.lower()))
+    db.session.commit()
+    community_id = community.id
+    monkeypatch.setattr(sync, 'find_actor_or_create', lambda url, community_only=False: community)
+
+    assert reconcile_sync()['added'] == 0
+    kept = db.session.get(Community, community_id)
+    assert kept is not None and kept.post_count == 3
+    assert entry.actor_url.lower() in excluded() and DiscoverySync.query.count() == 0
+
+
+def test_an_actor_document_without_an_id_falls_through_to_the_lookup(db_session, monkeypatch):
+    entry = add_entry('Alias', host='tube.example')
+    monkeypatch.setattr(sync, 'remote_object_to_json', lambda url: {'name': 'no id'})
+    monkeypatch.setattr(sync, 'find_actor_or_create', lambda url, community_only=False: None)
+
+    assert sync._add(entry, {}) is False
+    assert DiscoveryExclusion.query.count() == 0
 
 
 def test_a_local_community_with_a_server_url_profile_records_nothing(app, undone):
