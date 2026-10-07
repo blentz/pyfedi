@@ -1,4 +1,4 @@
-"""Interop D24: the Videos & Podcasts tab shows only PeerTube and Castopod posts, with All's guards."""
+"""Interop D24: the Media tab shows only PeerTube and Castopod posts, with All's guards."""
 import pytest
 
 from app import db
@@ -41,4 +41,4 @@ def test_a_reader_hiding_low_quality_loses_it(media):
 
 def test_the_nav_offers_the_tab(media):
     html = media.app.test_client().get('/home/new/media').get_data(as_text=True)
-    assert '/home/new/media' in html and 'Videos & Podcasts' in html
+    assert "/home/new/media" in html and ">Media<" in html.replace(" ", "").replace("\n", "") and "Videos & Podcasts<" not in html
