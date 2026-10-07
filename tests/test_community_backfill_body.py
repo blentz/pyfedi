@@ -146,6 +146,33 @@ class TestTheOutbox:
         post = Post.query.filter_by(community_id=env.community.id).one()
         assert post.posted_at.year == 2026
 
+    def test_the_rank_follows_the_date_the_remote_gave_it(self, env):
+        """The hot sort orders by `ranking`. Post.new ranks a post by when it arrived; the backfill then dates it
+        by `published`, and must rank it by that date too, or a backfilled channel sorts by ingestion order."""
+        from datetime import datetime
+        backfill(env.community, {MODS: EMPTY_MODS,
+                                 OUTBOX: outbox(an_announce(a_post(published='2020-06-01T12:00:00Z')))})
+        post = Post.query.filter_by(community_id=env.community.id).one()
+        assert post.posted_at == datetime(2020, 6, 1, 12, 0, 0)
+        assert post.ranking == post.post_ranking(post.score, datetime(2020, 6, 1, 12, 0, 0))
+        assert post.ranking_scaled == int(post.ranking + env.community.scale_by())
+
+    def test_a_newer_post_outranks_an_older_one_whatever_order_they_arrive_in(self, env):
+        """Owner report: the media tab listed posts per channel. Ingested newest-first, an older post arrives
+        later, so ranking by arrival put it above the newer one."""
+        newer = a_post('https://remote.test/p/new', name='newer', published='2026-03-01T00:00:00Z')
+        older = a_post('https://remote.test/p/old', name='older', published='2026-01-01T00:00:00Z')
+        backfill(env.community, {MODS: EMPTY_MODS, OUTBOX: outbox(an_announce(newer), an_announce(older))})
+        ranks = {post.title: post.ranking for post in Post.query.filter_by(community_id=env.community.id)}
+        assert ranks['newer'] > ranks['older']
+
+    def test_an_unreadable_published_keeps_the_arrival_date_and_rank(self, env):
+        backfill(env.community, {MODS: EMPTY_MODS,
+                                 OUTBOX: outbox(an_announce(a_post(published='not a date')))})
+        post = Post.query.filter_by(community_id=env.community.id).one()
+        assert post.posted_at.year >= 2026
+        assert post.ranking == post.post_ranking(post.score, post.posted_at)
+
     def test_several_posts(self, env):
         announces = [an_announce(a_post(f'https://remote.test/p/{index}',
                                         name=f'post {index}'))
