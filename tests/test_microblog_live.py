@@ -91,3 +91,159 @@ class TestCommunityPostQuery:
             assert posts.count() == 1
 
         assert content_filters == {}
+
+
+class TestLiveRules:
+
+    def test_the_local_microblogs_community_is_live(self, app, live):
+        from app.community.live import is_live_community
+
+        with app.test_request_context():
+            assert is_live_community(live.microblogs)
+
+    def test_another_local_community_is_not(self, app, live):
+        from app.community.live import is_live_community
+
+        with app.test_request_context():
+            assert not is_live_community(make_community('general'))
+
+    def test_a_remote_community_named_microblogs_is_not(self, app, live):
+        from app.community.live import is_live_community
+
+        remote = make_community('microblogs', host='other.example')
+        remote.ap_id = 'microblogs@other.example'
+        remote.instance_id = live.remote.id
+        db.session.commit()
+        with app.test_request_context():
+            assert not is_live_community(remote)
+
+    @pytest.mark.parametrize('logged_in, content_type, page, expected', [
+        (True, 'posts', 1, True),
+        (False, 'posts', 1, False),
+        (True, 'comments', 1, False),
+        (True, 'posts', 2, False),
+    ])
+    def test_live_is_available_only_to_a_logged_in_viewer_of_page_one_of_posts(
+            self, app, live, logged_in, content_type, page, expected):
+        from flask_login import AnonymousUserMixin
+
+        from app.community.live import live_available
+
+        user = live.viewer if logged_in else AnonymousUserMixin()
+        with app.test_request_context():
+            assert live_available(live.microblogs, user, content_type, page) is expected
+
+    def test_live_posts_are_newer_than_the_cursor_recent_unpinned_and_newest_first(self, app, live):
+        from app.community.live import live_posts
+
+        seen = live.toot()
+        older = live.toot(posted_at=utcnow() - timedelta(minutes=10))
+        newer = live.toot()
+        live.toot(posted_at=utcnow() - timedelta(hours=2))      # a backfill: new id, old post
+        live.toot(sticky=True)
+
+        result = live_posts(Post.query.filter(Post.community_id == live.microblogs.id), seen.id)
+
+        assert [post.id for post in result] == [newer.id, older.id]
+
+    def test_live_posts_stop_at_the_limit(self, app, live):
+        from app.community import live as live_module
+
+        for _ in range(3):
+            live.toot()
+        query = Post.query.filter(Post.community_id == live.microblogs.id)
+        original = live_module.LIVE_LIMIT
+        live_module.LIVE_LIMIT = 2
+        try:
+            assert len(live_module.live_posts(query, 0)) == 2
+        finally:
+            live_module.LIVE_LIMIT = original
+
+    def test_the_limit_is_forty(self):
+        from app.community.live import LIVE_LIMIT
+
+        assert LIVE_LIMIT == 40
+
+
+class TestAnnounceLivePost:
+    """The SSE wake-up. The payload is empty on purpose: each client fetches its own filtered posts."""
+
+    @pytest.fixture
+    def published(self, app, monkeypatch):
+        calls = []
+        monkeypatch.setattr('app.utils.publish_sse_event', lambda key, value: calls.append((key, value)))
+        monkeypatch.setitem(app.config, 'NOTIF_SERVER', 'https://notifs.example')
+        return calls
+
+    def test_a_new_microblogs_post_wakes_the_live_feed(self, app, live, published):
+        from app.community.live import announce_live_post
+
+        with app.test_request_context():
+            announce_live_post(live.toot(), live.microblogs, backfill=False)
+
+        assert published == [('live:microblogs', '{}')]
+
+    def test_a_backfilled_post_does_not(self, app, live, published):
+        from app.community.live import announce_live_post
+
+        with app.test_request_context():
+            announce_live_post(live.toot(), live.microblogs, backfill=True)
+
+        assert published == []
+
+    def test_a_post_in_another_community_does_not(self, app, live, published):
+        from app.community.live import announce_live_post
+
+        general = make_community('general')
+        post = make_post(general, live.author, 'https://mastodon.example/statuses/g')
+        with app.test_request_context():
+            announce_live_post(post, general, backfill=False)
+
+        assert published == []
+
+    @pytest.mark.parametrize('columns', [
+        {'status': POST_STATUS_REVIEWING},
+        {'deleted': True},
+        {'visibility': 'unlisted'},
+    ])
+    def test_a_post_the_feed_would_not_list_does_not(self, app, live, published, columns):
+        from app.community.live import announce_live_post
+
+        with app.test_request_context():
+            announce_live_post(live.toot(**columns), live.microblogs, backfill=False)
+
+        assert published == []
+
+    def test_without_a_notification_server_nothing_is_published(self, app, live, published):
+        from app.community.live import announce_live_post
+
+        app.config['NOTIF_SERVER'] = ''
+        with app.test_request_context():
+            announce_live_post(live.toot(), live.microblogs, backfill=False)
+
+        assert published == []
+
+    def test_a_redis_failure_is_logged_not_raised(self, app, live, monkeypatch, caplog):
+        from app.community.live import announce_live_post
+
+        def broken(key, value):
+            raise ConnectionError('redis is down')
+        monkeypatch.setattr('app.utils.publish_sse_event', broken)
+        monkeypatch.setitem(app.config, 'NOTIF_SERVER', 'https://notifs.example')
+        with app.test_request_context():
+            announce_live_post(live.toot(), live.microblogs, backfill=False)
+
+        assert 'redis is down' in caplog.text
+
+    def test_the_signal_reaches_the_redis_channel(self, app, live, redis_double, monkeypatch):
+        from app.community.live import announce_live_post
+
+        monkeypatch.setitem(app.config, 'NOTIF_SERVER', 'https://notifs.example')
+        subscriber = redis_double.pubsub()
+        subscriber.subscribe('live:microblogs')
+        subscriber.get_message(timeout=1)       # the subscribe confirmation
+        with app.test_request_context():
+            announce_live_post(live.toot(), live.microblogs, backfill=False)
+
+        message = subscriber.get_message(timeout=1)
+        assert message['channel'] == 'live:microblogs' and message['data'] == '{}'
