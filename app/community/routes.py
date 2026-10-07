@@ -27,6 +27,7 @@ from app.community.forms import SearchRemoteCommunity, CreateDiscussionForm, Cre
     EscalateReportForm, ResolveReportForm, CreateVideoForm, CreatePollForm, EditCommunityWikiPageForm, \
     InviteCommunityForm, MoveCommunityForm, EditCommunityFlairForm, SetMyFlairForm, FindAndBanUserCommunityForm, \
     CreateEventForm, InviteAcceptForm, EditCommunityMembership, CommunityRssFeedEdit, DeleteCommunityRssFeedForm
+from app.community.live import is_live_community, live_posts
 from app.community.util import search_for_community, actor_to_community, \
     save_icon_file, save_banner_file, \
     delete_post_from_community, delete_post_reply_from_community, \
@@ -890,6 +891,43 @@ def show_community_ical(actor):
         return resp
     else:
         abort(404)
+
+
+@bp.route('/<actor>/live/posts', methods=['GET'])
+@login_required
+@limiter.limit('12/minute', key_func=lambda: f'live_posts:{current_user.id}')
+def live_posts_fragment(actor):
+    """New teasers for the Live view, filtered for the current viewer. `after` is the newest
+    Post.id the page already has. 204 when nothing is new. The client advances its cursor from
+    X-Live-Cursor, not from the teasers, because a keyword filter can hide every one of them."""
+    community = actor_to_community(actor)
+    if community is None or not is_live_community(community):
+        abort(404)
+    after = request.args.get('after', type=int)
+    if after is None:
+        abort(400)
+
+    posts_query, content_filters = community_post_query(community, 'posts')
+    posts = live_posts(posts_query, after)
+    if not posts:
+        return '', 204
+
+    user_flair = {flair.user_id: flair.flair
+                  for flair in UserFlair.query.filter(UserFlair.community_id == community.id)}
+    response = make_response(render_template(
+        'community/_live_posts.html', posts=posts, community=community, sort='new',
+        content_filters=content_filters, show_post_community=False,
+        low_bandwidth=request.cookies.get('low_bandwidth', '0') == '1',
+        reported_posts=reported_posts(current_user.get_id(), current_user.get_id() in g.admin_ids),
+        user_notes=user_notes(current_user.get_id()), user_flair=user_flair,
+        recently_upvoted=recently_upvoted_posts(current_user.id),
+        recently_downvoted=recently_downvoted_posts(current_user.id),
+        can_upvote_here=can_upvote(current_user, community),
+        can_downvote_here=can_downvote(current_user, community),
+        user_pronouns=user_pronouns(), moderated_community_ids=moderating_communities_ids(current_user.get_id()),
+        community_flair=shared_community.get_comm_flair_list(community)))
+    response.headers['X-Live-Cursor'] = str(max(post.id for post in posts))
+    return response
 
 
 @bp.route('/<actor>/subscribe', methods=['POST'])

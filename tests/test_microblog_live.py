@@ -58,6 +58,11 @@ def live(app, db_session):
     return SimpleNamespace(viewer=viewer, author=author, remote=remote, microblogs=microblogs, toot=toot)
 
 
+@pytest.fixture
+def client(app):
+    return app.test_client()
+
+
 def teaser_ids(html):
     return [int(found) for found in re.findall(r'id="post_(\d+)"', html)]
 
@@ -247,3 +252,114 @@ class TestAnnounceLivePost:
 
         message = subscriber.get_message(timeout=1)
         assert message['channel'] == 'live:microblogs' and message['data'] == '{}'
+
+
+FRAGMENT = '/community/microblogs/live/posts'
+
+
+class TestLiveFragment:
+
+    def test_new_posts_after_the_cursor_come_back_newest_first_with_the_new_cursor(self, client, live):
+        seen = live.toot()
+        older = live.toot(posted_at=utcnow() - timedelta(minutes=5))
+        newer = live.toot()
+        login(client, live.viewer)
+
+        response = client.get(f'{FRAGMENT}?after={seen.id}')
+
+        assert response.status_code == 200
+        assert teaser_ids(response.get_data(as_text=True)) == [newer.id, older.id]
+        assert response.headers['X-Live-Cursor'] == str(max(newer.id, older.id))
+
+    def test_nothing_new_is_204(self, client, live):
+        latest = live.toot()
+        login(client, live.viewer)
+
+        response = client.get(f'{FRAGMENT}?after={latest.id}')
+
+        assert response.status_code == 204 and response.get_data() == b''
+
+    def test_a_backfilled_post_is_not_new(self, client, live):
+        live.toot(posted_at=utcnow() - timedelta(hours=2))
+        login(client, live.viewer)
+
+        assert client.get(f'{FRAGMENT}?after=0').status_code == 204
+
+    def test_at_most_forty_posts(self, client, live):
+        for _ in range(41):
+            live.toot()
+        login(client, live.viewer)
+
+        assert len(teaser_ids(client.get(f'{FRAGMENT}?after=0').get_data(as_text=True))) == 40
+
+    def test_the_viewers_blocks_and_settings_apply(self, client, live):
+        kept = live.toot()
+        pest = make_user(live.remote, 'pest')
+        make_post(live.microblogs, pest, 'https://mastodon.example/statuses/pest', microblog=True)
+        make_user_block(live.viewer, pest)
+        live.toot(nsfw=True)
+        live.toot(status=POST_STATUS_REVIEWING)
+        elsewhere = make_instance('blocked.example')
+        stranger = make_user(elsewhere, 'stranger')
+        make_post(live.microblogs, stranger, 'https://blocked.example/statuses/1', microblog=True)
+        make_instance_block(live.viewer, elsewhere)
+        live.viewer.hide_nsfw = 1
+        db.session.commit()
+        login(client, live.viewer)
+
+        assert teaser_ids(client.get(f'{FRAGMENT}?after=0').get_data(as_text=True)) == [kept.id]
+
+    def test_the_cursor_advances_even_when_a_keyword_filter_hides_every_teaser(self, client, live, monkeypatch):
+        hidden = live.toot()
+        monkeypatch.setattr(Post, 'blocked_by_content_filter', lambda self, filters, user_id: '-1')
+        login(client, live.viewer)
+
+        response = client.get(f'{FRAGMENT}?after=0')
+
+        assert response.status_code == 200
+        assert teaser_ids(response.get_data(as_text=True)) == []
+        assert response.headers['X-Live-Cursor'] == str(hidden.id)
+
+    def test_an_anonymous_visitor_is_sent_to_log_in(self, client, live):
+        response = client.get(f'{FRAGMENT}?after=0')
+
+        assert response.status_code == 302 and '/auth/login' in response.headers['Location']
+
+    def test_another_community_has_no_live_fragment(self, client, live):
+        make_community('general')
+        login(client, live.viewer)
+
+        assert client.get('/community/general/live/posts?after=0').status_code == 404
+
+    def test_an_unknown_community_has_none_either(self, client, live):
+        login(client, live.viewer)
+
+        assert client.get('/community/nosuch/live/posts?after=0').status_code == 404
+
+    @pytest.mark.parametrize('query', ['', '?after=', '?after=abc'])
+    def test_a_missing_or_unreadable_cursor_is_400(self, client, live, query):
+        login(client, live.viewer)
+
+        assert client.get(f'{FRAGMENT}{query}').status_code == 400
+
+    def test_the_thirteenth_request_in_a_minute_is_refused(self, live):
+        from app import create_app, limiter
+        from tests.conftest import TestConfig
+
+        # The suite's app was built with the limiter off, and Flask-Limiter registers its
+        # request hook only while building an app with it on, so this builds one.
+        class LimitedConfig(TestConfig):
+            RATELIMIT_ENABLED = True
+
+        limited = create_app(LimitedConfig)
+        try:
+            with limited.app_context():
+                client = limited.test_client()
+                login(client, live.viewer)
+                limiter.reset()
+                codes = [client.get(f'{FRAGMENT}?after=0').status_code for _ in range(13)]
+                limiter.reset()
+        finally:
+            limiter.enabled = False
+
+        assert codes[:12] == [204] * 12 and codes[12] == 429
