@@ -1,4 +1,5 @@
 """Interop D24: a synced community an admin deletes is unfollowed and never re-added."""
+import inspect
 from unittest.mock import patch
 
 import pytest
@@ -119,6 +120,65 @@ def test_an_alias_entry_resolving_to_an_excluded_community_is_not_added(db_sessi
 
     assert reconcile_sync()['added'] == 0
     assert follows == [] and DiscoverySync.query.count() == 0
+    assert 'https://tube.example/video-channels/alias' in excluded()
+
+
+def test_a_community_found_before_the_lookup_is_kept_when_its_url_is_excluded(db_session, monkeypatch):
+    entry = add_entry('Real', host='tube.example')
+    community = remote_community('real')
+    community.ap_profile_id = entry.actor_url.lower()
+    db.session.add(DiscoveryExclusion(actor_url=community.ap_profile_id))
+    db.session.commit()
+
+    assert sync._add(entry, {}) is False
+    assert db.session.get(Community, community.id) is not None
+
+
+def test_an_alias_lookup_that_re_created_a_deleted_community_removes_it_again(db_session, monkeypatch):
+    set_setting('discovery_sync_per_host', 5)
+    entry = add_entry('Alias', host='tube.example')
+    db.session.add(DiscoveryExclusion(actor_url='https://tube.example/c/real'))
+    db.session.commit()
+    follows = []
+
+    def recreate(url, community_only=False):
+        community = make_community('real', host='tube.example')
+        community.ap_id = 'real@tube.example'
+        db.session.commit()
+        return community
+
+    monkeypatch.setattr(sync, 'find_actor_or_create', recreate)
+    monkeypatch.setattr(sync, 'send_instance_follow', lambda row, c: follows.append(row))
+
+    assert reconcile_sync()['added'] == 0
+    assert follows == [] and Community.query.filter_by(name='real').count() == 0
+    assert entry.actor_url.lower() in excluded()
+    reconcile_sync()   # the alias is now excluded itself: no second lookup
+    assert Community.query.filter_by(name='real').count() == 0
+
+
+def test_a_local_community_with_a_server_url_profile_records_nothing(app, undone):
+    community = make_community('mine')
+    community.ap_profile_id = app.config['SERVER_URL'] + '/c/mine'
+    db.session.commit()
+    assert community.is_local() and community.ap_profile_id
+
+    forget_synced_community(community)
+
+    assert DiscoveryExclusion.query.count() == 0
+
+
+def test_the_admin_click_excludes_both_urls_and_unfollows_before_the_task_runs(app, db_session, undone):
+    from app.admin.routes import admin_community_delete
+    community = remote_community()
+    synced(community)
+
+    with app.test_request_context(), patch('app.admin.routes.unsubscribe_everyone_then_delete') as queued, \
+            patch('app.admin.routes.current_user'), patch('app.admin.routes.flash'):
+        inspect.unwrap(admin_community_delete)(community.id)
+
+    assert queued.called and undone == [TARGET]
+    assert excluded() == {community.ap_profile_id.lower(), TARGET.lower()}
 
 
 def spy(seen):

@@ -145,14 +145,22 @@ def _needs_refollow(row, now) -> bool:
 
 def _add(entry, held) -> bool:
     community = db.session.query(Community).filter(Community.ap_profile_id == entry.actor_url.lower()).first()
-    if community is None:
+    created = community is None
+    if created:
         community = find_actor_or_create(entry.actor_url, community_only=True)
         if not isinstance(community, Community):
             current_app.logger.info(f'discovery sync: {entry.actor_url} did not resolve to a community')
             return False
     if _unusable(community):   # an alias URL resolves to a banned or deleted community the desired set cannot see
         return False
-    if community.ap_profile_id and community.ap_profile_id.lower() in _excluded_urls():   # an admin deleted it
+    if community.ap_profile_id and db.session.get(DiscoveryExclusion, community.ap_profile_id.lower()) is not None:
+        # an admin deleted it: remember the alias too, and undo the re-creation this lookup may have caused
+        if db.session.get(DiscoveryExclusion, entry.actor_url.lower()) is None:
+            db.session.add(DiscoveryExclusion(actor_url=entry.actor_url.lower()))
+        if created:
+            community.delete_dependencies()
+            db.session.delete(community)
+        db.session.commit()
         return False
     if db.session.get(DiscoverySync, community.id) is not None:   # another entry already resolved to this community
         return False
