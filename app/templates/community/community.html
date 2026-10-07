@@ -161,7 +161,7 @@
                              data-cursor="{{ live_cursor }}"
                              data-sse-url="{{ notif_server ~ '/live/stream?feed=microblogs' if notif_server else '' }}"
                              data-str-live="{{ _('Live') }}" data-str-paused="{{ _('Paused') }}"
-                             data-str-new-posts="{{ _('%(num)s new posts', num='%d') }}"{% endif %}>
+                             data-str-new-posts="{{ _('New posts: %(num)s', num='%d') }}"{% endif %}>
                             {% if sticky_posts -%}
                                 {% for post in sticky_posts -%}
                                     {% include 'post/_post_teaser.html' -%}
