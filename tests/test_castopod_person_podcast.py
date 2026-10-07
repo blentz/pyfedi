@@ -404,7 +404,8 @@ def test_unreadable_nodeinfo_on_a_host_the_castopod_index_lists_is_castopod(app,
     _listed(CASTO)
 
     assert is_castopod_podcast(castopod_person(), instance) is True
-    assert db.session.get(Instance, instance.id).software == 'castopod'
+    # third-party directory data is never stored: nodeinfo is asked again once the failure expires, and wins
+    assert db.session.get(Instance, instance.id).software == 'unknown'
 
 
 def test_a_remembered_failure_still_consults_the_directory(app, db_session, http_mock, real_cache):
@@ -432,3 +433,20 @@ def test_a_readable_nodeinfo_wins_over_the_directory(app, db_session, http_mock)
     _listed(CASTO)
 
     assert workarounds.instance_software(instance) == 'mastodon'
+
+
+def test_a_directory_answer_is_not_stored_so_a_later_readable_nodeinfo_corrects_it(app, db_session, http_mock,
+                                                                                    real_cache):
+    """Security review of fc632a22c: a wrong or hostile directory listing must not misclassify a host for good."""
+    instance = make_instance(CASTO, 'unknown')
+    real_cache.set(f'interop:nodeinfo-failed:{CASTO}', True)
+    _listed(CASTO)
+    assert workarounds.instance_software(instance) == 'castopod'
+
+    real_cache.delete(f'interop:nodeinfo-failed:{CASTO}')
+    http_mock.get(f'https://{CASTO}/.well-known/nodeinfo').respond(json={'links': [
+        {'rel': 'http://nodeinfo.diaspora.software/ns/schema/2.0', 'href': f'https://{CASTO}/nodeinfo/2.0'}]})
+    http_mock.get(f'https://{CASTO}/nodeinfo/2.0').respond(json={'software': {'name': 'mastodon'}})
+
+    assert workarounds.instance_software(instance) == 'mastodon'
+    assert db.session.get(Instance, instance.id).software == 'mastodon'
