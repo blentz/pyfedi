@@ -91,12 +91,10 @@ def is_castopod_podcast(actor_json, instance) -> bool:
 
 
 def _software_from_directory(instance) -> str:
-    """The platform a single-platform directory lists `instance`'s host under, stored on the row; '' when none does."""
+    """The platform a single-platform directory lists `instance`'s host under; '' when none does. Never stored: it is
+    third-party data, so the row stays unknown and nodeinfo is asked again once the failure expires, and wins
+    (security review of fc632a22c: a wrong or hostile listing must not misclassify a host for good)."""
     domain = instance.domain.strip().lower()
     row = db.session.query(DiscoveryEntry.platform).filter(db.func.lower(DiscoveryEntry.host) == domain,
                                                            DiscoveryEntry.platform.in_(DIRECTORY_SOFTWARE)).first()
-    if row is None:
-        return ''
-    instance.software = row.platform
-    db.session.commit()
-    return instance.software
+    return row.platform if row is not None else ''
