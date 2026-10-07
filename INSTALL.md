@@ -812,6 +812,26 @@ also, within the `server` block:
 
 ```
 
+If you use the Live view of the microblogs community, proxy its stream the same way, also within the `server` block:
+
+```
+    location = /live/stream {
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Host $http_host;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_pass http://notif_server;
+
+            proxy_buffering off;
+            proxy_cache off;
+            proxy_redirect off;
+            proxy_read_timeout 3600s;
+    }
+```
+
+Without it, the Live view still works by polling every 15 seconds.
+
 In .env, set the `NOTIF_SERVER` environment variable to the same url as your instance, e.g. `NOTIF_SERVER = 'https://piefed.social'` 
 (no slash on the end, https:// on the start).
 

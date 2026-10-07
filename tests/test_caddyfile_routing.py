@@ -55,3 +55,7 @@ def test_mark_all_as_read_is_a_flask_route_the_old_matcher_would_have_shadowed(a
     assert any(rule.rule == '/notifications/all_read' for rule in app.url_map.iter_rules())
     assert caddy_matches('/notifications/*', '/notifications/all_read')
     assert not any(caddy_matches(m, '/notifications/all_read') for m in handled_paths())
+
+
+def test_the_live_stream_is_proxied_to_fastapi():
+    assert '/live/stream' in handled_paths()

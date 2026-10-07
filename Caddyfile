@@ -23,6 +23,13 @@ hell.cloud {
 		}
 	}
 
+	# The Live view's wake-up stream (fastapi_server.py, /live/stream). Same unbuffered proxying.
+	handle /live/stream {
+		reverse_proxy piefednotifs:8000 {
+			flush_interval -1
+		}
+	}
+
 	reverse_proxy web:5000
 }
 

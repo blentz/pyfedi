@@ -1,7 +1,7 @@
 from typing import List
 
 from fastapi import FastAPI
-from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import redis.asyncio as redis
@@ -38,6 +38,13 @@ app.add_middleware(
 
 # Dictionary of {user_id: set of asyncio.Queue instances}
 connected_clients = {}
+
+# Live feeds: one broadcast SSE stream per feed, for every viewer of it. Kept apart from
+# connected_clients so a user's notification stream never receives a broadcast. The payload
+# is only a wake-up; each browser then fetches its own filtered posts from Flask.
+LIVE_FEEDS = {"microblogs"}
+LIVE_HEARTBEAT_SECONDS = 60.0
+live_clients = {}
 
 # HTTP client for connection pooling
 http_client = None
@@ -92,6 +99,41 @@ async def notifications_stream(user_id: str):
     )
 
 
+async def live_event_stream(feed: str, q: asyncio.Queue):
+    try:
+        yield ": connected\n\n"
+        while True:
+            try:
+                message = await asyncio.wait_for(q.get(), timeout=LIVE_HEARTBEAT_SECONDS)
+                yield f"data: {message}\n\n"
+            except asyncio.TimeoutError:
+                yield ": heartbeat\n\n"
+    finally:
+        clients = live_clients.get(feed, set())
+        clients.discard(q)
+        if not clients:
+            live_clients.pop(feed, None)
+
+
+@app.get("/live/stream")
+async def live_stream(feed: str):
+    if feed not in LIVE_FEEDS:
+        return JSONResponse({"error": "Unknown feed"}, status_code=404)
+    q = asyncio.Queue()
+    live_clients.setdefault(feed, set()).add(q)
+    return StreamingResponse(
+        live_event_stream(feed, q),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
+
+
+async def fan_out_live(channel: str, data: str):
+    _, feed = channel.split(":", 1)
+    for q in list(live_clients.get(feed, ())):
+        await q.put(data)
+
+
 async def send_http_posts(all_urls: List, all_headers: List, data_json: str):
     """Send HTTP POST requests to multiple URLs concurrently with connection limits"""
     if not http_client:
@@ -132,7 +174,7 @@ async def redis_listener():
         try:
             logger.info("Starting Redis listener")
             pubsub = r.pubsub()
-            await pubsub.psubscribe("notifications:*", "http_posts:*", "messages:*")
+            await pubsub.psubscribe("notifications:*", "http_posts:*", "messages:*", "live:*")
 
             async for message in pubsub.listen():
                 if message["type"] == "pmessage":
@@ -148,6 +190,9 @@ async def redis_listener():
                                 await q.put(data)
                             except Exception as e:
                                 logger.error(f"Failed to queue message for user {user_id}: {e}")
+
+                    elif channel.startswith("live:"):
+                        await fan_out_live(channel, data)
 
                     elif channel.startswith("http_posts:"):
                         # Handle HTTP POST messages
