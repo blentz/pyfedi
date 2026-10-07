@@ -422,7 +422,8 @@ def show_community(community: Community):
     if sort is None:
         sort = ''
     low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
-    live = sort == 'live' and live_available(community, current_user, content_type, page)
+    # The Live fragment streams unfiltered posts, so a flair or tag filter rules Live out.
+    live = sort == 'live' and not flair and not tag and live_available(community, current_user, content_type, page)
     if sort == 'live' and not live:
         sort = 'new'
     if low_bandwidth:

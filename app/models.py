@@ -3255,9 +3255,6 @@ class Post(db.Model):
             post.generate_slug(community)
             db.session.commit()
 
-            for hook in post_stored_hooks:      # e.g. the Live view wake-up, app/community/live.py
-                hook(post, community, backfill)
-
             # check new accounts to see if their comments are AI generated
             # D1332. `len(post.body)` was `TypeError: object of type 'NoneType'
             # has no len()` for a post with no body at all -- a link post, an
@@ -3321,6 +3318,13 @@ class Post(db.Model):
                                                 }
                                 notify_admin('User auto-banned for AI-generated content', f'/u/{user.link()}', 1,
                                              NOTIF_REPORT, 'user_reported', targets_data)
+
+            # Last, so the post is final (AI verdict and any ban applied) before anything is told of it.
+            for hook in post_stored_hooks:      # e.g. the Live view wake-up, app/community/live.py
+                try:
+                    hook(post, community, backfill)
+                except Exception:               # the post is stored: a hook must not fail the ingest
+                    current_app.logger.exception(f'post-stored hook {getattr(hook, "__name__", hook)} failed')
 
         return post
 

@@ -32,6 +32,8 @@ def live_available(community, user, content_type: str, page: int) -> bool:
 def live_posts(posts_query, after: int) -> list:
     """Posts from `posts_query` newer than the cursor `after` (a Post.id: local ids only grow,
     unlike a peer's `published`), recent, unpinned, newest first."""
+    # More than LIVE_LIMIT new posts: the newest LIVE_LIMIT come back and the cursor moves past
+    # the rest (by design: show the latest).
     return posts_query.filter(Post.id > after, Post.posted_at > utcnow() - LIVE_WINDOW,
                               Post.sticky == False).order_by(desc(Post.posted_at)).limit(LIVE_LIMIT).all()
 
