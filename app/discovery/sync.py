@@ -164,6 +164,10 @@ def _add(entry, held) -> bool:
             return False
     if _unusable(community):   # an alias URL resolves to a banned or deleted community the desired set cannot see
         return False
+    # The pre-check and find_actor_or_create fetch the actor document separately, so a remote answering with another id
+    # the second time passes the pre-check. This check uses the stored ap_profile_id and fails closed: never synced or
+    # followed. What remains is a re-created, unsynced row, which any search can already produce. Building from the
+    # pre-fetched document would skip find_actor_or_create's Castopod twin handling, so that is not done.
     if community.ap_profile_id and db.session.get(DiscoveryExclusion, community.ap_profile_id.lower()) is not None:
         _exclude_alias(entry)   # an admin deleted it: what exists is left alone, only not synced
         return False
