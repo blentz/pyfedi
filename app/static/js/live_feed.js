@@ -12,8 +12,9 @@ export const COALESCE_MS = 5000;
 export const MAX_BACKOFF_MS = 120000;
 export const SSE_ERROR_LIMIT = 3;
 export const HIGHLIGHT_MS = 2000;
-// scripts.js setups that are safe to re-run over the whole page: each skips what it already
-// bound, or re-binds to the same effect. setupDynamicContent needs no call: scripts.js's
+// scripts.js setups that are safe to re-run over the whole page: some skip what they already
+// bound; setupVotableElements and setupVideoSpoilers re-bind their listeners on every call, but
+// the effect is idempotent. setupDynamicContent needs no call: scripts.js's
 // MutationObserver runs it for inserted nodes.
 export const TEASER_SETUPS = ['setupTeaserClick', 'setupPostTeaserHandler', 'setupBlurredPostImages',
                               'setupVideoSpoilers', 'setupVotableElements'];
@@ -128,12 +129,16 @@ export function createLiveFeed({ list, pill, status, fetch, EventSource, documen
         if (!paused) schedule(source ? SAFETY_POLL_MS : interval);
     }
 
+    // How long until a fetch is allowed. While backing off (429, errors) a wake-up must not fetch
+    // sooner than the backoff allows.
+    function fetchWait() {
+        const gap = interval > POLL_MS ? interval : COALESCE_MS;
+        return Math.max(0, lastFetch + gap - now());
+    }
+
     function requestFetch() {
         if (coalesceTimer !== null) return;
-        // While backing off (429, errors) a wake-up must not fetch sooner than the backoff allows.
-        const gap = interval > POLL_MS ? interval : COALESCE_MS;
-        const wait = Math.max(0, lastFetch + gap - now());
-        coalesceTimer = setTimeout(() => { coalesceTimer = null; fetchNow(); }, wait);
+        coalesceTimer = setTimeout(() => { coalesceTimer = null; fetchNow(); }, fetchWait());
     }
 
     function closeSse() {
@@ -143,10 +148,13 @@ export function createLiveFeed({ list, pill, status, fetch, EventSource, documen
 
     function openSse() {
         source = new EventSource(config.sseUrl);
+        source.onopen = () => { sseErrors = 0; };
         source.onmessage = () => { sseErrors = 0; requestFetch(); };
         source.onerror = () => {
             sseErrors += 1;
-            if (sseErrors >= SSE_ERROR_LIMIT) {
+            // readyState 2 (CLOSED): the browser gave up for good (non-200 or wrong content type)
+            // and will not retry, so waiting for more errors would leave us on the safety poll.
+            if (source.readyState === 2 || sseErrors >= SSE_ERROR_LIMIT) {
                 sseFailed = true;
                 closeSse();
                 schedule(interval);
@@ -167,7 +175,8 @@ export function createLiveFeed({ list, pill, status, fetch, EventSource, documen
         paused = false;
         setStatus(true);
         if (config.sseUrl && EventSource && !sseFailed) openSse();
-        fetchNow();
+        if (fetchWait() === 0) fetchNow();
+        else requestFetch();
     }
 
     function stop() {

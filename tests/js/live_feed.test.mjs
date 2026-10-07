@@ -106,7 +106,7 @@ function setup({ replies = [], ids = ['post_1'], sseUrl = '', EventSource, lowBa
         list, pill, status, fetch, EventSource, document, window, parse,
         setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, now: clock.now,
         config: { postsUrl: '/live/posts', cursor: 1, sseUrl, lowBandwidth,
-                  strings: { live: 'Live', paused: 'Paused', newPosts: '%d new posts' } },
+                  strings: { live: 'Live', paused: 'Paused', newPosts: 'New posts: %d' } },
     });
     return { feed, clock, list, pill, status, document, window, urls, calls };
 }
@@ -184,9 +184,9 @@ test('a reader scrolled down gets a pill, not a jump; the pill flushes to the to
     await settle();
     assert.deepEqual(list.ids(), ['post_1']);
     assert.equal(pill.hidden, false);
-    assert.equal(pill.textContent, '1 new posts');
+    assert.equal(pill.textContent, 'New posts: 1');
     await clock.advance(POLL_MS);
-    assert.equal(pill.textContent, '3 new posts');
+    assert.equal(pill.textContent, 'New posts: 3');
     pill.fire('click');
     assert.deepEqual(window.scrolledTo, [0]);
     assert.deepEqual(list.ids(), ['post_4', 'post_3', 'post_2', 'post_1']);
@@ -227,7 +227,7 @@ test('a post already listed or already held is never added twice', async () => {
     window.scrollY = 500;
     await clock.advance(POLL_MS);
     await clock.advance(POLL_MS);
-    assert.equal(pill.textContent, '1 new posts');
+    assert.equal(pill.textContent, 'New posts: 1');
 });
 
 test('the list never grows past the cap; the oldest teasers go', async () => {
@@ -312,6 +312,51 @@ test('three SSE errors in a row fall back to polling; a message in between reset
     document.hidden = true; document.fire('visibilitychange');
     document.hidden = false; document.fire('visibilitychange');
     assert.equal(instances.length, 1);                       // SSE is not retried after it failed
+});
+
+test('an EventSource the browser closed for good falls back to polling at once', async () => {
+    const { FakeEventSource, instances } = makeEventSource();
+    const { feed, clock, urls, document } = setup({ sseUrl: '/s', EventSource: FakeEventSource });
+    feed.start();
+    await settle();
+    const source = instances[0];
+    source.readyState = 2;
+    source.onerror();
+    assert.equal(source.closed, true);
+    const before = urls.length;
+    await clock.advance(POLL_MS);
+    assert.equal(urls.length, before + 1);
+    document.hidden = true; document.fire('visibilitychange');
+    document.hidden = false; document.fire('visibilitychange');
+    assert.equal(instances.length, 1);
+});
+
+test('an SSE open resets the error count', async () => {
+    const { FakeEventSource, instances } = makeEventSource();
+    const { feed } = setup({ sseUrl: '/s', EventSource: FakeEventSource });
+    feed.start();
+    await settle();
+    const source = instances[0];
+    source.onerror(); source.onerror();
+    source.onopen();
+    source.onerror(); source.onerror();
+    assert.equal(source.closed, false);
+});
+
+test('showing the tab again within the coalesce gap waits for the gap to end', async () => {
+    const { FakeEventSource } = makeEventSource();
+    const { feed, clock, urls, document } = setup({ sseUrl: '/s', EventSource: FakeEventSource });
+    feed.start();
+    await settle();
+    await clock.advance(1000);
+    document.hidden = true; document.fire('visibilitychange');
+    document.hidden = false; document.fire('visibilitychange');
+    await settle();
+    assert.equal(urls.length, 1);
+    await clock.advance(COALESCE_MS - 1000 - 1);
+    assert.equal(urls.length, 1);
+    await clock.advance(1);
+    assert.equal(urls.length, 2);
 });
 
 test('an SSE URL without EventSource support polls', async () => {
@@ -402,7 +447,7 @@ test('the held buffer is capped at MAX_TEASERS, keeping the newest', async () =>
     const { feed, list, pill } = setup({ scrollY: 500, replies: [response(200, { body, cursor: '9' })] });
     feed.start();
     await settle();
-    assert.equal(pill.textContent, `${MAX_TEASERS} new posts`);
+    assert.equal(pill.textContent, `New posts: ${MAX_TEASERS}`);
     pill.fire('click');
     assert.equal(list.children.length, MAX_TEASERS);
     assert.equal(list.ids()[0], 'n0');
