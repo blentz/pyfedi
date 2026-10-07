@@ -26,31 +26,42 @@ def test_an_unknown_feed_is_404():
     assert response.status_code == 404
 
 
-def test_a_known_feed_registers_a_queue_and_streams_events():
-    response = asyncio.run(fastapi_server.live_stream('microblogs'))
+def test_a_known_feed_returns_an_event_stream_and_registers_nothing_until_it_starts():
+    async def scenario():
+        response = await fastapi_server.live_stream('microblogs')
+        before = dict(fastapi_server.live_clients)
+        body = response.body_iterator
+        await body.__anext__()
+        registered = len(fastapi_server.live_clients['microblogs'])
+        await body.aclose()
+        return response, before, registered
+
+    response, before, registered = asyncio.run(scenario())
 
     assert response.media_type == 'text/event-stream'
     assert response.headers['x-accel-buffering'] == 'no'
-    assert len(fastapi_server.live_clients['microblogs']) == 1
+    assert before == {} and registered == 1
+    assert 'microblogs' not in fastapi_server.live_clients
 
 
 def test_the_stream_says_connected_then_relays_then_heartbeats_then_cleans_up(monkeypatch):
     monkeypatch.setattr(fastapi_server, 'LIVE_HEARTBEAT_SECONDS', 0.01)
 
     async def scenario():
-        q = asyncio.Queue()
-        other = asyncio.Queue()
-        fastapi_server.live_clients['microblogs'] = {q, other}
-        stream = fastapi_server.live_event_stream('microblogs', q)
+        other = asyncio.Queue(maxsize=1)
+        fastapi_server.live_clients['microblogs'] = {other}
+        stream = fastapi_server.live_event_stream('microblogs')
         first = await stream.__anext__()
+        q = (fastapi_server.live_clients['microblogs'] - {other}).pop()
         await q.put('{}')
         second = await stream.__anext__()
         third = await stream.__anext__()
         await stream.aclose()
         still_there = fastapi_server.live_clients['microblogs'] == {other}
-        fourth_stream = fastapi_server.live_event_stream('microblogs', other)
-        await fourth_stream.__anext__()
-        await fourth_stream.aclose()
+        other_stream = fastapi_server.live_event_stream('microblogs')
+        await other_stream.__anext__()
+        fastapi_server.live_clients['microblogs'].discard(other)
+        await other_stream.aclose()
         return first, second, third, still_there
 
     first, second, third, still_there = asyncio.run(scenario())
@@ -60,6 +71,17 @@ def test_the_stream_says_connected_then_relays_then_heartbeats_then_cleans_up(mo
     assert third == ': heartbeat\n\n'
     assert still_there
     assert 'microblogs' not in fastapi_server.live_clients
+
+
+def test_a_second_wake_up_to_a_full_queue_is_dropped_without_error():
+    async def scenario():
+        q = asyncio.Queue(maxsize=1)
+        fastapi_server.live_clients['microblogs'] = {q}
+        await fastapi_server.fan_out_live('live:microblogs', '{}')
+        await fastapi_server.fan_out_live('live:microblogs', '{}')
+        return q.qsize()
+
+    assert asyncio.run(scenario()) == 1
 
 
 def test_a_wake_up_reaches_live_clients_and_no_notification_client():
