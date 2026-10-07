@@ -3250,6 +3250,10 @@ class Post(db.Model):
             post.generate_slug(community)
             db.session.commit()
 
+            # Wake any open Live view of the microblogs community (app/community/live.py)
+            from app.community import live  # cycle: app.community.live imports from this module
+            live.announce_live_post(post, community, backfill)
+
             # check new accounts to see if their comments are AI generated
             # D1332. `len(post.body)` was `TypeError: object of type 'NoneType'
             # has no len()` for a post with no body at all -- a link post, an
