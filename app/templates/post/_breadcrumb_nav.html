@@ -3,6 +3,7 @@
     {% for breadcrumb in breadcrumbs -%}
       <li class="breadcrumb-item">{% if breadcrumb.url -%}<a href="{{ breadcrumb.url }}">{% endif -%}{{ breadcrumb.text }}{% if breadcrumb.url -%}</a>{% endif -%}</li>
     {% endfor -%}
-    <li class="breadcrumb-item"><a href="/c/{{ post.community.link() }}">{{ post.community.title }}@{{ post.community.ap_domain }}</a></li>
+    {% set community_link = post_community_link(post) -%}
+    <li class="breadcrumb-item"><a href="/c/{{ community_link }}">{{ community_link if community_link != post.community.link() else post.community.title + '@' + post.community.ap_domain }}</a></li>
   </ol>
 </nav>

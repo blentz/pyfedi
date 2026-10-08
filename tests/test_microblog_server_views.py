@@ -241,3 +241,56 @@ class TestServerViewLive:
         assert 'id="live_feed"' in html
         assert re.search(r'data-posts-url="/community/microblogs(@|%40)mastodon.example/live/posts"', html)
         assert f'data-sse-url="https://notifs.example/live/stream?feed=instance:{live.remote.id}"' in html
+
+
+class TestPostLinks:
+
+    def link(self, app, post):
+        from app.community.live import post_community_link
+
+        with app.test_request_context():
+            return post_community_link(post)
+
+    def test_a_remote_microblog_links_to_its_server_view(self, app, live):
+        assert self.link(app, live.toot()) == 'microblogs@mastodon.example'
+
+    def test_a_local_authors_microblog_links_to_the_community(self, app, live):
+        post = make_post(live.microblogs, live.viewer, 'https://test.piefed.local/post/2', microblog=True)
+
+        assert self.link(app, post) == 'microblogs'
+
+    def test_a_server_with_a_real_community_links_to_the_community(self, app, live):
+        real_microblogs(live)
+
+        assert self.link(app, live.toot()) == 'microblogs'
+
+    def test_a_post_in_another_community_keeps_its_link(self, app, live):
+        general = make_community('general')
+        post = make_post(general, live.author, 'https://mastodon.example/statuses/h')
+
+        assert self.link(app, post) == 'general'
+
+    def test_the_lookup_is_memoized_per_server(self):
+        # Tests run with NullCache, so the cache itself is not exercised here: pin the decorator.
+        from app.community.live import server_view_actor
+
+        assert server_view_actor.cache_timeout == 300
+
+    def test_the_post_page_breadcrumb_names_the_view(self, client, live):
+        post = live.toot()
+
+        html = client.get(f'/post/{post.id}').get_data(as_text=True)
+
+        assert re.search(r'<a href="/c/microblogs@mastodon.example">microblogs@mastodon.example</a>', html)
+
+    def test_a_teaser_byline_links_to_the_view(self, app, live):
+        # The byline is the non-microblog layout; a titled post by a remote author reaches it.
+        post = live.toot(microblog=False)
+
+        with app.test_request_context():
+            rendered = render_template_string(
+                "{% from 'post/post_teaser/_macros.html' import render_title %}"
+                "{{ render_title(post, show_post_community=True, request=request, user_pronouns={}, user_flair={}, reported_posts=[]) }}", post=post)
+
+        assert 'href="/c/microblogs@mastodon.example"' in rendered
+        assert '>@mastodon.example</span>' in rendered
