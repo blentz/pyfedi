@@ -1,0 +1,55 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% from 'bootstrap5/form.html' import render_form, render_field %}
+{% set active_child = 'admin_relays' %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+<div class="row">
+    <div class="col">
+        <h1>{{ _('Relays') }}</h1>
+        {% if allowlist_note %}
+            <p>{{ _("This instance federates only with allowlisted servers: add each relay's host to the allowlist, or its deliveries are refused.") }}</p>
+        {% endif %}
+        {{ render_form(add_form) }}
+
+        <table class="table table-responsive mt-4">
+            <tr>
+                <th>{{ _('URL') }}</th><th>{{ _('Style') }}</th><th>{{ _('State') }}</th><th>{{ _('Answered') }}</th>
+                <th>{{ _('Last error') }}</th><th>{{ _('Posts in the last 24 hours') }}</th><th>{{ _('Actions') }}</th>
+            </tr>
+            {% for relay in relays %}
+            <tr>
+                <td>{{ relay.url }}</td>
+                <td>{{ relay.style }}</td>
+                <td>{{ relay.state }}</td>
+                <td>{{ relay.answered_at.strftime('%Y-%m-%d %H:%M') if relay.answered_at else '' }}</td>
+                <td>{{ relay.last_error or '' }}</td>
+                <td class="relay_posts">{{ counts.get(relay.id, 0) }}</td>
+                <td>
+                    <form method="post" action="{{ url_for('admin.admin_federation_relays') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="relay_id" value="{{ relay.id }}">
+                        <input type="submit" name="relay_retry" value="{{ _('Retry') }}" class="btn btn-sm btn-secondary">
+                        <input type="submit" name="relay_remove" value="{{ _('Remove') }}" class="btn btn-sm btn-danger confirm_first">
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
+
+        {{ render_form(settings_form) }}
+    </div>
+</div>
+<hr />
+<div class="row">
+    <div class="col">
+        {% include 'admin/_nav.html' %}
+    </div>
+</div>
+<hr />
+{% endblock %}
