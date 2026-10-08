@@ -4712,7 +4712,7 @@ FOLLOWED_BOOSTER_SQL = """(EXISTS (SELECT 1 FROM post_boost pb
 MICROBLOG_GATE = 'p.private is false'
 
 
-def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, hashtag: str = '', include_following=False, community_sql: str = None) -> List[int]:
+def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, hashtag: str = '', include_following=False, community_sql: str = None, newer_than=None) -> List[int]:
     if not community_sql and (community_ids is None or len(community_ids) == 0):
         return []
     # result_id is client-controlled (every web caller reads it from ?result_id= and
@@ -4839,6 +4839,11 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
                 blocked_flair_ids = [bf.community_flair_id for bf in blocked_flair]
                 post_id_where.append('p.id NOT IN (SELECT post_id FROM "post_flair" WHERE flair_id IN :blocked_flair_ids) ')
                 params['blocked_flair_ids'] = tuple(blocked_flair_ids)
+
+    # Live views (app/community/live.py): only posts newer than the client's cursor, inside the window.
+    if newer_than is not None:
+        post_id_where.append('p.id > :live_after AND p.posted_at > :live_since ')
+        params['live_after'], params['live_since'] = newer_than
 
     # sorting
     post_id_sort = ''

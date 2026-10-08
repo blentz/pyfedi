@@ -385,6 +385,30 @@ class TestLiveFragment:
 
         assert codes[:12] == [204] * 12 and codes[12] == 429
 
+    def test_another_community_feed_has_its_own_budget(self, live):
+        from app import create_app, limiter
+        from tests.conftest import TestConfig
+
+        piefed_microblogs()
+
+        class LimitedConfig(TestConfig):
+            RATELIMIT_ENABLED = True
+
+        limited = create_app(LimitedConfig)
+        try:
+            with limited.app_context():
+                client = limited.test_client()
+                login(client, live.viewer)
+                limiter.reset()
+                local = [client.get(f'{FRAGMENT}?after=0').status_code for _ in range(13)]
+                remote = client.get('/community/microblogs@piefed.social/live/posts?after=0').status_code
+        finally:
+            limiter.reset()
+            limiter.enabled = False
+
+        assert 429 not in local[:12] and local[12] == 429
+        assert remote != 429
+
 
 class TestLivePage:
 

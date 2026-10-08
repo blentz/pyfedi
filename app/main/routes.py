@@ -96,13 +96,9 @@ def index(sort=None, view_filter=None):
                      tag=request.args.get('tag', ''))
 
 
-def home_page(sort, view_filter, page, result_id, low_bandwidth, tag):
-
-    page_length = 20 if low_bandwidth else current_app.config['PAGE_LENGTH']
-
-    if current_user.is_authenticated and current_user.page_length and current_user.page_length < page_length:
-        page_length = current_user.page_length
-
+def home_feed_source(view_filter: str):
+    """The communities a home tab draws from, for the current viewer, as get_deduped_post_ids
+    takes them: (community_ids, community_sql). Shared by the home page and its Live fragment."""
     # view filter - subscribed/local/all
     community_ids = [-1]
     low_quality_filter = 'AND c.low_quality is false' if current_user.is_authenticated and current_user.hide_low_quality else ''
@@ -113,14 +109,11 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag):
             private_communities = tuple([0, 0])
         else:
             private_communities = tuple(pc + [0])
-
-        ensure_rss_token(current_user)  # so a private rss feed can be generated
     else:
         modded_communities = []
         private_communities = ()
     if len(private_communities) == 0:
         private_communities = tuple([0, 0])
-    enable_mod_filter = len(modded_communities) > 0
 
     community_sql = None
     if view_filter == 'subscribed' and current_user.is_authenticated:
@@ -152,6 +145,23 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag):
         community_ids = modded_communities
 
     community_ids = list(community_ids)
+    return community_ids, community_sql
+
+
+def home_page(sort, view_filter, page, result_id, low_bandwidth, tag):
+
+    page_length = 20 if low_bandwidth else current_app.config['PAGE_LENGTH']
+
+    if current_user.is_authenticated and current_user.page_length and current_user.page_length < page_length:
+        page_length = current_user.page_length
+
+    if current_user.is_authenticated:
+        ensure_rss_token(current_user)  # so a private rss feed can be generated
+        modded_communities = moderating_communities_ids(current_user.id)
+    else:
+        modded_communities = []
+    enable_mod_filter = len(modded_communities) > 0
+    community_ids, community_sql = home_feed_source(view_filter)
 
     post_ids = get_deduped_post_ids(result_id, community_ids, sort, tag,
                                     include_following=view_filter == 'subscribed' and current_user.is_authenticated,

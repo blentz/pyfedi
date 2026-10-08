@@ -904,7 +904,7 @@ def show_community_ical(actor):
 
 @bp.route('/<actor>/live/posts', methods=['GET'])
 @login_required
-@limiter.limit('12/minute', key_func=lambda: f'live_posts:{current_user.id}')
+@limiter.limit('12/minute', key_func=lambda: f'live:{current_user.id}:community:{request.view_args["actor"]}')
 def live_posts_fragment(actor):
     """New teasers for the Live view, filtered for the current viewer. `after` is the newest
     Post.id the page already has. 204 when nothing is new. The client advances its cursor from
