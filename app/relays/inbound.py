@@ -11,7 +11,7 @@ from app.activitypub.util import (create_resolved_object, find_microblogging_com
 from app.constants import APLOG_ANNOUNCE, APLOG_FAILURE, APLOG_FOLLOW, APLOG_IGNORED, APLOG_NOTYPE, APLOG_SUCCESS
 from app.models import Community, Post, PostReply, Relay, utcnow
 from app.relays import RELAY_ACCEPTED, RELAY_PENDING, RELAY_REFUSED, relay_context
-from app.relays.subscribe import RelayError, detect_relay
+from app.relays import subscribe as relay_subscribe
 from app.utils import get_task_session, patch_db_session
 
 
@@ -46,8 +46,8 @@ def _verified_with_refetch(request, relay) -> bool:
     if not app_pkg.redis_client.set(f'relay-refetch:{relay.id}', 1, nx=True, ex=REFETCH_SECONDS):
         return False
     try:
-        fetched = detect_relay(relay.url)['public_key']
-    except RelayError:
+        fetched = relay_subscribe.detect_relay(relay.url)['public_key']
+    except relay_subscribe.RelayError:
         return False
     if not fetched or fetched == relay.public_key:
         return False

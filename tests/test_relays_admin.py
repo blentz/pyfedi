@@ -217,7 +217,7 @@ def run(app, monkeypatch):
 
 
 def test_cli_add_prints_the_state(run, monkeypatch):
-    monkeypatch.setattr(relay_cli, 'add_relay', lambda url: make_relay(url, RELAY_PENDING))
+    monkeypatch.setattr(relay_cli.relay_subscribe, 'add_relay', lambda url: make_relay(url, RELAY_PENDING))
 
     result = run('add', 'https://relay.example/inbox')
 
@@ -231,7 +231,7 @@ def test_cli_relay_error_exits_1(run, monkeypatch, name, args):
 
     def boom(*a):
         raise RelayError('nope, no relay there')
-    monkeypatch.setattr(relay_cli, name, boom)
+    monkeypatch.setattr(relay_cli.relay_subscribe, name, boom)
 
     result = run(*args)
 
@@ -249,8 +249,8 @@ def test_cli_list_prints_one_line_per_relay(run):
 
 def test_cli_retry_and_remove_by_url(run, monkeypatch):
     seen = []
-    monkeypatch.setattr(relay_cli, 'retry_relay', lambda relay: seen.append(('retry', relay.url)))
-    monkeypatch.setattr(relay_cli, 'remove_relay', lambda relay: seen.append(('remove', relay.url)))
+    monkeypatch.setattr(relay_cli.relay_subscribe, 'retry_relay', lambda relay: seen.append(('retry', relay.url)))
+    monkeypatch.setattr(relay_cli.relay_subscribe, 'remove_relay', lambda relay: seen.append(('remove', relay.url)))
     make_relay()
 
     retried = run('retry', 'https://relay.example/inbox')

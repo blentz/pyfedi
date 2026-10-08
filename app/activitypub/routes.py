@@ -36,7 +36,7 @@ from app.community.util import send_to_remote_instance, send_to_remote_instance_
 from app.discovery import SYNC_ACCEPTED, SYNC_REJECTED
 from app.discovery.instance_answers import instance_actor_answer, record_answer
 from app.relays import current_relay_id
-from app.relays.inbound import relay_actor_gate, relay_for_forwarded, relayed_activity_allowed
+from app.relays import inbound as relay_inbound
 from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
 from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
@@ -765,7 +765,7 @@ def shared_inbox():
         log_incoming_ap(id, APLOG_NOTYPE, APLOG_FAILURE, saved_json, 'Precheck failed: ' + str(e))
         return '', 400
 
-    answered = relay_actor_gate(request, request_json)   # after the precheck; relays (spec 2026-10-08): never a User row
+    answered = relay_inbound.relay_actor_gate(request, request_json)   # after the precheck; relays (spec 2026-10-08): never a User row
     if answered is not None:
         return answered
 
@@ -817,7 +817,7 @@ def shared_inbox():
             log_incoming_ap(id, APLOG_NOTYPE, APLOG_FAILURE, saved_json, 'Could not verify HTTP signature: ' + str(e))
             return '', 400
 
-    relay = relay_for_forwarded(request) if bounced else None   # relays: a Mastodon-style relay signs forwards
+    relay = relay_inbound.relay_for_forwarded(request) if bounced else None   # relays: a Mastodon-style relay signs forwards
 
     if actor.instance_id:
         actor.instance.last_seen = utcnow()
@@ -938,7 +938,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None):
             # although process_inbox_request uses session instead of db.session, many of the functions it calls, like find_actor_or_create_cached, do not which makes this necessary.
             with patch_db_session(session):
                 if relay_id is not None:   # relays: a forwarded activity is kept only when top-level and wanted
-                    allowed, reason = relayed_activity_allowed(request_json)
+                    allowed, reason = relay_inbound.relayed_activity_allowed(request_json)
                     if not allowed:
                         log_incoming_ap(request_json.get('id', ''), APLOG_NOTYPE, APLOG_IGNORED,
                                         request_json if store_ap_json else None, reason)

@@ -5,7 +5,7 @@ import click
 
 from app import db
 from app.models import Relay
-from app.relays.subscribe import RelayError, add_relay, remove_relay, retry_relay
+from app.relays import subscribe as relay_subscribe
 
 
 def register_relay_commands(app) -> None:
@@ -17,8 +17,8 @@ def register_relay_commands(app) -> None:
     @click.argument('url')
     def add(url):
         try:
-            relay = add_relay(url)
-        except RelayError as error:
+            relay = relay_subscribe.add_relay(url)
+        except relay_subscribe.RelayError as error:
             click.echo(str(error))
             sys.exit(1)
         click.echo(f'{relay.url}: {relay.style}, {relay.state}')
@@ -33,7 +33,7 @@ def register_relay_commands(app) -> None:
     @relays.command('remove')
     @click.argument('url')
     def remove(url):
-        remove_relay(_row(url))
+        relay_subscribe.remove_relay(_row(url))
         click.echo('removed')
 
     @relays.command('retry')
@@ -41,8 +41,8 @@ def register_relay_commands(app) -> None:
     def retry(url):
         relay = _row(url)
         try:
-            retry_relay(relay)
-        except RelayError as error:
+            relay_subscribe.retry_relay(relay)
+        except relay_subscribe.RelayError as error:
             click.echo(str(error))
             sys.exit(1)
         click.echo(f'{relay.url}: {relay.state}')
