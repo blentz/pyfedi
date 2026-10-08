@@ -21,7 +21,9 @@ Group to follow, so its servers have no equivalent.
 ## Goals
 
 `/c/microblogs@<host>` shows the microblog posts this instance holds whose author is on `<host>`,
-newest first, with every sort the community page has, Live included.
+newest first, with every sort the community page has, Live included. Its Live view is this
+instance's near real-time counterpart of that server's `/public/local` timeline, bounded by what the
+subscribed relays and other federation deliver. Nothing is fetched from the server to fill it.
 
 Success: with the infosec.exchange relay subscribed, a logged-in user opens
 `/c/microblogs@infosec.exchange?sort=live`. It lists only posts by infosec.exchange accounts, and a
