@@ -31,6 +31,7 @@ from app.activitypub.util import users_total, active_half_year, active_month, lo
     announce_target_uri, undo_boost
 # The module, not the name: app.community.routes reaches this file through
 # app.activitypub.signature before show_community is defined (U-circular-import)
+import app.community.live as community_live
 import app.community.routes as community_routes
 from app.community.util import send_to_remote_instance, send_to_remote_instance_fast
 from app.discovery import SYNC_ACCEPTED, SYNC_REJECTED
@@ -677,6 +678,11 @@ def community_profile(actor):
         else:  # browser request - return html
             return community_routes.show_community(community)
     else:
+        # A server view of the microblogs community (spec 2026-10-08). An ActivityPub request for an
+        # @ path was already refused with 400 above, so this only ever renders HTML.
+        server_view = community_live.microblog_server_view(actor) if '@' in actor else None
+        if server_view is not None:
+            return community_routes.show_community(find_microblogging_community(), from_instance=server_view)
         if is_activitypub_request():
             abort(404)
         elif current_user.is_authenticated and "@" in actor:

@@ -27,7 +27,7 @@ from app.community.forms import SearchRemoteCommunity, CreateDiscussionForm, Cre
     EscalateReportForm, ResolveReportForm, CreateVideoForm, CreatePollForm, EditCommunityWikiPageForm, \
     InviteCommunityForm, MoveCommunityForm, EditCommunityFlairForm, SetMyFlairForm, FindAndBanUserCommunityForm, \
     CreateEventForm, InviteAcceptForm, EditCommunityMembership, CommunityRssFeedEdit, DeleteCommunityRssFeedForm
-from app.community.live import is_live_community, live_available, live_posts
+from app.community.live import LIVE_COMMUNITY, is_live_community, is_local_microblogs, live_available, live_posts
 from app.community.util import search_for_community, actor_to_community, \
     save_icon_file, save_banner_file, \
     delete_post_from_community, delete_post_reply_from_community, \
@@ -291,18 +291,22 @@ def _make_community_results_datalist_html(community_name):
     return f'<option value="{escape(community_name)}"></option>'
 
 
-def community_post_query(community: Community, content_type: str, flair: str = '', tag: str = ''):
+def community_post_query(community: Community, content_type: str, flair: str = '', tag: str = '',
+                         from_instance=None):
     """The posts `community` shows the current viewer: listable, and filtered by that viewer's
     settings and blocks. Unsorted and unpaginated, sticky posts included; callers order and page it.
 
     Shared by the community page and its Live fragment, so the two can never disagree on what a
     viewer may see. Returns (query, content_filters).
+    from_instance limits it to posts by authors on that instance (a server view).
     """
     # No Post.private filter: private is the microblog marker (Post.new() sets it
     # for any titleless object), not a privacy flag -- non-public objects are
     # refused at ingest by create_post(). Filtering it here hid every microblog
     # from the community that carries them, e.g. /c/microblogs@piefed.social.
     posts = Post.query.filter(Post.community_id == community.id, listable_clause(Post))
+    if from_instance is not None:   # a server view: /c/microblogs@<host> (spec 2026-10-08)
+        posts = posts.filter(Post.instance_id == from_instance.id)
 
     if content_type == 'events':
         posts = posts.filter(Post.type == POST_TYPE_EVENT)
@@ -373,7 +377,7 @@ def community_post_query(community: Community, content_type: str, flair: str = '
 # @bp.route('/c/<actor>', methods=['GET']) - defined in activitypub/routes.py, which calls this function for user requests. A bit weird.
 @login_required_if_private_instance
 @check_anoobis
-def show_community(community: Community):
+def show_community(community: Community, from_instance=None):
     if community.banned:
         abort(404)
 
@@ -419,6 +423,10 @@ def show_community(community: Community):
     content_type = request.args.get('content_type', 'posts')
     flair = request.args.get('flair', '')
     tag = request.args.get('tag', '')
+    # A server view (/c/microblogs@<host>) is this community filtered to one author instance.
+    view_actor = f'{LIVE_COMMUNITY}@{from_instance.domain.lower()}' if from_instance is not None else None
+    if view_actor:
+        flair = tag = ''        # a server view offers neither filter
     if sort is None:
         sort = ''
     low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
@@ -437,7 +445,8 @@ def show_community(community: Community):
         post_layout = 'list'        # Live inserts teasers into a list; masonry cannot take them
 
     # If nothing has changed since their last visit, return HTTP 304
-    current_etag = f"{community.id}{sort}{post_layout}_{hash(community.last_active)}"
+    current_etag = (f"{community.id}{'@' + str(from_instance.id) if from_instance is not None else ''}"
+                    f"{sort}{post_layout}_{hash(community.last_active)}")
     if current_user.is_anonymous and request_etag_matches(current_etag):
         return return_304(current_etag)
 
@@ -491,7 +500,7 @@ def show_community(community: Community):
     posts = None
     comments = None
     if content_type == 'posts' or content_type == 'events':
-        posts, content_filters = community_post_query(community, content_type, flair, tag)
+        posts, content_filters = community_post_query(community, content_type, flair, tag, from_instance=from_instance)
         user = None if current_user.is_anonymous else current_user
 
 
@@ -708,22 +717,23 @@ def show_community(community: Community):
     description = shorten_string(community.description, 150) if community.description else None
     og_image = community.image.source_url if community.image_id else None
 
+    page_actor = view_actor or (community.ap_id if community.ap_id is not None else community.name)
     if content_type == 'posts' or content_type == 'events':
         next_url = url_for('activitypub.community_profile',
-                           actor=community.ap_id if community.ap_id is not None else community.name,
+                           actor=page_actor,
                            page=posts.next_num, sort='new' if live else sort, layout=post_layout,
                            content_type=content_type) if posts.has_next else None
         prev_url = url_for('activitypub.community_profile',
-                           actor=community.ap_id if community.ap_id is not None else community.name,
+                           actor=page_actor,
                            page=posts.prev_num, sort=sort, layout=post_layout,
                            content_type=content_type) if posts.has_prev and page != 1 else None
     else:
         next_url = url_for('activitypub.community_profile',
-                           actor=community.ap_id if community.ap_id is not None else community.name,
+                           actor=page_actor,
                            page=comments.next_num, sort=sort, layout=post_layout,
                            content_type=content_type) if comments.has_next else None
         prev_url = url_for('activitypub.community_profile',
-                           actor=community.ap_id if community.ap_id is not None else community.name,
+                           actor=page_actor,
                            page=comments.prev_num, sort=sort, layout=post_layout,
                            content_type=content_type) if comments.has_prev and page != 1 else None
 
@@ -746,7 +756,7 @@ def show_community(community: Community):
     else:
         is_dead = False
 
-    resp = make_response(render_template('community/community.html', community=community, title=community.title,
+    resp = make_response(render_template('community/community.html', community=community, title=view_actor or community.title,
                                          breadcrumbs=breadcrumbs, is_dead=is_dead,
                                          is_moderator=is_moderator, is_owner=is_owner, is_admin=is_admin, mods=mod_list, posts=posts,
                                          comments=comments, upcoming_events=upcoming_events, has_events=has_events,
@@ -756,10 +766,10 @@ def show_community(community: Community):
                                          SUBSCRIPTION_PENDING=SUBSCRIPTION_PENDING,
                                          SUBSCRIPTION_MEMBER=SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER=SUBSCRIPTION_OWNER,
                                          SUBSCRIPTION_MODERATOR=SUBSCRIPTION_MODERATOR,
-                                         etag=f"{community.id}{sort}{post_layout}_{hash(community.last_active)}",
+                                         etag=current_etag,
                                          related_communities=related_communities,
                                          next_url=next_url, prev_url=prev_url, low_bandwidth=low_bandwidth, un_moderated=un_moderated,
-                                         community_flair=shared_community.get_comm_flair_list(community),
+                                         community_flair=[] if view_actor else shared_community.get_comm_flair_list(community),
                                          recently_upvoted=recently_upvoted, recently_downvoted=recently_downvoted,
                                          community_feeds=community_feeds,
                                          live=live,
@@ -771,7 +781,9 @@ def show_community(community: Community):
                                          rss_feed=f"{current_app.config['SERVER_URL']}/community/{community.link()}/feed",
                                          rss_feed_name=f"{community.title} on {g.site.name}",
                                          content_filters=content_filters, sort=sort, flair=flair, show_post_community=False,
-                                         tags=hashtags_used_in_community(community.id, content_filters),
+                                         tags=[] if view_actor else hashtags_used_in_community(community.id, content_filters),
+                                         view_actor=view_actor,
+                                         live_sse_feed=f'instance:{from_instance.id}' if from_instance is not None else f'community:{community.id}',
                                          reported_posts=reported_posts(current_user.get_id(), current_user.get_id() in g.admin_ids),
                                          user_notes=user_notes(current_user.get_id()), banned_from_community=banned_from_community,
                                          moderated_community_ids=moderating_communities_ids(current_user.get_id()),
@@ -780,7 +792,7 @@ def show_community(community: Community):
                                          user_has_feeds=user_has_feeds, current_feed_id=current_feed_id,
                                          current_feed_title=current_feed_title, user_flair=user_flair, sticky_posts=sticky_posts))
     if current_user.is_anonymous:
-        resp.headers.set('ETag', f"{community.id}{sort}{post_layout}_{hash(community.last_active)}")
+        resp.headers.set('ETag', current_etag)
         resp.headers.set('Vary', 'Accept, Accept-Language')
         resp.headers.set('Cache-Control', 'public, max-age=30')
     else:
