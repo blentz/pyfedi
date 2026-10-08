@@ -779,7 +779,7 @@ def show_community(community: Community, from_instance=None):
                                          user_pronouns=user_pronouns(), hide_community_actions=community.name == 'microblogs',
                                          canonical=community.profile_id(), can_upvote_here=can_upvote(user, community),
                                          can_downvote_here=can_downvote(user, community),
-                                         rss_feed=f"{current_app.config['SERVER_URL']}/community/{community.link()}/feed",
+                                         rss_feed=None if view_actor else f"{current_app.config['SERVER_URL']}/community/{community.link()}/feed",
                                          rss_feed_name=f"{community.title} on {g.site.name}",
                                          content_filters=content_filters, sort=sort, flair=flair, show_post_community=False,
                                          tags=[] if view_actor else hashtags_used_in_community(community.id, content_filters),
