@@ -177,8 +177,27 @@ class TestAnnounceLivePost:
 
     @pytest.fixture
     def published(self, app, monkeypatch):
-        calls = []
-        monkeypatch.setattr('app.utils.publish_sse_event', lambda key, value: calls.append((key, value)))
+        class Calls(list):
+            connections = []
+
+        calls = Calls()
+        connections = calls.connections
+
+        class Pipeline:
+            def publish(self, channel, data):
+                calls.append((channel, data))
+
+            def execute(self):
+                calls.append('execute')
+
+        class Connection:
+            def __init__(self):
+                connections.append(self)
+
+            def pipeline(self):
+                return Pipeline()
+
+        monkeypatch.setattr('app.utils.get_redis_connection', Connection)
         monkeypatch.setitem(app.config, 'NOTIF_SERVER', 'https://notifs.example')
         return calls
 
@@ -188,7 +207,8 @@ class TestAnnounceLivePost:
         with app.test_request_context():
             announce_live_post(live.toot(), live.microblogs, backfill=False)
 
-        assert published == [('live:any', '{}'), (f'live:community:{live.microblogs.id}', '{}')]
+        assert published == [('live:any', '{}'), (f'live:community:{live.microblogs.id}', '{}'), 'execute']
+        assert len(published.connections) == 1
 
     def test_a_backfilled_post_does_not(self, app, live, published):
         from app.community.live import announce_live_post
@@ -208,7 +228,8 @@ class TestAnnounceLivePost:
         with app.test_request_context():
             announce_live_post(post, general, backfill=False)
 
-        assert published == [('live:any', '{}'), ('live:local', '{}')]
+        assert published == [('live:any', '{}'), ('live:local', '{}'), 'execute']
+        assert len(published.connections) == 1
 
     @pytest.mark.parametrize('columns', [
         {'status': POST_STATUS_REVIEWING},
@@ -235,9 +256,15 @@ class TestAnnounceLivePost:
     def test_a_redis_failure_is_logged_not_raised(self, app, live, monkeypatch, caplog):
         from app.community.live import announce_live_post
 
-        def broken(key, value):
-            raise ConnectionError('redis is down')
-        monkeypatch.setattr('app.utils.publish_sse_event', broken)
+        class Pipeline:
+            def publish(self, channel, data):
+                pass
+
+            def execute(self):
+                raise ConnectionError('redis is down')
+
+        monkeypatch.setattr('app.utils.get_redis_connection',
+                            lambda: type('Connection', (), {'pipeline': lambda self: Pipeline()})())
         monkeypatch.setitem(app.config, 'NOTIF_SERVER', 'https://notifs.example')
         with app.test_request_context():
             announce_live_post(live.toot(), live.microblogs, backfill=False)
