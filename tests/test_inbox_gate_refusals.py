@@ -648,7 +648,7 @@ def test_a_repeated_activity_is_suppressed(app, signing_peer, monkeypatch, redis
     monkeypatch.setitem(app.config, 'DEBUG', True)
     dispatched = []
     monkeypatch.setattr('app.activitypub.routes.process_inbox_request',
-                        lambda *args: dispatched.append(args))
+                        lambda *args, **kwargs: dispatched.append(args))
     activity = inbox_activity(signing_peer)
 
     with app.test_client() as client:

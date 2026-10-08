@@ -25,9 +25,13 @@ def _verified(request, relay) -> bool:
 REFETCH_SECONDS = 300
 
 
+def _key_owner(request) -> str:
+    """The actor a request's signature keyId belongs to (the keyId without its fragment)."""
+    return parse_signature_header(request.headers.get('Signature')).get('keyid', '').split('#')[0]
+
+
 def _names_the_relay_actor(request, relay) -> bool:
-    key_id = parse_signature_header(request.headers.get('Signature')).get('keyid', '')
-    return key_id.split('#')[0] == relay.actor_id
+    return _key_owner(request) == relay.actor_id
 
 
 def _verified_with_refetch(request, relay) -> bool:
@@ -48,6 +52,18 @@ def _verified_with_refetch(request, relay) -> bool:
     relay.public_key = fetched
     db.session.commit()
     return _verified(request, relay)
+
+
+def relay_for_forwarded(request):
+    """The accepted relay that HTTP-signed this request on behalf of the activity's author (Mastodon style)."""
+    owner = _key_owner(request)
+    if not owner:
+        return None
+    relay = db.session.query(Relay).filter(Relay.actor_id == owner, Relay.state == RELAY_ACCEPTED,
+                                           Relay.public_key.isnot(None)).first()
+    if relay is None or not _verified(request, relay):
+        return None
+    return relay
 
 
 def _answered_follow_id(activity):

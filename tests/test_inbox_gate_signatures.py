@@ -218,7 +218,7 @@ def test_a_genuinely_signed_activity_is_accepted(app, signing_peer, monkeypatch)
     """
     dispatched = []
     monkeypatch.setattr('app.activitypub.routes.process_inbox_request',
-                        lambda *args: dispatched.append(args))
+                        lambda *args, **kwargs: dispatched.append(args))
     monkeypatch.setitem(app.config, 'DEBUG', True)
 
     with app.test_client() as client:
