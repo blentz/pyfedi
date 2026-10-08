@@ -1,0 +1,146 @@
+"""Subscribing to relays (spec: Subscribing)."""
+import pytest
+
+from app import db
+from app.models import Relay
+from app.relays import (PUBLIC, RELAY_ACCEPTED, RELAY_FAILED, RELAY_PENDING, RELAY_REFUSED, STYLE_LITEPUB,
+                        STYLE_MASTODON)
+from app.relays import subscribe
+from app.relays.refusals import record_relay_refusal
+
+pytestmark = pytest.mark.usefixtures('site')
+
+ACTOR = {'id': 'https://relay.example/actor', 'type': 'Application', 'inbox': 'https://relay.example/inbox',
+         'publicKey': {'id': 'https://relay.example/actor#main-key', 'publicKeyPem': 'PEM'}}
+TAG = {'id': 'https://relay.fedi.buzz/tag/cats', 'type': 'Service', 'inbox': 'https://relay.fedi.buzz/tag/cats/inbox',
+       'publicKey': {'id': 'https://relay.fedi.buzz/tag/cats#key', 'publicKeyPem': 'TAGPEM'}}
+
+
+@pytest.fixture
+def net(monkeypatch):
+    calls = {'get': [], 'post': []}
+    documents = {}
+
+    def fake_get(uri):
+        calls['get'].append(uri)
+        return documents.get(uri)
+
+    def fake_post(uri, body, private_key, key_id, **kwargs):
+        calls['post'].append((uri, body, key_id))
+        return True
+
+    monkeypatch.setattr(subscribe, 'remote_object_to_json', fake_get)
+    monkeypatch.setattr(subscribe, 'send_post_request', fake_post)
+    calls['documents'] = documents
+    return calls
+
+
+class TestDetect:
+
+    def test_an_inbox_url_is_mastodon_style_and_its_actor_is_looked_up(self, app, net):
+        net['documents']['https://relay.example/actor'] = ACTOR
+        with app.test_request_context():
+            found = subscribe.detect_relay('https://relay.example/inbox')
+        assert found == {'style': STYLE_MASTODON, 'inbox_url': 'https://relay.example/inbox',
+                         'actor_id': 'https://relay.example/actor', 'public_key': 'PEM'}
+
+    def test_a_mastodon_relay_whose_actor_cannot_be_fetched_has_no_key(self, app, net):
+        with app.test_request_context():
+            found = subscribe.detect_relay('https://relay.example/inbox')
+        assert found['actor_id'] is None and found['public_key'] is None
+
+    def test_a_fedibuzz_tag_url_is_litepub_style(self, app, net):
+        net['documents']['https://relay.fedi.buzz/tag/cats'] = TAG
+        with app.test_request_context():
+            found = subscribe.detect_relay('https://relay.fedi.buzz/tag/cats')
+        assert found == {'style': STYLE_LITEPUB, 'inbox_url': 'https://relay.fedi.buzz/tag/cats/inbox',
+                         'actor_id': 'https://relay.fedi.buzz/tag/cats', 'public_key': 'TAGPEM'}
+
+    @pytest.mark.parametrize('document', [None, {'id': 'https://x.example/a'}])
+    def test_a_litepub_url_without_a_usable_actor_is_refused(self, app, net, document):
+        net['documents']['https://x.example/a'] = document
+        with app.test_request_context(), pytest.raises(subscribe.RelayError):
+            subscribe.detect_relay('https://x.example/a')
+
+
+class TestFollow:
+
+    def test_add_stores_a_pending_row_and_follows_public_for_mastodon(self, app, net):
+        net['documents']['https://relay.example/actor'] = ACTOR
+        with app.test_request_context():
+            relay = subscribe.add_relay('https://relay.example/inbox')
+        uri, body, key_id = net['post'][-1]
+        assert relay.state == RELAY_PENDING
+        assert uri == 'https://relay.example/inbox'
+        assert body['type'] == 'Follow' and body['object'] == PUBLIC and body['to'] == [PUBLIC]
+        assert body['actor'].endswith('/actor') and key_id.endswith('/actor#main-key')
+        assert body['id'] == relay.follow_activity_id and '/activities/relay-follow/' in body['id']
+
+    def test_a_litepub_follow_names_the_relay_actor(self, app, net):
+        net['documents']['https://relay.fedi.buzz/tag/cats'] = TAG
+        with app.test_request_context():
+            subscribe.add_relay('https://relay.fedi.buzz/tag/cats')
+        assert net['post'][-1][1]['object'] == 'https://relay.fedi.buzz/tag/cats'
+
+    def test_adding_the_same_url_twice_is_refused(self, app, net):
+        net['documents']['https://relay.example/actor'] = ACTOR
+        with app.test_request_context():
+            subscribe.add_relay('https://relay.example/inbox')
+            with pytest.raises(subscribe.RelayError):
+                subscribe.add_relay('https://relay.example/inbox')
+
+    def test_retry_sends_a_new_follow_id_and_goes_back_to_pending(self, app, net):
+        net['documents']['https://relay.example/actor'] = ACTOR
+        with app.test_request_context():
+            relay = subscribe.add_relay('https://relay.example/inbox')
+            first = relay.follow_activity_id
+            relay.state = RELAY_REFUSED
+            db.session.commit()
+            subscribe.retry_relay(relay)
+        assert relay.state == RELAY_PENDING and relay.follow_activity_id != first
+
+    def test_remove_sends_undo_and_deletes(self, app, net):
+        net['documents']['https://relay.example/actor'] = ACTOR
+        with app.test_request_context():
+            relay = subscribe.add_relay('https://relay.example/inbox')
+            follow = subscribe.relay_follow_activity(relay)
+            subscribe.remove_relay(relay)
+        undo = net['post'][-1][1]
+        assert undo['type'] == 'Undo' and undo['object'] == follow
+        assert Relay.query.count() == 0
+
+    def test_remove_still_deletes_when_the_undo_cannot_be_sent(self, app, net, monkeypatch):
+        net['documents']['https://relay.example/actor'] = ACTOR
+        with app.test_request_context():
+            relay = subscribe.add_relay('https://relay.example/inbox')
+
+            def broken(*args, **kwargs):
+                raise OSError('down')
+            monkeypatch.setattr(subscribe, 'send_post_request', broken)
+            subscribe.remove_relay(relay)
+        assert Relay.query.count() == 0
+
+
+class TestRefusal:
+
+    @pytest.mark.parametrize('status, expected', [(403, RELAY_FAILED), (500, RELAY_PENDING)])
+    def test_a_definitive_refusal_marks_the_row_failed(self, app, net, status, expected):
+        net['documents']['https://relay.example/actor'] = ACTOR
+        with app.test_request_context():
+            relay = subscribe.add_relay('https://relay.example/inbox')
+            record_relay_refusal(db.session, subscribe.relay_follow_activity(relay), status)
+        assert relay.state == expected
+
+    def test_an_accepted_relay_is_not_failed_by_a_late_refusal(self, app, net):
+        net['documents']['https://relay.example/actor'] = ACTOR
+        with app.test_request_context():
+            relay = subscribe.add_relay('https://relay.example/inbox')
+            relay.state = RELAY_ACCEPTED
+            db.session.commit()
+            record_relay_refusal(db.session, subscribe.relay_follow_activity(relay), 403)
+        assert relay.state == RELAY_ACCEPTED
+
+    @pytest.mark.parametrize('body', [None, {'type': 'Create'}, {'type': 'Follow', 'id': 'https://elsewhere/x'}])
+    def test_other_bodies_are_ignored(self, app, body):
+        with app.test_request_context():
+            record_relay_refusal(db.session, body, 403)
