@@ -52,14 +52,14 @@ class TestDeletion:
 
     def test_an_old_unengaged_relayed_post_is_purged(self, app, world):
         post_id = old_relayed(world)
-        assert expiry.expire_relayed_posts() == {'deleted': 1, 'kept': 0}
+        assert expiry.expire_relayed_posts() == {'deleted': 1, 'kept': 0, 'failed': 0}
         assert not present(post_id)
 
     def test_a_vote_from_a_remote_user_does_not_keep_it(self, app, world):
         post_id = old_relayed(world)
         db.session.add(PostVote(user_id=world['remote'].id, author_id=world['author'].id, post_id=post_id, effect=1))
         db.session.commit()
-        assert expiry.expire_relayed_posts() == {'deleted': 1, 'kept': 0}
+        assert expiry.expire_relayed_posts() == {'deleted': 1, 'kept': 0, 'failed': 0}
         assert not present(post_id)
 
     def test_a_follow_of_another_author_does_not_keep_it(self, app, world):
@@ -67,20 +67,20 @@ class TestDeletion:
         db.session.add(UserFollower(local_user_id=world['local'].id, remote_user_id=world['remote'].id,
                                     is_accepted=True, is_inward=False))
         db.session.commit()
-        assert expiry.expire_relayed_posts() == {'deleted': 1, 'kept': 0}
+        assert expiry.expire_relayed_posts() == {'deleted': 1, 'kept': 0, 'failed': 0}
         assert not present(post_id)
 
     def test_a_remote_member_of_another_community_does_not_keep_it(self, app, world):
         other = make_community('elsewhere')
         make_community_member(world['remote'], other)
         post_id = old_relayed(world, community=other)
-        assert expiry.expire_relayed_posts() == {'deleted': 1, 'kept': 0}
+        assert expiry.expire_relayed_posts() == {'deleted': 1, 'kept': 0, 'failed': 0}
         assert not present(post_id)
 
     def test_a_local_member_of_the_microblogs_community_does_not_keep_it(self, app, world):
         make_community_member(world['local'], world['community'])
         post_id = old_relayed(world)
-        assert expiry.expire_relayed_posts() == {'deleted': 1, 'kept': 0}
+        assert expiry.expire_relayed_posts() == {'deleted': 1, 'kept': 0, 'failed': 0}
         assert not present(post_id)
 
 
@@ -90,27 +90,27 @@ class TestKept:
         post_id = old_relayed(world)
         db.session.add(PostVote(user_id=world['local'].id, author_id=world['author'].id, post_id=post_id, effect=1))
         db.session.commit()
-        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 1}
+        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 1, 'failed': 0}
         assert present(post_id)
 
     def test_a_local_reply_keeps_it(self, app, world):
         post_id = old_relayed(world)
         make_post_reply(db.session.get(Post, post_id), world['local'])
-        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 1}
+        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 1, 'failed': 0}
         assert present(post_id)
 
     def test_a_bookmark_keeps_it(self, app, world):
         post_id = old_relayed(world)
         db.session.add(PostBookmark(user_id=world['local'].id, post_id=post_id))
         db.session.commit()
-        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 1}
+        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 1, 'failed': 0}
         assert present(post_id)
 
     def test_a_report_keeps_it(self, app, world):
         post_id = old_relayed(world)
         db.session.add(Report(reasons='spam', type=1, reporter_id=world['local'].id, suspect_post_id=post_id))
         db.session.commit()
-        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 1}
+        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 1, 'failed': 0}
         assert present(post_id)
 
     def test_an_author_a_local_user_follows_keeps_it(self, app, world):
@@ -118,24 +118,24 @@ class TestKept:
         db.session.add(UserFollower(local_user_id=world['local'].id, remote_user_id=world['author'].id,
                                     is_accepted=True, is_inward=False))
         db.session.commit()
-        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 1}
+        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 1, 'failed': 0}
         assert present(post_id)
 
     def test_a_post_in_a_community_with_a_local_member_keeps_it(self, app, world):
         other = make_community('cats')
         make_community_member(world['local'], other)
         post_id = old_relayed(world, community=other)
-        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 1}
+        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 1, 'failed': 0}
         assert present(post_id)
 
     def test_a_sticky_post_is_kept(self, app, world):
         post_id = old_relayed(world, sticky=True)
-        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 1}
+        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 1, 'failed': 0}
         assert present(post_id)
 
     def test_a_post_under_review_is_kept(self, app, world):
         post_id = old_relayed(world, status=POST_STATUS_REVIEWING)
-        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 1}
+        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 1, 'failed': 0}
         assert present(post_id)
 
 
@@ -143,12 +143,12 @@ class TestNotSelected:
 
     def test_a_post_younger_than_the_retention_period_is_left(self, app, world):
         post_id = old_relayed(world, days=6)
-        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 0}
+        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 0, 'failed': 0}
         assert present(post_id)
 
     def test_a_non_relayed_old_post_is_left(self, app, world):
         post_id = old_relayed(world, relayed=False)
-        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 0}
+        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 0, 'failed': 0}
         assert present(post_id)
 
     def test_a_post_whose_relay_was_deleted_is_left(self, app, world):
@@ -156,7 +156,7 @@ class TestNotSelected:
         db.session.delete(world['relay'])
         db.session.commit()
         assert db.session.get(Post, post_id).relay_id is None
-        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 0}
+        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 0, 'failed': 0}
         assert present(post_id)
 
 
@@ -170,14 +170,14 @@ class TestSettingAndCap:
         db.session.commit()
         post_id = old_relayed(world, days=4)
         assert expiry.relay_retention_days() == 3
-        assert expiry.expire_relayed_posts() == {'deleted': 1, 'kept': 0}
+        assert expiry.expire_relayed_posts() == {'deleted': 1, 'kept': 0, 'failed': 0}
         assert not present(post_id)
 
     def test_zero_retention_deletes_nothing(self, app, world):
         db.session.add(Settings(name='relay_retention_days', value='0'))
         db.session.commit()
         post_id = old_relayed(world)
-        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 0}
+        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 0, 'failed': 0}
         assert present(post_id)
 
     def test_one_run_deletes_no_more_than_the_cap_in_batches(self, app, world, monkeypatch):
@@ -190,15 +190,28 @@ class TestSettingAndCap:
 
 class TestFailure:
 
-    def test_an_error_rolls_back_and_is_raised(self, app, world, monkeypatch):
-        old_relayed(world)
+    def test_one_failing_post_does_not_stop_the_others(self, app, world, monkeypatch):
+        ids = [old_relayed(world) for _ in range(3)]
+        real = Post.delete_dependencies
 
-        def boom(self):
-            raise RuntimeError('boom')
+        def selective(self, *a, **k):
+            if self.id == ids[1]:
+                raise RuntimeError('boom')
+            return real(self, *a, **k)
 
-        monkeypatch.setattr(Post, 'delete_dependencies', boom)
-        with pytest.raises(RuntimeError):
+        monkeypatch.setattr(Post, 'delete_dependencies', selective)
+        assert expiry.expire_relayed_posts() == {'deleted': 2, 'kept': 0, 'failed': 1}
+        assert [present(i) for i in ids] == [False, True, False]
+
+    def test_a_failure_outside_a_single_post_is_raised(self, app, world, monkeypatch):
+        monkeypatch.setattr(expiry, '_kept_clause', lambda: 1 / 0)
+        with pytest.raises(ZeroDivisionError):
             expiry.expire_relayed_posts()
+
+    def test_a_non_integer_retention_setting_means_seven_days(self, app, world):
+        db.session.add(Settings(name='relay_retention_days', value='"soon"'))
+        db.session.commit()
+        assert expiry.relay_retention_days() == 7
 
 
 class TestDailyMaintenance:
