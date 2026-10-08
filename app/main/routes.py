@@ -28,6 +28,7 @@ from app.constants import SUBSCRIPTION_PENDING, SUBSCRIPTION_MEMBER, SUBSCRIPTIO
     POST_STATUS_REVIEWING
 from app.email import send_email, send_registration_approved_email
 from app.inoculation import inoculation
+from app.community.live import HOME_LIVE_FILTERS, LIVE_LIMIT, LIVE_WINDOW
 from app.main import bp
 from flask import g, flash, request, current_app, url_for, redirect, make_response, jsonify, send_file, abort
 from flask_login import current_user
@@ -94,6 +95,40 @@ def index(sort=None, view_filter=None):
                      result_id=request.args.get('result_id', gibberish(15)) if current_user.is_authenticated else None,
                      low_bandwidth=request.cookies.get('low_bandwidth', '0') == '1',
                      tag=request.args.get('tag', ''))
+
+
+@bp.route('/home/live_posts/<view_filter>', methods=['GET'])
+@login_required
+@limiter.limit('12/minute', key_func=lambda: f'live:{current_user.id}:{request.view_args["view_filter"]}')
+def home_live_posts(view_filter):
+    """New teasers for a home tab's Live view, filtered for the viewer exactly as the tab is.
+    204 when nothing is new; the client advances its cursor from X-Live-Cursor."""
+    if view_filter not in HOME_LIVE_FILTERS:
+        abort(404)
+    after = request.args.get('after', type=int)
+    if after is None:
+        abort(400)
+
+    community_ids, community_sql = home_feed_source(view_filter)
+    post_ids = get_deduped_post_ids('', community_ids, 'new', include_following=view_filter == 'subscribed',
+                                    community_sql=community_sql,
+                                    newer_than=(after, utcnow() - LIVE_WINDOW))[:LIVE_LIMIT]
+    if not post_ids:
+        return '', 204
+
+    user_id = current_user.get_id()
+    response = make_response(render_template(
+        'community/_live_posts.html', posts=post_ids_to_models(post_ids, 'new'), sort='new',
+        show_post_community=True, low_bandwidth=request.cookies.get('low_bandwidth', '0') == '1',
+        content_filters=user_filters_home(current_user.id),
+        recently_upvoted=recently_upvoted_posts(current_user.id),
+        recently_downvoted=recently_downvoted_posts(current_user.id),
+        communities_banned_from_list=communities_banned_from(current_user.id),
+        reported_posts=reported_posts(user_id, user_id in g.admin_ids), user_notes=user_notes(user_id),
+        joined_communities=joined_or_modding_communities(user_id),
+        moderated_community_ids=moderating_communities_ids(user_id), user_pronouns=user_pronouns()))
+    response.headers['X-Live-Cursor'] = str(max(post_ids))
+    return response
 
 
 def home_feed_source(view_filter: str):
