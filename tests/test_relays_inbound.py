@@ -9,7 +9,7 @@ import app as app_pkg
 from app import db
 from app.activitypub.signature import VerificationError
 from app.constants import ALLOWLIST_STRONG, APLOG_FAILURE, APLOG_IGNORED, APLOG_SUCCESS
-from app.models import BannedInstances, Community, Post, PostReply, Relay, Site, User
+from app.models import BannedInstances, Community, Post, PostReply, Relay, Site, User, utcnow
 from app.relays import RELAY_ACCEPTED, RELAY_PENDING, RELAY_REFUSED, STYLE_LITEPUB, STYLE_MASTODON
 from app.relays import inbound
 from tests.factories import (a_keypair, make_community_ban, make_instance_ban, make_community, make_instance, make_post, make_post_reply, make_user,
@@ -404,6 +404,27 @@ class TestProcessRelayedAnnounce:
         inbound.process_relayed_announce(relay.id, NOTE_URI)
         assert Post.query.count() == 0
 
+    def test_the_post_is_created_with_no_announce_id(self, app, fetch, logged, alice):
+        relay = make_relay(state=RELAY_ACCEPTED)
+        fetch.result = note()
+        inbound.process_relayed_announce(relay.id, NOTE_URI)
+        assert Post.query.filter_by(ap_id=NOTE_URI).one().ap_announce_id is None
+
+    def test_an_object_whose_canonical_id_is_already_stored_is_left_alone(self, app, fetch, logged, alice):
+        relay = make_relay(state=RELAY_ACCEPTED)
+        existing = make_post(make_community(), alice, 'https://other.example/notes/canonical')
+        fetch.result = note(uri='https://other.example/notes/canonical')
+        inbound.process_relayed_announce(relay.id, 'https://other.example/@alice/1')
+        db.session.refresh(existing)
+        assert Post.query.count() == 1 and existing.relay_id is None
+
+    def test_a_refused_creation_is_logged(self, app, fetch, logged, alice, monkeypatch):
+        relay = make_relay(state=RELAY_ACCEPTED)
+        fetch.result = note()
+        monkeypatch.setattr(inbound, 'create_resolved_object', lambda *args: None)
+        inbound.process_relayed_announce(relay.id, NOTE_URI)
+        assert logged[-1] == (inbound.APLOG_ANNOUNCE, inbound.APLOG_IGNORED, 'relayed object was refused')
+
     def test_an_existing_post_is_left_alone(self, app, fetch, logged, alice):
         relay = make_relay(state=RELAY_ACCEPTED)
         existing = make_post(make_community(), alice, NOTE_URI)
@@ -562,6 +583,13 @@ class TestRelayedObjectAllowed:
 
     def test_an_unknown_audience_is_refused(self, app):
         allowed, reason = inbound.relayed_object_allowed({'audience': 'https://other.example/c/none'})
+        assert not allowed and 'community' in reason
+
+    def test_an_audience_that_is_a_deleted_community_is_refused(self, app, alice):
+        community = make_community('gone')
+        community.ap_deleted_at = utcnow()
+        db.session.commit()
+        allowed, reason = inbound.relayed_object_allowed({'audience': community.ap_profile_id})
         assert not allowed and 'community' in reason
 
     def test_a_reply_to_a_stored_post_is_allowed(self, app, alice):

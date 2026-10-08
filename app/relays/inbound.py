@@ -121,14 +121,15 @@ def relay_actor_gate(request, request_json):
 
 
 def _exists(ap_id) -> bool:
-    return bool(Post.get_by_ap_id(ap_id) or PostReply.get_by_ap_id(ap_id))
+    return isinstance(ap_id, str) and bool(Post.get_by_ap_id(ap_id) or PostReply.get_by_ap_id(ap_id))
 
 
 def _target_community(post_data):
     """The known community a relayed object is addressed to, else None."""
     audience = post_data.get('audience')
     if isinstance(audience, str) and audience:
-        return db.session.query(Community).filter(func.lower(Community.ap_profile_id) == audience.lower()).first()
+        return db.session.query(Community).filter(func.lower(Community.ap_profile_id) == audience.lower(),
+                                                   Community.ap_deleted_at.is_(None)).first()
     return None
 
 
@@ -203,8 +204,13 @@ def process_relayed_announce(relay_id, object_uri):
             parent = _reply_parent(post_data)
             community = (parent.community if parent is not None else
                          _target_community(post_data) or find_microblogging_community())
+            if _exists(post_data.get('id')):   # a relay may announce a URL that differs from the canonical id
+                return
             with relay_context(relay_id):
-                create_resolved_object(object_uri, post_data, host_of(object_uri), community, object_uri, False)
+                # no announce id: it would become post.ap_announce_id and be re-emitted in outboxes
+                created = create_resolved_object(object_uri, post_data, host_of(object_uri), community, None, False)
+            if created is None:
+                log_incoming_ap(object_uri, APLOG_ANNOUNCE, APLOG_IGNORED, None, 'relayed object was refused')
     except Exception:
         session.rollback()
         raise
