@@ -1,5 +1,4 @@
 """Home Live (spec Amendment A): the home feed source, the newer-than cursor, the fragment and the page."""
-import pathlib
 import re
 from datetime import timedelta
 from types import SimpleNamespace
@@ -189,9 +188,10 @@ class TestHomeLivePage:
     def test_no_live_entry_for_anonymous(self, home):
         assert '/home/live/' not in home.client.get('/home/new/all').get_data(as_text=True)
 
-    @pytest.mark.parametrize('view_filter, key', [
-        ('subscribed', 'any'), ('local', 'local'), ('popular', 'popular'), ('media', 'media'), ('all', 'any')])
-    def test_the_live_page_carries_the_client_contract(self, app, home, monkeypatch, view_filter, key):
+    @pytest.mark.parametrize('view_filter, key, has_cursor', [
+        ('subscribed', 'any', True), ('local', 'local', True), ('popular', 'popular', True),
+        ('media', 'media', False), ('all', 'any', True)])
+    def test_the_live_page_carries_the_client_contract(self, app, home, monkeypatch, view_filter, key, has_cursor):
         monkeypatch.setitem(app.config, 'NOTIF_SERVER', 'https://notifs.example')
         post = home.post()
         login(home.client, home.reader)
@@ -203,8 +203,7 @@ class TestHomeLivePage:
         assert f'data-sse-url="https://notifs.example/live/stream?feed={key}"' in html
         assert 'id="live_status"' in html and 'id="live_pill"' in html and 'js/live_feed.js' in html
         assert 'id="auto-reload"' not in html
-        if view_filter in ('local', 'popular', 'all', 'subscribed'):
-            assert f'data-cursor="{post.id}"' in html
+        assert f'data-cursor="{post.id if has_cursor else 0}"' in html  # the fixture post is not a media post
 
     def test_no_instance_stickies_in_live(self, home):
         sticky = home.post(instance_sticky=True)
@@ -237,9 +236,11 @@ class TestHomeLivePage:
 
         assert 'Older posts' in html and '/home/new/all?page=1' in html
 
-    def test_the_community_page_still_renders_the_shared_live_bar(self, app):
-        # The community page includes _live_bar.html; tests/test_microblog_live.py's
-        # TestLivePage already asserts its ids. This test only pins that both pages use the include.
-        templates = pathlib.Path(app.root_path) / 'templates'
-        assert "_live_bar.html" in (templates / 'community' / 'community.html').read_text()
-        assert "_live_bar.html" in (templates / 'index.html').read_text()
+    def test_the_nav_highlights_live_on_a_live_page(self, home):
+        login(home.client, home.reader)
+
+        live = home.client.get('/home/live/all').get_data(as_text=True)
+        new = home.client.get('/home/new/all').get_data(as_text=True)
+
+        assert re.search(r'href="/home/live/all" class="btn btn-primary"', live)
+        assert re.search(r'href="/home/live/all" class="btn btn-outline-secondary"', new)
