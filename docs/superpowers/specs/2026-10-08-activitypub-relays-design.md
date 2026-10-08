@@ -82,7 +82,12 @@ minute, and they stream into `/c/microblogs` Live. With no relays subscribed, be
 
 ## Data
 
-A migration with a reversible downgrade adds:
+A migration with a reversible downgrade adds the following. It must not lock `post`, the largest table,
+for a scan or an index build: it sets `lock_timeout = '10s'`, adds `post.relay_id` as a nullable column
+with no default, creates its foreign key `NOT VALID` (the column is all NULL, so there is nothing to
+validate), and builds `ix_post_relay_id` `CONCURRENTLY` inside an autocommit block. The downgrade drops
+the index concurrently the same way. The model declares the same index and the foreign key name
+`fk_post_relay_id`.
 
 **Table `relay`:**
 
@@ -140,8 +145,12 @@ relay row matches when both hold:
 Accept sets `accepted`, Reject sets `refused`, and both set `answered_at`. An Accept for a row that is
 not `pending` is ignored.
 
+**Relay actor type:** a LitePub relay's actor must have type `Application` or `Service`; otherwise adding
+it fails with "is not a relay actor". A Mastodon-style `/actor` document of any other type is treated as
+unknown (`actor_id` and `public_key` stay null).
+
 **Retry:** for a `failed` or `refused` row, the actor and key are re-fetched and a new Follow is sent
-with a new id. The row goes back to `pending`.
+with a new id. A value the re-fetch cannot find never replaces a stored actor or key. The row goes back to `pending`.
 
 **Remove:** sends `Undo` of the stored Follow, wrapping the original Follow activity, and then deletes
 the row. Delivery failure of the Undo does not block deletion.
@@ -201,18 +210,27 @@ The rules below apply only to relayed deliveries. Non-relayed traffic is untouch
 - **`process_relayed_announce`:** fetches the object with `remote_object_to_json`. It then applies the
   same existing-community and reply-parent rules, and stores the post through
   `create_resolved_object(...)`, the path `process_microblog_announce` uses. It skips only the
-  "announcer is followed" gate, records no boost, and sets `relay_id`.
+  "announcer is followed" gate, records no boost, and sets `relay_id`. It passes no announce id (which
+  would become `post.ap_announce_id` and be re-emitted in outboxes), skips an object whose canonical `id`
+  is already stored (a relay may announce a URL that differs from it), and logs an object the creation
+  path refused.
 - **Moderation:** all existing gates apply unchanged. That covers inbox allowlist and banned
   instances, `ALLOWLIST_INTENSE`, `can_create_post`, the `create_post` refusals (`direct`,
   `local_only`, non-http ids), private and `local_only` communities, user and community bans, and the
   new-account limit.
 - **Duplicates:** a post or reply that already exists is not modified, and its `relay_id` is not set.
 - **Marking:** a post newly created from a relayed delivery gets `relay_id`.
+- **No re-broadcast:** relayed content (a post or a reply created while a relay id is set) is never
+  Announced to the followers of the local community it lands in.
+- **Communities:** an audience naming a community that is deleted (`ap_deleted_at` set) is treated as
+  unknown, so the object is dropped.
 
 ## Expiry
 
 The Celery beat task `expire_relayed_posts` runs daily. When `relay_retention_days > 0`, it selects
-posts with `relay_id IS NOT NULL` and `posted_at < now - relay_retention_days`.
+posts with `relay_id IS NOT NULL` and `created_at < now - relay_retention_days`. `created_at` is when the
+post arrived here, not the author's date, so a post that arrives late with an old date is not expired
+the moment it lands. The daily maintenance (both the synchronous and the Celery variant) runs it.
 
 A post is kept when any of these holds:
 - a local user voted on it, replied to it, bookmarked it, or reported it;
@@ -222,15 +240,17 @@ A post is kept when any of these holds:
 
 Every other selected post is purged through the existing post purge path, files and media included.
 
-The task works in batches of 500, up to 5,000 posts per run, each batch in its own transaction. It
-logs how many posts it deleted and kept.
+The task works in batches of 500, each batch in its own transaction, until no deletable post remains or
+a time budget (`RELAY_EXPIRY_SECONDS`, 600, measured on a monotonic clock) is spent. A post that fails
+in a run is not attempted again in that run. The CDN URLs of every deleted post are collected in one
+list and flushed once at the end of the run. It logs how many posts it deleted, kept and failed.
 
 ## Admin and CLI
 
 **Page.** `/admin/federation/relays` (permission `change instance settings`), linked from the
 federation admin page.
 - It lists each relay's `url`, `style`, `state`, `answered_at`, `last_error`, and the number of posts
-  with that `relay_id` in the last 24 h.
+  with that `relay_id` that arrived in the last 24 h (`created_at`).
 - It has a form to add a URL, Retry and Remove buttons (POST, CSRF-protected), and a
   `relay_retention_days` field.
 
@@ -314,7 +334,8 @@ Cases:
   - each keep reason has its own test: vote, reply, bookmark, report, followed author, joined
     non-microblogs community, sticky, under review;
   - a non-relayed post is never touched;
-  - the batch cap holds;
+  - the task loops over batches until none are left, stops at the time budget, attempts a failing post
+    once per run, and flushes the CDN once;
   - `relay_retention_days = 0` disables expiry;
   - deleting a relay sets `relay_id` to null.
 - **Admin and CLI:** permission is required; add, retry and remove work; the counts render; the
