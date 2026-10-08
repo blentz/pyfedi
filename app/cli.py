@@ -41,6 +41,7 @@ from app.shared.tasks import task_selector
 from app.visibility import listable_clause, post_title_for
 from app.shared.tasks.maintenance import add_remote_communities, remove_old_bot_content, pwn_bots
 from app.shared.post import make_post
+from app.relays.expiry import expire_relayed_posts
 from app.utils import retrieve_block_list, blocked_domains, retrieve_peertube_block_list, \
     shorten_string, get_request, blocked_communities, gibberish, \
     recently_upvoted_post_replies, recently_upvoted_posts, jaccard_similarity, \
@@ -919,6 +920,7 @@ def register(app):
         print(f'6 {datetime.now()}')
         remove_old_community_content()
         remove_old_bot_content()
+        expire_relayed_posts()
         print(f'7 {datetime.now()}')
         update_hashtag_counts()
         print(f'8 {datetime.now()}')
