@@ -281,11 +281,11 @@ for (const [label, reply] of [['a login redirect', response(200, { body: 'post_9
 
 test('with SSE, wake-ups are coalesced to one fetch per 5 s and a 60 s safety poll runs', async () => {
     const { FakeEventSource, instances } = makeEventSource();
-    const { feed, clock, urls } = setup({ sseUrl: 'https://n.example/live/stream?feed=microblogs',
+    const { feed, clock, urls } = setup({ sseUrl: 'https://n.example/live/stream?feed=community:1',
                                           EventSource: FakeEventSource });
     feed.start();
     await settle();
-    assert.equal(instances[0].url, 'https://n.example/live/stream?feed=microblogs');
+    assert.equal(instances[0].url, 'https://n.example/live/stream?feed=community:1');
     assert.equal(urls.length, 1);
     instances[0].onmessage();
     instances[0].onmessage();
