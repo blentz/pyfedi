@@ -2507,7 +2507,7 @@ class Post(db.Model):
     indexable = db.Column(db.Boolean, default=True, index=True)
     from_bot = db.Column(db.Boolean, default=False, index=True)
     private = db.Column(db.Boolean, default=False, index=True)
-    relay_id = db.Column(db.Integer, db.ForeignKey('relay.id', ondelete='SET NULL'), nullable=True)
+    relay_id = db.Column(db.Integer, db.ForeignKey('relay.id', ondelete='SET NULL', name='fk_post_relay_id'), nullable=True)
     visibility = db.Column(db.String(10), default='public', server_default='public', nullable=False, index=True)
     created_at = db.Column(db.DateTime, index=True, default=utcnow)  # this is when the content arrived here
     posted_at = db.Column(db.DateTime, index=True, default=utcnow, server_default=db.func.now(), nullable=False)  # this is when the original server created it
@@ -2568,6 +2568,7 @@ class Post(db.Model):
     hidden_by = db.relationship('User', secondary=hidden_posts, back_populates='hidden_post', lazy='dynamic')
 
     __table_args__ = (
+        db.Index('ix_post_relay_id', 'relay_id', postgresql_where=db.text('relay_id IS NOT NULL')),
         db.Index(
             'ix_post_user_id_not_deleted',
             'user_id',
