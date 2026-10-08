@@ -412,6 +412,17 @@ class TestProcessRelayedAnnounce:
         assert fetch.calls == []
         assert Post.query.count() == 1 and existing.relay_id is None
 
+    def test_an_existing_reply_is_not_updated(self, app, fetch, logged, alice, lockless_redis):
+        relay = make_relay(state=RELAY_ACCEPTED)
+        parent = make_post(make_community(), alice, 'https://other.example/notes/parent')
+        reply = make_post_reply(parent, alice, body='original')
+        reply.ap_id = NOTE_URI
+        db.session.commit()
+        fetch.result = note(inReplyTo=parent.ap_id, updated='2026-09-01T00:00:00Z', content='<p>changed</p>')
+        inbound.process_relayed_announce(relay.id, NOTE_URI)
+        db.session.refresh(reply)
+        assert fetch.calls == [] and reply.body == 'original'
+
     def test_an_error_rolls_back_and_is_raised(self, app, fetch, logged, alice, monkeypatch):
         relay = make_relay(state=RELAY_ACCEPTED)
         fetch.result = note()
