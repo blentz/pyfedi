@@ -1,0 +1,6 @@
+{# The Live view's status badge and its "new posts" pill (fixed at the bottom of the window,
+   clear of the sticky site navbar). Read by static/js/live_feed.js. #}
+<div class="d-flex align-items-center gap-2 py-1">
+    <span id="live_status" class="badge text-bg-success" aria-live="polite">{{ _('Live') }}</span>
+    <button type="button" id="live_pill" class="btn btn-primary btn-sm position-fixed bottom-0 start-50 translate-middle-x mb-3 z-3 shadow" hidden></button>
+</div>

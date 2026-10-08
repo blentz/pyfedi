@@ -6,6 +6,11 @@
         <option value="/home/new/{{ view_filter }}" aria-label="{{ _('Latest posts') }}" {{ 'selected'  if sort == 'new' }}>
             {{ _('New') }}
         </option>
+        {% if current_user.is_authenticated and view_filter in ('subscribed', 'local', 'popular', 'media', 'all') -%}
+        <option value="/home/live/{{ view_filter }}" aria-label="{{ _('Live feed of new posts') }}" {{ 'selected' if sort == 'live' }}>
+            {{ _('Live') }}
+        </option>
+        {% endif -%}
         <option value="/home/old/{{ view_filter }}" aria-label="{{ _('Oldest posts') }}" {{ 'selected'  if sort == 'old' }}>
             {{ _('Old') }}
         </option>
@@ -94,7 +99,9 @@
         </ul>
     </div><a href="/home/new/{{ view_filter }}" class="btn {{ 'btn-primary' if sort == 'new' else 'btn-outline-secondary' }}" rel="nofollow noindex" title="{{ _('Latest posts') }}">
         {{ _('New') }}
-    </a><!--<a href="/home/old/{{ view_filter }}" class="btn {{ 'btn-primary' if sort == 'old' else 'btn-outline-secondary' }}" rel="nofollow noindex" title="{{ _('Oldest posts') }}">
+    </a>{% if current_user.is_authenticated and view_filter in ('subscribed', 'local', 'popular', 'media', 'all') -%}<a href="/home/live/{{ view_filter }}" class="btn {{ 'btn-primary' if sort == 'live' else 'btn-outline-secondary' }}" rel="nofollow noindex" title="{{ _('Live feed of new posts') }}">
+        {{ _('Live') }}
+    </a>{% endif -%}<!--<a href="/home/old/{{ view_filter }}" class="btn {{ 'btn-primary' if sort == 'old' else 'btn-outline-secondary' }}" rel="nofollow noindex" title="{{ _('Oldest posts') }}">
         {{ _('Old') }}
     </a>--><a href="/home/active/{{ view_filter }}" class="btn {{ 'btn-primary' if sort == 'active' else 'btn-outline-secondary' }}" rel="nofollow noindex" title="{{ _('Recently commented on') }}">
         {{ _('Active') }}

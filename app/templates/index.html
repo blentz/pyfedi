@@ -26,9 +26,21 @@
                 {% include "_view_filter_nav.html" %}
             </div>
         </div>
-        <div class="post_list h-feed hide_flair" {% if reload_url %}id="auto-reload" hx-get="{{ reload_url }}" hx-trigger="refreshFragment" hx-swap="innerHTML" {% endif %}>
+        {% if live -%}
+            {% include '_live_bar.html' %}
+        {% endif -%}
+        <div class="post_list h-feed hide_flair" {% if live %}id="live_feed"
+             data-posts-url="{{ url_for('main.home_live_posts', view_filter=view_filter) }}"
+             data-cursor="{{ live_cursor }}"
+             data-sse-url="{{ notif_server ~ '/live/stream?feed=' ~ live_key if notif_server else '' }}"
+             data-str-live="{{ _('Live') }}" data-str-paused="{{ _('Paused') }}"
+             data-str-new-posts="{{ _('New posts: %(num)s', num='%d') }}"
+             {%- elif reload_url %}id="auto-reload" hx-get="{{ reload_url }}" hx-trigger="refreshFragment" hx-swap="innerHTML" {% endif %}>
             {% include "index_fragment.html" %}
         </div>
+        {% if live -%}
+            <script type="module" src="{{ url_for('static', filename='js/live_feed.js', changed=getmtime('js/live_feed.js')) }}" nonce="{{ nonce }}"></script>
+        {% endif -%}
 
         <nav aria-label="{{ _('Pagination') }}" class="mt-4" role="navigation">
                 {% if prev_url %}
@@ -38,7 +50,7 @@
                 {% endif %}
                 {% if next_url %}
                     <a href="{{ next_url }}" class="btn btn-primary" rel="nofollow">
-                        {{ _('Next page') }} <span aria-hidden="true">&rarr;</span>
+                        {{ _('Older posts') if live else _('Next page') }} <span aria-hidden="true">&rarr;</span>
                     </a>
                 {% endif %}
         </nav>
