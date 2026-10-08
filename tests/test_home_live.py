@@ -244,3 +244,13 @@ class TestHomeLivePage:
 
         assert re.search(r'href="/home/live/all" class="btn btn-primary"', live)
         assert re.search(r'href="/home/live/all" class="btn btn-outline-secondary"', new)
+
+    def test_a_live_page_has_no_auto_reload_url(self, home):
+        login(home.client, home.reader)
+
+        live = home.client.get('/home/live/all').get_data(as_text=True)
+        new = home.client.get('/home/new/all').get_data(as_text=True)
+
+        assert "var reloadUrl = '';" in live
+        assert "var reloadUrl = 'None'" not in live
+        assert "var reloadUrl = '/home/new/all?fragment=1';" in new
