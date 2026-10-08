@@ -153,8 +153,7 @@ exactly as today.
 
 **Mastodon style.** The body's `actor` is the post's author. When all of the following hold, the
 delivery is **relayed** and the inbox passes `relay_id` on to processing:
-- the request's `Signature` header `keyId` (without its fragment) equals `actor_id`, or starts with
-  `actor_id`
+- the request's `Signature` header `keyId` (without its fragment) equals `actor_id`
 - the HTTP signature verifies against that relay's `public_key`
 - the body passes the existing checks, i.e. the author's LD signature already verified through the
   fallback
@@ -195,7 +194,9 @@ The rules below apply only to relayed deliveries. Non-relayed traffic is untouch
   The normal reply gates (locked, archived, bans, blocks) also apply. Otherwise it is dropped, and no
   parent fetch happens. A reply is stored in its parent's community and carries no `relay_id`.
 - **Announce (a relayed boost)** inside a Mastodon-style relay delivery: dropped.
-- **Update and Delete:** handled by the normal handlers. They only touch objects that already exist.
+- **Update and Delete:** handled by the normal handlers. A relayed Update is processed only for an object
+  already stored here (otherwise it is dropped, since an Update of an unknown object would create it); a
+  Delete never creates anything.
 - **Like, Follow and others:** processed as today.
 - **`process_relayed_announce`:** fetches the object with `remote_object_to_json`. It then applies the
   same existing-community and reply-parent rules, and stores the post through

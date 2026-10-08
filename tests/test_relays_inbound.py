@@ -600,6 +600,10 @@ class TestRelayedActivityAllowed:
         assert inbound.relayed_activity_allowed(
             {'type': 'Create', 'object': {'audience': 'https://other.example/c/none'}})[0] is False
 
-    @pytest.mark.parametrize('kind', ['Update', 'Delete'])
-    def test_update_and_delete_are_allowed(self, app, kind):
-        assert inbound.relayed_activity_allowed({'type': kind}) == (True, '')
+    def test_a_delete_is_allowed(self, app):
+        assert inbound.relayed_activity_allowed({'type': 'Delete'}) == (True, '')
+
+    def test_an_update_of_a_stored_object_is_allowed(self, app, alice):
+        post = make_post(make_community(), alice, 'https://other.example/notes/p')
+        assert inbound.relayed_activity_allowed({'type': 'Update', 'object': post.ap_id}) == (True, '')
+        assert inbound.relayed_activity_allowed({'type': 'Update', 'object': {'id': post.ap_id}}) == (True, '')

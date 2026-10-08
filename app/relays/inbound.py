@@ -1,4 +1,5 @@
 """Relay traffic in the inbox (spec: Recognising a relay delivery; What is kept)."""
+from cryptography.exceptions import UnsupportedAlgorithm
 from flask import current_app
 from sqlalchemy import func
 
@@ -18,7 +19,8 @@ def _verified(request, relay) -> bool:
     try:
         HttpSignature.verify_request(request, relay.public_key, skip_date=True)
         return True
-    except VerificationError:
+    except (VerificationError, ValueError, TypeError, UnsupportedAlgorithm):
+        # ValueError/TypeError/UnsupportedAlgorithm: the stored key is not a loadable PEM; that is "not verified"
         return False
 
 
@@ -156,8 +158,11 @@ def relayed_object_allowed(obj):
     reply_to = obj.get('inReplyTo')
     if reply_to:
         target = reply_to.get('id') if isinstance(reply_to, dict) else reply_to
-        if not isinstance(target, str) or not _exists(target):
+        parent = (Post.get_by_ap_id(target) or PostReply.get_by_ap_id(target)) if isinstance(target, str) else None
+        if parent is None:
             return False, 'relayed reply to a post this instance does not have'
+        if not _reply_target_open(parent):
+            return False, 'relayed reply to a closed thread'
         return True, ''
     if obj.get('audience') and _target_community(obj) is None:
         return False, 'relayed post for a community this instance does not have'
@@ -170,6 +175,11 @@ def relayed_activity_allowed(activity):
         return False, 'relayed boost'
     if activity_type == 'Create':
         return relayed_object_allowed(activity.get('object'))
+    if activity_type == 'Update':   # an Update of an object we lack would be created as new content
+        obj = activity.get('object')
+        uri = obj.get('id') if isinstance(obj, dict) else obj
+        if not isinstance(uri, str) or not _exists(uri):
+            return False, 'relayed update of an object this instance does not have'
     return True, ''
 
 
@@ -191,9 +201,6 @@ def process_relayed_announce(relay_id, object_uri):
             if isinstance(post_data.get('inReplyTo'), dict):   # the reply code reads a parent's URL, not an object
                 post_data['inReplyTo'] = post_data['inReplyTo']['id']
             parent = _reply_parent(post_data)
-            if parent is not None and not _reply_target_open(parent):
-                log_incoming_ap(object_uri, APLOG_ANNOUNCE, APLOG_IGNORED, None, 'relayed reply to a closed thread')
-                return
             community = (parent.community if parent is not None else
                          _target_community(post_data) or find_microblogging_community())
             with relay_context(relay_id):

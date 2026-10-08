@@ -3,6 +3,7 @@ import contextlib
 import uuid
 
 import pytest
+from flask import request
 
 import app as app_pkg
 from app import db
@@ -171,7 +172,7 @@ def alice():
 
 def create(author, obj):
     return {'id': f'{author.ap_profile_id}/a/{uuid.uuid4().hex}', 'type': 'Create',
-            'actor': author.ap_profile_id, 'object': obj, 'to': obj.get('to', [])}
+            'actor': author.ap_profile_id, 'object': obj, 'to': obj.get('to', []) if isinstance(obj, dict) else []}
 
 
 class TestProcessInboxRequestForARelay:
@@ -256,3 +257,115 @@ class TestModerationStillAppliesThroughARelay:
         routes.process_inbox_request(create(alice, note(audience=community.ap_profile_id)), False,
                                      relay_id=relay.id)
         assert Post.query.count() == 0
+
+
+def update(author, obj):
+    activity = create(author, obj)
+    activity['type'] = 'Update'
+    return activity
+
+
+class TestOpenThreadRuleOnTheMastodonPath:
+
+    def test_a_reply_to_a_deleted_post_is_not_stored(self, app, alice, fetch, logged, lockless_redis):
+        relay = make_relay(state=RELAY_ACCEPTED)
+        parent = make_post(make_community(), alice, 'https://other.example/notes/parent')
+        parent.deleted = True
+        db.session.commit()
+        routes.process_inbox_request(create(alice, note(inReplyTo=parent.ap_id)), False, relay_id=relay.id)
+        assert PostReply.query.count() == 0
+        assert logged[-1][2] == 'relayed reply to a closed thread'
+
+    def test_a_reply_in_a_private_community_is_not_stored(self, app, alice, fetch, logged, lockless_redis):
+        relay = make_relay(state=RELAY_ACCEPTED)
+        community = make_community()
+        parent = make_post(community, alice, 'https://other.example/notes/parent')
+        community.private = True
+        db.session.commit()
+        routes.process_inbox_request(create(alice, note(inReplyTo=parent.ap_id)), False, relay_id=relay.id)
+        assert PostReply.query.count() == 0
+
+    def test_a_reply_in_an_open_thread_is_stored(self, app, alice, fetch, logged, lockless_redis):
+        relay = make_relay(state=RELAY_ACCEPTED)
+        parent = make_post(make_community(), alice, 'https://other.example/notes/parent')
+        routes.process_inbox_request(create(alice, note(inReplyTo=parent.ap_id)), False, relay_id=relay.id)
+        assert PostReply.query.count() == 1
+
+    def test_the_litepub_path_logs_a_closed_thread_once(self, app, alice, monkeypatch, lockless_redis):
+        relay = make_relay(state=RELAY_ACCEPTED)
+        parent = make_post(make_community(), alice, 'https://other.example/notes/parent')
+        parent.deleted = True
+        db.session.commit()
+        messages = []
+        monkeypatch.setattr(inbound, 'log_incoming_ap',
+                            lambda id, kind, result, saved, message=None, session=None: messages.append(message))
+        monkeypatch.setattr(inbound, 'remote_object_to_json', lambda uri: note(inReplyTo=parent.ap_id))
+        inbound.process_relayed_announce(relay.id, NOTE_URI)
+        assert messages == ['relayed reply to a closed thread']
+
+
+class TestRelayedUpdate:
+
+    def test_an_update_of_an_unknown_object_creates_nothing(self, app, alice, fetch, logged, lockless_redis):
+        relay = make_relay(state=RELAY_ACCEPTED)
+        routes.process_inbox_request(update(alice, note()), False, relay_id=relay.id)
+        assert Post.query.count() == 0
+        assert logged[-1][2] == 'relayed update of an object this instance does not have'
+
+    def test_an_update_whose_object_is_a_bare_unknown_string_is_dropped(self, app, alice, fetch, logged):
+        relay = make_relay(state=RELAY_ACCEPTED)
+        routes.process_inbox_request(update(alice, NOTE_URI), False, relay_id=relay.id)
+        assert logged[-1][2] == 'relayed update of an object this instance does not have'
+
+    def test_an_update_with_an_object_that_is_neither_is_dropped(self, app, alice, fetch, logged):
+        relay = make_relay(state=RELAY_ACCEPTED)
+        routes.process_inbox_request(update(alice, ['x']), False, relay_id=relay.id)
+        assert logged[-1][2] == 'relayed update of an object this instance does not have'
+
+    def test_an_update_of_a_stored_post_goes_through_the_normal_path(self, app, alice, fetch, logged,
+                                                                      lockless_redis):
+        relay = make_relay(state=RELAY_ACCEPTED)
+        post = make_post(make_community(), alice, NOTE_URI)
+        routes.process_inbox_request(update(alice, note(updated='2026-09-01T00:00:00Z')), False,
+                                     relay_id=relay.id)
+        db.session.refresh(post)
+        assert Post.query.count() == 1 and post.relay_id is None
+        assert 'relayed update of an object this instance does not have' not in [m for _k, _r, m in logged]
+
+    def test_a_delete_is_still_allowed(self, app):
+        assert inbound.relayed_activity_allowed({'type': 'Delete', 'object': NOTE_URI}) == (True, '')
+
+
+class TestTokenBoundBeforeTheTry:
+
+    def test_an_early_failure_propagates_and_leaves_no_relay_set(self, app, alice, monkeypatch):
+        def boom(session):
+            raise RuntimeError('early')
+
+        monkeypatch.setattr(routes, 'patch_db_session', boom)
+        with pytest.raises(RuntimeError, match='early'):
+            routes.process_inbox_request(create(alice, note()), False, relay_id=5)
+        assert current_relay_id.get() is None
+
+
+class TestMalformedStoredKey:
+
+    def test_the_gate_answers_401_for_a_key_that_is_not_a_pem(self, app, monkeypatch):
+        monkeypatch.setitem(app.config, 'DEBUG', True)
+        private_key, _public = a_keypair()
+        make_relay(state=RELAY_ACCEPTED, public_key='not a pem')
+        monkeypatch.setattr(inbound, 'detect_relay', lambda url: {'public_key': None})
+        sender = type('Sender', (), {'private_key': private_key, 'ap_profile_id': ACTOR})()
+        activity = {'id': 'https://relay.example/a/1', 'type': 'Accept', 'actor': ACTOR, 'object': 'x'}
+        with app.test_client() as client:
+            assert signed_inbox_post(client, activity, sender).status_code == 401
+
+    def test_a_forwarded_delivery_with_such_a_key_is_no_relay(self, app, monkeypatch):
+        monkeypatch.setitem(app.config, 'DEBUG', True)
+        private_key, _public = a_keypair()
+        make_relay(state=RELAY_ACCEPTED, public_key='not a pem')
+        activity = {'id': 'https://relay.example/a/1', 'type': 'Create', 'actor': ACTOR, 'object': 'x'}
+        _uri, headers, body = routes.HttpSignature.signed_request(
+            f"https://{app.config['SERVER_NAME']}/inbox", activity, private_key, KEY_ID, send_via_async=True)
+        with app.test_request_context('/inbox', method='POST', data=body, headers=headers):
+            assert inbound.relay_for_forwarded(request) is None

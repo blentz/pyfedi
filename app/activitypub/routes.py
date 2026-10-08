@@ -932,11 +932,11 @@ def replay_inbox_request(request_json):
 def process_inbox_request(request_json, store_ap_json, relay_id=None):
     with current_app.app_context():
         session = get_task_session()
+        token = current_relay_id.set(relay_id)   # Post.new records it as post.relay_id; reset in the finally
         try:
             # patch_db_session makes all db.session.whatever() use the session created with get_task_session, to guarantee proper connection clean-up at the end of the task.
             # although process_inbox_request uses session instead of db.session, many of the functions it calls, like find_actor_or_create_cached, do not which makes this necessary.
             with patch_db_session(session):
-                token = current_relay_id.set(relay_id)   # Post.new records it as post.relay_id; reset in the finally
                 if relay_id is not None:   # relays: a forwarded activity is kept only when top-level and wanted
                     allowed, reason = relayed_activity_allowed(request_json)
                     if not allowed:
@@ -2168,8 +2168,8 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None):
             session.rollback()
             raise
         finally:
-            current_relay_id.reset(token)
             session.close()
+            current_relay_id.reset(token)
 
 
 def process_announced_objects(request_json, objects, id, saved_json, store_ap_json):
