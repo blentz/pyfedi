@@ -30,7 +30,14 @@ hell.cloud {
 		}
 	}
 
-	reverse_proxy web:5000
+	# While the app restarts (migrations, preload) web:5000 refuses connections, and Caddy
+	# answered every inbox delivery with 502; senders that do not retry lost the activity.
+	# Hold the request and retry the dial instead. A refused dial is retried for any method,
+	# POST included, because nothing has been sent upstream yet.
+	reverse_proxy web:5000 {
+		lb_try_duration 30s
+		lb_try_interval 250ms
+	}
 }
 
 # Uncomment to also answer on www and redirect to the apex.
