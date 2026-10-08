@@ -162,14 +162,21 @@ delivery is **relayed** and the inbox passes `relay_id` on to processing:
 If the relay's HTTP signature does not verify, the delivery is processed as today, with no
 `relay_id`.
 
-**LitePub style.** The body's `actor` equals an accepted relay's `actor_id`, and its `type` is
-`Announce`.
-- This check runs before `find_actor_or_create_cached`, so no `User` row is created for a relay.
-- The HTTP signature must verify against the relay's `public_key`. If it doesn't, the key is
-  re-fetched once and verification is retried. If that also fails, the response is 401.
-- If the object is a URI, or an object with an `id`, the task `process_relayed_announce(relay_id,
-  object_uri)` is queued on the **background** Celery queue, and the inbox answers 200.
-- Any other activity type from a relay actor is ignored with a 200.
+**LitePub style.** The body's `actor` equals a relay row's `actor_id`. The gate runs after
+`HttpSignature.precheck` (so the Digest and date window are already checked) and before
+`find_actor_or_create_cached`, so no `User` row is created for a relay.
+- **Accept and Reject** are answered by the gate itself. They are honored only for a `pending` row whose
+  follow id matches the Accept's object, or when the object carries no follow id; otherwise they are
+  logged and ignored. Either way the response is 200.
+- **Announce** is handled only from an `accepted` row. If the object is a URI, or an object with an
+  `id`, the task `process_relayed_announce(relay_id, object_uri)` is queued on the **background** Celery
+  queue, and the inbox answers 200.
+- **Every other activity type** from a relay actor, and an Announce from a row that isn't `accepted`,
+  passes to the normal inbox path unchanged.
+- The HTTP signature must verify against the relay's `public_key`. If it doesn't, the key is re-fetched
+  and verification retried, but only when the signature's `keyId` (without its fragment) names the relay
+  actor, at most once per relay per 300 seconds, and a fetched key replaces the stored one only if it is
+  non-empty and different. If verification still fails, the response is 401 and the failure is logged.
 
 **Pending, refused, failed or unknown relays.** Deliveries from these get no special handling. A
 LitePub Announce from an actor no local user follows is dropped, as it is today.
@@ -183,20 +190,22 @@ The rules below apply only to relayed deliveries. Non-relayed traffic is untouch
   - addressed to a community that already exists here: routed there;
   - addressed to a community that doesn't exist here: dropped. Relays must never trigger community
     discovery or creation.
-- **Create of a reply:** kept only if its parent post or reply already exists here. Otherwise it is
-  dropped, and no parent fetch happens.
+- **Create of a reply:** kept only if its parent post or reply already exists here and the thread is
+  open: the post and parent are not deleted, and the community is not private, `local_only` or banned.
+  The normal reply gates (locked, archived, bans, blocks) also apply. Otherwise it is dropped, and no
+  parent fetch happens. A reply is stored in its parent's community and carries no `relay_id`.
 - **Announce (a relayed boost)** inside a Mastodon-style relay delivery: dropped.
 - **Update and Delete:** handled by the normal handlers. They only touch objects that already exist.
 - **Like, Follow and others:** processed as today.
 - **`process_relayed_announce`:** fetches the object with `remote_object_to_json`. It then applies the
-  same top-level, existing-community and reply-parent rules, and stores the post through
+  same existing-community and reply-parent rules, and stores the post through
   `create_resolved_object(...)`, the path `process_microblog_announce` uses. It skips only the
   "announcer is followed" gate, records no boost, and sets `relay_id`.
 - **Moderation:** all existing gates apply unchanged. That covers inbox allowlist and banned
   instances, `ALLOWLIST_INTENSE`, `can_create_post`, the `create_post` refusals (`direct`,
   `local_only`, non-http ids), private and `local_only` communities, user and community bans, and the
   new-account limit.
-- **Duplicates:** a post that already exists is not modified, and its `relay_id` is not set.
+- **Duplicates:** a post or reply that already exists is not modified, and its `relay_id` is not set.
 - **Marking:** a post newly created from a relayed delivery gets `relay_id`.
 
 ## Expiry
