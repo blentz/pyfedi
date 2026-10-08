@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
+import re
 import redis.asyncio as redis
 import os
 import logging
@@ -42,7 +43,8 @@ connected_clients = {}
 # Live feeds: one broadcast SSE stream per feed, for every viewer of it. Kept apart from
 # connected_clients so a user's notification stream never receives a broadcast. The payload
 # is only a wake-up; each browser then fetches its own filtered posts from Flask.
-LIVE_FEEDS = {"microblogs"}
+# Must equal app.community.live.LIVE_KEY_PATTERN (a test pins it); this server does not import the app.
+LIVE_FEED_PATTERN = re.compile(r'^(any|local|popular|media|community:\d+)$')
 LIVE_HEARTBEAT_SECONDS = 60.0
 live_clients = {}
 
@@ -121,7 +123,7 @@ async def live_event_stream(feed: str):
 
 @app.get("/live/stream")
 async def live_stream(feed: str):
-    if feed not in LIVE_FEEDS:
+    if not LIVE_FEED_PATTERN.fullmatch(feed):
         return JSONResponse({"error": "Unknown feed"}, status_code=404)
     return StreamingResponse(
         live_event_stream(feed),
