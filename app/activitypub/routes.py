@@ -836,10 +836,13 @@ def shared_inbox():
             process_delete_request.delay(request_json, store_ap_json)
         return ''
 
+    # relay_id is passed only for a relayed delivery: a worker still running the previous code (rolling deploy)
+    # would reject the unexpected keyword
+    relay_kwargs = {'relay_id': relay.id} if relay else {}
     if current_app.debug:
-        process_inbox_request(request_json, store_ap_json, relay_id=relay.id if relay else None)
+        process_inbox_request(request_json, store_ap_json, **relay_kwargs)
     else:
-        process_inbox_request.delay(request_json, store_ap_json, relay_id=relay.id if relay else None)
+        process_inbox_request.delay(request_json, store_ap_json, **relay_kwargs)
 
     return ''
 
@@ -2168,8 +2171,8 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None):
             session.rollback()
             raise
         finally:
+            current_relay_id.reset(token)   # before close(): a raising close must not leak relay_id into the next task
             session.close()
-            current_relay_id.reset(token)
 
 
 def process_announced_objects(request_json, objects, id, saved_json, store_ap_json):
@@ -2695,7 +2698,7 @@ def process_new_content(user, community, store_ap_json, request_json, announced)
                         else:
                             log_incoming_ap(id, APLOG_CREATE, APLOG_SUCCESS, saved_json)
 
-                        if not announced and post.visibility in OPEN_VISIBILITIES:
+                        if not announced and post.visibility in OPEN_VISIBILITIES and current_relay_id.get() is None:   # relayed content is never re-broadcast
                             announce_activity_to_followers(community, user, request_json)
                         return
                     else:  # The post was not allowed - send a 'Delete' to remove it from the remote instance
@@ -2743,7 +2746,7 @@ def process_new_content(user, community, store_ap_json, request_json, announced)
                         else:
                             log_incoming_ap(id, APLOG_CREATE, APLOG_SUCCESS, saved_json)
 
-                        if not announced and reply.visibility in OPEN_VISIBILITIES:
+                        if not announced and reply.visibility in OPEN_VISIBILITIES and current_relay_id.get() is None:   # relayed content is never re-broadcast
                             announce_activity_to_followers(community, user, request_json)
                     else:  # The reply was not allowed - send a 'Delete' to remove it from the remote instance
                         # OR the reply might be a mastodon post - we should retrieve the parent post.

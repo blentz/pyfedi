@@ -111,7 +111,7 @@ class TestSharedInbox:
         calls = []
         response = post_through_the_inbox(app, bounced_author, keys, calls, monkeypatch)
         assert response.status_code == 200
-        assert len(calls) == 1 and calls[0][1] == {'relay_id': None}
+        assert len(calls) == 1 and calls[0][1] == {}
 
     def test_a_delivery_signed_by_some_other_key_is_processed_with_no_relay(self, app, bounced_author,
                                                                               monkeypatch):
@@ -120,7 +120,24 @@ class TestSharedInbox:
         make_relay(state=RELAY_ACCEPTED, public_key=other_public)
         calls = []
         post_through_the_inbox(app, bounced_author, keys, calls, monkeypatch)
-        assert len(calls) == 1 and calls[0][1] == {'relay_id': None}
+        assert len(calls) == 1 and calls[0][1] == {}
+
+    def test_without_a_relay_the_celery_branch_passes_no_relay_keyword(self, app, bounced_author, monkeypatch):
+        # a worker still running the previous code would reject an unexpected keyword (rolling deploy)
+        keys = a_keypair()
+        delayed = []
+        monkeypatch.setattr(routes.process_inbox_request, 'delay', lambda *a, **k: delayed.append((a, k)))
+        activity = {'id': f'{bounced_author.ap_profile_id}/a/{uuid.uuid4().hex}', 'type': 'Create',
+                    'actor': bounced_author.ap_profile_id, 'object': note(),
+                    'signature': {'type': 'RsaSignature2017'}}
+        relay_signer = type('Sender', (), {'private_key': keys[0], 'ap_profile_id': ACTOR})()
+        with app.test_client() as client:
+            _uri, headers, body = routes.HttpSignature.signed_request(
+                f"https://{app.config['SERVER_NAME']}/inbox", activity, relay_signer.private_key,
+                ACTOR + '#main-key', send_via_async=True)
+            monkeypatch.setitem(app.config, 'DEBUG', False)
+            client.post('/inbox', data=body, headers=headers, content_type='application/activity+json')
+        assert len(delayed) == 1 and delayed[0][1] == {}
 
     def test_the_celery_branch_passes_the_relay_too(self, app, bounced_author, monkeypatch):
         keys = a_keypair()
@@ -187,6 +204,19 @@ class TestProcessInboxRequestForARelay:
     def test_the_relay_context_is_reset_afterwards(self, app, alice, fetch, logged, lockless_redis):
         relay = make_relay(state=RELAY_ACCEPTED)
         routes.process_inbox_request(create(alice, note()), False, relay_id=relay.id)
+        assert current_relay_id.get() is None
+
+    def test_the_relay_context_is_reset_even_when_closing_the_session_raises(self, app, alice, fetch, logged,
+                                                                             lockless_redis, monkeypatch):
+        session = routes.get_task_session()
+
+        def broken_close():
+            raise RuntimeError('close failed')
+        monkeypatch.setattr(session, 'close', broken_close)
+        monkeypatch.setattr(routes, 'get_task_session', lambda: session)
+        relay = make_relay(state=RELAY_ACCEPTED)
+        with pytest.raises(RuntimeError, match='close failed'):
+            routes.process_inbox_request(create(alice, note()), False, relay_id=relay.id)
         assert current_relay_id.get() is None
 
     def test_a_create_for_an_unknown_community_is_dropped_and_logged(self, app, alice, fetch, logged):
@@ -369,3 +399,38 @@ class TestMalformedStoredKey:
             f"https://{app.config['SERVER_NAME']}/inbox", activity, private_key, KEY_ID, send_via_async=True)
         with app.test_request_context('/inbox', method='POST', data=body, headers=headers):
             assert inbound.relay_for_forwarded(request) is None
+
+
+@pytest.fixture
+def announced(monkeypatch):
+    calls = []
+    monkeypatch.setattr(routes, 'announce_activity_to_followers', lambda *a, **k: calls.append(a))
+    return calls
+
+
+class TestNoRebroadcast:
+
+    def test_a_relayed_post_is_not_announced_to_the_communitys_followers(
+            self, app, alice, fetch, logged, lockless_redis, announced):
+        relay = make_relay(state=RELAY_ACCEPTED)
+        routes.process_inbox_request(create(alice, note()), False, relay_id=relay.id)
+        assert Post.query.filter_by(ap_id=NOTE_URI).one().relay_id == relay.id
+        assert announced == []
+
+    def test_a_relayed_reply_is_not_announced(self, app, alice, fetch, logged, lockless_redis, announced):
+        relay = make_relay(state=RELAY_ACCEPTED)
+        parent = make_post(make_community(), alice, 'https://other.example/notes/parent')
+        routes.process_inbox_request(create(alice, note(inReplyTo=parent.ap_id)), False, relay_id=relay.id)
+        assert PostReply.query.filter_by(ap_id=NOTE_URI).count() == 1
+        assert announced == []
+
+    def test_the_same_post_with_no_relay_is_announced_as_before(
+            self, app, alice, fetch, logged, lockless_redis, announced):
+        routes.process_inbox_request(create(alice, note()), False)
+        assert len(announced) == 1
+
+    def test_the_same_reply_with_no_relay_is_announced_as_before(
+            self, app, alice, fetch, logged, lockless_redis, announced):
+        parent = make_post(make_community(), alice, 'https://other.example/notes/parent')
+        routes.process_inbox_request(create(alice, note(inReplyTo=parent.ap_id)), False)
+        assert len(announced) == 1
