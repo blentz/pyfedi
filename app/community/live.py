@@ -77,6 +77,17 @@ def server_view_actor(instance_id: int):
     return f'{LIVE_COMMUNITY}@{host}' if server_view_instance(host) is not None else None
 
 
+def post_community_link(post) -> str:
+    """Where a post's community link points: its author's server view for a remote microblog in
+    the microblogs community, else the community itself (spec: Discovery)."""
+    community = post.community
+    if is_local_microblogs(community) and post.instance_id and post.instance_id != 1:
+        actor = server_view_actor(post.instance_id)
+        if actor:
+            return actor
+    return community.link()
+
+
 def live_available(community, user, content_type: str, page: int) -> bool:
     return user.is_authenticated and content_type == 'posts' and page == 1 and is_live_community(community)
 

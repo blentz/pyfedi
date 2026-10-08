@@ -7,6 +7,7 @@ from flask_login import current_user
 from flask_wtf.csrf import generate_csrf
 
 from app import db
+from app.community.live import post_community_link
 import pendulum
 from flask import session, g, json, request, current_app
 from sqlalchemy import text
@@ -78,6 +79,7 @@ def register_request_hooks(app):
     app.jinja_env.globals['reply_filter_keyword'] = reply_filter_keyword
     app.jinja_env.globals['user_banned_from_community'] = user_banned_from_community  # D995
     app.jinja_env.globals['viewer_can_view'] = viewer_can_view
+    app.jinja_env.globals['post_community_link'] = post_community_link
     app.jinja_env.filters['community_links'] = community_link_to_href
     app.jinja_env.filters['feed_links'] = feed_link_to_href
     app.jinja_env.filters['person_links'] = person_link_to_href
