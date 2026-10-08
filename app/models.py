@@ -40,6 +40,7 @@ from app.constants import SUBSCRIPTION_NONMEMBER, SUBSCRIPTION_MEMBER, SUBSCRIPT
     POST_STATUS_PUBLISHED, POST_TYPE_VIDEO, INVITE_MEMBERS_ONLY, INVITE_MODS_ONLY, INVITE_OWNER_ONLY, POST_TYPE_GALLERY, \
     POST_TYPE_IMAGE, ROLE_ADMIN_NAME, ROLE_STAFF_NAME
 import app as app_pkg
+from app.relays import current_relay_id
 
 
 def utcnow(naive=True):
@@ -2545,6 +2546,7 @@ class Post(db.Model):
     from_bot = db.Column(db.Boolean, default=False, index=True)
     from_reposter = db.Column(db.Boolean, default=False, index=True)
     private = db.Column(db.Boolean, default=False, index=True)
+    relay_id = db.Column(db.Integer, db.ForeignKey('relay.id', ondelete='SET NULL'), nullable=True)
     visibility = db.Column(db.String(10), default='public', server_default='public', nullable=False, index=True)
     created_at = db.Column(db.DateTime, index=True, default=utcnow)  # this is when the content arrived here
     posted_at = db.Column(db.DateTime, index=True, default=utcnow, server_default=db.func.now(), nullable=False)  # this is when the original server created it
@@ -2729,6 +2731,7 @@ class Post(db.Model):
                     up_votes=1,
                     from_bot=user.bot or user.bot_override,
                     from_reposter=user.reposter or user.reposter_override,
+                    relay_id=current_relay_id.get(),
                     score=1.0,
                     instance_id=user.instance_id,
                     indexable=user.indexable,
@@ -5816,6 +5819,22 @@ class DiscoveryExclusion(db.Model):
     __tablename__ = 'discovery_exclusion'
     actor_url = db.Column(db.String(1024), primary_key=True)
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+
+
+class Relay(db.Model):
+    """An ActivityPub relay the instance actor subscribes to (spec 2026-10-08-activitypub-relays)."""
+    __tablename__ = 'relay'
+    id = db.Column(db.Integer, primary_key=True)
+    url = db.Column(db.String(2048), nullable=False, unique=True)
+    style = db.Column(db.String(16), nullable=False)
+    inbox_url = db.Column(db.String(2048), nullable=False)
+    actor_id = db.Column(db.String(2048), nullable=True, index=True)
+    public_key = db.Column(db.Text, nullable=True)
+    follow_activity_id = db.Column(db.String(2048), nullable=False)
+    state = db.Column(db.String(16), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    answered_at = db.Column(db.DateTime, nullable=True)
+    last_error = db.Column(db.String(1024), nullable=True)
 
 
 def _large_community_subscribers() -> float:
