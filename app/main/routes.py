@@ -28,7 +28,7 @@ from app.constants import SUBSCRIPTION_PENDING, SUBSCRIPTION_MEMBER, SUBSCRIPTIO
     POST_STATUS_REVIEWING
 from app.email import send_email, send_registration_approved_email
 from app.inoculation import inoculation
-from app.community.live import HOME_LIVE_FILTERS, LIVE_LIMIT, LIVE_WINDOW
+from app.community.live import HOME_LIVE_FILTERS, LIVE_LIMIT, LIVE_WINDOW, home_live_available, home_live_key
 from app.main import bp
 from flask import g, flash, request, current_app, url_for, redirect, make_response, jsonify, send_file, abort
 from flask_login import current_user
@@ -82,6 +82,12 @@ def index(sort=None, view_filter=None):
         if view_filter is None:
             view_filter = 'subscribed' if current_user.is_authenticated else 'popular'
 
+    page = request.args.get('page', 0, type=int)
+    tag = request.args.get('tag', '')
+    live = sort == 'live' and home_live_available(current_user, view_filter, page, tag)
+    if sort == 'live' and not live:
+        sort = 'new'
+
     # If nothing has changed since their last visit, return HTTP 304
     current_etag = f"{sort}_{view_filter}_{hash(str(g.site.last_active))}"
     if current_user.is_anonymous and request_etag_matches(current_etag):
@@ -91,10 +97,10 @@ def index(sort=None, view_filter=None):
     block_honey_pot()
 
     return home_page(sort, view_filter,
-                     page=request.args.get('page', 0, type=int),
+                     page=page,
                      result_id=request.args.get('result_id', gibberish(15)) if current_user.is_authenticated else None,
                      low_bandwidth=request.cookies.get('low_bandwidth', '0') == '1',
-                     tag=request.args.get('tag', ''))
+                     tag=tag, live=live)
 
 
 @bp.route('/home/live_posts/<view_filter>', methods=['GET'])
@@ -183,7 +189,7 @@ def home_feed_source(view_filter: str):
     return community_ids, community_sql
 
 
-def home_page(sort, view_filter, page, result_id, low_bandwidth, tag):
+def home_page(sort, view_filter, page, result_id, low_bandwidth, tag, live=False):
 
     page_length = 20 if low_bandwidth else current_app.config['PAGE_LENGTH']
 
@@ -198,14 +204,15 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag):
     enable_mod_filter = len(modded_communities) > 0
     community_ids, community_sql = home_feed_source(view_filter)
 
-    post_ids = get_deduped_post_ids(result_id, community_ids, sort, tag,
+    query_sort = 'new' if live else sort  # Live is the New order, kept current by live_feed.js
+    post_ids = get_deduped_post_ids(result_id, community_ids, query_sort, tag,
                                     include_following=view_filter == 'subscribed' and current_user.is_authenticated,
                                     community_sql=community_sql)
     has_next_page = len(post_ids) > (page + 1) * page_length  # page is 0-based; `page + 1 * page_length` was page + page_length (D781)
     post_ids = paginate_post_ids(post_ids, page, page_length=page_length)
-    posts = post_ids_to_models(post_ids, sort)
+    posts = post_ids_to_models(post_ids, query_sort)
 
-    if page == 0:
+    if page == 0 and not live:
         # First page of the home feed, include any instance-wide stickies if they are present and visible
         instance_stickies = get_instance_stickies(community_ids=community_ids, sort=sort)
     else:
@@ -217,8 +224,11 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag):
         content_filters = user_filters_home(current_user.id)
 
     # Pagination
-    next_url = url_for('main.index', page=page + 1, sort=sort, view_filter=view_filter,
-                       result_id=result_id) if has_next_page else None
+    if live:  # older posts continue in the plain New list
+        next_url = url_for('main.index', page=page + 1, sort='new', view_filter=view_filter) if has_next_page else None
+    else:
+        next_url = url_for('main.index', page=page + 1, sort=sort, view_filter=view_filter,
+                           result_id=result_id) if has_next_page else None
     prev_url = url_for('main.index', page=page - 1, sort=sort, view_filter=view_filter,
                        result_id=result_id) if page > 0 else None
 
@@ -294,7 +304,10 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag):
                                enable_mod_filter=enable_mod_filter,
                                has_topics=num_topics() > 0, time=time,
                                user_pronouns=user_pronouns(),
-                               rss_feed=rss_feed, reload_url=reload_url(sort, view_filter)
+                               rss_feed=rss_feed, live=live,
+                               live_cursor=max((post.id for post in posts), default=0) if live else 0,
+                               live_key=home_live_key(view_filter) if live else '',
+                               reload_url=None if live else reload_url(sort, view_filter)
                                ))
     if current_user.is_anonymous:
         resp.headers.set('ETag', f"{sort}_{view_filter}_{hash(str(g.site.last_active))}")

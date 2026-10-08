@@ -1,4 +1,5 @@
 """Home Live (spec Amendment A): the home feed source, the newer-than cursor, the fragment and the page."""
+import pathlib
 import re
 from datetime import timedelta
 from types import SimpleNamespace
@@ -176,3 +177,69 @@ class TestHomeLiveFragment:
 
         assert 429 not in every[:12] and every[12] == 429
         assert local != 429
+
+
+class TestHomeLivePage:
+
+    def test_the_live_entry_shows_for_a_logged_in_reader(self, home):
+        login(home.client, home.reader)
+
+        assert '/home/live/all' in home.client.get('/home/new/all').get_data(as_text=True)
+
+    def test_no_live_entry_for_anonymous(self, home):
+        assert '/home/live/' not in home.client.get('/home/new/all').get_data(as_text=True)
+
+    @pytest.mark.parametrize('view_filter, key', [
+        ('subscribed', 'any'), ('local', 'local'), ('popular', 'popular'), ('media', 'media'), ('all', 'any')])
+    def test_the_live_page_carries_the_client_contract(self, app, home, monkeypatch, view_filter, key):
+        monkeypatch.setitem(app.config, 'NOTIF_SERVER', 'https://notifs.example')
+        post = home.post()
+        login(home.client, home.reader)
+
+        html = home.client.get(f'/home/live/{view_filter}').get_data(as_text=True)
+
+        assert 'id="live_feed"' in html
+        assert f'data-posts-url="/home/live_posts/{view_filter}"' in html
+        assert f'data-sse-url="https://notifs.example/live/stream?feed={key}"' in html
+        assert 'id="live_status"' in html and 'id="live_pill"' in html and 'js/live_feed.js' in html
+        assert 'id="auto-reload"' not in html
+        if view_filter in ('local', 'popular', 'all', 'subscribed'):
+            assert f'data-cursor="{post.id}"' in html
+
+    def test_no_instance_stickies_in_live(self, home):
+        sticky = home.post(instance_sticky=True)
+        login(home.client, home.reader)
+
+        assert sticky.id not in teaser_ids(home.client.get('/home/live/all').get_data(as_text=True))
+
+    @pytest.mark.parametrize('path, as_reader', [
+        ('/home/live/all', False),
+        ('/home/live/moderating', True),
+        ('/home/live/all?page=1', True),
+        ('/home/live/all?tag=news', True),
+    ])
+    def test_live_falls_back_to_new_where_unavailable(self, home, path, as_reader):
+        if as_reader:
+            login(home.client, home.reader)
+
+        response = home.client.get(path)
+
+        assert response.status_code in (200, 302)
+        assert 'id="live_feed"' not in response.get_data(as_text=True)
+
+    def test_older_posts_continue_in_new(self, app, home, monkeypatch):
+        monkeypatch.setitem(app.config, 'PAGE_LENGTH', 2)
+        for _ in range(3):
+            home.post()
+        login(home.client, home.reader)
+
+        html = home.client.get('/home/live/all').get_data(as_text=True)
+
+        assert 'Older posts' in html and '/home/new/all?page=1' in html
+
+    def test_the_community_page_still_renders_the_shared_live_bar(self, app):
+        # The community page includes _live_bar.html; tests/test_microblog_live.py's
+        # TestLivePage already asserts its ids. This test only pins that both pages use the include.
+        templates = pathlib.Path(app.root_path) / 'templates'
+        assert "_live_bar.html" in (templates / 'community' / 'community.html').read_text()
+        assert "_live_bar.html" in (templates / 'index.html').read_text()
