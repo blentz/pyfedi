@@ -16,7 +16,7 @@ from ics import Calendar, Event, DisplayAlarm
 
 from app import db, cache, celery, httpx_client, limiter, plugins
 from app.activitypub.signature import RsaKeys, send_post_request
-from app.activitypub.util import extract_domain_and_actor, find_actor_or_create
+from app.activitypub.util import extract_domain_and_actor, find_actor_or_create, find_microblogging_community
 from app.activitypub.actor import schedule_actor_refresh
 # The module, not the names: app.api.alpha.views reaches this file through
 # app.activitypub before they are defined (import cycle: app.api.alpha)
@@ -28,7 +28,7 @@ from app.community.forms import SearchRemoteCommunity, CreateDiscussionForm, Cre
     InviteCommunityForm, MoveCommunityForm, EditCommunityFlairForm, SetMyFlairForm, FindAndBanUserCommunityForm, \
     CreateEventForm, InviteAcceptForm, EditCommunityMembership, CommunityRssFeedEdit, DeleteCommunityRssFeedForm, \
     CreateGalleryForm
-from app.community.live import is_live_community, live_posts, live_available, LIVE_COMMUNITY, is_local_microblogs
+from app.community.live import is_live_community, live_posts, live_available, LIVE_COMMUNITY, is_local_microblogs, microblog_server_view
 from app.community.util import search_for_community, actor_to_community, \
     save_icon_file, save_banner_file, \
     delete_post_from_community, delete_post_reply_from_community, \
@@ -947,6 +947,11 @@ def live_posts_fragment(actor):
     Post.id the page already has. 204 when nothing is new. The client advances its cursor from
     X-Live-Cursor, not from the teasers, because a keyword filter can hide every one of them."""
     community = actor_to_community(actor)
+    from_instance = None
+    if community is None:   # perhaps a server view: microblogs@<host> (spec 2026-10-08)
+        from_instance = microblog_server_view(actor)
+        if from_instance is not None:
+            community = find_microblogging_community()
     if community is None or not is_live_community(community):
         abort(404)
     if community.private and community.id not in community_membership_private(current_user.get_id()):
@@ -955,7 +960,7 @@ def live_posts_fragment(actor):
     if after is None:
         abort(400)
 
-    posts_query, content_filters = community_post_query(community, 'posts')
+    posts_query, content_filters = community_post_query(community, 'posts', from_instance=from_instance)
     posts = live_posts(posts_query, after)
     if not posts:
         return '', 204

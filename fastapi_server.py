@@ -44,7 +44,7 @@ connected_clients = {}
 # connected_clients so a user's notification stream never receives a broadcast. The payload
 # is only a wake-up; each browser then fetches its own filtered posts from Flask.
 # Must equal app.community.live.LIVE_KEY_PATTERN (a test pins it); this server does not import the app.
-LIVE_FEED_PATTERN = re.compile(r'^(any|local|popular|media|community:\d+)$')
+LIVE_FEED_PATTERN = re.compile(r'^(any|local|popular|media|community:\d+|instance:\d+)$')
 LIVE_HEARTBEAT_SECONDS = 60.0
 live_clients = {}
 

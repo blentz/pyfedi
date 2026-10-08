@@ -153,14 +153,14 @@ def test_the_listener_passes_over_a_message_on_a_channel_it_does_not_handle(monk
     assert asyncio.run(scenario()) == '{}'
 
 
-@pytest.mark.parametrize('feed', ['any', 'local', 'popular', 'media', 'community:12'])
+@pytest.mark.parametrize('feed', ['any', 'local', 'popular', 'media', 'community:12', 'instance:7'])
 def test_every_live_key_is_a_known_feed(feed):
     response = asyncio.run(fastapi_server.live_stream(feed))
 
     assert response.media_type == 'text/event-stream'
 
 
-@pytest.mark.parametrize('feed', ['microblogs', 'community:x', 'community:', '../x', 'any ', 'community:12:3'])
+@pytest.mark.parametrize('feed', ['microblogs', 'community:x', 'community:', '../x', 'any ', 'community:12:3', 'instance:x', 'instance:'])
 def test_anything_else_is_404(feed):
     response = TestClient(fastapi_server.app).get('/live/stream', params={'feed': feed})
 
