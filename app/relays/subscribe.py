@@ -29,16 +29,27 @@ def _actor_parts(document):
     return document['id'], document.get('inbox'), pem
 
 
+RELAY_ACTOR_TYPES = ('Application', 'Service')
+
+
+RELAY_ACTOR_TYPES = ('Application', 'Service')
+
+
 def detect_relay(url: str) -> dict:
     parts = urlsplit(url)
     if parts.path.rstrip('/').endswith('/inbox'):
         actor_url = urlunsplit(parts._replace(path=parts.path.rstrip('/')[:-len('inbox')] + 'actor'))
-        found = _actor_parts(remote_object_to_json(actor_url))
+        document = remote_object_to_json(actor_url)
+        is_relay = isinstance(document, dict) and document.get('type') in RELAY_ACTOR_TYPES
+        found = _actor_parts(document) if is_relay else None
         actor_id, public_key = (found[0], found[2]) if found else (None, None)
         return {'style': STYLE_MASTODON, 'inbox_url': url, 'actor_id': actor_id, 'public_key': public_key}
-    found = _actor_parts(remote_object_to_json(url))
+    document = remote_object_to_json(url)
+    found = _actor_parts(document)
     if not found or not isinstance(found[1], str):
         raise RelayError(f'{url} is not a relay actor with an inbox')
+    if document.get('type') not in RELAY_ACTOR_TYPES:
+        raise RelayError(f'{url} is not a relay actor')
     return {'style': STYLE_LITEPUB, 'inbox_url': found[1], 'actor_id': found[0], 'public_key': found[2]}
 
 
@@ -71,7 +82,8 @@ def add_relay(url: str) -> Relay:
 
 def retry_relay(relay) -> None:
     for name, value in detect_relay(relay.url).items():
-        setattr(relay, name, value)
+        if value is not None:   # a failed fetch must not erase an actor or key we already know
+            setattr(relay, name, value)
     relay.follow_activity_id = _new_follow_id()
     relay.state = RELAY_PENDING
     relay.answered_at = None

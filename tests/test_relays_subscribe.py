@@ -63,6 +63,19 @@ class TestDetect:
             subscribe.detect_relay('https://x.example/a')
 
 
+    @pytest.mark.parametrize('kind', ['Person', 'Group', None])
+    def test_a_litepub_url_whose_actor_is_not_a_relay_type_is_refused(self, app, net, kind):
+        net['documents']['https://x.example/a'] = {**ACTOR, 'id': 'https://x.example/a', 'type': kind}
+        with app.test_request_context(), pytest.raises(subscribe.RelayError, match='is not a relay actor'):
+            subscribe.detect_relay('https://x.example/a')
+
+    def test_a_mastodon_actor_that_is_not_a_relay_type_is_treated_as_unknown(self, app, net):
+        net['documents']['https://relay.example/actor'] = {**ACTOR, 'type': 'Person'}
+        with app.test_request_context():
+            found = subscribe.detect_relay('https://relay.example/inbox')
+        assert found['actor_id'] is None and found['public_key'] is None and found['style'] == STYLE_MASTODON
+
+
 class TestFollow:
 
     def test_add_stores_a_pending_row_and_follows_public_for_mastodon(self, app, net):
@@ -98,6 +111,24 @@ class TestFollow:
             db.session.commit()
             subscribe.retry_relay(relay)
         assert relay.state == RELAY_PENDING and relay.follow_activity_id != first
+
+    def test_retry_keeps_a_known_actor_and_key_when_the_actor_cannot_be_fetched(self, app, net):
+        net['documents']['https://relay.example/actor'] = ACTOR
+        with app.test_request_context():
+            relay = subscribe.add_relay('https://relay.example/inbox')
+            first = relay.follow_activity_id
+            del net['documents']['https://relay.example/actor']
+            subscribe.retry_relay(relay)
+        assert relay.actor_id == 'https://relay.example/actor' and relay.public_key == 'PEM'
+        assert relay.follow_activity_id != first and net['post'][-1][1]['id'] == relay.follow_activity_id
+
+    def test_retry_replaces_a_known_key_with_a_fetched_one(self, app, net):
+        net['documents']['https://relay.example/actor'] = ACTOR
+        with app.test_request_context():
+            relay = subscribe.add_relay('https://relay.example/inbox')
+            net['documents']['https://relay.example/actor'] = {**ACTOR, 'publicKey': {'publicKeyPem': 'NEW'}}
+            subscribe.retry_relay(relay)
+        assert relay.public_key == 'NEW'
 
     def test_remove_sends_undo_and_deletes(self, app, net):
         net['documents']['https://relay.example/actor'] = ACTOR
