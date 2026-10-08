@@ -155,12 +155,15 @@ class TestServerViewPage:
 
     def test_join_and_post_controls_are_hidden(self, client, live):
         login(client, live.viewer)
-        assert '/community/microblogs/submit' in client.get('/c/microblogs').get_data(as_text=True)
+        plain = client.get('/c/microblogs').get_data(as_text=True)
+        assert '/community/microblogs/submit' in plain
+        assert '-notification-toggle' in plain
 
         html = client.get(VIEW).get_data(as_text=True)
 
         assert '/community/microblogs/submit' not in html
         assert '/community/microblogs/subscribe' not in html
+        assert '-notification-toggle' not in html
 
     def test_a_tag_filter_is_not_applied(self, client, live):
         mine = live.toot()
