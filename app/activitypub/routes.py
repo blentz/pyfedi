@@ -758,15 +758,15 @@ def shared_inbox():
         log_incoming_ap(id, APLOG_PT_VIEW, APLOG_IGNORED, saved_json, 'PeerTube View or CacheFile activity')
         return ''
 
-    answered = relay_actor_gate(request, request_json)   # relays (spec 2026-10-08): never a User row
-    if answered is not None:
-        return answered
-
     try:
         HttpSignature.precheck(request)
     except VerificationFormatError as e:
         log_incoming_ap(id, APLOG_NOTYPE, APLOG_FAILURE, saved_json, 'Precheck failed: ' + str(e))
         return '', 400
+
+    answered = relay_actor_gate(request, request_json)   # after the precheck; relays (spec 2026-10-08): never a User row
+    if answered is not None:
+        return answered
 
     # Ignore account deletion requests from users that do not already exist here
     account_deletion = False
