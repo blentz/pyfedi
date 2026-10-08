@@ -28,7 +28,9 @@ def admin_federation_relays():
             except RelayError as error:
                 flash(str(error), 'error')
         elif action_form.relay_id.data and action_form.validate_on_submit():
-            relay = db.session.get(Relay, int(action_form.relay_id.data)) or abort(404)
+            raw_id = action_form.relay_id.data
+            relay = (db.session.get(Relay, int(raw_id)) if raw_id.isascii() and raw_id.isdigit() else None) \
+                or abort(404)
             if action_form.relay_remove.data:
                 remove_relay(relay)
                 flash(_('Relay removed.'))
@@ -41,6 +43,11 @@ def admin_federation_relays():
         elif settings_form.relay_settings_save.data and settings_form.validate_on_submit():
             set_setting('relay_retention_days', settings_form.relay_retention.data)
             flash(_('Relay settings saved.'))
+        else:
+            for form in (add_form, settings_form):
+                for errors in form.errors.values():
+                    for error in errors:
+                        flash(str(error), 'error')
         return redirect(url_for('admin.admin_federation_relays'))
     settings_form.relay_retention.data = relay_retention_days()
     since = utcnow() - timedelta(hours=24)
