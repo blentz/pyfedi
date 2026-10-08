@@ -60,12 +60,14 @@ from app.shared.tasks.maintenance import (
 )
 from app.utils import move_file_to_s3
 from app.discovery.cli import register_discovery_commands
+from app.relays.cli import register_relay_commands
 import app as app_pkg
 
 logger = logging.getLogger(__name__)
 
 
 def register(app):
+    register_relay_commands(app)   # fork: flask relays
     register_discovery_commands(app)   # fork (interop D24): flask refresh_discovery
 
     @app.cli.group()
