@@ -165,6 +165,36 @@ class TestServerViewPage:
         assert '/community/microblogs/subscribe' not in html
         assert '-notification-toggle' not in html
 
+    def test_the_community_rss_is_not_advertised(self, client, live):
+        live.toot()
+        assert '/community/microblogs/feed' in client.get('/c/microblogs').get_data(as_text=True)
+
+        html = client.get(VIEW).get_data(as_text=True)
+
+        assert '/community/microblogs/feed' not in html
+
+    def test_the_flair_controls_are_hidden(self, client, live):
+        login(client, live.viewer)
+        plain = client.get('/c/microblogs').get_data(as_text=True)
+        assert 'Set my flair' in plain
+
+        html = client.get(VIEW).get_data(as_text=True)
+
+        assert 'Set my flair' not in html
+        assert '<h3>Flair</h3>' not in html
+
+    def test_the_dillo_theme_hides_join_and_post_controls(self, client, live):
+        live.viewer.theme = 'dillo'
+        db.session.commit()
+        login(client, live.viewer)
+        plain = client.get('/c/microblogs').get_data(as_text=True)
+        assert '/community/microblogs/subscribe' in plain
+
+        html = client.get(VIEW).get_data(as_text=True)
+
+        assert '/community/microblogs/submit' not in html
+        assert '/community/microblogs/subscribe' not in html
+
     def test_a_tag_filter_is_not_applied(self, client, live):
         mine = live.toot()
         db.session.add(Tag(name='x'))
@@ -294,6 +324,19 @@ class TestPostLinks:
 
         assert 'href="/c/microblogs@mastodon.example"' in rendered
         assert '>@mastodon.example</span>' in rendered
+
+    def test_a_teaser_that_hides_its_community_makes_no_link_lookup(self, app, live, monkeypatch):
+        post = live.toot(microblog=False)
+        calls = []
+        monkeypatch.setitem(app.jinja_env.globals, 'post_community_link', lambda p: calls.append(p) or 'x')
+
+        with app.test_request_context():
+            for template in ('post/post_teaser/_macros.html', 'themes/dillo/post/post_teaser/_macros.html'):
+                render_template_string(
+                    "{% from '" + template + "' import render_title %}"
+                    "{{ render_title(post, show_post_community=False, request=request, user_pronouns={}, user_flair={}, reported_posts=[]) }}", post=post)
+
+        assert calls == []
 
 
 class TestServersSidebar:

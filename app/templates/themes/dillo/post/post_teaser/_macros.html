@@ -48,8 +48,7 @@
     {% if post.sticky -%}<span class="fe fe-sticky-right"></span>{% endif -%}
     {% if post.deleted -%}<span class="red fe fe-delete" title="{{ _('Post deleted') }}"></span>{% endif -%}
 </h3>
-{% set community_link = post_community_link(post) -%}
-<div class="author small">{% if show_post_community -%}<a href="{{ (request.url_root + 'c/' + community_link if embed else '/c/' + community_link) }}" {{ 'target="_blank"' if embed }}>
+<div class="author small">{% if show_post_community -%}{% set community_link = post_community_link(post) -%}<a href="{{ (request.url_root + 'c/' + community_link if embed else '/c/' + community_link) }}" {{ 'target="_blank"' if embed }}>
     {% if post.community.icon_id and not low_bandwidth %}<img class="community_icon_small rounded-circle" src="{{ post.community.icon_image('tiny') }}" alt="Community icon" loading="lazy" />{% endif -%}
     c/{{ post.community.name }}</a><span class="community_instance text-muted {{ 'local' if post.community.is_local() and community_link == post.community.link() }}">@{{ community_link.rpartition('@')[2] if community_link != post.community.link() else post.community.ap_domain }}</span> {% endif -%}
     {{ _('by') }} {{ render_username(post.author, htmx_redirect_back_to=request.path + '#post_' + str(post.id), current_user=current_user, low_bandwidth=low_bandwidth, admin_ids=admin_ids, user_notes=user_notes) }}
