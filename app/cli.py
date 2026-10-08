@@ -896,6 +896,7 @@ def register(app):
                 if get_setting('auto_add_remote_communities', False):
                     add_remote_communities.delay()
                 clean_up_tmp.delay()
+                expire_relayed_posts.delay()
                 print('All maintenance tasks scheduled successfully (production mode)')
 
 

@@ -13,7 +13,7 @@
     <div class="col">
         <h1>{{ _('Relays') }}</h1>
         {% if allowlist_note %}
-            <p>{{ _("This instance federates only with allowlisted servers: add each relay's host to the allowlist, or its deliveries are refused.") }}</p>
+            <p>{{ _("This instance federates only with allowlisted servers. For a LitePub relay (a tag or actor URL), add the relay's host to the allowlist. A Mastodon-style relay forwards posts whose authors' hosts are checked against the allowlist, so most forwarded posts are refused.") }}</p>
         {% endif %}
         {{ render_form(add_form) }}
 

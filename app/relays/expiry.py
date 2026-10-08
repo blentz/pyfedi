@@ -1,4 +1,5 @@
 """Relayed posts nobody here engaged with expire (spec: Expiry)."""
+import time
 from datetime import timedelta
 
 from flask import current_app
@@ -7,11 +8,11 @@ from sqlalchemy import and_, exists, or_, select
 from app import celery
 from app.constants import POST_STATUS_REVIEWING
 from app.models import (Community, CommunityMember, Post, PostBookmark, PostReply, PostVote, Report, User,
-                        UserFollower, utcnow)
+                        UserFollower, flush_cdn_cache, utcnow)
 from app.utils import get_setting, get_task_session, patch_db_session
 
 RELAY_EXPIRY_BATCH = 500
-RELAY_EXPIRY_MAX = 5000
+RELAY_EXPIRY_SECONDS = 600
 
 
 def relay_retention_days() -> int:
@@ -53,25 +54,34 @@ def expire_relayed_posts():
         return {'deleted': 0, 'kept': 0, 'failed': 0}
     session = get_task_session()
     deleted = failed = 0
+    cache_urls = []
     try:
         with patch_db_session(session):
-            old = and_(Post.relay_id.isnot(None), Post.posted_at < utcnow() - timedelta(days=days))
+            # arrival time: a post that arrived late with an old date is not expired the moment it lands
+            old = and_(Post.relay_id.isnot(None), Post.created_at < utcnow() - timedelta(days=days))
             kept_clause = _kept_clause()
             kept = session.query(Post.id).filter(old, kept_clause).count()
-            doomed = [row[0] for row in session.query(Post.id).filter(old, ~kept_clause).order_by(Post.id)
-                      .limit(RELAY_EXPIRY_MAX).all()]
-            for start in range(0, len(doomed), RELAY_EXPIRY_BATCH):
-                for post in session.query(Post).filter(Post.id.in_(doomed[start:start + RELAY_EXPIRY_BATCH])):
+            deadline = time.monotonic() + RELAY_EXPIRY_SECONDS
+            last_id = 0   # ids ascend, so a post that failed in this run is never selected again
+            while time.monotonic() < deadline:
+                batch = session.query(Post).filter(old, ~kept_clause, Post.id > last_id).order_by(Post.id) \
+                    .limit(RELAY_EXPIRY_BATCH).all()
+                if not batch:
+                    break
+                last_id = batch[-1].id
+                for post in batch:
                     post_id = post.id
                     try:
                         with session.begin_nested():
-                            post.delete_dependencies()
+                            post.delete_dependencies(cache_urls=cache_urls)
                             session.delete(post)
                         deleted += 1
                     except Exception as e:
                         failed += 1
                         current_app.logger.warning(f'relays: could not expire post {post_id}: {type(e).__name__}')
                 session.commit()
+            if cache_urls:
+                flush_cdn_cache(cache_urls)
         current_app.logger.info(f'relays: expired {deleted} relayed posts, kept {kept}, failed {failed}')
         return {'deleted': deleted, 'kept': kept, 'failed': failed}
     except Exception:
