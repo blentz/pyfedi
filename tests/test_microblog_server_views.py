@@ -84,3 +84,97 @@ class TestResolution:
             assert is_local_microblogs(live.microblogs)
             assert not is_local_microblogs(make_community('general'))
             assert not is_local_microblogs(real_microblogs(live))
+
+
+class TestServerViewPage:
+
+    def test_it_lists_only_that_servers_posts(self, client, live):
+        mine = live.toot()
+        other_toot(live)
+
+        html = client.get(f'{VIEW}?sort=new').get_data(as_text=True)
+
+        assert set(teaser_ids(html)) == {mine.id}
+
+    def test_the_title_and_heading_name_the_view(self, client, live):
+        html = client.get(VIEW).get_data(as_text=True)
+
+        assert 'microblogs@mastodon.example' in re.search(r'<title>([^<]*)</title>', html).group(1)
+        assert re.search(r'<h1[^>]*>\s*microblogs@mastodon.example', html)
+
+    def test_case_is_ignored(self, client, live):
+        assert client.get('/c/Microblogs@Mastodon.Example').status_code == 200
+
+    @pytest.mark.parametrize('path', ['/c/microblogs@nowhere.example', '/c/microblogs@test.piefed.local'])
+    def test_no_view_is_404_for_a_visitor(self, client, live, path):
+        assert client.get(path).status_code == 404
+
+    def test_a_signed_in_user_with_no_view_gets_the_existing_lookup(self, client, live):
+        login(client, live.viewer)
+
+        response = client.get('/c/microblogs@nowhere.example')
+
+        assert response.status_code == 302 and 'lookup' in response.headers['Location']
+
+    def test_a_banned_server_is_404(self, client, live):
+        live.toot()
+        db.session.add(BannedInstances(domain='mastodon.example'))
+        db.session.commit()
+
+        assert client.get(VIEW).status_code == 404
+
+    def test_a_real_community_wins(self, client, live):
+        real = real_microblogs(live)
+        theirs = make_post(real, live.author, 'https://mastodon.example/statuses/real', microblog=True)
+        live.toot()
+
+        html = client.get(f'{VIEW}?sort=new').get_data(as_text=True)
+
+        assert set(teaser_ids(html)) == {theirs.id}
+
+    def test_an_activitypub_request_is_400(self, client, live):
+        response = client.get(VIEW, headers={'Accept': 'application/activity+json'})
+
+        assert response.status_code == 400
+
+    def test_a_server_with_no_posts_is_an_empty_page(self, client, live):
+        response = client.get(VIEW)
+
+        assert response.status_code == 200 and teaser_ids(response.get_data(as_text=True)) == []
+
+    def test_pagination_stays_on_the_view(self, client, live):
+        for _ in range(3):
+            live.toot()
+        live.viewer.page_length = 2
+        db.session.commit()
+        login(client, live.viewer)
+
+        html = client.get(f'{VIEW}?sort=new').get_data(as_text=True)
+
+        assert re.search(r'href="/c/microblogs(@|%40)mastodon.example\?[^"]*page=2', html)
+
+    def test_join_and_post_controls_are_hidden(self, client, live):
+        login(client, live.viewer)
+        assert '/community/microblogs/submit' in client.get('/c/microblogs').get_data(as_text=True)
+
+        html = client.get(VIEW).get_data(as_text=True)
+
+        assert '/community/microblogs/submit' not in html
+        assert '/community/microblogs/subscribe' not in html
+
+    def test_a_tag_filter_is_not_applied(self, client, live):
+        mine = live.toot()
+        db.session.add(Tag(name='x'))
+        db.session.commit()
+
+        html = client.get(f'{VIEW}?sort=new&tag=x').get_data(as_text=True)
+
+        assert set(teaser_ids(html)) == {mine.id}
+
+    def test_the_etag_differs_from_the_community(self, client, live):
+        live.toot()
+
+        view = client.get(f'{VIEW}?sort=new').headers['ETag']
+        plain = client.get('/c/microblogs?sort=new').headers['ETag']
+
+        assert view != plain
