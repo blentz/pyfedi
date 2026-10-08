@@ -10,6 +10,7 @@ RELAY_FAILED = 'failed'
 STYLE_MASTODON = 'mastodon'
 STYLE_LITEPUB = 'litepub'
 PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
+FOLLOW_PATH = '/activities/relay-follow/'
 
 # The relay a post being ingested came through; Post.new records it as post.relay_id.
 current_relay_id: ContextVar = ContextVar('current_relay_id', default=None)

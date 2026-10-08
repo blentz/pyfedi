@@ -51,6 +51,7 @@ from sqlalchemy import text
 from app import celery, httpx_client
 from app.constants import DATETIME_MS_FORMAT
 from app.discovery.instance_answers import record_delivery_refusal
+from app.relays.refusals import record_relay_refusal
 from app.models import utcnow, ActivityPubLog, Community, Instance, CommunityMember, User, SendQueue
 from app.utils import get_task_session, is_invalid_get_request_uri
 import app.activitypub.util as activitypub_util
@@ -177,6 +178,7 @@ def post_request(uri: str, body: dict | None, private_key: str, key_id: str,
         else:
             if not transport_failure:   # transport failures report 404 internally; only a peer's answer counts
                 record_delivery_refusal(session, body, http_status_code)
+                record_relay_refusal(session, body, http_status_code)
             if transport_failure or (http_status_code is not None and (http_status_code == 429 or http_status_code >= 500)):
                 if content_type == "application/activity+json":
                     # Calculate retry delay with exponential backoff. 1 min, 2 mins, 4 mins, 8 mins, up to 4h
