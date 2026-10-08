@@ -409,6 +409,28 @@ class TestLiveFragment:
         assert 429 not in local[:12] and local[12] == 429
         assert remote != 429
 
+    def test_the_case_of_the_actor_does_not_buy_a_fresh_budget(self, live):
+        from app import create_app, limiter
+        from tests.conftest import TestConfig
+
+        class LimitedConfig(TestConfig):
+            RATELIMIT_ENABLED = True
+
+        limited = create_app(LimitedConfig)
+        try:
+            with limited.app_context():
+                client = limited.test_client()
+                login(client, live.viewer)
+                limiter.reset()
+                for _ in range(12):
+                    client.get(f'{FRAGMENT}?after=0')
+                variant = client.get('/community/MicroBlogs/live/posts?after=0').status_code
+        finally:
+            limiter.reset()
+            limiter.enabled = False
+
+        assert variant == 429
+
 
 class TestLivePage:
 
