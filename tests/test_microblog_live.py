@@ -44,6 +44,8 @@ def live(app, db_session):
     remote = make_instance('mastodon.example')
     author = make_user(remote, 'tooter')
     microblogs = make_community('microblogs')
+    microblogs.show_popular = False
+    microblogs.show_all = False
     db.session.add(Language(code='und', name='Undetermined'))
     db.session.commit()
     counter = iter(range(1, 10_000))
@@ -180,13 +182,13 @@ class TestAnnounceLivePost:
         monkeypatch.setitem(app.config, 'NOTIF_SERVER', 'https://notifs.example')
         return calls
 
-    def test_a_new_microblogs_post_wakes_the_live_feed(self, app, live, published):
+    def test_a_new_microblogs_post_wakes_its_community_and_any(self, app, live, published):
         from app.community.live import announce_live_post
 
         with app.test_request_context():
             announce_live_post(live.toot(), live.microblogs, backfill=False)
 
-        assert published == [('live:microblogs', '{}')]
+        assert published == [('live:any', '{}'), (f'live:community:{live.microblogs.id}', '{}')]
 
     def test_a_backfilled_post_does_not(self, app, live, published):
         from app.community.live import announce_live_post
@@ -196,15 +198,17 @@ class TestAnnounceLivePost:
 
         assert published == []
 
-    def test_a_post_in_another_community_does_not(self, app, live, published):
+    def test_a_post_in_another_local_community_wakes_any_and_local_only(self, app, live, published):
         from app.community.live import announce_live_post
 
         general = make_community('general')
+        general.show_popular = False
+        db.session.commit()
         post = make_post(general, live.author, 'https://mastodon.example/statuses/g')
         with app.test_request_context():
             announce_live_post(post, general, backfill=False)
 
-        assert published == []
+        assert published == [('live:any', '{}'), ('live:local', '{}')]
 
     @pytest.mark.parametrize('columns', [
         {'status': POST_STATUS_REVIEWING},
@@ -245,13 +249,14 @@ class TestAnnounceLivePost:
 
         monkeypatch.setitem(app.config, 'NOTIF_SERVER', 'https://notifs.example')
         subscriber = redis_double.pubsub()
-        subscriber.subscribe('live:microblogs')
+        channel = f'live:community:{live.microblogs.id}'
+        subscriber.subscribe(channel)
         subscriber.get_message(timeout=1)       # the subscribe confirmation
         with app.test_request_context():
             announce_live_post(live.toot(), live.microblogs, backfill=False)
 
         message = subscriber.get_message(timeout=1)
-        assert message['channel'] == 'live:microblogs' and message['data'] == '{}'
+        assert message['channel'] == channel and message['data'] == '{}'
 
 
 FRAGMENT = '/community/microblogs/live/posts'
@@ -439,7 +444,7 @@ class TestLivePage:
 
         html = client.get('/c/microblogs?sort=live').get_data(as_text=True)
 
-        assert 'data-sse-url="https://notifs.example/live/stream?feed=microblogs"' in html
+        assert f'data-sse-url="https://notifs.example/live/stream?feed=community:{live.microblogs.id}"' in html
 
     @pytest.mark.parametrize('path, as_viewer', [
         ('/c/microblogs?sort=live', False),
@@ -574,3 +579,139 @@ class TestPostNewAnnounces:
         assert post is not None and len(env.calls) == 1
         assert sum('boom' in record.getMessage() or record.exc_info is not None
                    for record in caplog.records if record.levelname == 'ERROR') == 1
+
+
+def piefed_microblogs(host='piefed.social', software='piefed'):
+    instance = make_instance(host, software=software)
+    community = make_community('microblogs', host=host)
+    community.ap_id = f'microblogs@{host}'
+    community.instance_id = instance.id
+    db.session.commit()
+    return community
+
+
+class TestLiveCapableCommunities:
+
+    @pytest.mark.parametrize('software, expected', [
+        ('piefed', True), ('PieFed', True), ('lemmy', False), ('mastodon', False)])
+    def test_remote_microblogs_is_live_only_on_piefed(self, app, live, software, expected):
+        from app.community.live import is_live_community
+
+        community = piefed_microblogs(f'{software.lower()}.test', software)
+        with app.test_request_context():
+            assert is_live_community(community) is expected
+
+    def test_a_remote_piefed_community_with_another_name_is_not(self, app, live):
+        from app.community.live import is_live_community
+
+        community = piefed_microblogs()
+        community.name = 'general'
+        db.session.commit()
+        with app.test_request_context():
+            assert not is_live_community(community)
+
+    def test_the_remote_piefed_microblogs_page_goes_live(self, client, live):
+        community = piefed_microblogs()
+        make_post(community, live.author, 'https://piefed.social/post/1', microblog=True)
+        login(client, live.viewer)
+
+        html = client.get('/c/microblogs@piefed.social?sort=live').get_data(as_text=True)
+
+        assert 'id="live_feed"' in html
+        assert 'data-posts-url="/community/microblogs@piefed.social/live/posts"' in html
+
+    def test_a_remote_lemmy_microblogs_page_has_no_live(self, client, live):
+        piefed_microblogs('lemmy.example', 'lemmy')
+        login(client, live.viewer)
+
+        html = client.get('/c/microblogs@lemmy.example?sort=live').get_data(as_text=True)
+
+        assert 'id="live_feed"' not in html and '?sort=live' not in html
+
+    def test_the_remote_piefed_fragment_serves_new_posts(self, client, live):
+        community = piefed_microblogs()
+        post = make_post(community, live.author, 'https://piefed.social/post/2', microblog=True)
+        login(client, live.viewer)
+
+        response = client.get('/community/microblogs@piefed.social/live/posts?after=0')
+
+        assert response.status_code == 200 and teaser_ids(response.get_data(as_text=True)) == [post.id]
+
+    def test_a_remote_microblogs_with_no_instance_row_is_not_live(self, app, live):
+        from app.community.live import is_live_community, live_feed_keys
+
+        community = piefed_microblogs()
+        community.instance_id = None
+        db.session.commit()
+        post = make_post(community, live.author, 'https://piefed.social/post/9', microblog=True)
+        with app.test_request_context():
+            assert not is_live_community(community)
+            assert 'media' not in live_feed_keys(post, community, False)
+
+
+class TestLiveFeedKeys:
+
+    def keys(self, app, post, community, backfill=False):
+        from app.community.live import live_feed_keys
+
+        with app.test_request_context():
+            return live_feed_keys(post, community, backfill)
+
+    def test_a_live_capable_community_post(self, app, live):
+        assert self.keys(app, live.toot(), live.microblogs) == {'any', f'community:{live.microblogs.id}'}
+
+    def test_the_local_microblogs_community_does_not_wake_local(self, app, live):
+        assert 'local' not in self.keys(app, live.toot(), live.microblogs)
+
+    def test_a_local_popular_community(self, app, live):
+        general = make_community('general')
+        general.show_popular = True
+        db.session.commit()
+        post = make_post(general, live.author, 'https://mastodon.example/statuses/p')
+
+        assert self.keys(app, post, general) == {'any', 'local', 'popular'}
+
+    def test_a_remote_media_community(self, app, live):
+        tube = make_instance('tube.example', software='PeerTube')
+        channel = make_community('films', host='tube.example')
+        channel.ap_id = 'films@tube.example'
+        channel.instance_id = tube.id
+        channel.show_popular = False
+        db.session.commit()
+        post = make_post(channel, live.author, 'https://tube.example/videos/1')
+
+        assert self.keys(app, post, channel) == {'any', 'media'}
+
+    @pytest.mark.parametrize('columns', [
+        {'status': POST_STATUS_REVIEWING}, {'deleted': True}, {'visibility': 'unlisted'}])
+    def test_a_post_no_feed_would_list_wakes_nothing(self, app, live, columns):
+        assert self.keys(app, live.toot(**columns), live.microblogs) == set()
+
+    def test_a_backfill_wakes_nothing(self, app, live):
+        assert self.keys(app, live.toot(), live.microblogs, backfill=True) == set()
+
+
+class TestHomeLiveRules:
+
+    @pytest.mark.parametrize('view_filter, key', [
+        ('subscribed', 'any'), ('all', 'any'), ('local', 'local'), ('popular', 'popular'), ('media', 'media')])
+    def test_home_live_key(self, view_filter, key):
+        from app.community.live import home_live_key
+
+        assert home_live_key(view_filter) == key
+
+    @pytest.mark.parametrize('logged_in, view_filter, page, tag, expected', [
+        (True, 'subscribed', 0, '', True),
+        (True, 'all', 0, '', True),
+        (False, 'all', 0, '', False),
+        (True, 'moderating', 0, '', False),
+        (True, 'all', 1, '', False),
+        (True, 'all', 0, 'news', False),
+    ])
+    def test_home_live_available(self, live, logged_in, view_filter, page, tag, expected):
+        from flask_login import AnonymousUserMixin
+
+        from app.community.live import home_live_available
+
+        user = live.viewer if logged_in else AnonymousUserMixin()
+        assert home_live_available(user, view_filter, page, tag) is expected
