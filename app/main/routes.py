@@ -205,12 +205,13 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag, live=False
     community_ids, community_sql = home_feed_source(view_filter)
 
     query_sort = 'new' if live else sort  # Live is the New order, kept current by live_feed.js
-    post_ids = get_deduped_post_ids(result_id, community_ids, query_sort, tag,
+    post_ids = get_deduped_post_ids('' if live else result_id, community_ids, query_sort, tag,
                                     include_following=view_filter == 'subscribed' and current_user.is_authenticated,
                                     community_sql=community_sql)
     has_next_page = len(post_ids) > (page + 1) * page_length  # page is 0-based; `page + 1 * page_length` was page + page_length (D781)
     post_ids = paginate_post_ids(post_ids, page, page_length=page_length)
     posts = post_ids_to_models(post_ids, query_sort)
+    live_cursor = max(post_ids, default=0) if live else 0
 
     if page == 0 and not live:
         # First page of the home feed, include any instance-wide stickies if they are present and visible
@@ -305,7 +306,7 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag, live=False
                                has_topics=num_topics() > 0, time=time,
                                user_pronouns=user_pronouns(),
                                rss_feed=rss_feed, live=live,
-                               live_cursor=max((post.id for post in posts), default=0) if live else 0,
+                               live_cursor=live_cursor, live_filters=HOME_LIVE_FILTERS,
                                live_key=home_live_key(view_filter) if live else '',
                                reload_url='' if live else reload_url(sort, view_filter)
                                ))
