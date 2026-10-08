@@ -139,6 +139,42 @@ def test_an_unknown_id_is_a_404(admin, calls):
     assert response.status_code == 404 and calls == []
 
 
+def test_a_non_numeric_id_is_a_404(admin, calls):
+    client, token = admin
+
+    response = client.post(PAGE, data={'relay_id': 'abc', 'relay_remove': 'go', 'csrf_token': token})
+
+    assert response.status_code == 404 and calls == []
+
+
+def test_an_invalid_url_flashes_its_error(admin, calls):
+    client, token = admin
+
+    client.post(PAGE, data={'relay_url': 'nope', 'relay_add': 'go', 'csrf_token': token})
+
+    assert 'Invalid URL' in client.get(PAGE).get_data(as_text=True)
+
+
+def test_an_out_of_range_retention_flashes_its_error(admin):
+    client, token = admin
+
+    client.post(PAGE, data={'relay_retention': '400', 'relay_settings_save': 'go', 'csrf_token': token})
+
+    assert 'Number must be between 0 and 365' in client.get(PAGE).get_data(as_text=True)
+
+
+def test_a_post_without_a_csrf_token_is_refused(admin, calls):
+    client, _ = admin
+    relay = make_relay()
+
+    for data in ({'relay_url': 'https://relay.example/inbox', 'relay_add': 'go'},
+                 {'relay_id': str(relay.id), 'relay_retry': 'go'},
+                 {'relay_id': str(relay.id), 'relay_remove': 'go'}):
+        assert client.post(PAGE, data=data).status_code == 400
+
+    assert calls == []
+
+
 def test_saving_the_retention_setting_stores_it(admin):
     client, token = admin
 
