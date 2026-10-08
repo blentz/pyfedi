@@ -35,7 +35,7 @@ def old_relayed(world, days=8, community=None, relayed=True, **kw):
     n = next(_serial)
     post = make_post(community or world['community'], world['author'], f'https://remote.example/notes/{n}',
                      microblog=True)
-    post.posted_at = utcnow() - timedelta(days=days)
+    post.created_at = utcnow() - timedelta(days=days)   # arrival, not the author's date
     post.relay_id = world['relay'].id if relayed else None
     for name, value in kw.items():
         setattr(post, name, value)
@@ -180,12 +180,56 @@ class TestSettingAndCap:
         assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 0, 'failed': 0}
         assert present(post_id)
 
-    def test_one_run_deletes_no_more_than_the_cap_in_batches(self, app, world, monkeypatch):
-        monkeypatch.setattr(expiry, 'RELAY_EXPIRY_MAX', 3)
+    def test_one_run_deletes_every_batch_until_none_are_left(self, app, world, monkeypatch):
         monkeypatch.setattr(expiry, 'RELAY_EXPIRY_BATCH', 2)
         ids = [old_relayed(world) for _ in range(5)]
-        assert expiry.expire_relayed_posts()['deleted'] == 3
-        assert sum(present(i) for i in ids) == 2
+        assert expiry.expire_relayed_posts() == {'deleted': 5, 'kept': 0, 'failed': 0}
+        assert not any(present(i) for i in ids)
+
+    def test_the_time_budget_stops_the_loop(self, app, world, monkeypatch):
+        monkeypatch.setattr(expiry, 'RELAY_EXPIRY_BATCH', 2)
+        clock = {'now': 0}
+        monkeypatch.setattr(expiry.time, 'monotonic', lambda: clock['now'])
+        real = Post.delete_dependencies
+
+        def slow(self, *a, **k):
+            clock['now'] += 400   # two posts take 800s, past RELAY_EXPIRY_SECONDS
+            return real(self, *a, **k)
+        monkeypatch.setattr(Post, 'delete_dependencies', slow)
+        ids = [old_relayed(world) for _ in range(5)]
+        assert expiry.expire_relayed_posts()['deleted'] == 2
+        assert sum(present(i) for i in ids) == 3
+
+    def test_the_time_budget_is_ten_minutes(self):
+        assert expiry.RELAY_EXPIRY_SECONDS == 600
+
+    def test_the_cdn_is_flushed_once_with_every_url(self, app, world, monkeypatch):
+        monkeypatch.setattr(expiry, 'RELAY_EXPIRY_BATCH', 2)
+        flushed = []
+        monkeypatch.setattr(expiry, 'flush_cdn_cache', lambda urls: flushed.append(list(urls)))
+        real = Post.delete_dependencies
+
+        def collecting(self, *a, cache_urls=None, **k):
+            cache_urls.append(f'https://cdn.example/{self.id}')
+            return real(self, *a, cache_urls=cache_urls, **k)
+        monkeypatch.setattr(Post, 'delete_dependencies', collecting)
+        ids = [old_relayed(world) for _ in range(5)]
+        expiry.expire_relayed_posts()
+        assert flushed == [[f'https://cdn.example/{i}' for i in ids]]
+
+    def test_no_flush_when_there_are_no_urls(self, app, world, monkeypatch):
+        flushed = []
+        monkeypatch.setattr(expiry, 'flush_cdn_cache', lambda urls: flushed.append(urls))
+        old_relayed(world)
+        expiry.expire_relayed_posts()
+        assert flushed == []
+
+    def test_a_post_posted_long_ago_but_arrived_recently_is_left(self, app, world):
+        post_id = old_relayed(world, days=1)
+        db.session.get(Post, post_id).posted_at = utcnow() - timedelta(days=30)
+        db.session.commit()
+        assert expiry.expire_relayed_posts() == {'deleted': 0, 'kept': 0, 'failed': 0}
+        assert present(post_id)
 
 
 class TestFailure:
@@ -202,6 +246,22 @@ class TestFailure:
         monkeypatch.setattr(Post, 'delete_dependencies', selective)
         assert expiry.expire_relayed_posts() == {'deleted': 2, 'kept': 0, 'failed': 1}
         assert [present(i) for i in ids] == [False, True, False]
+
+    def test_a_failing_post_is_attempted_once_per_run(self, app, world, monkeypatch):
+        monkeypatch.setattr(expiry, 'RELAY_EXPIRY_BATCH', 2)
+        ids = [old_relayed(world) for _ in range(5)]
+        attempts = []
+        real = Post.delete_dependencies
+
+        def selective(self, *a, **k):
+            attempts.append(self.id)
+            if self.id == ids[0]:
+                raise RuntimeError('boom')
+            return real(self, *a, **k)
+
+        monkeypatch.setattr(Post, 'delete_dependencies', selective)
+        assert expiry.expire_relayed_posts() == {'deleted': 4, 'kept': 0, 'failed': 1}
+        assert attempts.count(ids[0]) == 1
 
     def test_a_failure_outside_a_single_post_is_raised(self, app, world, monkeypatch):
         monkeypatch.setattr(expiry, '_kept_clause', lambda: 1 / 0)
@@ -236,3 +296,25 @@ class TestDailyMaintenance:
         result = app.test_cli_runner().invoke(args=['daily-maintenance'])
         assert result.exception is None, result.output
         assert calls == [1]
+
+
+    def test_the_celery_variant_queues_the_expiry(self, app, monkeypatch):
+        queued = []
+        monkeypatch.setattr(cli, 'expire_relayed_posts', type('T', (), {'delay': staticmethod(lambda: queued.append(1))}))
+        for name in ('cleanup_old_notifications', 'cleanup_old_read_posts', 'cleanup_send_queue',
+                     'process_expired_bans', 'remove_old_community_content', 'update_hashtag_counts',
+                     'delete_old_soft_deleted_content', 'update_community_stats', 'cleanup_old_voting_data',
+                     'unban_expired_users', 'sync_defederation_subscriptions', 'check_instance_health',
+                     'monitor_healthy_instances', 'recalculate_user_attitudes', 'calculate_community_activity_stats',
+                     'cleanup_old_activitypub_logs', 'archive_old_posts', 'archive_old_users', 'clean_up_tmp'):
+            monkeypatch.setattr(cli, name, type('T', (), {'delay': staticmethod(lambda *a, **k: None)}))
+        monkeypatch.setattr(cli, 'log_cron_task_to_db', lambda *a, **k: None)
+        monkeypatch.setattr(cli.plugins, 'fire_hook', lambda *a, **k: None)
+        monkeypatch.setattr(cli, 'sleep', lambda *_: None)
+        monkeypatch.setattr(cli, 'get_setting', lambda *a, **k: False)
+        monkeypatch.setitem(app.config, 'DEBUG', False)
+        app.debug = False
+        cli.register(app)
+        result = app.test_cli_runner().invoke(args=['daily-maintenance-celery'])
+        assert result.exception is None, result.output
+        assert queued == [1]

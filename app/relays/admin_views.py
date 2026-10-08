@@ -52,7 +52,7 @@ def admin_federation_relays():
     settings_form.relay_retention.data = relay_retention_days()
     since = utcnow() - timedelta(hours=24)
     counts = dict(db.session.query(Post.relay_id, func.count(Post.id)).filter(
-        Post.relay_id.isnot(None), Post.posted_at > since).group_by(Post.relay_id).all())
+        Post.relay_id.isnot(None), Post.created_at > since).group_by(Post.relay_id).all())
     relays = db.session.query(Relay).order_by(Relay.created_at).all()
     return render_template('admin/federation_relays.html', title=_('Federation settings - relays'),
                            relays=relays, counts=counts, add_form=add_form, action_form=action_form,

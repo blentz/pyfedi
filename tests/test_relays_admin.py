@@ -65,7 +65,7 @@ def test_get_lists_relays_with_the_24_hour_post_count(admin):
     author = make_user(make_instance('remote.example'), 'author')
     for n, age in enumerate((timedelta(hours=1), timedelta(hours=2), timedelta(hours=30))):
         post = make_post(community, author, f'https://remote.example/notes/{n}', microblog=True)
-        post.posted_at = utcnow() - age
+        post.created_at = utcnow() - age
         post.relay_id = relay.id
     db.session.commit()
 
@@ -83,7 +83,9 @@ def test_get_shows_the_allowlist_note_only_in_strong_mode(admin):
     db.session.get(Site, 1).allowlist_mode = ALLOWLIST_STRONG
     db.session.commit()
 
-    assert 'allowlisted servers' in client.get(PAGE).get_data(as_text=True)
+    page = client.get(PAGE).get_data(as_text=True)
+    assert 'allowlisted servers' in page
+    assert 'LitePub' in page and 'author' in page
 
 
 def test_add_calls_add_relay_and_redirects(admin, calls):
