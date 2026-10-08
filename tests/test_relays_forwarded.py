@@ -14,7 +14,7 @@ from app.models import BannedInstances, Post, PostReply, utcnow
 from app.relays import RELAY_ACCEPTED, RELAY_PENDING, current_relay_id
 from app.relays import inbound
 from tests.factories import (a_keypair, make_community, make_instance, make_post,
-                             make_user, signed_inbox_post)
+                             make_post_reply, make_user, signed_inbox_post)
 from tests.test_relays_inbound import ACTOR, NOTE_URI, PEM, make_relay, note
 
 pytestmark = pytest.mark.usefixtures('site', 'redis_double')
@@ -434,3 +434,29 @@ class TestNoRebroadcast:
         parent = make_post(make_community(), alice, 'https://other.example/notes/parent')
         routes.process_inbox_request(create(alice, note(inReplyTo=parent.ap_id)), False)
         assert len(announced) == 1
+
+    def stored_reply(self, alice):
+        parent = make_post(make_community(), alice, 'https://other.example/notes/parent')
+        reply = make_post_reply(parent, alice)
+        reply.ap_id = NOTE_URI
+        db.session.commit()
+        return parent
+
+    @pytest.mark.parametrize('relayed, expected', [(True, 0), (False, 1)])
+    def test_an_edit_of_a_stored_post_is_announced_only_when_not_relayed(
+            self, app, alice, fetch, logged, lockless_redis, announced, relayed, expected):
+        relay_id = make_relay(state=RELAY_ACCEPTED).id if relayed else None
+        make_post(make_community(), alice, NOTE_URI)
+        routes.process_inbox_request(update(alice, note(updated='2026-09-01T00:00:00Z')), False,
+                                     **({'relay_id': relay_id} if relayed else {}))
+        assert len(announced) == expected
+
+    @pytest.mark.parametrize('relayed, expected', [(True, 0), (False, 1)])
+    def test_an_edit_of_a_stored_reply_is_announced_only_when_not_relayed(
+            self, app, alice, fetch, logged, lockless_redis, announced, relayed, expected):
+        relay_id = make_relay(state=RELAY_ACCEPTED).id if relayed else None
+        parent = self.stored_reply(alice)
+        routes.process_inbox_request(
+            update(alice, note(inReplyTo=parent.ap_id, updated='2026-09-01T00:00:00Z')), False,
+            **({'relay_id': relay_id} if relayed else {}))
+        assert len(announced) == expected
