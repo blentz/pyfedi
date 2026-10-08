@@ -9,7 +9,7 @@ from flask import g
 from app import db
 from app.models import Site
 from app.utils import utcnow
-from tests.factories import (make_community, make_community_member, make_post,
+from tests.factories import (make_community, make_community_member, make_instance, make_post,
                              make_user_block)
 
 
@@ -44,7 +44,16 @@ def home(app, api_baseline):
         db.session.commit()
         return created
 
-    return SimpleNamespace(client=app.test_client(), community=community, reader=reader, author=author,
+    def media_post():
+        instance = make_instance('video.example', software='peertube')
+        videos = make_community('videos')
+        videos.show_all = True
+        videos.ap_id = 'videos@video.example'
+        videos.instance_id = instance.id
+        db.session.commit()
+        return make_post(videos, author, f'https://video.example/p/{next(counter)}')
+
+    return SimpleNamespace(media_post=media_post, client=app.test_client(), community=community, reader=reader, author=author,
                            post=post, baseline=api_baseline)
 
 
@@ -87,6 +96,11 @@ class TestNewerThan:
 
         assert post.id not in self.ids(app, home, 0, 'media')
 
+    def test_media_sees_a_post_from_a_media_instance(self, app, home):
+        post = home.media_post()
+
+        assert post.id in self.ids(app, home, 0, 'media')
+
 
 
 class TestHomeLiveFragment:
@@ -100,6 +114,16 @@ class TestHomeLiveFragment:
         login(home.client, home.reader)
 
         response = home.client.get(self.url(view_filter))
+
+        assert response.status_code == 200
+        assert post.id in teaser_ids(response.get_data(as_text=True))
+        assert response.headers['X-Live-Cursor'] == str(post.id)
+
+    def test_media_returns_a_post_from_a_media_instance(self, home):
+        post = home.media_post()
+        login(home.client, home.reader)
+
+        response = home.client.get(self.url('media'))
 
         assert response.status_code == 200
         assert post.id in teaser_ids(response.get_data(as_text=True))
