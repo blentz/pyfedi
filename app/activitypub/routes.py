@@ -35,7 +35,8 @@ import app.community.routes as community_routes
 from app.community.util import send_to_remote_instance, send_to_remote_instance_fast
 from app.discovery import SYNC_ACCEPTED, SYNC_REJECTED
 from app.discovery.instance_answers import instance_actor_answer, record_answer
-from app.relays.inbound import relay_actor_gate
+from app.relays import current_relay_id
+from app.relays.inbound import relay_actor_gate, relay_for_forwarded, relayed_activity_allowed
 from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
 from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
@@ -816,6 +817,8 @@ def shared_inbox():
             log_incoming_ap(id, APLOG_NOTYPE, APLOG_FAILURE, saved_json, 'Could not verify HTTP signature: ' + str(e))
             return '', 400
 
+    relay = relay_for_forwarded(request) if bounced else None   # relays: a Mastodon-style relay signs forwards
+
     if actor.instance_id:
         actor.instance.last_seen = utcnow()
         actor.instance.dormant = False
@@ -834,9 +837,9 @@ def shared_inbox():
         return ''
 
     if current_app.debug:
-        process_inbox_request(request_json, store_ap_json)
+        process_inbox_request(request_json, store_ap_json, relay_id=relay.id if relay else None)
     else:
-        process_inbox_request.delay(request_json, store_ap_json)
+        process_inbox_request.delay(request_json, store_ap_json, relay_id=relay.id if relay else None)
 
     return ''
 
@@ -926,13 +929,20 @@ def replay_inbox_request(request_json):
 
 
 @celery.task
-def process_inbox_request(request_json, store_ap_json):
+def process_inbox_request(request_json, store_ap_json, relay_id=None):
     with current_app.app_context():
         session = get_task_session()
         try:
             # patch_db_session makes all db.session.whatever() use the session created with get_task_session, to guarantee proper connection clean-up at the end of the task.
             # although process_inbox_request uses session instead of db.session, many of the functions it calls, like find_actor_or_create_cached, do not which makes this necessary.
             with patch_db_session(session):
+                token = current_relay_id.set(relay_id)   # Post.new records it as post.relay_id; reset in the finally
+                if relay_id is not None:   # relays: a forwarded activity is kept only when top-level and wanted
+                    allowed, reason = relayed_activity_allowed(request_json)
+                    if not allowed:
+                        log_incoming_ap(request_json.get('id', ''), APLOG_NOTYPE, APLOG_IGNORED,
+                                        request_json if store_ap_json else None, reason)
+                        return
                 # For an Announce, Accept, or Reject, we have the community/feed, and need to find the user
                 # For everything else, we have the user, and need to find the community/feed
                 # Benefits of always using request_json['actor']:
@@ -2158,6 +2168,7 @@ def process_inbox_request(request_json, store_ap_json):
             session.rollback()
             raise
         finally:
+            current_relay_id.reset(token)
             session.close()
 
 
