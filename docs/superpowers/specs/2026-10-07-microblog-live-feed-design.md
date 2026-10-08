@@ -250,3 +250,161 @@ check:
 - the polling fallback
 
 This is verification, not a committed gate.
+
+---
+
+# Amendment A (2026-10-07): remote microblogs communities and home Live
+
+Status: design approved in session (2026-10-07). This amendment replaces decision 1 (scope) and the
+single `live:microblogs` channel above. Everything not mentioned here is unchanged.
+
+## Why
+
+On production, `/c/microblogs@piefed.social` has no Live button. The owner also wants Live on the
+home page, following the selected home tab.
+
+## Decisions (owner rulings, 2026-10-07)
+
+A1. **Community scope.** A community is Live-capable when `name == 'microblogs'` and either it is
+    local (`is_local()`) or its instance's software is PieFed (`instance.software.lower() == 'piefed'`).
+    No migration and no flag. `microblogs` on Lemmy, Mastodon or any other software is not Live.
+A2. **Home Live.** Logged-in users get a Live sort on the home page for the Subscribed, Local,
+    Popular, Media and All tabs. A Live tab shows the same post set as that tab, newest first, and
+    ignores the tab's own sort.
+A3. **Wake-ups by feed key** (approach A). A stored post publishes `{}` on `live:<key>` for every
+    key it belongs to. Each Live page subscribes to exactly one key. Subscribed and All both
+    subscribe to `any` and rely on the fetch to filter.
+
+## Wake-up keys
+
+`live_feed_keys(post, community) -> set[str]` in `app/community/live.py`. It returns nothing for a
+backfill, for a post that is not listable, for a post with `status <= POST_STATUS_REVIEWING`, or
+for a deleted post. Otherwise:
+
+| Key | When |
+|---|---|
+| `community:<id>` | the community is Live-capable (A1) |
+| `any` | always |
+| `local` | `community.instance_id == 1` and it is not the local microblogs community |
+| `popular` | `community.show_popular` |
+| `media` | `community.instance.software.lower()` is in `app.discovery.MEDIA_SOFTWARE` |
+
+The post-stored hook (`announce_live_post`) publishes one message per key. It does nothing when
+`NOTIF_SERVER` is unset, and a publish failure is logged as a warning, as before. The constant
+`LIVE_CHANNEL = 'live:microblogs'` is removed.
+
+Why `any` and not `all`: Subscribed includes posts by followed authors, and those posts can be in
+communities without `show_all`, such as the microblogs community. A key gated on `show_all` would
+never wake those tabs.
+
+## Community Live changes
+
+- `is_live_community` implements A1.
+- The page's `data-sse-url` becomes `<NOTIF_SERVER>/live/stream?feed=community:<community.id>`.
+- The fragment route already resolves `<actor>` through `actor_to_community`, including
+  `name@host`. Its access checks are unchanged.
+
+## Home Live
+
+- **Route.** `/home/live/<view_filter>`, through the existing `main.index` route with
+  `sort='live'`. Live is available only when all of these hold:
+  - the viewer is logged in
+  - `view_filter` is one of `subscribed`, `local`, `popular`, `media` or `all`
+  - this is page 1 (`page == 0` in `home_page`)
+  - there is no tag filter
+
+  Otherwise `sort='live'` falls back to `new`.
+- **Shared community selection.** The `view_filter` to `(community_ids, community_sql)` block in
+  `home_page` (`app/main/routes.py`) moves, unchanged, into one function
+  `home_feed_source(view_filter) -> (community_ids, community_sql)`. Both the page and the home
+  fragment call it.
+- **Query.** `get_deduped_post_ids` (`app/utils.py`) gets an optional keyword argument
+  `newer_than: tuple[int, datetime] | None = None`. When it is given, the query adds
+  `p.id > :live_after AND p.posted_at > :live_since`, and the caller passes `sort='new'` and
+  `result_id=''`, so nothing is cached. The caller keeps the first 40 ids after dedup. Existing
+  callers do not pass the argument, and their behavior is unchanged.
+- **Page.** The page renders like New page 1, with these differences:
+  - no instance stickies
+  - no `reload_url` auto-refresh (`#auto-reload` is not rendered)
+  - the shared Live bar and `#live_feed` attributes
+  - the SSE key: `any` for Subscribed and All; `local`, `popular` or `media` for those tabs
+  - an "Older posts" link to `/home/new/<view_filter>?page=1`
+- **Nav.** "Live" goes after New in `_home_nav.html`, in both the dropdown and the button group. The
+  dillo theme's `_home_nav.html` is left alone: Live is not offered there and the theme stays
+  unchanged.
+- **Fragment.** `GET /home/live_posts/<view_filter>?after=<int>` (endpoint
+  `main.home_live_posts`) is `@login_required`.
+  - It returns 404 for any `view_filter` outside the five tabs.
+  - It returns 400 for a missing or unreadable `after`.
+  - Otherwise it uses `home_feed_source` and `get_deduped_post_ids(newer_than=(after,
+    utcnow() - LIVE_WINDOW))`, then `post_ids_to_models`.
+  - It renders the teasers with the same teaser template and context as the home page.
+  - It returns 200 with header `X-Live-Cursor` (the largest id returned), or 204 when nothing is new.
+
+## Rate limit
+
+Both fragment routes use `12/minute` keyed `live:<user id>:<feed>`. `<feed>` is the community id
+or the home `view_filter`. Two Live tabs on different feeds do not share a budget.
+
+## Shared markup
+
+The Live bar has two parts: the `#live_status` badge, and the fixed `#live_pill` at the bottom of
+the window. It moves into `app/templates/_live_bar.html`, which both `community/community.html` and
+`index.html` include. `#live_feed`, the data attributes and the module script tag stay at their
+own `.post_list` element in each page.
+
+## FastAPI
+
+`LIVE_FEEDS = {"microblogs"}` is replaced by the pattern `^(any|local|popular|media|community:\d+)$`.
+A feed that does not match the pattern returns 404. The registry, the queue and the fan-out are
+unchanged. The Redis channel suffix after `live:` is the feed key, so `fan_out_live` keeps
+splitting on the first `:` only.
+
+## Testing
+
+The bar is the same as the base spec: 100% line and branch coverage of new and changed lines
+(`tests/check_changed_line_coverage.py --branches`), JS at 100/100/100, no floor may drop, and the
+full suite green. Cases:
+
+- **`live_feed_keys`:** one test per key, plus each exclusion:
+  - backfill
+  - under review
+  - not listable
+  - deleted
+  - the local microblogs community not getting `local`
+- **`announce_live_post`:**
+  - it publishes one message per key
+  - nothing is published without `NOTIF_SERVER`
+  - a failure is logged as a warning
+- **`is_live_community`:**
+  - true for local `microblogs` and for `microblogs` on a `piefed` instance (any letter case)
+  - false for `microblogs` on lemmy or mastodon
+  - false for any other name
+- **`get_deduped_post_ids(newer_than=...)`:**
+  - it respects the cursor and the 1 h window
+  - a blocked user and a non-member private community stay filtered out
+  - in Subscribed, a followed author's post in a non-`show_all` community is included
+  - existing callers are unchanged (their existing tests)
+- **`home_feed_source`:** existing home page tests pass unchanged, which shows the move is pure.
+- **Home page:**
+  - the Live entry shows only for a logged-in user, on page 1 of the five tabs, without a tag
+  - everything else falls back to `new`
+  - there are no stickies and no `#auto-reload`
+  - each tab carries the right SSE key
+  - the Older posts link is correct
+- **Home fragment:**
+  - for each of the five tabs: 200 with the cursor header, and 204
+  - 400 for a bad cursor
+  - 404 for `moderating` and for an unknown filter
+  - an anonymous request is redirected to login
+  - the per-user, per-feed rate limit: the 13th request on one feed gets 429, and another feed is
+    unaffected
+- **Remote community:** Live on `microblogs@<piefed host>`, no Live on `microblogs@<lemmy host>`,
+  and its SSE key is `community:<id>`.
+- **FastAPI:** `any`, `local`, `popular`, `media` and `community:12` are accepted; `microblogs`,
+  `community:x`, `community:` and `../x` get 404.
+- **Browser (verification, not a committed gate)**, on the local stack:
+  - home All Live inserts a new post
+  - the Popular tab does not wake for a post outside popular communities
+  - a remote PieFed microblogs page goes Live
+  - the SSE wake-up drives the fetch
