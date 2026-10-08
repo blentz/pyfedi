@@ -57,9 +57,8 @@ Non-goals:
 
 ### Resolving `microblogs@<host>`
 
-One function, `microblog_server_view(actor) -> Instance | None`, in `app/community/live.py` (or a
-sibling module if the import graph requires it). It returns the `Instance` when every rule holds, else
-`None`:
+One function, `microblog_server_view(actor) -> Instance | None`, in `app/community/live.py`. It
+returns the `Instance` when every rule holds, else `None`:
 
 1. `actor` lower-cased splits on its last `@` into `name` and `host`, and `name == 'microblogs'`.
 2. No real community exists for `actor`. A real community always wins, so
