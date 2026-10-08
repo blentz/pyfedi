@@ -307,7 +307,7 @@ def home_page(sort, view_filter, page, result_id, low_bandwidth, tag, live=False
                                rss_feed=rss_feed, live=live,
                                live_cursor=max((post.id for post in posts), default=0) if live else 0,
                                live_key=home_live_key(view_filter) if live else '',
-                               reload_url=None if live else reload_url(sort, view_filter)
+                               reload_url='' if live else reload_url(sort, view_filter)
                                ))
     if current_user.is_anonymous:
         resp.headers.set('ETag', f"{sort}_{view_filter}_{hash(str(g.site.last_active))}")
