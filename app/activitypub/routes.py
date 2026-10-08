@@ -35,6 +35,7 @@ import app.community.routes as community_routes
 from app.community.util import send_to_remote_instance, send_to_remote_instance_fast
 from app.discovery import SYNC_ACCEPTED, SYNC_REJECTED
 from app.discovery.instance_answers import instance_actor_answer, record_answer
+from app.relays.inbound import relay_actor_gate
 from app.discovery.podcast import PODCAST_DROP, podcast_person_follow_target, podcast_route_for, podcast_twin_user
 from app.constants import *
 # The module, not the name: app.feed.routes reaches this file through
@@ -756,6 +757,10 @@ def shared_inbox():
     if isinstance(request_json['actor'], str) and request_json['actor'].endswith('accounts/peertube'):
         log_incoming_ap(id, APLOG_PT_VIEW, APLOG_IGNORED, saved_json, 'PeerTube View or CacheFile activity')
         return ''
+
+    answered = relay_actor_gate(request, request_json)   # relays (spec 2026-10-08): never a User row
+    if answered is not None:
+        return answered
 
     try:
         HttpSignature.precheck(request)
