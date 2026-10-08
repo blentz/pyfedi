@@ -294,3 +294,61 @@ class TestPostLinks:
 
         assert 'href="/c/microblogs@mastodon.example"' in rendered
         assert '>@mastodon.example</span>' in rendered
+
+
+class TestServersSidebar:
+
+    def servers(self, app, live):
+        from app.community.live import busiest_microblog_servers
+
+        with app.test_request_context():
+            return busiest_microblog_servers(live.microblogs.id)
+
+    def test_servers_are_ranked_by_posts_in_the_last_day(self, app, live):
+        live.toot()
+        live.toot()
+        other_toot(live, 1)
+
+        assert self.servers(app, live) == [('mastodon.example', 2), ('other1.example', 1)]
+
+    def test_older_posts_do_not_count(self, app, live):
+        live.toot(posted_at=utcnow() - timedelta(hours=25))
+
+        assert self.servers(app, live) == []
+
+    def test_local_authors_and_servers_without_a_view_are_left_out(self, app, live):
+        make_post(live.microblogs, live.viewer, 'https://test.piefed.local/post/3', microblog=True)
+        live.toot()
+        real_microblogs(live)
+
+        assert self.servers(app, live) == []
+
+    def test_at_most_ten(self, app, live):
+        for n in range(12):
+            other_toot(live, n)
+
+        assert len(self.servers(app, live)) == 10
+
+    def test_the_query_is_memoized(self):
+        # Tests run with NullCache: pin the decorator.
+        from app.community.live import busiest_microblog_servers
+
+        assert busiest_microblog_servers.cache_timeout == 300
+
+    def test_the_sidebar_lists_them_on_the_community(self, client, live):
+        live.toot()
+
+        html = client.get('/c/microblogs').get_data(as_text=True)
+
+        assert 'id="microblog_servers"' in html
+        assert 'href="/c/microblogs@mastodon.example"' in html
+
+    def test_not_on_a_server_view(self, client, live):
+        live.toot()
+
+        assert 'id="microblog_servers"' not in client.get(VIEW).get_data(as_text=True)
+
+    def test_not_on_another_community(self, client, live):
+        make_community('general')
+
+        assert 'id="microblog_servers"' not in client.get('/c/general').get_data(as_text=True)

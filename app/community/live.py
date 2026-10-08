@@ -146,3 +146,22 @@ def announce_live_post(post, community, backfill: bool) -> None:
 
 
 post_stored_hooks.append(announce_live_post)
+
+
+SIDEBAR_SERVERS = 10
+
+
+@cache.memoize(timeout=300)
+def busiest_microblog_servers(community_id: int) -> list:
+    """(host, posts in the last 24 h) for the servers with the most posts in the microblogs
+    community, busiest first, only those with a server view (spec: Discovery)."""
+    count = func.count(Post.id)
+    rows = (db.session.query(func.lower(Instance.domain), count)
+            .join(Instance, Instance.id == Post.instance_id)
+            .filter(Post.community_id == community_id, Post.instance_id != 1, Post.deleted == False,
+                    Post.posted_at > utcnow() - timedelta(hours=24))
+            .group_by(func.lower(Instance.domain))
+            .order_by(count.desc(), func.lower(Instance.domain))
+            .limit(SIDEBAR_SERVERS * 2)      # headroom for hosts that have no view
+            .all())
+    return [(host, posts) for host, posts in rows if server_view_instance(host) is not None][:SIDEBAR_SERVERS]
