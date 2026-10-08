@@ -46,7 +46,7 @@
                 {% if community.nsfl -%}
                     <span class="warning_badge nsfl" title="{{ _('Not safe for life') }}">nsfl</span>
                 {% endif -%}
-                {% if current_user.is_authenticated -%}
+                {% if current_user.is_authenticated and not view_actor -%}
                     <span>{% include 'community/_notification_toggle.html' -%}</span>
                 {% endif -%}
             </h1>
@@ -83,7 +83,7 @@
                         {% if community.nsfl -%}
                             <span class="warning_badge nsfl" title="{{ _('Not safe for life') }}">nsfl</span>
                         {% endif -%}
-                        {% if current_user.is_authenticated -%}
+                        {% if current_user.is_authenticated and not view_actor -%}
                             {% include 'community/_notification_toggle.html' -%}
                         {% endif -%}
                     </h1>
@@ -117,7 +117,7 @@
                 {% if community.nsfl -%}
                     <span class="warning_badge nsfl" title="{{ _('Not safe for life') }}">nsfl</span>
                 {% endif -%}
-                {% if current_user.is_authenticated -%}
+                {% if current_user.is_authenticated and not view_actor -%}
                     {% include 'community/_notification_toggle.html' -%}
                 {% endif -%}
             </h1>
