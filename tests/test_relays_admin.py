@@ -207,6 +207,15 @@ def test_the_nav_and_federation_page_link_here(admin):
     assert f'href="{PAGE}"' in client.get('/admin/federation').get_data(as_text=True)
 
 
+def test_the_federation_page_links_here_outside_the_bulk_import_sections(admin):
+    client, _ = admin
+
+    html = client.get('/admin/federation').get_data(as_text=True)
+
+    # Relays are not a bulk import: the link sits in its own section, ahead of the import fieldsets
+    assert html.index(f'href="{PAGE}"') < html.index('Bulk community import')
+
+
 # --- CLI ---
 
 @pytest.fixture
