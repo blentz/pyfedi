@@ -186,7 +186,7 @@ class TestSignature:
     def test_a_bad_signature_refetches_the_key_once_and_a_good_retry_is_handled(self, app, verifier, monkeypatch):
         relay = make_relay(public_key='STALE')
         fetched = []
-        monkeypatch.setattr(inbound, 'detect_relay',
+        monkeypatch.setattr(inbound.relay_subscribe, 'detect_relay',
                             lambda url: fetched.append(url) or {'public_key': PEM})
         assert gate(app, activity('Accept', FOLLOW_ID)) == ('', 200)
         assert fetched == [relay.url] and verifier == ['STALE', PEM]
@@ -195,7 +195,7 @@ class TestSignature:
 
     def test_a_relay_with_no_stored_key_fetches_one(self, app, verifier, monkeypatch):
         relay = make_relay(public_key=None)
-        monkeypatch.setattr(inbound, 'detect_relay', lambda url: {'public_key': PEM})
+        monkeypatch.setattr(inbound.relay_subscribe, 'detect_relay', lambda url: {'public_key': PEM})
         assert gate(app, activity('Accept', FOLLOW_ID)) == ('', 200)
         assert verifier == [PEM]
         db.session.refresh(relay)
@@ -203,7 +203,7 @@ class TestSignature:
 
     def test_a_signature_that_still_fails_is_a_401_and_logged(self, app, verifier, logs, monkeypatch):
         relay = make_relay(public_key='STALE')
-        monkeypatch.setattr(inbound, 'detect_relay', lambda url: {'public_key': 'STILL-WRONG'})
+        monkeypatch.setattr(inbound.relay_subscribe, 'detect_relay', lambda url: {'public_key': 'STILL-WRONG'})
         assert gate(app, activity('Accept', FOLLOW_ID)) == ('', 401)
         assert logs[-1][1:] == (APLOG_FAILURE, 'Relay signature did not verify')
         db.session.refresh(relay)
@@ -213,34 +213,34 @@ class TestSignature:
         make_relay(public_key='STALE')
 
         def fail(url):
-            raise inbound.RelayError('gone')
+            raise inbound.relay_subscribe.RelayError('gone')
 
-        monkeypatch.setattr(inbound, 'detect_relay', fail)
+        monkeypatch.setattr(inbound.relay_subscribe, 'detect_relay', fail)
         assert gate(app, activity('Accept', FOLLOW_ID)) == ('', 401)
 
     def test_a_fetch_that_finds_no_key_leaves_the_stored_key_alone(self, app, verifier, monkeypatch):
         relay = make_relay(public_key='STALE')
-        monkeypatch.setattr(inbound, 'detect_relay', lambda url: {'public_key': None})
+        monkeypatch.setattr(inbound.relay_subscribe, 'detect_relay', lambda url: {'public_key': None})
         assert gate(app, activity('Accept', FOLLOW_ID)) == ('', 401)
         db.session.refresh(relay)
         assert relay.public_key == 'STALE'
 
     def test_a_fetch_that_returns_the_same_key_is_a_401(self, app, verifier, monkeypatch):
         make_relay(public_key='STALE')
-        monkeypatch.setattr(inbound, 'detect_relay', lambda url: {'public_key': 'STALE'})
+        monkeypatch.setattr(inbound.relay_subscribe, 'detect_relay', lambda url: {'public_key': 'STALE'})
         assert gate(app, activity('Accept', FOLLOW_ID)) == ('', 401)
 
     def test_a_signature_naming_another_key_causes_no_fetch(self, app, verifier, monkeypatch):
         make_relay(public_key='STALE')
         fetched = []
-        monkeypatch.setattr(inbound, 'detect_relay', lambda url: fetched.append(url) or {'public_key': PEM})
+        monkeypatch.setattr(inbound.relay_subscribe, 'detect_relay', lambda url: fetched.append(url) or {'public_key': PEM})
         assert gate(app, activity('Accept', FOLLOW_ID), key_id='https://evil.example/actor#main-key') == ('', 401)
         assert fetched == []
 
     def test_two_bad_requests_within_five_minutes_fetch_once(self, app, verifier, monkeypatch):
         make_relay(public_key='STALE')
         fetched = []
-        monkeypatch.setattr(inbound, 'detect_relay', lambda url: fetched.append(url) or {'public_key': 'STALE'})
+        monkeypatch.setattr(inbound.relay_subscribe, 'detect_relay', lambda url: fetched.append(url) or {'public_key': 'STALE'})
         assert gate(app, activity('Accept', FOLLOW_ID)) == ('', 401)
         assert gate(app, activity('Accept', FOLLOW_ID)) == ('', 401)
         assert len(fetched) == 1
@@ -265,7 +265,7 @@ class TestThroughTheInbox:
         private_key, public_key = a_keypair()
         other_public = next(pair[1] for pair in (a_keypair() for _ in range(10)) if pair[1] != public_key)
         relay = make_relay(public_key=other_public)
-        monkeypatch.setattr(inbound, 'detect_relay', lambda url: {'public_key': other_public})
+        monkeypatch.setattr(inbound.relay_subscribe, 'detect_relay', lambda url: {'public_key': other_public})
         sender = type('Sender', (), {'private_key': private_key, 'ap_profile_id': ACTOR})()
         with app.test_client() as client:
             response = signed_inbox_post(client, activity('Accept', FOLLOW_ID), sender)
@@ -290,7 +290,7 @@ class TestThroughTheInbox:
         db.session.get(Site, 1).allowlist_mode = ALLOWLIST_STRONG
         db.session.commit()
         called = []
-        monkeypatch.setattr('app.activitypub.routes.relay_actor_gate', lambda *a: called.append(a))
+        monkeypatch.setattr('app.relays.inbound.relay_actor_gate', lambda *a: called.append(a))
         monkeypatch.setattr('app.activitypub.routes.instance_allowed', lambda host: False)
         with app.test_client() as client:
             response = client.post('/inbox', json=activity('Accept', FOLLOW_ID))

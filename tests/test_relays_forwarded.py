@@ -354,7 +354,7 @@ class TestMalformedStoredKey:
         monkeypatch.setitem(app.config, 'DEBUG', True)
         private_key, _public = a_keypair()
         make_relay(state=RELAY_ACCEPTED, public_key='not a pem')
-        monkeypatch.setattr(inbound, 'detect_relay', lambda url: {'public_key': None})
+        monkeypatch.setattr(inbound.relay_subscribe, 'detect_relay', lambda url: {'public_key': None})
         sender = type('Sender', (), {'private_key': private_key, 'ap_profile_id': ACTOR})()
         activity = {'id': 'https://relay.example/a/1', 'type': 'Accept', 'actor': ACTOR, 'object': 'x'}
         with app.test_client() as client:
