@@ -28,7 +28,7 @@ from app.community.forms import SearchRemoteCommunity, CreateDiscussionForm, Cre
     InviteCommunityForm, MoveCommunityForm, EditCommunityFlairForm, SetMyFlairForm, FindAndBanUserCommunityForm, \
     CreateEventForm, InviteAcceptForm, EditCommunityMembership, CommunityRssFeedEdit, DeleteCommunityRssFeedForm
 from app.community.live import LIVE_COMMUNITY, is_live_community, is_local_microblogs, live_available, live_posts, \
-    microblog_server_view
+    microblog_server_view, busiest_microblog_servers
 from app.community.util import search_for_community, actor_to_community, \
     save_icon_file, save_banner_file, \
     delete_post_from_community, delete_post_reply_from_community, \
@@ -784,6 +784,8 @@ def show_community(community: Community, from_instance=None):
                                          content_filters=content_filters, sort=sort, flair=flair, show_post_community=False,
                                          tags=[] if view_actor else hashtags_used_in_community(community.id, content_filters),
                                          view_actor=view_actor,
+                                         microblog_servers=busiest_microblog_servers(community.id)
+                                         if is_local_microblogs(community) and not view_actor else None,
                                          live_sse_feed=f'instance:{from_instance.id}' if from_instance is not None else f'community:{community.id}',
                                          reported_posts=reported_posts(current_user.get_id(), current_user.get_id() in g.admin_ids),
                                          user_notes=user_notes(current_user.get_id()), banned_from_community=banned_from_community,
