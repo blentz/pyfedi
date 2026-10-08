@@ -15,7 +15,12 @@ RELAY_EXPIRY_MAX = 5000
 
 
 def relay_retention_days() -> int:
-    return int(get_setting('relay_retention_days', 7))
+    value = get_setting('relay_retention_days', 7)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        current_app.logger.warning(f'relays: relay_retention_days is {value!r}, not a number; using 7')
+        return 7
 
 
 def _local_user_ids():
@@ -45,9 +50,9 @@ def _kept_clause():
 def expire_relayed_posts():
     days = relay_retention_days()
     if days <= 0:
-        return {'deleted': 0, 'kept': 0}
+        return {'deleted': 0, 'kept': 0, 'failed': 0}
     session = get_task_session()
-    deleted = 0
+    deleted = failed = 0
     try:
         with patch_db_session(session):
             old = and_(Post.relay_id.isnot(None), Post.posted_at < utcnow() - timedelta(days=days))
@@ -57,12 +62,18 @@ def expire_relayed_posts():
                       .limit(RELAY_EXPIRY_MAX).all()]
             for start in range(0, len(doomed), RELAY_EXPIRY_BATCH):
                 for post in session.query(Post).filter(Post.id.in_(doomed[start:start + RELAY_EXPIRY_BATCH])):
-                    post.delete_dependencies()
-                    session.delete(post)
-                    deleted += 1
+                    post_id = post.id
+                    try:
+                        with session.begin_nested():
+                            post.delete_dependencies()
+                            session.delete(post)
+                        deleted += 1
+                    except Exception as e:
+                        failed += 1
+                        current_app.logger.warning(f'relays: could not expire post {post_id}: {type(e).__name__}')
                 session.commit()
-        current_app.logger.info(f'relays: expired {deleted} relayed posts, kept {kept}')
-        return {'deleted': deleted, 'kept': kept}
+        current_app.logger.info(f'relays: expired {deleted} relayed posts, kept {kept}, failed {failed}')
+        return {'deleted': deleted, 'kept': kept, 'failed': failed}
     except Exception:
         session.rollback()
         raise
