@@ -154,9 +154,9 @@
                             {% include '_live_bar.html' %}
                         {% endif -%}
                         <div class="post_list"{% if live %} id="live_feed"
-                             data-posts-url="{{ url_for('community.live_posts_fragment', actor=community.link()) }}"
+                             data-posts-url="{{ url_for('community.live_posts_fragment', actor=view_actor or community.link()) }}"
                              data-cursor="{{ live_cursor }}"
-                             data-sse-url="{{ notif_server ~ '/live/stream?feed=community:' ~ community.id if notif_server else '' }}"
+                             data-sse-url="{{ notif_server ~ '/live/stream?feed=' ~ live_sse_feed if notif_server else '' }}"
                              data-str-live="{{ _('Live') }}" data-str-paused="{{ _('Paused') }}"
                              data-str-new-posts="{{ _('New posts: %(num)s', num='%d') }}"{% endif %}>
                             {% if sticky_posts -%}

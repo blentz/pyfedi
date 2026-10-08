@@ -17,7 +17,7 @@ from app.utils import instance_banned, utcnow
 from app.discovery import MEDIA_SOFTWARE
 
 LIVE_COMMUNITY = 'microblogs'
-LIVE_KEY_PATTERN = r'^(any|local|popular|media|community:\d+)$'
+LIVE_KEY_PATTERN = r'^(any|local|popular|media|community:\d+|instance:\d+)$'
 # A backfilled post is old but gets a new, high id; this window keeps it out of the stream
 # while still admitting a post that federated in a few minutes late.
 LIVE_WINDOW = timedelta(hours=1)
@@ -112,6 +112,8 @@ def live_feed_keys(post, community, backfill: bool) -> set:
         keys.add('popular')
     if _software(community) in MEDIA_SOFTWARE:
         keys.add('media')
+    if is_local_microblogs(community) and post.instance_id and post.instance_id != 1:
+        keys.add(f'instance:{post.instance_id}')   # its author's server view (spec 2026-10-08)
     return keys
 
 

@@ -181,3 +181,63 @@ class TestServerViewPage:
         plain = client.get('/c/microblogs?sort=new').headers['ETag']
 
         assert view != plain
+
+
+FRAGMENT = '/community/microblogs@mastodon.example/live/posts'
+
+
+class TestServerViewLive:
+
+    def keys(self, app, post, community):
+        from app.community.live import live_feed_keys
+
+        with app.test_request_context():
+            return live_feed_keys(post, community, False)
+
+    def test_a_remote_authors_post_wakes_its_server_view(self, app, live):
+        post = live.toot()
+
+        assert f'instance:{live.remote.id}' in self.keys(app, post, live.microblogs)
+
+    def test_a_local_authors_post_does_not(self, app, live):
+        post = make_post(live.microblogs, live.viewer, 'https://test.piefed.local/post/1', microblog=True)
+
+        assert not any(key.startswith('instance:') for key in self.keys(app, post, live.microblogs))
+
+    def test_a_post_in_another_community_does_not(self, app, live):
+        general = make_community('general')
+        post = make_post(general, live.author, 'https://mastodon.example/statuses/g')
+
+        assert not any(key.startswith('instance:') for key in self.keys(app, post, general))
+
+    def test_the_fragment_serves_only_that_servers_new_posts(self, client, live):
+        mine = live.toot()
+        other_toot(live)
+        login(client, live.viewer)
+
+        response = client.get(f'{FRAGMENT}?after=0')
+
+        assert response.status_code == 200
+        assert teaser_ids(response.get_data(as_text=True)) == [mine.id]
+
+    def test_the_fragment_is_204_when_only_other_servers_posted(self, client, live):
+        other_toot(live)
+        login(client, live.viewer)
+
+        assert client.get(f'{FRAGMENT}?after=0').status_code == 204
+
+    def test_no_view_has_no_fragment(self, client, live):
+        login(client, live.viewer)
+
+        assert client.get('/community/microblogs@nowhere.example/live/posts?after=0').status_code == 404
+
+    def test_the_live_page_wires_the_view(self, app, client, live, monkeypatch):
+        monkeypatch.setitem(app.config, 'NOTIF_SERVER', 'https://notifs.example')
+        live.toot()
+        login(client, live.viewer)
+
+        html = client.get(f'{VIEW}?sort=live').get_data(as_text=True)
+
+        assert 'id="live_feed"' in html
+        assert re.search(r'data-posts-url="/community/microblogs(@|%40)mastodon.example/live/posts"', html)
+        assert f'data-sse-url="https://notifs.example/live/stream?feed=instance:{live.remote.id}"' in html

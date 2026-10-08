@@ -207,7 +207,8 @@ class TestAnnounceLivePost:
         with app.test_request_context():
             announce_live_post(live.toot(), live.microblogs, backfill=False)
 
-        assert published == [('live:any', '{}'), (f'live:community:{live.microblogs.id}', '{}'), 'execute']
+        assert published == [('live:any', '{}'), (f'live:community:{live.microblogs.id}', '{}'),
+                             (f'live:instance:{live.remote.id}', '{}'), 'execute']
         assert len(published.connections) == 1
 
     def test_a_backfilled_post_does_not(self, app, live, published):
@@ -731,7 +732,8 @@ class TestLiveFeedKeys:
             return live_feed_keys(post, community, backfill)
 
     def test_a_live_capable_community_post(self, app, live):
-        assert self.keys(app, live.toot(), live.microblogs) == {'any', f'community:{live.microblogs.id}'}
+        assert self.keys(app, live.toot(), live.microblogs) == {
+            'any', f'community:{live.microblogs.id}', f'instance:{live.remote.id}'}
 
     def test_the_local_microblogs_community_does_not_wake_local(self, app, live):
         assert 'local' not in self.keys(app, live.toot(), live.microblogs)
