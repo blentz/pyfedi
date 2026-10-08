@@ -269,6 +269,17 @@ class TestHomeLivePage:
         assert re.search(r'href="/home/live/all" class="btn btn-primary"', live)
         assert re.search(r'href="/home/live/all" class="btn btn-outline-secondary"', new)
 
+    def test_a_live_page_caches_no_result_list(self, home, redis_double):
+        home.post()
+        login(home.client, home.reader)
+
+        home.client.get('/home/new/all')
+        assert redis_double.keys('feed:*'), 'control: a plain page caches its result list'
+        redis_double.flushall()
+        home.client.get('/home/live/all')
+
+        assert redis_double.keys('feed:*') == []
+
     def test_a_live_page_has_no_auto_reload_url(self, home):
         login(home.client, home.reader)
 
