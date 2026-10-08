@@ -80,11 +80,16 @@ def announce_live_post(post, community, backfill: bool) -> None:
     fetches its own filtered posts, so a broadcast reveals nothing a filter would hide."""
     if not current_app.config['NOTIF_SERVER']:
         return
-    for key in sorted(live_feed_keys(post, community, backfill)):
-        try:
-            utils.publish_sse_event(f'live:{key}', '{}')
-        except Exception as exc:
-            current_app.logger.warning(f'Live feed wake-up {key} not sent: {exc}')
+    keys = sorted(live_feed_keys(post, community, backfill))
+    if not keys:
+        return
+    try:
+        pipe = utils.get_redis_connection().pipeline()
+        for key in keys:
+            pipe.publish(f'live:{key}', '{}')
+        pipe.execute()
+    except Exception as exc:
+        current_app.logger.warning(f'Live feed wake-up not sent: {exc}')
 
 
 post_stored_hooks.append(announce_live_post)
