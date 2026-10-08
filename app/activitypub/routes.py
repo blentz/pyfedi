@@ -2678,7 +2678,8 @@ def process_new_content(user, community, store_ap_json, request_json, announced)
                 if can_create_post(user, community):
                     update_post_from_activity(post, activity_json)
                     log_incoming_ap(id, APLOG_UPDATE, APLOG_SUCCESS, saved_json)
-                    if not announced and post.visibility in OPEN_VISIBILITIES:  # a followers-only body is never relayed to the community's followers
+                    # a followers-only body is never relayed to the community's followers, and relayed content is never re-broadcast
+                    if not announced and post.visibility in OPEN_VISIBILITIES and current_relay_id.get() is None:
                         announce_activity_to_followers(post.community, post.author, request_json)
                 else:
                     log_incoming_ap(id, APLOG_UPDATE, APLOG_FAILURE, saved_json, 'User cannot create post in Community')
@@ -2725,7 +2726,7 @@ def process_new_content(user, community, store_ap_json, request_json, announced)
                 if can_create_post_reply(user, community):
                     update_post_reply_from_activity(reply, activity_json)
                     log_incoming_ap(id, APLOG_UPDATE, APLOG_SUCCESS, saved_json)
-                    if not announced and reply.visibility in OPEN_VISIBILITIES:
+                    if not announced and reply.visibility in OPEN_VISIBILITIES and current_relay_id.get() is None:   # relayed content is never re-broadcast
                         announce_activity_to_followers(reply.community, reply.author, request_json)
                 else:
                     log_incoming_ap(id, APLOG_UPDATE, APLOG_FAILURE, saved_json, 'User cannot create reply in Community')
