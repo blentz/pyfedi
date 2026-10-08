@@ -59,3 +59,27 @@ def test_mark_all_as_read_is_a_flask_route_the_old_matcher_would_have_shadowed(a
 
 def test_the_live_stream_is_proxied_to_fastapi():
     assert '/live/stream' in handled_paths()
+
+
+def web_proxy_block():
+    """The body of the `reverse_proxy web:5000 { ... }` block, comments ignored."""
+    lines = [line.split('#', 1)[0].strip() for line in CADDYFILE.read_text().splitlines()]
+    start = lines.index('reverse_proxy web:5000 {')
+    return lines[start + 1:lines.index('}', start)]
+
+
+def caddy_seconds(value):
+    match = re.fullmatch(r'(\d+)(ms|s)', value)
+    assert match, f'unsupported Caddy duration {value}'
+    return int(match.group(1)) / (1000 if match.group(2) == 'ms' else 1)
+
+
+def test_requests_wait_for_the_app_while_it_restarts():
+    """While gunicorn restarts (migrations, preload), dials to web:5000 are refused and Caddy answered
+    every inbox delivery with 502; a sender that does not retry lost the activity. Caddy retries a
+    refused dial for any method, POST included, because nothing was sent upstream yet."""
+    options = dict(line.split(None, 1) for line in web_proxy_block() if line)
+
+    # A restart took about 10 s (502s from 14:33:04, gunicorn listening at 14:33:12).
+    assert caddy_seconds(options['lb_try_duration']) >= 30
+    assert caddy_seconds(options['lb_try_interval']) <= 1
