@@ -564,13 +564,24 @@ def list_communities():
     args_dict["platform"] = platform
 
     # Server views (/c/microblogs@<host>) join the list as rows (spec 2026-10-08, server views in the list)
-    microblogs = find_microblogging_community()
+    microblogs = None
     view_rows = None
     if server_view_list.view_side_allowed(home_select=home_select, subscribe_select=subscribe_select,
                                           topic_id=topic_id, language_id=language_id, feed_id=feed_id,
                                           platform=platform, nsfw=nsfw):
-        blocked = blocked_or_banned_instances(current_user.id) if current_user.is_authenticated else ()
-        view_rows = server_view_list.server_view_select(microblogs.id, search_param, instance, blocked)
+        microblogs = find_microblogging_community()
+        keywords = ()
+        hidden_communities = set()
+        blocked = ()
+        if current_user.is_authenticated:
+            blocked = blocked_or_banned_instances(current_user.id)
+            keywords = [keyword.strip() for keyword in (current_user.community_keyword_filter or '').split(',')]
+            hidden_communities = set(blocked_community_ids) | set(banned_from) | set(filtered_out_community_ids)
+        if microblogs.id not in hidden_communities:
+            view_rows = server_view_list.server_view_select(microblogs.id, search_param, instance, blocked,
+                                                            keywords)
+        else:
+            microblogs = None
     communities = server_view_list.paginate_union(
         communities, view_rows, sort_by, page,
         100 if current_user.is_authenticated and not low_bandwidth else 50, microblogs)
