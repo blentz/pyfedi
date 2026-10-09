@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from typing import List
 
 from fastapi import FastAPI
@@ -25,7 +26,28 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
+
+
+@asynccontextmanager
+async def lifespan(app):
+    """Open the shared HTTP client and start the Redis listener with the app; close the client
+    with it. (FastAPI deprecated @app.on_event for this.)"""
+    global http_client
+    # Initialize HTTP client with connection limits
+    limits = httpx.Limits(max_keepalive_connections=200, max_connections=200)
+    http_client = httpx.AsyncClient(limits=limits, http2=True)
+    logger.info("HTTP client initialized with 200 connection limit")
+
+    asyncio.create_task(redis_listener())
+    try:
+        yield
+    finally:
+        if http_client:
+            await http_client.aclose()
+            logger.info("HTTP client closed")
+
+
+app = FastAPI(lifespan=lifespan)
 
 # CORS configuration for cross-origin requests from piefed.social
 allowed_origins = os.getenv("ALLOWED_ORIGINS", "*").split(",")
@@ -249,25 +271,6 @@ async def health_check():
             "redis": "disconnected",
             "error": str(e)
         }
-
-
-@app.on_event("startup")
-async def startup_event():
-    global http_client
-    # Initialize HTTP client with connection limits
-    limits = httpx.Limits(max_keepalive_connections=200, max_connections=200)
-    http_client = httpx.AsyncClient(limits=limits, http2=True)
-    logger.info("HTTP client initialized with 200 connection limit")
-
-    asyncio.create_task(redis_listener())
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    global http_client
-    if http_client:
-        await http_client.aclose()
-        logger.info("HTTP client closed")
 
 
 if __name__ == "__main__":
