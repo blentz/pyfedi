@@ -202,6 +202,7 @@ class TestConfig(Config):
     MAIL_SUPPRESS_SEND = True
     SQLALCHEMY_DATABASE_URI = TEST_DATABASE_URL
     CACHE_TYPE = 'NullCache'
+    CACHE_NO_NULL_WARNING = True   # the suite chooses NullCache; flask-caching warns about it at init
     SERVER_NAME = 'test.piefed.local'
     # Flask-Limiter's init_app() copies RATELIMIT_ENABLED onto the shared
     # `limiter` every time create_app() runs, and config.py defaults it to True.

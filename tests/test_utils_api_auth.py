@@ -681,7 +681,7 @@ class TestAuthoriseApiUserJwtValidationFailures:
         now = int(time())
         payload = {'sub': str(user.id), 'iss': current_app.config['SERVER_NAME'],
                    'iat': now, 'exp': now + 90000, 'jti': str(uuid.uuid4())}
-        token = jwt.encode(payload, 'not-the-servers-secret', algorithm='HS256')
+        token = jwt.encode(payload, 'not-the-servers-secret-but-32-bytes-long', algorithm='HS256')
         with pytest.raises(Exception) as exc_info:
             authorise_api_user(f'Bearer {token}')
         assert type(exc_info.value) is Exception
