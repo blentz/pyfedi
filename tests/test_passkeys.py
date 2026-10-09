@@ -38,6 +38,7 @@ from webauthn.helpers.exceptions import (InvalidAuthenticationResponse,
 
 from app import cache, db
 from app.models import Passkey, Site, utcnow
+from tests.cache_doubles import calls_for, get_for
 from tests.factories import make_instance, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -265,7 +266,7 @@ def test_the_options_endpoint_answers_an_unknown_user_like_a_known_one(app, db_s
     assert unknown.content_type == known.content_type
     assert set(unknown.get_json()) == set(known.get_json())
     # Nobody to cache a challenge for: only alice's request stored one.
-    assert cache_set.call_count == 1
+    assert len(calls_for(cache_set, 'challenge_')) == 1
 
 
 def test_the_verification_endpoint_does_not_name_an_unknown_user(app, db_session):
@@ -302,7 +303,7 @@ def test_a_known_user_is_given_a_challenge(app, db_session):
     # Asserted on the SET, not a later GET: tests/conftest.py configures
     # NullCache, so nothing stored is ever retrievable and cache.get() answers
     # None for a challenge that was correctly saved. Fact 344.
-    assert cache_set.call_args.args[0] == f'challenge_{alice.id}'
+    assert [c.args[0] for c in calls_for(cache_set, 'challenge_')] == [f'challenge_{alice.id}']
 
 
 def test_a_user_can_be_found_by_email(app, db_session):
@@ -341,7 +342,7 @@ def test_a_banned_or_remote_account_gets_no_usable_challenge(app, db_session, co
     # D888 residue: the decoy credential an unknown name gets ('ALICE' matches no account)
     assert len(response.get_json()['allowCredentials']) == 1
     assert response.get_json()['allowCredentials'] == _offered(app, 'ALICE')
-    assert cache_set.call_args_list == []
+    assert calls_for(cache_set, 'challenge_') == []
 
 
 def _offered(app, username):
@@ -460,7 +461,7 @@ def test_the_login_is_verified_against_this_host_and_challenge(app, db_session):
     _passkey(alice)
     client = app.test_client()
 
-    with patch('app.auth.passkeys.cache.get', return_value='CHALLENGE'):
+    with patch('app.auth.passkeys.cache.get', side_effect=get_for('challenge_', 'CHALLENGE')):
         with patch('app.auth.passkeys.parse_authentication_credential_json',
                    return_value='CRED'):
             with patch('app.auth.passkeys.verify_authentication_response',
@@ -686,7 +687,7 @@ def test_the_registration_options_carry_the_site_and_the_user(app, db_session):
     assert body['rp']['id'] == 'test.piefed.local'
     assert body['rp']['name'] == 'Test Site'
     assert body['user']['name'] == alice.user_name
-    assert cache_set.call_args.args[0] == f'challenge_{alice.id}'
+    assert [c.args[0] for c in calls_for(cache_set, 'challenge_')] == [f'challenge_{alice.id}']
 
 
 def test_the_registration_options_exclude_credentials_already_registered(app, db_session):

@@ -135,6 +135,7 @@ def stripe_webhook():
         # Invalid signature
         return 'could not verify signature', 400
 
+    event = event.to_dict()             # stripe >= 13: a StripeObject is no dict (no .get)
     data = event.get('data')            # every value below comes off the wire
     stripe_object = data.get('object') if isinstance(data, dict) else None
     if not isinstance(stripe_object, dict):
