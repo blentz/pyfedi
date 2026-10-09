@@ -95,7 +95,8 @@ For one page of union rows, in order:
 
 - Community rows load as `Community` objects in one query with `joinedload(Community.instance)`, as
   today.
-- View rows become `ServerView` objects (new, in `app/community/live.py`): `is_server_view = True`,
+- View rows become `ServerView` objects (new module `app/community/server_view_list.py`, which also
+  builds the union): `is_server_view = True`,
   `instance`, `host`, the aggregate counts, `subscriptions_count = 0`, `nsfw = nsfl = False`,
   `id = None`, `link()` returning `microblogs@<host>`, `display_name()` returning `microblogs@<host>`,
   and `icon_image(size)` returning the microblogs community's icon.
