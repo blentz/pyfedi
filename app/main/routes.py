@@ -28,6 +28,7 @@ from app.constants import SUBSCRIPTION_PENDING, SUBSCRIPTION_MEMBER, SUBSCRIPTIO
     POST_STATUS_REVIEWING
 from app.email import send_email, send_registration_approved_email
 from app.inoculation import inoculation
+from app.community import server_view_list
 from app.community.live import HOME_LIVE_FILTERS, LIVE_LIMIT, LIVE_WINDOW, home_live_available, home_live_key
 from app.main import bp
 from flask import g, flash, request, current_app, url_for, redirect, make_response, jsonify, send_file, abort
@@ -436,7 +437,9 @@ def list_communities():
     if search_param == '':
         pass
     else:
-        communities = communities.filter(or_(Community.title.ilike(f"%{search_param}%"), Community.ap_id.ilike(f"%{search_param}%")))
+        pattern = server_view_list.like_pattern(search_param)   # %, _ and \ match literally
+        communities = communities.filter(or_(Community.title.ilike(pattern, escape='\\'),
+                                             Community.ap_id.ilike(pattern, escape='\\')))
 
     if topic_id > 0:
         communities = communities.filter_by(topic_id=topic_id)
@@ -548,10 +551,6 @@ def list_communities():
         elif nsfw == 'yes':
             communities = communities.filter(and_(Community.nsfw == True))
 
-    communities = communities.order_by(safe_order_by(sort_by, Community, {'title', 'subscriptions_count', 'post_count',
-                                                                          'post_reply_count', 'last_active', 'created_at',
-                                                                          'active_weekly'}))
-
     # dict used for pagination query parameters
     args_dict = dict()
     args_dict["search"] = search_param
@@ -564,10 +563,17 @@ def list_communities():
     args_dict["instance"] = instance
     args_dict["platform"] = platform
 
-    # Pagination (platform_of reads each row's instance, so load it with the list)
-    communities = communities.options(joinedload(Community.instance)).paginate(page=page,
-                                       per_page=100 if current_user.is_authenticated and not low_bandwidth else 50,
-                                       error_out=False)
+    # Server views (/c/microblogs@<host>) join the list as rows (spec 2026-10-08, server views in the list)
+    microblogs = find_microblogging_community()
+    view_rows = None
+    if server_view_list.view_side_allowed(home_select=home_select, subscribe_select=subscribe_select,
+                                          topic_id=topic_id, language_id=language_id, feed_id=feed_id,
+                                          platform=platform, nsfw=nsfw):
+        blocked = blocked_or_banned_instances(current_user.id) if current_user.is_authenticated else ()
+        view_rows = server_view_list.server_view_select(microblogs.id, search_param, instance, blocked)
+    communities = server_view_list.paginate_union(
+        communities, view_rows, sort_by, page,
+        100 if current_user.is_authenticated and not low_bandwidth else 50, microblogs)
     # Interop D24: below the local results, offer what the discovery directory knows and this server does not
     discovered = discovery_fallback(KIND_COMMUNITY, search_param, allow_nsfw=nsfw != 'no',
                                     viewer_id=current_user.id if current_user.is_authenticated else None) \

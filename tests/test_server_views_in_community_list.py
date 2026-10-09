@@ -6,8 +6,8 @@ from datetime import timedelta
 
 import pytest
 
-from app import db
-from app.models import BannedInstances, Community, InstanceBlock
+from app import cache, db
+from app.models import BannedInstances, Community, InstanceBlock, Site
 from app.utils import utcnow
 from tests.discovery_fixtures import fresh_cache  # noqa: F401
 from tests.factories import make_community, make_instance, make_post, make_user
@@ -200,3 +200,90 @@ class TestHelpers:
     @pytest.mark.parametrize('change', [{'home_select': 'remote'}, {'nsfw': 'no'}])
     def test_filters_a_view_can_match_keep_it(self, change):
         assert view_side_allowed(**{**self.base, **change})
+
+
+VIEW_LINK = 'href="/c/microblogs@mastodon.example"'
+
+
+class TestTheList:
+
+    def test_search_microblogs_lists_every_server_view(self, client, live):
+        live.toot()
+        server(live, 'infosec.exchange')
+
+        html = client.get('/communities?search=microblogs').get_data(as_text=True)
+
+        assert VIEW_LINK in html and 'href="/c/microblogs@infosec.exchange"' in html
+
+    def test_a_host_search_finds_its_view(self, client, live):
+        live.toot()
+        server(live, 'infosec.exchange')
+
+        html = client.get('/communities?search=infosec').get_data(as_text=True)
+
+        assert 'href="/c/microblogs@infosec.exchange"' in html and VIEW_LINK not in html
+
+    def test_the_unfiltered_list_includes_views(self, client, live):
+        live.toot()
+
+        assert VIEW_LINK in client.get('/communities').get_data(as_text=True)
+
+    def test_a_view_row_has_no_join_control(self, client, live):
+        live.toot()
+        login(client, live.viewer)
+
+        html = client.get('/communities?search=microblogs').get_data(as_text=True)
+
+        assert VIEW_LINK in html
+        assert '/community/microblogs@mastodon.example/subscribe' not in html
+        assert '/community/microblogs@mastodon.example/unsubscribe' not in html
+
+    @pytest.mark.parametrize('query', ['home_select=local', 'subscribe_select=subscribed', 'topic_id=1',
+                                       'language_id=1', 'feed_id=1', 'platform=peertube', 'nsfw=yes'])
+    def test_filters_a_view_cannot_match_drop_views(self, client, live, query):
+        live.toot()
+        Site.query.first().enable_nsfw = True   # with NSFW hidden by the site or the viewer, nsfw=yes is ignored
+        live.viewer.hide_nsfw = 0
+        db.session.commit()
+        cache.clear()   # the site settings are cached
+        login(client, live.viewer)
+
+        response = client.get(f'/communities?{query}')
+
+        assert response.status_code == 200 and VIEW_LINK not in response.get_data(as_text=True)
+
+    @pytest.mark.parametrize('query', ['home_select=remote', 'nsfw=no', 'instance=mastodon.example'])
+    def test_filters_a_view_can_match_keep_views(self, client, live, query):
+        live.toot()
+
+        assert VIEW_LINK in client.get(f'/communities?{query}').get_data(as_text=True)
+
+    def test_a_blocked_server_is_not_listed_for_its_blocker(self, client, live):
+        live.toot()
+        db.session.add(InstanceBlock(user_id=live.viewer.id, instance_id=live.remote.id))
+        db.session.commit()
+        login(client, live.viewer)
+
+        assert VIEW_LINK not in client.get('/communities?search=microblogs').get_data(as_text=True)
+
+    def test_a_community_search_takes_wildcards_literally(self, client, live):
+        make_community('plain')
+
+        assert 'href="/c/plain"' not in client.get('/communities?search=%25').get_data(as_text=True)
+
+    @pytest.mark.parametrize('sort_by', ['', 'title asc', 'post_count desc', 'nonsense', '1; DROP TABLE x'])
+    def test_every_sort_answers(self, client, live, sort_by):
+        live.toot()
+
+        assert client.get('/communities', query_string={'sort_by': sort_by}).status_code == 200
+
+    def test_pagination_crosses_from_communities_to_views(self, client, live):
+        for n in range(60):
+            community(f'c{n:02d}', 100 + n)
+        live.toot()
+
+        first = client.get('/communities?sort_by=post_count desc').get_data(as_text=True)
+        second = client.get('/communities?sort_by=post_count desc&page=2').get_data(as_text=True)
+
+        assert VIEW_LINK not in first and 'page=2' in first
+        assert VIEW_LINK in second
