@@ -3,15 +3,13 @@ from unittest.mock import Mock, patch
 
 from app import create_app, db
 from app.models import Post, Community
-from config import Config
+from tests.conftest import TestConfig as SuiteConfig
 
 
-class TestConfig(Config):
-    """Test configuration that inherits from the main Config"""
-    TESTING = True
-    WTF_CSRF_ENABLED = False
-    # Disable real email sending during tests
-    MAIL_SUPPRESS_SEND = True
+class TestConfig(SuiteConfig):
+    """The suite's config, with https URLs. It inherited production Config, whose
+    RATELIMIT_ENABLED defaults to True: create_app() copies that onto the shared limiter,
+    so every later test in the same process ran rate-limited (429s in a serial run)."""
     HTTP_PROTOCOL = 'https'
 
 
@@ -270,3 +268,11 @@ def test_ap_id_fallback_for_emoji_titles(app):
         # slugify just makes empty string, fall back to old /post/post_id style
         assert post.ap_id is not None
         assert post.ap_id.endswith("/post/314")
+
+
+def test_building_this_modules_app_leaves_the_shared_limiter_off(app):
+    """create_app() copies RATELIMIT_ENABLED onto the one shared limiter; a config that turned it
+    on here left every later test in the process rate-limited."""
+    from app import limiter
+
+    assert not limiter.enabled
