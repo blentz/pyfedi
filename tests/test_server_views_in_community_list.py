@@ -3,6 +3,7 @@
 Spec: docs/superpowers/specs/2026-10-08-server-views-in-community-list-design.md
 """
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -32,7 +33,7 @@ def community(name, post_count):
     return row
 
 
-from app.community.server_view_list import (ServerView, like_pattern, paginate_union, parse_sort,
+from app.community.server_view_list import (ServerView, _hydrate, like_pattern, paginate_union, parse_sort,
                                             server_view_select, view_side_allowed)
 
 
@@ -103,6 +104,21 @@ class TestServerViewSelect:
         server(live, 'infosec.exchange')
 
         assert list(view_rows(app, live, host='InfoSec.Exchange')) == ['microblogs@infosec.exchange']
+
+
+class TestHydrate:
+
+    def test_skips_a_union_row_whose_community_is_gone(self, app, live):
+        first = community('first', 2)
+        last = community('last', 1)
+        rows = [SimpleNamespace(community_id=first.id, instance_id=None),
+                SimpleNamespace(community_id=999_999, instance_id=None),
+                SimpleNamespace(community_id=last.id, instance_id=None)]
+
+        with app.test_request_context():
+            items = _hydrate(rows, live.microblogs)
+
+        assert [item.id for item in items] == [first.id, last.id]
 
 
 class TestPaginateUnion:
