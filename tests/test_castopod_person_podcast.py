@@ -225,7 +225,8 @@ def test_the_failure_is_remembered_for_a_day(app, db_session, http_mock, monkeyp
 
     actor_json_to_model(castopod_person(), 'mypodcast', CASTO)
 
-    assert stored == {f'interop:nodeinfo-failed:{CASTO}': 24 * 60 * 60}
+    # flask-caching 2.5 sends memoized lookups through the same cache.set: keep this test to its key
+    assert {k: v for k, v in stored.items() if k.startswith('interop:')} == {f'interop:nodeinfo-failed:{CASTO}': 24 * 60 * 60}
 
 
 def test_a_successful_read_is_not_repeated_across_three_actors(app, db_session, http_mock, real_cache):

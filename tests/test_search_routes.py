@@ -1158,12 +1158,12 @@ def test_relevance_ranking_is_asked_for_only_when_no_sort_was(app, db_session, s
     the tie then breaks by id. The route's decision is the thing the sort
     parameter names, and it is deterministic.
     """
-    from sqlalchemy_searchable import SearchQueryMixin
+    from app.models import FullTextSearchQuery
     instance, alice, bob = _seed()
     community = make_community('microblogs')
     _post(community, alice, 'an article')
     client = app.test_client()
-    real_search = SearchQueryMixin.search
+    real_search = FullTextSearchQuery.search
     seen = {}
 
     def spy(self, term, **kwargs):
@@ -1171,7 +1171,7 @@ def test_relevance_ranking_is_asked_for_only_when_no_sort_was(app, db_session, s
         return real_search(self, term, **kwargs)
 
     with patch('app.search.routes.render_template', return_value='rendered'), \
-         patch.object(SearchQueryMixin, 'search', spy):
+         patch.object(FullTextSearchQuery, 'search', spy):
         response = client.get(f'/search?q=article&sort_by={sort_by}')
 
     assert response.status_code == 200

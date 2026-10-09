@@ -27,7 +27,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.dialects.postgresql import BIT
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.mutable import MutableList
-from sqlalchemy_searchable import SearchQueryMixin
+from sqlalchemy_searchable import search as fulltext_search
 from sqlalchemy_utils.types import \
     TSVectorType  # https://sqlalchemy-searchable.readthedocs.io/en/latest/installation.html
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -654,8 +654,13 @@ class PostReplyValidationError(Exception):
     pass
 
 
-class FullTextSearchQuery(Query, SearchQueryMixin):
-    pass
+class FullTextSearchQuery(Query):
+    """A legacy Query with `.search()`. SQLAlchemy-Searchable 3 removed SearchQueryMixin; its
+    module-level search() still accepts a legacy Query (it uses only column_descriptions,
+    filter, order_by and params)."""
+
+    def search(self, search_query, vector=None, regconfig=None, sort=False):
+        return fulltext_search(self, search_query, vector=vector, regconfig=regconfig, sort=sort)
 
 
 class BannedInstances(db.Model):

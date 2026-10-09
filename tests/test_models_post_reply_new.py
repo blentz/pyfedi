@@ -29,6 +29,7 @@ from app import db
 from app.models import (NotificationSubscription, Post, PostReply,
                         PostReplyValidationError, PostReplyVote, Site, User,
                         UserBlock)
+from tests.cache_doubles import calls_for, get_for
 from tests.factories import (make_community, make_community_member, make_post,
                              make_post_reply, make_user)
 
@@ -314,7 +315,7 @@ class TestTheEmDashReport:
         calls in one test."""
         from app.utils import set_setting
         set_setting('limit_one_em_report_per_user', True)
-        with patch('app.models.cache.get', return_value=True), \
+        with patch('app.models.cache.get', side_effect=get_for('em-dash_used_by_', True)), \
                 patch('app.utils.notify_admin') as notify:
             a_reply(env, body='a reply — with an em dash')
         assert notify.call_count == 0
@@ -322,13 +323,14 @@ class TestTheEmDashReport:
     def test_and_the_first_report_stores_that_flag(self, env, newcomer):
         from app.utils import set_setting
         set_setting('limit_one_em_report_per_user', True)
-        with patch('app.models.cache.get', return_value=None), \
+        with patch('app.models.cache.get', side_effect=get_for('em-dash_used_by_', None)), \
                 patch('app.models.cache.set') as store, \
                 patch('app.utils.notify_admin') as notify:
             a_reply(env, body='a reply — with an em dash')
         assert notify.call_count == 1
-        assert store.call_count == 1
-        assert store.call_args.kwargs['timeout'] == 86400
+        flags = calls_for(store, 'em-dash_used_by_')
+        assert len(flags) == 1
+        assert flags[0].kwargs['timeout'] == 86400
 
     def test_and_every_time_when_not(self, env, newcomer):
         from app.utils import set_setting
