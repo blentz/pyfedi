@@ -1,4 +1,4 @@
-pgdata/
+pgdata*
 app/static/media/
 media/
 logs/
@@ -13,3 +13,4 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
+deploy/
