@@ -14,3 +14,4 @@ __pycache__/
 *.pyd
 .Python
 deploy/
+.env*
