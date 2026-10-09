@@ -295,6 +295,7 @@
                                 or (current_user.hide_nsfl == 2 and community.nsfl) -%}
                         <tr class="{{ 'blocked' if content_blocked }}{{ 'blur' if blur_content }}">
                             <td width="100">
+                                {% if not community.is_server_view -%}
                                 {% if current_user.is_authenticated -%}
                                     {% if community.id in pending_communities and community.id not in joined_communities -%}
                                         <form method="post" action="/community/{{ community.link() }}/unsubscribe"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -311,6 +312,7 @@
                                     {% if not community.instance.gone_forever %}
                                         {% include "community/_join_button.html" %}
                                     {% endif %}
+                                {% endif -%}
                                 {% endif -%}</td>
                             {% if not low_bandwidth -%}
                                 <td width="46">
