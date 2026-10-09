@@ -152,7 +152,7 @@ names_a_subset() {
         case "$argument" in
             -n|-n*|--dist|--dist=*) return 0 ;;
             -k|-k*|-m|-m*) return 0 ;;
-            -p|-c|-o|--rootdir|--override-ini|--deselect|--ignore|--junit-xml|--log-file)
+            -p|-c|-o|-W|--rootdir|--override-ini|--deselect|--ignore|--junit-xml|--log-file)
                 skip_next=true ;;
             -*) ;;
             tests|tests/) ;;
