@@ -2,7 +2,7 @@ services:
 
   db:
     shm_size: 128mb
-    image: postgres:17
+    image: postgres:17.11
     restart: unless-stopped
     user: "1000:1000"
     env_file:
@@ -15,7 +15,7 @@ services:
       - pf_network
 
   redis:
-    image: redis:6.2
+    image: redis:8.10
     restart: unless-stopped
     env_file:
      - ./.env.docker

@@ -306,7 +306,7 @@ class TestPatchingAProxyDoesNotGiveAnAsyncMock:
     `unittest.mock` picks AsyncMock when `_is_async_obj(original)` is true, and
     that asks `inspect.isawaitable`, which is satisfied by anything with
     `__await__` -- which werkzeug's LocalProxy defines so it can proxy an async
-    object. `asyncio.iscoroutinefunction(current_app)` is False, so the usual
+    object. `inspect.iscoroutinefunction(current_app)` is False, so the usual
     check does not explain it; measured, the mock is an AsyncMock and so is every
     attribute of it.
 
@@ -318,14 +318,14 @@ class TestPatchingAProxyDoesNotGiveAnAsyncMock:
 
     def test_the_proxy_is_what_mock_reads_as_async(self, app):
         """`unittest.mock._is_async_obj` is what decides, and it is satisfied by
-        LocalProxy while `asyncio.iscoroutinefunction` is not -- which is why the
+        LocalProxy while `inspect.iscoroutinefunction` is not -- which is why the
         usual check does not explain the AsyncMock below."""
-        import asyncio
+        import inspect
         from unittest.mock import _is_async_obj
 
         import app.api.alpha as alpha
 
-        assert asyncio.iscoroutinefunction(alpha.current_app) is False
+        assert inspect.iscoroutinefunction(alpha.current_app) is False
         assert _is_async_obj(alpha.current_app) is True
 
     def test_a_bare_patch_of_it_is_an_async_mock(self, app):

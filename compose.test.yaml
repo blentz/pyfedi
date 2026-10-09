@@ -6,7 +6,7 @@
 services:
 
   test-db:
-    image: docker.io/library/postgres:17
+    image: docker.io/library/postgres:17.11
     environment:
       POSTGRES_USER: pyfedi
       POSTGRES_PASSWORD: pyfedi
@@ -39,7 +39,7 @@ services:
       - pf_test_network
 
   test-redis:
-    image: docker.io/library/redis:6.2
+    image: docker.io/library/redis:8.10
     networks:
       - pf_test_network
 

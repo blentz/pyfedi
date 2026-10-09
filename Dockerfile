@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.4
-FROM python:3.13-slim AS builder
+FROM python:3.14-slim AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
@@ -11,10 +11,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /venv
 ENV PATH="/venv/bin:$PATH"
 
-RUN --mount=type=cache,target=/root/.cache/pip,id=pip-py313-slim \
+RUN --mount=type=cache,target=/root/.cache/pip,id=pip-py314-slim \
     --mount=source=requirements.txt,target=/tmp/requirements.txt \
     pip install -r /tmp/requirements.txt
-RUN --mount=type=cache,target=/root/.cache/pip,id=pip-py313-slim \
+RUN --mount=type=cache,target=/root/.cache/pip,id=pip-py314-slim \
     pip install gunicorn
 
 # Test dependencies go here and NOWHERE ELSE. This stage is what
@@ -33,11 +33,11 @@ RUN --mount=type=cache,target=/root/.cache/pip,id=pip-py313-slim \
 # LAST stage, and that has to remain the production image.
 FROM builder AS test
 
-RUN --mount=type=cache,target=/root/.cache/pip,id=pip-py313-slim \
+RUN --mount=type=cache,target=/root/.cache/pip,id=pip-py314-slim \
     --mount=source=requirements-test.txt,target=/tmp/requirements-test.txt \
     pip install -r /tmp/requirements-test.txt
 
-FROM python:3.13-slim AS runtime
+FROM python:3.14-slim AS runtime
 
 ARG TARGETARCH
 ARG SUPERCRONIC_VERSION=v0.2.49
