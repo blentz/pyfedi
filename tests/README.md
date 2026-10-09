@@ -11575,7 +11575,7 @@ one.
 **682. `patch('...current_app')` GIVES YOU AN AsyncMock.**
 `unittest.mock` picks AsyncMock when `_is_async_obj(original)` is true, and that
 asks `inspect.isawaitable`, satisfied by anything with `__await__` -- which
-werkzeug's LocalProxy defines. `asyncio.iscoroutinefunction(current_app)` is
+werkzeug's LocalProxy defines. `inspect.iscoroutinefunction(current_app)` is
 False, so the obvious check does not explain it. Every attribute of the result is
 an AsyncMock too, so `current_app.logger.exception(...)` builds a coroutine
 nobody awaits: `RuntimeWarning: coroutine 'AsyncMockMixin._execute_mock_call' was
