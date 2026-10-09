@@ -7,8 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from sqlalchemy import event
+
 from app import cache, db
-from app.models import BannedInstances, Community, InstanceBlock, Site
+from app.models import BannedInstances, Community, CommunityBan, CommunityBlock, InstanceBlock, Site
 from app.utils import utcnow
 from tests.discovery_fixtures import fresh_cache  # noqa: F401
 from tests.factories import make_community, make_instance, make_post, make_user
@@ -105,6 +107,22 @@ class TestServerViewSelect:
 
         assert list(view_rows(app, live, host='InfoSec.Exchange')) == ['microblogs@infosec.exchange']
 
+    def test_excluded_keywords_hide_matching_titles(self, app, live):
+        live.toot()
+        server(live, 'infosec.exchange')
+
+        assert list(view_rows(app, live, exclude_keywords=('MASTODON', ' ', '', '_'))) == \
+            ['microblogs@infosec.exchange']
+
+    def test_hosts_differing_only_by_case_are_one_row(self, app, live):
+        server(live, 'Dup.example')
+        server(live, 'dup.example')
+
+        with app.test_request_context():
+            titles = [row.title for row in db.session.execute(server_view_select(live.microblogs.id)).all()]
+
+        assert titles.count('microblogs@dup.example') == 1
+
 
 class TestHydrate:
 
@@ -122,6 +140,30 @@ class TestHydrate:
 
 
 class TestPaginateUnion:
+
+    def test_a_non_empty_page_runs_the_union_once(self, app, live):
+        live.toot()
+        community('one', 3)
+        statements = []
+
+        def record(conn, cursor, statement, *rest):
+            statements.append(statement)
+
+        event.listen(db.engine, 'before_cursor_execute', record)
+        try:
+            result, _ = page(app, live)
+        finally:
+            event.remove(db.engine, 'before_cursor_execute', record)
+
+        assert result.total == Community.query.filter_by(banned=False).count() + 1
+        assert len([s for s in statements if 'UNION ALL' in s.upper()]) == 1
+
+    def test_an_empty_page_past_the_end_still_knows_the_total(self, app, live):
+        live.toot()
+
+        result, links = page(app, live, n=5, per_page=1)
+
+        assert links == [] and result.total == Community.query.filter_by(banned=False).count() + 1
 
     def test_views_sort_among_communities(self, app, live):
         community('big', 5)
@@ -303,3 +345,38 @@ class TestTheList:
 
         assert VIEW_LINK not in first and 'page=2' in first
         assert VIEW_LINK in second
+
+    def test_a_blocked_microblogs_community_hides_the_views(self, client, live):
+        live.toot()
+        db.session.add(CommunityBlock(user_id=live.viewer.id, community_id=live.microblogs.id))
+        db.session.commit()
+        login(client, live.viewer)
+
+        assert VIEW_LINK not in client.get('/communities?search=microblogs').get_data(as_text=True)
+
+    def test_a_ban_from_the_microblogs_community_hides_the_views(self, client, live):
+        live.toot()
+        db.session.add(CommunityBan(user_id=live.viewer.id, community_id=live.microblogs.id))
+        db.session.commit()
+        login(client, live.viewer)
+
+        assert VIEW_LINK not in client.get('/communities?search=microblogs').get_data(as_text=True)
+
+    def test_a_keyword_filter_hides_matching_views_only(self, client, live):
+        live.toot()
+        server(live, 'infosec.exchange')
+        live.viewer.community_keyword_filter = 'mastodon.example'
+        db.session.commit()
+        login(client, live.viewer)
+
+        html = client.get('/communities?search=microblogs').get_data(as_text=True)
+
+        assert VIEW_LINK not in html and 'href="/c/microblogs@infosec.exchange"' in html
+
+    def test_a_filtered_out_microblogs_community_hides_the_views(self, client, live):
+        live.toot()
+        live.viewer.community_keyword_filter = 'microblogs'
+        db.session.commit()
+        login(client, live.viewer)
+
+        assert VIEW_LINK not in client.get('/communities?search=microblogs').get_data(as_text=True)

@@ -7,7 +7,7 @@ Spec: docs/superpowers/specs/2026-10-08-server-views-in-community-list-design.md
 from datetime import timedelta
 
 from flask import current_app
-from sqlalchemy import Integer, cast, func, literal, null, select, union_all
+from sqlalchemy import Integer, cast, func, literal, not_, null, select, union_all
 from sqlalchemy.orm import joinedload
 
 from app import db
@@ -83,7 +83,8 @@ def community_select(community_query):
         Community.active_weekly.label('active_weekly')).statement
 
 
-def server_view_select(microblogs_id: int, search: str = '', host: str = '', blocked_instance_ids=()):
+def server_view_select(microblogs_id: int, search: str = '', host: str = '', blocked_instance_ids=(),
+                       exclude_keywords=()):
     """One row per server with a server view, aggregated over the microblogs community's posts.
     Wildcard bans are not matched here; paginate_union drops those rows."""
     domain = func.lower(Instance.domain)
@@ -91,7 +92,7 @@ def server_view_select(microblogs_id: int, search: str = '', host: str = '', blo
     week_ago = utcnow() - timedelta(days=7)
     banned = select(func.lower(BannedInstances.domain)).where(BannedInstances.domain.isnot(None))
     real = select(Community.ap_id).where(Community.ap_id.like(f'{VIEW_PREFIX}%'))
-    stmt = (select(cast(null(), Integer).label('community_id'), Post.instance_id.label('instance_id'),
+    stmt = (select(cast(null(), Integer).label('community_id'), func.min(Post.instance_id).label('instance_id'),
                    title.label('title'), literal(0).label('subscriptions_count'),
                    func.count(Post.id).label('post_count'),
                    func.coalesce(func.sum(Post.reply_count), 0).label('post_reply_count'),
@@ -102,9 +103,12 @@ def server_view_select(microblogs_id: int, search: str = '', host: str = '', blo
             .where(Post.community_id == microblogs_id, Post.deleted == False, Post.instance_id != 1,
                    domain != current_app.config['SERVER_NAME'].lower(),
                    domain.not_in(banned), title.not_in(real))
-            .group_by(Post.instance_id, domain))
+            .group_by(domain))
     if search:
         stmt = stmt.where(title.ilike(like_pattern(search), escape='\\'))
+    for keyword in exclude_keywords:
+        if keyword:
+            stmt = stmt.where(not_(title.ilike(like_pattern(keyword), escape='\\')))
     if host:
         stmt = stmt.where(domain == host.strip().lower())
     if blocked_instance_ids:
@@ -158,6 +162,10 @@ def _hydrate(rows, microblogs) -> list:
     return items
 
 
+def _count(union) -> int:
+    return db.session.scalar(select(func.count()).select_from(union))
+
+
 def paginate_union(community_query, view_select, sort_by, page, per_page, microblogs) -> UnionPage:
     """One page of communities and (when view_select is given) server views, ordered as one list."""
     parts = [community_select(community_query)]
@@ -169,6 +177,7 @@ def paginate_union(community_query, view_select, sort_by, page, per_page, microb
     order = [key.desc() if direction == 'desc' else key.asc(), union.c.title, union.c.community_id,
              union.c.instance_id]
     page = max(page, 1)
-    total = db.session.scalar(select(func.count()).select_from(union))
-    rows = db.session.execute(select(union).order_by(*order).limit(per_page).offset((page - 1) * per_page)).all()
+    rows = db.session.execute(select(union, func.count().over().label('total')).order_by(*order)
+                              .limit(per_page).offset((page - 1) * per_page)).all()
+    total = rows[0].total if rows else _count(union)   # an empty page (past the end, or no rows) needs its own count
     return UnionPage(_hydrate(rows, microblogs), page, per_page, total)
