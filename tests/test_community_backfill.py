@@ -162,7 +162,8 @@ class TestOneEntryThatBreaksTheSession:
         def create_post(store, community, request_json, user, announce_id=None, backfill=False):
             created.append(request_json['id'])
             if len(created) == 1:   # a failed flush, swallowed, as create_post does
-                db.session.add(CommunityMember(community_id=None, user_id=None))
+                # a user that does not exist: the flush fails on the foreign key
+                db.session.add(CommunityMember(community_id=env.community.id, user_id=2_000_000_000))
                 try:
                     db.session.flush()
                 except Exception:

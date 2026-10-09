@@ -38,3 +38,5 @@ respx
 moto
 fakeredis
 atheris
+# starlette's TestClient prefers httpx2 and warns when it falls back to httpx
+httpx2

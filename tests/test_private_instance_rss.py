@@ -290,7 +290,7 @@ class TestTheCachedRoutes:
         cache.clear()
         yield
         cache.clear()
-        cache.init_app(app, config={'CACHE_TYPE': 'NullCache'})
+        cache.init_app(app, config={'CACHE_TYPE': 'NullCache', 'CACHE_NO_NULL_WARNING': True})
 
     @staticmethod
     def _set_privacy(site, private):
