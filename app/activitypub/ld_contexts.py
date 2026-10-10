@@ -14,6 +14,7 @@ as-received, not hand-written, so URDNA2015 normalization sees exactly what
 the network would serve.
 """
 import json
+import re
 
 from pyld import jsonld
 
@@ -41,3 +42,259 @@ def ld_document_loader(url, options=None):
                                  'jsonld.LoadDocumentError', {'url': url},
                                  code='loading document failed')
     return bundled_document(url)
+
+
+# ---------------------------------------------------------------------------
+# What an LD signature covers, and the gate that refuses a document whose JSON
+# says more than its signed graph does.
+# ---------------------------------------------------------------------------
+
+# The extension terms pyfedi itself declares in its outgoing @context (the same
+# map Lemmy declares). `default_context` sends exactly this.
+PYFEDI_CONTEXT_TERMS = {
+    "lemmy": "https://join-lemmy.org/ns#",
+    "litepub": "http://litepub.social/ns#",
+    "pt": "https://joinpeertube.org/ns#",
+    "sc": "http://schema.org/",
+    "ChatMessage": "litepub:ChatMessage",
+    "commentsEnabled": "pt:commentsEnabled",
+    "sensitive": "as:sensitive",
+    "matrixUserId": "lemmy:matrixUserId",
+    "postingRestrictedToMods": "lemmy:postingRestrictedToMods",
+    "removeData": "lemmy:removeData",
+    "stickied": "lemmy:stickied",
+    "moderators": {
+        "@type": "@id",
+        "@id": "lemmy:moderators"
+    },
+    "expires": "as:endTime",
+    "distinguished": "lemmy:distinguished",
+    "language": "sc:inLanguage",
+    "identifier": "sc:identifier"
+}
+
+# Mastodon's inline term map, copied from CONTEXT_EXTENSION_MAP in its
+# app/helpers/context_helper.rb (main, 2026-10). A Mastodon document carries the
+# subset of it that its object uses.
+MASTODON_CONTEXT_TERMS = {
+    "toot": "http://joinmastodon.org/ns#",
+    "schema": "http://schema.org#",
+    "ostatus": "http://ostatus.org#",
+    "gts": "https://gotosocial.org/ns#",
+    "manuallyApprovesFollowers": "as:manuallyApprovesFollowers",
+    "sensitive": "as:sensitive",
+    "Hashtag": "as:Hashtag",
+    "movedTo": {"@id": "as:movedTo", "@type": "@id"},
+    "alsoKnownAs": {"@id": "as:alsoKnownAs", "@type": "@id"},
+    "Emoji": "toot:Emoji",
+    "featured": {"@id": "toot:featured", "@type": "@id"},
+    "featuredTags": {"@id": "toot:featuredTags", "@type": "@id"},
+    "PropertyValue": "schema:PropertyValue",
+    "value": "schema:value",
+    "atomUri": "ostatus:atomUri",
+    "inReplyToAtomUri": "ostatus:inReplyToAtomUri",
+    "conversation": "ostatus:conversation",
+    "focalPoint": {"@container": "@list", "@id": "toot:focalPoint"},
+    "blurhash": "toot:blurhash",
+    "discoverable": "toot:discoverable",
+    "indexable": "toot:indexable",
+    "memorial": "toot:memorial",
+    "votersCount": "toot:votersCount",
+    "suspended": "toot:suspended",
+    "attributionDomains": {"@id": "toot:attributionDomains", "@container": "@set"},
+    "showFeatured": "toot:showFeatured",
+    "showMedia": "toot:showMedia",
+    "showRepliesInMedia": "toot:showRepliesInMedia",
+    "QuoteRequest": "https://w3id.org/fep/044f#QuoteRequest",
+    "quote": {"@id": "https://w3id.org/fep/044f#quote", "@type": "@id"},
+    "quoteUri": "http://fedibird.com/ns#quoteUri",
+    "_misskey_quote": "https://misskey-hub.net/ns#_misskey_quote",
+    "quoteAuthorization": {"@id": "https://w3id.org/fep/044f#quoteAuthorization", "@type": "@id"},
+    "interactionPolicy": {"@id": "gts:interactionPolicy", "@type": "@id"},
+    "canFeature": {"@id": "https://w3id.org/fep/7aa9#canFeature", "@type": "@id"},
+    "canQuote": {"@id": "gts:canQuote", "@type": "@id"},
+    "automaticApproval": {"@id": "gts:automaticApproval", "@type": "@id"},
+    "manualApproval": {"@id": "gts:manualApproval", "@type": "@id"},
+    "QuoteAuthorization": "https://w3id.org/fep/044f#QuoteAuthorization",
+    "interactingObject": {"@id": "gts:interactingObject", "@type": "@id"},
+    "interactionTarget": {"@id": "gts:interactionTarget", "@type": "@id"},
+    "FeatureRequest": "https://w3id.org/fep/7aa9#FeatureRequest",
+    "FeaturedCollection": "https://w3id.org/fep/7aa9#FeaturedCollection",
+    "FeaturedItem": "https://w3id.org/fep/7aa9#FeaturedItem",
+    "FeatureAuthorization": "https://w3id.org/fep/7aa9#FeatureAuthorization",
+    "topic": {"@id": "https://w3id.org/fep/7aa9#topic", "@type": "@id"},
+    "featuredObject": {"@id": "https://w3id.org/fep/7aa9#featuredObject", "@type": "@id"},
+    "featureAuthorization": {"@id": "https://w3id.org/fep/7aa9#featureAuthorization", "@type": "@id"},
+}
+
+# The namespaces a term an inline context defines may map into.
+KNOWN_LD_NAMESPACES = (
+    'https://www.w3.org/ns/activitystreams#', 'https://w3id.org/security#', 'http://purl.org/dc/terms/',
+    'http://www.w3.org/2001/XMLSchema#', 'http://www.w3.org/ns/ldp#', 'http://www.w3.org/2006/vcard/ns#',
+    'http://joinmastodon.org/ns#', 'http://schema.org#', 'http://schema.org/', 'http://ostatus.org#',
+    'https://w3id.org/fep/', 'http://fedibird.com/ns#', 'https://misskey-hub.net/ns#',
+    'https://gotosocial.org/ns#', 'https://join-lemmy.org/ns#', 'http://litepub.social/ns#',
+    'https://joinpeertube.org/ns#',
+)
+
+_TERM_DEFINITION_KEYS = {'@id', '@type', '@container'}
+_INLINE_CONTAINERS = {'@list', '@set', '@language'}
+# pyld's own absolute-IRI test (jsonld._is_absolute_iri) without its blank-node alternative: a value that fails it
+# is dropped from the graph by toRDF, and a blank-node label can be renamed without changing the normalized graph.
+_ABSOLUTE_IRI = re.compile(r'^[A-Za-z][A-Za-z0-9+-.]*:[^\s]*$')
+_LD_OPTIONS = {'documentLoader': ld_document_loader}
+
+
+class LDCoverageError(ValueError):
+    """The document's JSON says something its signed RDF graph does not."""
+
+
+def _process_context(active_ctx, local_ctx):
+    return jsonld.JsonLdProcessor().process_context(active_ctx, local_ctx, _LD_OPTIONS)
+
+
+def _shape(definition: dict) -> tuple:
+    """A pyld term definition reduced to what decides the triples a key produces."""
+    return definition['@id'], definition.get('@type'), tuple(definition.get('@container', ()))
+
+
+def _canonical_definitions() -> dict[str, set[tuple]]:
+    """term -> the definitions it may have: the bundled contexts', plus pyfedi's and Mastodon's extension terms.
+    Extension prefixes (toot, schema, ...) are left out: what matters is the IRI a term resolves to, not the
+    prefix it was spelled with."""
+    allowed: dict[str, set[tuple]] = {}
+    bundled = _process_context(_process_context(None, None), list(BUNDLED_LD_CONTEXTS))
+    for term, definition in bundled['mappings'].items():
+        allowed.setdefault(term, set()).add(_shape(definition))
+    for extension in (PYFEDI_CONTEXT_TERMS, MASTODON_CONTEXT_TERMS):
+        extended = _process_context(bundled, extension)
+        for term in extension:
+            if not extended['mappings'][term]['_prefix']:
+                allowed.setdefault(term, set()).add(_shape(extended['mappings'][term]))
+    return allowed
+
+
+CANONICAL_LD_TERMS = _canonical_definitions()
+CANONICAL_LD_IRIS = {iri for shapes in CANONICAL_LD_TERMS.values() for iri, _type, _container in shapes}
+
+
+def _check_context_entries(local_ctx) -> list[dict]:
+    """The raw @context value: bundled URLs and inline term maps only. Returns the inline maps."""
+    entries = local_ctx if isinstance(local_ctx, list) else [local_ctx]
+    inline = []
+    for entry in entries:
+        if isinstance(entry, str):
+            if entry not in BUNDLED_LD_CONTEXTS:
+                raise LDCoverageError(f'JSON-LD context {entry} is not bundled, and is not fetched')
+        elif isinstance(entry, dict):
+            for term, definition in entry.items():
+                if term.startswith('@') or ':' in term:
+                    raise LDCoverageError(f'inline @context key {term!r} is not a plain term')
+                if isinstance(definition, dict):
+                    term_type = definition.get('@type', '@id')
+                    container = definition.get('@container', '@set')
+                    if not set(definition) <= _TERM_DEFINITION_KEYS or not isinstance(definition.get('@id'), str) \
+                            or not isinstance(term_type, str) or term_type in ('@vocab', '@json', '@none') \
+                            or not isinstance(container, str) or container not in _INLINE_CONTAINERS:
+                        raise LDCoverageError(f'inline @context term {term!r} has an unsupported definition')
+                elif not isinstance(definition, str):
+                    raise LDCoverageError(f'inline @context term {term!r} has an unsupported definition')
+            inline.append(entry)
+        else:
+            raise LDCoverageError('@context holds something other than a URL or a term map')
+    return inline
+
+
+def _check_inline_term(term: str, definition: dict) -> None:
+    shape = _shape(definition)
+    if term in CANONICAL_LD_TERMS:
+        if shape not in CANONICAL_LD_TERMS[term]:
+            raise LDCoverageError(f'inline @context redefines {term!r}')
+        return
+    iri = shape[0]
+    if not iri.startswith(KNOWN_LD_NAMESPACES):
+        raise LDCoverageError(f'inline @context maps {term!r} outside the known namespaces')
+    if iri in CANONICAL_LD_IRIS:
+        raise LDCoverageError(f'inline @context makes {term!r} an alias of {iri}')
+
+
+def _check_iri_values(key: str, value) -> None:
+    for item in value if isinstance(value, list) else [value]:
+        if isinstance(item, str) and not _ABSOLUTE_IRI.fullmatch(item):
+            raise LDCoverageError(f'{key!r} value {item!r} is not an absolute IRI, so the signature does not cover it')
+
+
+def _check_type_values(key: str, value, active_ctx) -> None:
+    for item in value if isinstance(value, list) else [value]:
+        definition = active_ctx['mappings'].get(item) if isinstance(item, str) else None
+        if definition is not None:
+            if definition['@id'].startswith('@'):
+                raise LDCoverageError(f'{key!r} value {item!r} names a keyword')
+        elif not isinstance(item, str) or not _ABSOLUTE_IRI.fullmatch(item):
+            raise LDCoverageError(f'{key!r} value {item!r} is not a defined type or an absolute IRI')
+
+
+def _check_node(node, active_ctx) -> None:
+    if isinstance(node, list):
+        for item in node:
+            _check_node(item, active_ctx)
+        return
+    if not isinstance(node, dict):
+        return
+    if '@context' in node:
+        inline = _check_context_entries(node['@context'])
+        try:
+            active_ctx = _process_context(active_ctx, node['@context'])
+        except jsonld.JsonLdError as e:
+            raise LDCoverageError(f'@context could not be processed: {e}') from e
+        for term_map in inline:
+            for term in term_map:
+                _check_inline_term(term, active_ctx['mappings'][term])
+    for key, value in node.items():
+        if key == '@context':
+            continue
+        definition = active_ctx['mappings'].get(key)
+        if definition is None:
+            raise LDCoverageError(f'{key!r} is not defined by the document\'s contexts, so the signature does not cover it')
+        iri = definition['@id']
+        if iri == '@id':
+            if not isinstance(value, str):
+                raise LDCoverageError(f'{key!r} is not a string')
+            _check_iri_values(key, value)
+        elif iri == '@type':
+            _check_type_values(key, value, active_ctx)
+        elif '@language' in definition.get('@container', ()):
+            continue        # a language map: its keys are language tags, and its strings are signed with them
+        else:
+            if definition.get('@type') == '@id':
+                _check_iri_values(key, value)
+            _check_node(value, active_ctx)
+
+
+def check_ld_coverage(document: dict) -> None:
+    """Refuses (LDCoverageError) a document whose JSON an LD signature does not actually cover.
+
+    An RsaSignature2017 signs the URDNA2015 normalization of the document's RDF graph, but pyfedi reads the JSON
+    keys. Anything that changes the JSON without changing the graph keeps the signature valid, so a signed
+    document is accepted only when every key and value pyfedi could read is pinned to the graph:
+
+    1. Every @context, at the top level and in any nested object (lists included), is a bundled context URL
+       (BUNDLED_LD_CONTEXTS) or an inline term map. Inline maps exist because Mastodon sends one with every
+       LD-signed activity; one is accepted only if each of its terms is a plain term (no '@' keywords, no
+       compact-IRI terms) whose definition is a string, or an object of '@id', '@type' (not '@vocab'/'@json'/
+       '@none') and '@container' ('@list', '@set' or '@language' only), and:
+       - a term the bundled contexts, pyfedi or Mastodon already define (CANONICAL_LD_TERMS) keeps one of
+         those definitions. Redefining 'content' as a blank node and adding 'realcontent' for as:content, or
+         'id' as an alias elsewhere, is the remap that moved forged text into the key pyfedi reads;
+       - any other term maps into a known namespace (KNOWN_LD_NAMESPACES), never to a keyword ('realid':
+         '@id'), a blank node, or an IRI a canonical term already uses (an alias that would let a signed
+         value be moved out of, or into, a key pyfedi reads).
+    2. Every key, recursively except inside language maps, is a term the active context defines. With the
+       activitystreams context's '@vocab': '_:' an undefined key becomes a blank-node property, which
+       normalization drops, so its value was never signed ('sensitive', 'stickied' without a context).
+       Other '@' keywords and absolute-IRI keys are refused for the same reason.
+    3. Every 'id', and every string under an '@id'-typed term ('actor', 'inReplyTo', 'to', ...), is an
+       absolute IRI, and every 'type' a defined term or absolute IRI: a relative IRI is dropped from the
+       graph, and a blank-node label can be swapped for another without changing the normalized hash.
+    """
+    _check_node(document, _process_context(None, None))
