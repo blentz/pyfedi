@@ -1053,17 +1053,19 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None):
                             return
                         process_announced_objects(request_json, request_json['object']['orderedItems'], id, saved_json, store_ap_json)
                         return
-                    # S4: an inner activity from another host is not trusted on the Group's signature alone. Checked
-                    # before the inner actor is looked up, so a spoofed actor is never fetched or stored.
+                    # D52's refusal stays ahead of the S4 check, so an object with neither actor nor id still logs it
+                    if not feed and 'actor' not in request_json['object']:
+                        log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json, 'Announce object has no actor')
+                        return
+                    # S4: an inner activity from another host is not trusted on the Group's signature alone, and one
+                    # without a usable id is refused outright (R-INNERID). Checked before the inner actor is looked
+                    # up, so a refused activity's actor is never fetched or stored.
                     verified_inner, refusal = verify_announced_inner(request_json)
                     if verified_inner is None:
                         log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json, refusal)
                         return
                     request_json['object'] = verified_inner
                     if not feed:
-                        if 'actor' not in request_json['object']:
-                            log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json, 'Announce object has no actor')
-                            return
                         user = find_actor_or_create_cached(request_json['object']['actor'])
                         if user and isinstance(user, User):
                             if user.banned:

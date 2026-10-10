@@ -5599,19 +5599,25 @@ def verify_announced_inner(announce: dict) -> Tuple[Union[dict, None], Union[str
     same host. Returns `(inner, None)` to process -- `inner` may be replaced by what its origin serves -- or
     `(None, reason)` to drop, the reason going into the incoming-activity log.
 
-    An inner activity with no string id is passed through: the dispatcher refuses it itself (D127) and logs that.
+    An inner activity without a usable id is refused here, before its actor is looked up (ruling R-INNERID): the
+    dispatcher's own D127 check tests only that the key is present, after the lookup. A missing id keeps D127's
+    log text.
     """
     inner = announce['object']
-    inner_id = inner.get('id')
-    if not isinstance(inner_id, str):
-        return inner, None
+    if 'id' not in inner:
+        return None, 'Announce object has no id or type'
+    inner_id = inner['id']
+    if not isinstance(inner_id, str) or not inner_id:
+        return None, 'Announced activity id is not a non-empty string'
     inner_host = host_of(inner_id)
     if not inner_host:
         return None, 'Announced activity id has no host'
     if inner_host == host_of(_id_of(announce['actor'])):
         return inner, None
+    if 'actor' not in inner:
+        return None, 'Announced activity from another host has no actor'
     # inner_host is non-empty here, so an actor whose host cannot be parsed ('') can only compare unequal
-    if host_of(_id_of(inner.get('actor'))) != inner_host:
+    if host_of(_id_of(inner['actor'])) != inner_host:
         return None, 'Announced activity host does not match its actor'
     return inner, None
 

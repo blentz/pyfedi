@@ -8,6 +8,7 @@ import uuid
 
 import pytest
 
+import app.activitypub.routes as activitypub_routes
 from app.activitypub.util import verify_announced_inner
 from app.models import ActivityPubLog, User
 from tests.test_inbox_dispatch_announce import _seed_announcing_community
@@ -61,20 +62,42 @@ def test_a_cross_origin_vote_with_a_consistent_actor_is_trusted(actor):
     assert verify_announced_inner(_announce(inner)) == (inner, None)
 
 
-@pytest.mark.parametrize('actor', ['MISSING', 42, {'type': 'Person'}, 'not a url'])
+@pytest.mark.parametrize('actor', [42, {'type': 'Person'}, 'not a url'])
 def test_a_cross_origin_inner_activity_with_no_usable_actor_is_dropped(actor):
     inner = _like('https://other.example/activities/like/1', actor)
-    if actor == 'MISSING':
-        del inner['actor']
 
     assert verify_announced_inner(_announce(inner)) == (None, 'Announced activity host does not match its actor')
 
 
-def test_an_inner_activity_without_an_id_is_left_to_the_dispatchers_own_refusal():
-    """D127 (R:1036) refuses an id-less inner activity and logs it; this check must not change that message."""
-    inner = {'type': 'Like', 'actor': 'https://third.example/u/mallory'}
+def test_a_cross_origin_inner_object_with_no_actor_is_dropped_for_that_reason():
+    """A bare object naming only attributedTo has no actor to be consistent with; say so, not 'does not match'."""
+    inner = {'id': 'https://other.example/post/1', 'type': 'Page', 'attributedTo': 'https://other.example/u/bob'}
+
+    assert verify_announced_inner(_announce(inner)) == (None, 'Announced activity from another host has no actor')
+
+
+def test_a_same_origin_inner_object_with_no_actor_is_left_to_the_dispatcher():
+    inner = {'id': 'https://peer.example/post/1', 'type': 'Page', 'attributedTo': 'https://peer.example/u/bob'}
 
     assert verify_announced_inner(_announce(inner)) == (inner, None)
+
+
+UNUSABLE_IDS = [None, 42, {}, '']
+
+
+def test_an_inner_activity_without_an_id_is_dropped_with_the_d127_message():
+    """R-INNERID: refused here, before the actor lookup, with the text D127 (R:1075) logged after it."""
+    inner = {'type': 'Like', 'actor': 'https://third.example/u/mallory', 'object': 'https://peer.example/post/1'}
+
+    assert verify_announced_inner(_announce(inner)) == (None, 'Announce object has no id or type')
+
+
+@pytest.mark.parametrize('inner_id', UNUSABLE_IDS)
+def test_an_inner_activity_whose_id_is_not_a_non_empty_string_is_dropped(inner_id):
+    """R-INNERID: D127 and object_has_missing_fields test only that the key is present, so {'id': None} got past both."""
+    inner = _like(inner_id, 'https://third.example/u/mallory')
+
+    assert verify_announced_inner(_announce(inner)) == (None, 'Announced activity id is not a non-empty string')
 
 
 def test_an_inner_activity_whose_id_has_no_host_is_dropped():
@@ -107,3 +130,57 @@ def test_every_element_of_an_announced_list_gets_the_same_check(app, db_session,
     dispatch(activity)
 
     assert _messages(activity) == ['Announced activity host does not match its actor'] * 2
+
+
+def _record_actor_lookups(monkeypatch):
+    looked_up = []
+    real = activitypub_routes.find_actor_or_create_cached
+
+    def recording(actor, *args, **kwargs):
+        looked_up.append(actor)
+        return real(actor, *args, **kwargs)
+
+    monkeypatch.setattr(activitypub_routes, 'find_actor_or_create_cached', recording)
+    return looked_up
+
+
+MALLORY = 'https://third.example/u/mallory'
+
+
+@pytest.mark.parametrize('inner_id', ['MISSING'] + UNUSABLE_IDS)
+def test_the_dispatcher_drops_an_inner_activity_without_a_usable_id_before_looking_up_its_actor(
+        app, db_session, monkeypatch, inner_id):
+    """R-INNERID: the forged vote {'id': None, 'actor': mallory} reached process_upvote before this check."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    _instance, community = _seed_announcing_community()
+    inner = _like(inner_id, MALLORY)
+    if inner_id == 'MISSING':
+        del inner['id']
+    activity = _announce(inner, group=community.ap_profile_id)
+    looked_up = _record_actor_lookups(monkeypatch)
+
+    dispatch(activity)
+
+    expected = 'Announce object has no id or type' if inner_id == 'MISSING' \
+        else 'Announced activity id is not a non-empty string'
+    assert _messages(activity) == [expected]
+    assert MALLORY not in looked_up
+    assert User.query.filter_by(ap_profile_id=MALLORY).first() is None
+
+
+def test_the_dispatcher_drops_an_announced_list_element_without_a_usable_id_before_looking_up_its_actor(
+        app, db_session, monkeypatch):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    _instance, community = _seed_announcing_community()
+    no_id = _like('unused', MALLORY)
+    del no_id['id']
+    activity = _announce([_like(None, MALLORY), _like(42, MALLORY), _like({}, MALLORY), no_id],
+                         group=community.ap_profile_id)
+    looked_up = _record_actor_lookups(monkeypatch)
+
+    dispatch(activity)
+
+    assert sorted(_messages(activity)) == sorted(['Announced activity id is not a non-empty string'] * 3
+                                                 + ['Announce object has no id or type'])
+    assert MALLORY not in looked_up
+    assert User.query.filter_by(ap_profile_id=MALLORY).first() is None
