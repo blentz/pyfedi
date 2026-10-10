@@ -2620,7 +2620,9 @@ def activities_json(type, id):
             resp.headers['Cache-Control'] = AP_CACHE_CONTENT
             return resp
         actor_url = activity_json.get('actor')
-        local_actor = (find_actor_by_url(actor_url) or None) if isinstance(actor_url, str) and actor_url else None
+        named_actor = find_actor_by_url(actor_url) if isinstance(actor_url, str) and actor_url else None
+        # only OUR actor has followers we can enumerate; a stored remote one must not open rule 4
+        local_actor = named_actor if named_actor and named_actor.is_local() else None
         if audience_entitles(addressees, signed_requester_actor(), local_actor):
             resp = jsonify(activity_json)
             resp.content_type = 'application/activity+json'

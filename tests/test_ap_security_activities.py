@@ -8,8 +8,8 @@ import pytest
 
 from app import db
 from app.models import Instance
-from tests.factories import (make_activitypub_log, make_follow, make_instance, make_site, make_user,
-                             signed_get_headers)
+from tests.factories import (make_activitypub_log, make_community, make_community_member, make_follow, make_instance,
+                             make_site, make_user, signed_get_headers)
 
 pytestmark = pytest.mark.usefixtures('redis_double')
 
@@ -145,6 +145,28 @@ def test_an_activity_whose_actor_is_not_local_still_uses_its_addressing(app, db_
     recipient = _remote('peer.example', 'bob')
     path = _log('create', 'noactor', actor='https://gone.example/u/x', to=[recipient.ap_profile_id])
     assert _get(app, path, signed_get_headers(path, recipient)).status_code == 200
+
+
+def test_a_stored_remote_community_actor_never_entitles_through_its_followers_collection(app, db_session):
+    """find_actor_by_url resolves stored remote actors too. Rule 4 counts OUR members of a community, which is
+    meaningless for a remote one: a signer hosting one of them must not be entitled."""
+    make_site()
+    signer = _remote('peer.example', 'bob')  # first row: make_community owns itself to user 1 / instance 1
+    community = make_community('far', host='other.example')
+    community.ap_id = 'far@other.example'
+    db.session.commit()
+    make_community_member(signer, community)
+    path = _log('create', 'remotecomm', actor=community.ap_profile_id, to=[community.ap_followers_url])
+    _assert_refused(_get(app, path, signed_get_headers(path, signer)))
+
+
+def test_a_stored_remote_user_actor_never_entitles_through_its_followers_collection(app, db_session):
+    make_site()
+    author = _remote('other.example', 'carol')
+    follower = _remote('peer.example', 'bob')
+    make_follow(author, follower, is_accepted=True, is_inward=True)
+    path = _log('create', 'remoteuser', actor=author.ap_profile_id, to=[f'{author.public_url()}/followers'])
+    _assert_refused(_get(app, path, signed_get_headers(path, follower)))
 
 
 def test_an_activity_with_a_non_string_actor_is_judged_on_its_addressing(app, db_session):
