@@ -1,6 +1,6 @@
 """S3.2: deleted local actors answer 410 Tombstone; bans stay a reversible 404 (spec 2026-10-10)."""
 from app import db
-from tests.factories import make_community, make_user
+from tests.factories import make_community, make_instance, make_user
 from tests.test_actor_profiles import seed_actors
 from tests.test_ap_content_objects import ap_get, browser_get
 
@@ -70,3 +70,24 @@ def test_a_deleted_or_banned_community_still_answers_404(app, db_session):
     db.session.commit()
 
     assert ap_get(app, '/c/dead').status_code == 404
+
+
+def test_a_deleted_remote_user_sharing_the_name_is_not_tombstoned_by_us(app, db_session):
+    """We only vouch for our own accounts: a remote row named 'gone' must not turn /u/gone into a Tombstone.
+    resolve_remote_handle returns None for a bare name, so nothing touches the network."""
+    seed_actors('test.piefed.local')
+    remote = make_user(make_instance('other.example'), 'gone')
+    remote.deleted = True
+    db.session.commit()
+    assert remote.ap_id == 'gone@other.example'
+
+    assert ap_get(app, '/u/gone').status_code == 404
+
+
+def test_a_head_for_a_deleted_local_user_is_a_tombstone_too(app, db_session):
+    _local_user('gone', deleted=True, banned=True)
+
+    with app.test_client() as client:
+        response = client.head('/u/gone', headers={'Accept': 'application/activity+json'})
+
+    assert response.status_code == 410
