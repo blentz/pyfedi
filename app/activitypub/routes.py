@@ -2365,6 +2365,8 @@ def community_featured(actor):
         return redirect(url_for('activitypub.community_profile', actor=actor))
     community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first()
     if community is not None:
+        if community.local_only or community.private:
+            abort(403)   # S3.4: as the community actor document; these never federate
         posts = Post.query.filter_by(community_id=community.id, sticky=True, deleted=False).filter(
             Post.status >= POST_STATUS_PUBLISHED, listable_clause(Post)).all()
 
@@ -2396,6 +2398,8 @@ def community_moderators_route(actor):
         return redirect(url_for('activitypub.community_profile', actor=actor))
     community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first()
     if community is not None:
+        if community.local_only or community.private:
+            abort(403)   # S3.4: as the community actor document; these never federate
         moderator_ids = community_moderators(community.id)
         moderators = db.session.query(User).filter(User.id.in_([mod.user_id for mod in moderator_ids])).all()
         community_data = {
@@ -2426,6 +2430,8 @@ def community_followers(actor):
         return redirect(url_for('activitypub.community_profile', actor=actor))
     community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first()
     if community is not None:
+        if community.local_only or community.private:
+            abort(403)   # S3.4: as the community actor document; these never federate
         result = {
             "@context": default_context(),
             "id": f'{current_app.config["SERVER_URL"]}/c/{actor}/followers',
