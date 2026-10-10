@@ -1,5 +1,7 @@
 """S3.5: a DM's id is dereferenceable, but only by the parties to it (spec 2026-10-10)."""
 from app import db
+from app.chat import util as chat_util
+from app.models import Role
 from tests.factories import make_chat_message, make_conversation, make_instance, make_user
 from tests.test_actor_profiles import seed_actors
 from tests.test_ap_content_objects import ap_get, browser_get, signed_ap_get
@@ -103,26 +105,74 @@ def test_a_missing_message_is_404(app, db_session):
     assert signed_ap_get(app, f'/private_message/{message.id + 999}', bob, 'Test').status_code == 404
 
 
-def test_a_browser_is_sent_to_the_conversation(app, db_session):
-    message, conversation, bob, dave = _dm()
+def _login(app, user):
+    client = app.test_client()
+    with client.session_transaction() as sess:
+        sess['_user_id'] = str(user.id)
+        sess['_fresh'] = True
+    return client
 
-    response = browser_get(app, f'/private_message/{message.id}')
+
+def test_a_member_browser_is_sent_to_the_conversation(app, db_session):
+    message, conversation, bob, dave = _dm()
+    alice = db.session.get(type(bob), message.sender_id)
+
+    response = _login(app, alice).get(f'/private_message/{message.id}')
 
     assert response.status_code == 302
     assert response.headers['Location'].endswith(f'/chat/{conversation.id}')
 
 
-def test_a_browser_asking_for_a_message_without_a_conversation_gets_404(app, db_session):
+def test_an_anonymous_browser_gets_404_not_a_redirect(app, db_session):
     message, conversation, bob, dave = _dm()
-    message.conversation_id = None
-    db.session.commit()
 
     assert browser_get(app, f'/private_message/{message.id}').status_code == 404
 
 
+def test_a_non_member_browser_gets_404(app, db_session):
+    message, conversation, bob, dave = _dm()
+    carol = make_user(None, 'carol', local=True)
+
+    assert _login(app, carol).get(f'/private_message/{message.id}').status_code == 404
+
+
+def test_a_deleted_message_is_404_to_a_member_browser(app, db_session):
+    message, conversation, bob, dave = _dm(deleted=True)
+    alice = db.session.get(type(bob), message.sender_id)
+
+    assert _login(app, alice).get(f'/private_message/{message.id}').status_code == 404
+
+
+def test_an_admin_browser_is_sent_to_the_conversation(app, db_session):
+    message, conversation, bob, dave = _dm()
+    root = make_user(None, 'root', local=True)
+    root.roles.append(db.session.query(Role).filter_by(name='Admin').first() or Role(name='Admin'))
+    db.session.commit()
+
+    assert _login(app, root).get(f'/private_message/{message.id}').status_code == 302
+
+
+def test_a_local_to_local_message_is_404_to_a_remote_signer(app, db_session):
+    """P12: only the recipient's host is entitled; a local recipient's host is ours, not a remote signer's."""
+    message, conversation, bob, dave = _dm()
+    local = make_user(None, 'lena', local=True)
+    message.recipient_id = local.id
+    db.session.commit()
+
+    assert signed_ap_get(app, f'/private_message/{message.id}', bob, 'Test').status_code == 404
+
+
+def test_a_member_browser_asking_for_a_message_without_a_conversation_gets_404(app, db_session):
+    message, conversation, bob, dave = _dm()
+    message.conversation_id = None
+    db.session.commit()
+    alice = db.session.get(type(bob), message.sender_id)
+
+    assert _login(app, alice).get(f'/private_message/{message.id}').status_code == 404
+
+
 def test_update_message_still_federates_the_same_object(app, db_session, monkeypatch):
     """update_message now builds its object with chat_message_ap_object; the pushed Update is unchanged."""
-    from app.chat import util as chat_util
     message, conversation, bob, dave = _dm(software='mastodon')
     sent = []
     monkeypatch.setattr(chat_util, 'send_post_request', lambda inbox, body, key, key_id: sent.append(body))

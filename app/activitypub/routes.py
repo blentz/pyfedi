@@ -2537,9 +2537,12 @@ def private_message_ap(message_id):
     message = db.session.get(ChatMessage, message_id)
     ours = message is not None and message.ap_id == f"{current_app.config['SERVER_URL']}/private_message/{message.id}"
     if not is_activitypub_request():
-        if not ours or message.conversation_id is None:
+        # a browser is sent on only by someone who may read the conversation; everyone else gets the AP refusal
+        conversation = db.session.get(Conversation, message.conversation_id) if ours and message.conversation_id else None
+        if (conversation is None or message.deleted or not current_user.is_authenticated
+                or not (conversation.is_member(current_user) or current_user.is_admin())):
             abort(404)
-        return redirect(url_for('chat.chat_home', conversation_id=message.conversation_id))
+        return redirect(url_for('chat.chat_home', conversation_id=conversation.id))
     if not ours or message.deleted or message.recipient_id is None:
         abort(404)
     recipient = db.session.get(User, message.recipient_id)
