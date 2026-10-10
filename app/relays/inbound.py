@@ -3,9 +3,9 @@ from cryptography.exceptions import UnsupportedAlgorithm
 from flask import current_app
 from sqlalchemy import func
 
-import app as app_pkg
 from app import celery, db
-from app.activitypub.signature import POST_REQUIRED, HttpSignature, VerificationError, parse_signature_header
+from app.activitypub.signature import (POST_REQUIRED, HttpSignature, VerificationError, request_key_id,
+                                      verify_refreshing_key)
 from app.activitypub.util import (claim_activity, create_resolved_object, find_microblogging_community, host_of,
                                   log_incoming_ap, remote_object_to_json)
 from app.constants import APLOG_ANNOUNCE, APLOG_DUPLICATE, APLOG_FAILURE, APLOG_FOLLOW, APLOG_IGNORED, APLOG_NOTYPE, APLOG_SUCCESS
@@ -25,36 +25,33 @@ def _verified(request, relay) -> bool:
         return False
 
 
-REFETCH_SECONDS = 300
-
-
 def _key_owner(request) -> str:
     """The actor a request's signature keyId belongs to (the keyId without its fragment)."""
-    return parse_signature_header(request.headers.get('Signature')).get('keyid', '').split('#')[0]
+    return (request_key_id(request) or '').split('#')[0]
 
 
-def _names_the_relay_actor(request, relay) -> bool:
-    return _key_owner(request) == relay.actor_id
+def _relay_key(relay):
+    try:
+        return relay_subscribe.detect_relay(relay.url)['public_key']
+    except relay_subscribe.RelayError:
+        return None
+
+
+def _store_relay_key(relay, pem):
+    relay.public_key = pem
+    db.session.commit()
 
 
 def _verified_with_refetch(request, relay) -> bool:
-    if relay.public_key and _verified(request, relay):
-        return True
-    # An unauthenticated request must not make this instance fetch: only a signature that names the relay
-    # actor's own key, and at most once per relay in five minutes.
-    if not _names_the_relay_actor(request, relay):
-        return False
-    if not app_pkg.redis_client.set(f'relay-refetch:{relay.id}', 1, nx=True, ex=REFETCH_SECONDS):
-        return False
+    # One implementation of refetch-on-failure (signature.verify_refreshing_key): at most once per relay in
+    # KEY_REFETCH_SECONDS, and only for a keyId on the relay actor's own host.
     try:
-        fetched = relay_subscribe.detect_relay(relay.url)['public_key']
-    except relay_subscribe.RelayError:
+        verify_refreshing_key(request, relay.public_key, POST_REQUIRED, owner_url=relay.actor_id,
+                              rate_key=f'relay-refetch:{relay.id}', fetch_key=lambda: _relay_key(relay),
+                              store_key=lambda pem: _store_relay_key(relay, pem))
+        return True
+    except VerificationError:
         return False
-    if not fetched or fetched == relay.public_key:
-        return False
-    relay.public_key = fetched
-    db.session.commit()
-    return _verified(request, relay)
 
 
 def relay_for_forwarded(request):
