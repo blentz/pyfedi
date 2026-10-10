@@ -85,7 +85,10 @@ class TestFollow:
         uri, body, key_id = net['post'][-1]
         assert relay.state == RELAY_PENDING
         assert uri == 'https://relay.example/inbox'
-        assert body['type'] == 'Follow' and body['object'] == PUBLIC and body['to'] == [PUBLIC]
+        assert body['type'] == 'Follow' and body['object'] == PUBLIC
+        # Activity-Relay (yukimochi) reads a Follow addressed to Public as an activity to relay, and drops it
+        # with a 202: the Follow is addressed to nobody, as Mastodon's own relay Follow is.
+        assert 'to' not in body and 'cc' not in body
         assert body['actor'].endswith('/actor') and key_id.endswith('/actor#main-key')
         assert body['id'] == relay.follow_activity_id and '/activities/relay-follow/' in body['id']
 
@@ -93,7 +96,8 @@ class TestFollow:
         net['documents']['https://relay.fedi.buzz/tag/cats'] = TAG
         with app.test_request_context():
             subscribe.add_relay('https://relay.fedi.buzz/tag/cats')
-        assert net['post'][-1][1]['object'] == 'https://relay.fedi.buzz/tag/cats'
+        body = net['post'][-1][1]
+        assert body['object'] == 'https://relay.fedi.buzz/tag/cats' and body['to'] == ['https://relay.fedi.buzz/tag/cats']
 
     def test_adding_the_same_url_twice_is_refused(self, app, net):
         net['documents']['https://relay.example/actor'] = ACTOR

@@ -54,9 +54,12 @@ def detect_relay(url: str) -> dict:
 
 
 def relay_follow_activity(relay) -> dict:
-    target = PUBLIC if relay.style == STYLE_MASTODON else relay.actor_id
-    return {'type': 'Follow', 'id': relay.follow_activity_id, 'actor': instance_actor_url(),
-            'object': target, 'to': [target]}
+    follow = {'type': 'Follow', 'id': relay.follow_activity_id, 'actor': instance_actor_url()}
+    if relay.style == STYLE_MASTODON:
+        # Addressed to nobody, as Mastodon's own relay Follow is: Activity-Relay treats anything addressed to
+        # Public as an activity to relay, and answers a Follow so addressed with a 202 and nothing else.
+        return {**follow, 'object': PUBLIC}
+    return {**follow, 'object': relay.actor_id, 'to': [relay.actor_id]}
 
 
 def _new_follow_id() -> str:

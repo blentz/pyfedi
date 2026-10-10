@@ -131,7 +131,9 @@ The admin enters a URL.
 **Follow:** `follow_activity()` from the instance actor, signed as today.
 - The `object` is `https://www.w3.org/ns/activitystreams#Public` for Mastodon style, and `actor_id` for
   LitePub style.
-- `to` is `[object]`.
+- LitePub style: `to` is `[actor_id]`. Mastodon style: no `to` or `cc`, as Mastodon's own relay Follow.
+  Activity-Relay (yukimochi) routes on addressing: a Follow whose `to` holds Public is taken for an
+  activity to relay and answered 202 with nothing done, so the relay never Accepts.
 - The row is stored `pending` with `follow_activity_id`.
 - An HTTP refusal while sending (any non-2xx) sets `failed` and `last_error`.
 
