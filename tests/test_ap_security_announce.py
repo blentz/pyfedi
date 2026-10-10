@@ -17,8 +17,8 @@ from app.activitypub.signature import LDSignature, default_context
 from app.activitypub.util import ANNOUNCED_DELETE_DEFERRED, cross_origin_delete_delay, verify_announced_inner
 from app.models import ActivityPubLog, InstanceRole, Post, User, utcnow
 from app.utils import set_setting
-from tests.factories import AS_PUBLIC_URI, a_keypair, make_community_member, make_instance, make_post, \
-    make_post_reply, make_user, note_document, serve_remote_object
+from tests.factories import AS_PUBLIC_URI, a_keypair, make_community, make_community_member, make_instance, \
+    make_post, make_post_reply, make_user, note_document, serve_remote_object
 from tests.test_inbox_dispatch_announce import _seed_announcing_community
 from tests.test_inbox_dispatch_lock_delete import record_moderation
 from tests.test_inbox_dispatch_preamble import dispatch
@@ -612,7 +612,7 @@ def test_the_dispatcher_schedules_a_moderators_delete_with_the_configured_delay(
 
     dispatch(activity)
 
-    assert scheduled == [((activity, True), 45)]
+    assert scheduled == [((activity, True, community.id), 45)]
     assert _messages(activity) == [
         'Announced Delete by a moderator: applied after 45 seconds unless its home server deletes it first']
     db.session.refresh(post)
@@ -627,7 +627,7 @@ def test_a_deferred_delete_of_a_live_post_is_applied_as_a_moderator_removal(app,
     calls = record_moderation(monkeypatch, 'delete_post_or_comment', 'announce_activity_to_followers')
     announce = _announce(_mod_delete(dave.ap_profile_id), group=community.ap_profile_id)
 
-    activitypub_routes.apply_delayed_delete(announce, True)
+    activitypub_routes.apply_delayed_delete(announce, True, community.id)
 
     assert len(calls['delete_post_or_comment']) == 1
     user_arg, to_delete_arg, store_ap_json_arg, _request_json, reason_arg = calls['delete_post_or_comment'][0][0]
@@ -651,7 +651,7 @@ def test_a_deferred_delete_of_a_live_reply_goes_back_through_the_dispatcher(app,
     obj = {'id': reply.ap_id, 'type': 'Tombstone'} if by_tombstone else reply.ap_id
     announce = _announce(_mod_delete(dave.ap_profile_id, obj=obj), group=community.ap_profile_id)
 
-    activitypub_routes.apply_delayed_delete(announce, False)
+    activitypub_routes.apply_delayed_delete(announce, False, community.id)
 
     assert processed == [((announce, False), {'announce_verified': True})]
 
@@ -668,10 +668,77 @@ def test_a_deferred_delete_the_home_server_beat_is_superseded(app, db_session, m
     monkeypatch.setattr(activitypub_routes, 'process_inbox_request', lambda *a, **k: processed.append((a, k)))
     announce = _announce(_mod_delete(dave.ap_profile_id), group=community.ap_profile_id)
 
-    activitypub_routes.apply_delayed_delete(announce, True)
+    activitypub_routes.apply_delayed_delete(announce, True, community.id)
 
     assert processed == []
     assert _messages(announce) == ["Delete superseded by the home server's"]
+
+
+# --- R-SAMECOMMUNITY: a Group's moderators reach only that Group's content ---
+
+def _cross_community_attack():
+    """peer.example names carol a moderator of its community A; carol's post is stored here in community B."""
+    _instance, community_a = _seed_announcing_community()
+    community_b = make_community('elsewhere', host='peer.example')
+    carol = _carol()
+    make_community_member(carol, community_a, is_moderator=True)
+    post = make_post(community_b, carol, ap_id=DELETED_ID)
+    activity = _announce(_delete(), group=community_a.ap_profile_id)
+    return community_a, post, activity
+
+
+def test_a_moderators_delete_of_a_post_in_another_community_is_not_deferred_but_refetched(app, db_session,
+                                                                                         http_mock):
+    community_a, _post, activity = _cross_community_attack()
+    http_mock.get(DELETED_ID).respond(200, json=note_document(attributed_to=CAROL, uri=DELETED_ID))
+
+    assert verify_announced_inner(activity, community_a) == (None, 'Announced Delete of an object that still exists')
+
+
+def test_the_dispatcher_keeps_a_post_in_another_community_its_origin_still_serves(app, db_session, monkeypatch,
+                                                                                 http_mock):
+    """The attack end to end, delete_post_or_comment unstubbed: nothing is scheduled and the post survives."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    _community_a, post, activity = _cross_community_attack()
+    http_mock.get(DELETED_ID).respond(200, json=note_document(attributed_to=CAROL, uri=DELETED_ID))
+    scheduled = []
+    monkeypatch.setattr(activitypub_routes.apply_delayed_delete, 'apply_async',
+                        lambda *a, **k: scheduled.append((a, k)))
+
+    dispatch(activity)
+
+    assert scheduled == []
+    assert _messages(activity) == ['Announced Delete of an object that still exists']
+    db.session.refresh(post)
+    assert post.deleted is False
+
+
+def test_the_dispatcher_applies_a_delete_in_another_community_once_its_origin_drops_it(app, db_session,
+                                                                                     monkeypatch, http_mock):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    _community_a, post, activity = _cross_community_attack()
+    http_mock.get(DELETED_ID).respond(410)
+    scheduled = []
+    monkeypatch.setattr(activitypub_routes.apply_delayed_delete, 'apply_async',
+                        lambda *a, **k: scheduled.append((a, k)))
+
+    dispatch(activity)
+
+    assert scheduled == []
+    db.session.refresh(post)
+    assert post.deleted is True
+
+
+def test_a_deferred_delete_of_a_post_now_in_another_community_is_dropped(app, db_session, monkeypatch):
+    """Apply time re-checks: deferred while the post was not stored (or was in A), it is in B when the delay ends."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    community_a, post, activity = _cross_community_attack()
+
+    activitypub_routes.apply_delayed_delete(activity, True, community_a.id)
+
+    assert _messages(activity) == ['Announced Delete by a moderator: the object is not in the announcing community']
+    db.session.refresh(post)
+    assert post.deleted is False
 
 
 # --- the delay setting ---
