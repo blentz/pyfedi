@@ -6,9 +6,9 @@ from sqlalchemy import func
 import app as app_pkg
 from app import celery, db
 from app.activitypub.signature import POST_REQUIRED, HttpSignature, VerificationError, parse_signature_header
-from app.activitypub.util import (create_resolved_object, find_microblogging_community, host_of,
+from app.activitypub.util import (claim_activity, create_resolved_object, find_microblogging_community, host_of,
                                   log_incoming_ap, remote_object_to_json)
-from app.constants import APLOG_ANNOUNCE, APLOG_FAILURE, APLOG_FOLLOW, APLOG_IGNORED, APLOG_NOTYPE, APLOG_SUCCESS
+from app.constants import APLOG_ANNOUNCE, APLOG_DUPLICATE, APLOG_FAILURE, APLOG_FOLLOW, APLOG_IGNORED, APLOG_NOTYPE, APLOG_SUCCESS
 from app.discovery.instance_answers import instance_actor_url
 from app.models import Community, Post, PostReply, Relay, utcnow
 from app.relays import RELAY_ACCEPTED, RELAY_PENDING, RELAY_REFUSED, relay_context
@@ -131,6 +131,10 @@ def relay_actor_gate(request, request_json):
         log_incoming_ap(request_json.get('id') or '', APLOG_NOTYPE, APLOG_FAILURE, None,
                         'Relay signature did not verify')
         return '', 401
+    if not claim_activity(request_json.get('id') or '', actor):   # verified, so only now may the id be remembered
+        log_incoming_ap(request_json.get('id') or '', APLOG_DUPLICATE, APLOG_IGNORED, None,
+                        'Already aware of this activity')
+        return '', 200
     if activity_type == 'Announce':
         obj = request_json.get('object')
         uri = obj.get('id') if isinstance(obj, dict) else obj

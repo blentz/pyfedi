@@ -21,7 +21,7 @@ from app.activitypub.actor import find_actor_by_url
 from app.activitypub.entitlement import PRIVATE_HEADERS, addressees_of, audience_entitles, signed_requester_actor
 from app.activitypub.signature import POST_REQUIRED, HttpSignature, VerificationError, VerificationFormatError, default_context, LDSignature, \
     send_post_request
-from app.activitypub.util import host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
+from app.activitypub.util import activity_dedupe_key, claim_activity, host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
     post_to_activity, find_actor_or_create_cached, find_liked_object, \
     lemmy_site_data, is_activitypub_request, delete_post_or_comment, community_members, \
     create_post, create_post_reply, update_post_reply_from_activity, \
@@ -68,9 +68,6 @@ from app.utils import user_banned_from_community, gibberish, get_setting, commun
     requestor_domain
 import urllib.parse
 import app as app_pkg
-
-# How long an inbound activity id is remembered so a redelivery is not processed twice (S2.4)
-ACTIVITY_DEDUPE_SECONDS = 86400
 
 # D160/D180/D195 (owner ruling): one Cache-Control policy for every ActivityPub document served here, by kind.
 # A miss (404 or 410) is never cached, so a peer asking before an object exists does not keep the answer.
@@ -762,7 +759,7 @@ def shared_inbox():
         if not instance_allowed(furl(request_json['actor']).host):
             return '', 403
 
-    if app_pkg.redis_client.exists(id):  # Something is sending same activity multiple times
+    if app_pkg.redis_client.exists(activity_dedupe_key(id, request_json['actor'])):  # Something is sending same activity multiple times
         log_incoming_ap(id, APLOG_DUPLICATE, APLOG_IGNORED, saved_json, 'Already aware of this activity')
         return '', 200
 
@@ -826,7 +823,7 @@ def shared_inbox():
 
     # Remembered only once the signature has verified, so a forged request reusing a genuine activity's id cannot
     # make this instance drop the genuine one. set(nx=True) is also the gate for two deliveries verified at once.
-    if not app_pkg.redis_client.set(id, 1, ex=ACTIVITY_DEDUPE_SECONDS, nx=True):
+    if not claim_activity(id, request_json['actor']):
         log_incoming_ap(id, APLOG_DUPLICATE, APLOG_IGNORED, saved_json, 'Already aware of this activity')
         return '', 200
 

@@ -654,6 +654,24 @@ def remove_outdated_community_flair(community: Community, keep_ap_ids: set, keep
         session.delete(flair)
 
 
+# How long an inbound activity id is remembered so a redelivery is not processed twice (S2.4)
+ACTIVITY_DEDUPE_SECONDS = 86400
+
+
+def activity_dedupe_key(activity_id, actor_url) -> str:
+    """The Redis key remembering an inbound activity. Namespaced so a sender-chosen id can never name another
+    mechanism's key, and scoped to the actor's host so one host cannot claim another host's id."""
+    return f'ap-dedupe:{host_of(actor_url) if isinstance(actor_url, str) else ""}:{activity_id}'
+
+
+def claim_activity(activity_id, actor_url) -> bool:
+    """True when this is the first verified delivery of the activity; False when it was already claimed.
+
+    Called only after the signature has verified. set(nx=True) is also the gate for two deliveries verified at once."""
+    return bool(app_pkg.redis_client.set(activity_dedupe_key(activity_id, actor_url), 1,
+                                         ex=ACTIVITY_DEDUPE_SECONDS, nx=True))
+
+
 def host_of(url_string: str) -> str:
     """The lowercased host of a URL, or '' when it has none.
 

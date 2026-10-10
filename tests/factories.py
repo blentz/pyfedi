@@ -1144,7 +1144,7 @@ def inbox_activity(actor, *, activity_type: str = 'Like', object_uri: str = None
     ... or not 'object'`, so all four are always present here and a test that
     wants one missing deletes it explicitly -- which reads as the deviation it
     is. `id` is unique per call because shared_inbox writes it to Redis for
-    ACTIVITY_DEDUPE_SECONDS (app/activitypub/routes.py) to suppress duplicates;
+    ACTIVITY_DEDUPE_SECONDS (app/activitypub/util.py) to suppress duplicates;
     a fixed id would make tests interfere through Redis rather than through anything they assert about.
     """
     activity = {
