@@ -13,7 +13,7 @@ below, the two frozen `@context` documents behind it, and the
 `unsigned_but_precheck_clean_headers` / `ld_signed_body` recipes now live
 there for the same reason: all three inbox-gate modules use them.
 
-TASK 6 -- signature verification, the LD fallback, and the fediseer exemption
+TASK 6 -- signature verification, and the LD fallback
 ===============================================================================
 Source order (routes.py:714-739), all AFTER Task 5's precheck/Delete-shortcut/
 actor-resolution outcomes and all reached only once an actor has been
@@ -29,20 +29,10 @@ resolved:
            request body carries a `signature` key, `LDSignature.
            verify_signature` is tried as a fallback. Its own failure ->
            ('', 400), logged 'Could not verify LD signature: ' + str(e).
-  726-731  Its success has NO return statement -- exactly like the fediseer
-           branch below, it falls out of the `except` block and continues
+  726-731  Its success has NO return statement -- it falls out of the `except` block and continues
            into the shared instance bookkeeping and dispatch, with `bounced`
            already True from line 718.
-  731      The fediseer exemption: `elif (actor.ap_profile_id ==
-           'https://fediseer.com/api/v1/user/fediseer' and ... type == Create
-           ... object type == ChatMessage): ...`. The branch body is a
-           LITERAL `...` (an Ellipsis expression statement) -- it does
-           nothing at all but decline to `return`, so nothing is logged on
-           this path either; falling out of the `elif` is the entire effect,
-           and what happens next is exactly what happens after a successful
-           LD-signature fallback: shared bookkeeping, then dispatch.
-  737-739  Any other failure (no `signature` key and the fediseer condition
-           does not hold) -> ('', 400), logged 'Could not verify HTTP
+  737-739  Any other failure (no `signature` key) -> ('', 400), logged 'Could not verify HTTP
            signature: ' + str(e). This is the arm a plain wrong-key mismatch
            reaches, since a request produced by `signed_inbox_post` always
            carries a genuine Signature header and no `signature` body key.
@@ -130,70 +120,11 @@ test_a_delete_of_an_unknown_account_needs_no_signature and
 test_an_unresolvable_actor_is_refused (test_inbox_gate_refusals.py) do for
 the same reason.
 
-The fediseer exemption (Step 4) needs an actor row this suite has no factory
-for -- `ap_profile_id` exactly 'https://fediseer.com/api/v1/user/fediseer'
--- built here with `make_instance`/`make_user` plus the same `ap_fetched_at`
-stamp `signing_peer` uses, so `find_actor_or_create_cached` resolves it as a
-pure database read (no actor fetch). The activity is UNSIGNED (no Signature
-header, no `signature` body key either), which is the case the elif is
-FOR: fediseer's real sender apparently cannot produce an HTTP or LD signature
-PieFed accepts, so this is the one arm in the whole gate that accepts a
-completely bare request, gated only on which actor sent it and what shape the
-activity is.
-
-What `fediseer` does NOT do, verified against a hypothesis to avoid getting
-it backwards: the exemption reads the ALREADY-RESOLVED `actor` row's
-`ap_profile_id`, not the raw `request_json['actor']` string -- so it cannot
-be reached by an unresolvable actor URL that merely happens to end in
-'/fediseer' (find_actor_or_create_cached would return None for that and the
-gate would refuse two branches earlier, at routes.py:703-708, before this
-code is ever reached). The test below resolves a REAL row with that exact
-identity instead.
-
-A second test right after it sends the IDENTICAL activity shape (unsigned
-Create of a ChatMessage) from `signing_peer` instead of the fediseer row --
-this is the negative half review's second round asked for, added after
-Step 5's mutation run showed the positive test alone cannot tell "the
-exemption is scoped to one actor" apart from "the exemption is scoped to
-this activity shape, for anyone". Both tests together pin the `and` in the
-`elif`'s condition, not just the shape check on its own.
-
-Mutation (Step 5), applied one at a time to app/activitypub/routes.py, this
-file's tests run against each mutant, then `git checkout --
-app/activitypub/routes.py` before the next:
-
-  1. `bounced = True` (line 718, the top of the `except VerificationError`
-     block) forced to `bounced = False`.
-  2. The entire `if 'signature' in request_json: try: ... except
-     VerificationError as e: ... return '', 400` block deleted, with the
-     following `elif` promoted to a bare `if` so the file still parses.
-  3. The fediseer condition's actor test dropped: `actor.ap_profile_id ==
-     'https://fediseer.com/api/v1/user/fediseer' and` removed from the
-     `elif`, leaving only the Create/ChatMessage shape test.
-
-Results and counts are recorded in this sub-project's task-6-report.md
-rather than restated here, since this docstring is read before every test
-run and a stale count baked into it would be easy to miss updating. (First
-pass: mutants 1 and 2 killed, mutant 3 survived. After adding the negative
-fediseer test above, mutant 3 was re-run and killed too -- see the report's
-fix appendix for the re-run count.)
-
-The fediseer branch's `...` body -- what it actually does
--------------------------------------------------------------------------
-`...` on its own line, as a Python statement, is an `Ellipsis` expression
-statement -- syntactically valid but semantically inert, exactly like `pass`
-would be here. It does not return, does not log, does not touch `bounced`
-(already True from line 718) or any other variable. Its only effect is
-allowing control flow to fall out of the `except` block's `elif` chain with
-no `return`, which is precisely the branch of Python's own semantics this
-whole exemption depends on: `elif`/`else` with no matching branch executed
-and no explicit `return` inside whichever branch DID execute both continue
-execution at the first statement after the `try/except`, which is the shared
-instance-bookkeeping code, followed by dispatch. It is not shorthand for
-anything specific; it is precisely as inert as `pass`, chosen (guessing from
-the surrounding comment, not confirmed by any commit message) probably
-because the branch existed at this literal placeholder for a while before the
-site operator's exemption request landed and simply never got a body written.
+The fediseer exemption that used to sit between the LD fallback and the final
+`else` was removed by the security track (S0.1, owner ruling 2026-10-10): its
+literal `...` body let an unsigned Create/ChatMessage claiming the fediseer
+actor through. test_an_unsigned_fediseer_chat_message_is_refused pins that it
+now gets the generic signature-failure 400.
 """
 import json
 
@@ -421,38 +352,23 @@ def test_a_valid_ld_signature_is_accepted(app, signing_peer, monkeypatch, no_net
     assert set(no_network_ld_signing) == {'https://www.w3.org/ns/activitystreams', 'https://w3id.org/security/v1'}
 
 
-def test_an_unsigned_fediseer_chat_message_is_exempted(app, db_session, monkeypatch):
-    """routes.py:717-731: with NEITHER a Signature header NOR a `signature`
-    body key, every other actor falls to the generic 'Could not verify HTTP
-    signature' refusal (see test_a_signature_verified_against_the_wrong_key_
-    is_refused above) -- except this one, exact actor identity, sending this
-    one exact activity shape. No factory in tests/factories.py builds an
-    actor with this `ap_profile_id`, so it is constructed here directly:
-    `make_instance`/`make_user` give it a row, then `ap_profile_id` is
-    overwritten to the literal string the source compares against, and
-    `ap_fetched_at` is stamped to now so `find_actor_or_create_cached`
-    resolves it as a pure database read (the same reason signing_peer's own
-    fixture does this, tests/conftest.py).
+def test_an_unsigned_fediseer_chat_message_is_refused(app, db_session, monkeypatch):
+    """S0.1 (security track, owner ruling 2026-10-10). The fediseer `elif` used
+    to fall out of the `except` with a literal `...` body, so an unsigned
+    Create/ChatMessage that merely CLAIMED the fediseer actor was dispatched --
+    anyone could DM any local user "from fediseer". It is now refused like
+    every other unsigned activity.
 
-    The exemption reads the RESOLVED actor's `ap_profile_id`, confirmed by
-    reading routes.py:727 rather than assumed -- so this test proves the
-    identity check is about the database row, not about the raw
-    `request_json['actor']` string coincidentally containing 'fediseer'.
-
-    Like the valid-LD-signature test above, three assertions together pin
-    this to the exemption specifically rather than to any other 200 outcome:
-    dispatch ran once, no ActivityPubLog row was written (the `...` body logs
-    nothing, see the module docstring's closing section), and `bounced`'s
-    unconditional True (line 718) blanked the instance's ip_address.
+    Three assertions together pin the refusal: 400, nothing dispatched, and the
+    generic signature-failure log row (the exemption logged nothing at all).
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
-    monkeypatch.setitem(app.config, 'DEBUG', True)
     dispatched = []
     monkeypatch.setattr('app.activitypub.routes.process_inbox_request',
                         lambda *args, **kwargs: dispatched.append(args))
     make_site()
     instance = make_instance('fediseer.com')
-    fediseer = make_user(instance, 'fediseer')
+    fediseer = make_user(instance, 'fediseer', with_keys=True)
     fediseer.ap_profile_id = 'https://fediseer.com/api/v1/user/fediseer'
     fediseer.ap_public_url = fediseer.ap_profile_id
     fediseer.ap_inbox_url = f'{fediseer.ap_profile_id}/inbox'
@@ -467,10 +383,10 @@ def test_an_unsigned_fediseer_chat_message_is_exempted(app, db_session, monkeypa
                                headers=unsigned_but_precheck_clean_headers(body_bytes),
                                content_type='application/activity+json')
 
-    assert response.status_code == 200
-    assert len(dispatched) == 1
-    assert ActivityPubLog.query.count() == 0
-    assert fediseer.instance.ip_address == ''
+    assert response.status_code == 400
+    assert dispatched == []
+    assert ActivityPubLog.query.one().exception_message == \
+        'Could not verify HTTP signature: No signature header present'
 
 
 def test_an_unsigned_chat_message_from_a_non_fediseer_actor_is_refused(app, signing_peer, monkeypatch):

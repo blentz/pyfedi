@@ -71,8 +71,8 @@ returns instead of reading conditions:
   failed, but an exemption applies" outcomes inside the `HttpSignature.
   verify_request` `except VerificationError` block: row 18 (valid LD
   signature) falls out of the inner `try/except` with no return, and row 19
-  (fediseer `ChatMessage` exemption) falls out of the `elif` with no return
-  either (`...` is the entire body of that branch). Both continue into the
+  (removed by S0.1: the fediseer exemption no longer exists) fell out of the
+  `elif` with no return. Both continued into the
   shared instance-bookkeeping code and the dispatch that is row 20. This is
   consistent with the design's separate note that the two dispatch paths
   (`process_delete_request` / `process_inbox_request`) come after the table,
@@ -88,8 +88,8 @@ returns instead of reading conditions:
 Net: 20 rows - 2 (rows 18/19, no return) - 1 (rows 7/8 collapse to one
 return) + 1 (row 20 expands to two returns) = 18, which is exactly the
 AST's count. **No row's condition or stated outcome is wrong.** The one
-substantive addition this derivation makes: row 19 (fediseer exemption)
-carries the same `bounced = True` consequence as row 18, because both are
+substantive addition this derivation makes: row 19 (removed by S0.1: the fediseer exemption no longer exists)
+carried the same `bounced = True` consequence as row 18, because both are
 reached through the same `except VerificationError` block that sets
 `bounced = True` unconditionally at its top (line 718) before branching on
 `'signature' in request_json`. The table states "bounced true" only for row
