@@ -2064,8 +2064,7 @@ building the row.
 `make_user` (`tests/factories.py:39-65`) sets `ap_id`, `ap_profile_id`,
 `ap_public_url` and `ap_inbox_url` from `instance.domain` but never touches
 `ap_domain`, which is left `NULL`. Code that branches on a sender's
-`ap_domain` (for example `process_chat`'s fediseer.com exemption,
-`app/activitypub/routes.py:2550`) will see `None`, not the instance's
+`ap_domain` will see `None`, not the instance's
 domain, unless a test sets `user.ap_domain` itself after calling
 `make_user`.
 

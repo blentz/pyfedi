@@ -48,10 +48,10 @@ def test_an_old_sender_is_not_refused_for_newness(app, db_session, monkeypatch):
     assert log.result == 'success'
 
 
-def test_a_brand_new_sender_from_fediseer_is_exempt(app, db_session, monkeypatch):
-    """The second conjunct: `user.ap_domain != 'fediseer.com'`. A brand-new
-    sender is normally refused; this one is not, solely because of its domain.
-    This is the ONLY test that distinguishes that conjunct.
+def test_a_brand_new_sender_from_fediseer_is_refused_like_any_other(app, db_session, monkeypatch):
+    """S0.1. The `user.ap_domain != 'fediseer.com'` conjunct is gone: with the
+    unsigned path closed, a fediseer.com sender is an ordinary signed sender
+    and a brand-new one is refused as 'Sender is too new' like any other.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, sender, recipient = seed_chat_pair(host='fediseer.com')
@@ -64,7 +64,8 @@ def test_a_brand_new_sender_from_fediseer_is_exempt(app, db_session, monkeypatch
                            content='hello', id='https://peer.example/pm/1'))
 
     log = ActivityPubLog.query.one()
-    assert log.result == 'success'
+    assert log.result == 'failure'
+    assert log.exception_message == 'Sender is too new'
 
 
 def test_a_sender_blocked_by_the_recipient_is_refused(app, db_session, monkeypatch):

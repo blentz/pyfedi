@@ -811,11 +811,6 @@ def shared_inbox():
             except VerificationError as e:
                 log_incoming_ap(id, APLOG_NOTYPE, APLOG_FAILURE, saved_json, 'Could not verify LD signature: ' + str(e))
                 return '', 400
-        elif (
-                actor.ap_profile_id == 'https://fediseer.com/api/v1/user/fediseer' and  # accept unsigned chat message from fediseer for API key
-                request_json['type'] == 'Create' and isinstance(request_json['object'], dict) and
-                'type' in request_json['object'] and request_json['object']['type'] == 'ChatMessage'):
-            ...
         # no HTTP sig, and no LD sig, so reduce the inner object to just its remote ID, and then fetch it and check it in process_inbox_request()
         # Removed due to potential security issues. This will probably break PeerTube federation, unfortunately.
         #elif ((request_json['type'] == 'Create' or request_json['type'] == 'Update') and
@@ -2926,7 +2921,7 @@ def process_chat(user, store_ap_json, core_activity, session):
     recipient = find_actor_or_create_cached(recipient_ap_id)
     if recipient and recipient.is_local():
         recipient = session.get(User, recipient.id)  # for some reason find_actor_or_create_cached was giving me a user from the wrong DB session, causing an exception later on.
-        if sender.created_very_recently() and user.ap_domain != 'fediseer.com':
+        if sender.created_very_recently():
             log_incoming_ap(id, log_type, APLOG_FAILURE, saved_json, 'Sender is too new')
             return True
         elif recipient.has_blocked_user(sender.id) or recipient.has_blocked_instance(sender.instance_id):
