@@ -171,6 +171,79 @@ class TestAnnounce:
         assert User.query.filter_by(ap_profile_id=relay.actor_id).count() == 0
 
 
+INSTANCE_ACTOR = 'https://test.piefed.local/actor'
+
+
+@pytest.fixture
+def accepts(monkeypatch):
+    calls = []
+    monkeypatch.setattr(inbound.send_relay_follow_accept, 'apply_async',
+                        lambda args=None, queue=None, **kw: calls.append((args, queue)))
+    return calls
+
+
+class TestFollowBack:
+    """barkshark ActivityRelay follows a non-Mastodon instance back, and only after accepting its Follow."""
+
+    @pytest.mark.parametrize('obj', [INSTANCE_ACTOR, {'id': INSTANCE_ACTOR, 'type': 'Application'}])
+    def test_a_follow_back_from_a_pending_relay_accepts_it_and_is_answered(self, app, verifier, accepts, logs,
+                                                                         monkeypatch, obj):
+        monkeypatch.setitem(app.config, 'DEBUG', False)
+        relay = make_relay(state=RELAY_PENDING)
+        follow = activity('Follow', obj)
+        assert gate(app, follow) == ('', 200)
+        db.session.refresh(relay)
+        assert relay.state == RELAY_ACCEPTED and relay.answered_at is not None
+        assert accepts == [((relay.id, follow), 'background')]
+        assert logs[-1][1] == APLOG_SUCCESS
+
+    @pytest.mark.parametrize('state', [RELAY_ACCEPTED, RELAY_REFUSED])
+    def test_a_follow_back_is_answered_without_changing_a_settled_row(self, app, verifier, accepts, monkeypatch,
+                                                                     state):
+        monkeypatch.setitem(app.config, 'DEBUG', False)
+        relay = make_relay(state=state)
+        assert gate(app, activity('Follow', INSTANCE_ACTOR)) == ('', 200)
+        db.session.refresh(relay)
+        assert relay.state == state and relay.answered_at is None
+        assert len(accepts) == 1
+
+    def test_a_badly_signed_follow_back_is_a_401_and_changes_nothing(self, app, verifier, accepts, monkeypatch):
+        relay = make_relay(state=RELAY_PENDING, public_key='STALE')
+        monkeypatch.setattr(inbound.relay_subscribe, 'detect_relay', lambda url: {'public_key': 'STALE'})
+        assert gate(app, activity('Follow', INSTANCE_ACTOR)) == ('', 401)
+        db.session.refresh(relay)
+        assert relay.state == RELAY_PENDING and accepts == []
+
+    def test_under_debug_the_accept_is_sent_inline(self, app, verifier, monkeypatch):
+        monkeypatch.setitem(app.config, 'DEBUG', True)
+        relay = make_relay(state=RELAY_PENDING)
+        sent = []
+        monkeypatch.setattr(inbound, 'send_relay_follow_accept', lambda *args: sent.append(args))
+        follow = activity('Follow', INSTANCE_ACTOR)
+        gate(app, follow)
+        assert sent == [(relay.id, follow)]
+
+    def test_the_task_sends_an_accept_of_the_follow_to_the_relay_inbox(self, app, monkeypatch):
+        relay = make_relay(state=RELAY_ACCEPTED)
+        posted = []
+        monkeypatch.setattr(inbound.relay_subscribe, 'send_post_request',
+                            lambda uri, body, private_key, key_id, **kw: posted.append((uri, body, key_id)))
+        follow = activity('Follow', INSTANCE_ACTOR)
+        with app.test_request_context():
+            inbound.send_relay_follow_accept(relay.id, follow)
+        (uri, body, key_id), = posted
+        assert uri == 'https://relay.example/inbox' and key_id == INSTANCE_ACTOR + '#main-key'
+        assert body['type'] == 'Accept' and body['actor'] == INSTANCE_ACTOR and body['object'] == follow
+        assert body['to'] == [ACTOR] and body['id'].startswith('https://test.piefed.local/')
+
+    def test_the_task_does_nothing_for_a_removed_relay(self, app, monkeypatch):
+        posted = []
+        monkeypatch.setattr(inbound.relay_subscribe, 'send_post_request', lambda *a, **kw: posted.append(a))
+        with app.test_request_context():
+            inbound.send_relay_follow_accept(999, activity('Follow', INSTANCE_ACTOR))
+        assert posted == []
+
+
 class TestNotARelayActor:
 
     def test_an_actor_that_is_not_a_relay_is_left_alone(self, app, verifier):

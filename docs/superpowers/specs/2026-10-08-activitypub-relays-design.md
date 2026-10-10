@@ -147,6 +147,12 @@ relay row matches when both hold:
 Accept sets `accepted`, Reject sets `refused`, and both set `answered_at`. An Accept for a row that is
 not `pending` is ignored.
 
+**Follow-back:** a signed Follow from a relay actor whose `object` is the instance actor is answered with
+an Accept (sent to `inbox_url` from the background queue) whatever the row's state. barkshark
+ActivityRelay sends one to non-Mastodon software only after accepting our Follow, and its Accept does not
+always arrive, so a follow-back also sets a `pending` row `accepted` and sets `answered_at`. A Follow of
+anything else from a relay actor is left to the normal inbox.
+
 **Relay actor type:** a LitePub relay's actor must have type `Application` or `Service`; otherwise adding
 it fails with "is not a relay actor". A Mastodon-style `/actor` document of any other type is treated as
 unknown (`actor_id` and `public_key` stay null).
