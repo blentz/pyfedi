@@ -2336,6 +2336,8 @@ def community_outbox(actor):
         return redirect(url_for('activitypub.community_profile', actor=actor))
     community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first()
     if community is not None:
+        if community.local_only or community.private:
+            abort(403)   # S3.4: as the community actor document (community_profile); these never federate
         listed = Post.query.filter(Post.community_id == community.id, Post.deleted == False,
                                    Post.status > POST_STATUS_REVIEWING, listable_clause(Post))
         # sticky posts first, newest first within each, as the one page this served before paging
