@@ -29,7 +29,7 @@ from app.activitypub.util import activity_dedupe_key, claim_activity, host_of, u
     process_report, ensure_domains_match, refresh_community_profile, \
     comment_model_to_json, restore_post_or_comment, ban_user, unban_user, \
     log_incoming_ap, find_community, site_ban_remove_data, community_ban_remove_data, verify_object_from_source, \
-    verify_announced_inner, ANNOUNCED_DELETE_DEFERRED, cross_origin_delete_delay, _id_of, \
+    verify_announced_inner, verify_ld_accepted_activity, ANNOUNCED_DELETE_DEFERRED, cross_origin_delete_delay, _id_of, \
     post_replies_for_ap, is_vote, known_instance_id, resolve_remote_post_from_search, proactively_delete_content, \
     process_quote_boost, object_has_missing_fields, find_microblogging_community, process_announce_of_uri, \
     announce_target_uri, undo_boost
@@ -809,6 +809,7 @@ def shared_inbox():
     #    return '', 200
 
     bounced = False
+    ld_signed = False   # R-LDDOWNGRADE: accepted on an LD signature, so content comes from the origin
     try:
         verify_with_key_refresh(request, actor, POST_REQUIRED)
     except VerificationError as e:
@@ -820,6 +821,7 @@ def shared_inbox():
             except VerificationError as e:
                 log_incoming_ap(id, APLOG_NOTYPE, APLOG_FAILURE, saved_json, 'Could not verify LD signature: ' + str(e))
                 return '', 400
+            ld_signed = True
         # no HTTP sig, and no LD sig, so reduce the inner object to just its remote ID, and then fetch it and check it in process_inbox_request()
         # Removed due to potential security issues. This will probably break PeerTube federation, unfortunately.
         #elif ((request_json['type'] == 'Create' or request_json['type'] == 'Update') and
@@ -836,7 +838,8 @@ def shared_inbox():
     key_host = host_of(request_key_id(request) or '')
     if not bounced and key_host != host_of(actor.ap_profile_id):
         current_app.logger.info(f'Signature keyId host {key_host} differs from actor host {host_of(actor.ap_profile_id)}')
-        if not _ld_signature_verifies(request_json, actor):
+        ld_signed = _ld_signature_verifies(request_json, actor)
+        if not ld_signed:
             relay = relay_inbound.relay_for_forwarded(request)
             if relay is None:
                 log_incoming_ap(id, APLOG_NOTYPE, APLOG_FAILURE, saved_json, 'Signature keyId host does not match actor')
@@ -858,16 +861,18 @@ def shared_inbox():
 
     # When a user is deleted, the only way to be fairly sure they get deleted everywhere is to tell the whole fediverse.
     # Earlier check means this is only for users that already exist, processing it here means that http signature will have been verified
+    # relay_id and ld_signed are passed only when set: a worker still running the previous code (rolling deploy)
+    # would reject the unexpected keyword
+    ld_kwargs = {'ld_signed': True} if ld_signed else {}
     if account_deletion == True:
         if current_app.debug:
-            process_delete_request(request_json, store_ap_json)
+            process_delete_request(request_json, store_ap_json, **ld_kwargs)
         else:
-            process_delete_request.delay(request_json, store_ap_json)
+            process_delete_request.delay(request_json, store_ap_json, **ld_kwargs)
         return ''
 
-    # relay_id is passed only for a relayed delivery: a worker still running the previous code (rolling deploy)
-    # would reject the unexpected keyword
     relay_kwargs = {'relay_id': relay.id} if relay else {}
+    relay_kwargs.update(ld_kwargs)
     if current_app.debug:
         process_inbox_request(request_json, store_ap_json, **relay_kwargs)
     else:
@@ -972,7 +977,7 @@ def replay_inbox_request(request_json):
 
 
 @celery.task
-def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_verified=False):
+def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_verified=False, ld_signed=False):
     with current_app.app_context():
         session = get_task_session()
         token = current_relay_id.set(relay_id)   # Post.new records it as post.relay_id; reset in the finally
@@ -986,6 +991,13 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                         log_incoming_ap(request_json.get('id', ''), APLOG_NOTYPE, APLOG_IGNORED,
                                         request_json if store_ap_json else None, reason)
                         return
+                if ld_signed:   # R-LDDOWNGRADE: an LD signature vouches for who and which object, not content
+                    verified, reason = verify_ld_accepted_activity(request_json)
+                    if verified is None:
+                        log_incoming_ap(request_json.get('id', ''), APLOG_NOTYPE, APLOG_FAILURE,
+                                        request_json if store_ap_json else None, f'LD-signed activity dropped: {reason}')
+                        return
+                    request_json = verified
                 # For an Announce, Accept, or Reject, we have the community/feed, and need to find the user
                 # For everything else, we have the user, and need to find the community/feed
                 # Benefits of always using request_json['actor']:
@@ -2285,7 +2297,7 @@ def apply_delayed_delete(announce_json, store_ap_json, community_id):
 
 
 @celery.task
-def process_delete_request(request_json, store_ap_json):
+def process_delete_request(request_json, store_ap_json, ld_signed=False):
     with current_app.app_context():
         session = get_task_session()
         try:
@@ -2293,6 +2305,11 @@ def process_delete_request(request_json, store_ap_json):
                 # this function processes self-deletes (retain case here, as user_removed_from_remote_server() uses a JSON request)
                 saved_json = request_json if store_ap_json else None
                 id = request_json['id']
+                if ld_signed:   # R-LDDOWNGRADE: an LD-signed self-delete needs the origin to have stopped serving the actor
+                    verified, reason = verify_ld_accepted_activity(request_json)
+                    if verified is None:
+                        log_incoming_ap(id, APLOG_DELETE, APLOG_FAILURE, saved_json, f'LD-signed activity dropped: {reason}')
+                        return
                 user_ap_id = request_json['actor']
                 user = session.query(User).filter_by(ap_profile_id=user_ap_id.lower()).first()
                 if user:

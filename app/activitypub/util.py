@@ -5667,23 +5667,56 @@ def _verify_announced_delete(inner: dict, community) -> Tuple[Union[dict, None],
     From the announcing community's moderator or owner, or an admin of its host, the Delete is deferred: the
     dispatcher schedules apply_delayed_delete so the home server's own Delete can win. That applies only to an
     object not stored here in another community (R-SAMECOMMUNITY). From anyone else, or for such an object, it is
-    processed only once the object's origin no longer serves it (404 or 410). One fetch and no retry (D775): an
-    unreachable origin, or any other answer, drops the Delete. get_request_capped, not get_request: get_request
-    sleeps and retries on every transport error, and only the status matters here, so no body is read."""
+    processed only once the object's origin no longer serves it (404 or 410): an unreachable origin, or any other
+    answer, drops the Delete (_origin_refusal_of_delete)."""
     object_id = _id_of(inner.get('object'))
     if not object_id:
         return None, 'Announced Delete names no object'
     if _may_remove_from(_id_of(inner.get('actor')), community) and not _stored_elsewhere(object_id, community):
         return None, ANNOUNCED_DELETE_DEFERRED
+    refusal = _origin_refusal_of_delete(object_id, 'Announced Delete')
+    return (inner, None) if refusal is None else (None, refusal)
+
+
+def _origin_refusal_of_delete(object_id: str, label: str) -> Union[str, None]:
+    """None when the object's origin no longer serves it (404 or 410), else why the Delete is dropped.
+
+    One fetch and no retry (D775). get_request_capped, not get_request: get_request sleeps and retries on every
+    transport error, and only the status matters here, so no body is read."""
     try:
         status, _body = get_request_capped(object_id, 0, headers={'Accept': 'application/activity+json'})
     except httpx.HTTPError:
-        return None, 'Announced Delete: the object could not be fetched'
+        return f'{label}: the object could not be fetched'
     if status in (404, 410):
-        return inner, None
+        return None
     if status == 200:
-        return None, 'Announced Delete of an object that still exists'
-    return None, f'Announced Delete: the object answers HTTP {status}'
+        return f'{label} of an object that still exists'
+    return f'{label}: the object answers HTTP {status}'
+
+
+def verify_ld_accepted_activity(activity: dict) -> Tuple[Union[dict, None], Union[str, None]]:
+    """An activity the inbox accepted on an LD signature (ruling R-LDDOWNGRADE): returns `(activity, None)` to
+    process -- its object possibly replaced -- or `(None, reason)` to drop.
+
+    RsaSignature2017 signs the normalized graph, not the JSON this instance reads, and some graph-preserving
+    edits survive LDSignature.verify_signature's checks (node merging, ordering, aliases between unknown terms).
+    So the signature is trusted only for who sent what kind of activity about which object id:
+    - Create or Update with an embedded object: the object is replaced by the copy its origin serves, which must
+      be on the actor's host, carry the same id and be attributed to the activity's actor (as for announced
+      content, Task 16);
+    - Delete: processed only once the object's origin no longer serves it (404 or 410, as for a cross-origin
+      Announced Delete, Task 17);
+    - anything else keeps the verified, stripped document."""
+    activity_type = activity.get('type')
+    if activity_type in ('Create', 'Update') and isinstance(activity.get('object'), dict):
+        return _verify_announced_content(activity, host_of(_id_of(activity.get('actor'))))
+    if activity_type == 'Delete':
+        object_id = _id_of(activity.get('object'))
+        if not object_id:
+            return None, 'LD-signed Delete names no object'
+        refusal = _origin_refusal_of_delete(object_id, 'LD-signed Delete')
+        return (activity, None) if refusal is None else (None, refusal)
+    return activity, None
 
 
 def verify_announced_inner(announce: dict, community=None) -> Tuple[Union[dict, None], Union[str, None]]:
