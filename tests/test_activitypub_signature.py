@@ -1164,3 +1164,70 @@ def test_a_client_error_on_a_GET_is_returned_rather_than_raised(app):
                                               private_key, 'kid', method='get')
 
     assert result.status_code == 400
+
+
+def _network_down(monkeypatch):
+    """Every `requests` call fails the way w3id.org's did in production
+    (RemoteDisconnected surfacing as ConnectionError), and is recorded."""
+    import requests
+    attempted = []
+
+    def _refuse(self, method, url, *args, **kwargs):
+        attempted.append(url)
+        raise requests.exceptions.ConnectionError('Remote end closed connection without response')
+
+    monkeypatch.setattr(requests.Session, 'request', _refuse)
+    return attempted
+
+
+def test_ld_signing_resolves_the_standard_contexts_without_the_network(app, monkeypatch):
+    """Production's document loader serves activitystreams and security/v1
+    from bundled copies: an inbox LD-signature check failed with a 500 when
+    w3id.org dropped the connection mid-fetch. No `no_network_ld_signing`
+    here on purpose -- this pins the loader production installs.
+    """
+    from app.activitypub.signature import LDSignature, RsaKeys, default_context
+
+    attempted = _network_down(monkeypatch)
+    private_key, public_key = RsaKeys.generate_keypair()
+    document = {'@context': default_context(),
+                'id': 'https://local.example/activities/1', 'type': 'Create',
+                'actor': 'https://local.example/u/alice'}
+
+    signature = LDSignature.create_signature(document, private_key,
+                                             'https://local.example/u/alice#main-key')
+
+    assert LDSignature.verify_signature(dict(document, signature=signature), public_key) is None
+    assert attempted == []
+
+
+def test_an_unreachable_unknown_context_is_reported_as_unavailable(app, monkeypatch):
+    """A context URL with no bundled copy still goes to the network; when that
+    fetch fails the caller gets LDContextUnavailable (a retryable condition),
+    not pyld's JsonLdError and not a VerificationError."""
+    from app.activitypub.signature import LDContextUnavailable, LDSignature
+
+    attempted = _network_down(monkeypatch)
+    document = {'@context': ['https://www.w3.org/ns/activitystreams',
+                             'https://unreachable.example/ns'],
+                'id': 'https://remote.example/activities/1', 'type': 'Create',
+                'signature': {'type': 'RsaSignature2017', 'creator': 'kid',
+                              'created': '2026-10-09T00:00:00Z', 'signatureValue': ''}}
+
+    with pytest.raises(LDContextUnavailable):
+        LDSignature.verify_signature(document, 'unused')
+    assert attempted == ['https://unreachable.example/ns']
+
+
+def test_a_document_pyld_cannot_normalize_is_a_format_error(app, monkeypatch):
+    """A malformed JSON-LD document is the sender's fault, not a transient
+    outage: it stays a VerificationFormatError (400), not unavailable."""
+    from app.activitypub.signature import LDSignature, VerificationFormatError
+
+    _network_down(monkeypatch)
+    document = {'@context': 5, 'id': 'https://remote.example/activities/1',
+                'signature': {'type': 'RsaSignature2017', 'creator': 'kid',
+                              'created': '2026-10-09T00:00:00Z', 'signatureValue': ''}}
+
+    with pytest.raises(VerificationFormatError):
+        LDSignature.verify_signature(document, 'unused')
