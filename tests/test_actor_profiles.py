@@ -1784,7 +1784,9 @@ def test_a_deleted_user_profile_is_not_served(app, db_session, monkeypatch):
 
     response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
 
-    assert response.status_code == 404
+    # S3.2: a deleted local user is not served; ActivityPub peers get a 410 Tombstone instead of a 404.
+    assert response.status_code == 410
+    assert response.json['type'] == 'Tombstone'
 
 
 def test_a_banned_user_profile_is_not_served(app, db_session, monkeypatch):
