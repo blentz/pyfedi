@@ -1376,8 +1376,9 @@ of a dispatch, or the row that was or was not written -- never the status
 code alone.
 
 **Redis activity-id uniqueness is a fixture hazard, not just gate
-behaviour.** `shared_inbox` writes every activity's `id` into redis for 90
-seconds (`routes.py:680`, `ex=90`) to suppress duplicates. `inbox_activity`
+behaviour.** `shared_inbox` writes every activity's `id` into redis for
+`ACTIVITY_DEDUPE_SECONDS` (set only after the signature verifies) to suppress
+duplicates. `inbox_activity`
 (`tests/factories.py`) therefore mints a fresh uuid into `id` on every call;
 a test that hardcodes an id collides with any other test reusing it under
 the same `redis_double` server and gets refused as a duplicate for a reason

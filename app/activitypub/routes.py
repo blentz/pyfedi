@@ -69,6 +69,9 @@ from app.utils import user_banned_from_community, gibberish, get_setting, commun
 import urllib.parse
 import app as app_pkg
 
+# How long an inbound activity id is remembered so a redelivery is not processed twice (S2.4)
+ACTIVITY_DEDUPE_SECONDS = 86400
+
 # D160/D180/D195 (owner ruling): one Cache-Control policy for every ActivityPub document served here, by kind.
 # A miss (404 or 410) is never cached, so a peer asking before an object exists does not keep the answer.
 AP_CACHE_ACTOR = 'public, max-age=300'
@@ -762,7 +765,6 @@ def shared_inbox():
     if app_pkg.redis_client.exists(id):  # Something is sending same activity multiple times
         log_incoming_ap(id, APLOG_DUPLICATE, APLOG_IGNORED, saved_json, 'Already aware of this activity')
         return '', 200
-    app_pkg.redis_client.set(id, 1, ex=90, nx=True)  # Save the activity ID into redis, to avoid duplicate activities
 
     # Ignore unutilised PeerTube activity
     if isinstance(request_json['actor'], str) and request_json['actor'].endswith('accounts/peertube'):
@@ -821,6 +823,12 @@ def shared_inbox():
         else:
             log_incoming_ap(id, APLOG_NOTYPE, APLOG_FAILURE, saved_json, 'Could not verify HTTP signature: ' + str(e))
             return '', 400
+
+    # Remembered only once the signature has verified, so a forged request reusing a genuine activity's id cannot
+    # make this instance drop the genuine one. set(nx=True) is also the gate for two deliveries verified at once.
+    if not app_pkg.redis_client.set(id, 1, ex=ACTIVITY_DEDUPE_SECONDS, nx=True):
+        log_incoming_ap(id, APLOG_DUPLICATE, APLOG_IGNORED, saved_json, 'Already aware of this activity')
+        return '', 200
 
     relay = relay_inbound.relay_for_forwarded(request) if bounced else None   # relays: a Mastodon-style relay signs forwards
 
