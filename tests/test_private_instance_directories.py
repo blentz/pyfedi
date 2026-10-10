@@ -215,7 +215,7 @@ def test_no_get_route_outside_the_known_list_is_ungated():
         ('main', 'anoobis'), ('main', 'bot_challenge_result'),
         # operational, no instance content
         ('main', 'health'), ('main', 'health2'), ('main', 'service_worker'),
-        ('main', 'static_manifest'), ('main', 'instance_actor'), ('main', 'honey_pot'),
+        ('main', 'static_manifest'), ('main', 'instance_actor'), ('main', 'instance_actor_outbox'), ('main', 'honey_pot'),
         ('main', 'share'), ('main', 'test'), ('main', 'test_email'),
         ('main', 'test_redis'), ('main', 'test_ip'), ('main', 'test_s3'),
         ('main', 'test_hashing'), ('main', 'test_ldap'), ('main', 'test_ldap_login'),
