@@ -17,10 +17,10 @@ from sqlalchemy import desc, or_, text, func
 
 from app import db, cache, celery, limiter
 from app.activitypub import bp
-from app.activitypub.actor import find_actor_by_url
+from app.activitypub.entitlement import signed_requester_actor
 from app.activitypub.signature import HttpSignature, VerificationError, VerificationFormatError, default_context, LDSignature, \
     send_post_request
-from app.activitypub.util import users_total, active_half_year, active_month, local_posts, local_comments, \
+from app.activitypub.util import host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
     post_to_activity, find_actor_or_create_cached, find_liked_object, \
     lemmy_site_data, is_activitypub_request, delete_post_or_comment, community_members, \
     create_post, create_post_reply, update_post_reply_from_activity, \
@@ -2478,19 +2478,13 @@ def tombstone_response(ap_id: str, former_type: str):
 
 
 def signed_requestor_domain():
-    """The host of the keyId a GET is validly signed with, else the domain its User-Agent volunteers.
+    """The host of the actor that validly signed this GET, else the domain its User-Agent volunteers.
 
-    Only keys of actors already stored here are used, so identifying a requester never fetches anything; a signature
-    from an unknown actor, or one that does not verify, is ignored rather than trusted."""
-    if 'signature' in request.headers:
-        try:
-            key_id = HttpSignature.parse_signature(request.headers['signature'])['keyid']
-            actor = find_actor_by_url(key_id.split('#')[0])
-            if actor and actor.public_key:
-                HttpSignature.verify_request(request, actor.public_key)
-                return furl(key_id).host
-        except (VerificationError, ValueError):
-            pass
+    Only actors already stored here are considered (entitlement.signed_requester_actor), so identifying a requester
+    never fetches anything; a signature from an unknown actor, or one that does not verify, is ignored."""
+    actor = signed_requester_actor()
+    if actor is not None:
+        return host_of(actor.ap_profile_id or actor.public_url())
     return requestor_domain()
 
 

@@ -16,6 +16,8 @@ import uuid
 from collections.abc import Iterable
 from datetime import datetime
 
+from unittest.mock import patch
+
 from flask import current_app
 from flask_login import login_user
 
@@ -1189,6 +1191,26 @@ def signed_inbox_post(client, activity: dict, sender, *, path: str = '/inbox',
         f'{sender.ap_profile_id}#main-key', send_via_async=True)
     return client.post(path, data=body if body is not None else body_bytes,
                        headers=headers, content_type='application/activity+json')
+
+
+def signed_get_headers(path: str, signer, *, key_id: str = None) -> dict:
+    """Headers for a GET of `path` on this instance, HTTP-signed with `signer`'s
+    REAL private key by production's own signer -- as a peer doing an
+    authorized fetch would send them.
+
+    `signed_request(..., send_via_async=True)` returns the headers instead of
+    sending. Its outbound-URI guard refuses '.local' hosts (SERVER_NAME is
+    test.piefed.local), so the guard is doubled for the duration of the call
+    only. `key_id` overrides the keyId, which is how tests produce
+    GoToSocial-style '/main-key' ids or a mixed-case/port host.
+    """
+    from app.activitypub.signature import HttpSignature
+    host = current_app.config['SERVER_NAME']
+    with patch('app.activitypub.signature.is_invalid_get_request_uri', return_value=False):
+        _uri, headers, _body = HttpSignature.signed_request(
+            f'https://{host}{path}', None, signer.private_key,
+            key_id or f'{signer.ap_profile_id}#main-key', method='get', send_via_async=True)
+    return headers
 
 
 def make_user_registration(user: User, answer: str = 'why', status: int = 0) -> UserRegistration:
