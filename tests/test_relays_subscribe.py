@@ -134,6 +134,60 @@ class TestFollow:
             subscribe.retry_relay(relay)
         assert relay.public_key == 'NEW'
 
+
+FOLLOWERS = 'https://relay.example/followers'
+
+
+class TestRetryFindsUsAmongTheFollowers:
+    """barkshark ActivityRelay lists accepted instances in its followers collection; an Accept it sent may
+    never have arrived, so Retry looks there before following again."""
+
+    def _listed(self, app, net, collection, actor=None):
+        net['documents']['https://relay.example/actor'] = actor or {**ACTOR, 'followers': FOLLOWERS}
+        with app.test_request_context():
+            relay = subscribe.add_relay('https://relay.example/inbox')
+            first, posts = relay.follow_activity_id, len(net['post'])
+            net['documents'][FOLLOWERS] = collection(subscribe.instance_actor_url())
+            subscribe.retry_relay(relay)
+        return relay, first, net['post'][posts:]
+
+    @pytest.mark.parametrize('collection', [
+        lambda me: {'type': 'Collection', 'items': ['https://other.example/actor', me]},
+        lambda me: {'type': 'OrderedCollection', 'orderedItems': [{'id': me, 'type': 'Application'}]},
+        lambda me: {'type': 'OrderedCollection', 'first': {'type': 'OrderedCollectionPage', 'orderedItems': [me]}},
+    ])
+    def test_a_relay_listing_the_instance_actor_is_accepted_without_a_new_follow(self, app, net, collection):
+        relay, first, posts = self._listed(app, net, collection)
+        assert relay.state == RELAY_ACCEPTED and relay.answered_at is not None and relay.last_error is None
+        assert relay.follow_activity_id == first and posts == []
+
+    def test_a_first_page_given_as_a_url_is_fetched(self, app, net):
+        with app.test_request_context():
+            net['documents'][FOLLOWERS + '?page=1'] = {'orderedItems': [subscribe.instance_actor_url()]}
+        relay, _, _ = self._listed(app, net, lambda me: {'first': FOLLOWERS + '?page=1'})
+        assert relay.state == RELAY_ACCEPTED
+
+    @pytest.mark.parametrize('collection', [
+        lambda me: {'type': 'Collection', 'items': ['https://other.example/actor']},
+        lambda me: None,
+        lambda me: {'type': 'Collection', 'items': 'not a list'},
+    ])
+    def test_a_relay_not_listing_us_is_followed_again(self, app, net, collection):
+        relay, first, posts = self._listed(app, net, collection)
+        assert relay.state == RELAY_PENDING and relay.follow_activity_id != first
+        assert [body['type'] for _, body, _ in posts] == ['Follow']
+
+    def test_a_relay_actor_with_no_followers_collection_is_followed_again(self, app, net):
+        relay, first, posts = self._listed(app, net, lambda me: {'items': [me]}, actor=ACTOR)
+        assert relay.state == RELAY_PENDING and [body['type'] for _, body, _ in posts] == ['Follow']
+
+    def test_a_followers_collection_on_another_host_is_not_fetched(self, app, net):
+        elsewhere = 'https://elsewhere.example/followers'
+        with app.test_request_context():
+            net['documents'][elsewhere] = {'items': [subscribe.instance_actor_url()]}
+        relay, _, posts = self._listed(app, net, lambda me: None, actor={**ACTOR, 'followers': elsewhere})
+        assert relay.state == RELAY_PENDING and elsewhere not in net['get']
+
     def test_remove_sends_undo_and_deletes(self, app, net):
         net['documents']['https://relay.example/actor'] = ACTOR
         with app.test_request_context():

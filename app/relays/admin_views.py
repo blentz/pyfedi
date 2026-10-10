@@ -9,6 +9,7 @@ from app import db
 from app.admin import bp
 from app.constants import ALLOWLIST_STRONG
 from app.models import Post, Relay, utcnow
+from app.relays import RELAY_ACCEPTED
 from app.relays.expiry import relay_retention_days
 from app.relays.forms import RelayActionForm, RelayAddForm, RelaySettingsForm
 from app.relays.subscribe import RelayError, add_relay, remove_relay, retry_relay
@@ -37,7 +38,10 @@ def admin_federation_relays():
             else:
                 try:
                     retry_relay(relay)
-                    flash(_('Subscription request sent again.'))
+                    if relay.state == RELAY_ACCEPTED:
+                        flash(_('The relay already lists this server as a follower; marked accepted.'))
+                    else:
+                        flash(_('Subscription request sent again.'))
                 except RelayError as error:
                     flash(str(error), 'error')
         elif settings_form.relay_settings_save.data and settings_form.validate_on_submit():
