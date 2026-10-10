@@ -18,6 +18,9 @@ VECTORS = json.loads((Path(__file__).parent / 'fixtures' / 'rfc9421' / 'appendix
 URL = 'https://peer.example/inbox'
 BODY = b'{"type": "Create"}'
 NOW = 1_800_000_000
+# The components each Appendix B vector covers, as its Signature-Input lists them
+VECTOR_COVERED = {'B.2.1': frozenset(),
+                  'B.2.6': frozenset({'date', '@method', '@path', '@authority', 'content-type', 'content-length'})}
 
 
 def _pem(public_key) -> str:
@@ -64,7 +67,7 @@ class TestRfcVectors:
             if case['name'] == 'B.2.1' and 'usable PEM' in str(e):
                 pytest.skip('this cryptography build cannot load an id-RSASSA-PSS SPKI key; B.2.6 still runs')
             raise
-        assert isinstance(covered, frozenset)
+        assert covered == VECTOR_COVERED[case['name']]
 
     def test_a_tampered_vector_fails(self):
         case = next(c for c in VECTORS['cases'] if c['name'] == 'B.2.6')
@@ -104,6 +107,13 @@ class TestRoundTrip:
         headers = rfc9421.sign('get', URL, None, private_key, 'a"b\\c', created=NOW)
         assert rfc9421.parse_key_id(headers) == 'a"b\\c'
         assert rfc9421.verify('GET', URL, headers, b'', public_key, now=NOW)
+
+    def test_the_method_is_signed_uppercase_and_verified_as_given(self):
+        private_key, public_key = a_keypair()
+        headers = rfc9421.sign('post', URL, BODY, private_key, 'k', created=NOW)
+        assert rfc9421.verify('POST', URL, headers, BODY, public_key, now=NOW)
+        with pytest.raises(VerificationError, match='Signature mismatch'):
+            rfc9421.verify('post', URL, headers, BODY, public_key, now=NOW)
 
     def test_a_non_ascii_key_id_cannot_be_signed(self):
         with pytest.raises(ValueError):
@@ -183,6 +193,11 @@ class TestLabels:
         with pytest.raises(VerificationFormatError, match='No signature for label sig1'):
             rfc9421.verify('GET', URL, headers, b'', public_key, now=NOW)
 
+    def test_non_ascii_signature_bytes_are_a_format_error(self):
+        headers = {'Signature-Input': f'sig1=("@method");created={NOW}', 'Signature': 'sig1=:\u00e9:'}
+        with pytest.raises(VerificationFormatError, match='bad base64'):
+            rfc9421.verify('GET', URL, headers, b'', a_keypair()[1], now=NOW)
+
     def test_no_signature_input_fails(self):
         with pytest.raises(VerificationFormatError, match='No Signature-Input header present'):
             rfc9421.verify('GET', URL, {}, b'', a_keypair()[1], now=NOW)
@@ -211,10 +226,33 @@ class TestCoveredComponents:
 
     def test_the_base_for_each_component(self):
         base = rfc9421.signature_base(['@method', '@target-uri', '@authority', '@path', 'content-type'], '(x)',
-                                      'post', 'https://Peer.Example:8443?q=1', {'CONTENT-TYPE': ' a/b '})
-        assert base == ('"@method": POST\n"@target-uri": https://Peer.Example:8443?q=1\n'
+                                      'post', 'https://Peer.Example:8443?q=1', {'CONTENT-TYPE': ' \ta/b\t '})
+        assert base == ('"@method": post\n"@target-uri": https://Peer.Example:8443?q=1\n'
                         '"@authority": peer.example:8443\n"@path": /\n"content-type": a/b\n'
                         '"@signature-params": (x)')
+
+    def test_a_header_value_is_trimmed_of_spaces_and_tabs_only(self):
+        base = rfc9421.signature_base(['x'], '()', 'GET', URL, {'X': ' a/b\x0c'})
+        assert base.startswith('"x": a/b\x0c\n')
+
+    @pytest.mark.parametrize('url, authority', [('https://[::1]:8443/x', '[::1]:8443'),
+                                                ('https://[::1]/x', '[::1]'),
+                                                ('https://[2001:DB8::1]:443/x', '[2001:db8::1]')])
+    def test_an_ipv6_authority_keeps_its_brackets(self, url, authority):
+        assert rfc9421.signature_base(['@authority'], '()', 'GET', url, {}).startswith(f'"@authority": {authority}\n')
+
+    @pytest.mark.parametrize('component', ['@authority', '@path'])
+    @pytest.mark.parametrize('url', ['https://peer.example:abc/x', 'https://peer.example:99999/x',
+                                     'https://[::1/x'])
+    def test_a_malformed_target_uri_is_a_format_error(self, component, url):
+        with pytest.raises(VerificationFormatError, match='Malformed target URI'):
+            rfc9421.signature_base([component], '()', 'GET', url, {})
+
+    def test_a_malformed_host_in_a_verified_request_is_a_format_error(self):
+        private_key, public_key = a_keypair()
+        headers = rfc9421.sign('get', URL, None, private_key, 'k', created=NOW)
+        with pytest.raises(VerificationFormatError, match='Malformed target URI'):
+            rfc9421.verify('GET', 'https://peer.example:abc/inbox', headers, b'', public_key, now=NOW)
 
     @pytest.mark.parametrize('url', ['https://peer.example:443/x', 'http://peer.example:80/x'])
     def test_a_default_port_is_dropped_from_the_authority(self, url):
@@ -299,7 +337,8 @@ class TestContentDigest:
 
     @pytest.mark.parametrize('value, message', [('md5=:YWJj:', 'no supported algorithm'),
                                                 ('sha-256="text"', 'Content-Digest is incorrect'),
-                                                ('sha-256=:YWJj:', 'Content-Digest is incorrect')])
+                                                ('sha-256=:YWJj:', 'Content-Digest is incorrect'),
+                                                ('sha-256=:\u00e9:', 'bad base64')])
     def test_bad_digests(self, value, message):
         with pytest.raises(VerificationFormatError, match=message):
             rfc9421.check_content_digest({'Content-Digest': value}, BODY)
@@ -313,6 +352,7 @@ class TestParseKeyId:
         ({'Signature-Input': 'Bad'}, None),
         ({'Signature-Input': 'sig1=()'}, None),
         ({'Signature-Input': 'sig1=();keyid=1'}, None),
+        ({'Signature-Input': 'sig1=:\u00e9:'}, None),
     ])
     def test_parse_key_id(self, headers, expected):
         assert rfc9421.parse_key_id(headers) == expected
@@ -342,6 +382,7 @@ class TestStructuredFieldParser:
         ('sig1=("\u00e9")', 'non-printable character'),
         ('sig1=:YQ==', 'unterminated byte sequence'),
         ('sig1=:Y!==:', 'bad base64'),
+        ('sig1=:\u00e9:', 'bad base64'),
     ])
     def test_malformed_input_is_a_format_error(self, text, message):
         with pytest.raises(VerificationFormatError, match=re.escape(message)):
