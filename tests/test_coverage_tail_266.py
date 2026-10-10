@@ -433,19 +433,16 @@ class TestRefreshingAFeedsProfile:
 
 class TestADocumentThatCannotBeRead:
 
-    def test_a_missing_key_answers_none_rather_than_raising(self, db_session):
-        """`except KeyError: log; return None`.
-
-        `actor_json_to_model` is handed a document a PEER wrote, and the constructor above reads
-        several keys outright. Answering None is what lets the caller refuse the actor; a KeyError
-        would come out of whichever inbox or page triggered the lookup.
-        """
+    def test_endpoints_without_a_shared_inbox_still_produces_a_row(self, db_session):
+        """S1.2 (security track). This row used to reach the Person branch's
+        `except KeyError` through `endpoints: {}` -- the only KeyError that
+        constructor could raise. shared_inbox_of now reads endpoints safely, the
+        `try` is gone as dead code, and the same document creates the actor with
+        an empty inbox."""
         make_site()
         make_instance(PEER)
         db.session.commit()
 
-        # `endpoints` present without `sharedInbox` is the KeyError this `try` covers: every other
-        # key the constructor reads is either guarded with an `in` test or read above the `try`.
         result = actor_json_to_model({
             'type': 'Person',
             'id': f'https://{PEER}/u/nokeys',
@@ -454,8 +451,9 @@ class TestADocumentThatCannotBeRead:
             'endpoints': {},
         }, 'nokeys', PEER)
 
-        assert result is None
-        assert db.session.query(User).filter_by(user_name='nokeys').count() == 0
+        assert result is not None
+        assert result.ap_inbox_url == ''
+        assert db.session.query(User).filter_by(user_name='nokeys').count() == 1
 
     def test_a_document_with_the_keys_produces_a_row(self, db_session):
         """The control. The `try` covers a constructor call, so a row here says the KeyError arm
