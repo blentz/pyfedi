@@ -9,6 +9,7 @@ from app import db
 from app.activitypub.entitlement import (PRIVATE_HEADERS, addressees_of, audience_entitles,
                                          signed_requester_actor)
 from app.models import Instance
+from tests.test_ap_content_objects import seed_local_post
 from tests.factories import (make_community, make_community_member, make_follow, make_instance,
                              make_site, make_user, seed_community_owner, signed_get_headers)
 
@@ -103,6 +104,30 @@ def test_a_keyid_on_a_non_default_port_is_looked_up_with_that_port(app, db_sessi
     signer = _remote('peer.example', 'alice')
     headers = signed_get_headers('/post/1', signer, key_id='https://peer.example:8443/users/alice#main-key')
     assert _requester_for(app, '/post/1', headers) is None
+
+
+BAD_SIGNATURES = [
+    'keyId="https://peer.example/users/alice#main-key",headers="date",signature="A",algorithm="rsa-sha256"',
+    'keyId="https://peer.example:99999/users/alice#main-key",headers="date",signature="AAAA",algorithm="rsa-sha256"',
+    'keyId="https://peer.example:abc/users/alice#main-key",headers="date",signature="AAAA",algorithm="rsa-sha256"',
+]
+
+
+@pytest.mark.parametrize('signature', BAD_SIGNATURES)
+def test_a_malformed_signature_header_names_nobody(app, db_session, signature):
+    make_site()
+    _remote('peer.example', 'alice')
+    assert _requester_for(app, '/post/1', {'Signature': signature}) is None
+
+
+@pytest.mark.parametrize('signature', BAD_SIGNATURES)
+def test_a_malformed_signature_header_does_not_break_a_public_get(app, db_session, signature):
+    make_site()
+    _community, _author, post = seed_local_post()
+    with app.test_client() as client:
+        response = client.get(f'/post/{post.id}', headers={'Accept': 'application/activity+json',
+                                                           'Signature': signature})
+    assert response.status_code < 500
 
 
 def test_a_keyid_with_no_host_names_nobody(app, db_session):

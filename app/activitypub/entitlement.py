@@ -33,7 +33,7 @@ def _signature_key_id() -> str | None:
         return None
     try:
         return HttpSignature.parse_signature(request.headers['signature'])['keyid']
-    except VerificationError:
+    except (VerificationError, ValueError):
         return None
 
 
@@ -48,9 +48,13 @@ def _owner_candidates(key_id: str) -> list[str]:
     if not host:
         return []
     parsed = urlparse(owner)
+    try:
+        port = parsed.port
+    except ValueError:
+        return []
     base = f'{parsed.scheme.lower()}://{host}'
-    if parsed.port and parsed.port not in (80, 443):
-        base += f':{parsed.port}'
+    if port and port not in (80, 443):
+        base += f':{port}'
     path = parsed.path.rstrip('/')
     candidates = [base + path]
     for _ in range(_KEY_PATH_TRIMS):
