@@ -34,6 +34,7 @@ from app.activitypub.util import activity_dedupe_key, claim_activity, host_of, u
     announce_target_uri, undo_boost
 # The module, not the name: app.community.routes reaches this file through
 # app.activitypub.signature before show_community is defined (U-circular-import)
+import app.chat.util as chat_util
 import app.community.live as community_live
 import app.community.routes as community_routes
 from app.community.util import send_to_remote_instance, send_to_remote_instance_fast
@@ -2525,6 +2526,30 @@ def tombstone_response(ap_id: str, former_type: str):
     resp = jsonify({'@context': default_context(), 'id': ap_id, 'type': 'Tombstone', 'formerType': former_type})
     resp.status_code = 410
     resp.content_type = 'application/activity+json'
+    return resp
+
+
+@bp.route('/private_message/<int:message_id>')
+def private_message_ap(message_id):
+    """A DM's id (S3.5). Served only to a party to it: the recipient, or a signer on the recipient's host, which
+    received it through its shared inbox. Anything else -- missing, deleted, not ours, not entitled -- is the
+    same 404, so a refusal never confirms a message exists. HEAD is answered from this GET by Flask."""
+    message = db.session.get(ChatMessage, message_id)
+    ours = message is not None and message.ap_id == f"{current_app.config['SERVER_URL']}/private_message/{message.id}"
+    if not is_activitypub_request():
+        if not ours or message.conversation_id is None:
+            abort(404)
+        return redirect(url_for('chat.chat_home', conversation_id=message.conversation_id))
+    if not ours or message.deleted or message.recipient_id is None:
+        abort(404)
+    recipient = db.session.get(User, message.recipient_id)
+    # the sender is always local, so only the recipient (or its host) can be entitled
+    if not audience_entitles([recipient.public_url()], signed_requester_actor()):
+        abort(404)
+    document = {'@context': default_context(), **chat_util.chat_message_ap_object(message, recipient)}
+    resp = jsonify(document)
+    resp.content_type = 'application/activity+json'
+    resp.headers.update(PRIVATE_HEADERS)
     return resp
 
 
