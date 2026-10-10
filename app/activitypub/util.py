@@ -5519,13 +5519,9 @@ def verify_object_from_source(request_json) -> Tuple[Union[dict, None], Union[st
         return None, 'the announcing actor is on a different host than the object URI'
 
     try:
-        object_request = get_request(uri, headers={'Accept': 'application/activity+json'})
+        object_request = get_request(uri, headers={'Accept': 'application/activity+json'}, retry=False)
     except httpx.HTTPError:
-        time.sleep(3)
-        try:
-            object_request = get_request(uri, headers={'Accept': 'application/activity+json'})
-        except httpx.HTTPError:
-            return None, 'the object could not be fetched'
+        return None, 'the object could not be fetched'
     if object_request.status_code == 200:
         try:
             object = object_request.json()
@@ -5540,11 +5536,7 @@ def verify_object_from_source(request_json) -> Tuple[Union[dict, None], Union[st
         try:
             object_request = signed_get_request(uri, site.private_key, f"{current_app.config['SERVER_URL']}/actor#main-key")
         except httpx.HTTPError:
-            time.sleep(3)
-            try:
-                object_request = signed_get_request(uri, site.private_key, f"{current_app.config['SERVER_URL']}/actor#main-key")
-            except httpx.HTTPError:
-                return None, 'the object could not be fetched with a signed request'
+            return None, 'the object could not be fetched with a signed request'
         try:
             object = object_request.json()
         except JSONDecodeError:
@@ -5554,6 +5546,8 @@ def verify_object_from_source(request_json) -> Tuple[Union[dict, None], Union[st
     else:
         return None, f'the object fetch returned HTTP {object_request.status_code}'
 
+    if not isinstance(object, dict):
+        return None, 'the fetched object is not a JSON object'
     if not 'id' in object or not 'type' in object or not 'attributedTo' in object:
         return None, 'the fetched object has no id, type or attributedTo'
 
