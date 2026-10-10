@@ -17,7 +17,8 @@ from sqlalchemy import desc, or_, text, func
 
 from app import db, cache, celery, limiter
 from app.activitypub import bp
-from app.activitypub.entitlement import signed_requester_actor
+from app.activitypub.actor import find_actor_by_url
+from app.activitypub.entitlement import PRIVATE_HEADERS, addressees_of, audience_entitles, signed_requester_actor
 from app.activitypub.signature import HttpSignature, VerificationError, VerificationFormatError, default_context, LDSignature, \
     send_post_request
 from app.activitypub.util import host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
@@ -2602,22 +2603,30 @@ def post_ap_context(post_id):
 
 
 @bp.route('/activities/<type>/<id>')
-@cache.cached(timeout=2400)
 def activities_json(type, id):
+    """A logged outbound activity, for whoever its own addressing entitles (security track S0.2).
+
+    No @cache.cached: the answer depends on who signed the request. A refusal is the same 404 as a miss."""
     activity = ActivityPubLog.query.filter_by(
         activity_id=f"{current_app.config['SERVER_URL']}/activities/{type}/{id}").first()
-    if activity:
-        if activity.activity_json is not None:
-            activity_json = json.loads(activity.activity_json)
-        else:
-            activity_json = {}
-        resp = jsonify(activity_json)
-        resp.content_type = 'application/activity+json'
-        resp.headers['Cache-Control'] = AP_CACHE_CONTENT
-    else:
-        # don't let a peer polling before the activity is logged cache the miss
-        resp = make_response('', 404)
-        resp.headers['Cache-Control'] = AP_CACHE_MISS
+    activity_json = json.loads(activity.activity_json) if activity and activity.activity_json else None
+    if isinstance(activity_json, dict) and activity_json:
+        addressees = addressees_of(activity_json)
+        if audience_entitles(addressees, None):
+            resp = jsonify(activity_json)
+            resp.content_type = 'application/activity+json'
+            resp.headers['Cache-Control'] = AP_CACHE_CONTENT
+            return resp
+        actor_url = activity_json.get('actor')
+        local_actor = (find_actor_by_url(actor_url) or None) if isinstance(actor_url, str) and actor_url else None
+        if audience_entitles(addressees, signed_requester_actor(), local_actor):
+            resp = jsonify(activity_json)
+            resp.content_type = 'application/activity+json'
+            resp.headers.update(PRIVATE_HEADERS)
+            return resp
+    # a refusal and a miss are indistinguishable, and neither may be cached
+    resp = make_response('', 404)
+    resp.headers['Cache-Control'] = AP_CACHE_MISS
     return resp
 
 

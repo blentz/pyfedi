@@ -1107,32 +1107,24 @@ def test_a_logged_activity_is_served_as_its_stored_json(app, db_session):
     `activity_json` is stored as a TEXT column holding a JSON string and the
     route calls `json.loads` on it, so the factory is given a string and the
     assertion reads back a dict.
-
-    `@cache.cached(timeout=2400)` on this route is inert under test
-    (CACHE_TYPE='NullCache'), so this measures the view, not the cache.
     """
     seed_actors()
     make_activitypub_log('https://test.piefed.local/activities/announce/abc123',
                          activity_type='Announce',
-                         activity_json='{"type": "Announce", "id": "https://test.piefed.local/activities/announce/abc123"}')
+                         activity_json='{"type": "Announce", "id": "https://test.piefed.local/activities/announce/abc123", "to": ["https://www.w3.org/ns/activitystreams#Public"]}')
 
     with app.test_client() as client:
         response = client.get('/activities/announce/abc123')
 
     assert response.status_code == 200
     assert response.content_type == 'application/activity+json'
-    # D195, fixed (owner ruling): 2400 before; the content max-age now. The
-    # view's own @cache.cached(timeout=2400) is server-side and unchanged.
+    # D195, fixed (owner ruling): 2400 before; the content max-age now.
     assert response.headers['Cache-Control'] == 'public, max-age=120'
     assert response.json['type'] == 'Announce'
 
 
-def test_a_logged_activity_with_no_json_serves_an_empty_document(app, db_session):
-    """`if activity.activity_json is not None:` -- the else sets
-    `activity_json = {}`. The column is nullable and `make_activitypub_log`
-    defaults it to None, so this test passes `activity_json=None` EXPLICITLY
-    to state which branch it means rather than relying on the factory default.
-    """
+def test_a_logged_activity_with_no_json_is_refused(app, db_session):
+    """S0.2: a row with no document has no addressing, so nobody is entitled to it."""
     seed_actors()
     make_activitypub_log('https://test.piefed.local/activities/announce/nojson',
                          activity_json=None)
@@ -1140,8 +1132,8 @@ def test_a_logged_activity_with_no_json_serves_an_empty_document(app, db_session
     with app.test_client() as client:
         response = client.get('/activities/announce/nojson')
 
-    assert response.status_code == 200
-    assert response.json == {}
+    assert response.status_code == 404
+    assert response.headers['Cache-Control'] == 'no-store'
 
 
 def test_an_unlogged_activity_is_404_and_not_cached(app, db_session):
