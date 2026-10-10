@@ -76,6 +76,24 @@ Then add RFC 9421 signatures with double-knocking, and opt-in authorized fetch.
     - Secure mode is one hook in the app-wide `before_request` (`app/request_hooks.py`), not per-blueprint hooks, so AP GETs served by other blueprints are covered.
     - `admin_federation` now invalidates the memoized `get_site_as_dict`, which caches for 60 s.
 12. **`host_of` is in `app/activitypub/util.py`,** and `audience_entitles` rule 4 uses the inbound follow shape: `UserFollower(local_user_id=author, remote_user_id=requester, is_inward=True, is_accepted=True)`.
+13. **Task 17 (Amendment A) contract:**
+    - `verify_announced_inner(announce, community=None)` gains a third outcome, `(None, ANNOUNCED_DELETE_DEFERRED)`.
+    - `process_inbox_request(..., announce_verified=False)`.
+    - New names: `cross_origin_delete_delay()` (default 90; out-of-range values fall back to 90), `apply_delayed_delete`, and `FederationForm.cross_origin_delete_delay`.
+    - `tests/test_admin_federation.py:_federation_payload` gains `'cross_origin_delete_delay': '90'`, and Task 24 inherits it.
+    - The spec's local-admin arm is dropped: the inbox discards Announces of local actors' activities at R:746, so that branch would be dead code. The spec is amended to match.
+14. **S7 (Amendment B) clarifications:**
+    1. **The API error body follows the existing handler** (`app/api/alpha/__init__.py:131-135`): `{"code": 400, "message": "invalid visibility", "status": "Bad Request"}`. The spec's `{'error': 'invalid visibility'}` is a paraphrase of the same 400. An edit that tries to change visibility gets message `visibility cannot be changed`.
+    2. **The reply inheritance lives in `PostReply.new`, not `make_reply`.** `PostReply.new` is where visibility is decided for every reply (`app/models.py:4061`). Its local branch, where there is no `request_json`, is the one place that covers both the web and API producers. The rule: the reply is followers-only when the parent reply or the post is followers-only. Otherwise it is public.
+    3. **pyfedi has no local boost and no local quote feature.** `grep -i boost` finds only inbound `post_boost` records. No route lets a local user Announce or quote a post. The S7.4 guards become:
+       - `move_post` and `move_object` refuse a non-open post;
+       - an inbound FEP-044f `QuoteRequest` for a non-open local post or reply is not accepted (no `QuoteAuthorization`, no `Accept`), matching the `canQuote: [author]` Task 27 publishes;
+       - E9 regression tests.
+
+       The "refuse a local boost/quote" bullets have nothing to attach to. Record this in the spec.
+    4. **The Delete of a followers-only reply reaches its audience (Task 28).** Today `delete_object` sends nothing for a non-open reply in a local community. After S7.3 such a reply is delivered to the replier's follower hosts and the parent author's host, so its Delete must follow it. This is a small addition beyond the spec's Delete bullet, which named posts only.
+    5. **Delete addressing changes only for a local community** (`community.is_local() and not is_open(object)`). A remote community is the object's home (ruling R-a). Its Delete addressing is unchanged, so the existing remote-community E9 rows stay green.
+    6. **`pages.py`'s `# pragma: no branch` lines are kept.** The announce block's `if not community.local_only:` becomes `elif` under a new `if followers_only:`. The pragma's proof, that the false arm is unreachable after the `local_only` early return, still holds for the `elif`.
 
 ## Interface contract
 
@@ -115,6 +133,13 @@ neighbouring tasks agree.
 | `Site.require_signed_fetch` | `app/models.py` | Boolean, not null, server default false | Task 24 |
 | `SIGNED_FETCH_EXEMPT_PREFIXES` | `app/activitypub/entitlement.py` | `('/actor', '/.well-known/', '/nodeinfo/')`. `/actor` covers `/actor/outbox` and `/actor/inbox`. Matching is exact-or-prefix on `/actor` and `/actor/`. | Task 24 |
 | `signed_fetch_exempt`, `signed_fetch_refusal` | `app/activitypub/entitlement.py` | `(path: str) -> bool` and `() -> Response \| None`; called from the app-wide `before_request` in `app/request_hooks.py` | Task 24 |
+| `is_local_microblogs` | `app/utils.py` | `(community) -> bool`: `community.name == 'microblogs' and community.is_local()` | Task 26 |
+| `requested_visibility` | `app/shared/post.py` | `(input, src, community) -> str`. Raises `Exception('invalid visibility')`. | Task 26 |
+| `CreatePostForm.visibility` | `app/community/forms.py` | `SelectField`, choices `public` / `followers`, default `public` | Task 26 |
+| `show_visibility` | template variable of `community/add_post.html` | `is_local_microblogs(community)`; `post_edit.html` renders the select only when it is truthy | Task 26 |
+| `CreatePostRequest.visibility`, `EditPostRequest.visibility` | `app/api/alpha/schema.py` | `fields.String()` | Task 26 |
+| `follower_instances` | `app/visibility.py` | `(user) -> list[Instance]`: online remote instances holding at least one **accepted inward** follower of `user` | Task 27 |
+| `followers_only_reply_instances` | `app/visibility.py` | `(reply) -> list[Instance]`: `follower_instances(reply.author)` plus the parent author's remote instance | Task 28 |
 
 ## Review Focus
 
@@ -165,6 +190,9 @@ neighbouring tasks agree.
 | S4 Announce | 15 host consistency · 16 Create/Update verification · 17 Delete verification |
 | S5 RFC 9421 | 18 module · 19 inbound dispatch · 20 migration + POST double-knock · 21 GET double-knock |
 | S6 authorized fetch | 22 signer-safe caching on post/comment AP routes · 23 followers-only unlock · 24 secure mode |
+| S7 followers-only microblog posts | 26 create (web + API) · 27 federate post · 28 replies · 29 guards · 30 read-side regression + gate |
+
+**Execution order:** Tasks 1–22, then 26–30 (S7), then 23, 24, 25. Task 23's unlock tests author their content through S7.1.
 | Follow-up | 25 enforce required headers (**blocked on owner**) |
 
 ## Phase S0: critical
@@ -3576,27 +3604,91 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 17: S4 — cross-origin Delete: the origin must no longer serve the object
+### Task 17: S4 — cross-origin Delete: moderators deferred, everyone else needs the origin to have dropped it
 
 **Files:**
-- Modify: `app/activitypub/util.py` (new `_verify_announced_delete`; `verify_announced_inner`)
-- Test: `tests/test_ap_security_announce.py` (append)
+- Modify: `app/activitypub/util.py`:
+  - new constants `CROSS_ORIGIN_DELETE_DELAY_DEFAULT` and `ANNOUNCED_DELETE_DEFERRED`;
+  - new `cross_origin_delete_delay`, `_may_remove_from` and `_verify_announced_delete`;
+  - `verify_announced_inner` gains `community`.
+- Modify: `app/activitypub/routes.py`:
+  - imports (R:21-31);
+  - `process_inbox_request` signature (R:941);
+  - the Task 15 S4 hook;
+  - new task `apply_delayed_delete`, placed directly above `process_delete_request` (R:2203).
+- Modify: `app/admin/forms.py:110-127` (`FederationForm`), and `app/admin/routes.py:477-529` (`admin_federation` save and populate).
+- Test: `tests/test_ap_security_announce.py` (append); `tests/test_admin_federation.py` (payload helper plus new tests).
 
 **Interfaces:**
-- Consumes: `verify_announced_inner` and `_id_of` (Tasks 15–16). It also consumes `get_request(uri, headers=...)` (`app/utils.py:140`), which turns transport problems into `httpx.HTTPError`. It retries internally only on `httpx.ReadError`.
-- Produces drop reasons `'Announced Delete names no object'`, `'Announced Delete of an object that still exists'`, `'Announced Delete: the object could not be fetched'` and `'Announced Delete: the object answers HTTP <status>'`.
+- Consumes:
+  - `verify_announced_inner` and `_id_of` (Tasks 15–16).
+  - `get_request(uri, headers=...)` (`app/utils.py:140`). It raises `httpx.HTTPError` for transport problems and retries internally only on `httpx.ReadError`.
+  - `get_setting(name, default)` and `set_setting(name, value)` (`app/utils.py:248-268`).
+  - `find_actor_or_create_cached(actor, create_if_not_found=False)`. Lookup only: it never fetches.
+  - `Community.is_moderator(user)`. It covers owners too, because `moderators()` (models.py:1400) selects `is_owner OR is_moderator`, not banned.
+  - `Community.is_instance_admin(user)` (models.py:1454): an `InstanceRole(role='admin')` row for the community's `instance_id`.
+- Produces:
+  - `cross_origin_delete_delay() -> int`. It returns a whole number from 0 to 3600. Anything else, or a value that can't be coerced, gives 90 with a warning logged.
+  - `ANNOUNCED_DELETE_DEFERRED = 'Announced Delete by a moderator: deferred'`.
+  - `verify_announced_inner(announce, community=None)`: see CONTRACT CHANGES 1–2.
+  - `apply_delayed_delete(announce_json, store_ap_json)`, a Celery task. It logs `"Delete superseded by the home server's"` when the object is already gone here. Otherwise it calls `process_inbox_request(announce_json, store_ap_json, announce_verified=True)`.
+  - The deferral log message is `'Announced Delete by a moderator: applied after <n> seconds unless its home server deletes it first'`, with type `Delete` and result `processing`.
+  - Drop reasons:
+    - `'Announced Delete names no object'`
+    - `'Announced Delete of an object that still exists'`
+    - `'Announced Delete: the object could not be fetched'`
+    - `'Announced Delete: the object answers HTTP <status>'`
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Write the failing Announce tests**
 
-Append to `tests/test_ap_security_announce.py`:
+Merge these imports into the top of `tests/test_ap_security_announce.py`, together with the existing ones:
+
+```python
+from flask import current_app
+from sqlalchemy import inspect as sa_inspect
+
+from app.activitypub import routes as activitypub_routes
+from app.activitypub.util import ANNOUNCED_DELETE_DEFERRED, cross_origin_delete_delay
+from app.models import InstanceRole
+from app.utils import set_setting
+from tests.factories import make_community_member, make_post, make_post_reply
+from tests.test_inbox_dispatch_lock_delete import record_moderation
+```
+
+Append:
 
 ```python
 DELETED_ID = 'https://other.example/objects/1'
+MOD_DELETE_ID = 'https://mods.example/activities/delete/1'
 
 
 def _delete(obj=DELETED_ID):
     return {'id': 'https://other.example/activities/delete/1', 'type': 'Delete', 'actor': CAROL, 'object': obj}
 
+
+def _mod_delete(actor, obj=DELETED_ID):
+    return {'id': MOD_DELETE_ID, 'type': 'Delete', 'actor': actor, 'object': obj, 'summary': 'rule violation'}
+
+
+def _remote(domain, name):
+    """A remote user stored here; ap_fetched_at stops an inline profile refresh."""
+    user = make_user(make_instance(domain), name)
+    user.ap_fetched_at = utcnow()
+    db.session.commit()
+    return user
+
+
+def _moderated_community(role='moderator'):
+    """The announcing community (peer.example) with dave, on a third host, as a moderator or owner."""
+    _instance, community = _seed_announcing_community()
+    dave = _remote('mods.example', 'dave')
+    member = make_community_member(dave, community, is_moderator=(role == 'moderator'))
+    member.is_owner = role == 'owner'
+    db.session.commit()
+    return community, dave
+
+
+# --- everyone who is not a moderator: the origin must no longer serve the object ---
 
 @pytest.mark.parametrize('status', [404, 410])
 def test_an_announced_delete_is_processed_once_the_origin_no_longer_serves_the_object(app, db_session, http_mock,
@@ -3620,7 +3712,7 @@ def test_an_announced_delete_of_an_object_the_origin_still_serves_is_dropped(app
     assert verify_announced_inner(_announce(_delete())) == (None, 'Announced Delete of an object that still exists')
 
 
-@pytest.mark.parametrize('status', [401, 500])
+@pytest.mark.parametrize('status', [401, 403, 500])
 def test_any_other_origin_answer_drops_the_delete(app, db_session, http_mock, status):
     http_mock.get(DELETED_ID).respond(status)
 
@@ -3653,6 +3745,68 @@ def test_a_same_origin_delete_is_not_fetched(app, db_session, http_mock):
     assert verify_announced_inner(_announce(inner, group='https://other.example/c/news')) == (inner, None)
 
 
+# --- moderators and Group-host admins: deferred, never fetched ---
+
+@pytest.mark.parametrize('role', ['moderator', 'owner'])
+def test_a_moderators_cross_origin_delete_is_deferred_not_fetched(app, db_session, http_mock, role):
+    """http_mock has no routes: a fetch would be an unmatched request."""
+    community, dave = _moderated_community(role)
+    announce = _announce(_mod_delete(dave.ap_profile_id), group=community.ap_profile_id)
+
+    assert verify_announced_inner(announce, community) == (None, ANNOUNCED_DELETE_DEFERRED)
+
+
+def test_an_admin_of_the_communitys_host_is_deferred(app, db_session, http_mock):
+    """What counts is an InstanceRole admin row for the community's own instance (Community.is_instance_admin)."""
+    _instance, community = _seed_announcing_community()
+    erin = _remote('mods.example', 'erin')
+    db.session.add(InstanceRole(instance_id=community.instance_id, user_id=erin.id, role='admin'))
+    db.session.commit()
+    announce = _announce(_mod_delete(erin.ap_profile_id), group=community.ap_profile_id)
+
+    assert verify_announced_inner(announce, community) == (None, ANNOUNCED_DELETE_DEFERRED)
+
+
+def test_an_admin_of_an_unrelated_instance_takes_the_refetch_path(app, db_session, http_mock):
+    _instance, community = _seed_announcing_community()
+    erin = _remote('mods.example', 'erin')
+    db.session.add(InstanceRole(instance_id=erin.instance_id, user_id=erin.id, role='admin'))
+    db.session.commit()
+    http_mock.get(DELETED_ID).respond(200, json=note_document(attributed_to=CAROL, uri=DELETED_ID))
+    announce = _announce(_mod_delete(erin.ap_profile_id), group=community.ap_profile_id)
+
+    assert verify_announced_inner(announce, community) == (None, 'Announced Delete of an object that still exists')
+
+
+def test_a_moderator_announced_by_a_feed_takes_the_refetch_path(app, db_session, http_mock):
+    """No announcing community (a feed, or a podcast twin): nobody's moderator status can apply."""
+    _community, dave = _moderated_community()
+    http_mock.get(DELETED_ID).respond(410)
+    inner = _mod_delete(dave.ap_profile_id)
+
+    assert verify_announced_inner(_announce(inner)) == (inner, None)
+
+
+def test_an_actor_not_stored_here_is_never_fetched_and_takes_the_refetch_path(app, db_session, http_mock):
+    """Only the object is fetched: an unknown actor is looked up, never created."""
+    _instance, community = _seed_announcing_community()
+    http_mock.get(DELETED_ID).respond(410)
+    inner = _mod_delete('https://mods.example/users/nobody')
+
+    assert verify_announced_inner(_announce(inner, group=community.ap_profile_id), community) == (inner, None)
+    assert User.query.filter_by(ap_profile_id='https://mods.example/users/nobody').first() is None
+
+
+def test_a_moderator_delete_naming_no_object_is_dropped_before_any_role_check(app, db_session):
+    community, dave = _moderated_community()
+    inner = _mod_delete(dave.ap_profile_id, obj=42)
+
+    assert verify_announced_inner(_announce(inner, group=community.ap_profile_id), community) == (
+        None, 'Announced Delete names no object')
+
+
+# --- the dispatcher ---
+
 def test_the_dispatcher_drops_and_logs_a_delete_of_an_object_still_served(app, db_session, monkeypatch, http_mock):
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     _instance, community = _seed_announcing_community()
@@ -3662,25 +3816,212 @@ def test_the_dispatcher_drops_and_logs_a_delete_of_an_object_still_served(app, d
     dispatch(activity)
 
     assert _messages(activity) == ['Announced Delete of an object that still exists']
+
+
+def test_the_dispatcher_schedules_a_moderators_delete_with_the_configured_delay(app, db_session, monkeypatch,
+                                                                               http_mock):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    community, dave = _moderated_community()
+    post = make_post(community, _carol(), ap_id=DELETED_ID)
+    set_setting('cross_origin_delete_delay', 45)
+    scheduled = []
+    monkeypatch.setattr(activitypub_routes.apply_delayed_delete, 'apply_async',
+                        lambda args=None, kwargs=None, countdown=None, **options: scheduled.append((args, countdown)))
+    activity = _announce(_mod_delete(dave.ap_profile_id), group=community.ap_profile_id)
+
+    dispatch(activity)
+
+    assert scheduled == [((activity, True), 45)]
+    assert _messages(activity) == [
+        'Announced Delete by a moderator: applied after 45 seconds unless its home server deletes it first']
+    db.session.refresh(post)
+    assert post.deleted is False    # nothing is applied before the delay
+
+
+# --- apply_delayed_delete ---
+
+def test_a_deferred_delete_of_a_live_post_is_applied_as_a_moderator_removal(app, db_session, monkeypatch):
+    community, dave = _moderated_community()
+    post = make_post(community, _carol(), ap_id=DELETED_ID)
+    calls = record_moderation(monkeypatch, 'delete_post_or_comment', 'announce_activity_to_followers')
+    announce = _announce(_mod_delete(dave.ap_profile_id), group=community.ap_profile_id)
+
+    activitypub_routes.apply_delayed_delete(announce, True)
+
+    assert len(calls['delete_post_or_comment']) == 1
+    user_arg, to_delete_arg, store_ap_json_arg, _request_json, reason_arg = calls['delete_post_or_comment'][0][0]
+    assert sa_inspect(user_arg).identity[0] == dave.id
+    assert sa_inspect(to_delete_arg).identity[0] == post.id
+    assert store_ap_json_arg is True
+    assert reason_arg == 'rule violation'
+    assert calls['announce_activity_to_followers'] == []    # an Announced Delete is never re-announced
+
+
+@pytest.mark.parametrize('by_tombstone', [False, True])
+def test_a_deferred_delete_of_a_live_reply_goes_back_through_the_dispatcher(app, db_session, monkeypatch,
+                                                                            by_tombstone):
+    community, dave = _moderated_community()
+    post = make_post(community, _carol(), ap_id=DELETED_ID)
+    reply = make_post_reply(post, post.author)
+    reply.ap_id = 'https://other.example/comment/1'
+    db.session.commit()
+    processed = []
+    monkeypatch.setattr(activitypub_routes, 'process_inbox_request', lambda *a, **k: processed.append((a, k)))
+    obj = {'id': reply.ap_id, 'type': 'Tombstone'} if by_tombstone else reply.ap_id
+    announce = _announce(_mod_delete(dave.ap_profile_id, obj=obj), group=community.ap_profile_id)
+
+    activitypub_routes.apply_delayed_delete(announce, False)
+
+    assert processed == [((announce, False), {'announce_verified': True})]
+
+
+@pytest.mark.parametrize('state', ['already deleted', 'never stored'])
+def test_a_deferred_delete_the_home_server_beat_is_superseded(app, db_session, monkeypatch, state):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    community, dave = _moderated_community()
+    if state == 'already deleted':
+        post = make_post(community, _carol(), ap_id=DELETED_ID)
+        post.deleted = True
+        db.session.commit()
+    processed = []
+    monkeypatch.setattr(activitypub_routes, 'process_inbox_request', lambda *a, **k: processed.append((a, k)))
+    announce = _announce(_mod_delete(dave.ap_profile_id), group=community.ap_profile_id)
+
+    activitypub_routes.apply_delayed_delete(announce, True)
+
+    assert processed == []
+    assert _messages(announce) == ["Delete superseded by the home server's"]
+
+
+# --- the delay setting ---
+
+def test_the_delay_defaults_to_90_seconds(app, db_session):
+    assert cross_origin_delete_delay() == 90
+
+
+@pytest.mark.parametrize('stored, expected', [
+    (0, 0), (45, 45), (3600, 3600), ('120', 120),
+    ('soon', 90), (None, 90), (-5, 90), (3601, 90),
+])
+def test_the_delay_setting_is_coerced_and_bounded(app, db_session, stored, expected):
+    set_setting('cross_origin_delete_delay', stored)
+
+    assert cross_origin_delete_delay() == expected
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+The `site` fixture is not needed here, because `_seed_announcing_community` calls `make_site()`.
 
-Run: `./run_tests.sh tests/test_ap_security_announce.py -q`
-Expected: the new tests FAIL. For example, `test_an_announced_delete_of_an_object_the_origin_still_serves_is_dropped` fails with `assert (inner, None) == (None, ...)`, and the routed tests fail at teardown with respx `AllCalledAssertionError`. The Task 15 and 16 tests still pass.
+- [ ] **Step 2: Write the failing admin-form tests**
 
-- [ ] **Step 3: Implement it in `app/activitypub/util.py`**
-
-Add above `verify_announced_inner`:
+In `tests/test_admin_federation.py`, change `_federation_payload` so the new required field is always posted:
 
 ```python
-def _verify_announced_delete(inner: dict) -> Tuple[Union[dict, None], Union[str, None]]:
-    """A cross-origin Announced Delete is processed only once the object's origin no longer serves it (404 or 410).
+def _federation_payload(token, **overrides):
+    data = {'federation_mode': 'blocklist', 'allowlist': '', 'allowlist_mode': '0',
+            'blocklist': '', 'defederation_subscription': '',
+            'blocked_phrases': '', 'blocked_actors': '', 'blocked_bio': '',
+            'cross_origin_delete_delay': '90',
+            'submit': 'Save', 'csrf_token': token}
+    data.update(overrides)
+    return data
+```
 
-    One fetch and no retry (D775): an unreachable origin, or any other answer, drops the Delete."""
+Append:
+
+```python
+def test_the_cross_origin_delete_delay_is_stored(admin_client):
+    from app.utils import get_setting
+
+    client, token = admin_client
+
+    _post(client, token, cross_origin_delete_delay='30')
+
+    assert get_setting('cross_origin_delete_delay', None) == 30
+
+
+@pytest.mark.parametrize('value', ['-1', '3601', 'soon', ''])
+def test_an_out_of_range_cross_origin_delete_delay_saves_nothing(admin_client, value):
+    from app.utils import get_setting
+
+    client, token = admin_client
+
+    _response, render = _post(client, token, cross_origin_delete_delay=value)
+
+    assert get_setting('cross_origin_delete_delay', None) is None
+    assert render.call_args.kwargs['form'].cross_origin_delete_delay.errors
+
+
+@pytest.mark.parametrize('stored, shown', [(None, 90), (120, 120)])
+def test_the_form_shows_the_current_cross_origin_delete_delay(admin_client, stored, shown):
+    from app.utils import set_setting
+
+    client, _token = admin_client
+    if stored is not None:
+        set_setting('cross_origin_delete_delay', stored)
+
+    with patch('app.admin.routes.render_template', return_value='rendered') as render:
+        client.get('/admin/federation')
+
+    assert render.call_args.kwargs['form'].cross_origin_delete_delay.data == shown
+```
+
+- [ ] **Step 3: Run the tests to verify they fail**
+
+Run: `./run_tests.sh tests/test_ap_security_announce.py tests/test_admin_federation.py -q`
+Expected:
+- **`tests/test_ap_security_announce.py`:** collection ERROR, `ImportError: cannot import name 'ANNOUNCED_DELETE_DEFERRED' from 'app.activitypub.util'`.
+- **`tests/test_admin_federation.py`:** the three new tests FAIL. `test_the_cross_origin_delete_delay_is_stored` fails with `assert None == 30`. The existing tests still pass, because an unknown posted field is ignored.
+
+- [ ] **Step 4: Implement the verifier in `app/activitypub/util.py`**
+
+Add these constants and helpers above `verify_announced_inner`. `get_setting`, `find_actor_or_create_cached`, `User`, `get_request`, `httpx` and `current_app` are already imported in this module.
+
+```python
+CROSS_ORIGIN_DELETE_DELAY_DEFAULT = 90
+ANNOUNCED_DELETE_DEFERRED = 'Announced Delete by a moderator: deferred'
+
+
+def cross_origin_delete_delay() -> int:
+    """Seconds a moderator's Announced cross-origin Delete waits for the home server's own Delete (spec Amendment A).
+
+    An admin setting (admin federation form). Anything that is not a whole number from 0 to 3600 falls back to the
+    default, with a warning, so a bad stored value can never schedule a negative or day-long countdown."""
+    value = get_setting('cross_origin_delete_delay', CROSS_ORIGIN_DELETE_DELAY_DEFAULT)
+    try:
+        delay = int(value)
+    except (TypeError, ValueError):
+        delay = -1
+    if not 0 <= delay <= 3600:
+        current_app.logger.warning(f'cross_origin_delete_delay is {value!r}; using {CROSS_ORIGIN_DELETE_DELAY_DEFAULT}')
+        return CROSS_ORIGIN_DELETE_DELAY_DEFAULT
+    return delay
+
+
+def _may_remove_from(actor_id: str, community) -> bool:
+    """True when `actor_id` is a stored moderator or owner of `community`, or an admin of the instance hosting it.
+
+    Lookup only: an actor not stored here is never fetched. Local admins are not considered: the inbox gate drops
+    every Announce whose inner actor is local before it is dispatched (R:746)."""
+    if community is None:
+        return False
+    user = find_actor_or_create_cached(actor_id, create_if_not_found=False)
+    if not isinstance(user, User):
+        return False
+    return community.is_moderator(user) or community.is_instance_admin(user)
+
+
+def _verify_announced_delete(inner: dict, community) -> Tuple[Union[dict, None], Union[str, None]]:
+    """A cross-origin Announced Delete (spec S4 item 4, Amendment A).
+
+    From the announcing community's moderator or owner, or an admin of its host, the Delete is deferred: the
+    dispatcher schedules apply_delayed_delete so the home server's own Delete can win. From anyone else it is
+    processed only once the object's origin no longer serves it (404 or 410). One fetch and no retry (D775): an
+    unreachable origin, or any other answer, drops the Delete."""
     object_id = _id_of(inner.get('object'))
     if not object_id:
         return None, 'Announced Delete names no object'
+    if _may_remove_from(_id_of(inner.get('actor')), community):
+        return None, ANNOUNCED_DELETE_DEFERRED
     try:
         response = get_request(object_id, headers={'Accept': 'application/activity+json'})
     except httpx.HTTPError:
@@ -3694,31 +4035,146 @@ def _verify_announced_delete(inner: dict) -> Tuple[Union[dict, None], Union[str,
     return None, f'Announced Delete: the object answers HTTP {status}'
 ```
 
-In `verify_announced_inner`, before the final `return inner, None`, add:
+Change `verify_announced_inner`'s signature and docstring opening:
+
+```python
+def verify_announced_inner(announce: dict, community=None) -> Tuple[Union[dict, None], Union[str, None]]:
+    """Decide whether the activity a Group's Announce wraps may be processed (security track, phase S4).
+
+    `community` is the announcing Community, or None for a feed or a podcast twin; it is consulted only for a
+    cross-origin Delete, whose moderators' Deletes are deferred rather than fetched (Amendment A). Returns
+    `(inner, None)` to process, `(None, ANNOUNCED_DELETE_DEFERRED)` to schedule apply_delayed_delete, or
+    `(None, reason)` to drop.
+```
+
+Keep the rest of the docstring. Before the final `return inner, None`, add:
 
 ```python
     if inner.get('type') == 'Delete':
-        return _verify_announced_delete(inner)
+        return _verify_announced_delete(inner, community)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [ ] **Step 5: Implement the hook and the delayed task in `app/activitypub/routes.py`**
 
-Run: `./run_tests.sh tests/test_ap_security_announce.py tests/test_inbox_dispatch_announce.py tests/test_no_inline_imports.py -q`
+Extend the `from app.activitypub.util import ...` list (R:21-31), after the `verify_announced_inner` that Task 15 added:
+
+```python
+    verify_announced_inner, ANNOUNCED_DELETE_DEFERRED, cross_origin_delete_delay, \
+```
+
+Change the signature at R:941:
+
+```python
+def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_verified=False):
+```
+
+Replace the Task 15 hook block with:
+
+```python
+                    # S4: an inner activity from another host is not trusted on the Group's signature alone. Checked
+                    # before the inner actor is looked up, so a spoofed actor is never fetched or stored.
+                    # announce_verified: apply_delayed_delete re-dispatches an Announce this check already deferred.
+                    if not announce_verified:
+                        verified_inner, refusal = verify_announced_inner(request_json, community)
+                        if refusal == ANNOUNCED_DELETE_DEFERRED:
+                            delay = cross_origin_delete_delay()
+                            apply_delayed_delete.apply_async(args=(request_json, store_ap_json), countdown=delay)
+                            log_incoming_ap(id, APLOG_DELETE, APLOG_PROCESSING, saved_json,
+                                            f'Announced Delete by a moderator: applied after {delay} seconds '
+                                            f'unless its home server deletes it first')
+                            return
+                        if verified_inner is None:
+                            log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json, refusal)
+                            return
+                        request_json['object'] = verified_inner
+```
+
+Add the task directly above `@celery.task` / `def process_delete_request` (R:2203):
+
+```python
+@celery.task
+def apply_delayed_delete(announce_json, store_ap_json):
+    """Apply a moderator's Announced cross-origin Delete once cross_origin_delete_delay has passed (spec Amendment A).
+
+    If the object is already gone here -- the home server's own Delete arrived first, or it was never stored -- there
+    is nothing left to do. Otherwise the Announce goes back through the dispatcher, skipping the S4 check that
+    deferred it, so the Delete is recorded as the moderator's removal."""
+    with current_app.app_context():
+        saved_json = announce_json if store_ap_json else None
+        target = announce_json['object'].get('object')
+        object_id = target.get('id') if isinstance(target, dict) else target
+        session = get_task_session()
+        try:
+            live = (session.query(Post).filter_by(ap_id=object_id, deleted=False).first() or
+                    session.query(PostReply).filter_by(ap_id=object_id, deleted=False).first())
+        finally:
+            session.close()
+        if live is None:
+            log_incoming_ap(announce_json['id'], APLOG_DELETE, APLOG_IGNORED, saved_json,
+                            "Delete superseded by the home server's")
+            return
+        process_inbox_request(announce_json, store_ap_json, announce_verified=True)
+```
+
+`object_id` is always a non-empty string here, because `_verify_announced_delete` defers only after `_id_of` found one.
+
+- [ ] **Step 6: Add the admin setting**
+
+In `app/admin/forms.py`, add this to `FederationForm`, directly before `submit`:
+
+```python
+    cross_origin_delete_delay = IntegerField(
+        _l("Seconds to wait before applying a moderator's Delete of a post from another server"),
+        validators=[InputRequired(), NumberRange(min=0, max=3600)], default=90)
+```
+
+In `app/admin/routes.py`, change the import at line 26:
+
+```python
+from app.activitypub.util import extract_domain_and_actor, cross_origin_delete_delay
+```
+
+In `admin_federation`'s save branch, after `set_setting('auto_add_remote_communities', ...)`, add:
+
+```python
+        set_setting('cross_origin_delete_delay', form.cross_origin_delete_delay.data)
+```
+
+In the `GET` branch, after `form.auto_add_remote_communities.data = ...`, add:
+
+```python
+        form.cross_origin_delete_delay.data = cross_origin_delete_delay()
+```
+
+`admin/federation.html` renders the form with `render_form(form)`, so the field appears without a template change.
+
+- [ ] **Step 7: Run the tests to verify they pass**
+
+Run: `./run_tests.sh tests/test_ap_security_announce.py tests/test_admin_federation.py tests/test_inbox_dispatch_announce.py tests/test_inbox_dispatch_lock_delete.py tests/test_inbox_dispatch_preamble.py tests/test_no_inline_imports.py -q`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+Then run `grep -rn "'/admin/federation'" tests/`. Any other test that POSTs the federation form without `cross_origin_delete_delay` now fails validation. Add the field to that test's payload. Do not make the field optional.
+
+- [ ] **Step 8: Commit**
 
 ```bash
-git add app/activitypub/util.py tests/test_ap_security_announce.py
-git commit -m "fix: a cross-origin Announced Delete needs the object gone at its origin
+git add app/activitypub/util.py app/activitypub/routes.py app/admin/forms.py app/admin/routes.py \
+    tests/test_ap_security_announce.py tests/test_admin_federation.py
+git commit -m "fix: cross-origin Announced Deletes need a moderator and a delay, or the origin's word
 
-The origin must answer 404 or 410. A 200, any other answer, or an unreachable
-origin drops the Delete, with one fetch and no retry.
+A moderator or owner of the announcing community, or an admin of its host,
+has their Delete applied after cross_origin_delete_delay seconds (admin
+setting, default 90) unless the home server's own Delete arrives first.
+Anyone else's Delete needs the origin to answer 404 or 410; a 200, any other
+answer, or an unreachable origin drops it, with one fetch and no retry.
+
+Local admins are not a separate case: the inbox gate drops every Announce of
+a local actor's activity before dispatch.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 6: Phase S4 gate**
+- [ ] **Step 9: Phase S4 gate**
 
 Run: `./run_tests.sh tests/ --cov=app --cov=fastapi_server --cov-branch --cov-report=json:coverage.json -q`
 Expected: all tests pass. Read the passed count: a session-budget stop still exits 0.
@@ -3728,9 +4184,6 @@ Expected: 100% of changed lines and branches.
 
 Run: `python3 tests/check_coverage_floors.py coverage.json coverage_floors.ini`
 Expected: no floor dropped.
-
----
-
 
 ## Phase S5: RFC 9421 signatures
 
@@ -5472,7 +5925,1583 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
+## Phase S7: followers-only posts in local `microblogs`
+
+### Task 26: Create followers-only posts in local microblogs (web + API), immutable on edit
+
+**Files:**
+- Modify: `app/utils.py`: add `is_local_microblogs` (near `get_setting`, around line 248)
+- Modify: `app/community/forms.py:259-290` (`CreatePostForm`): add the `visibility` field
+- Modify: `app/templates/post/post_edit.html:178`: render the select after `language_id`
+- Modify: `app/community/routes.py:80` (import), `:1379` (`render_template` gets `show_visibility`)
+- Modify: `app/post/routes.py:1301` (`post_edit`): `del form.visibility`
+- Modify: `app/shared/post.py:25-26` (imports), add `requested_visibility` above `make_post` (:204), use it in `make_post`
+- Modify: `app/api/alpha/schema.py:1474-1498`: add `visibility` to `CreatePostRequest` and `EditPostRequest`
+- Modify: `app/api/alpha/utils/post.py:1686` (`post_post` input), `put_post` (:1717): refuse a change
+- Test: `tests/test_s7_followers_only_create.py` (new)
+
+**Interfaces:**
+- Consumes: `VISIBILITY_PUBLIC`, `VISIBILITY_FOLLOWERS` (`app/constants.py:26-30`, star-imported into `app/shared/post.py`). Test helpers: `seed_make_context` (`tests/test_shared_post_make.py:115`), `_api_input` (`tests/test_shared_post_edit.py:178`), and `instance`, `login`, `csrf`, `url`, `able_to_post`, `_post_payload` (`tests/test_community_add_post.py`). Also `bearer` (`tests/factories.py:1296`).
+- Produces: `is_local_microblogs(community) -> bool`; `requested_visibility(input, src, community) -> str`; the `visibility` field on `CreatePostForm`; the `show_visibility` template variable; `visibility` on the two API request schemas.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `tests/test_s7_followers_only_create.py`:
+
+```python
+"""Amendment B, S7.1: a local user can publish a followers-only post, in the local `microblogs` community only.
+
+Visibility is chosen at creation and never changes. The web form offers the choice only in local microblogs, the API
+accepts `visibility` and refuses `followers` anywhere else, and an edit that tries to change it is refused.
+"""
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
+from flask import current_app
+
+from app import db
+from app.constants import POST_TYPE_ARTICLE, SRC_API, SRC_WEB, VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC
+from app.models import Language, Post
+from app.shared.post import make_post, requested_visibility
+from app.utils import is_local_microblogs
+from tests.factories import bearer, make_community, make_community_member, make_instance, make_user
+from tests.test_community_add_post import _post_payload, able_to_post, csrf, instance, login, url
+from tests.test_shared_post_edit import _api_input
+from tests.test_shared_post_make import seed_make_context
+
+
+# --------------------------------------------------------------------------
+# is_local_microblogs
+# --------------------------------------------------------------------------
+
+
+def test_the_local_microblogs_community_counts(db_session):
+    make_instance('local.example', software='piefed')
+    assert is_local_microblogs(make_community('microblogs')) is True
+
+
+def test_another_local_community_does_not(db_session):
+    make_instance('local.example', software='piefed')
+    assert is_local_microblogs(make_community('general')) is False
+
+
+def test_a_remote_community_called_microblogs_does_not(db_session):
+    make_instance('local.example', software='piefed')
+    community = make_community('microblogs', host='peer.example')
+    community.ap_id = 'microblogs@peer.example'
+    db.session.commit()
+    assert is_local_microblogs(community) is False
+
+
+# --------------------------------------------------------------------------
+# requested_visibility: the one decision both producers share
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def two_communities(db_session):
+    make_instance('local.example', software='piefed')
+    return SimpleNamespace(microblogs=make_community('microblogs'), general=make_community('general'))
+
+
+@pytest.mark.parametrize('src, input_, expected', [
+    (SRC_API, {}, VISIBILITY_PUBLIC),
+    (SRC_API, {'visibility': None}, VISIBILITY_PUBLIC),
+    (SRC_API, {'visibility': 'public'}, VISIBILITY_PUBLIC),
+    (SRC_API, {'visibility': 'followers'}, VISIBILITY_FOLLOWERS),
+    (SRC_WEB, SimpleNamespace(visibility=SimpleNamespace(data='followers')), VISIBILITY_FOLLOWERS),
+    (SRC_WEB, SimpleNamespace(visibility=SimpleNamespace(data='public')), VISIBILITY_PUBLIC),
+    (SRC_WEB, SimpleNamespace(), VISIBILITY_PUBLIC),   # a form built without the field (community/util.py:1180)
+], ids=['api-absent', 'api-null', 'api-public', 'api-followers', 'web-followers', 'web-public', 'web-no-field'])
+def test_microblogs_accepts_public_and_followers(two_communities, src, input_, expected):
+    assert requested_visibility(input_, src, two_communities.microblogs) == expected
+
+
+@pytest.mark.parametrize('src, input_', [
+    (SRC_API, {'visibility': 'followers'}),
+    (SRC_WEB, SimpleNamespace(visibility=SimpleNamespace(data='followers'))),
+], ids=['api', 'web'])
+def test_followers_outside_microblogs_is_invalid(two_communities, src, input_):
+    with pytest.raises(Exception, match='invalid visibility'):
+        requested_visibility(input_, src, two_communities.general)
+
+
+@pytest.mark.parametrize('value', ['unlisted', 'direct', 'everyone', ''])
+def test_any_other_value_is_invalid(two_communities, value):
+    if value == '':
+        # '' is falsy, so it reads as "not given" -- public, the default
+        assert requested_visibility({'visibility': value}, SRC_API, two_communities.microblogs) == VISIBILITY_PUBLIC
+        return
+    with pytest.raises(Exception, match='invalid visibility'):
+        requested_visibility({'visibility': value}, SRC_API, two_communities.microblogs)
+
+
+# --------------------------------------------------------------------------
+# make_post stores it (SRC_API, as tests/test_local_post_url_scheme.py drives it)
+# --------------------------------------------------------------------------
+
+
+def _api_seed(monkeypatch, community_name):
+    s = seed_make_context(community_name)
+    monkeypatch.setattr('app.shared.post.task_selector', lambda *a, **k: None)
+    monkeypatch.setattr('app.shared.post.make_image_sizes', lambda *a, **k: None)
+    monkeypatch.setattr('app.shared.post.authorise_api_user', lambda *a, **k: s.author)
+    return s
+
+
+def test_make_post_stores_followers_in_microblogs(db_session, monkeypatch):
+    s = _api_seed(monkeypatch, 'microblogs')
+    _, post = make_post(_api_input(visibility='followers'), s.community, POST_TYPE_ARTICLE, SRC_API, auth='t')
+    assert db.session.get(Post, post.id).visibility == VISIBILITY_FOLLOWERS
+
+
+def test_make_post_defaults_to_public(db_session, monkeypatch):
+    s = _api_seed(monkeypatch, 'microblogs')
+    _, post = make_post(_api_input(), s.community, POST_TYPE_ARTICLE, SRC_API, auth='t')
+    assert db.session.get(Post, post.id).visibility == VISIBILITY_PUBLIC
+
+
+def test_make_post_refuses_followers_elsewhere_before_writing_anything(db_session, monkeypatch):
+    s = _api_seed(monkeypatch, 'general')
+    with pytest.raises(Exception, match='invalid visibility'):
+        make_post(_api_input(visibility='followers'), s.community, POST_TYPE_ARTICLE, SRC_API, auth='t')
+    assert Post.query.count() == 0
+    assert s.community.post_count == 0
+
+
+# --------------------------------------------------------------------------
+# The HTTP API: create refusal, edit immutability
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def api_client(app, db_session, monkeypatch):
+    s = seed_make_context('microblogs')
+    general = make_community('general')
+    monkeypatch.setitem(current_app.config, 'ENABLE_ALPHA_API', 'true')
+    monkeypatch.setattr('app.shared.post.task_selector', lambda *a, **k: None)
+    return SimpleNamespace(client=app.test_client(), author=s.author, microblogs=s.community, general=general)
+
+
+def test_api_create_with_followers_outside_microblogs_is_a_400(api_client):
+    a = api_client
+    response = a.client.post('/api/alpha/post', headers={'Authorization': bearer(a.author)},
+                             json={'title': 'nope', 'community_id': a.general.id, 'visibility': 'followers'})
+    assert response.status_code == 400
+    assert response.get_json()['message'] == 'invalid visibility'
+    assert Post.query.count() == 0
+
+
+def test_api_create_with_a_bad_value_is_a_400(api_client):
+    a = api_client
+    response = a.client.post('/api/alpha/post', headers={'Authorization': bearer(a.author)},
+                             json={'title': 'nope', 'community_id': a.microblogs.id, 'visibility': 'direct'})
+    assert response.status_code == 400
+    assert response.get_json()['message'] == 'invalid visibility'
+
+
+def test_api_create_with_followers_in_microblogs_is_stored(api_client):
+    a = api_client
+    response = a.client.post('/api/alpha/post', headers={'Authorization': bearer(a.author)},
+                             json={'title': 'for my followers', 'community_id': a.microblogs.id,
+                                   'visibility': 'followers'})
+    assert response.status_code == 200
+    post = Post.query.filter_by(title='for my followers').one()
+    assert post.visibility == VISIBILITY_FOLLOWERS
+
+
+def _followers_post(a):
+    with patch('app.shared.post.authorise_api_user', return_value=a.author):
+        _, post = make_post(_api_input(visibility='followers', title='fixed'), a.microblogs, POST_TYPE_ARTICLE,
+                            SRC_API, auth='t')
+    return post
+
+
+def test_api_edit_changing_visibility_is_a_400(api_client):
+    a = api_client
+    post = _followers_post(a)
+    response = a.client.put('/api/alpha/post', headers={'Authorization': bearer(a.author)},
+                            json={'post_id': post.id, 'visibility': 'public'})
+    assert response.status_code == 400
+    assert response.get_json()['message'] == 'visibility cannot be changed'
+    assert db.session.get(Post, post.id).visibility == VISIBILITY_FOLLOWERS
+
+
+def test_api_edit_repeating_the_same_visibility_is_accepted(api_client):
+    a = api_client
+    post = _followers_post(a)
+    response = a.client.put('/api/alpha/post', headers={'Authorization': bearer(a.author)},
+                            json={'post_id': post.id, 'visibility': 'followers', 'title': 'still fixed'})
+    assert response.status_code == 200
+    assert db.session.get(Post, post.id).visibility == VISIBILITY_FOLLOWERS
+
+
+# --------------------------------------------------------------------------
+# The web form
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def web(app, db_session, site):
+    local = instance()
+    founder = make_user(local, 'founder', local=True)
+    assert founder.id == 1  # fact 347
+    author = able_to_post(make_user(local, 'author', local=True))
+    microblogs = make_community('microblogs')
+    general = make_community('general')
+    db.session.add(Language(code='und', name='Undetermined'))
+    english = Language(code='en', name='English')
+    db.session.add(english)
+    db.session.commit()
+    make_community_member(author, microblogs)
+    make_community_member(author, general)
+    db.session.commit()
+    client = app.test_client()
+    login(client, author)
+    return SimpleNamespace(client=client, token=csrf(app, client), author=author, english=english,
+                           microblogs=microblogs, general=general)
+
+
+def test_the_form_offers_visibility_in_microblogs(app, web):
+    body = web.client.get(url(app, 'community.add_post', actor='microblogs', type='discussion')).get_data(as_text=True)
+    assert 'name="visibility"' in body
+    assert 'Followers only' in body
+
+
+def test_the_form_does_not_offer_it_elsewhere(app, web):
+    body = web.client.get(url(app, 'community.add_post', actor='general', type='discussion')).get_data(as_text=True)
+    assert 'name="visibility"' not in body
+
+
+def test_a_web_followers_only_post_is_stored(app, web):
+    with patch('app.community.routes.render_template', return_value='rendered'):
+        response = web.client.post(url(app, 'community.add_post', actor='microblogs', type='discussion'),
+                                   data=_post_payload(web.token, web.english, web.microblogs,
+                                                      title='Friends only', visibility='followers'),
+                                   content_type='multipart/form-data')
+    assert response.status_code == 302
+    assert Post.query.filter_by(title='Friends only').one().visibility == VISIBILITY_FOLLOWERS
+
+
+def test_a_web_followers_only_post_to_another_community_is_refused(app, web):
+    """The community can be switched in the form (`communities`), so the check is on the community the post lands in,
+    not on the URL the form was opened from."""
+    with patch('app.community.routes.render_template', return_value='rendered'):
+        web.client.post(url(app, 'community.add_post', actor='microblogs', type='discussion'),
+                        data=_post_payload(web.token, web.english, web.general,
+                                           title='Wrong place', visibility='followers'),
+                        content_type='multipart/form-data')
+    assert Post.query.filter_by(title='Wrong place').first() is None
+
+
+def test_the_edit_form_never_offers_visibility(app, web):
+    with patch('app.community.routes.render_template', return_value='rendered'):
+        web.client.post(url(app, 'community.add_post', actor='microblogs', type='discussion'),
+                        data=_post_payload(web.token, web.english, web.microblogs,
+                                           title='Edit me', visibility='followers'),
+                        content_type='multipart/form-data')
+    post = Post.query.filter_by(title='Edit me').one()
+    body = web.client.get(url(app, 'post.post_edit', post_id=post.id)).get_data(as_text=True)
+    assert 'name="visibility"' not in body
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `./run_tests.sh tests/test_s7_followers_only_create.py -q`
+Expected: collection FAILS with `ImportError: cannot import name 'requested_visibility' from 'app.shared.post'`.
+
+- [ ] **Step 3: Implement**
+
+`app/utils.py`: add, next to `get_setting`:
+
+```python
+def is_local_microblogs(community) -> bool:
+    """The local `microblogs` community (find_microblogging_community): the only place a local user may publish a
+    followers-only post (Amendment B, S7.1). A remote community with the same name does not count."""
+    return community.name == 'microblogs' and community.is_local()
+```
+
+`app/community/forms.py`: inside `class CreatePostForm(FlaskForm):`, after `nsfw = BooleanField(_l('NSFW'))`:
+
+```python
+    # Amendment B (S7.1): offered only in the local microblogs community (add_post passes show_visibility), and
+    # deleted from the edit form -- visibility is fixed when the post is created
+    visibility = SelectField(_l('Visibility'), choices=[('public', _l('Public')), ('followers', _l('Followers only'))],
+                             default='public', render_kw={'class': 'form-select'})
+```
+
+`app/templates/post/post_edit.html`: directly after line 178, `{{ render_field(form.language_id) }}`:
+
+```jinja
+            {% if show_visibility and form.visibility %}{{ render_field(form.visibility) }}{% endif %}
+```
+
+`app/community/routes.py:80`: extend the import:
+
+```python
+from app.utils import get_recipient_language, subscribed_feeds, feed_membership, is_local_microblogs
+```
+
+In `add_post`'s final `render_template('community/add_post.html', ...)` (around :1379), add the keyword argument `show_visibility=is_local_microblogs(community),` after `community=community,`.
+
+`app/post/routes.py`, in `post_edit`, directly after `del form.communities` (:1301):
+
+```python
+    del form.visibility     # Amendment B: visibility is fixed at creation
+```
+
+`app/shared/post.py`: add `is_local_microblogs` to the `from app.utils import ...` list (:26). Add above `def make_post`:
+
+```python
+def requested_visibility(input, src, community) -> str:
+    """The visibility a new local post asks for (Amendment B, S7.1).
+
+    Only the local microblogs community takes 'followers'. A value that is absent or empty means public. Anything
+    else, or 'followers' anywhere else, is refused, before any row is written."""
+    if src == SRC_API:
+        visibility = input.get('visibility') or VISIBILITY_PUBLIC
+    else:
+        field = getattr(input, 'visibility', None)
+        visibility = (field.data if field is not None else None) or VISIBILITY_PUBLIC
+    if visibility not in (VISIBILITY_PUBLIC, VISIBILITY_FOLLOWERS):
+        raise Exception('invalid visibility')
+    if visibility == VISIBILITY_FOLLOWERS and not is_local_microblogs(community):
+        raise Exception('invalid visibility')
+    return visibility
+```
+
+In `make_post`, directly after the `can_create_post` refusal (`raise Exception('You are not permitted to make posts in this community')`), add:
+
+```python
+    visibility = requested_visibility(input, src, community)
+```
+
+Add `visibility=visibility` to the `Post(...)` constructor:
+
+```python
+    post = Post(user_id=user.id, community_id=community.id, instance_id=user.instance_id, from_bot=user.bot or user.bot_override,
+                posted_at=utcnow(), ap_id=gibberish(), title=title, language_id=language_id, visibility=visibility)
+```
+
+`app/api/alpha/schema.py`: in `CreatePostRequest`, after `poll = ...`:
+
+```python
+    visibility = fields.String(metadata={"description": "'public' (default) or 'followers'. 'followers' is accepted "
+                                                        "only in the local microblogs community"})
+```
+
+In `EditPostRequest`, after `flair = ...`:
+
+```python
+    visibility = fields.String(metadata={"description": "Fixed when the post is created: a different value is refused"})
+```
+
+`app/api/alpha/utils/post.py`, in `post_post`, directly after the `input = {...}` dict:
+
+```python
+    if 'visibility' in data:
+        input['visibility'] = data['visibility']
+```
+
+In `put_post`, directly after `post = a_visible_post(post_id, auth)`:
+
+```python
+    if 'visibility' in data and data['visibility'] != post.visibility:
+        raise Exception('visibility cannot be changed')     # Amendment B: fixed at creation
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `./run_tests.sh tests/test_s7_followers_only_create.py tests/test_community_add_post.py tests/test_local_post_url_scheme.py tests/test_shared_post_make.py tests/test_no_inline_imports.py -q`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add app/utils.py app/community/forms.py app/templates/post/post_edit.html app/community/routes.py \
+        app/post/routes.py app/shared/post.py app/api/alpha/schema.py app/api/alpha/utils/post.py \
+        tests/test_s7_followers_only_create.py
+git commit -m "feat: local users can create followers-only posts in the local microblogs community
+
+The web form offers a Visibility select there only; the API accepts
+visibility and refuses followers anywhere else. Visibility is fixed at
+creation: the edit form drops the field and an API edit that changes it
+is a 400.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 27: Federate a followers-only post to the author's followers only
+
+**Files:**
+- Modify: `app/visibility.py:16` (import `Instance`, `User`), add `follower_instances`
+- Modify: `app/shared/tasks/pages.py:10` (import), `send_post` (:89-366)
+- Modify: `app/shared/tasks/deletes.py:6` (import), `delete_object` (:119-227)
+- Test: `tests/test_s7_followers_only_federation.py` (new)
+
+**Interfaces:**
+- Consumes: `is_open` (`app/visibility.py:39`), `VISIBILITY_FOLLOWERS`. Test factories: `make_instance`, `make_site`, `make_user`, `make_community`, `make_community_member`, `make_post`, `make_follow`.
+- Produces: `follower_instances(user) -> list[Instance]`. Under it, `send_post` and `delete_object` address a followers-only post in a local community to `[author.followers_url()]`, with no Public and no community Announce.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `tests/test_s7_followers_only_federation.py`:
+
+```python
+"""Amendment B, S7.2: a followers-only post in local microblogs reaches the author's accepted followers and the
+people it mentions -- nobody else. No community Announce, no Public anywhere, canQuote limited to the author.
+
+Deliveries are captured by replacing each module's `send_post_request` (the precedent is tests/test_chat_util.py and
+tests/test_visibility_outbound.py). No signature is involved, so nothing honest is lost.
+"""
+import copy
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from app import db
+from app.constants import POST_TYPE_ARTICLE, VISIBILITY_FOLLOWERS
+from app.models import UserFollower
+from app.shared.tasks import deletes
+from app.shared.tasks.pages import send_post
+from app.visibility import follower_instances
+from tests.factories import (make_community, make_community_member, make_follow, make_instance, make_post,
+                             make_site, make_user)
+
+PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
+
+
+class Sent(list):
+    def __call__(self, inbox, body, private_key, key_id, *args, **kwargs):
+        self.append(SimpleNamespace(inbox=inbox, body=copy.deepcopy(body), key_id=key_id))
+
+    def inboxes(self):
+        return sorted(s.inbox for s in self)
+
+
+@pytest.fixture
+def sent(monkeypatch):
+    recorder = Sent()
+    monkeypatch.setattr('app.shared.tasks.pages.send_post_request', recorder)
+    monkeypatch.setattr('app.shared.tasks.deletes.send_post_request', recorder)
+    return recorder
+
+
+def _peer(domain, software='mastodon'):
+    instance = make_instance(domain, software=software)
+    instance.inbox = f'https://{domain}/inbox'
+    db.session.commit()
+    return instance
+
+
+def _world(visibility=VISIBILITY_FOLLOWERS):
+    """Instance 1 is local (built first, fact 21). Five peers:
+
+    peer1 (mastodon) and peer5 (piefed) each host an ACCEPTED follower of alice; peer2 hosts a PENDING one;
+    peer3 (lemmy) only follows the community; peer4 hosts carol, who is mentioned."""
+    local = make_instance('test.piefed.local', software='piefed')
+    make_site()
+    author = make_user(local, 'alice', local=True)
+    community = make_community('microblogs')
+    peers = {d: _peer(d, s) for d, s in [('peer1.example', 'mastodon'), ('peer2.example', 'mastodon'),
+                                          ('peer3.example', 'lemmy'), ('peer4.example', 'mastodon'),
+                                          ('peer5.example', 'piefed')]}
+    make_follow(author, make_user(peers['peer1.example'], 'bob'), is_inward=True)
+    make_follow(author, make_user(peers['peer5.example'], 'eve'), is_inward=True)
+    make_follow(author, make_user(peers['peer2.example'], 'pat'), is_accepted=None, is_inward=True)
+    make_community_member(make_user(peers['peer3.example'], 'cm'), community)
+    make_user(peers['peer4.example'], 'carol')
+    post = make_post(community, author, ap_id='https://test.piefed.local/post/1', title='hello')
+    post.type = POST_TYPE_ARTICLE
+    post.body = 'for friends, and @carol@peer4.example'
+    post.body_html = '<p>for friends</p>'
+    post.visibility = visibility
+    db.session.commit()
+    return SimpleNamespace(author=author, community=community, post=post, peers=peers)
+
+
+# --------------------------------------------------------------------------
+# follower_instances
+# --------------------------------------------------------------------------
+
+
+def test_follower_instances_counts_accepted_inward_followers_only(db_session):
+    w = _world()
+    outward = _peer('peer6.example')
+    make_follow(w.author, make_user(outward, 'followed'))          # alice follows them: not a follower
+    dormant = _peer('peer7.example')
+    dormant.dormant = True
+    make_follow(w.author, make_user(dormant, 'sleepy'), is_inward=True)
+    make_follow(w.author, make_user(w.peers['peer1.example'], 'bob2'), is_inward=True)   # second follower, same host
+    db.session.commit()
+    assert sorted(i.domain for i in follower_instances(w.author)) == ['peer1.example', 'peer5.example']
+
+
+# --------------------------------------------------------------------------
+# send_post
+# --------------------------------------------------------------------------
+
+
+def test_a_followers_only_post_goes_to_follower_hosts_and_mentions_only(db_session, sent):
+    w = _world()
+    send_post(w.post.id, session=db.session)
+    assert sent.inboxes() == ['https://peer1.example/inbox', 'https://peer4.example/inbox',
+                              'https://peer5.example/inbox']
+
+
+@pytest.mark.parametrize('edit', [False, True], ids=['create', 'update'])
+def test_no_public_anywhere_and_addressed_to_the_followers_collection(db_session, sent, edit):
+    w = _world()
+    send_post(w.post.id, edit=edit, session=db.session)
+    assert sent
+    for s in sent:
+        assert PUBLIC not in json.dumps(s.body)
+        assert s.body['type'] == ('Update' if edit else 'Create')
+        assert s.body['to'] == [w.author.followers_url()]
+        assert s.body['object']['to'] == [w.author.followers_url()]
+        assert s.body['object']['type'] == 'Note'
+        assert 'audience' not in s.body and 'audience' not in s.body['object']
+
+
+def test_mentions_are_in_cc(db_session, sent):
+    w = _world()
+    send_post(w.post.id, session=db.session)
+    carol = 'https://peer4.example/users/carol'
+    assert all(carol in s.body['cc'] for s in sent)
+
+
+def test_no_announce_and_never_signed_by_the_community(db_session, sent):
+    w = _world()
+    send_post(w.post.id, session=db.session)
+    assert all(s.body['type'] != 'Announce' for s in sent)
+    assert all(s.key_id == w.author.public_url() + '#main-key' for s in sent)
+
+
+def test_can_quote_is_the_author_only(db_session, sent):
+    w = _world()
+    send_post(w.post.id, session=db.session)
+    for s in sent:
+        assert s.body['object']['interactionPolicy']['canQuote']['automaticApproval'] == [w.author.public_url()]
+
+
+def test_follower_cc_names_accepted_followers_only(db_session, sent):
+    w = _world()
+    send_post(w.post.id, session=db.session)
+    last = sent[-1].body['cc']
+    assert 'https://peer1.example/users/bob' in last
+    assert 'https://peer2.example/users/pat' not in last
+
+
+def test_with_no_accepted_followers_only_mentions_are_sent(db_session, sent):
+    w = _world()
+    UserFollower.query.filter_by(local_user_id=w.author.id, is_accepted=True).delete()
+    db.session.commit()
+    send_post(w.post.id, session=db.session)
+    assert sent.inboxes() == ['https://peer4.example/inbox']
+
+
+def test_a_public_post_in_microblogs_is_still_announced(db_session, sent):
+    """Control: the public path is unchanged -- the community's follower host gets the Announce."""
+    w = _world(visibility='public')
+    w.author.private_key = 'k'
+    db.session.commit()
+    send_post(w.post.id, session=db.session)
+    assert any(s.inbox == 'https://peer3.example/inbox' and s.body['type'] == 'Announce' for s in sent)
+
+
+# --------------------------------------------------------------------------
+# delete_object: the Delete follows the post, with no Public
+# --------------------------------------------------------------------------
+
+
+def test_deleting_a_followers_only_post_tells_follower_hosts_without_public(db_session, sent):
+    w = _world()
+    deletes.delete_post(None, w.author.id, w.post.id)
+    assert sent.inboxes() == ['https://peer1.example/inbox', 'https://peer5.example/inbox']
+    for s in sent:
+        assert PUBLIC not in json.dumps(s.body)
+        assert s.body['to'] == [w.author.followers_url()]
+        assert 'https://peer2.example/users/pat' not in s.body['cc']
+        assert 'audience' not in s.body
+
+
+def test_deleting_a_public_post_keeps_public_addressing(db_session, sent):
+    w = _world(visibility='public')
+    deletes.delete_post(None, w.author.id, w.post.id)
+    assert sent
+    assert all(s.body['to'] == [PUBLIC] or s.body['object']['to'] == [PUBLIC] for s in sent)
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `./run_tests.sh tests/test_s7_followers_only_federation.py -q`
+Expected: collection FAILS with `ImportError: cannot import name 'follower_instances' from 'app.visibility'`.
+
+- [ ] **Step 3: Implement**
+
+`app/visibility.py:16`:
+
+```python
+from app.models import Instance, ModLog, Post, PostReply, User, UserFollower
+```
+
+Add after `is_open`:
+
+```python
+def follower_instances(user) -> list:
+    """The remote instances holding at least one ACCEPTED follower of local `user`: where a followers-only object of
+    theirs is delivered (Amendment B, S7.2). Unlike `User.following_instances`, a pending or refused follow does not
+    count, and nor does a follow in the other direction."""
+    return (db.session.query(Instance)
+            .join(User, User.instance_id == Instance.id)
+            .join(UserFollower, UserFollower.remote_user_id == User.id)
+            .filter(UserFollower.local_user_id == user.id,
+                    UserFollower.is_inward.is_(True),
+                    UserFollower.is_accepted.is_(True),
+                    Instance.id != 1,
+                    Instance.dormant.is_(False),
+                    Instance.gone_forever.is_(False))
+            .distinct().all())
+```
+
+`app/shared/tasks/pages.py:10`:
+
+```python
+from app.visibility import can_view, follower_instances, is_open
+```
+
+In `send_post`, replace the addressing line `to = [community.public_url(), "https://www.w3.org/ns/activitystreams#Public"]` with:
+
+```python
+    # Amendment B (S7.2): a followers-only post is addressed to the author's followers, never to Public or the community
+    followers_only = not is_open(post)
+    if followers_only:
+        to = [user.followers_url()]
+    else:
+        to = [community.public_url(), "https://www.w3.org/ns/activitystreams#Public"]
+```
+
+In the `page` dict, replace the `'interactionPolicy'` value with:
+
+```python
+      'interactionPolicy': {
+        'canQuote': {
+          'automaticApproval': [user.public_url()] if followers_only else ['https://www.w3.org/ns/activitystreams#Public']
+        }
+      },
+```
+
+Directly after the `create = {...}` dict, add:
+
+```python
+    if followers_only:      # no community audience: Lemmy-likes would file it as a community post
+        del page['audience']
+        del create['audience']
+```
+
+Change the announce block's first line. It goes from:
+
+```python
+    if not community.local_only:  # pragma: no branch -- see proof in test_shared_tasks_send_post.py
+```
+
+to:
+
+```python
+    if followers_only:
+        pass    # S7.2: it never reaches the community's followers, so the community never Announces it
+    elif not community.local_only:  # pragma: no branch -- see proof in test_shared_tasks_send_post.py
+```
+
+Replace the follower query:
+
+```python
+    followers = session.query(UserFollower).filter_by(local_user_id=post.user_id, is_inward=True).all()
+```
+
+with:
+
+```python
+    follower_query = session.query(UserFollower).filter_by(local_user_id=post.user_id, is_inward=True)
+    if followers_only:      # a pending follower has not been let in yet
+        follower_query = follower_query.filter_by(is_accepted=True)
+    followers = follower_query.all()
+```
+
+Replace the final delivery loop:
+
+```python
+    for instance in user.following_instances():
+        if instance.domain not in domains_sent_to and instance.id != 1 and instance.software != 'piefed':
+```
+
+with:
+
+```python
+    # a followers-only post got no Announce, so a piefed follower host has nothing yet and is sent the Create too
+    for instance in (follower_instances(user) if followers_only else user.following_instances()):
+        if instance.domain not in domains_sent_to and instance.id != 1 and (followers_only or instance.software != 'piefed'):
+```
+
+The body of that loop is unchanged.
+
+`app/shared/tasks/deletes.py:6`:
+
+```python
+from app.visibility import follower_instances, is_open
+```
+
+In `delete_object`, replace:
+
+```python
+    to = ["https://www.w3.org/ns/activitystreams#Public"]
+    cc = [community.public_url()]
+```
+
+with:
+
+```python
+    # Amendment B (S7.2): the Delete of a followers-only object in a local community goes where the object went --
+    # the author's followers -- with no Public. A remote community is the object's home (R-a) and is unchanged.
+    followers_only_local = community.is_local() and not is_open(object)
+    if followers_only_local:
+        to = [user.followers_url()]
+        cc = []
+    else:
+        to = ["https://www.w3.org/ns/activitystreams#Public"]
+        cc = [community.public_url()]
+```
+
+Directly after the `delete = {...}` dict and its `if reason:` lines, add:
+
+```python
+    if followers_only_local:
+        del delete['audience']
+```
+
+The `undo` dict is built from `delete` after this point, so it inherits the change. Remove its `'audience': community.public_url(),` line under the same condition by adding, directly after the `undo = {...}` dict:
+
+```python
+        if followers_only_local:
+            del undo['audience']
+```
+
+In the `if is_post and followers and not reason:` block, replace the follower loop and the instance query with:
+
+```python
+        for follower in followers:
+            if followers_only_local and not (follower.is_inward and follower.is_accepted is True):
+                continue    # only accepted followers ever received a followers-only post
+            # remote_user_id is a nullable FK, so a follower row can carry no
+            # account at all. The None is kept OUT of .get() rather than handed
+            # to it: SQLAlchemy warns that a fully NULL primary key identity
+            # "may raise an error in a future release", so relying on the None
+            # it answers today is relying on a deprecation. The existing
+            # `if user_details` below is still the one decision, which keeps
+            # the skip on a branch a test can reach.
+            user_details = (session.get(User, follower.remote_user_id)
+                            if follower.remote_user_id else None)
+            if user_details:
+                payload['cc'].append(user_details.public_url())
+        if followers_only_local:
+            instances = follower_instances(user)
+        else:
+            instances = session.query(Instance).join(User, User.instance_id == Instance.id).join(UserFollower, UserFollower.remote_user_id == User.id)
+            instances = instances.filter(UserFollower.local_user_id == user.id).filter(Instance.gone_forever == False, Instance.dormant == False)
+```
+
+The existing comment block inside the loop is kept verbatim. The `for instance in instances:` send loop below is unchanged.
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `./run_tests.sh tests/test_s7_followers_only_federation.py tests/test_shared_tasks_send_post.py tests/test_visibility_outbound.py tests/test_no_inline_imports.py -q`
+Expected: PASS. `test_visibility_outbound.py`'s rows stay green: the remote-community arm is unchanged, and the local-community follower rows use accepted inward follows.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add app/visibility.py app/shared/tasks/pages.py app/shared/tasks/deletes.py tests/test_s7_followers_only_federation.py
+git commit -m "feat: a followers-only microblog post federates to the author's followers only
+
+send_post addresses it to the followers collection with no Public and
+no community Announce, delivers to accepted-follower and mention hosts
+once each, and limits canQuote to the author. Its Delete follows the
+same audience.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 28: Replies under a followers-only post inherit it and are federated like it
+
+**Files:**
+- Modify: `app/models.py:36-40` (constants import), `PostReply.new` (:4061-4062)
+- Modify: `app/visibility.py`: add `followers_only_reply_instances`
+- Modify: `app/shared/tasks/notes.py:8` (import), `send_reply` (:81-232)
+- Modify: `app/shared/tasks/deletes.py`: `delete_object` reply delivery
+- Test: `tests/test_s7_followers_only_replies.py` (new)
+
+**Interfaces:**
+- Consumes: `follower_instances`, `is_open` (Task 27), and `followers_only_local` inside `delete_object` (Task 27).
+- Produces: `followers_only_reply_instances(reply) -> list[Instance]`. A local reply under a followers-only parent is stored `followers`. `send_reply` for a non-open reply goes to `[replier.followers_url()]`, cc the parent author and mentions, with no Announce.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `tests/test_s7_followers_only_replies.py`:
+
+```python
+"""Amendment B, S7.3: a local reply under a followers-only post (or reply) is followers-only too, as Mastodon does.
+It goes to the replier's accepted followers and the parent's author, never to Public, never Announced. Its Delete
+follows it."""
+import copy
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from app import db
+from app.constants import VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC
+from app.models import PostReply
+from app.shared.tasks import deletes
+from app.shared.tasks.notes import send_reply
+from app.visibility import followers_only_reply_instances
+from tests.factories import (make_community, make_community_member, make_follow, make_instance, make_post,
+                             make_post_reply, make_site, make_user)
+
+PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
+
+
+class Sent(list):
+    def __call__(self, inbox, body, private_key, key_id, *args, **kwargs):
+        self.append(SimpleNamespace(inbox=inbox, body=copy.deepcopy(body), key_id=key_id))
+
+    def inboxes(self):
+        return sorted(s.inbox for s in self)
+
+
+@pytest.fixture
+def sent(monkeypatch):
+    recorder = Sent()
+    monkeypatch.setattr('app.shared.tasks.notes.send_post_request', recorder)
+    monkeypatch.setattr('app.shared.tasks.deletes.send_post_request', recorder)
+    return recorder
+
+
+def _peer(domain, software='mastodon'):
+    instance = make_instance(domain, software=software)
+    instance.inbox = f'https://{domain}/inbox'
+    db.session.commit()
+    return instance
+
+
+def _world(post_visibility=VISIBILITY_FOLLOWERS, remote_parent_author=False):
+    """alice (local, or dave on peer6) wrote the post; bob (local) replies. bob has an accepted follower on peer1 and
+    a pending one on peer2; peer3 only follows the community; carol and carl on peer4 are mentioned."""
+    local = make_instance('test.piefed.local', software='piefed')
+    make_site()
+    community = make_community('microblogs')
+    peers = {d: _peer(d, s) for d, s in [('peer1.example', 'mastodon'), ('peer2.example', 'mastodon'),
+                                          ('peer3.example', 'lemmy'), ('peer4.example', 'mastodon'),
+                                          ('peer6.example', 'mastodon')]}
+    author = make_user(peers['peer6.example'], 'dave') if remote_parent_author else make_user(local, 'alice', local=True)
+    replier = make_user(local, 'bob', local=True)
+    make_follow(replier, make_user(peers['peer1.example'], 'fan'), is_inward=True)
+    make_follow(replier, make_user(peers['peer2.example'], 'maybe'), is_accepted=None, is_inward=True)
+    make_community_member(make_user(peers['peer3.example'], 'cm'), community)
+    make_user(peers['peer4.example'], 'carol')
+    make_user(peers['peer4.example'], 'carl')
+    post = make_post(community, author, ap_id='https://test.piefed.local/post/1', title='hello')
+    post.visibility = post_visibility
+    db.session.commit()
+    return SimpleNamespace(community=community, author=author, replier=replier, post=post, peers=peers)
+
+
+def _reply(w, body='agreed @carol@peer4.example and @carl@peer4.example', visibility=VISIBILITY_FOLLOWERS):
+    reply = make_post_reply(w.post, w.replier, body)
+    reply.visibility = visibility
+    db.session.commit()
+    return reply
+
+
+# --------------------------------------------------------------------------
+# PostReply.new: inheritance on the local path
+# --------------------------------------------------------------------------
+
+
+def test_a_local_reply_under_a_followers_only_post_is_followers_only(db_session):
+    w = _world()
+    reply = PostReply.new(w.replier, w.post, None, 'hi', '<p>hi</p>', True, None, False, False)
+    assert reply.visibility == VISIBILITY_FOLLOWERS
+
+
+def test_a_local_reply_under_a_followers_only_reply_is_followers_only(db_session):
+    w = _world(post_visibility=VISIBILITY_PUBLIC)
+    parent = _reply(w, body='parent')
+    reply = PostReply.new(w.replier, w.post, parent, 'hi', '<p>hi</p>', True, None, False, False)
+    assert reply.visibility == VISIBILITY_FOLLOWERS
+
+
+def test_a_local_reply_under_a_public_post_stays_public(db_session):
+    w = _world(post_visibility=VISIBILITY_PUBLIC)
+    reply = PostReply.new(w.replier, w.post, None, 'hi', '<p>hi</p>', True, None, False, False)
+    assert reply.visibility == VISIBILITY_PUBLIC
+
+
+# --------------------------------------------------------------------------
+# send_reply
+# --------------------------------------------------------------------------
+
+
+def test_a_followers_only_reply_goes_to_follower_and_mention_hosts_once_each(db_session, sent):
+    """carol and carl share peer4: one delivery, not two."""
+    w = _world()
+    send_reply(_reply(w).id, None, session=db.session)
+    assert sent.inboxes() == ['https://peer1.example/inbox', 'https://peer4.example/inbox']
+
+
+def test_its_addressing_has_no_public_and_names_the_parent_author(db_session, sent):
+    w = _world()
+    send_reply(_reply(w).id, None, session=db.session)
+    assert sent
+    for s in sent:
+        assert PUBLIC not in json.dumps(s.body)
+        assert s.body['to'] == [w.replier.followers_url()]
+        assert w.author.public_url() in s.body['cc']
+        assert s.body['type'] == 'Create'
+        assert 'audience' not in s.body and 'audience' not in s.body['object']
+
+
+def test_it_is_never_announced(db_session, sent):
+    w = _world()
+    send_reply(_reply(w).id, None, session=db.session)
+    assert all(s.body['type'] != 'Announce' for s in sent)
+    assert 'https://peer3.example/inbox' not in sent.inboxes()
+
+
+def test_a_remote_parent_authors_host_is_sent_it(db_session, sent):
+    w = _world(remote_parent_author=True)
+    send_reply(_reply(w, body='agreed').id, None, session=db.session)
+    assert sent.inboxes() == ['https://peer1.example/inbox', 'https://peer6.example/inbox']
+
+
+def test_a_public_reply_is_still_announced(db_session, sent):
+    """Control: the open path is unchanged."""
+    w = _world(post_visibility=VISIBILITY_PUBLIC)
+    send_reply(_reply(w, body='open', visibility=VISIBILITY_PUBLIC).id, None, session=db.session)
+    assert any(s.body['type'] == 'Announce' and s.inbox == 'https://peer3.example/inbox' for s in sent)
+
+
+# --------------------------------------------------------------------------
+# followers_only_reply_instances and the Delete
+# --------------------------------------------------------------------------
+
+
+def test_followers_only_reply_instances_adds_a_remote_parent_author(db_session):
+    w = _world(remote_parent_author=True)
+    reply = _reply(w, body='x')
+    assert sorted(i.domain for i in followers_only_reply_instances(reply)) == ['peer1.example', 'peer6.example']
+
+
+def test_followers_only_reply_instances_skips_a_local_parent_author(db_session):
+    w = _world()
+    reply = _reply(w, body='x')
+    assert [i.domain for i in followers_only_reply_instances(reply)] == ['peer1.example']
+
+
+def test_followers_only_reply_instances_uses_the_parent_reply_author(db_session):
+    w = _world()
+    stranger = make_user(_peer('peer8.example'), 'zed')
+    parent = make_post_reply(w.post, stranger, 'parent')
+    child = _reply(w, body='child')
+    child.parent_id = parent.id
+    db.session.commit()
+    assert sorted(i.domain for i in followers_only_reply_instances(child)) == ['peer1.example', 'peer8.example']
+
+
+@pytest.mark.parametrize('task', [deletes.delete_reply, deletes.restore_reply], ids=['delete', 'restore'])
+def test_deleting_a_followers_only_reply_reaches_its_audience(db_session, sent, task):
+    w = _world(remote_parent_author=True)
+    reply = _reply(w, body='x')
+    task(None, w.replier.id, reply.id)
+    assert sent.inboxes() == ['https://peer1.example/inbox', 'https://peer6.example/inbox']
+    for s in sent:
+        assert PUBLIC not in json.dumps(s.body)
+
+
+def test_deleting_a_remote_authors_followers_only_reply_sends_nothing(db_session, sent):
+    """We cannot reach a remote author's followers; the local community's fan-out stays skipped (E9)."""
+    w = _world(remote_parent_author=True)
+    reply = make_post_reply(w.post, w.author, 'theirs')
+    reply.visibility = VISIBILITY_FOLLOWERS
+    db.session.commit()
+    deletes.delete_reply(None, w.replier.id, reply.id)
+    assert sent == []
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `./run_tests.sh tests/test_s7_followers_only_replies.py -q`
+Expected: collection FAILS with `ImportError: cannot import name 'followers_only_reply_instances' from 'app.visibility'`.
+
+- [ ] **Step 3: Implement**
+
+`app/models.py:36-40`: add `VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC` to the `from app.constants import ...` list, after `ROLE_STAFF_NAME`.
+
+In `PostReply.new`, replace:
+
+```python
+        visibility = activitypub_visibility(request_json['object']) \
+            if request_json and isinstance(request_json.get('object'), dict) else 'public'
+```
+
+with:
+
+```python
+        if request_json and isinstance(request_json.get('object'), dict):
+            visibility = activitypub_visibility(request_json['object'])
+        elif (in_reply_to is not None and in_reply_to.visibility == VISIBILITY_FOLLOWERS) or \
+                post.visibility == VISIBILITY_FOLLOWERS:
+            visibility = VISIBILITY_FOLLOWERS   # Amendment B (S7.3): a reply under a followers-only parent inherits it
+        else:
+            visibility = VISIBILITY_PUBLIC
+```
+
+`app/visibility.py`: add after `follower_instances`:
+
+```python
+def followers_only_reply_instances(reply) -> list:
+    """Where a local followers-only reply was delivered (Amendment B, S7.3): its author's follower instances, plus
+    the instance of the author it replies to when that author is remote."""
+    parent = db.session.get(PostReply, reply.parent_id) if reply.parent_id else reply.post
+    instances = follower_instances(reply.author)
+    parent_instance = parent.author.instance
+    if parent_instance is not None and parent_instance.id != 1 and parent_instance not in instances:
+        instances.append(parent_instance)
+    return instances
+```
+
+`app/shared/tasks/notes.py:8`:
+
+```python
+from app.visibility import can_view, follower_instances, is_open
+```
+
+In `send_reply`, replace:
+
+```python
+    to = ["https://www.w3.org/ns/activitystreams#Public"]
+    cc = [community.public_url()]
+```
+
+with:
+
+```python
+    # Amendment B (S7.3): a followers-only reply goes to the replier's followers and the people it answers or names
+    followers_only = not is_open(reply)
+    if followers_only:
+        to = [user.followers_url()]
+        cc = []
+    else:
+        to = ["https://www.w3.org/ns/activitystreams#Public"]
+        cc = [community.public_url()]
+```
+
+The existing `for recipient in recipients:` loop that follows adds the parent author (always `recipients[0]`) and each mention to `cc`. It is unchanged.
+
+Directly after the `create = {...}` dict, add:
+
+```python
+    if followers_only:
+        del note['audience']
+        del create['audience']
+```
+
+Change the delivery branch from `if community.is_local():` to:
+
+```python
+    if followers_only:
+        pass    # never Announced, and a remote community's inbox is not its audience either
+    elif community.is_local():
+```
+
+The `elif`'s body and the trailing `else:` are unchanged.
+
+Replace the final mention loop:
+
+```python
+    for recipient in recipients:
+        if recipient.instance.domain not in domains_sent_to:
+            send_post_request(recipient.instance.inbox, create, user.private_key, user.public_url() + '#main-key')
+```
+
+with:
+
+```python
+    for recipient in recipients:
+        if recipient.instance.domain not in domains_sent_to:
+            send_post_request(recipient.instance.inbox, create, user.private_key, user.public_url() + '#main-key')
+            domains_sent_to.append(recipient.instance.domain)     # two people on one host get one delivery
+    if followers_only:
+        for instance in follower_instances(user):
+            if instance.domain not in domains_sent_to and instance.inbox and instance.online() and \
+                    not user.has_blocked_instance(instance.id) and not instance_banned(instance.domain):
+                send_post_request(instance.inbox, create, user.private_key, user.public_url() + '#main-key')
+                domains_sent_to.append(instance.domain)
+```
+
+`app/shared/tasks/deletes.py:6`:
+
+```python
+from app.visibility import follower_instances, followers_only_reply_instances, is_open
+```
+
+In `delete_object`, directly after the whole `if is_post and followers and not reason:` block, before `# remove any notifications about deleted posts`, add:
+
+```python
+    # Amendment B (S7.3): a local author's followers-only reply was delivered to their followers and the parent's
+    # author; its Delete or Undo goes to the same hosts. A remote author's audience cannot be reached from here.
+    if (not is_post and isinstance(object, PostReply) and followers_only_local and object.author.is_local()
+            and not reason):
+        payload = undo if is_restore else delete
+        for instance in followers_only_reply_instances(object):
+            if instance.inbox and instance.domain not in domains_sent_to:
+                send_post_request(instance.inbox, payload, user.private_key, user.public_url() + '#main-key')
+                domains_sent_to.append(instance.domain)
+```
+
+`delete_object` starts with `if not is_post and community.local_only: return`. The microblogs community is not `local_only`, so the block is reachable.
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `./run_tests.sh tests/test_s7_followers_only_replies.py tests/test_visibility_outbound.py tests/test_shared_reply_make.py tests/test_no_inline_imports.py -q`
+Expected: PASS. In `test_visibility_outbound.py`, `delete_reply`'s local followers-only row still records `[]`, because `w.reply`'s author is remote.
+
+Then run the tests touching `send_reply` and `PostReply.new`:
+
+Run: `./run_tests.sh tests/ -q -k "send_reply or reply_new or notes or post_reply"`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add app/models.py app/visibility.py app/shared/tasks/notes.py app/shared/tasks/deletes.py \
+        tests/test_s7_followers_only_replies.py
+git commit -m "feat: replies under a followers-only post inherit it and federate to the replier's followers
+
+PostReply.new's local path takes followers-only from the parent post or
+reply. send_reply addresses such a reply to the replier's followers, cc
+the parent author and mentions, with no Public and no Announce, and
+dedupes deliveries per host. Its Delete reaches the same hosts.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 29: Guards: no moving, no quote authorization; E9 regression for local followers-only posts
+
+**Files:**
+- Modify: `app/shared/post.py:1084` (`move_post`)
+- Modify: `app/shared/tasks/pages.py:402` (`move_object`)
+- Modify: `app/activitypub/util.py:4672` (`process_quote_boost`)
+- Test: `tests/test_s7_followers_only_guards.py` (new)
+
+**Interfaces:**
+- Consumes: `is_open` (`app/visibility.py`; check whether `app/shared/post.py` and `app/activitypub/util.py` already import it, and add it to their `from app.visibility import ...` lines if not). Also `follower_instances` (Task 27).
+- Produces: `move_post` raises (API) or flashes (web) `A followers-only post cannot be moved.` `move_object` sends nothing for a non-open object. `process_quote_boost` ignores a non-open local object.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `tests/test_s7_followers_only_guards.py`:
+
+```python
+"""Amendment B, S7.4: the guards around a local followers-only microblog post.
+
+pyfedi has no local boost or quote feature (plan, contract additions 3), so the guards are: a followers-only post
+cannot be moved; an inbound QuoteRequest for one is not authorized (its canQuote names only the author); and the
+existing E9 gates keep every moderation and vote activity about it away from the community's followers.
+"""
+from types import SimpleNamespace
+
+import pytest
+
+from app import db
+from app.activitypub.util import process_quote_boost
+from app.constants import SRC_API, VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC
+from app.models import ActivityBatch, QuoteAuthorization
+from app.shared.post import move_post
+from app.shared.tasks import adds, likes, locks
+from app.shared.tasks.pages import move_object
+from tests.factories import make_community, make_community_member, make_instance, make_post, make_site, make_user
+
+
+class Sent(list):
+    def __call__(self, inbox, *args, **kwargs):
+        self.append(inbox)
+
+
+def _world(visibility):
+    local = make_instance('test.piefed.local', software='piefed')
+    make_site()
+    author = make_user(local, 'alice', local=True)
+    community = make_community('microblogs')
+    other = make_community('general')
+    peer = make_instance('peer3.example', software='lemmy')
+    peer.inbox = 'https://peer3.example/inbox'
+    make_community_member(make_user(peer, 'cm'), community)     # the community has a follower host
+    post = make_post(community, author, ap_id='https://test.piefed.local/post/1', title='hello')
+    post.visibility = visibility
+    db.session.commit()
+    return SimpleNamespace(author=author, community=community, other=other, post=post)
+
+
+# --------------------------------------------------------------------------
+# Moving
+# --------------------------------------------------------------------------
+
+
+def test_moving_a_followers_only_post_is_refused_before_the_permission_check(db_session, monkeypatch):
+    w = _world(VISIBILITY_FOLLOWERS)
+    monkeypatch.setattr('app.shared.post.authorise_api_user', lambda *a, **k: w.author)
+    with pytest.raises(Exception, match='A followers-only post cannot be moved.'):
+        move_post(w.post.id, w.other.id, SRC_API, auth='t')
+    assert w.post.community_id == w.community.id
+
+
+def test_moving_a_public_post_reaches_the_permission_check(db_session, monkeypatch):
+    """Control: the author is no moderator, so a public post is refused for permission -- proving the guard above
+    runs first and is not the permission check misreported."""
+    w = _world(VISIBILITY_PUBLIC)
+    monkeypatch.setattr('app.shared.post.authorise_api_user', lambda *a, **k: w.author)
+    with pytest.raises(Exception, match='Does not have permission'):
+        move_post(w.post.id, w.other.id, SRC_API, auth='t')
+
+
+@pytest.mark.parametrize('visibility, expected', [(VISIBILITY_FOLLOWERS, []),
+                                                  (VISIBILITY_PUBLIC, ['https://peer3.example/inbox'])],
+                         ids=['followers-only', 'public'])
+def test_move_object_announces_only_an_open_post(db_session, monkeypatch, visibility, expected):
+    w = _world(visibility)
+    sent = Sent()
+    monkeypatch.setattr('app.shared.tasks.pages.send_post_request', sent)
+    move_object(db.session, w.author.id, w.post, origin=w.community, target=w.other)
+    assert sent == expected
+
+
+# --------------------------------------------------------------------------
+# Quote requests
+# --------------------------------------------------------------------------
+
+
+def _quote_request(post):
+    return {'id': 'https://peer4.example/activities/q1', 'type': 'QuoteRequest',
+            'actor': 'https://peer4.example/users/carol', 'object': post.ap_id,
+            'instrument': 'https://peer4.example/notes/1'}
+
+
+def test_a_quote_request_for_a_followers_only_post_is_not_authorized(db_session, monkeypatch):
+    w = _world(VISIBILITY_FOLLOWERS)
+    sent = Sent()
+    monkeypatch.setattr('app.activitypub.util.send_post_request', sent)
+    process_quote_boost(_quote_request(w.post), w.post.ap_id, 'https://peer4.example/notes/1')
+    assert QuoteAuthorization.query.count() == 0
+    assert sent == []
+
+
+def test_a_quote_request_for_a_public_post_is_still_authorized(db_session, monkeypatch):
+    w = _world(VISIBILITY_PUBLIC)
+    peer4 = make_instance('peer4.example')
+    peer4.inbox = 'https://peer4.example/inbox'
+    carol = make_user(peer4, 'carol')
+    db.session.commit()
+    sent = Sent()
+    monkeypatch.setattr('app.activitypub.util.send_post_request', sent)
+    monkeypatch.setattr('app.activitypub.util.find_actor_or_create_cached', lambda *a, **k: carol)
+    process_quote_boost(_quote_request(w.post), w.post.ap_id, 'https://peer4.example/notes/1')
+    assert QuoteAuthorization.query.count() == 1
+    assert sent == ['https://peer4.example/inbox']
+
+
+# --------------------------------------------------------------------------
+# E9 regression: moderation and votes about a local followers-only post stay home
+# --------------------------------------------------------------------------
+
+E9_TASKS = [
+    ('lock_post', lambda w: locks.lock_post(None, w.author.id, w.post.id), 'app.shared.tasks.locks'),
+    ('unlock_post', lambda w: locks.unlock_post(None, w.author.id, w.post.id), 'app.shared.tasks.locks'),
+    ('sticky_post', lambda w: adds.sticky_post(None, w.author.id, w.post.id), 'app.shared.tasks.adds'),
+    ('vote', lambda w: likes.vote_for_post(None, w.author.id, w.post.id, None, 'upvote'), 'app.shared.tasks.likes'),
+]
+
+
+@pytest.mark.parametrize('name, run, module', E9_TASKS, ids=[t[0] for t in E9_TASKS])
+@pytest.mark.parametrize('visibility, federated', [(VISIBILITY_FOLLOWERS, False), (VISIBILITY_PUBLIC, True)],
+                         ids=['followers-only', 'public'])
+def test_e9_keeps_a_local_followers_only_post_away_from_community_followers(
+        db_session, monkeypatch, name, run, module, visibility, federated):
+    w = _world(visibility)
+    sent = Sent()
+    monkeypatch.setattr(f'{module}.send_post_request', sent)
+    run(w)
+    announced = bool(sent) or ActivityBatch.query.count() > 0
+    assert announced is federated, name
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `./run_tests.sh tests/test_s7_followers_only_guards.py -q`
+Expected: FAIL. The move refusal raises `Does not have permission` instead of `A followers-only post cannot be moved.`. The followers-only quote request creates one `QuoteAuthorization`. `move_object` sends one Announce for the followers-only post. The E9 rows should already pass; they are the regression pin.
+
+- [ ] **Step 3: Implement**
+
+`app/shared/post.py`, in `move_post`, directly after `post = db.session.get(Post, post_id) or abort(404)`:
+
+```python
+    if not is_open(post):
+        # Amendment B (S7.4): a followers-only post lives only in the local microblogs community and was never
+        # sent to any community's followers -- moving it would publish it to a new audience
+        msg = 'A followers-only post cannot be moved.'
+        if src == SRC_API:
+            raise Exception(msg)
+        flash(_(msg), 'error')
+        return
+```
+
+If `is_open` is not yet imported in `app/shared/post.py`, change `from app.visibility import post_title_for` (:25) to:
+
+```python
+from app.visibility import is_open, post_title_for
+```
+
+`app/shared/tasks/pages.py`, in `move_object`, change:
+
+```python
+    if community.local_only or community.private or not (community.instance_id and community.instance.online()):
+        return
+```
+
+to:
+
+```python
+    if community.local_only or community.private or not (community.instance_id and community.instance.online()):
+        return
+    if not is_open(object):     # Amendment B (S7.4): move_post refuses this; never federate one that got through
+        return
+```
+
+`app/activitypub/util.py`, in `process_quote_boost`, change:
+
+```python
+    if post is not None and post.author.is_local():
+```
+
+to:
+
+```python
+    # Amendment B (S7.4): a followers-only object publishes canQuote: [author] -- nobody else is authorized to quote it
+    if post is not None and post.author.is_local() and is_open(post):
+```
+
+If `is_open` is not yet imported in `app/activitypub/util.py`, add it to that module's `from app.visibility import ...` line. Run `grep -n "from app.visibility" app/activitypub/util.py` first.
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `./run_tests.sh tests/test_s7_followers_only_guards.py tests/test_shared_tasks_send_post.py tests/test_visibility_outbound.py tests/test_no_inline_imports.py -q`
+Expected: PASS.
+
+Run: `./run_tests.sh tests/ -q -k "move_post or quote"`
+Expected: PASS. The existing move and quote rows use public posts.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add app/shared/post.py app/shared/tasks/pages.py app/activitypub/util.py tests/test_s7_followers_only_guards.py
+git commit -m "feat: a followers-only post cannot be moved or quote-authorized
+
+move_post refuses it (web and API) and move_object never federates one.
+process_quote_boost no longer authorizes a quote of a non-open local
+object, matching the author-only canQuote it publishes. E9 regression
+rows pin lock, sticky and vote staying away from community followers.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 30: Read-side regression for local followers-only posts, and the S7 phase gate
+
+**Files:**
+- Test: `tests/test_s7_followers_only_read_side.py` (new)
+
+**Interfaces:**
+- Consumes: `make_post` and `requested_visibility` (Task 26), plus the read surfaces already gated by `app/visibility.py`. Test helpers: `client_as` (`tests/test_visibility_single_object.py:11`), `feed_ids` and `bearer` (`tests/factories.py`), `_api_input` (`tests/test_shared_post_edit.py:178`).
+- Produces: nothing new. This pins that S7 posts get the protection remote followers-only content already has.
+
+- [ ] **Step 1: Write the tests**
+
+Create `tests/test_s7_followers_only_read_side.py`:
+
+```python
+"""Amendment B, S7 read side: a followers-only post AUTHORED HERE gets the same protection remote followers-only
+content already has (tests/test_visibility_listings.py). It is absent from every listing for everyone, present on a
+follower's home feed, and its permalink is a 404 for anyone else.
+
+The posts are made through make_post -- the S7.1 producer -- not by setting the column on a factory row.
+"""
+import re
+from types import SimpleNamespace
+
+import pytest
+from flask import current_app, g
+
+from app import db
+from app.constants import POST_TYPE_ARTICLE, SRC_API
+from app.models import Language, Site
+from app.shared.post import make_post
+from tests.factories import bearer, feed_ids, make_community, make_follow, make_instance, make_site, make_user
+from tests.test_shared_post_edit import _api_input
+from tests.test_visibility_single_object import client_as
+
+WORD = 'quokkabird'
+
+
+def post_links(response):
+    return {int(i) for i in re.findall(r'/post/(\d+)', response.get_data(as_text=True))}
+
+
+@pytest.fixture
+def world(app, db_session, monkeypatch):
+    local = make_instance('test.piefed.local', software='piefed')
+    site = make_site()
+    site.private_instance = False
+    g.admin_ids = []
+    g.site = site
+    monkeypatch.setitem(current_app.config, 'ENABLE_ALPHA_API', 'true')
+    db.session.add(Language(code='und', name='Undetermined'))
+    db.session.add(Language(code='en', name='English'))
+    db.session.commit()
+    author = make_user(local, 'alice', local=True, with_keys=True)
+    follower = make_user(local, 'fran', local=True)
+    stranger = make_user(local, 'sam', local=True)
+    make_follow(follower, author)
+    community = make_community('microblogs')
+    with monkeypatch.context() as m:
+        m.setattr('app.shared.post.task_selector', lambda *a, **k: None)
+        m.setattr('app.shared.post.authorise_api_user', lambda *a, **k: author)
+        _, hidden = make_post(_api_input(title=f'{WORD} hidden', visibility='followers'), community,
+                              POST_TYPE_ARTICLE, SRC_API, auth='t')
+        _, shown = make_post(_api_input(title=f'{WORD} shown'), community, POST_TYPE_ARTICLE, SRC_API, auth='t')
+    return SimpleNamespace(author=author, follower=follower, stranger=stranger, community=community,
+                           hidden=hidden, shown=shown)
+
+
+SURFACES = {
+    'community_page': '/c/microblogs',
+    'community_rss': '/community/microblogs/feed',
+    'instance_posts': '/instance/test.piefed.local/posts',
+    'search': f'/search?q={WORD}&search_for=posts',
+}
+
+
+@pytest.mark.parametrize('surface', sorted(SURFACES))
+@pytest.mark.parametrize('who', ['follower', 'stranger', None])
+def test_no_listing_offers_it(app, world, surface, who):
+    viewer = getattr(world, who) if who else None
+    response = client_as(app, viewer).get(SURFACES[surface])
+    assert response.status_code == 200, surface
+    shown = post_links(response)
+    assert world.hidden.id not in shown, surface
+    if surface != 'search':     # search ranking depends on the index; the hidden post's absence is the pin
+        assert world.shown.id in shown, surface
+
+
+@pytest.mark.parametrize('who', ['follower', 'stranger'])
+def test_the_api_post_list_omits_it(app, world, who):
+    viewer = getattr(world, who)
+    for params in ({}, {'community_id': world.community.id}, {'type_': 'Local'}):
+        response = app.test_client().get('/api/alpha/post/list', query_string=params,
+                                         headers={'Authorization': bearer(viewer)})
+        assert response.status_code == 200, params
+        ids = {p['post']['id'] for p in response.get_json()['posts']}
+        assert world.shown.id in ids, params
+        assert world.hidden.id not in ids, params
+
+
+def test_a_followers_home_feed_has_it(app, world):
+    assert world.hidden.id in feed_ids(app, world.follower, [world.community.id], include_following=True)
+
+
+def test_a_strangers_home_feed_does_not(app, world):
+    assert world.hidden.id not in feed_ids(app, world.stranger, [world.community.id], include_following=True)
+
+
+@pytest.mark.parametrize('who, status', [('follower', 200), ('author', 200), ('stranger', 404), (None, 404)])
+def test_the_permalink(app, world, who, status):
+    viewer = getattr(world, who) if who else None
+    assert client_as(app, viewer).get(f'/post/{world.hidden.id}').status_code == status
+```
+
+- [ ] **Step 2: Run the tests**
+
+Run: `./run_tests.sh tests/test_s7_followers_only_read_side.py -q`
+Expected: PASS. These are regression pins over surfaces that Tasks 26–29 did not change.
+
+If a row fails, that surface leaks S7 content. Do not weaken the row. Find the surface's query, apply `listable_clause(Post)` or `visible_to_clause(Post, viewer_id)` from `app/visibility.py` (the existing pattern), add the fix to this task's commit, and rerun.
+
+- [ ] **Step 3: Phase gate (S7)**
+
+Run: `./run_tests.sh tests/ --cov=app --cov=fastapi_server --cov-branch --cov-report=json:coverage.json -q`
+Expected: full suite green. Read the passed count, not just the exit code (see `pytest.ini` on `session_timeout`).
+
+Run: `python3 tests/check_changed_line_coverage.py coverage.json dafbb3aa0 --branches app/ fastapi_server.py`
+Expected: 100% of new and changed lines and branches.
+
+Run: `python3 tests/check_coverage_floors.py coverage.json coverage_floors.ini`
+Expected: no floor dropped.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add tests/test_s7_followers_only_read_side.py
+git commit -m "test: locally authored followers-only posts stay out of every listing
+
+Community page, RSS, instance timeline, search and the API list omit
+it for followers and strangers; a follower's home feed has it; the
+permalink is a 404 for anyone but the author and followers.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+
+## Phase S6 (continued)
+
 ### Task 23: S6 — a signed fetch by an entitled requester unlocks followers-only content
+
+> **Amendment (applies before executing this task):** Task 23 was drafted when no local authoring path produced followers-only content. Its `world` fixture sets
+> `post.visibility = 'followers'` and `reply.visibility = 'followers'` on rows from `seed_local_post()`. Task 23 now runs
+> after Task 30, so change that fixture as follows:
+> 
+> 1. Build the community with `make_community('microblogs')`. Create the post with
+>    `make_post(_api_input(visibility='followers', title=...), community, POST_TYPE_ARTICLE, SRC_API, auth='t')`
+>    (`app.shared.post.make_post`). Patch `app.shared.post.task_selector` and `app.shared.post.authorise_api_user`
+>    inside a `monkeypatch.context()`, as Task 30's fixture does.
+> 2. Create the reply with `PostReply.new(author, post, None, 'reply', '<p>reply</p>', True, None, False, False)`, and
+>    assert `reply.visibility == 'followers'`. That witnesses Task 28's inheritance instead of setting the column.
+> 3. Drop the module docstring's sentence "Local followers-only content is set directly on the rows here: no local
+>    authoring path produces it yet (plan, clarification 11)". Replace it with "The followers-only post and reply are
+>    authored through S7.1 and S7.3."
+> 4. Update plan clarification 11's bullet "Local users cannot author followers-only posts…" to "Local followers-only
+>    content exists only in the local microblogs community (Amendment B); the unlock applies to it."
+> 
+> Keep every assertion in Task 23 unchanged. The routes it exercises (`post_ap_refusal`, `comment_ap`) are reached the
+> same way.
+
 
 **Files:**
 - Modify: `app/activitypub/routes.py`:

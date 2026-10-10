@@ -47,7 +47,7 @@ pyfedi also lacks RFC 9421 signatures and authorized fetch. Both are now common 
 | Required signed headers | Logged first behind a flag; enforcement switched on in a separate commit after the owner reviews the logs |
 | Coverage | 100% line and branch coverage of new and changed lines |
 | Votes refetched by a third host | 404 is fine (only addressees and their hosts are entitled) |
-| Cross-origin Delete (Amendment A) | Accepted only from a known moderator or Group-host admin (or a local admin), after an admin-configurable delay (default 90 s) passes without the home server's own Delete; other cross-origin Deletes need the origin to answer 404/410 |
+| Cross-origin Delete (Amendment A) | Accepted only from a known moderator or Group-host admin, after an admin-configurable delay (default 90 s) passes without the home server's own Delete; other cross-origin Deletes need the origin to answer 404/410 |
 | Followers-only authoring (Amendment B) | Local users may create followers-only posts, in the local `microblogs` community only |
 
 ## Shared helpers
@@ -255,8 +255,9 @@ Define `group_host = host_of(announce['actor'])`, `inner = announce['object']`, 
 4. **Delete** (rewritten by Amendment A):
    - **From a moderator or Group-host admin.** The inner actor is one of:
      - a stored moderator or owner of the announcing community (`Community.moderators()`);
-     - an admin of the announcing community's host instance (`Community.is_instance_admin`);
-     - a local admin.
+     - an admin of the announcing community's host instance (`Community.is_instance_admin`).
+
+     (A local admin's Delete never arrives as an Announce: the inbox drops Announces of local actors' activities.)
 
      Schedule the Delete to be applied after `cross_origin_delete_delay` seconds (see Amendment A). Do not refetch.
    - **From anyone else.** Fetch the deleted object's id:
@@ -468,8 +469,9 @@ origin. Under the original S4 rule the Delete was dropped, so federated moderati
 - **Who counts:**
   - the announcing community's stored moderators and owners;
   - admins of the announcing community's host instance (`InstanceRole` rows for that instance, via
-    `Community.is_instance_admin`);
-  - local admins.
+    `Community.is_instance_admin`).
+
+  Local admins are not listed, because their activities never arrive through an inbound Announce (R:746).
 
   `can_moderate` is unchanged, so remote `InstanceRole` admins stay excluded everywhere else.
 - **Delay.** A new Celery task, `apply_delayed_delete(announce_json, store_ap_json)`, is scheduled with
@@ -550,8 +552,10 @@ In `send_post` (`app/shared/tasks/pages.py:89`), when `post.visibility == VISIBI
 ### S7.4 Guards
 
 - `move_object` (`app/shared/tasks/pages.py:402`) and the UI that offers it refuse a non-open post.
-- A local boost (Announce) of a non-open post or reply is refused on web and API.
-- A local quote of a non-open post is refused.
+- pyfedi has no local boost or local quote feature, so there is nothing to refuse there. Instead, an inbound
+  FEP-044f `QuoteRequest` for a non-open local post or reply is not accepted: no `QuoteAuthorization` is recorded
+  and no `Accept` is sent. That matches the published `canQuote: [author]`.
+- The Delete of a followers-only reply reaches the same hosts the reply was delivered to.
 - The existing E9 gates (likes, locks, adds, removes) apply unchanged. Tests confirm that a followers-only microblog
   post triggers none of them toward community followers.
 
@@ -568,7 +572,7 @@ In `send_post` (`app/shared/tasks/pages.py:89`), when `post.visibility == VISIBI
   - an edit is addressed the same way;
   - the Delete addressing has no Public.
 - **Replies:** inherited visibility; addressing; no Announce; a public parent is unchanged.
-- **Guards:** move refused; boost refused (web and API); quote refused.
+- **Guards:** move refused; inbound QuoteRequest for a non-open post not accepted.
 - **Read side** (regression): the post is absent from the community page, RSS, search, the API list and the
   instance timeline; present on a follower's home feed; 404 for a non-follower.
 
