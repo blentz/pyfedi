@@ -65,15 +65,10 @@ compare unequal. That is a claim about behaviour, so it is tested at both
 guards -- see the two "will not parse" tests. Under the previous authority
 comparison those two inputs raised ValueError out of the function instead.
 
-TIMING. app/utils.py carries both `import time` and `from time import
-sleep`, and get_request runs its OWN retry through that second binding,
-nested inside this function's `time.sleep(3)` retry. Patching only
-`time.sleep` would leave the inner one sleeping for real, so
-the shared `no_real_sleeping` fixture in conftest patches both,
-function-scoped, and this module opts into it by pytestmark. Neither patch
-touches get_request or verify_object_from_source, so no test here asserts
-retry TIMING -- only that a second attempt happens and that its outcome is
-what comes back.
+TIMING. R-NORETRY: verify_object_from_source fetches once and never sleeps
+(get_request(retry=False); the signed fetch is also a single attempt). The
+transport-failure tests patch both sleep bindings with a Mock and assert it
+was never called and that the respx route saw exactly the expected requests.
 
 THE Site ROW. Nothing seeds one automatically: `db_session` truncates, and a
 Site row exists in a test only if that test calls make_site()
@@ -100,6 +95,8 @@ covered separately below, because a duplicated construct with only one copy
 tested lets a mutation on the untested copy survive silently -- and because
 the two now return different reasons, each test can say which copy ran.
 """
+from unittest.mock import Mock
+
 import httpx
 import pytest
 
@@ -526,68 +523,57 @@ class TestFetchOutcomes:
         assert verify_object_from_source(request_json) == (None, NO_SIGNING_SITE)
         assert request_json['object'] == URI
 
-    def test_a_signed_fetch_failure_then_a_successful_retry_returns_the_fetched_object(self, app, db_session,
-                                                                                       http_mock):
-        """The 401 branch carries its OWN transport-failure retry, separate
-        from the plain path's. signed_get_request has no internal retry of
-        its own, so one failure per attempt is enough here where the plain
-        path needs two."""
+    def test_a_signed_fetch_failure_refuses_without_a_retry(self, app, db_session, http_mock, monkeypatch):
+        """R-NORETRY: inbox processing never retries. One 401, one failed
+        signed fetch: exactly two requests, no sleep, refused."""
+        sleeps = Mock()
+        monkeypatch.setattr('time.sleep', sleeps)
+        monkeypatch.setattr('app.utils.sleep', sleeps)
         seed_signing_site()
-        http_mock.get(URI).mock(side_effect=[
+        route = http_mock.get(URI).mock(side_effect=[
             httpx.Response(401),
             httpx.ConnectError('boom'),
             httpx.Response(200, json=note_document()),
-        ])
-        request_json = announce_activity()
-
-        result, reason = verify_object_from_source(request_json)
-
-        assert result is request_json
-        assert reason is None
-        assert request_json['object'] == note_document()
-
-    def test_both_signed_fetch_attempts_failing_refuses(self, app, db_session, http_mock):
-        """Production change that fails this: the 401 branch's inner `except
-        httpx.HTTPError` re-raising or refusing with the plain path's reason
-        -- a second copy of the handler covered by
-        test_four_transport_failures_refuses, tested separately, and the two
-        reasons are what keep the copies distinguishable."""
-        seed_signing_site()
-        http_mock.get(URI).mock(side_effect=[
-            httpx.Response(401),
-            httpx.ConnectError('boom'),
-            httpx.ConnectError('boom'),
         ])
         request_json = announce_activity()
 
         assert verify_object_from_source(request_json) == (None, SIGNED_FETCH_FAILED)
+        assert route.call_count == 2
+        sleeps.assert_not_called()
         assert request_json['object'] == URI
 
-    def test_two_transport_failures_then_a_success_returns_the_fetched_object(self, app, db_session, http_mock):
-        """get_request has its own internal retry, so one
-        verify_object_from_source attempt costs TWO httpx attempts before
-        its `except httpx.HTTPError` sees anything -- hence two failures
-        here, not one. Production change that fails this: deleting the outer
-        retry, which would let the error propagate."""
-        http_mock.get(URI).mock(side_effect=[
-            httpx.ConnectError('boom'),
+    def test_a_transport_failure_makes_one_request_and_refuses(self, app, db_session, http_mock, monkeypatch):
+        """R-NORETRY: get_request's own retry and the outer retry are both
+        gone. Production change that fails this: any second attempt or sleep."""
+        sleeps = Mock()
+        monkeypatch.setattr('time.sleep', sleeps)
+        monkeypatch.setattr('app.utils.sleep', sleeps)
+        route = http_mock.get(URI).mock(side_effect=[
             httpx.ConnectError('boom'),
             httpx.Response(200, json=note_document()),
         ])
         request_json = announce_activity()
 
-        result, reason = verify_object_from_source(request_json)
+        assert verify_object_from_source(request_json) == (None, FETCH_FAILED)
+        assert route.call_count == 1
+        sleeps.assert_not_called()
+        assert request_json['object'] == URI
 
-        assert result is request_json
-        assert reason is None
-        assert request_json['object'] == note_document()
+    def test_a_read_error_makes_one_request_and_refuses(self, app, db_session, http_mock, monkeypatch):
+        """httpx.ReadError took its own retry clause in get_request."""
+        sleeps = Mock()
+        monkeypatch.setattr('time.sleep', sleeps)
+        monkeypatch.setattr('app.utils.sleep', sleeps)
+        route = http_mock.get(URI).mock(side_effect=[httpx.ReadError('boom'), httpx.Response(200, json=note_document())])
 
-    def test_four_transport_failures_refuses(self, app, db_session, http_mock):
-        """Production change that fails this: the inner `except
-        httpx.HTTPError` re-raising or refusing with the signed path's
-        reason."""
-        http_mock.get(URI).mock(side_effect=[httpx.ConnectError('boom')] * 4)
+        assert verify_object_from_source(announce_activity()) == (None, FETCH_FAILED)
+        assert route.call_count == 1
+        sleeps.assert_not_called()
+
+    @pytest.mark.parametrize('body', ['"just a string"', '[1, 2]', '42', 'null'])
+    def test_a_non_object_json_response_refuses_rather_than_raising(self, app, db_session, http_mock, body):
+        http_mock.get(URI).respond(200, content=body.encode(), headers={'content-type': 'application/json'})
         request_json = announce_activity()
 
-        assert verify_object_from_source(request_json) == (None, FETCH_FAILED)
+        assert verify_object_from_source(request_json) == (None, 'the fetched object is not a JSON object')
         assert request_json['object'] == URI
