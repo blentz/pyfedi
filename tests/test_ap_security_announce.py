@@ -13,7 +13,7 @@ from sqlalchemy import inspect as sa_inspect
 
 import app.activitypub.routes as activitypub_routes
 from app import db
-from app.activitypub.signature import LDSignature, default_context
+from app.activitypub.signature import LDSignature, VerificationFormatError, default_context
 from app.activitypub.util import ANNOUNCED_DELETE_DEFERRED, cross_origin_delete_delay, verify_announced_inner
 from app.models import ActivityPubLog, InstanceRole, Post, User, utcnow
 from app.utils import set_setting
@@ -299,12 +299,14 @@ def _tamper_with_an_unmapped_term(inner):
 
 
 @pytest.mark.parametrize('tamper', [_tamper_with_inline_context_remap, _tamper_with_an_unmapped_term])
-def test_a_tampered_ld_signed_create_still_verifies_but_the_origin_copy_is_used(app, db_session, http_mock,
-                                                                                no_network_ld_signing, tamper):
-    """Finding 1: the tampering keeps the LD signature valid, which is why it is no shortcut."""
+def test_a_tampered_ld_signed_create_is_refused_and_the_origin_copy_is_used(app, db_session, http_mock,
+                                                                            no_network_ld_signing, tamper):
+    """Finding 1: the tampering keeps the signed graph, so LD verification refuses it (R-LDHARDEN); the origin
+    copy is used either way."""
     carol = _carol()
     inner = tamper(_ld_sign(_create(), carol.private_key))
-    LDSignature.verify_signature(copy.deepcopy(inner), carol.public_key)    # the forgery passes LD verification
+    with pytest.raises(VerificationFormatError, match='Signature does not cover the document'):
+        LDSignature.verify_signature(copy.deepcopy(inner), carol.public_key)
     served = _origin_copy(http_mock)
 
     result, reason = verify_announced_inner(_announce(inner))

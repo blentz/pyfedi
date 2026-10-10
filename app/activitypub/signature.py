@@ -30,6 +30,8 @@
 from __future__ import annotations
 
 import base64
+import binascii
+import copy
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
@@ -50,7 +52,7 @@ from sqlalchemy import text
 
 import app as app_pkg
 from app import celery, db, httpx_client
-from app.activitypub.ld_contexts import ld_document_loader
+from app.activitypub.ld_contexts import LDCoverageError, PYFEDI_CONTEXT_TERMS, check_ld_coverage, ld_document_loader
 from app.constants import DATETIME_MS_FORMAT
 from app.discovery.instance_answers import record_delivery_refusal
 from app.relays.refusals import record_relay_refusal
@@ -700,20 +702,21 @@ class LDSignature:
     @classmethod
     def verify_signature(cls, document: dict, public_key: str) -> None:
         """
-        Verifies a document
+        Verifies a document. Raises VerificationError (VerificationFormatError for a malformed signature section
+        or a document the signature does not cover) unless the signature is genuine and covers every key and
+        value of the JSON pyfedi will read (see check_ld_coverage).
         """
-        try:
-            # Strip out the signature from the incoming document
-            signature = document.pop("signature")
-            # Create the options document: like Mastodon, every key of the signature section except these three,
-            # so an `expires` the signer included is hashed too
-            options = {key: value for key, value in signature.items() if key not in ("type", "id", "signatureValue")}
-            options["@context"] = "https://w3id.org/security/v1"
-            signature["creator"], signature["created"]
-        except (KeyError, AttributeError):
+        # Strip out the signature from the incoming document
+        signature = document.pop("signature", None)
+        if not isinstance(signature, dict) or not all(
+                isinstance(signature.get(key), str) for key in ("type", "creator", "created", "signatureValue")):
             raise VerificationFormatError("Invalid signature section")
         if signature["type"].lower() != "rsasignature2017":
             raise VerificationFormatError("Unknown signature type")
+        # Create the options document: like Mastodon, every key of the signature section except these three,
+        # so an `expires` the signer included is hashed too
+        options = {key: value for key, value in signature.items() if key not in ("type", "id", "signatureValue")}
+        options["@context"] = "https://w3id.org/security/v1"
         # An expiry the signer set is honoured, so a relay cannot replay an old signed body; none is still accepted.
         # Read from the expanded options, not the `expires` key: every alias (`expiration`, ...) hashes the same
         try:
@@ -730,16 +733,26 @@ class LDSignature:
                     expires = expires.astimezone(timezone.utc).replace(tzinfo=None)
                 if expires + LD_SIGNATURE_EXPIRY_SKEW < utcnow():
                     raise VerificationError("Signature expired")
+        try:
+            check_ld_coverage(document)
+        except LDCoverageError as e:
+            raise VerificationFormatError(f"Signature does not cover the document: {e}") from e
+        try:
+            signature_value = base64.b64decode(signature["signatureValue"], validate=True)
+        except binascii.Error as e:
+            raise VerificationFormatError("Invalid signatureValue") from e
         # Get the normalised hash of each document
         final_hash = cls.normalized_hash(options) + cls.normalized_hash(document)
         # Verify the signature
-        public_key_instance: rsa.RSAPublicKey = cast(
-            rsa.RSAPublicKey,
-            serialization.load_pem_public_key(public_key.encode("ascii")),
-        )
+        try:
+            public_key_instance = serialization.load_pem_public_key(public_key.encode("ascii"))
+        except (AttributeError, ValueError, UnsupportedAlgorithm) as e:
+            raise VerificationError("Unusable public key") from e
+        if not isinstance(public_key_instance, rsa.RSAPublicKey):
+            raise VerificationError("Unusable public key")
         try:
             public_key_instance.verify(
-                base64.b64decode(signature["signatureValue"]),
+                signature_value,
                 final_hash,
                 padding.PKCS1v15(),
                 hashes.SHA256(),
@@ -812,27 +825,7 @@ def default_context():
         "https://w3id.org/security/v1",
     ]
     if current_app.config['FULL_AP_CONTEXT']:
-        context.append({
-            "lemmy": "https://join-lemmy.org/ns#",
-            "litepub": "http://litepub.social/ns#",
-            "pt": "https://joinpeertube.org/ns#",
-            "sc": "http://schema.org/",
-            "ChatMessage": "litepub:ChatMessage",
-            "commentsEnabled": "pt:commentsEnabled",
-            "sensitive": "as:sensitive",
-            "matrixUserId": "lemmy:matrixUserId",
-            "postingRestrictedToMods": "lemmy:postingRestrictedToMods",
-            "removeData": "lemmy:removeData",
-            "stickied": "lemmy:stickied",
-            "moderators": {
-                "@type": "@id",
-                "@id": "lemmy:moderators"
-            },
-            "expires": "as:endTime",
-            "distinguished": "lemmy:distinguished",
-            "language": "sc:inLanguage",
-            "identifier": "sc:identifier"
-        })
+        context.append(copy.deepcopy(PYFEDI_CONTEXT_TERMS))
     return context
 
 

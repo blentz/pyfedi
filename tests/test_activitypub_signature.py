@@ -1226,9 +1226,10 @@ def test_a_document_pyld_cannot_normalize_is_a_format_error(app, monkeypatch):
     from app.activitypub.signature import LDSignature, VerificationFormatError
 
     _network_down(monkeypatch)
-    document = {'@context': 5, 'id': 'https://remote.example/activities/1',
+    document = {'@context': 'https://www.w3.org/ns/activitystreams', 'id': 'https://remote.example/activities/1',
+                'contentMap': {'en': 5},
                 'signature': {'type': 'RsaSignature2017', 'creator': 'kid',
                               'created': '2026-10-09T00:00:00Z', 'signatureValue': ''}}
 
-    with pytest.raises(VerificationFormatError):
+    with pytest.raises(VerificationFormatError, match='Could not normalize'):
         LDSignature.verify_signature(document, 'unused')
