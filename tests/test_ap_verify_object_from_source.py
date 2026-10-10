@@ -101,6 +101,7 @@ import httpx
 import pytest
 
 from app.activitypub.util import verify_object_from_source
+from app.utils import get_request
 from tests.factories import (PEER_ACTOR_URI, PEER_OBJECT_HOST, PEER_OBJECT_URI,
                              announce_activity, note_document, seed_signing_site)
 
@@ -569,6 +570,18 @@ class TestFetchOutcomes:
         assert verify_object_from_source(announce_activity()) == (None, FETCH_FAILED)
         assert route.call_count == 1
         sleeps.assert_not_called()
+
+    @pytest.mark.parametrize('error', [httpx.InvalidURL('bad url'), ValueError('bad value'), httpx.StreamError('stream')])
+    def test_a_non_http_error_from_the_client_is_normalised_and_refused(self, app, db_session, monkeypatch, error):
+        """get_request(retry=False) maps InvalidURL, ValueError and StreamError (none an
+        HTTPError) to httpx.HTTPError, so the caller refuses instead of raising."""
+        def boom(*args, **kwargs):
+            raise error
+        monkeypatch.setattr('app.utils.httpx_client.get', boom)
+
+        with pytest.raises(httpx.HTTPError):
+            get_request(URI, retry=False)
+        assert verify_object_from_source(announce_activity()) == (None, FETCH_FAILED)
 
     @pytest.mark.parametrize('body', ['"just a string"', '[1, 2]', '42', 'null'])
     def test_a_non_object_json_response_refuses_rather_than_raising(self, app, db_session, http_mock, body):

@@ -156,7 +156,7 @@ def get_request(uri, params=None, headers=None, retry=True) -> httpx.Response:
             return httpx_client.get(uri, params=payload_str, headers=headers, timeout=timeout, follow_redirects=False)
         except httpx.HTTPError as failure:
             raise failure from None
-        except (httpx.InvalidURL, ValueError) as failure:
+        except (httpx.InvalidURL, ValueError, httpx.StreamError) as failure:
             raise httpx.HTTPError(f"HTTPError: {str(failure)}") from None
     try:
         response = httpx_client.get(uri, params=payload_str, headers=headers, timeout=timeout, follow_redirects=False)
