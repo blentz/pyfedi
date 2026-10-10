@@ -58,7 +58,7 @@ from app.models import Community, CommunityMember, Post, Site, User, utcnow, Top
     Notification, Language, community_language, ModLog, Feed, FeedItem, CmsPage, BannedInstances, BotChallenge
 from app.ldap_utils import test_ldap_connection, sync_user_to_ldap, login_with_ldap
 import boto3
-from app.activitypub.routes import replay_inbox_request
+from app.activitypub.routes import replay_inbox_request, paged_outbox, AP_CACHE_COLLECTION
 import app as app_pkg
 
 
@@ -1332,6 +1332,17 @@ def instance_actor():
     }
     resp = jsonify(application_data)
     resp.content_type = 'application/activity+json'
+    return resp
+
+
+@bp.route('/actor/outbox', methods=['GET'])
+def instance_actor_outbox():
+    """The outbox /actor advertises (S3.1). The instance actor publishes nothing, so it is empty, but it exists:
+    peers that dereference an advertised outbox got 404 before."""
+    outbox = paged_outbox(f"{current_app.config['SERVER_URL']}/actor/outbox", 0, lambda offset, limit: [])
+    resp = jsonify(outbox)
+    resp.content_type = 'application/activity+json'
+    resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
     return resp
 
 
