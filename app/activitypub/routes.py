@@ -29,6 +29,7 @@ from app.activitypub.util import activity_dedupe_key, claim_activity, host_of, u
     process_report, ensure_domains_match, refresh_community_profile, \
     comment_model_to_json, restore_post_or_comment, ban_user, unban_user, \
     log_incoming_ap, find_community, site_ban_remove_data, community_ban_remove_data, verify_object_from_source, \
+    verify_announced_inner, \
     post_replies_for_ap, is_vote, known_instance_id, resolve_remote_post_from_search, proactively_delete_content, \
     process_quote_boost, object_has_missing_fields, find_microblogging_community, process_announce_of_uri, \
     announce_target_uri, undo_boost
@@ -1052,6 +1053,13 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None):
                             return
                         process_announced_objects(request_json, request_json['object']['orderedItems'], id, saved_json, store_ap_json)
                         return
+                    # S4: an inner activity from another host is not trusted on the Group's signature alone. Checked
+                    # before the inner actor is looked up, so a spoofed actor is never fetched or stored.
+                    verified_inner, refusal = verify_announced_inner(request_json)
+                    if verified_inner is None:
+                        log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json, refusal)
+                        return
+                    request_json['object'] = verified_inner
                     if not feed:
                         if 'actor' not in request_json['object']:
                             log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json, 'Announce object has no actor')

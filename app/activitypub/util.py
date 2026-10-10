@@ -5582,6 +5582,40 @@ def verify_object_from_source(request_json) -> Tuple[Union[dict, None], Union[st
     return request_json, None
 
 
+def _id_of(value) -> str:
+    """The id an activity field names: the string itself, or a dict's string 'id'; '' for anything else."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict) and isinstance(value.get('id'), str):
+        return value['id']
+    return ''
+
+
+def verify_announced_inner(announce: dict) -> Tuple[Union[dict, None], Union[str, None]]:
+    """Decide whether the activity a Group's Announce wraps may be processed (security track, phase S4).
+
+    The Group's HTTP signature proves only that the Group sent the Announce. An inner activity published on the
+    Group's own host is the Group's to vouch for; one from any other host must at least name an actor on that
+    same host. Returns `(inner, None)` to process -- `inner` may be replaced by what its origin serves -- or
+    `(None, reason)` to drop, the reason going into the incoming-activity log.
+
+    An inner activity with no string id is passed through: the dispatcher refuses it itself (D127) and logs that.
+    """
+    inner = announce['object']
+    inner_id = inner.get('id')
+    if not isinstance(inner_id, str):
+        return inner, None
+    inner_host = host_of(inner_id)
+    if not inner_host:
+        return None, 'Announced activity id has no host'
+    if inner_host == host_of(_id_of(announce['actor'])):
+        return inner, None
+    # inner_host is non-empty here, so an actor whose host cannot be parsed ('') can only compare unequal
+    if host_of(_id_of(inner.get('actor'))) != inner_host:
+        return None, 'Announced activity host does not match its actor'
+    return inner, None
+
+
 def log_incoming_ap(id, aplog_type, aplog_result, saved_json, message=None, session=None):
     aplog_in = APLOG_IN
 
