@@ -133,6 +133,22 @@ def test_retry_and_remove_act_on_the_row(admin, calls):
     assert calls == [('retry', relay.id), ('remove', relay.id)]
 
 
+@pytest.mark.parametrize('after, message', [(RELAY_PENDING, 'Subscription request sent again.'),
+                                            (RELAY_ACCEPTED, 'already lists this server as a follower')])
+def test_retry_says_whether_it_followed_again_or_found_the_subscription(admin, monkeypatch, after, message):
+    client, token = admin
+    relay = make_relay(state=RELAY_PENDING)
+
+    def retry(row):
+        row.state = after
+        db.session.commit()
+    monkeypatch.setattr(views, 'retry_relay', retry)
+
+    client.post(PAGE, data={'relay_id': str(relay.id), 'relay_retry': 'go', 'csrf_token': token})
+
+    assert message in client.get(PAGE).get_data(as_text=True)
+
+
 def test_an_unknown_id_is_a_404(admin, calls):
     client, token = admin
 

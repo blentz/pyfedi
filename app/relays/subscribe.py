@@ -9,7 +9,7 @@ from app.activitypub.signature import send_post_request
 from app.activitypub.util import remote_object_to_json
 from app.discovery.instance_answers import instance_actor_url
 from app.models import Relay, Site, utcnow
-from app.relays import FOLLOW_PATH, PUBLIC, RELAY_PENDING, STYLE_LITEPUB, STYLE_MASTODON
+from app.relays import FOLLOW_PATH, PUBLIC, RELAY_ACCEPTED, RELAY_PENDING, STYLE_LITEPUB, STYLE_MASTODON
 
 
 class RelayError(Exception):
@@ -83,10 +83,44 @@ def add_relay(url: str) -> Relay:
     return relay
 
 
+def _collection_items(collection) -> list:
+    if not isinstance(collection, dict):
+        return []
+    items = collection.get('items', collection.get('orderedItems'))
+    if not isinstance(items, list):
+        return []
+    return [item.get('id') if isinstance(item, dict) else item for item in items]
+
+
+def _lists_us_as_follower(relay) -> bool:
+    """True when the relay's followers collection names the instance actor.
+
+    barkshark ActivityRelay lists every instance it accepted there, and its Accept does not always arrive.
+    Only the collection itself and its first page are read, and only on the relay actor's own host."""
+    if not relay.actor_id:
+        return False
+    actor = remote_object_to_json(relay.actor_id)
+    followers = actor.get('followers') if isinstance(actor, dict) else None
+    if not isinstance(followers, str) or urlsplit(followers).hostname != urlsplit(relay.actor_id).hostname:
+        return False
+    collection = remote_object_to_json(followers)
+    first = collection.get('first') if isinstance(collection, dict) else None
+    if isinstance(first, str) and urlsplit(first).hostname == urlsplit(relay.actor_id).hostname:
+        first = remote_object_to_json(first)
+    me = instance_actor_url()
+    return me in _collection_items(collection) or me in _collection_items(first)
+
+
 def retry_relay(relay) -> None:
     for name, value in detect_relay(relay.url).items():
         if value is not None:   # a failed fetch must not erase an actor or key we already know
             setattr(relay, name, value)
+    if _lists_us_as_follower(relay):   # already accepted; its Accept was lost, so following again would not help
+        relay.state = RELAY_ACCEPTED
+        relay.answered_at = utcnow()
+        relay.last_error = None
+        db.session.commit()
+        return
     relay.follow_activity_id = _new_follow_id()
     relay.state = RELAY_PENDING
     relay.answered_at = None

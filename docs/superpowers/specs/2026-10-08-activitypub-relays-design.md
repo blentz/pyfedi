@@ -153,6 +153,9 @@ unknown (`actor_id` and `public_key` stay null).
 
 **Retry:** for a `failed` or `refused` row, the actor and key are re-fetched and a new Follow is sent
 with a new id. A value the re-fetch cannot find never replaces a stored actor or key. The row goes back to `pending`.
+Before following again, Retry reads the relay actor's `followers` collection (and its first page), on
+the actor's own host only. If it names the instance actor, the relay already accepted us and its Accept
+was lost (seen with barkshark ActivityRelay 0.3.5): the row is marked `accepted` and no Follow is sent.
 
 **Remove:** sends `Undo` of the stored Follow, wrapping the original Follow activity, and then deletes
 the row. Delivery failure of the Undo does not block deletion.
