@@ -192,3 +192,16 @@ class TestThroughTheInbox:
         with app.test_request_context('/inbox', method='POST', headers=headers):
             with pytest.raises(VerificationError, match='Signature mismatch'):
                 verify_with_key_refresh(request, local)
+
+    @pytest.mark.parametrize('state', ['dormant', 'gone_forever'])
+    def test_an_actor_on_a_dead_instance_is_never_refetched(self, app, signing_peer, http_mock, signing_site, state):
+        """R-DEADREFETCH: no fetch to an instance that is dormant or gone for good."""
+        (private_key, _), (_, stale) = _two_keypairs()
+        signing_peer.public_key = stale
+        setattr(signing_peer.instance, state, True)
+        db.session.commit()
+        headers = cavage_signed_headers(private_key, f'{signing_peer.ap_profile_id}#main-key')
+        with app.test_request_context('/inbox', method='POST', headers=headers):
+            with pytest.raises(VerificationError, match='Signature mismatch'):
+                verify_with_key_refresh(request, signing_peer)
+        assert len(http_mock.calls) == 0

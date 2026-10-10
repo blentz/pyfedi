@@ -20,7 +20,7 @@ from app.activitypub import bp
 from app.activitypub.actor import find_actor_by_url
 from app.activitypub.entitlement import PRIVATE_HEADERS, addressees_of, audience_entitles, signed_requester_actor
 from app.activitypub.signature import POST_REQUIRED, HttpSignature, VerificationError, VerificationFormatError, default_context, LDSignature, \
-    send_post_request, verify_with_key_refresh
+    send_post_request, verify_with_key_refresh, request_key_id
 from app.activitypub.util import activity_dedupe_key, claim_activity, host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
     post_to_activity, find_actor_or_create_cached, find_liked_object, \
     lemmy_site_data, is_activitypub_request, delete_post_or_comment, community_members, \
@@ -821,13 +821,23 @@ def shared_inbox():
             log_incoming_ap(id, APLOG_NOTYPE, APLOG_FAILURE, saved_json, 'Could not verify HTTP signature: ' + str(e))
             return '', 400
 
+    relay = relay_inbound.relay_for_forwarded(request) if bounced else None   # relays: a Mastodon-style relay signs forwards
+    # S2.2: the HTTP signature verified with the actor's key, but a keyId on another host is accepted only when the
+    # body carries the actor's LD signature or an accepted relay made the HTTP signature
+    key_host = host_of(request_key_id(request) or '')
+    if not bounced and key_host != host_of(actor.ap_profile_id):
+        current_app.logger.info(f'Signature keyId host {key_host} differs from actor host {host_of(actor.ap_profile_id)}')
+        if not _ld_signature_verifies(request_json, actor):
+            relay = relay_inbound.relay_for_forwarded(request)
+            if relay is None:
+                log_incoming_ap(id, APLOG_NOTYPE, APLOG_FAILURE, saved_json, 'Signature keyId host does not match actor')
+                return '', 400
+
     # Remembered only once the signature has verified, so a forged request reusing a genuine activity's id cannot
     # make this instance drop the genuine one. set(nx=True) is also the gate for two deliveries verified at once.
     if not claim_activity(id, request_json['actor']):
         log_incoming_ap(id, APLOG_DUPLICATE, APLOG_IGNORED, saved_json, 'Already aware of this activity')
         return '', 200
-
-    relay = relay_inbound.relay_for_forwarded(request) if bounced else None   # relays: a Mastodon-style relay signs forwards
 
     if actor.instance_id:
         actor.instance.last_seen = utcnow()
@@ -881,7 +891,18 @@ def community_inbox(actor):
 
 # The messages shared_inbox logs when an activity fails signature checking. replay_inbox_request skips those
 # checks, so the admin replay refuses to re-run a row logged with one of these.
-SIGNATURE_FAILURE_MESSAGES = ('Precheck failed', 'Could not verify LD signature', 'Could not verify HTTP signature')
+SIGNATURE_FAILURE_MESSAGES = ('Precheck failed', 'Could not verify LD signature', 'Could not verify HTTP signature',
+                              'Signature keyId host does not match actor')
+
+
+def _ld_signature_verifies(request_json, actor) -> bool:
+    if 'signature' not in request_json:
+        return False
+    try:
+        LDSignature.verify_signature(request_json, actor.public_key)
+        return True
+    except VerificationError:
+        return False
 
 
 def replay_inbox_request(request_json):
