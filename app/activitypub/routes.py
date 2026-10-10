@@ -2505,6 +2505,13 @@ def comment_ap(comment_id):
         return post_routes.continue_discussion(reply.post.id, comment_id)
 
 
+def former_type_of_post(post: Post) -> str:
+    """The ActivityStreams type `post` was federated as, for its Tombstone's formerType (S3.3). Delegates to
+    post_to_page so the two can never disagree: a poll without an end time or an event without a start goes out
+    as a Page, and its Tombstone says so."""
+    return post_to_page(post)['type']
+
+
 def tombstone_response(ap_id: str, former_type: str):
     """410 Gone with an ActivityPub Tombstone for deleted content."""
     resp = jsonify({'@context': default_context(), 'id': ap_id, 'type': 'Tombstone', 'formerType': former_type})
@@ -2534,7 +2541,7 @@ def post_ap_refusal(post: Post):
     if post.visibility not in OPEN_VISIBILITIES:
         abort(404)
     if post.deleted:
-        return tombstone_response(post.ap_id, 'Page')
+        return tombstone_response(post.ap_id, former_type_of_post(post))
     requesting_domain = signed_requestor_domain()
     if post.author.has_blocked_instance(known_instance_id(requesting_domain)):
         return make_response(f'Author has blocked {requesting_domain}'), 401
