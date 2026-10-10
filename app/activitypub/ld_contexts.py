@@ -313,10 +313,13 @@ def check_ld_coverage(document: dict) -> None:
     This is defence in depth, not a proof that the JSON equals the graph (ruling R-LDDOWNGRADE). Accepted
     residuals: node merging (properties moved between JSON occurrences of one @id), ordering, multiplicity
     and shape (list order, duplicates, scalar versus list, a string versus {"id": ...}), and renames between
-    non-canonical terms that map to one IRI. None of them can change stored post content, because an
-    LD-accepted Create or Update has its object replaced by the origin's copy and an LD-accepted Delete
-    needs the origin to have stopped serving the object (app.activitypub.util.verify_ld_accepted_activity);
-    and null values and empty lists, which produce no triple, are stripped after verification
+    non-canonical terms that map to one IRI. They can still change what pyfedi reads from the activity
+    itself (its type-specific fields, e.g. a Like's or Follow's), but not post content or addressing: an
+    LD-accepted Create or Update has its object, and its to/cc/audience/target, replaced by the origin's
+    copy; an LD-accepted Delete needs the origin to have stopped serving the object
+    (app.activitypub.util.verify_ld_accepted_activity); an LD-accepted Announce's inner Create, Update or
+    Delete gets the same treatment (verify_announced_inner, ld_signed); rows logged for such a delivery are
+    never replayed (LD_SIGNED_LOG_PREFIX); and null values and empty lists are stripped after verification
     (strip_empty_values).
     """
     _check_node(document, _process_context(None, None))
@@ -327,11 +330,13 @@ def _is_empty(value) -> bool:
 
 
 def strip_empty_values(node) -> None:
-    """In place, bottom-up: drops null values, empty lists and empty objects, none of which produces a triple.
+    """In place, bottom-up: drops null values, empty lists and empty objects.
 
-    Run on an LD-verified document so that pyfedi reads only what the signature covered: an injected
-    'commentsEnabled': null or 'to': [] keeps the normalized hash, but would otherwise lock a post or erase its
-    addressing. A peer's 'summary': null or 'inReplyTo': null simply becomes absent."""
+    Run on an LD-verified document so that pyfedi never reads a value the signature did not cover: a null
+    produces no triple, so an injected 'commentsEnabled': null or 'sensitive': null keeps the normalized hash
+    but would otherwise lock a post or clear a flag. It only ever removes: an empty list or object can itself
+    be signed (rdf:nil for an empty @list, a blank node for {}), and stripping it loses that signed value,
+    which pyfedi then reads as absent. A peer's 'summary': null or 'inReplyTo': null simply becomes absent."""
     if isinstance(node, dict):
         for key in list(node):
             strip_empty_values(node[key])

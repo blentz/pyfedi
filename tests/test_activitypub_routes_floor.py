@@ -45,7 +45,7 @@ def test_announces_of_the_same_remote_object_are_deduplicated_by_the_inner_id(
     assert first.status_code == 200 and second.status_code == 200
     assert len(inbox_recorder.inline) == 1
     assert [row.exception_message for row in ActivityPubLog.query.all()] == \
-        ['Already aware of this activity']
+        ['Already aware of this activity (before any signature check)']
 
 
 def test_an_allowlisted_actor_passes_a_strong_allowlist(app, signing_peer, monkeypatch):
