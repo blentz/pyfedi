@@ -77,8 +77,9 @@ def send_message(message: str, conversation_id: int, user: User = current_user, 
 
 
 def chat_message_ap_object(reply: ChatMessage, recipient: User) -> dict:
-    """The ActivityPub object a DM is federated as: what update_message pushes and what /private_message/<id>
-    serves (S3.5), so a fetched message and a pushed one cannot differ."""
+    """The ActivityPub object a DM is federated as in an Update: what update_message pushes and what
+    /private_message/<id> serves (S3.5), so a fetched message and an edited one cannot differ. send_message keeps
+    its own builder for the original Create."""
     ap_type = "ChatMessage" if recipient.instance.software in ("lemmy", "mbin") else "Note"
     obj = {
         "attributedTo": reply.sender.public_url(),
