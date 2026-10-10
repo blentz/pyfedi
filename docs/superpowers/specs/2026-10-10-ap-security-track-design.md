@@ -46,6 +46,9 @@ pyfedi also lacks RFC 9421 signatures and authorized fetch. Both are now common 
 | Banned vs deleted actors | 410 Tombstone for deleted only; banned stays 404 so a ban stays reversible on peers |
 | Required signed headers | Logged first behind a flag; enforcement switched on in a separate commit after the owner reviews the logs |
 | Coverage | 100% line and branch coverage of new and changed lines |
+| Votes refetched by a third host | 404 is fine (only addressees and their hosts are entitled) |
+| Cross-origin Delete (Amendment A) | Accepted only from a known moderator or Group-host admin (or a local admin), after an admin-configurable delay (default 90 s) passes without the home server's own Delete; other cross-origin Deletes need the origin to answer 404/410 |
+| Followers-only authoring (Amendment B) | Local users may create followers-only posts, in the local `microblogs` community only |
 
 ## Shared helpers
 
@@ -249,10 +252,18 @@ Define `group_host = host_of(announce['actor'])`, `inner = announce['object']`, 
    - Then accept if `inner` carries an LD signature that verifies against the inner actor's key.
    - Otherwise replace the object with its id and run it through `verify_object_from_source` (U:5462), which
      fetches from the origin. A refusal is logged with that function's reason and the activity is dropped.
-4. **Delete:**
-   - Fetch the deleted object's id. 404 or 410 means process.
-   - 200 means drop and log `Announced Delete of an object that still exists`.
-   - A transport failure means drop and log. There is no retry, per D775.
+4. **Delete** (rewritten by Amendment A):
+   - **From a moderator or Group-host admin.** The inner actor is one of:
+     - a stored moderator or owner of the announcing community (`Community.moderators()`);
+     - an admin of the announcing community's host instance (`Community.is_instance_admin`);
+     - a local admin.
+
+     Schedule the Delete to be applied after `cross_origin_delete_delay` seconds (see Amendment A). Do not refetch.
+   - **From anyone else.** Fetch the deleted object's id:
+     - 404 or 410: process. This covers authors deleting their own posts, because the origin's 410 is the home
+       server's own word.
+     - 200: drop and log `Announced Delete of an object that still exists`.
+     - Any other status, or a transport failure: drop and log the status. There is no retry, per D775.
 5. **All other types** (Like, Dislike, Undo, Flag, Lock, Add, Remove…): host consistency only. This is the
    accepted residual.
 
@@ -445,3 +456,120 @@ Required cases, in addition to those listed in each phase above:
 - `SIG_REQUIRED_HEADERS_ENFORCE` stays off until the owner reviews the production warnings from S2.1 commit 1.
 - Secure mode ships off.
 - Each phase is merged and deployed in order, so production logs from earlier phases can inform the later ones.
+
+## Amendment A (2026-10-10): delayed moderator Deletes
+
+**Problem.** A moderator on a third instance removes a post, and the Group announces the Delete. The post's origin
+may still serve it, because the removal has not reached it yet or because a moderator removal never deletes it at the
+origin. Under the original S4 rule the Delete was dropped, so federated moderation broke.
+
+**Rule.** See S4 item 4.
+
+- **Who counts:**
+  - the announcing community's stored moderators and owners;
+  - admins of the announcing community's host instance (`InstanceRole` rows for that instance, via
+    `Community.is_instance_admin`);
+  - local admins.
+
+  `can_moderate` is unchanged, so remote `InstanceRole` admins stay excluded everywhere else.
+- **Delay.** A new Celery task, `apply_delayed_delete(announce_json, store_ap_json)`, is scheduled with
+  `countdown = cross_origin_delete_delay()`. When it runs:
+  - if the object is already gone here, because the home server's own Delete arrived first, log
+    `Delete superseded by the home server's` and stop;
+  - otherwise process the inner Delete through the normal handler, so it is recorded as a moderator removal.
+- **Setting.** `cross_origin_delete_delay` is a `Settings` key read through `get_setting`, with default 90 and
+  int coercion falling back to 90. It is not a Site column, so no migration is needed. It appears as an
+  IntegerField in the admin federation form, with `NumberRange(min=0, max=3600)`. 0 means apply on the next worker
+  run. The pattern follows `relay_retention_days` (`app/relays/expiry.py:18`, `app/relays/forms.py:20`).
+
+**Tests:**
+- a moderator Delete is scheduled with the configured countdown, not fetched;
+- a Group-host admin Delete is scheduled;
+- a Delete from an admin of an unrelated instance takes the refetch path;
+- a non-moderator Delete with an origin 410 is processed, a 200 dropped, a 403 dropped, a transport failure dropped;
+- `apply_delayed_delete` on an object already deleted logs superseded and changes nothing;
+- `apply_delayed_delete` on a live object removes it as a moderator;
+- the setting's default, coercion fallback, and form save and populate.
+
+## Amendment B (2026-10-10): Phase S7, followers-only posts in local `microblogs`
+
+**Goal.** A local user can publish a followers-only post in the local `microblogs` community. Only the author's
+accepted followers receive it and can see it. This also makes S6's unlock (Task 23) live.
+
+The read side already exists, so this phase is about writing and federating:
+
+- `app/visibility.py` (`can_view`, `listable_clause`, `visible_to_clause`) keeps non-public posts out of every
+  listing and shows them to followers on viewer-aware surfaces;
+- `refuse_invisible` returns 404 for single-object views.
+
+The microblogs community is identified as today: `Community.name == 'microblogs'` and local, as created by
+`find_microblogging_community()` (U:5657). A helper, `is_local_microblogs(community) -> bool`, replaces the
+open-coded checks this phase touches.
+
+### S7.1 Creating
+
+- **Web form** (`add_post`, `app/community/routes.py:1184`): a `visibility` SelectField (`public` /
+  `followers`, default `public`). It is rendered only when `is_local_microblogs(community)`.
+- **Alpha API create** (`app/api/alpha/utils/post.py:1686`): an optional `visibility` (`public` | `followers`).
+  Any other value, or `followers` outside local microblogs, gives 400 with `{'error': 'invalid visibility'}`,
+  following the API's existing error pattern (ruling D896: API refusals stay 400).
+- **Storage:** `make_post` (`app/shared/post.py:204`) stores it on the `Post`.
+- **Immutable:** an edit (web or API) that tries to change visibility gives 400, or a form error on the web.
+  Visibility is not shown as editable.
+
+### S7.2 Federating a followers-only post
+
+In `send_post` (`app/shared/tasks/pages.py:89`), when `post.visibility == VISIBILITY_FOLLOWERS`:
+
+- **No community Announce.** The `group_announce` and `microblog_announce` paths are skipped.
+- **The object is a `Note`,** as the existing second pass builds it, with:
+  - `to: [author.followers_url()]`;
+  - `cc: [mentioned users]`;
+  - `interactionPolicy.canQuote.automaticApproval: [author.public_url()]`.
+
+  The Create/Update wrapper carries the same `to`/`cc`.
+- **Recipients:** the shared inboxes of instances that host at least one accepted follower of the author
+  (`UserFollower(local_user_id=author, is_inward=True, is_accepted=True)`), plus the instances of mentioned users.
+  Each host gets at most one delivery.
+- **Edits** use the same addressing and recipients.
+- **Delete** already skips community followers for non-open objects (`app/shared/tasks/deletes.py:176`). Its
+  addressing is checked and tested so it carries no Public.
+
+### S7.3 Replies under a followers-only post
+
+- A local reply whose parent post (or parent reply) is followers-only is stored with
+  `visibility = VISIBILITY_FOLLOWERS`. `make_reply` (`app/shared/reply.py`) sets it from the parent.
+- `send_reply` (`app/shared/tasks/notes.py:81`), for a non-open reply:
+  - `to: [replier.followers_url()]`, `cc: [parent author's actor id]` plus mentions;
+  - no Public anywhere;
+  - no community Announce;
+  - recipients: the instances hosting the replier's accepted followers, plus the parent author's instance.
+
+  This adds the missing `is_open` gate.
+
+### S7.4 Guards
+
+- `move_object` (`app/shared/tasks/pages.py:402`) and the UI that offers it refuse a non-open post.
+- A local boost (Announce) of a non-open post or reply is refused on web and API.
+- A local quote of a non-open post is refused.
+- The existing E9 gates (likes, locks, adds, removes) apply unchanged. Tests confirm that a followers-only microblog
+  post triggers none of them toward community followers.
+
+### S7 tests
+
+- **Web:** the form shows the select only in local microblogs; a followers-only post is stored; posting followers
+  to another community is refused.
+- **API:** `followers` in microblogs gives 200 and is stored; `followers` elsewhere gives 400; a bad value gives
+  400; an edit changing visibility gives 400.
+- **Federation:**
+  - the Create addressing has no Public anywhere and `to == [followers_url]`;
+  - no Announce is sent;
+  - the deliveries go exactly to the follower hosts plus the mention hosts, each once;
+  - an edit is addressed the same way;
+  - the Delete addressing has no Public.
+- **Replies:** inherited visibility; addressing; no Announce; a public parent is unchanged.
+- **Guards:** move refused; boost refused (web and API); quote refused.
+- **Read side** (regression): the post is absent from the community page, RSS, search, the API list and the
+  instance timeline; present on a follower's home feed; 404 for a non-follower.
+
+Task 23 (S6 unlock) runs after S7, and its tests use posts authored through S7.1.
