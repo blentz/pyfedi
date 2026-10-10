@@ -1201,27 +1201,28 @@ def test_ld_signing_resolves_the_standard_contexts_without_the_network(app, monk
     assert attempted == []
 
 
-def test_an_unreachable_unknown_context_is_reported_as_unavailable(app, monkeypatch):
-    """A context URL with no bundled copy still goes to the network; when that
-    fetch fails the caller gets LDContextUnavailable (a retryable condition),
-    not pyld's JsonLdError and not a VerificationError."""
-    from app.activitypub.signature import LDContextUnavailable, LDSignature
+def test_an_unknown_context_is_refused_without_fetching_it(app, monkeypatch):
+    """A context URL with no bundled copy is never fetched: the sender
+    chooses @context, so fetching it would let any actor make this server
+    GET an arbitrary URL (SSRF) before its signature is even checked. The
+    document is refused as a format error (400) instead."""
+    from app.activitypub.signature import LDSignature, VerificationFormatError
 
     attempted = _network_down(monkeypatch)
     document = {'@context': ['https://www.w3.org/ns/activitystreams',
-                             'https://unreachable.example/ns'],
+                             'http://169.254.169.254/latest/meta-data/'],
                 'id': 'https://remote.example/activities/1', 'type': 'Create',
                 'signature': {'type': 'RsaSignature2017', 'creator': 'kid',
                               'created': '2026-10-09T00:00:00Z', 'signatureValue': ''}}
 
-    with pytest.raises(LDContextUnavailable):
+    with pytest.raises(VerificationFormatError, match='169.254.169.254'):
         LDSignature.verify_signature(document, 'unused')
-    assert attempted == ['https://unreachable.example/ns']
+    assert attempted == []
 
 
 def test_a_document_pyld_cannot_normalize_is_a_format_error(app, monkeypatch):
-    """A malformed JSON-LD document is the sender's fault, not a transient
-    outage: it stays a VerificationFormatError (400), not unavailable."""
+    """A malformed JSON-LD document is a VerificationFormatError (400), not
+    pyld's JsonLdError escaping as a 500."""
     from app.activitypub.signature import LDSignature, VerificationFormatError
 
     _network_down(monkeypatch)

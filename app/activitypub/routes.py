@@ -17,7 +17,7 @@ from app import db, cache, celery, limiter
 from app.activitypub import bp
 from app.activitypub.actor import find_actor_by_url
 from app.activitypub.signature import HttpSignature, VerificationError, VerificationFormatError, default_context, LDSignature, \
-    LDContextUnavailable, send_post_request
+    send_post_request
 from app.activitypub.util import users_total, active_half_year, active_month, local_posts, local_comments, \
     post_to_activity, find_actor_or_create_cached, find_liked_object, \
     lemmy_site_data, is_activitypub_request, delete_post_or_comment, community_members, \
@@ -808,10 +808,6 @@ def shared_inbox():
             except VerificationError as e:
                 log_incoming_ap(id, APLOG_NOTYPE, APLOG_FAILURE, saved_json, 'Could not verify LD signature: ' + str(e))
                 return '', 400
-            except LDContextUnavailable as e:
-                # transient, so 503: the sender retries instead of dropping the activity
-                log_incoming_ap(id, APLOG_NOTYPE, APLOG_FAILURE, saved_json, 'Could not verify LD signature: ' + str(e))
-                return '', 503
         elif (
                 actor.ap_profile_id == 'https://fediseer.com/api/v1/user/fediseer' and  # accept unsigned chat message from fediseer for API key
                 request_json['type'] == 'Create' and isinstance(request_json['object'], dict) and

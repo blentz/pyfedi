@@ -486,12 +486,12 @@ def test_an_unsigned_chat_message_from_a_non_fediseer_actor_is_refused(app, sign
     assert ActivityPubLog.query.one().exception_message == 'Could not verify HTTP signature: No signature header present'
 
 
-def test_an_ld_signature_whose_context_cannot_be_fetched_is_retryable(app, signing_peer, monkeypatch,
-                                                                      no_network_ld_signing):
-    """An LD-signed activity naming a context with no bundled copy, sent while
-    that context's host is unreachable: the inbox answers 503 so the sender
-    retries later, logs the failure, and does not dispatch. Previously pyld's
-    JsonLdError escaped shared_inbox as an unhandled 500.
+def test_an_ld_signature_naming_an_unknown_context_is_refused_without_a_fetch(app, signing_peer, monkeypatch,
+                                                                             no_network_ld_signing):
+    """An LD-signed activity naming a context with no bundled copy, for
+    example an internal address: the inbox answers 400 and logs the failure,
+    makes no outbound request (no SSRF), and does not dispatch. Previously
+    pyld fetched the URL and a failed fetch escaped shared_inbox as a 500.
     """
     import requests
     from pyld import jsonld
@@ -502,25 +502,27 @@ def test_an_ld_signature_whose_context_cannot_be_fetched_is_retryable(app, signi
     monkeypatch.setattr('app.activitypub.routes.process_inbox_request',
                         lambda *args, **kwargs: dispatched.append(args))
     activity = json.loads(ld_signed_body(signing_peer))
-    activity['@context'].append('https://unreachable.example/ns')
+    activity['@context'].append('http://169.254.169.254/latest/meta-data/')
     body_bytes = json.dumps(activity).encode('utf8')
 
-    # Signing needed the fixture's static loader; verifying uses production's,
-    # with the network down the way w3id.org was in the original traceback.
+    # Signing needed the fixture's static loader; verifying uses production's.
     jsonld.set_document_loader(ld_document_loader)
+    attempted = []
 
-    def _refuse(self, method, url, *args, **kwargs):
-        raise requests.exceptions.ConnectionError('Remote end closed connection without response')
+    def _record(self, method, url, *args, **kwargs):
+        attempted.append(url)
+        raise requests.exceptions.ConnectionError('network is off in this test')
 
-    monkeypatch.setattr(requests.Session, 'request', _refuse)
+    monkeypatch.setattr(requests.Session, 'request', _record)
 
     with app.test_client() as client:
         response = client.post('/inbox', data=body_bytes,
                                headers=unsigned_but_precheck_clean_headers(body_bytes),
                                content_type='application/activity+json')
 
-    assert response.status_code == 503
+    assert response.status_code == 400
+    assert attempted == []
     assert dispatched == []
     log = ActivityPubLog.query.one()
     assert log.result == 'failure'
-    assert 'unreachable.example' in log.exception_message
+    assert '169.254.169.254' in log.exception_message
