@@ -657,7 +657,7 @@ def test_a_repeated_activity_is_suppressed(app, signing_peer, monkeypatch, redis
 
     assert first.status_code == 200 and second.status_code == 200
     assert len(dispatched) == 1
-    assert 'Already aware of this activity' in [
+    assert 'Already aware of this activity (before any signature check)' in [
         row.exception_message for row in ActivityPubLog.query.all()]
 
 

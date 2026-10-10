@@ -32,7 +32,7 @@ from app.activitypub.util import activity_dedupe_key, claim_activity, host_of, u
     verify_announced_inner, verify_ld_accepted_activity, ANNOUNCED_DELETE_DEFERRED, cross_origin_delete_delay, _id_of, \
     post_replies_for_ap, is_vote, known_instance_id, resolve_remote_post_from_search, proactively_delete_content, \
     process_quote_boost, object_has_missing_fields, find_microblogging_community, process_announce_of_uri, \
-    announce_target_uri, undo_boost
+    announce_target_uri, undo_boost, LD_SIGNED_LOG_PREFIX, current_ld_signed
 # The module, not the name: app.community.routes reaches this file through
 # app.activitypub.signature before show_community is defined (U-circular-import)
 import app.chat.util as chat_util
@@ -769,7 +769,7 @@ def shared_inbox():
             return '', 403
 
     if app_pkg.redis_client.exists(activity_dedupe_key(id, request_json['actor'])):  # Something is sending same activity multiple times
-        log_incoming_ap(id, APLOG_DUPLICATE, APLOG_IGNORED, saved_json, 'Already aware of this activity')
+        log_incoming_ap(id, APLOG_DUPLICATE, APLOG_IGNORED, saved_json, UNVERIFIED_DUPLICATE_MESSAGE)
         return '', 200
 
     # Ignore unutilised PeerTube activity
@@ -848,7 +848,8 @@ def shared_inbox():
     # Remembered only once the signature has verified, so a forged request reusing a genuine activity's id cannot
     # make this instance drop the genuine one. set(nx=True) is also the gate for two deliveries verified at once.
     if not claim_activity(id, request_json['actor']):
-        log_incoming_ap(id, APLOG_DUPLICATE, APLOG_IGNORED, saved_json, 'Already aware of this activity')
+        log_incoming_ap(id, APLOG_DUPLICATE, APLOG_IGNORED, saved_json,
+                        f'{LD_SIGNED_LOG_PREFIX}: Already aware of this activity' if ld_signed else 'Already aware of this activity')
         return '', 200
 
     if actor.instance_id:
@@ -905,6 +906,10 @@ def community_inbox(actor):
 
 # The messages shared_inbox logs when an activity fails signature checking. replay_inbox_request skips those
 # checks, so the admin replay refuses to re-run a row logged with one of these.
+# Logged before any signature check, so the stored JSON is whatever anyone sent with a known id: never replayed.
+UNVERIFIED_DUPLICATE_MESSAGE = 'Already aware of this activity (before any signature check)'
+UNVERIFIED_LOG_MESSAGES = (UNVERIFIED_DUPLICATE_MESSAGE,)
+
 SIGNATURE_FAILURE_MESSAGES = ('Precheck failed', 'Could not verify LD signature', 'Could not verify HTTP signature',
                               'Signature keyId host does not match actor')
 
@@ -981,6 +986,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
     with current_app.app_context():
         session = get_task_session()
         token = current_relay_id.set(relay_id)   # Post.new records it as post.relay_id; reset in the finally
+        ld_token = current_ld_signed.set(ld_signed)   # log_incoming_ap marks this delivery's rows unreplayable
         try:
             # patch_db_session makes all db.session.whatever() use the session created with get_task_session, to guarantee proper connection clean-up at the end of the task.
             # although process_inbox_request uses session instead of db.session, many of the functions it calls, like find_actor_or_create_cached, do not which makes this necessary.
@@ -1057,13 +1063,15 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                         process_announce_of_uri(request_json, community, id, store_ap_json)
                         return
                     elif isinstance(request_json['object'], list):  # PieFed can Announce many objects at once, as long as they are all from the same community.
-                        process_announced_objects(request_json, request_json['object'], id, saved_json, store_ap_json)
+                        process_announced_objects(request_json, request_json['object'], id, saved_json, store_ap_json,
+                                                  ld_signed)
                         return
                     elif 'type' in request_json['object'] and request_json['object']['type'] == 'OrderedCollection':
                         if not isinstance(request_json['object'].get('orderedItems'), list):
                             log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json, 'Announced OrderedCollection has no orderedItems list')
                             return
-                        process_announced_objects(request_json, request_json['object']['orderedItems'], id, saved_json, store_ap_json)
+                        process_announced_objects(request_json, request_json['object']['orderedItems'], id, saved_json,
+                                                  store_ap_json, ld_signed)
                         return
                     # D52's refusal stays ahead of the S4 check, so an object with neither actor nor id still logs it
                     if not feed and 'actor' not in request_json['object']:
@@ -1074,7 +1082,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                     # up, so a refused activity's actor is never fetched or stored.
                     # announce_verified: apply_delayed_delete re-dispatches an Announce this check already deferred.
                     if not announce_verified:
-                        verified_inner, refusal = verify_announced_inner(request_json, community)
+                        verified_inner, refusal = verify_announced_inner(request_json, community, ld_signed)
                         if refusal == ANNOUNCED_DELETE_DEFERRED:
                             delay = cross_origin_delete_delay()
                             apply_delayed_delete.apply_async(args=(request_json, store_ap_json, community.id),
@@ -2245,14 +2253,16 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
             raise
         finally:
             current_relay_id.reset(token)   # before close(): a raising close must not leak relay_id into the next task
+            current_ld_signed.reset(ld_token)
             session.close()
 
 
-def process_announced_objects(request_json, objects, id, saved_json, store_ap_json):
+def process_announced_objects(request_json, objects, id, saved_json, store_ap_json, ld_signed=False):
     """Process each object of an Announce of a list or OrderedCollection as its own single-object Announce.
 
     D54 (owner ruling): a nested list or collection is refused rather than recursed into, and at most
-    ANNOUNCE_MAX_OBJECTS objects are processed, the excess logged."""
+    ANNOUNCE_MAX_OBJECTS objects are processed, the excess logged. `ld_signed` goes with each, so every object of
+    an LD-accepted Announce gets the R-LDANNOUNCE refetch."""
     if any(isinstance(obj, list) or (isinstance(obj, dict) and obj.get('type') in ('Collection', 'OrderedCollection'))
            for obj in objects):
         log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json, 'Announced list contains a nested list or collection')
@@ -2264,7 +2274,8 @@ def process_announced_objects(request_json, objects, id, saved_json, store_ap_js
         # Convert each object into an identical Announce activity containing just that object
         fake_activity = request_json.copy()
         fake_activity['object'] = obj
-        process_inbox_request(fake_activity, store_ap_json)  # Process the Announce (with single object) as normal
+        # Process the Announce (with single object) as normal; ld_signed only when set (rolling deploy)
+        process_inbox_request(fake_activity, store_ap_json, **({'ld_signed': True} if ld_signed else {}))
 
 
 @celery.task
@@ -2300,6 +2311,7 @@ def apply_delayed_delete(announce_json, store_ap_json, community_id):
 def process_delete_request(request_json, store_ap_json, ld_signed=False):
     with current_app.app_context():
         session = get_task_session()
+        ld_token = current_ld_signed.set(ld_signed)   # log_incoming_ap marks this delivery's rows unreplayable
         try:
             with patch_db_session(session):
                 # this function processes self-deletes (retain case here, as user_removed_from_remote_server() uses a JSON request)
@@ -2325,6 +2337,7 @@ def process_delete_request(request_json, store_ap_json, ld_signed=False):
             session.rollback()
             raise
         finally:
+            current_ld_signed.reset(ld_token)
             session.close()
 
 

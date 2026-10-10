@@ -132,6 +132,42 @@ class TestReplayingAStoredActivity:
         assert 'signature' in response.get_data(as_text=True)
         assert replayed == []
 
+    @pytest.mark.parametrize('message', [
+        'LD-signed',
+        'LD-signed: Already aware of this activity',
+        'LD-signed activity dropped: the fetched object is not attributed to the Announced activity actor',
+    ])
+    def test_an_activity_accepted_on_an_ld_signature_is_not_replayed(self, stored, message):
+        """R-LDDOWNGRADE: an LD-accepted delivery is processed only after an origin refetch that replay does not
+        do, so every row such a delivery logged (log_incoming_ap marks them) is refused."""
+        stored.activity.exception_message = message
+        db.session.commit()
+        replayed = []
+
+        with patch('app.admin.routes.replay_inbox_request',
+                   side_effect=lambda payload: replayed.append(payload)):
+            response = stored.client.get(
+                f'/admin/activity_json/{stored.activity.id}/replay')
+
+        assert response.status_code == 400
+        assert 'LD signature' in response.get_data(as_text=True)
+        assert replayed == []
+
+    def test_a_repeat_logged_before_its_signature_was_checked_is_not_replayed(self, stored):
+        """shared_inbox's early dedupe logs the body before any signature check: anyone can send it."""
+        stored.activity.exception_message = 'Already aware of this activity (before any signature check)'
+        db.session.commit()
+        replayed = []
+
+        with patch('app.admin.routes.replay_inbox_request',
+                   side_effect=lambda payload: replayed.append(payload)):
+            response = stored.client.get(
+                f'/admin/activity_json/{stored.activity.id}/replay')
+
+        assert response.status_code == 400
+        assert 'before its signature was checked' in response.get_data(as_text=True)
+        assert replayed == []
+
     def test_an_activity_that_failed_for_another_reason_is_still_replayed(self, stored):
         """D45's boundary: only signature failures are refused; any other failure
         replays as before."""

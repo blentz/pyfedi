@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import os
+from contextvars import ContextVar
 import re
 import sys
 import time
@@ -5694,6 +5695,17 @@ def _origin_refusal_of_delete(object_id: str, label: str) -> Union[str, None]:
     return f'{label}: the object answers HTTP {status}'
 
 
+ADDRESSING_FIELDS = ('to', 'cc', 'audience', 'target')
+
+
+def _with_object_addressing(activity: dict) -> dict:
+    """The activity with its addressing taken from its (refetched) object, not the LD-signed wrapper: find_community
+    and the microblog private flag read the activity's to/cc/audience/target."""
+    addressed = {key: value for key, value in activity.items() if key not in ADDRESSING_FIELDS}
+    addressed.update({key: activity['object'][key] for key in ADDRESSING_FIELDS if key in activity['object']})
+    return addressed
+
+
 def verify_ld_accepted_activity(activity: dict) -> Tuple[Union[dict, None], Union[str, None]]:
     """An activity the inbox accepted on an LD signature (ruling R-LDDOWNGRADE): returns `(activity, None)` to
     process -- its object possibly replaced -- or `(None, reason)` to drop.
@@ -5703,13 +5715,16 @@ def verify_ld_accepted_activity(activity: dict) -> Tuple[Union[dict, None], Unio
     So the signature is trusted only for who sent what kind of activity about which object id:
     - Create or Update with an embedded object: the object is replaced by the copy its origin serves, which must
       be on the actor's host, carry the same id and be attributed to the activity's actor (as for announced
-      content, Task 16);
+      content, Task 16), and the activity's addressing (to, cc, audience, target) is taken from that copy;
     - Delete: processed only once the object's origin no longer serves it (404 or 410, as for a cross-origin
       Announced Delete, Task 17);
+    - an Announce keeps the verified document here; the dispatcher's verify_announced_inner, told ld_signed,
+      refetches every inner Create, Update or Delete (ruling R-LDANNOUNCE);
     - anything else keeps the verified, stripped document."""
     activity_type = activity.get('type')
     if activity_type in ('Create', 'Update') and isinstance(activity.get('object'), dict):
-        return _verify_announced_content(activity, host_of(_id_of(activity.get('actor'))))
+        verified, reason = _verify_announced_content(activity, host_of(_id_of(activity.get('actor'))))
+        return (_with_object_addressing(verified), None) if verified is not None else (None, reason)
     if activity_type == 'Delete':
         object_id = _id_of(activity.get('object'))
         if not object_id:
@@ -5719,7 +5734,8 @@ def verify_ld_accepted_activity(activity: dict) -> Tuple[Union[dict, None], Unio
     return activity, None
 
 
-def verify_announced_inner(announce: dict, community=None) -> Tuple[Union[dict, None], Union[str, None]]:
+def verify_announced_inner(announce: dict, community=None,
+                           ld_signed: bool = False) -> Tuple[Union[dict, None], Union[str, None]]:
     """Decide whether the activity a Group's Announce wraps may be processed (security track, phase S4).
 
     `community` is the announcing Community, or None for a feed or a podcast twin; it is consulted only for a
@@ -5735,6 +5751,11 @@ def verify_announced_inner(announce: dict, community=None) -> Tuple[Union[dict, 
     An inner activity without a usable id is refused here, before its actor is looked up (ruling R-INNERID): the
     dispatcher's own D127 check tests only that the key is present, after the lookup. A missing id keeps D127's
     log text.
+
+    `ld_signed` (ruling R-LDANNOUNCE): the Announce was accepted on an LD signature, which does not bind the JSON
+    this instance reads, so every inner Create, Update or Delete is treated as cross-origin even on the Group's own
+    host: content is refetched from its origin, and a Delete needs the origin to answer 404 or 410 -- never a
+    moderator's deferral.
     """
     inner = announce['object']
     if 'id' not in inner:
@@ -5745,7 +5766,8 @@ def verify_announced_inner(announce: dict, community=None) -> Tuple[Union[dict, 
     inner_host = host_of(inner_id)
     if not inner_host:
         return None, 'Announced activity id has no host'
-    if inner_host == host_of(_id_of(announce['actor'])):
+    content_activity = inner.get('type') in ('Create', 'Update', 'Delete')
+    if inner_host == host_of(_id_of(announce['actor'])) and not (ld_signed and content_activity):
         return inner, None
     if 'actor' not in inner:
         return None, 'Announced activity from another host has no actor'
@@ -5753,14 +5775,31 @@ def verify_announced_inner(announce: dict, community=None) -> Tuple[Union[dict, 
     if host_of(_id_of(inner['actor'])) != inner_host:
         return None, 'Announced activity host does not match its actor'
     if inner.get('type') in ('Create', 'Update'):
-        return _verify_announced_content(inner, inner_host)
+        verified, reason = _verify_announced_content(inner, inner_host)
+        if ld_signed and verified is not None:
+            verified = _with_object_addressing(verified)
+        return verified, reason
     if inner.get('type') == 'Delete':
+        if ld_signed:
+            object_id = _id_of(inner.get('object'))
+            if not object_id:
+                return None, 'Announced Delete names no object'
+            refusal = _origin_refusal_of_delete(object_id, 'Announced Delete')
+            return (inner, None) if refusal is None else (None, refusal)
         return _verify_announced_delete(inner, community)
     return inner, None
 
 
+# R-LDDOWNGRADE: rows logged while processing a delivery accepted on an LD signature carry this prefix, and the admin
+# replay refuses them -- replay re-runs the stored JSON without the origin refetch the LD path depends on.
+LD_SIGNED_LOG_PREFIX = 'LD-signed'
+current_ld_signed: ContextVar = ContextVar('current_ld_signed', default=False)
+
+
 def log_incoming_ap(id, aplog_type, aplog_result, saved_json, message=None, session=None):
     aplog_in = APLOG_IN
+    if current_ld_signed.get() and not (message or '').startswith(LD_SIGNED_LOG_PREFIX):
+        message = f'{LD_SIGNED_LOG_PREFIX}: {message}' if message else LD_SIGNED_LOG_PREFIX
 
     if aplog_in and aplog_type[0] and aplog_result[0]:
         if current_app.config['LOG_ACTIVITYPUB_TO_DB']:

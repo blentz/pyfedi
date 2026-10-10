@@ -21,9 +21,9 @@ from app import db, celery, cache
 from app.discovery import sync as discovery_sync
 from app.visibility import visible_to_clause
 from app.activitypub.routes import process_inbox_request, process_delete_request, replay_inbox_request, \
-    SIGNATURE_FAILURE_MESSAGES
+    SIGNATURE_FAILURE_MESSAGES, UNVERIFIED_LOG_MESSAGES
 from app.activitypub.signature import post_request, default_context, RsaKeys
-from app.activitypub.util import extract_domain_and_actor, cross_origin_delete_delay
+from app.activitypub.util import extract_domain_and_actor, cross_origin_delete_delay, LD_SIGNED_LOG_PREFIX
 from app.admin.constants import ReportTypes
 from app.admin.forms import FederationForm, SiteMiscForm, SiteProfileForm, EditCommunityForm, EditUserForm, \
     EditTopicForm, SendNewsletterForm, AddUserForm, PreLoadCommunitiesForm, ImportExportBannedListsForm, \
@@ -1440,6 +1440,11 @@ def activity_replay(activity_id):
     # replaying skips signature verification, so never replay something that failed it
     if activity.exception_message and activity.exception_message.startswith(SIGNATURE_FAILURE_MESSAGES):
         return _('Not replayed: this activity failed signature verification when it arrived.'), 400
+    if activity.exception_message and activity.exception_message.startswith(UNVERIFIED_LOG_MESSAGES):
+        return _('Not replayed: this activity was logged before its signature was checked.'), 400
+    # R-LDDOWNGRADE: accepted on an LD signature, which needs an origin refetch that replay does not do
+    if activity.exception_message and activity.exception_message.startswith(LD_SIGNED_LOG_PREFIX):
+        return _('Not replayed: this activity was accepted on an LD signature, which replay cannot re-check.'), 400
     request_json = json.loads(activity.activity_json)
     replay_inbox_request(request_json)
 

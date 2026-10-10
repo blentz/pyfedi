@@ -18,11 +18,13 @@ from app.activitypub.ld_contexts import (CANONICAL_LD_TERMS, MASTODON_CONTEXT_TE
 from app.activitypub.signature import HttpSignature, LDSignature, VerificationError, VerificationFormatError, \
     default_context
 from app import db
-from app.activitypub.routes import process_delete_request, process_inbox_request
-from app.activitypub.util import verify_ld_accepted_activity
+from app.activitypub.routes import UNVERIFIED_LOG_MESSAGES, process_delete_request, process_inbox_request
+from app.activitypub.util import log_incoming_ap, verify_announced_inner, verify_ld_accepted_activity
+from app.constants import APLOG_CREATE, APLOG_FAILURE, APLOG_SUCCESS
 from app.models import ActivityPubLog, Post, User, utcnow
 from tests.conftest import unsigned_but_precheck_clean_headers
-from tests.factories import AS_PUBLIC_URI, a_keypair, inbox_activity, make_user, note_document, serve_remote_object
+from tests.factories import AS_PUBLIC_URI, a_keypair, inbox_activity, make_community, make_user, note_document, \
+    serve_remote_object
 from tests.test_inbox_dispatch_announce import _seed_announcing_community
 
 AS = 'https://www.w3.org/ns/activitystreams'
@@ -477,6 +479,8 @@ def test_an_ld_signed_create_stores_the_origins_content(app, db_session, monkeyp
     process_inbox_request(activity, True, ld_signed=True)
 
     assert 'what the origin says' in Post.query.filter_by(ap_id=CAROL_NOTE).one().body_html
+    messages = _ld_messages(activity['id'])
+    assert messages and all(message.startswith('LD-signed') for message in messages)   # never replayed
 
 
 def test_an_ld_signed_create_whose_origin_names_another_author_is_dropped(app, db_session, monkeypatch, http_mock,
@@ -528,6 +532,7 @@ def test_an_ld_signed_self_delete_needs_the_origin_to_have_dropped_the_actor(app
 
     db.session.expire_all()     # the task wrote through its own session
     assert db.session.get(User, carol.id).deleted is deleted
+    assert all(message.startswith('LD-signed') for message in _ld_messages(activity['id']))
     if not deleted:
         assert _ld_messages(activity['id']) == [
             'LD-signed activity dropped: LD-signed Delete of an object that still exists']
@@ -545,3 +550,132 @@ def test_the_mastodon_shaped_create_still_verifies_after_the_downgrade_rules(app
     document = signed(mastodon_create(), private_key)
     LDSignature.verify_signature(document, public_key)
     assert 'summary' not in document['object'] and document['object']['contentMap'] == {'en': '<p>what alice wrote</p>'}
+
+
+# --- round 2: replay, Announce, addressing --------------------------------------------------------------------
+
+@pytest.mark.usefixtures('redis_double')
+def test_a_duplicate_of_an_ld_accepted_delivery_is_logged_as_ld_signed(app, signing_peer, dispatched, monkeypatch,
+                                                                       no_network_ld_signing):
+    """The claim after verification loses a race with a concurrent delivery of the same id."""
+    monkeypatch.setattr('app.activitypub.routes.claim_activity', lambda *a: False)
+    body = json.dumps(_ld_signed_tampered(signing_peer, None)).encode('utf8')
+    with app.test_client() as client:
+        client.post('/inbox', data=body, headers=unsigned_but_precheck_clean_headers(body),
+                    content_type='application/activity+json')
+
+    assert dispatched == []
+    assert ActivityPubLog.query.one().exception_message == 'LD-signed: Already aware of this activity'
+
+
+@pytest.mark.usefixtures('redis_double')
+def test_a_repeat_delivery_is_logged_before_any_signature_check_and_is_not_replayable(app, signing_peer,
+                                                                                      dispatched,
+                                                                                      no_network_ld_signing):
+    activity = _ld_signed_tampered(signing_peer, None)
+    with app.test_client() as client:
+        for _ in range(2):
+            body = json.dumps(activity).encode('utf8')
+            client.post('/inbox', data=body, headers=unsigned_but_precheck_clean_headers(body),
+                        content_type='application/activity+json')
+
+    assert len(dispatched) == 1
+    assert ActivityPubLog.query.one().exception_message.startswith(UNVERIFIED_LOG_MESSAGES)
+
+
+def test_rows_outside_an_ld_accepted_delivery_are_not_marked(app, db_session, monkeypatch):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    log_incoming_ap('https://other.example/a/1', APLOG_CREATE, APLOG_SUCCESS, None)
+    log_incoming_ap('https://other.example/a/2', APLOG_CREATE, APLOG_FAILURE, None, 'why')
+    assert [row.exception_message for row in ActivityPubLog.query.order_by(ActivityPubLog.id)] == [None, 'why']
+
+
+def _announce_of(inner, community):
+    group = community.ap_profile_id
+    announce = {'@context': default_context(), 'id': f'{group}/activities/announce/{uuid.uuid4().hex}',
+                'type': 'Announce', 'actor': group, 'object': inner, 'to': [AS_PUBLIC_URI]}
+    return announce
+
+
+def _inner_create(community, content='<p>forged in transit</p>'):
+    addressing = {'to': [AS_PUBLIC_URI], 'audience': community.ap_profile_id}
+    return {'id': f'{CAROL}/activities/{uuid.uuid4().hex}', 'type': 'Create', 'actor': CAROL, **addressing,
+            'object': note_document(attributed_to=CAROL, uri=CAROL_NOTE, fields={'content': content, **addressing})}
+
+
+def _serve_origin_note(http_mock, community, fields=None):
+    serve_remote_object(http_mock, uri=CAROL_NOTE, document=note_document(
+        attributed_to=CAROL, uri=CAROL_NOTE, fields={'content': 'what the origin says', 'to': [AS_PUBLIC_URI],
+                                                     'audience': community.ap_profile_id, **(fields or {})}))
+
+
+@pytest.mark.parametrize('as_list', [False, True])
+def test_an_ld_signed_announce_of_a_same_host_create_stores_the_origins_content(app, db_session, monkeypatch,
+                                                                               http_mock, as_list):
+    """R-LDANNOUNCE: the Group's own host would otherwise be trusted on the (LD) signature alone."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    _carol, community = _carol_and_community()
+    community.ap_fetched_at = utcnow()
+    db.session.commit()
+    inner = _inner_create(community)
+    announce = _announce_of([inner] if as_list else inner, community)
+    _serve_origin_note(http_mock, community)
+
+    process_inbox_request(announce, True, ld_signed=True)
+
+    assert 'what the origin says' in Post.query.filter_by(ap_id=CAROL_NOTE).one().body_html
+
+
+def test_an_announce_of_a_same_host_create_without_ld_is_trusted_as_before(app, db_session):
+    _carol, community = _carol_and_community()
+    inner = _inner_create(community)
+    assert verify_announced_inner(_announce_of(inner, community), community) == (inner, None)
+
+
+@pytest.mark.parametrize('status, expected', [
+    (200, (None, 'Announced Delete of an object that still exists')),
+    (410, 'processed'),
+])
+def test_an_ld_signed_announce_of_a_same_host_delete_needs_the_origin_gone(app, db_session, http_mock, status,
+                                                                          expected):
+    _carol, community = _carol_and_community()
+    inner = {'id': f'{CAROL}#delete-1', 'type': 'Delete', 'actor': CAROL, 'object': CAROL_NOTE}
+    http_mock.get(CAROL_NOTE).respond(status)
+
+    result = verify_announced_inner(_announce_of(inner, community), community, ld_signed=True)
+
+    assert result == (expected if status == 200 else (inner, None))
+
+
+def test_an_ld_signed_announce_of_a_delete_naming_no_object_is_refused(app, db_session):
+    _carol, community = _carol_and_community()
+    inner = {'id': f'{CAROL}#delete-1', 'type': 'Delete', 'actor': CAROL, 'object': {'type': 'Tombstone'}}
+    assert verify_announced_inner(_announce_of(inner, community), community, ld_signed=True) == \
+        (None, 'Announced Delete names no object')
+
+
+def test_an_ld_signed_announce_whose_inner_content_is_refused_stays_refused(app, db_session, http_mock):
+    _carol, community = _carol_and_community()
+    serve_remote_object(http_mock, uri=CAROL_NOTE, document=note_document(
+        attributed_to='https://other.example/users/dave', uri=CAROL_NOTE))
+    assert verify_announced_inner(_announce_of(_inner_create(community), community), community, ld_signed=True) == \
+        (None, 'the fetched object is not attributed to the Announced activity actor')
+
+
+def test_an_ld_signed_create_takes_its_addressing_from_the_origin_object(app, db_session, monkeypatch, http_mock,
+                                                                        no_network_ld_signing):
+    """The wrapper's to/audience are LD JSON too: find_community and the private flag must follow the origin."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    carol, community = _carol_and_community()
+    decoy = make_community('decoy', host='other.example')
+    decoy.ap_fetched_at = utcnow()
+    db.session.commit()
+    activity = _ld_create(carol, community)
+    activity.update(audience=decoy.ap_profile_id, to=[f'{CAROL}/followers'], cc=[decoy.ap_profile_id])
+    _serve_origin_note(http_mock, community)
+
+    process_inbox_request(activity, True, ld_signed=True)
+
+    post = Post.query.filter_by(ap_id=CAROL_NOTE).one()
+    assert post.community_id == community.id and post.private is False
+
