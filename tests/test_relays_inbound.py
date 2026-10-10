@@ -131,6 +131,14 @@ class TestAnnounce:
         assert gate(app, activity('Announce', NOTE_URI)) == ('', 200)
         assert queued == [((relay.id, NOTE_URI), 'background')]
 
+    def test_a_redelivered_relay_announce_is_dispatched_once(self, app, verifier, queued, monkeypatch):
+        monkeypatch.setitem(app.config, 'DEBUG', False)
+        make_relay(state=RELAY_ACCEPTED)
+        announce = activity('Announce', NOTE_URI)
+        assert gate(app, announce) == ('', 200)
+        assert gate(app, announce) == ('', 200)
+        assert len(queued) == 1
+
     def test_an_announced_object_with_an_id_is_queued_by_its_id(self, app, verifier, queued, monkeypatch):
         monkeypatch.setitem(app.config, 'DEBUG', False)
         relay = make_relay(state=RELAY_ACCEPTED)
