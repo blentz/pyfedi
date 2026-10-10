@@ -354,13 +354,16 @@ def verify_refreshing_key(request, stored_key, required: frozenset[str] = frozen
 
 def verify_with_key_refresh(request, actor, required: frozenset[str] = frozenset()) -> None:
     """verify_refreshing_key for a User, Community or Feed: its stored key, a signed refetch of its actor
-    document, and the key stored back on the row. A local actor is never refetched."""
+    document, and the key stored back on the row. A local actor, and one whose instance is gone for good or not
+    online, is never refetched."""
     def store(pem):
         actor.public_key = pem
         db.session.commit()
 
+    instance = actor.instance if actor.instance_id else None
+    refetchable = not actor.is_local() and not (instance is not None and not instance.online())
     verify_refreshing_key(request, actor.public_key, required,
-                          owner_url=None if actor.is_local() else actor.ap_profile_id,
+                          owner_url=actor.ap_profile_id if refetchable else None,
                           rate_key=f'sig-refetch:{actor.ap_profile_id}',
                           fetch_key=lambda: _fetch_actor_key(actor.ap_profile_id), store_key=store)
 
