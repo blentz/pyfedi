@@ -182,16 +182,14 @@ def test_undo_follow_of_a_feed_with_no_join_request_still_removes_membership(app
 
 
 def test_undo_follow_of_a_local_user_deletes_an_accepted_follower(app, db_session, monkeypatch):
-    """The user branch. `make_follow(local_user, remote_user, is_accepted=True)`
-    matches the filter the branch applies.
-    """
+    """The user branch: an inbound (is_inward) accepted follower row is deleted."""
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance = make_instance('peer.example')
     remote = make_user(instance, 'remote')
     local = make_user(None, 'local', local=True)
     local.ap_profile_id = f"{app.config['SERVER_URL']}/u/local".lower()
     db.session.commit()
-    make_follow(local, remote, is_accepted=True)
+    make_follow(local, remote, is_accepted=True, is_inward=True)
     local_id, remote_id = local.id, remote.id
 
     dispatch(undo_follow_activity(remote, local.ap_profile_id))
@@ -204,27 +202,65 @@ def test_undo_follow_of_a_local_user_deletes_an_accepted_follower(app, db_sessio
     assert log.result == 'success'
 
 
-def test_undo_follow_of_a_user_with_a_pending_follow_logs_nothing(app, db_session, monkeypatch):
-    """`is_accepted=True` is part of the filter, so a PENDING follow does not
-    match and the branch returns having logged NOTHING -- there is no
-    log_incoming_ap call outside the `if follower:` block. Asserted with
-    LOG_ACTIVITYPUB_TO_DB explicitly True, so the zero is a real silence and
-    not an artifact of logging being off.
-    """
+def test_undo_follow_of_a_user_withdraws_a_pending_follow_request(app, db_session, monkeypatch):
+    """S1.1 (security track): the filter used to require is_accepted=True, so a
+    follow request that had not been approved yet could never be withdrawn --
+    the Undo found nothing and the request stayed in the local user's queue.
+    is_accepted=None is what production stores for a pending inbound request
+    (routes.py Follow arm, `auto_accept if auto_accept else None`)."""
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance = make_instance('peer.example')
     remote = make_user(instance, 'remote')
     local = make_user(None, 'local', local=True)
     local.ap_profile_id = f"{app.config['SERVER_URL']}/u/local".lower()
     db.session.commit()
-    make_follow(local, remote, is_accepted=False)
+    make_follow(local, remote, is_accepted=None, is_inward=True)
     local_id, remote_id = local.id, remote.id
 
     dispatch(undo_follow_activity(remote, local.ap_profile_id))
 
     db.session.expire_all()
     assert db.session.query(UserFollower).filter_by(
-        local_user_id=local_id, remote_user_id=remote_id).first() is not None  # survives
+        local_user_id=local_id, remote_user_id=remote_id).first() is None
+    assert ActivityPubLog.query.one().result == 'success'
+
+
+def test_undo_follow_of_a_user_clears_a_rejected_follow_row(app, db_session, monkeypatch):
+    """is_accepted=False (rejected) is also the remote user's own row to withdraw."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    remote = make_user(instance, 'remote')
+    local = make_user(None, 'local', local=True)
+    local.ap_profile_id = f"{app.config['SERVER_URL']}/u/local".lower()
+    db.session.commit()
+    make_follow(local, remote, is_accepted=False, is_inward=True)
+    local_id, remote_id = local.id, remote.id
+
+    dispatch(undo_follow_activity(remote, local.ap_profile_id))
+
+    db.session.expire_all()
+    assert db.session.query(UserFollower).filter_by(
+        local_user_id=local_id, remote_user_id=remote_id).first() is None
+
+
+def test_undo_follow_from_a_remote_user_never_deletes_our_outward_follow_of_them(app, db_session, monkeypatch):
+    """The same (local_user_id, remote_user_id) pair also stores OUR follow of
+    them, with is_inward=False. Their Undo of a follow of us must not touch it
+    -- pending or accepted -- and logs nothing, as before."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    remote = make_user(instance, 'remote')
+    local = make_user(None, 'local', local=True)
+    local.ap_profile_id = f"{app.config['SERVER_URL']}/u/local".lower()
+    db.session.commit()
+    make_follow(local, remote, is_accepted=None, is_inward=False)
+    local_id, remote_id = local.id, remote.id
+
+    dispatch(undo_follow_activity(remote, local.ap_profile_id))
+
+    db.session.expire_all()
+    assert db.session.query(UserFollower).filter_by(
+        local_user_id=local_id, remote_user_id=remote_id).first() is not None
     assert ActivityPubLog.query.count() == 0
 
 

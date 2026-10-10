@@ -1989,8 +1989,10 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None):
                         if isinstance(target, User):
                             local_user = target
                             remote_user = user
+                            # S1.1: any inbound row, so a pending (None) or rejected (False) request can be withdrawn
+                            # too; is_inward keeps their Undo from touching OUR outward follow of them (same pair)
                             follower = session.query(UserFollower).filter_by(local_user_id=local_user.id,
-                                                                    remote_user_id=remote_user.id, is_accepted=True).first()
+                                                                    remote_user_id=remote_user.id, is_inward=True).first()
                             if follower:
                                 session.delete(follower)
                                 session.commit()
