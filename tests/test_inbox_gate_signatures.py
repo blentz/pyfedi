@@ -91,7 +91,7 @@ AT the network on purpose): `jsonld.set_document_loader`. The
 file after a whole-branch review objected to the cross-file fixture import it
 had grown in tests/test_inbox_gate_dispatch.py) installs a loader backed by the two
 context documents' content, fetched once from the real URLs and frozen
-verbatim into `_ACTIVITYSTREAMS_CONTEXT`/`_SECURITY_V1_CONTEXT` (not
+verbatim into app/activitypub/ld_contexts.py, which production serves too (not
 synthesized -- URDNA2015 normalization has to see exactly what a real
 request would return, or the normalized hash a genuinely-invalid-signature
 test relies on being wrong would silently be computed over the wrong
@@ -484,3 +484,43 @@ def test_an_unsigned_chat_message_from_a_non_fediseer_actor_is_refused(app, sign
 
     assert response.status_code == 400
     assert ActivityPubLog.query.one().exception_message == 'Could not verify HTTP signature: No signature header present'
+
+
+def test_an_ld_signature_whose_context_cannot_be_fetched_is_retryable(app, signing_peer, monkeypatch,
+                                                                      no_network_ld_signing):
+    """An LD-signed activity naming a context with no bundled copy, sent while
+    that context's host is unreachable: the inbox answers 503 so the sender
+    retries later, logs the failure, and does not dispatch. Previously pyld's
+    JsonLdError escaped shared_inbox as an unhandled 500.
+    """
+    import requests
+    from pyld import jsonld
+    from app.activitypub.ld_contexts import ld_document_loader
+
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    dispatched = []
+    monkeypatch.setattr('app.activitypub.routes.process_inbox_request',
+                        lambda *args, **kwargs: dispatched.append(args))
+    activity = json.loads(ld_signed_body(signing_peer))
+    activity['@context'].append('https://unreachable.example/ns')
+    body_bytes = json.dumps(activity).encode('utf8')
+
+    # Signing needed the fixture's static loader; verifying uses production's,
+    # with the network down the way w3id.org was in the original traceback.
+    jsonld.set_document_loader(ld_document_loader)
+
+    def _refuse(self, method, url, *args, **kwargs):
+        raise requests.exceptions.ConnectionError('Remote end closed connection without response')
+
+    monkeypatch.setattr(requests.Session, 'request', _refuse)
+
+    with app.test_client() as client:
+        response = client.post('/inbox', data=body_bytes,
+                               headers=unsigned_but_precheck_clean_headers(body_bytes),
+                               content_type='application/activity+json')
+
+    assert response.status_code == 503
+    assert dispatched == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert 'unreachable.example' in log.exception_message
