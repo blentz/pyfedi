@@ -52,7 +52,8 @@ from sqlalchemy import text
 
 import app as app_pkg
 from app import celery, db, httpx_client
-from app.activitypub.ld_contexts import LDCoverageError, PYFEDI_CONTEXT_TERMS, check_ld_coverage, ld_document_loader
+from app.activitypub.ld_contexts import LDCoverageError, PYFEDI_CONTEXT_TERMS, check_ld_coverage, ld_document_loader, \
+    strip_empty_values
 from app.constants import DATETIME_MS_FORMAT
 from app.discovery.instance_answers import record_delivery_refusal
 from app.relays.refusals import record_relay_refusal
@@ -704,7 +705,10 @@ class LDSignature:
         """
         Verifies a document. Raises VerificationError (VerificationFormatError for a malformed signature section
         or a document the signature does not cover) unless the signature is genuine and covers every key and
-        value of the JSON pyfedi will read (see check_ld_coverage).
+        value of the JSON pyfedi will read (see check_ld_coverage). On success the document is stripped, in place,
+        of null values and empty lists, which the signature cannot cover. An LD signature authenticates only who
+        sent what kind of activity about which object: the inbox hands an LD-accepted activity to
+        process_inbox_request with ld_signed=True, which takes content from the origin instead.
         """
         # Strip out the signature from the incoming document
         signature = document.pop("signature", None)
@@ -759,6 +763,8 @@ class LDSignature:
             )
         except InvalidSignature:
             raise VerificationError("Signature mismatch")
+        # What produced no triple was not signed: pyfedi must not read it (R-LDDOWNGRADE)
+        strip_empty_values(document)
 
     @classmethod
     def create_signature(

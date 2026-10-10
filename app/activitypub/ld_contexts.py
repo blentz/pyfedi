@@ -218,10 +218,18 @@ def _check_inline_term(term: str, definition: dict) -> None:
         raise LDCoverageError(f'inline @context makes {term!r} an alias of {iri}')
 
 
-def _check_iri_values(key: str, value) -> None:
+def _is_compact_iri(item: str, active_ctx) -> bool:
+    """'as:Public' rather than the absolute IRI: the graph cannot tell the spellings apart, pyfedi's string tests can."""
+    prefix, colon, suffix = item.partition(':')
+    return bool(colon) and not suffix.startswith('//') and active_ctx['mappings'].get(prefix) is not None
+
+
+def _check_iri_values(key: str, value, active_ctx) -> None:
     for item in value if isinstance(value, list) else [value]:
         if isinstance(item, str) and not _ABSOLUTE_IRI.fullmatch(item):
             raise LDCoverageError(f'{key!r} value {item!r} is not an absolute IRI, so the signature does not cover it')
+        if isinstance(item, str) and _is_compact_iri(item, active_ctx):
+            raise LDCoverageError(f'{key!r} value {item!r} is a compact IRI; only the absolute spelling is accepted')
 
 
 def _check_type_values(key: str, value, active_ctx) -> None:
@@ -232,6 +240,9 @@ def _check_type_values(key: str, value, active_ctx) -> None:
                 raise LDCoverageError(f'{key!r} value {item!r} names a keyword')
         elif not isinstance(item, str) or not _ABSOLUTE_IRI.fullmatch(item):
             raise LDCoverageError(f'{key!r} value {item!r} is not a defined type or an absolute IRI')
+        elif _is_compact_iri(item, active_ctx) or any(
+                term is not None and term['@id'] == item for term in active_ctx['mappings'].values()):
+            raise LDCoverageError(f'{key!r} value {item!r} spells a defined type another way; only the term is accepted')
 
 
 def _check_node(node, active_ctx) -> None:
@@ -260,14 +271,14 @@ def _check_node(node, active_ctx) -> None:
         if iri == '@id':
             if not isinstance(value, str):
                 raise LDCoverageError(f'{key!r} is not a string')
-            _check_iri_values(key, value)
+            _check_iri_values(key, value, active_ctx)
         elif iri == '@type':
             _check_type_values(key, value, active_ctx)
         elif '@language' in definition.get('@container', ()):
             continue        # a language map: its keys are language tags, and its strings are signed with them
         else:
             if definition.get('@type') == '@id':
-                _check_iri_values(key, value)
+                _check_iri_values(key, value, active_ctx)
             _check_node(value, active_ctx)
 
 
@@ -296,5 +307,37 @@ def check_ld_coverage(document: dict) -> None:
     3. Every 'id', and every string under an '@id'-typed term ('actor', 'inReplyTo', 'to', ...), is an
        absolute IRI, and every 'type' a defined term or absolute IRI: a relative IRI is dropped from the
        graph, and a blank-node label can be swapped for another without changing the normalized hash.
+       Compact IRIs ('as:Public', 'as:Note') are refused there, and so is a 'type' spelled as the absolute
+       IRI of a defined term: the graph cannot tell the spellings apart, pyfedi's string comparisons can.
+
+    This is defence in depth, not a proof that the JSON equals the graph (ruling R-LDDOWNGRADE). Accepted
+    residuals: node merging (properties moved between JSON occurrences of one @id), ordering, multiplicity
+    and shape (list order, duplicates, scalar versus list, a string versus {"id": ...}), and renames between
+    non-canonical terms that map to one IRI. None of them can change stored post content, because an
+    LD-accepted Create or Update has its object replaced by the origin's copy and an LD-accepted Delete
+    needs the origin to have stopped serving the object (app.activitypub.util.verify_ld_accepted_activity);
+    and null values and empty lists, which produce no triple, are stripped after verification
+    (strip_empty_values).
     """
     _check_node(document, _process_context(None, None))
+
+
+def _is_empty(value) -> bool:
+    return value is None or value == [] or value == {}
+
+
+def strip_empty_values(node) -> None:
+    """In place, bottom-up: drops null values, empty lists and empty objects, none of which produces a triple.
+
+    Run on an LD-verified document so that pyfedi reads only what the signature covered: an injected
+    'commentsEnabled': null or 'to': [] keeps the normalized hash, but would otherwise lock a post or erase its
+    addressing. A peer's 'summary': null or 'inReplyTo': null simply becomes absent."""
+    if isinstance(node, dict):
+        for key in list(node):
+            strip_empty_values(node[key])
+            if _is_empty(node[key]):
+                del node[key]
+    elif isinstance(node, list):
+        for item in node:
+            strip_empty_values(item)
+        node[:] = [item for item in node if not _is_empty(item)]

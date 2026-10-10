@@ -102,7 +102,7 @@ class TestSharedInbox:
         calls = []
         response = post_through_the_inbox(app, bounced_author, keys, calls, monkeypatch)
         assert response.status_code == 200
-        assert len(calls) == 1 and calls[0][1] == {'relay_id': relay.id}
+        assert len(calls) == 1 and calls[0][1] == {'relay_id': relay.id, 'ld_signed': True}
 
     def test_a_delivery_signed_by_a_pending_relay_is_processed_with_no_relay(self, app, bounced_author,
                                                                                monkeypatch):
@@ -111,7 +111,7 @@ class TestSharedInbox:
         calls = []
         response = post_through_the_inbox(app, bounced_author, keys, calls, monkeypatch)
         assert response.status_code == 200
-        assert len(calls) == 1 and calls[0][1] == {}
+        assert len(calls) == 1 and calls[0][1] == {'ld_signed': True}
 
     def test_a_delivery_signed_by_some_other_key_is_processed_with_no_relay(self, app, bounced_author,
                                                                               monkeypatch):
@@ -120,10 +120,11 @@ class TestSharedInbox:
         make_relay(state=RELAY_ACCEPTED, public_key=other_public)
         calls = []
         post_through_the_inbox(app, bounced_author, keys, calls, monkeypatch)
-        assert len(calls) == 1 and calls[0][1] == {}
+        assert len(calls) == 1 and calls[0][1] == {'ld_signed': True}
 
     def test_without_a_relay_the_celery_branch_passes_no_relay_keyword(self, app, bounced_author, monkeypatch):
-        # a worker still running the previous code would reject an unexpected keyword (rolling deploy)
+        # a worker still running the previous code would reject an unexpected keyword (rolling deploy); ld_signed
+        # is there because this delivery was accepted on its LD signature (R-LDDOWNGRADE)
         keys = a_keypair()
         delayed = []
         monkeypatch.setattr(routes.process_inbox_request, 'delay', lambda *a, **k: delayed.append((a, k)))
@@ -137,7 +138,7 @@ class TestSharedInbox:
                 ACTOR + '#main-key', send_via_async=True)
             monkeypatch.setitem(app.config, 'DEBUG', False)
             client.post('/inbox', data=body, headers=headers, content_type='application/activity+json')
-        assert len(delayed) == 1 and delayed[0][1] == {}
+        assert len(delayed) == 1 and delayed[0][1] == {'ld_signed': True}
 
     def test_the_celery_branch_passes_the_relay_too(self, app, bounced_author, monkeypatch):
         keys = a_keypair()
@@ -154,7 +155,7 @@ class TestSharedInbox:
                 ACTOR + '#main-key', send_via_async=True)
             monkeypatch.setitem(app.config, 'DEBUG', False)   # signing needed DEBUG for a .local host
             client.post('/inbox', data=body, headers=headers, content_type='application/activity+json')
-        assert len(delayed) == 1 and delayed[0][1] == {'relay_id': relay.id}
+        assert len(delayed) == 1 and delayed[0][1] == {'relay_id': relay.id, 'ld_signed': True}
 
 
 @pytest.fixture

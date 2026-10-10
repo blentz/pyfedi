@@ -6,6 +6,7 @@ at the unit level and at each inbox path that accepts a document on an LD signat
 """
 import copy
 import json
+import uuid
 
 import pytest
 from pyld import jsonld
@@ -13,12 +14,16 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from app.activitypub.ld_contexts import (CANONICAL_LD_TERMS, MASTODON_CONTEXT_TERMS, PYFEDI_CONTEXT_TERMS,
-                                         LDCoverageError, check_ld_coverage, ld_document_loader)
+                                         LDCoverageError, check_ld_coverage, ld_document_loader, strip_empty_values)
 from app.activitypub.signature import HttpSignature, LDSignature, VerificationError, VerificationFormatError, \
     default_context
-from app.models import ActivityPubLog
+from app import db
+from app.activitypub.routes import process_delete_request, process_inbox_request
+from app.activitypub.util import verify_ld_accepted_activity
+from app.models import ActivityPubLog, Post, User, utcnow
 from tests.conftest import unsigned_but_precheck_clean_headers
-from tests.factories import a_keypair, inbox_activity
+from tests.factories import AS_PUBLIC_URI, a_keypair, inbox_activity, make_user, note_document, serve_remote_object
+from tests.test_inbox_dispatch_announce import _seed_announcing_community
 
 AS = 'https://www.w3.org/ns/activitystreams'
 SEC = 'https://w3id.org/security/v1'
@@ -221,6 +226,11 @@ def note(**fields):
     (note(type='Weird'), 'is not a defined type or an absolute IRI'),
     (note(type=['Note', 5]), 'is not a defined type or an absolute IRI'),
     (note(type='id'), 'names a keyword'),
+    (note(to=['as:Public']), 'is a compact IRI'),
+    (note(inReplyTo='sec:x'), 'is a compact IRI'),
+    (note(id='as:x'), 'is a compact IRI'),
+    (note(type='as:Note'), 'spells a defined type another way'),
+    (note(type='https://www.w3.org/ns/activitystreams#Note'), 'spells a defined type another way'),
     (note(**{'@context': [AS, SEC, {'xid': '@id'}]}), "maps 'xid' outside the known namespaces"),
 ])
 def test_the_gate_refuses(app, document, reason):
@@ -230,7 +240,7 @@ def test_the_gate_refuses(app, document, reason):
 
 @pytest.mark.parametrize('document', [
     note(contentMap={'en': 'x', 'und-fake key': 'y'}),
-    note(type=['Note', 'https://misskey-hub.net/ns#Thing', 'as:Note'], to='as:Public'),
+    note(type=['Note', 'https://misskey-hub.net/ns#Thing'], to='https://www.w3.org/ns/activitystreams#Public'),
     note(object=[{'id': 'https://ok.example/1', 'type': 'Note', 'url': None}, 'https://ok.example/2'], cc=[]),
     note(**{'@context': [AS, {'misskey': 'https://misskey-hub.net/ns#',
                               '_misskey_content': 'misskey:_misskey_content',
@@ -331,7 +341,7 @@ def dispatched(app, monkeypatch):
     monkeypatch.setitem(app.config, 'DEBUG', True)
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     calls = []
-    monkeypatch.setattr('app.activitypub.routes.process_inbox_request', lambda *a, **kw: calls.append(a))
+    monkeypatch.setattr('app.activitypub.routes.process_inbox_request', lambda *a, **kw: calls.append((a, kw)))
     return calls
 
 
@@ -358,6 +368,7 @@ def test_the_bounced_inbox_path_accepts_the_untampered_body(app, signing_peer, d
                                content_type='application/activity+json')
 
     assert response.status_code == 200 and len(dispatched) == 1
+    assert dispatched[0][1] == {'ld_signed': True}     # R-LDDOWNGRADE: the worker takes content from the origin
 
 
 def _post_with_foreign_key_id(app, activity, private_key):
@@ -385,3 +396,152 @@ def test_a_foreign_key_id_is_excused_by_the_untampered_ld_signature(app, signing
     response = _post_with_foreign_key_id(app, _ld_signed_tampered(signing_peer, None), signing_peer.private_key)
 
     assert response.status_code == 200 and len(dispatched) == 1
+    assert dispatched[0][1] == {'ld_signed': True}
+
+
+@pytest.mark.usefixtures('redis_double')
+def test_an_http_signature_from_the_actors_own_host_is_not_marked_ld_signed(app, signing_peer, dispatched,
+                                                                           no_network_ld_signing):
+    _uri, headers, body = HttpSignature.signed_request(
+        f"https://{app.config['SERVER_NAME']}/inbox", _ld_signed_tampered(signing_peer, None),
+        signing_peer.private_key, f'{signing_peer.ap_profile_id}#main-key', send_via_async=True)
+    with app.test_client() as client:
+        response = client.post('/inbox', data=body, headers=headers, content_type='application/activity+json')
+
+    assert response.status_code == 200 and dispatched[0][1] == {}
+
+
+# --- R-LDDOWNGRADE: what an LD signature still cannot vouch for ---------------------------------------------
+
+def test_null_and_empty_values_are_stripped_after_verification(app, monkeypatch, no_network_ld_signing):
+    """An injected null or empty list produces no triple, so the signature still verifies: it must not be read."""
+    monkeypatch.setitem(app.config, 'FULL_AP_CONTEXT', True)
+    private_key, public_key = a_keypair()
+    original = plain_create()
+    original['@context'] = default_context()
+    original = signed(original, private_key)
+    tampered = copy.deepcopy(original)
+    tampered['object'].update(commentsEnabled=None, stickied=None, sensitive=[], bcc=[], cc=None,
+                              nameMap={'fr': None}, tag=[None])
+    assert graph_hash(tampered) == graph_hash(original)
+
+    LDSignature.verify_signature(tampered, public_key)
+
+    for key in ('commentsEnabled', 'stickied', 'sensitive', 'bcc', 'cc', 'nameMap', 'tag', 'summary',
+                'inReplyTo'):
+        assert key not in tampered['object']
+    assert tampered['object']['content'] == '<p>what alice wrote</p>'
+
+
+def test_strip_keeps_falsy_values_that_are_signed(app):
+    document = {'a': False, 'b': 0, 'c': '', 'd': [0, None, [], {}], 'e': {'f': None}}
+    strip_empty_values(document)
+    assert document == {'a': False, 'b': 0, 'c': '', 'd': [0]}
+
+
+CAROL = 'https://other.example/users/carol'
+CAROL_NOTE = 'https://other.example/objects/1'
+
+
+def _carol_and_community():
+    _instance, community = _seed_announcing_community(host='other.example')
+    carol = make_user(_instance, 'carol', with_keys=True)
+    carol.ap_fetched_at = utcnow()
+    db.session.commit()
+    return carol, community
+
+
+def _ld_create(carol, community, content='<p>forged in transit</p>'):
+    addressing = {'to': [AS_PUBLIC_URI], 'audience': community.ap_profile_id}
+    activity = {'@context': default_context(), 'id': f'{CAROL}/activities/{uuid.uuid4().hex}', 'type': 'Create',
+                'actor': CAROL, **addressing,
+                'object': note_document(attributed_to=CAROL, uri=CAROL_NOTE, fields={'content': content, **addressing})}
+    activity['signature'] = LDSignature.create_signature(activity, carol.private_key, f'{CAROL}#main-key')
+    LDSignature.verify_signature(activity, carol.public_key)
+    return activity
+
+
+def _ld_messages(activity_id):
+    return [log.exception_message for log in ActivityPubLog.query.filter_by(activity_id=activity_id).all()]
+
+
+def test_an_ld_signed_create_stores_the_origins_content(app, db_session, monkeypatch, http_mock,
+                                                         no_network_ld_signing):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    carol, community = _carol_and_community()
+    activity = _ld_create(carol, community)
+    serve_remote_object(http_mock, uri=CAROL_NOTE, document=note_document(
+        attributed_to=CAROL, uri=CAROL_NOTE, fields={'content': 'what the origin says', 'to': [AS_PUBLIC_URI],
+                                                     'audience': community.ap_profile_id}))
+
+    process_inbox_request(activity, True, ld_signed=True)
+
+    assert 'what the origin says' in Post.query.filter_by(ap_id=CAROL_NOTE).one().body_html
+
+
+def test_an_ld_signed_create_whose_origin_names_another_author_is_dropped(app, db_session, monkeypatch, http_mock,
+                                                                         no_network_ld_signing):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    carol, community = _carol_and_community()
+    activity = _ld_create(carol, community)
+    serve_remote_object(http_mock, uri=CAROL_NOTE, document=note_document(
+        attributed_to='https://other.example/users/dave', uri=CAROL_NOTE, fields={'to': [AS_PUBLIC_URI]}))
+
+    process_inbox_request(activity, True, ld_signed=True)
+
+    assert Post.query.filter_by(ap_id=CAROL_NOTE).first() is None
+    assert _ld_messages(activity['id']) == [
+        'LD-signed activity dropped: the fetched object is not attributed to the Announced activity actor']
+
+
+def _ld_delete(actor, object_id):
+    activity = {'@context': default_context(), 'id': f'{actor.ap_profile_id}#delete-{uuid.uuid4().hex}',
+                'type': 'Delete', 'actor': actor.ap_profile_id, 'object': object_id,
+                'to': [AS_PUBLIC_URI]}
+    activity['signature'] = LDSignature.create_signature(activity, actor.private_key,
+                                                         f'{actor.ap_profile_id}#main-key')
+    LDSignature.verify_signature(activity, actor.public_key)
+    return activity
+
+
+def test_an_ld_signed_delete_of_an_object_its_origin_still_serves_is_dropped(app, db_session, monkeypatch,
+                                                                            http_mock, no_network_ld_signing):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    carol, _community = _carol_and_community()
+    activity = _ld_delete(carol, CAROL_NOTE)
+    http_mock.get(CAROL_NOTE).respond(200, json=note_document(attributed_to=CAROL, uri=CAROL_NOTE))
+
+    process_inbox_request(activity, True, ld_signed=True)
+
+    assert _ld_messages(activity['id']) == ['LD-signed activity dropped: LD-signed Delete of an object that still exists']
+
+
+@pytest.mark.parametrize('status, deleted', [(410, True), (200, False)])
+def test_an_ld_signed_self_delete_needs_the_origin_to_have_dropped_the_actor(app, db_session, monkeypatch, http_mock,
+                                                                            no_network_ld_signing, status, deleted):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    carol, _community = _carol_and_community()
+    activity = _ld_delete(carol, CAROL)
+    http_mock.get(CAROL).respond(status)
+
+    process_delete_request(activity, True, ld_signed=True)
+
+    db.session.expire_all()     # the task wrote through its own session
+    assert db.session.get(User, carol.id).deleted is deleted
+    if not deleted:
+        assert _ld_messages(activity['id']) == [
+            'LD-signed activity dropped: LD-signed Delete of an object that still exists']
+
+
+def test_other_ld_signed_activities_keep_the_verified_document(app):
+    like = {'id': 'https://other.example/likes/1', 'type': 'Like', 'actor': CAROL, 'object': CAROL_NOTE}
+    assert verify_ld_accepted_activity(like) == (like, None)
+    assert verify_ld_accepted_activity({'type': 'Delete', 'actor': CAROL, 'object': {'type': 'Tombstone'}}) == \
+        (None, 'LD-signed Delete names no object')
+
+
+def test_the_mastodon_shaped_create_still_verifies_after_the_downgrade_rules(app, no_network_ld_signing):
+    private_key, public_key = a_keypair()
+    document = signed(mastodon_create(), private_key)
+    LDSignature.verify_signature(document, public_key)
+    assert 'summary' not in document['object'] and document['object']['contentMap'] == {'en': '<p>what alice wrote</p>'}
