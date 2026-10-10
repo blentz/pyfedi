@@ -14,7 +14,7 @@ from sqlalchemy import or_
 
 from app import db
 from app.activitypub.actor import find_actor_by_url
-from app.activitypub.signature import HttpSignature, VerificationError
+from app.activitypub.signature import GET_REQUIRED, HttpSignature, VerificationError
 from app.activitypub.util import AS_PUBLIC, host_of
 from app.models import Community, CommunityMember, User, UserFollower
 
@@ -75,7 +75,8 @@ def signed_requester_actor():
         if not actor or not getattr(actor, 'public_key', None):
             continue
         try:
-            HttpSignature.verify_request(request, actor.public_key)
+            HttpSignature.check_date(request)
+            HttpSignature.verify_request(request, actor.public_key, GET_REQUIRED)
         except (VerificationError, ValueError):
             return None
         return actor

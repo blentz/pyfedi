@@ -18,11 +18,13 @@ from datetime import datetime
 
 from unittest.mock import patch
 
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding
 from flask import current_app
 from flask_login import login_user
 
 from app import db
-from app.activitypub.signature import RsaKeys
+from app.activitypub.signature import HttpSignature, RsaKeys, http_date
 from app.constants import NOTIF_POST, NOTIF_REPORT
 from app.utils import markdown_to_html
 from app.models import (ActivityPubLog, BannedInstances, ChatMessage, Community, CommunityBan, CommunityBlock,
@@ -1191,6 +1193,27 @@ def signed_inbox_post(client, activity: dict, sender, *, path: str = '/inbox',
         f'{sender.ap_profile_id}#main-key', send_via_async=True)
     return client.post(path, data=body if body is not None else body_bytes,
                        headers=headers, content_type='application/activity+json')
+
+
+def cavage_signed_headers(private_key: str, key_id: str, *, method: str = 'post', path: str = '/inbox',
+                          body: bytes = b'', signed=('(request-target)', 'host', 'date', 'digest'),
+                          host: str = None) -> dict:
+    """Headers for a draft-cavage signature over exactly the header names in `signed`.
+
+    HttpSignature.signed_request always signs its own fixed set, so a test that needs a signature leaving a
+    required header out builds it here. Host, Date and Digest are always SENT -- precheck needs Date and
+    Digest present -- but only the names in `signed` are covered by the signature. The signing itself is
+    production's: the same key loading, PKCS#1 v1.5 padding and SHA-256 signed_request uses.
+    """
+    host = host or current_app.config['SERVER_NAME']
+    values = {'(request-target)': f'{method} {path}', 'host': host, 'date': http_date(),
+              'digest': HttpSignature.calculate_digest(body)}
+    signed_string = '\n'.join(f'{name}: {values[name]}' for name in signed)
+    key = HttpSignature._get_private_key_instance(private_key)
+    signature = key.sign(signed_string.encode('ascii'), padding.PKCS1v15(), hashes.SHA256())
+    return {'Host': host, 'Date': values['date'], 'Digest': values['digest'],
+            'Signature': HttpSignature.compile_signature({'keyid': key_id, 'headers': list(signed),
+                                                          'signature': signature, 'algorithm': 'rsa-sha256'})}
 
 
 def signed_get_headers(path: str, signer, *, key_id: str = None) -> dict:

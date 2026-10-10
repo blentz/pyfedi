@@ -31,7 +31,7 @@ def fake_request(key_id=KEY_ID):
 def verifier(monkeypatch):
     tried = []
 
-    def fake(request_, public_key, skip_date=False):
+    def fake(request_, public_key, required=frozenset()):
         tried.append(public_key)
         if public_key != PEM:
             raise VerificationError('wrong key')

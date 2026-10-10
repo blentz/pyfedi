@@ -37,7 +37,7 @@ def verifier(monkeypatch):
     """HttpSignature.verify_request that accepts only the expected PEM; records the keys tried."""
     tried = []
 
-    def fake(request_, public_key, skip_date=False):
+    def fake(request_, public_key, required=frozenset()):
         tried.append(public_key)
         if public_key != PEM:
             raise VerificationError('wrong key')

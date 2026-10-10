@@ -19,7 +19,7 @@ from app import db, cache, celery, limiter
 from app.activitypub import bp
 from app.activitypub.actor import find_actor_by_url
 from app.activitypub.entitlement import PRIVATE_HEADERS, addressees_of, audience_entitles, signed_requester_actor
-from app.activitypub.signature import HttpSignature, VerificationError, VerificationFormatError, default_context, LDSignature, \
+from app.activitypub.signature import POST_REQUIRED, HttpSignature, VerificationError, VerificationFormatError, default_context, LDSignature, \
     send_post_request
 from app.activitypub.util import host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
     post_to_activity, find_actor_or_create_cached, find_liked_object, \
@@ -802,7 +802,7 @@ def shared_inbox():
 
     bounced = False
     try:
-        HttpSignature.verify_request(request, actor.public_key, skip_date=True)
+        HttpSignature.verify_request(request, actor.public_key, POST_REQUIRED)
     except VerificationError as e:
         bounced = True
         # HTTP sig will fail if a.gup.pe or PeerTube have bounced a request, so check LD sig instead

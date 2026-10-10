@@ -5,7 +5,7 @@ from sqlalchemy import func
 
 import app as app_pkg
 from app import celery, db
-from app.activitypub.signature import HttpSignature, VerificationError, parse_signature_header
+from app.activitypub.signature import POST_REQUIRED, HttpSignature, VerificationError, parse_signature_header
 from app.activitypub.util import (create_resolved_object, find_microblogging_community, host_of,
                                   log_incoming_ap, remote_object_to_json)
 from app.constants import APLOG_ANNOUNCE, APLOG_FAILURE, APLOG_FOLLOW, APLOG_IGNORED, APLOG_NOTYPE, APLOG_SUCCESS
@@ -18,7 +18,7 @@ from app.utils import get_task_session, patch_db_session
 
 def _verified(request, relay) -> bool:
     try:
-        HttpSignature.verify_request(request, relay.public_key, skip_date=True)
+        HttpSignature.verify_request(request, relay.public_key, POST_REQUIRED)
         return True
     except (VerificationError, ValueError, TypeError, UnsupportedAlgorithm):
         # ValueError/TypeError/UnsupportedAlgorithm: the stored key is not a loadable PEM; that is "not verified"
