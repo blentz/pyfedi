@@ -702,6 +702,19 @@ def host_of(url_string: str) -> str:
         return ''
 
 
+def shared_inbox_of(actor_json: dict) -> str | None:
+    """The actor's shared inbox, or None when `endpoints` does not carry a usable one.
+
+    The spec lets `endpoints` omit sharedInbox or be a URI string naming a document to fetch. Neither is an
+    error: the caller falls back to the actor's own inbox. A string `endpoints` is not dereferenced (roadmap
+    tier C)."""
+    endpoints = actor_json.get('endpoints')
+    if not isinstance(endpoints, dict):
+        return None
+    shared_inbox = endpoints.get('sharedInbox')
+    return shared_inbox if isinstance(shared_inbox, str) and shared_inbox else None
+
+
 def on_owner_host(entry, owner_url: str) -> bool:
     """Whether a collection entry (a URL, or an object carrying one as 'id') is on the collection owner's host.
 
@@ -1424,37 +1437,33 @@ def actor_json_to_model(activity_json, address, server):
             current_app.logger.error(
                 f'No usable publicKey for {address}@{server} in ' + str(activity_json))
             return None
-        try:
-            user = User(user_name=actor_name,
-                        title=actor_name_from_ap(activity_json, 'name', limit=256),
-                        email=f"{address}@{server}",
-                        matrix_user_id=activity_json['matrixUserId'] if 'matrixUserId' in activity_json else '',
-                        indexable=activity_json['indexable'] if 'indexable' in activity_json else True,
-                        searchable=activity_json['discoverable'] if 'discoverable' in activity_json else True,
-                        # D1347. A peer's string straight into a DateTime column:
-                        # `published: "whenever"` was a DataError at commit, so a
-                        # remote actor whose actor document carries an unreadable
-                        # `published` could never be created here -- and nothing
-                        # they ever posted could land either.
-                        created=parse_ap_timestamp(activity_json.get('published')) or utcnow(),
-                        ap_id=f"{address.lower()}@{server.lower()}",
-                        ap_public_url=activity_json['id'],
-                        ap_profile_id=activity_json['id'].lower(),
-                        ap_inbox_url=activity_json['endpoints']['sharedInbox'] if 'endpoints' in activity_json else activity_json['inbox'] if 'inbox' in activity_json else '',
-                        ap_followers_url=activity_json['followers'] if 'followers' in activity_json else None,
-                        ap_preferred_username=actor_name,
-                        ap_manually_approves_followers=activity_json['manuallyApprovesFollowers'] if 'manuallyApprovesFollowers' in activity_json else False,
-                        ap_fetched_at=utcnow(),
-                        ap_domain=server.lower(),
-                        public_key=actor_pem,
-                        bot=True if activity_json['type'] == 'Service' else False,
-                        instance_id=find_instance_id(server),
-                        accept_private_messages=activity_json['acceptPrivateMessages'] if 'acceptPrivateMessages' in activity_json else 3
-                        # language=community_json['language'][0]['identifier'] # todo: language
-                        )
-        except KeyError:
-            current_app.logger.error(f'KeyError for {address}@{server} while parsing ' + str(activity_json))
-            return None
+        user = User(user_name=actor_name,
+                    title=actor_name_from_ap(activity_json, 'name', limit=256),
+                    email=f"{address}@{server}",
+                    matrix_user_id=activity_json['matrixUserId'] if 'matrixUserId' in activity_json else '',
+                    indexable=activity_json['indexable'] if 'indexable' in activity_json else True,
+                    searchable=activity_json['discoverable'] if 'discoverable' in activity_json else True,
+                    # D1347. A peer's string straight into a DateTime column:
+                    # `published: "whenever"` was a DataError at commit, so a
+                    # remote actor whose actor document carries an unreadable
+                    # `published` could never be created here -- and nothing
+                    # they ever posted could land either.
+                    created=parse_ap_timestamp(activity_json.get('published')) or utcnow(),
+                    ap_id=f"{address.lower()}@{server.lower()}",
+                    ap_public_url=activity_json['id'],
+                    ap_profile_id=activity_json['id'].lower(),
+                    ap_inbox_url=shared_inbox_of(activity_json) or activity_json.get('inbox') or '',
+                    ap_followers_url=activity_json['followers'] if 'followers' in activity_json else None,
+                    ap_preferred_username=actor_name,
+                    ap_manually_approves_followers=activity_json['manuallyApprovesFollowers'] if 'manuallyApprovesFollowers' in activity_json else False,
+                    ap_fetched_at=utcnow(),
+                    ap_domain=server.lower(),
+                    public_key=actor_pem,
+                    bot=True if activity_json['type'] == 'Service' else False,
+                    instance_id=find_instance_id(server),
+                    accept_private_messages=activity_json['acceptPrivateMessages'] if 'acceptPrivateMessages' in activity_json else 3
+                    # language=community_json['language'][0]['identifier'] # todo: language
+                    )
 
         if 'summary' in activity_json:
             about_html = _as_text(activity_json['summary'])  # D1355
@@ -1575,7 +1584,7 @@ def actor_json_to_model(activity_json, address, server):
                                   ap_public_url=activity_json['id'],
                                   ap_profile_id=activity_json['id'].lower(),
                                   ap_followers_url=activity_json['followers'] if 'followers' in activity_json else None,
-                                  ap_inbox_url=activity_json['endpoints']['sharedInbox'] if 'endpoints' in activity_json else activity_json['inbox'] if 'inbox' in activity_json else '',
+                                  ap_inbox_url=shared_inbox_of(activity_json) or activity_json.get('inbox') or '',
                                   ap_outbox_url=activity_json['outbox'],
                                   ap_featured_url=activity_json['featured'] if 'featured' in activity_json else '',
                                   ap_moderators_url=mods_url,
@@ -1853,7 +1862,7 @@ def actor_json_to_model(activity_json, address, server):
                         # Read unconditionally by the /following fetch above, so
                         # it is always present here (D18).
                         ap_following_url=activity_json['following'],
-                        ap_inbox_url=activity_json['endpoints']['sharedInbox'] if 'endpoints' in activity_json else activity_json['inbox'] if 'inbox' in activity_json else '',
+                        ap_inbox_url=shared_inbox_of(activity_json) or activity_json.get('inbox') or '',
                         ap_outbox_url=activity_json['outbox'],
                         ap_moderators_url=owners_url,
                         ap_fetched_at=utcnow(),
