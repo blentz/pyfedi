@@ -9,6 +9,7 @@ from app.activitypub.signature import HttpSignature, VerificationError, parse_si
 from app.activitypub.util import (create_resolved_object, find_microblogging_community, host_of,
                                   log_incoming_ap, remote_object_to_json)
 from app.constants import APLOG_ANNOUNCE, APLOG_FAILURE, APLOG_FOLLOW, APLOG_IGNORED, APLOG_NOTYPE, APLOG_SUCCESS
+from app.discovery.instance_answers import instance_actor_url
 from app.models import Community, Post, PostReply, Relay, utcnow
 from app.relays import RELAY_ACCEPTED, RELAY_PENDING, RELAY_REFUSED, relay_context
 from app.relays import subscribe as relay_subscribe
@@ -90,15 +91,38 @@ def _answer_follow(relay, request_json, activity_type, saved_json):
         log_incoming_ap(activity_id, APLOG_FOLLOW, APLOG_SUCCESS, saved_json)
 
 
+def _follows_the_instance_actor(request_json) -> bool:
+    obj = request_json.get('object')
+    return (obj.get('id') if isinstance(obj, dict) else obj) == instance_actor_url()
+
+
+def _accept_follow_back(relay, request_json):
+    """barkshark ActivityRelay follows a non-Mastodon instance back only after accepting its Follow, so the
+    follow-back settles a pending row whose Accept never arrived. It is always answered."""
+    follow = {key: request_json[key] for key in ('id', 'type', 'actor', 'object') if key in request_json}
+    if current_app.debug:
+        send_relay_follow_accept(relay.id, follow)
+    else:
+        send_relay_follow_accept.apply_async(args=(relay.id, follow), queue='background')
+    if relay.state == RELAY_PENDING:
+        relay.state = RELAY_ACCEPTED
+        relay.answered_at = utcnow()
+        db.session.commit()
+    log_incoming_ap(request_json.get('id') or '', APLOG_FOLLOW, APLOG_SUCCESS, None)
+
+
 def relay_actor_gate(request, request_json):
-    """A response tuple for a relay's Accept/Reject, or an Announce from an accepted relay; else None.
+    """A response tuple for a relay's Accept/Reject, its Follow of the instance actor, or an Announce from an
+    accepted relay; else None.
 
     Runs after HttpSignature.precheck, so the Digest and date have already been checked."""
     actor = request_json.get('actor')
     if not isinstance(actor, str):
         return None
     activity_type = request_json.get('type')
-    if activity_type not in ('Accept', 'Reject', 'Announce'):
+    if activity_type not in ('Accept', 'Reject', 'Announce', 'Follow'):
+        return None
+    if activity_type == 'Follow' and not _follows_the_instance_actor(request_json):
         return None
     relay = db.session.query(Relay).filter(Relay.actor_id == actor).first()
     if relay is None or (activity_type == 'Announce' and relay.state != RELAY_ACCEPTED):
@@ -115,6 +139,8 @@ def relay_actor_gate(request, request_json):
                 process_relayed_announce(relay.id, uri)
             else:
                 process_relayed_announce.apply_async(args=(relay.id, uri), queue='background')
+    elif activity_type == 'Follow':
+        _accept_follow_back(relay, request_json)
     else:
         _answer_follow(relay, request_json, activity_type, None)
     return '', 200
@@ -182,6 +208,18 @@ def relayed_activity_allowed(activity):
         if not isinstance(uri, str) or not _exists(uri):
             return False, 'relayed update of an object this instance does not have'
     return True, ''
+
+
+@celery.task
+def send_relay_follow_accept(relay_id, follow):
+    session = get_task_session()
+    try:
+        with patch_db_session(session):
+            relay = session.get(Relay, relay_id)
+            if relay is not None:   # removed since the Follow arrived
+                relay_subscribe.send_follow_accept(relay, follow)
+    finally:
+        session.close()
 
 
 @celery.task

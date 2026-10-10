@@ -71,6 +71,14 @@ def send_relay_follow(relay) -> None:
     send_post_request(relay.inbox_url, relay_follow_activity(relay), private_key, key_id, timeout=10)
 
 
+def send_follow_accept(relay, follow: dict) -> None:
+    """Accept the relay's Follow of the instance actor."""
+    accept = {'type': 'Accept', 'id': f"{current_app.config['SERVER_URL']}/activities/accept/{uuid.uuid4()}",
+              'actor': instance_actor_url(), 'object': follow, 'to': [relay.actor_id]}
+    private_key, key_id = _signing()
+    send_post_request(relay.inbox_url, accept, private_key, key_id, timeout=10)
+
+
 def add_relay(url: str) -> Relay:
     url = url.strip()
     if db.session.query(Relay).filter_by(url=url).first():
