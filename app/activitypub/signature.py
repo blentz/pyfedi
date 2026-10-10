@@ -271,6 +271,24 @@ def signature_part(signature, key):
     return parse_signature_header(signature).get(key, '')
 
 
+# The headers an inbound signature must cover (S2.1). A POST without a signed digest lets the body be swapped;
+# without (request-target) or host a signature can be replayed against another endpoint or instance.
+POST_REQUIRED = frozenset({'(request-target)', 'host', 'date', 'digest'})
+GET_REQUIRED = frozenset({'(request-target)', 'host', 'date'})
+
+
+def _check_required(signed: set[str], required: frozenset[str], key_id: str | None) -> None:
+    """Refuse (or, with SIG_REQUIRED_HEADERS_ENFORCE off, log) a valid signature that leaves a required header
+    uncovered."""
+    missing = required - signed
+    if not missing:
+        return
+    names = ' '.join(sorted(missing))
+    if current_app.config.get('SIG_REQUIRED_HEADERS_ENFORCE'):
+        raise VerificationError(f'unsigned required header: {names}')
+    current_app.logger.warning(f'Signature from {activitypub_util.host_of(key_id or "")} does not sign: {names}')
+
+
 class HttpSignature:
     """
     Allows for calculation and verification of HTTP signatures
@@ -424,6 +442,14 @@ class HttpSignature:
         if request.headers["digest"] != expected_digest:
             raise VerificationFormatError("Digest is incorrect")
 
+        cls.check_date(request)
+
+    @classmethod
+    def check_date(cls, request: Request):
+        """
+        The Date header must be present, a valid HTTP date and within 1 hour of now. Without this a captured
+        signed request could be replayed forever.
+        """
         if "date" not in request.headers:
             raise VerificationFormatError("No date header present")
         try:
@@ -438,9 +464,10 @@ class HttpSignature:
             raise VerificationFormatError("Date is too far away")
 
     @classmethod
-    def verify_request(cls, request: Request, public_key, skip_date=False):
+    def verify_request(cls, request: Request, public_key, required: frozenset[str] = frozenset()):
         """
-        Verifies that the request has a valid signature for its body
+        Verifies that the request has a valid signature for its body, and that the signature covers every
+        header in `required` (see _check_required)
         """
         # Get the signature details
         if "signature" not in request.headers:
@@ -462,6 +489,8 @@ class HttpSignature:
             headers_string,
             public_key,
         )
+        _check_required({name.lower() for name in signature_details["headers"]}, required,
+                        signature_details["keyid"])
         return True
 
     @classmethod

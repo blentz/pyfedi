@@ -3,11 +3,15 @@
 Signatures are made by production's signer (tests/factories.py:
 signed_get_headers) and checked by production's verifier; neither is patched.
 """
+import time
+from unittest.mock import patch
+
 import pytest
 
 from app import db
 from app.activitypub.entitlement import (PRIVATE_HEADERS, addressees_of, audience_entitles,
                                          signed_requester_actor)
+from app.activitypub.signature import http_date
 from app.models import Instance
 from tests.test_ap_content_objects import seed_local_post
 from tests.factories import (make_community, make_community_member, make_follow, make_instance,
@@ -43,6 +47,23 @@ def test_a_validly_signed_get_names_its_signer(app, db_session):
     make_site()
     signer = _remote('peer.example', 'alice')
     assert _requester_for(app, '/post/1', signed_get_headers('/post/1', signer)) == signer
+
+
+def test_a_signed_get_with_a_stale_date_names_nobody(app, db_session):
+    """A captured signed GET must not be replayable forever: a Date 2 h old is anonymous."""
+    make_site()
+    signer = _remote('peer.example', 'alice')
+    with patch('app.activitypub.signature.http_date', lambda: http_date(time.time() - 7200)):
+        headers = signed_get_headers('/post/1', signer)
+    assert _requester_for(app, '/post/1', headers) is None
+
+
+def test_a_signed_get_without_a_date_names_nobody(app, db_session):
+    make_site()
+    signer = _remote('peer.example', 'alice')
+    headers = signed_get_headers('/post/1', signer)
+    del headers['Date']
+    assert _requester_for(app, '/post/1', headers) is None
 
 
 def test_an_unsigned_get_names_nobody(app, db_session):
