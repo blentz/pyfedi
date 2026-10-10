@@ -458,6 +458,13 @@ def user_profile(actor):
         if user is None:
             user = User.query.filter_by(ap_profile_id=f'{current_app.config["SERVER_URL"]}/u/{actor.lower()}',
                                         deleted=False, banned=False, ap_id=None).first()
+        if user is None and is_activitypub_request():
+            # S3.2: a deleted account is gone for good, so peers are told to purge it. A ban (banned, not deleted)
+            # stays a 404 -- it can be lifted. Account deletion sets both flags, so `deleted` decides.
+            gone = User.query.filter(func.lower(User.user_name) == actor.lower(), User.ap_id.is_(None),
+                                     User.deleted.is_(True)).first()
+            if gone is not None:
+                return tombstone_response(gone.public_url(), 'Service' if gone.bot else 'Person')
 
     if user is None:
         user = resolve_remote_handle(actor)
