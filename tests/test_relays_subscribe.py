@@ -233,3 +233,12 @@ class TestRefusal:
     def test_other_bodies_are_ignored(self, app, body):
         with app.test_request_context():
             record_relay_refusal(db.session, body, 403)
+
+
+class TestFollowersListing:
+
+    def test_a_relay_with_no_actor_id_is_never_read_for_a_followers_listing(self, app, net):
+        with app.test_request_context():
+            relay = Relay(url='https://relay.example/inbox', actor_id=None)
+            assert subscribe._lists_us_as_follower(relay) is False
+        assert net['get'] == [] and net['post'] == []
