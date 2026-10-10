@@ -14,7 +14,7 @@ from sqlalchemy import or_
 
 from app import db
 from app.activitypub.actor import find_actor_by_url
-from app.activitypub.signature import GET_REQUIRED, HttpSignature, VerificationError
+from app.activitypub.signature import GET_REQUIRED, HttpSignature, VerificationError, request_key_id
 from app.activitypub.util import AS_PUBLIC, host_of
 from app.models import Community, CommunityMember, User, UserFollower
 
@@ -25,16 +25,6 @@ PRIVATE_HEADERS = {'Cache-Control': 'private, no-store', 'Vary': 'Accept, Signat
 
 # How many trailing path segments a keyId may carry past its actor id ('<actor>/main-key' is GoToSocial's).
 _KEY_PATH_TRIMS = 2
-
-
-def _signature_key_id() -> str | None:
-    """The keyId of the current request's Signature header, or None."""
-    if 'signature' not in request.headers:
-        return None
-    try:
-        return HttpSignature.parse_signature(request.headers['signature'])['keyid']
-    except (VerificationError, ValueError):
-        return None
 
 
 def _owner_candidates(key_id: str) -> list[str]:
@@ -66,17 +56,23 @@ def _owner_candidates(key_id: str) -> list[str]:
 
 
 def signed_requester_actor():
-    """The stored User or Community whose key validly signed the current GET, else None."""
-    key_id = _signature_key_id()
+    """The stored User or Community whose key validly signed the current GET, else None.
+
+    GET_REQUIRED is enforced whatever SIG_REQUIRED_HEADERS_ENFORCE says: authorized fetch is a new privilege, and
+    with `date` unsigned the Date check below would mean nothing."""
+    key_id = request_key_id(request)
     if not key_id:
+        return None
+    try:
+        HttpSignature.check_date(request)
+    except VerificationError:
         return None
     for candidate in _owner_candidates(key_id):
         actor = find_actor_by_url(candidate)
         if not actor or not getattr(actor, 'public_key', None):
             continue
         try:
-            HttpSignature.check_date(request)
-            HttpSignature.verify_request(request, actor.public_key, GET_REQUIRED)
+            HttpSignature.verify_request(request, actor.public_key, GET_REQUIRED, enforce=True)
         except (VerificationError, ValueError):
             return None
         return actor

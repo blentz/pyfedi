@@ -14,8 +14,8 @@ from app.activitypub.entitlement import (PRIVATE_HEADERS, addressees_of, audienc
 from app.activitypub.signature import http_date
 from app.models import Instance
 from tests.test_ap_content_objects import seed_local_post
-from tests.factories import (make_community, make_community_member, make_follow, make_instance,
-                             make_site, make_user, seed_community_owner, signed_get_headers)
+from tests.factories import (cavage_signed_headers, make_community, make_community_member, make_follow,
+                             make_instance, make_site, make_user, seed_community_owner, signed_get_headers)
 
 pytestmark = pytest.mark.usefixtures('redis_double')
 
@@ -138,7 +138,8 @@ BAD_SIGNATURES = [
 def test_a_malformed_signature_header_names_nobody(app, db_session, signature):
     make_site()
     _remote('peer.example', 'alice')
-    assert _requester_for(app, '/post/1', {'Signature': signature}) is None
+    # A fresh Date, so the request gets past check_date to the keyId and signature parsing
+    assert _requester_for(app, '/post/1', {'Date': http_date(), 'Signature': signature}) is None
 
 
 @pytest.mark.parametrize('signature', BAD_SIGNATURES)
@@ -149,6 +150,31 @@ def test_a_malformed_signature_header_does_not_break_a_public_get(app, db_sessio
         response = client.get(f'/post/{post.id}', headers={'Accept': 'application/activity+json',
                                                            'Signature': signature})
     assert response.status_code < 500
+
+
+@pytest.mark.parametrize('enforce', [False, True])
+@pytest.mark.parametrize('left_out', ['date', '(request-target)'])
+def test_a_signed_get_leaving_a_required_header_unsigned_names_nobody(app, db_session, monkeypatch, enforce,
+                                                                      left_out):
+    """Authorized fetch is a new privilege, so GET_REQUIRED is enforced whatever SIG_REQUIRED_HEADERS_ENFORCE
+    says: with `date` unsigned the checked Date could be swapped, and a replay could never expire."""
+    monkeypatch.setitem(app.config, 'SIG_REQUIRED_HEADERS_ENFORCE', enforce)
+    make_site()
+    signer = _remote('peer.example', 'alice')
+    signed = tuple(name for name in ('(request-target)', 'host', 'date') if name != left_out)
+    headers = cavage_signed_headers(signer.private_key, f'{signer.ap_profile_id}#main-key', method='get',
+                                    path='/post/1', signed=signed)
+    assert _requester_for(app, '/post/1', headers) is None
+
+
+def test_a_signed_get_covering_every_required_header_names_its_signer_with_the_flag_off(app, db_session,
+                                                                                         monkeypatch):
+    monkeypatch.setitem(app.config, 'SIG_REQUIRED_HEADERS_ENFORCE', False)
+    make_site()
+    signer = _remote('peer.example', 'alice')
+    headers = cavage_signed_headers(signer.private_key, f'{signer.ap_profile_id}#main-key', method='get',
+                                    path='/post/1', signed=('(request-target)', 'host', 'date'))
+    assert _requester_for(app, '/post/1', headers) == signer
 
 
 def test_a_keyid_with_no_host_names_nobody(app, db_session):

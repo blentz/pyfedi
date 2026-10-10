@@ -39,7 +39,7 @@ from urllib.parse import urlparse
 
 import pendulum
 import httpx
-from cryptography.exceptions import InvalidSignature
+from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from dateutil import parser
@@ -48,12 +48,13 @@ from furl import furl
 from pyld import jsonld
 from sqlalchemy import text
 
-from app import celery, httpx_client
+import app as app_pkg
+from app import celery, db, httpx_client
 from app.activitypub.ld_contexts import ld_document_loader
 from app.constants import DATETIME_MS_FORMAT
 from app.discovery.instance_answers import record_delivery_refusal
 from app.relays.refusals import record_relay_refusal
-from app.models import utcnow, ActivityPubLog, Community, Instance, CommunityMember, User, SendQueue
+from app.models import utcnow, ActivityPubLog, Community, Instance, CommunityMember, Site, User, SendQueue, public_key_pem
 from app.utils import get_task_session, is_invalid_get_request_uri
 import app.activitypub.util as activitypub_util
 
@@ -277,16 +278,91 @@ POST_REQUIRED = frozenset({'(request-target)', 'host', 'date', 'digest'})
 GET_REQUIRED = frozenset({'(request-target)', 'host', 'date'})
 
 
-def _check_required(signed: set[str], required: frozenset[str], key_id: str | None) -> None:
-    """Refuse (or, with SIG_REQUIRED_HEADERS_ENFORCE off, log) a valid signature that leaves a required header
-    uncovered."""
+def _check_required(signed: set[str], required: frozenset[str], key_id: str | None, enforce: bool = False) -> None:
+    """Refuse (or, with SIG_REQUIRED_HEADERS_ENFORCE off and `enforce` False, log) a valid signature that leaves a
+    required header uncovered."""
     missing = required - signed
     if not missing:
         return
     names = ' '.join(sorted(missing))
-    if current_app.config.get('SIG_REQUIRED_HEADERS_ENFORCE'):
+    if enforce or current_app.config.get('SIG_REQUIRED_HEADERS_ENFORCE'):
         raise VerificationError(f'unsigned required header: {names}')
     current_app.logger.warning(f'Signature from {activitypub_util.host_of(key_id or "")} does not sign: {names}')
+
+
+# A signer whose signature fails gets at most one key refetch in this many seconds (S2.3)
+KEY_REFETCH_SECONDS = 300
+
+
+def request_key_id(request) -> str | None:
+    """The keyId the request's signature names, or None. Every keyId read goes through here."""
+    return parse_signature_header(request.headers.get('Signature')).get('keyid') or None
+
+
+def _fetch_actor_key(actor_url: str) -> str | None:
+    """The PEM `actor_url` publishes now, fetched with a signed GET as the instance actor; None on any failure.
+    Only the key is taken: the daily profile refresh does the rest."""
+    site = db.session.get(Site, 1)
+    if site is None or not site.private_key:
+        return None
+    try:
+        response = signed_get_request(actor_url, site.private_key,
+                                      f"{current_app.config['SERVER_URL']}/actor#main-key")
+    except (httpx.HTTPError, ValueError):
+        return None
+    try:
+        if response.status_code != 200:
+            return None
+        return public_key_pem(response.json())
+    except ValueError:   # JSONDecodeError
+        return None
+    finally:
+        response.close()
+
+
+def verify_refreshing_key(request, stored_key, required: frozenset[str] = frozenset(), *, owner_url,
+                          rate_key: str, fetch_key, store_key) -> None:
+    """Verify `request` against `stored_key`; on failure, refetch the signer's key once and verify again.
+
+    The refetch happens only when the keyId names a key on `owner_url`'s host (an unauthenticated request must not
+    make this instance fetch from a host of its choosing), `owner_url` is set (None for a local actor), and
+    `rate_key` was not used in the last KEY_REFETCH_SECONDS. `fetch_key()` returns the published PEM or None;
+    `store_key(pem)` persists a new one. Raises VerificationError when the request does not verify."""
+    try:
+        if not stored_key:
+            raise VerificationError('No public key is stored for the signer')
+        HttpSignature.verify_request(request, stored_key, required)
+        return
+    except (ValueError, TypeError, UnsupportedAlgorithm):
+        first_error = VerificationError('The stored public key is not a usable PEM')
+    except VerificationError as e:
+        first_error = e
+    key_host = activitypub_util.host_of(request_key_id(request) or '')
+    if not owner_url or not key_host or key_host != activitypub_util.host_of(owner_url):
+        raise first_error
+    if not app_pkg.redis_client.set(rate_key, 1, nx=True, ex=KEY_REFETCH_SECONDS):
+        raise first_error
+    fetched = fetch_key()
+    if not fetched or fetched == stored_key:
+        raise first_error
+    store_key(fetched)
+    try:
+        HttpSignature.verify_request(request, fetched, required)
+    except (ValueError, TypeError, UnsupportedAlgorithm):
+        raise VerificationError('The refetched public key is not a usable PEM')
+
+
+def verify_with_key_refresh(request, actor, required: frozenset[str] = frozenset()) -> None:
+    """verify_refreshing_key for a User, Community or Feed: its stored key, a signed refetch of its actor
+    document, and the key stored back on the row. A local actor is never refetched."""
+    def store(pem):
+        actor.public_key = pem
+        db.session.commit()
+
+    verify_refreshing_key(request, actor.public_key, required,
+                          owner_url=None if actor.is_local() else actor.ap_profile_id,
+                          rate_key=f'sig-refetch:{actor.ap_profile_id}',
+                          fetch_key=lambda: _fetch_actor_key(actor.ap_profile_id), store_key=store)
 
 
 class HttpSignature:
@@ -464,10 +540,12 @@ class HttpSignature:
             raise VerificationFormatError("Date is too far away")
 
     @classmethod
-    def verify_request(cls, request: Request, public_key, required: frozenset[str] = frozenset()):
+    def verify_request(cls, request: Request, public_key, required: frozenset[str] = frozenset(), *,
+                       enforce: bool = False):
         """
         Verifies that the request has a valid signature for its body, and that the signature covers every
-        header in `required` (see _check_required)
+        header in `required` (see _check_required; `enforce` refuses a gap whatever SIG_REQUIRED_HEADERS_ENFORCE
+        says)
         """
         # Get the signature details
         if "signature" not in request.headers:
@@ -490,7 +568,7 @@ class HttpSignature:
             public_key,
         )
         _check_required({name.lower() for name in signature_details["headers"]}, required,
-                        signature_details["keyid"])
+                        signature_details["keyid"], enforce)
         return True
 
     @classmethod
