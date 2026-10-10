@@ -5657,18 +5657,29 @@ def _may_remove_from(actor_id: str, community) -> bool:
     return community.is_moderator(user) or community.is_instance_admin(user)
 
 
+def _stored_elsewhere(object_id: str, community) -> bool:
+    """True when the post or reply `object_id` is stored here in a community other than `community`.
+
+    Lookup only. A Group's moderators have authority over its own content (ruling R-SAMECOMMUNITY): a Group host
+    controls its moderator list, so naming someone a moderator there must not reach a post in another community."""
+    stored = (db.session.query(Post.community_id).filter_by(ap_id=object_id).first() or
+              db.session.query(PostReply.community_id).filter_by(ap_id=object_id).first())
+    return stored is not None and stored.community_id != community.id
+
+
 def _verify_announced_delete(inner: dict, community) -> Tuple[Union[dict, None], Union[str, None]]:
     """A cross-origin Announced Delete (spec S4 item 4, Amendment A).
 
     From the announcing community's moderator or owner, or an admin of its host, the Delete is deferred: the
-    dispatcher schedules apply_delayed_delete so the home server's own Delete can win. From anyone else it is
+    dispatcher schedules apply_delayed_delete so the home server's own Delete can win. That applies only to an
+    object not stored here in another community (R-SAMECOMMUNITY). From anyone else, or for such an object, it is
     processed only once the object's origin no longer serves it (404 or 410). One fetch and no retry (D775): an
     unreachable origin, or any other answer, drops the Delete. get_request_capped, not get_request: get_request
     sleeps and retries on every transport error, and only the status matters here, so no body is read."""
     object_id = _id_of(inner.get('object'))
     if not object_id:
         return None, 'Announced Delete names no object'
-    if _may_remove_from(_id_of(inner.get('actor')), community):
+    if _may_remove_from(_id_of(inner.get('actor')), community) and not _stored_elsewhere(object_id, community):
         return None, ANNOUNCED_DELETE_DEFERRED
     try:
         status, _body = get_request_capped(object_id, 0, headers={'Accept': 'application/activity+json'})
