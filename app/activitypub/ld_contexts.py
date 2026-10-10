@@ -4,8 +4,10 @@
 `@context` URL through pyld's document loader. pyld's default loader fetches
 each one over the network on every call, with no cache and no timeout, so an
 inbox LD-signature check failed whenever w3id.org or w3.org was slow or down.
-These documents are effectively frozen, so they are served from memory;
-anything else still goes to the network, with a timeout.
+It was also SSRF: the sender chooses @context, so any actor could make this
+server GET an arbitrary URL before its signature was even checked. These
+documents are effectively frozen, so they are served from memory, and any
+other context is refused rather than fetched.
 
 The two documents were fetched once from their real URLs and pasted in
 as-received, not hand-written, so URDNA2015 normalization sees exactly what
@@ -26,9 +28,6 @@ BUNDLED_LD_CONTEXTS = {
     'https://w3id.org/security/v1': SECURITY_V1_CONTEXT,
 }
 
-_network_document_loader = jsonld.requests_document_loader(timeout=5)
-
-
 def bundled_document(url: str) -> dict:
     """The pyld remote-document shape for a bundled context."""
     return {'contentType': 'application/ld+json', 'contextUrl': None,
@@ -36,8 +35,9 @@ def bundled_document(url: str) -> dict:
 
 
 def ld_document_loader(url, options=None):
-    """pyld document loader: bundled contexts from memory, the rest from the
-    network with a 5 second timeout."""
-    if url in BUNDLED_LD_CONTEXTS:
-        return bundled_document(url)
-    return _network_document_loader(url, options)
+    """pyld document loader: bundled contexts from memory, never the network."""
+    if url not in BUNDLED_LD_CONTEXTS:
+        raise jsonld.JsonLdError(f'JSON-LD context {url} is not bundled, and is not fetched',
+                                 'jsonld.LoadDocumentError', {'url': url},
+                                 code='loading document failed')
+    return bundled_document(url)

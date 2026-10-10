@@ -100,7 +100,7 @@ from werkzeug.http import http_date
 import app  # noqa: F401
 
 from app import celery
-from app.activitypub.ld_contexts import BUNDLED_LD_CONTEXTS, bundled_document
+from app.activitypub.ld_contexts import ld_document_loader
 from config import Config
 
 TEST_DATABASE_URL = os.environ.get('TEST_DATABASE_URL')
@@ -951,27 +951,10 @@ def api_baseline(app, db_session):
 # ---------------------------------------------------------------------------
 
 # The two JSON-LD context documents `LDSignature.normalized_hash` resolves via
-# `pyld.jsonld.normalize` are the SAME frozen copies production serves
-# (app/activitypub/ld_contexts.py), so tests and production cannot drift. The
-# static loader below differs from production's `ld_document_loader` only in
-# refusing any OTHER url instead of falling back to the network.
-_STATIC_LD_CONTEXTS = BUNDLED_LD_CONTEXTS
-
-
-def _static_ld_document_loader(url, options=None):
-    """A pyld document loader over the two frozen documents above -- never
-    the network. Raises the same `jsonld.JsonLdError` pyld's own loaders
-    raise for an unresolvable URL, so a test that accidentally needs a THIRD
-    context fails loudly (an unhelpful KeyError would do too, but this stays
-    in pyld's own error vocabulary, matching what `normalized_hash`'s callers
-    already expect to catch).
-    """
-    if url not in _STATIC_LD_CONTEXTS:
-        raise jsonld.JsonLdError(
-            f'no static content for {url!r} -- add it to _STATIC_LD_CONTEXTS '
-            f'rather than letting this fall through to the network',
-            'jsonld.LoadDocumentError')
-    return bundled_document(url)
+# `pyld.jsonld.normalize` are frozen copies in app/activitypub/ld_contexts.py,
+# and production's own `ld_document_loader` serves them and refuses any other
+# url without touching the network -- so the fixture below records production's
+# loader rather than keeping a separate test copy that could drift from it.
 
 
 @pytest.fixture
@@ -1004,7 +987,7 @@ def no_network_ld_signing(monkeypatch):
 
     def _recording_loader(url, options=None):
         resolved.append(url)
-        return _static_ld_document_loader(url, options)
+        return ld_document_loader(url, options)
 
     previous_loader = jsonld.get_document_loader()
     jsonld.set_document_loader(_recording_loader)

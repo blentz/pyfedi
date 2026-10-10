@@ -221,22 +221,9 @@ class VerificationFormatError(VerificationError):
     pass
 
 
-class LDContextUnavailable(Exception):
-    """
-    A JSON-LD context the document names could not be fetched, so its
-    signature cannot be checked yet. Transient: the sender should retry.
-    """
-
-    pass
-
-
 # pyld's default loader fetches every @context over the network, uncached and
-# with no timeout; serve the standard ones from bundled copies instead.
+# with no timeout, at a URL the sender chose; serve bundled copies instead.
 jsonld.set_document_loader(ld_document_loader)
-
-# pyld error codes meaning a context document could not be retrieved, as
-# opposed to the document itself being malformed.
-_LD_LOAD_FAILURE_CODES = {'loading document failed', 'loading remote context failed'}
 
 
 class RsaKeys:
@@ -680,12 +667,11 @@ class LDSignature:
                 {"algorithm": "URDNA2015", "format": "application/n-quads"},
             )
         except jsonld.JsonLdError as e:
+            # pyld wraps the real reason several levels down
             cause = e
-            while cause is not None:
-                if getattr(cause, 'code', None) in _LD_LOAD_FAILURE_CODES:
-                    raise LDContextUnavailable(f"Could not load JSON-LD context: {cause.details}") from e
+            while isinstance(cause.__cause__, jsonld.JsonLdError):
                 cause = cause.__cause__
-            raise VerificationFormatError(f"Could not normalize document: {e.type}") from e
+            raise VerificationFormatError(f"Could not normalize document: {cause.args[0]}") from e
         digest = hashes.Hash(hashes.SHA256())
         digest.update(norm_form.encode("utf8"))
         return digest.finalize().hex().encode("ascii")
