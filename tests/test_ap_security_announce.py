@@ -6,11 +6,15 @@ looked up, and that an Announced list gets the same check for every element.
 """
 import uuid
 
+import httpx
 import pytest
 
 import app.activitypub.routes as activitypub_routes
+from app import db
+from app.activitypub.signature import LDSignature, default_context
 from app.activitypub.util import verify_announced_inner
-from app.models import ActivityPubLog, User
+from app.models import ActivityPubLog, Post, User, utcnow
+from tests.factories import AS_PUBLIC_URI, a_keypair, make_instance, make_user, note_document, serve_remote_object
 from tests.test_inbox_dispatch_announce import _seed_announcing_community
 from tests.test_inbox_dispatch_preamble import dispatch
 
@@ -184,3 +188,145 @@ def test_the_dispatcher_drops_an_announced_list_element_without_a_usable_id_befo
                                                  + ['Announce object has no id or type'])
     assert MALLORY not in looked_up
     assert User.query.filter_by(ap_profile_id=MALLORY).first() is None
+
+
+CAROL = 'https://other.example/users/carol'
+OBJECT_ID = 'https://other.example/objects/1'
+
+
+def _carol():
+    """A remote author stored here with a real keypair; ap_fetched_at stops an inline profile refresh."""
+    author = make_user(make_instance('other.example'), 'carol', with_keys=True)
+    author.ap_fetched_at = utcnow()
+    db.session.commit()
+    assert author.ap_profile_id == CAROL
+    return author
+
+
+def _create(actor=CAROL, obj=None, activity_type='Create'):
+    return {'@context': default_context(), 'id': f'https://other.example/activities/{activity_type.lower()}/1',
+            'type': activity_type, 'actor': actor,
+            'object': obj if obj is not None else note_document(attributed_to=actor, uri=OBJECT_ID)}
+
+
+def _ld_sign(inner, private_key, actor=CAROL):
+    inner['signature'] = LDSignature.create_signature(inner, private_key, f'{actor}#main-key')
+    return inner
+
+
+@pytest.mark.parametrize('activity_type', ['Create', 'Update'])
+def test_a_valid_inner_ld_signature_is_accepted_without_a_fetch(app, db_session, http_mock, no_network_ld_signing,
+                                                                 activity_type):
+    """http_mock has no routes: any fetch is an unmatched request and fails the test."""
+    carol = _carol()
+    inner = _ld_sign(_create(activity_type=activity_type), carol.private_key)
+
+    result, reason = verify_announced_inner(_announce(inner))
+
+    assert reason is None
+    assert result is inner
+    assert 'signature' in inner    # verified on a copy: LDSignature.verify_signature pops it
+
+
+@pytest.mark.parametrize('activity_type', ['Create', 'Update'])
+def test_a_bad_inner_ld_signature_falls_back_to_the_origin_copy(app, db_session, http_mock, no_network_ld_signing,
+                                                                activity_type):
+    _carol()
+    wrong_key, _public = a_keypair()
+    inner = _ld_sign(_create(activity_type=activity_type), wrong_key)
+    served = serve_remote_object(http_mock, uri=OBJECT_ID,
+                                 document=note_document(attributed_to=CAROL, uri=OBJECT_ID,
+                                                        fields={'content': 'what the origin says'}))
+
+    result, reason = verify_announced_inner(_announce(inner))
+
+    assert reason is None
+    assert result['object'] == served
+    assert result['id'] == inner['id']
+
+
+def test_a_signature_by_an_actor_not_stored_here_is_not_trusted_and_fetches_no_actor(
+        app, db_session, http_mock, no_network_ld_signing):
+    stranger = 'https://other.example/users/nobody'
+    key, _public = a_keypair()
+    inner = _ld_sign(_create(actor=stranger), key, actor=stranger)
+    served = serve_remote_object(http_mock, uri=OBJECT_ID, document=note_document(attributed_to=stranger, uri=OBJECT_ID))
+
+    result, reason = verify_announced_inner(_announce(inner))
+
+    assert reason is None
+    assert result['object'] == served
+
+
+def test_an_unsigned_inner_activity_naming_its_object_by_uri_is_checked_against_the_origin(app, db_session, http_mock):
+    served = serve_remote_object(http_mock, uri=OBJECT_ID, document=note_document(attributed_to=CAROL, uri=OBJECT_ID))
+
+    result, reason = verify_announced_inner(_announce(_create(obj=OBJECT_ID)))
+
+    assert reason is None
+    assert result['object'] == served
+
+
+def test_an_object_on_another_host_than_its_activity_is_dropped(app, db_session):
+    inner = _create(obj=note_document(attributed_to=CAROL, uri='https://elsewhere.example/objects/1'))
+
+    assert verify_announced_inner(_announce(inner)) == (None, 'Announced object is on a different host than its activity')
+
+
+@pytest.mark.parametrize('obj', [{'type': 'Note', 'content': 'no id'}, 42])
+def test_an_inner_activity_whose_object_has_no_id_is_dropped(app, db_session, obj):
+    assert verify_announced_inner(_announce(_create(obj=obj))) == (None, 'Announced object has no id')
+
+
+def test_an_origin_copy_attributed_to_another_host_is_dropped(app, db_session, http_mock):
+    serve_remote_object(http_mock, uri=OBJECT_ID,
+                        document=note_document(attributed_to='https://elsewhere.example/u/x', uri=OBJECT_ID))
+
+    assert verify_announced_inner(_announce(_create())) == (
+        None, 'the fetched object is attributed to a different host than its URI')
+
+
+def test_an_unreachable_origin_drops_the_activity(app, db_session, http_mock):
+    http_mock.get(OBJECT_ID).mock(side_effect=httpx.ConnectError('down'))
+
+    assert verify_announced_inner(_announce(_create())) == (None, 'the object could not be fetched')
+
+
+def test_the_dispatcher_drops_and_logs_a_cross_origin_create_its_origin_disowns(app, db_session, monkeypatch, http_mock):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    _instance, community = _seed_announcing_community()
+    serve_remote_object(http_mock, uri=OBJECT_ID, document={}, status=404)
+    activity = _announce(_create(), group=community.ap_profile_id)
+
+    dispatch(activity)
+
+    assert _messages(activity) == ['the object fetch returned HTTP 404']
+    assert Post.query.count() == 0
+
+
+def test_a_refetched_object_naming_its_author_only_by_attributed_to_keeps_the_activitys_actor(
+        app, db_session, monkeypatch, http_mock):
+    """Controller carry-over: D52's 'actor' check runs before the S4 hook, so the replacement the hook hands back
+    must still carry the inner activity's actor -- the dispatcher reads request_json['object']['actor'] next. The
+    origin's document has no 'actor', only 'attributedTo'; the activity stays the Create and keeps its actor, and
+    the post is stored from the origin's copy."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    _instance, community = _seed_announcing_community()
+    _carol()
+    served = serve_remote_object(http_mock, uri=OBJECT_ID, document=note_document(
+        attributed_to=CAROL, uri=OBJECT_ID,
+        fields={'content': 'what the origin says', 'to': [AS_PUBLIC_URI], 'audience': community.ap_profile_id}))
+    assert 'actor' not in served
+    inner = _create(obj=note_document(attributed_to=CAROL, uri=OBJECT_ID, fields={'content': 'forged'}))
+
+    result, reason = verify_announced_inner(_announce(inner))
+    assert reason is None
+    assert result['actor'] == CAROL
+    assert result['type'] == 'Create'
+    assert result['object'] == served
+
+    activity = _announce(inner, group=community.ap_profile_id)
+    dispatch(activity)
+
+    post = Post.query.filter_by(ap_id=OBJECT_ID).one()
+    assert 'what the origin says' in post.body_html
