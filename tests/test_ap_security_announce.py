@@ -4,6 +4,7 @@ signature alone. Spec: docs/superpowers/specs/2026-10-10-ap-security-track-desig
 verify_announced_inner is tested directly; the dispatcher tests prove the hook sits before the inner actor is
 looked up, and that an Announced list gets the same check for every element.
 """
+import copy
 import uuid
 
 import httpx
@@ -214,48 +215,150 @@ def _ld_sign(inner, private_key, actor=CAROL):
     return inner
 
 
+def _origin_copy(http_mock, attributed_to=CAROL, uri=OBJECT_ID, fields=None):
+    return serve_remote_object(http_mock, uri=OBJECT_ID, document=note_document(
+        attributed_to=attributed_to, uri=uri, fields={'content': 'what the origin says', **(fields or {})}))
+
+
 @pytest.mark.parametrize('activity_type', ['Create', 'Update'])
-def test_a_valid_inner_ld_signature_is_accepted_without_a_fetch(app, db_session, http_mock, no_network_ld_signing,
-                                                                 activity_type):
-    """http_mock has no routes: any fetch is an unmatched request and fails the test."""
+def test_a_valid_inner_ld_signature_is_no_shortcut_the_origin_copy_is_used(app, db_session, http_mock,
+                                                                            no_network_ld_signing, activity_type):
+    """Ruling R-NOLDSHORTCUT: an LD signature binds the normalized graph, not the JSON pyfedi reads, so even a
+    valid one by the stored actor is not trusted -- the object is always replaced by the copy its origin serves."""
     carol = _carol()
     inner = _ld_sign(_create(activity_type=activity_type), carol.private_key)
-
-    result, reason = verify_announced_inner(_announce(inner))
-
-    assert reason is None
-    assert result is inner
-    assert 'signature' in inner    # verified on a copy: LDSignature.verify_signature pops it
-
-
-@pytest.mark.parametrize('activity_type', ['Create', 'Update'])
-def test_a_bad_inner_ld_signature_falls_back_to_the_origin_copy(app, db_session, http_mock, no_network_ld_signing,
-                                                                activity_type):
-    _carol()
-    wrong_key, _public = a_keypair()
-    inner = _ld_sign(_create(activity_type=activity_type), wrong_key)
-    served = serve_remote_object(http_mock, uri=OBJECT_ID,
-                                 document=note_document(attributed_to=CAROL, uri=OBJECT_ID,
-                                                        fields={'content': 'what the origin says'}))
+    served = _origin_copy(http_mock)
 
     result, reason = verify_announced_inner(_announce(inner))
 
     assert reason is None
     assert result['object'] == served
     assert result['id'] == inner['id']
+    assert result['type'] == activity_type
 
 
-def test_a_signature_by_an_actor_not_stored_here_is_not_trusted_and_fetches_no_actor(
-        app, db_session, http_mock, no_network_ld_signing):
-    stranger = 'https://other.example/users/nobody'
-    key, _public = a_keypair()
-    inner = _ld_sign(_create(actor=stranger), key, actor=stranger)
-    served = serve_remote_object(http_mock, uri=OBJECT_ID, document=note_document(attributed_to=stranger, uri=OBJECT_ID))
+def test_a_bad_inner_ld_signature_is_refetched_like_any_other(app, db_session, http_mock, no_network_ld_signing):
+    _carol()
+    wrong_key, _public = a_keypair()
+    inner = _ld_sign(_create(), wrong_key)
+    served = _origin_copy(http_mock)
 
     result, reason = verify_announced_inner(_announce(inner))
 
     assert reason is None
     assert result['object'] == served
+
+
+def test_a_signature_by_an_actor_not_stored_here_fetches_no_actor(app, db_session, http_mock, no_network_ld_signing):
+    """http_mock serves only the object: a fetch of the stranger's actor document would be an unmatched request."""
+    stranger = 'https://other.example/users/nobody'
+    key, _public = a_keypair()
+    inner = _ld_sign(_create(actor=stranger), key, actor=stranger)
+    served = _origin_copy(http_mock, attributed_to=stranger)
+
+    result, reason = verify_announced_inner(_announce(inner))
+
+    assert reason is None
+    assert result['object'] == served
+    assert User.query.filter_by(ap_profile_id=stranger).first() is None
+
+
+@pytest.mark.parametrize('signature', ['garbage', 42, None, {}, [],
+                                       {'type': 'RsaSignature2017', 'creator': f'{CAROL}#main-key',
+                                        'created': '2026-10-10T00:00:00Z', 'signatureValue': '!!not base64!!'}])
+def test_an_attacker_shaped_signature_field_is_ignored_and_the_object_refetched(app, db_session, http_mock,
+                                                                                signature):
+    _carol()
+    inner = {**_create(), 'signature': signature}
+    served = _origin_copy(http_mock)
+
+    result, reason = verify_announced_inner(_announce(inner))
+
+    assert reason is None
+    assert result['object'] == served
+
+
+def _tamper_with_inline_context_remap(inner):
+    """Keeps the signed graph: 'content' becomes an ignored blank-node term carrying the forgery, and
+    'realcontent' carries the signed text under as:content."""
+    note = inner['object']
+    note['@context'] = {'content': '_:ignored', 'realcontent': 'https://www.w3.org/ns/activitystreams#content'}
+    note['realcontent'] = note['content']
+    note['content'] = 'forged by the announcing group'
+    return inner
+
+
+def _tamper_with_an_unmapped_term(inner):
+    """A term no context maps is dropped from the graph, so adding it leaves the signature valid."""
+    inner['object']['piefedForgedFlag'] = True
+    return inner
+
+
+@pytest.mark.parametrize('tamper', [_tamper_with_inline_context_remap, _tamper_with_an_unmapped_term])
+def test_a_tampered_ld_signed_create_still_verifies_but_the_origin_copy_is_used(app, db_session, http_mock,
+                                                                                no_network_ld_signing, tamper):
+    """Finding 1: the tampering keeps the LD signature valid, which is why it is no shortcut."""
+    carol = _carol()
+    inner = tamper(_ld_sign(_create(), carol.private_key))
+    LDSignature.verify_signature(copy.deepcopy(inner), carol.public_key)    # the forgery passes LD verification
+    served = _origin_copy(http_mock)
+
+    result, reason = verify_announced_inner(_announce(inner))
+
+    assert reason is None
+    assert result['object'] == served
+
+
+def test_the_dispatcher_stores_the_origin_content_not_an_ld_signed_forgery(app, db_session, monkeypatch, http_mock,
+                                                                         no_network_ld_signing):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    _instance, community = _seed_announcing_community()
+    carol = _carol()
+    addressing = {'to': [AS_PUBLIC_URI], 'audience': community.ap_profile_id}
+    inner = _ld_sign(_create(obj=note_document(attributed_to=CAROL, uri=OBJECT_ID, fields=addressing)),
+                     carol.private_key)
+    inner = _tamper_with_inline_context_remap(inner)
+    _origin_copy(http_mock, fields=addressing)
+
+    dispatch(_announce(inner, group=community.ap_profile_id))
+
+    post = Post.query.filter_by(ap_id=OBJECT_ID).one()
+    assert 'what the origin says' in post.body_html
+    assert 'forged' not in post.body_html
+    assert post.user_id == carol.id
+
+
+@pytest.mark.parametrize('attributed_to', [{'id': CAROL, 'type': 'Person'},
+                                           ['https://other.example/users/dave', {'id': CAROL, 'type': 'Person'}],
+                                           ['https://other.example/users/dave', CAROL]])
+def test_an_origin_copy_attributed_to_the_activitys_actor_in_any_form_is_accepted(app, db_session, http_mock,
+                                                                                  attributed_to):
+    served = _origin_copy(http_mock, attributed_to=attributed_to)
+
+    result, reason = verify_announced_inner(_announce(_create()))
+
+    assert reason is None
+    assert result['object'] == served
+
+
+@pytest.mark.parametrize('attributed_to', ['https://other.example/users/dave',
+                                           {'id': 'https://other.example/users/dave', 'type': 'Person'},
+                                           ['https://other.example/users/dave', {'type': 'Person'}, 42]])
+def test_an_origin_copy_by_another_author_on_the_same_host_is_dropped(app, db_session, http_mock, attributed_to):
+    """Finding 3: the origin vouches for the host, not for the author the announcing Group names."""
+    _origin_copy(http_mock, attributed_to=attributed_to)
+
+    assert verify_announced_inner(_announce(_create())) == (
+        None, 'the fetched object is not attributed to the Announced activity actor')
+
+
+@pytest.mark.parametrize('served_id', ['https://elsewhere.example/objects/1', 'https://other.example/objects/2'])
+def test_an_origin_copy_with_a_different_id_is_dropped(app, db_session, http_mock, served_id):
+    """Finding 4: the id the origin serves must be the one asked for, or the host invariant is bypassed."""
+    _origin_copy(http_mock, uri=served_id)
+
+    assert verify_announced_inner(_announce(_create())) == (
+        None, 'the fetched object id does not match the Announced object id')
 
 
 def test_an_unsigned_inner_activity_naming_its_object_by_uri_is_checked_against_the_origin(app, db_session, http_mock):
