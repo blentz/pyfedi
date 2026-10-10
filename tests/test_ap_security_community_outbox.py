@@ -26,3 +26,25 @@ def test_an_ordinary_community_outbox_is_still_served(app, db_session):
 
     assert response.status_code == 200
     assert response.json['type'] == 'OrderedCollection'
+
+
+COLLECTION_SUFFIXES = ['featured', 'moderators', 'followers']
+
+
+@pytest.mark.parametrize('suffix', COLLECTION_SUFFIXES)
+@pytest.mark.parametrize('flag', ['private', 'local_only'])
+def test_a_non_federating_community_collection_is_403(app, db_session, flag, suffix):
+    seed_actors('test.piefed.local')
+    community = make_community(name='hidden')
+    setattr(community, flag, True)
+    db.session.commit()
+
+    assert ap_get(app, f'/c/hidden/{suffix}').status_code == 403
+
+
+@pytest.mark.parametrize('suffix', COLLECTION_SUFFIXES)
+def test_an_ordinary_community_collection_is_still_served(app, db_session, suffix):
+    seed_actors('test.piefed.local')
+    make_community(name='open')
+
+    assert ap_get(app, f'/c/open/{suffix}').status_code == 200
