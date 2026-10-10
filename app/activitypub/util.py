@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import html
 import os
 import re
@@ -27,8 +26,7 @@ from sqlalchemy import text, Integer, update
 from sqlalchemy.exc import IntegrityError
 
 from app import db, cache, celery, plugins
-from app.activitypub.signature import signed_get_request, send_post_request, default_context, RsaKeys, \
-    LDSignature, VerificationError
+from app.activitypub.signature import signed_get_request, send_post_request, default_context, RsaKeys
 from app.constants import *
 from app.models import User, Post, Community, File, PostReply, Instance, utcnow, \
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
@@ -5593,24 +5591,19 @@ def _id_of(value) -> str:
     return ''
 
 
-def _ld_signed_by_actor(inner: dict) -> bool:
-    """True when `inner` carries an LD signature that verifies against its actor's stored key.
-
-    Only an actor already stored here is used, so a forged signature never makes this instance fetch an actor.
-    Verified on a copy: LDSignature.verify_signature pops 'signature' from what it is given."""
-    actor = find_actor_or_create_cached(_id_of(inner.get('actor')), create_if_not_found=False)
-    if not isinstance(actor, User) or not actor.public_key:
-        return False
-    try:
-        LDSignature.verify_signature(copy.deepcopy(inner), actor.public_key)
-    except VerificationError:
-        return False
-    return True
+def _attributed_ids(attributed_to) -> List[str]:
+    """Every actor id an object's attributedTo names: a string, a dict's string 'id', or either as a list member."""
+    members = attributed_to if isinstance(attributed_to, list) else [attributed_to]
+    return [actor_id for actor_id in (_id_of(member) for member in members) if actor_id]
 
 
 def _verify_announced_content(inner: dict, inner_host: str) -> Tuple[Union[dict, None], Union[str, None]]:
-    """A cross-origin Announced Create or Update: its object must be on the activity's host, and is then trusted
-    on a valid LD signature by the activity's actor, or replaced by the copy its origin serves.
+    """A cross-origin Announced Create or Update: its object must be on the activity's host, and is then replaced
+    by the copy its origin serves, which must carry the id asked for and be attributed to the activity's actor.
+
+    Any inner LD signature is ignored (ruling R-NOLDSHORTCUT): RsaSignature2017 signs the normalized graph, not the
+    JSON this instance reads, so unmapped terms and inline @context remaps change stored content without
+    invalidating it.
 
     Only 'object' is replaced: the activity keeps its own 'actor', which the dispatcher reads next, even when the
     origin's document names its author only by 'attributedTo'."""
@@ -5619,12 +5612,16 @@ def _verify_announced_content(inner: dict, inner_host: str) -> Tuple[Union[dict,
         return None, 'Announced object has no id'
     if host_of(object_id) != inner_host:
         return None, 'Announced object is on a different host than its activity'
-    if 'signature' in inner and _ld_signed_by_actor(inner):
-        return inner, None
-    verified, reason = verify_object_from_source({'actor': _id_of(inner.get('actor')), 'object': object_id})
+    actor_id = _id_of(inner.get('actor'))
+    verified, reason = verify_object_from_source({'actor': actor_id, 'object': object_id})
     if verified is None:
         return None, reason
-    return {**inner, 'object': verified['object']}, None
+    fetched = verified['object']
+    if _id_of(fetched['id']) != object_id:
+        return None, 'the fetched object id does not match the Announced object id'
+    if actor_id not in _attributed_ids(fetched['attributedTo']):
+        return None, 'the fetched object is not attributed to the Announced activity actor'
+    return {**inner, 'object': fetched}, None
 
 
 def verify_announced_inner(announce: dict) -> Tuple[Union[dict, None], Union[str, None]]:
