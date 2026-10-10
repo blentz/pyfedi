@@ -303,7 +303,7 @@ It has no new dependency and builds on `cryptography` (pinned at 50.0.2).
   `signature_format`. An unknown instance defaults to cavage.
 - If the response is 401, re-sign once in the other format and resend immediately. If the second attempt
   succeeds (2xx), store the other format on the instance. If it fails, keep the stored value and return the
-  second response to the existing failure handling. That means a SendQueue retry for POSTs.
+  second response to the existing failure handling. A 4xx is never queued for retry, so nothing changes there.
 - Exactly one alternate attempt is made per send, so a peer that refuses both formats cannot cause a loop.
 
 ## Phase S6: authorized fetch
@@ -425,8 +425,8 @@ Required cases, in addition to those listed in each phase above:
   - a missing required component is handled per the flag;
   - with multiple signatures, the first valid one wins;
   - outbound: a fake peer returning 401 for cavage and 2xx for 9421 changes `signature_format`;
-  - a peer refusing both formats leaves the format unchanged, makes exactly 2 attempts, and the SendQueue retry
-    path runs;
+  - a peer refusing both formats leaves the format unchanged, makes exactly 2 attempts, and creates no SendQueue
+    row;
   - a signed GET double-knock.
 - **S6:**
   - a followers-only post fetched by an accepted follower (200, `private, no-store`, `Vary`);
