@@ -5,7 +5,6 @@ rsa-v1_5-sha256. Verification also accepts rsa-pss-sha512 and ed25519, any cover
 Nothing here touches Flask: callers pass the method, the target URI, the headers and the body.
 """
 import base64
-import binascii
 import hashlib
 import re
 import time
@@ -147,7 +146,7 @@ class _Parser:
         self.pos = end + 1
         try:
             return base64.b64decode(encoded, validate=True)
-        except binascii.Error:
+        except ValueError:   # binascii.Error, or a plain ValueError for non-ASCII input
             self._fail('bad base64')
 
 
@@ -165,29 +164,41 @@ def _header(headers: Mapping[str, str], name: str) -> str | None:
     return None
 
 
+def _split(url: str):
+    """(parts, port) for `url`; the target URI may come from the sender's Host header, so a malformed one is a
+    format error, not a crash."""
+    try:
+        parts = urlsplit(url)
+        return parts, parts.port
+    except ValueError:
+        raise VerificationFormatError('Malformed target URI')
+
+
 def _authority(url: str) -> str:
-    parts = urlsplit(url)
+    parts, port = _split(url)
     host = (parts.hostname or '').lower()
-    if parts.port is not None and (parts.scheme, parts.port) not in (('https', 443), ('http', 80)):
-        host = f'{host}:{parts.port}'
+    if ':' in host:
+        host = f'[{host}]'   # an IPv6 literal keeps its brackets
+    if port is not None and (parts.scheme, port) not in (('https', 443), ('http', 80)):
+        host = f'{host}:{port}'
     return host
 
 
 def _component_value(name: str, method: str, url: str, headers: Mapping[str, str]) -> str:
     if name == '@method':
-        return method.upper()
+        return method   # as sent on the wire, untransformed (RFC 9421 section 2.2.1)
     if name == '@target-uri':
         return url
     if name == '@authority':
         return _authority(url)
     if name == '@path':
-        return urlsplit(url).path or '/'
+        return _split(url)[0].path or '/'
     if name.startswith('@'):
         raise VerificationFormatError(f'Unsupported derived component {name}')
     value = _header(headers, name)
     if value is None:
         raise VerificationError(f'Covered header {name} is missing')
-    return value.strip()
+    return value.strip(' \t')
 
 
 def signature_base(covered: list[str], params: str, method: str, url: str, headers: Mapping[str, str]) -> str:
@@ -350,7 +361,9 @@ def _private_key(private_key_pem: str):
 
 def sign(method: str, url: str, body: bytes | None, private_key_pem: str, key_id: str,
          created: int | None = None) -> dict[str, str]:
-    """The Signature-Input, Signature and (with a body) Content-Digest headers for a request."""
+    """The Signature-Input, Signature and (with a body) Content-Digest headers for a request. The method is
+    signed uppercased, as httpx sends it."""
+    method = method.upper()
     covered = ['@method', '@target-uri', '@authority']
     headers = {}
     if body is not None:
