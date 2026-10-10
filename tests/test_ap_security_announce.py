@@ -9,14 +9,18 @@ import uuid
 
 import httpx
 import pytest
+from sqlalchemy import inspect as sa_inspect
 
 import app.activitypub.routes as activitypub_routes
 from app import db
 from app.activitypub.signature import LDSignature, default_context
-from app.activitypub.util import verify_announced_inner
-from app.models import ActivityPubLog, Post, User, utcnow
-from tests.factories import AS_PUBLIC_URI, a_keypair, make_instance, make_user, note_document, serve_remote_object
+from app.activitypub.util import ANNOUNCED_DELETE_DEFERRED, cross_origin_delete_delay, verify_announced_inner
+from app.models import ActivityPubLog, InstanceRole, Post, User, utcnow
+from app.utils import set_setting
+from tests.factories import AS_PUBLIC_URI, a_keypair, make_community_member, make_instance, make_post, \
+    make_post_reply, make_user, note_document, serve_remote_object
 from tests.test_inbox_dispatch_announce import _seed_announcing_community
+from tests.test_inbox_dispatch_lock_delete import record_moderation
 from tests.test_inbox_dispatch_preamble import dispatch
 
 GROUP = 'https://peer.example/c/microblogs'
@@ -433,3 +437,254 @@ def test_a_refetched_object_naming_its_author_only_by_attributed_to_keeps_the_ac
 
     post = Post.query.filter_by(ap_id=OBJECT_ID).one()
     assert 'what the origin says' in post.body_html
+
+
+DELETED_ID = 'https://other.example/objects/1'
+MOD_DELETE_ID = 'https://mods.example/activities/delete/1'
+
+
+def _delete(obj=DELETED_ID):
+    return {'id': 'https://other.example/activities/delete/1', 'type': 'Delete', 'actor': CAROL, 'object': obj}
+
+
+def _mod_delete(actor, obj=DELETED_ID):
+    return {'id': MOD_DELETE_ID, 'type': 'Delete', 'actor': actor, 'object': obj, 'summary': 'rule violation'}
+
+
+def _remote(domain, name):
+    """A remote user stored here; ap_fetched_at stops an inline profile refresh."""
+    user = make_user(make_instance(domain), name)
+    user.ap_fetched_at = utcnow()
+    db.session.commit()
+    return user
+
+
+def _moderated_community(role='moderator'):
+    """The announcing community (peer.example) with dave, on a third host, as a moderator or owner."""
+    _instance, community = _seed_announcing_community()
+    dave = _remote('mods.example', 'dave')
+    member = make_community_member(dave, community, is_moderator=(role == 'moderator'))
+    member.is_owner = role == 'owner'
+    db.session.commit()
+    return community, dave
+
+
+# --- everyone who is not a moderator: the origin must no longer serve the object ---
+
+@pytest.mark.parametrize('status', [404, 410])
+def test_an_announced_delete_is_processed_once_the_origin_no_longer_serves_the_object(app, db_session, http_mock,
+                                                                                     status):
+    http_mock.get(DELETED_ID).respond(status)
+    inner = _delete()
+
+    assert verify_announced_inner(_announce(inner)) == (inner, None)
+
+
+def test_an_announced_delete_may_name_its_object_by_tombstone(app, db_session, http_mock):
+    http_mock.get(DELETED_ID).respond(410)
+    inner = _delete(obj={'id': DELETED_ID, 'type': 'Tombstone'})
+
+    assert verify_announced_inner(_announce(inner)) == (inner, None)
+
+
+def test_an_announced_delete_of_an_object_the_origin_still_serves_is_dropped(app, db_session, http_mock):
+    http_mock.get(DELETED_ID).respond(200, json=note_document(attributed_to=CAROL, uri=DELETED_ID))
+
+    assert verify_announced_inner(_announce(_delete())) == (None, 'Announced Delete of an object that still exists')
+
+
+@pytest.mark.parametrize('status', [401, 403, 500])
+def test_any_other_origin_answer_drops_the_delete(app, db_session, http_mock, status):
+    http_mock.get(DELETED_ID).respond(status)
+
+    assert verify_announced_inner(_announce(_delete())) == (None, f'Announced Delete: the object answers HTTP {status}')
+
+
+def test_an_unreachable_origin_drops_the_delete_without_a_retry(app, db_session, http_mock):
+    """D775: no retry on inbox processing."""
+    route = http_mock.get(DELETED_ID).mock(side_effect=httpx.ConnectError('down'))
+
+    assert verify_announced_inner(_announce(_delete())) == (None, 'Announced Delete: the object could not be fetched')
+    assert route.call_count == 1
+
+
+@pytest.mark.parametrize('obj', ['MISSING', {'type': 'Tombstone'}, 42])
+def test_an_announced_delete_naming_no_object_is_dropped(app, db_session, obj):
+    inner = _delete()
+    if obj == 'MISSING':
+        del inner['object']
+    else:
+        inner['object'] = obj
+
+    assert verify_announced_inner(_announce(inner)) == (None, 'Announced Delete names no object')
+
+
+def test_a_same_origin_delete_is_not_fetched(app, db_session, http_mock):
+    """http_mock has no routes: a fetch would be an unmatched request."""
+    inner = _delete()
+
+    assert verify_announced_inner(_announce(inner, group='https://other.example/c/news')) == (inner, None)
+
+
+# --- moderators and Group-host admins: deferred, never fetched ---
+
+@pytest.mark.parametrize('role', ['moderator', 'owner'])
+def test_a_moderators_cross_origin_delete_is_deferred_not_fetched(app, db_session, http_mock, role):
+    """http_mock has no routes: a fetch would be an unmatched request."""
+    community, dave = _moderated_community(role)
+    announce = _announce(_mod_delete(dave.ap_profile_id), group=community.ap_profile_id)
+
+    assert verify_announced_inner(announce, community) == (None, ANNOUNCED_DELETE_DEFERRED)
+
+
+def test_an_admin_of_the_communitys_host_is_deferred(app, db_session, http_mock):
+    """What counts is an InstanceRole admin row for the community's own instance (Community.is_instance_admin)."""
+    _instance, community = _seed_announcing_community()
+    erin = _remote('mods.example', 'erin')
+    db.session.add(InstanceRole(instance_id=community.instance_id, user_id=erin.id, role='admin'))
+    db.session.commit()
+    announce = _announce(_mod_delete(erin.ap_profile_id), group=community.ap_profile_id)
+
+    assert verify_announced_inner(announce, community) == (None, ANNOUNCED_DELETE_DEFERRED)
+
+
+def test_an_admin_of_an_unrelated_instance_takes_the_refetch_path(app, db_session, http_mock):
+    _instance, community = _seed_announcing_community()
+    erin = _remote('mods.example', 'erin')
+    db.session.add(InstanceRole(instance_id=erin.instance_id, user_id=erin.id, role='admin'))
+    db.session.commit()
+    http_mock.get(DELETED_ID).respond(200, json=note_document(attributed_to=CAROL, uri=DELETED_ID))
+    announce = _announce(_mod_delete(erin.ap_profile_id), group=community.ap_profile_id)
+
+    assert verify_announced_inner(announce, community) == (None, 'Announced Delete of an object that still exists')
+
+
+def test_a_moderator_announced_by_a_feed_takes_the_refetch_path(app, db_session, http_mock):
+    """No announcing community (a feed, or a podcast twin): nobody's moderator status can apply."""
+    _community, dave = _moderated_community()
+    http_mock.get(DELETED_ID).respond(410)
+    inner = _mod_delete(dave.ap_profile_id)
+
+    assert verify_announced_inner(_announce(inner)) == (inner, None)
+
+
+def test_an_actor_not_stored_here_is_never_fetched_and_takes_the_refetch_path(app, db_session, http_mock):
+    """Only the object is fetched: an unknown actor is looked up, never created."""
+    _instance, community = _seed_announcing_community()
+    http_mock.get(DELETED_ID).respond(410)
+    inner = _mod_delete('https://mods.example/users/nobody')
+
+    assert verify_announced_inner(_announce(inner, group=community.ap_profile_id), community) == (inner, None)
+    assert User.query.filter_by(ap_profile_id='https://mods.example/users/nobody').first() is None
+
+
+def test_a_moderator_delete_naming_no_object_is_dropped_before_any_role_check(app, db_session):
+    community, dave = _moderated_community()
+    inner = _mod_delete(dave.ap_profile_id, obj=42)
+
+    assert verify_announced_inner(_announce(inner, group=community.ap_profile_id), community) == (
+        None, 'Announced Delete names no object')
+
+
+# --- the dispatcher ---
+
+def test_the_dispatcher_drops_and_logs_a_delete_of_an_object_still_served(app, db_session, monkeypatch, http_mock):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    _instance, community = _seed_announcing_community()
+    http_mock.get(DELETED_ID).respond(200, json=note_document(attributed_to=CAROL, uri=DELETED_ID))
+    activity = _announce(_delete(), group=community.ap_profile_id)
+
+    dispatch(activity)
+
+    assert _messages(activity) == ['Announced Delete of an object that still exists']
+
+
+def test_the_dispatcher_schedules_a_moderators_delete_with_the_configured_delay(app, db_session, monkeypatch,
+                                                                               http_mock):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    community, dave = _moderated_community()
+    post = make_post(community, _carol(), ap_id=DELETED_ID)
+    set_setting('cross_origin_delete_delay', 45)
+    scheduled = []
+    monkeypatch.setattr(activitypub_routes.apply_delayed_delete, 'apply_async',
+                        lambda args=None, kwargs=None, countdown=None, **options: scheduled.append((args, countdown)))
+    activity = _announce(_mod_delete(dave.ap_profile_id), group=community.ap_profile_id)
+
+    dispatch(activity)
+
+    assert scheduled == [((activity, True), 45)]
+    assert _messages(activity) == [
+        'Announced Delete by a moderator: applied after 45 seconds unless its home server deletes it first']
+    db.session.refresh(post)
+    assert post.deleted is False    # nothing is applied before the delay
+
+
+# --- apply_delayed_delete ---
+
+def test_a_deferred_delete_of_a_live_post_is_applied_as_a_moderator_removal(app, db_session, monkeypatch):
+    community, dave = _moderated_community()
+    post = make_post(community, _carol(), ap_id=DELETED_ID)
+    calls = record_moderation(monkeypatch, 'delete_post_or_comment', 'announce_activity_to_followers')
+    announce = _announce(_mod_delete(dave.ap_profile_id), group=community.ap_profile_id)
+
+    activitypub_routes.apply_delayed_delete(announce, True)
+
+    assert len(calls['delete_post_or_comment']) == 1
+    user_arg, to_delete_arg, store_ap_json_arg, _request_json, reason_arg = calls['delete_post_or_comment'][0][0]
+    assert sa_inspect(user_arg).identity[0] == dave.id
+    assert sa_inspect(to_delete_arg).identity[0] == post.id
+    assert store_ap_json_arg is True
+    assert reason_arg == 'rule violation'
+    assert calls['announce_activity_to_followers'] == []    # an Announced Delete is never re-announced
+
+
+@pytest.mark.parametrize('by_tombstone', [False, True])
+def test_a_deferred_delete_of_a_live_reply_goes_back_through_the_dispatcher(app, db_session, monkeypatch,
+                                                                            by_tombstone):
+    community, dave = _moderated_community()
+    post = make_post(community, _carol(), ap_id=DELETED_ID)
+    reply = make_post_reply(post, post.author)
+    reply.ap_id = 'https://other.example/comment/1'
+    db.session.commit()
+    processed = []
+    monkeypatch.setattr(activitypub_routes, 'process_inbox_request', lambda *a, **k: processed.append((a, k)))
+    obj = {'id': reply.ap_id, 'type': 'Tombstone'} if by_tombstone else reply.ap_id
+    announce = _announce(_mod_delete(dave.ap_profile_id, obj=obj), group=community.ap_profile_id)
+
+    activitypub_routes.apply_delayed_delete(announce, False)
+
+    assert processed == [((announce, False), {'announce_verified': True})]
+
+
+@pytest.mark.parametrize('state', ['already deleted', 'never stored'])
+def test_a_deferred_delete_the_home_server_beat_is_superseded(app, db_session, monkeypatch, state):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    community, dave = _moderated_community()
+    if state == 'already deleted':
+        post = make_post(community, _carol(), ap_id=DELETED_ID)
+        post.deleted = True
+        db.session.commit()
+    processed = []
+    monkeypatch.setattr(activitypub_routes, 'process_inbox_request', lambda *a, **k: processed.append((a, k)))
+    announce = _announce(_mod_delete(dave.ap_profile_id), group=community.ap_profile_id)
+
+    activitypub_routes.apply_delayed_delete(announce, True)
+
+    assert processed == []
+    assert _messages(announce) == ["Delete superseded by the home server's"]
+
+
+# --- the delay setting ---
+
+def test_the_delay_defaults_to_90_seconds(app, db_session):
+    assert cross_origin_delete_delay() == 90
+
+
+@pytest.mark.parametrize('stored, expected', [
+    (0, 0), (45, 45), (3600, 3600), ('120', 120),
+    ('soon', 90), (None, 90), (-5, 90), (3601, 90),
+])
+def test_the_delay_setting_is_coerced_and_bounded(app, db_session, stored, expected):
+    set_setting('cross_origin_delete_delay', stored)
+
+    assert cross_origin_delete_delay() == expected

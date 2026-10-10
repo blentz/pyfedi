@@ -23,7 +23,7 @@ from app.visibility import visible_to_clause
 from app.activitypub.routes import process_inbox_request, process_delete_request, replay_inbox_request, \
     SIGNATURE_FAILURE_MESSAGES
 from app.activitypub.signature import post_request, default_context, RsaKeys
-from app.activitypub.util import extract_domain_and_actor
+from app.activitypub.util import extract_domain_and_actor, cross_origin_delete_delay
 from app.admin.constants import ReportTypes
 from app.admin.forms import FederationForm, SiteMiscForm, SiteProfileForm, EditCommunityForm, EditUserForm, \
     EditTopicForm, SendNewsletterForm, AddUserForm, PreLoadCommunitiesForm, ImportExportBannedListsForm, \
@@ -510,6 +510,7 @@ def admin_federation():
         set_setting('actor_blocked_words', form.blocked_actors.data)
         set_setting('actor_bio_blocked_words', form.blocked_bio.data)
         set_setting('auto_add_remote_communities', form.auto_add_remote_communities.data)
+        set_setting('cross_origin_delete_delay', form.cross_origin_delete_delay.data)
         cache.delete_memoized(blocked_phrases)
         cache.delete_memoized(get_setting, 'actor_blocked_words')
         db.session.commit()
@@ -529,6 +530,7 @@ def admin_federation():
         form.blocked_actors.data = get_setting('actor_blocked_words', '')
         form.blocked_bio.data = get_setting('actor_bio_blocked_words', '')
         form.auto_add_remote_communities.data = get_setting('auto_add_remote_communities', False)
+        form.cross_origin_delete_delay.data = cross_origin_delete_delay()
 
     return render_template('admin/federation.html', title=_('Federation settings'),
                            form=form, current_app_debug=current_app.debug, roles_with=roles_with('change instance settings'))

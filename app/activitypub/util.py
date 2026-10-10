@@ -36,7 +36,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     _as_text, _as_int, _as_float, _as_dict, _as_url, property_value_fields, public_key_pem, \
     more_info_link, is_more_info_link, more_info_url_from, \
     language_from_ap, adjust_domain_post_count, actor_name_from_ap, PostReplyValidationError, post_file, GALLERY_BLOCKED_WEIGHT
-from app.utils import get_request, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
+from app.utils import get_request, get_request_capped, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
     sanitise_posting_warning, \
     is_image_url, domain_from_url, gibberish, ensure_directory_exists, shorten_string, fixup_url, \
     microblog_content_to_title, is_video_url, \
@@ -5624,8 +5624,70 @@ def _verify_announced_content(inner: dict, inner_host: str) -> Tuple[Union[dict,
     return {**inner, 'object': fetched}, None
 
 
-def verify_announced_inner(announce: dict) -> Tuple[Union[dict, None], Union[str, None]]:
+CROSS_ORIGIN_DELETE_DELAY_DEFAULT = 90
+ANNOUNCED_DELETE_DEFERRED = 'Announced Delete by a moderator: deferred'
+
+
+def cross_origin_delete_delay() -> int:
+    """Seconds a moderator's Announced cross-origin Delete waits for the home server's own Delete (spec Amendment A).
+
+    An admin setting (admin federation form). Anything that is not a whole number from 0 to 3600 falls back to the
+    default, with a warning, so a bad stored value can never schedule a negative or day-long countdown."""
+    value = get_setting('cross_origin_delete_delay', CROSS_ORIGIN_DELETE_DELAY_DEFAULT)
+    try:
+        delay = int(value)
+    except (TypeError, ValueError):
+        delay = -1
+    if not 0 <= delay <= 3600:
+        current_app.logger.warning(f'cross_origin_delete_delay is {value!r}; using {CROSS_ORIGIN_DELETE_DELAY_DEFAULT}')
+        return CROSS_ORIGIN_DELETE_DELAY_DEFAULT
+    return delay
+
+
+def _may_remove_from(actor_id: str, community) -> bool:
+    """True when `actor_id` is a stored moderator or owner of `community`, or an admin of the instance hosting it.
+
+    Lookup only: an actor not stored here is never fetched. Local admins are not considered: the inbox gate drops
+    every Announce whose inner actor is local before it is dispatched (R:746)."""
+    if community is None:
+        return False
+    user = find_actor_or_create_cached(actor_id, create_if_not_found=False)
+    if not isinstance(user, User):
+        return False
+    return community.is_moderator(user) or community.is_instance_admin(user)
+
+
+def _verify_announced_delete(inner: dict, community) -> Tuple[Union[dict, None], Union[str, None]]:
+    """A cross-origin Announced Delete (spec S4 item 4, Amendment A).
+
+    From the announcing community's moderator or owner, or an admin of its host, the Delete is deferred: the
+    dispatcher schedules apply_delayed_delete so the home server's own Delete can win. From anyone else it is
+    processed only once the object's origin no longer serves it (404 or 410). One fetch and no retry (D775): an
+    unreachable origin, or any other answer, drops the Delete. get_request_capped, not get_request: get_request
+    sleeps and retries on every transport error, and only the status matters here, so no body is read."""
+    object_id = _id_of(inner.get('object'))
+    if not object_id:
+        return None, 'Announced Delete names no object'
+    if _may_remove_from(_id_of(inner.get('actor')), community):
+        return None, ANNOUNCED_DELETE_DEFERRED
+    try:
+        status, _body = get_request_capped(object_id, 0, headers={'Accept': 'application/activity+json'})
+    except httpx.HTTPError:
+        return None, 'Announced Delete: the object could not be fetched'
+    if status in (404, 410):
+        return inner, None
+    if status == 200:
+        return None, 'Announced Delete of an object that still exists'
+    return None, f'Announced Delete: the object answers HTTP {status}'
+
+
+def verify_announced_inner(announce: dict, community=None) -> Tuple[Union[dict, None], Union[str, None]]:
     """Decide whether the activity a Group's Announce wraps may be processed (security track, phase S4).
+
+    `community` is the announcing Community, or None for a feed or a podcast twin; it is consulted only for a
+    cross-origin Delete, whose moderators' Deletes are deferred rather than fetched (Amendment A). Returns
+    `(inner, None)` to process, `(None, ANNOUNCED_DELETE_DEFERRED)` to schedule apply_delayed_delete, or
+    `(None, reason)` to drop.
 
     The Group's HTTP signature proves only that the Group sent the Announce. An inner activity published on the
     Group's own host is the Group's to vouch for; one from any other host must at least name an actor on that
@@ -5654,6 +5716,8 @@ def verify_announced_inner(announce: dict) -> Tuple[Union[dict, None], Union[str
         return None, 'Announced activity host does not match its actor'
     if inner.get('type') in ('Create', 'Update'):
         return _verify_announced_content(inner, inner_host)
+    if inner.get('type') == 'Delete':
+        return _verify_announced_delete(inner, community)
     return inner, None
 
 

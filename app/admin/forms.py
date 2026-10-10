@@ -124,6 +124,9 @@ class FederationForm(FlaskForm):
     blocked_actors = TextAreaField(_l('Discard all posts and comments by users with these words in their name (one per line)'))
     blocked_bio = TextAreaField(_l('Discard all posts and comments by users with these phrases in their bio (one per line)'))
     auto_add_remote_communities = BooleanField(_l('Automatically add new remote communities'))
+    cross_origin_delete_delay = IntegerField(
+        _l("Seconds to wait before applying a moderator's Delete of a post from another server"),
+        validators=[InputRequired(), NumberRange(min=0, max=3600)], default=90)
     submit = SubmitField(_l('Save'))
 
 

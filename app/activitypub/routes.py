@@ -29,7 +29,7 @@ from app.activitypub.util import activity_dedupe_key, claim_activity, host_of, u
     process_report, ensure_domains_match, refresh_community_profile, \
     comment_model_to_json, restore_post_or_comment, ban_user, unban_user, \
     log_incoming_ap, find_community, site_ban_remove_data, community_ban_remove_data, verify_object_from_source, \
-    verify_announced_inner, \
+    verify_announced_inner, ANNOUNCED_DELETE_DEFERRED, cross_origin_delete_delay, \
     post_replies_for_ap, is_vote, known_instance_id, resolve_remote_post_from_search, proactively_delete_content, \
     process_quote_boost, object_has_missing_fields, find_microblogging_community, process_announce_of_uri, \
     announce_target_uri, undo_boost
@@ -972,7 +972,7 @@ def replay_inbox_request(request_json):
 
 
 @celery.task
-def process_inbox_request(request_json, store_ap_json, relay_id=None):
+def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_verified=False):
     with current_app.app_context():
         session = get_task_session()
         token = current_relay_id.set(relay_id)   # Post.new records it as post.relay_id; reset in the finally
@@ -1060,11 +1060,20 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None):
                     # S4: an inner activity from another host is not trusted on the Group's signature alone, and one
                     # without a usable id is refused outright (R-INNERID). Checked before the inner actor is looked
                     # up, so a refused activity's actor is never fetched or stored.
-                    verified_inner, refusal = verify_announced_inner(request_json)
-                    if verified_inner is None:
-                        log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json, refusal)
-                        return
-                    request_json['object'] = verified_inner
+                    # announce_verified: apply_delayed_delete re-dispatches an Announce this check already deferred.
+                    if not announce_verified:
+                        verified_inner, refusal = verify_announced_inner(request_json, community)
+                        if refusal == ANNOUNCED_DELETE_DEFERRED:
+                            delay = cross_origin_delete_delay()
+                            apply_delayed_delete.apply_async(args=(request_json, store_ap_json), countdown=delay)
+                            log_incoming_ap(id, APLOG_DELETE, APLOG_PROCESSING, saved_json,
+                                            f'Announced Delete by a moderator: applied after {delay} seconds '
+                                            f'unless its home server deletes it first')
+                            return
+                        if verified_inner is None:
+                            log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json, refusal)
+                            return
+                        request_json['object'] = verified_inner
                     if not feed:
                         user = find_actor_or_create_cached(request_json['object']['actor'])
                         if user and isinstance(user, User):
@@ -2243,6 +2252,30 @@ def process_announced_objects(request_json, objects, id, saved_json, store_ap_js
         fake_activity = request_json.copy()
         fake_activity['object'] = obj
         process_inbox_request(fake_activity, store_ap_json)  # Process the Announce (with single object) as normal
+
+
+@celery.task
+def apply_delayed_delete(announce_json, store_ap_json):
+    """Apply a moderator's Announced cross-origin Delete once cross_origin_delete_delay has passed (spec Amendment A).
+
+    If the object is already gone here -- the home server's own Delete arrived first, or it was never stored -- there
+    is nothing left to do. Otherwise the Announce goes back through the dispatcher, skipping the S4 check that
+    deferred it, so the Delete is recorded as the moderator's removal."""
+    with current_app.app_context():
+        saved_json = announce_json if store_ap_json else None
+        target = announce_json['object'].get('object')
+        object_id = target.get('id') if isinstance(target, dict) else target
+        session = get_task_session()
+        try:
+            live = (session.query(Post).filter_by(ap_id=object_id, deleted=False).first() or
+                    session.query(PostReply).filter_by(ap_id=object_id, deleted=False).first())
+        finally:
+            session.close()
+        if live is None:
+            log_incoming_ap(announce_json['id'], APLOG_DELETE, APLOG_IGNORED, saved_json,
+                            "Delete superseded by the home server's")
+            return
+        process_inbox_request(announce_json, store_ap_json, announce_verified=True)
 
 
 @celery.task

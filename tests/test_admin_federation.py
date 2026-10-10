@@ -101,6 +101,7 @@ def _federation_payload(token, **overrides):
     data = {'federation_mode': 'blocklist', 'allowlist': '', 'allowlist_mode': '0',
             'blocklist': '', 'defederation_subscription': '',
             'blocked_phrases': '', 'blocked_actors': '', 'blocked_bio': '',
+            'cross_origin_delete_delay': '90',
             'submit': 'Save', 'csrf_token': token}
     data.update(overrides)
     return data
@@ -965,3 +966,39 @@ def test_a_failed_import_rolls_back_and_re_raises(app, db_session):
         import_bans_task('{"banned_instances": ["evil.example"]')  # truncated JSON
 
     assert BannedInstances.query.count() == 0
+
+
+def test_the_cross_origin_delete_delay_is_stored(admin_client):
+    from app.utils import get_setting
+
+    client, token = admin_client
+
+    _post(client, token, cross_origin_delete_delay='30')
+
+    assert get_setting('cross_origin_delete_delay', None) == 30
+
+
+@pytest.mark.parametrize('value', ['-1', '3601', 'soon', ''])
+def test_an_out_of_range_cross_origin_delete_delay_saves_nothing(admin_client, value):
+    from app.utils import get_setting
+
+    client, token = admin_client
+
+    _response, render = _post(client, token, cross_origin_delete_delay=value)
+
+    assert get_setting('cross_origin_delete_delay', None) is None
+    assert render.call_args.kwargs['form'].cross_origin_delete_delay.errors
+
+
+@pytest.mark.parametrize('stored, shown', [(None, 90), (120, 120)])
+def test_the_form_shows_the_current_cross_origin_delete_delay(admin_client, stored, shown):
+    from app.utils import set_setting
+
+    client, _token = admin_client
+    if stored is not None:
+        set_setting('cross_origin_delete_delay', stored)
+
+    with patch('app.admin.routes.render_template', return_value='rendered') as render:
+        client.get('/admin/federation')
+
+    assert render.call_args.kwargs['form'].cross_origin_delete_delay.data == shown
