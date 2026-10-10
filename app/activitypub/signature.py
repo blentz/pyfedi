@@ -54,6 +54,7 @@ import app as app_pkg
 from app import celery, db, httpx_client
 from app.activitypub.ld_contexts import LDCoverageError, PYFEDI_CONTEXT_TERMS, check_ld_coverage, ld_document_loader, \
     strip_empty_values
+from app.activitypub.signature_errors import VerificationError, VerificationFormatError  # re-exported
 from app.constants import DATETIME_MS_FORMAT
 from app.discovery.instance_answers import record_delivery_refusal
 from app.relays.refusals import record_relay_refusal
@@ -207,22 +208,6 @@ def signed_get_request(uri: str, private_key: str, key_id: str, content_type: st
                        method: Literal["get", "post"] = "get", timeout: int = 10, ):
     result = HttpSignature.signed_request(uri, None, private_key, key_id, content_type, method, timeout)
     return result
-
-
-class VerificationError(BaseException):
-    """
-    There was an error with verifying the signature
-    """
-
-    pass
-
-
-class VerificationFormatError(VerificationError):
-    """
-    There was an error with the format of the signature (not if it is valid)
-    """
-
-    pass
 
 
 # pyld's default loader fetches every @context over the network, uncached and
