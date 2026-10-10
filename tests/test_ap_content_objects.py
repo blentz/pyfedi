@@ -503,7 +503,9 @@ def test_a_deleted_post_is_410_with_a_tombstone(app, db_session, monkeypatch):
     assert response.json['type'] == 'Tombstone'
     assert response.json['formerType'] == 'Page'
     assert response.json['id'] == post.ap_id
-    assert calls['post_to_page'] == []
+    # post_to_page is consulted only for the type (S3.3); its Page is not served.
+    assert calls['post_to_page'] == [post]
+    assert 'content' not in response.json
 
 
 def test_a_deleted_post_in_a_private_community_is_403_not_410(app, db_session, monkeypatch):
