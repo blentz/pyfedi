@@ -138,8 +138,8 @@ def test_an_announce_of_a_list_processes_every_element(app, db_session, monkeypa
     db.session.commit()
 
     activity = inbox_activity(community, activity_type='Announce',
-                              object=[{'actor': bob.ap_profile_id},
-                                      {'actor': carol.ap_profile_id}])
+                              object=[{'id': 'https://peer.example/activities/like/1', 'actor': bob.ap_profile_id},
+                                      {'id': 'https://peer.example/activities/like/2', 'actor': carol.ap_profile_id}])
 
     dispatch(activity)
 
@@ -174,8 +174,8 @@ def test_an_announce_of_an_ordered_collection_processes_every_item(
     activity = inbox_activity(
         community, activity_type='Announce',
         object={'type': 'OrderedCollection',
-                'orderedItems': [{'actor': bob.ap_profile_id},
-                                 {'actor': carol.ap_profile_id}]})
+                'orderedItems': [{'id': 'https://peer.example/activities/like/3', 'actor': bob.ap_profile_id},
+                                 {'id': 'https://peer.example/activities/like/4', 'actor': carol.ap_profile_id}]})
 
     dispatch(activity)
 
@@ -351,7 +351,7 @@ def test_an_announce_whose_inner_actor_is_banned_is_refused(app, db_session, mon
     db.session.commit()
 
     activity = inbox_activity(community, activity_type='Announce',
-                              object={'actor': user_url})
+                              object={'id': 'https://peer.example/activities/like/5', 'actor': user_url})
 
     dispatch(activity)
 
@@ -383,7 +383,8 @@ def test_an_announce_whose_inner_actor_resolves_to_a_banned_user_is_refused(app,
 
     monkeypatch.setattr(activitypub_routes, 'find_actor_or_create_cached', find)
 
-    dispatch(inbox_activity(community, activity_type='Announce', object={'actor': user_url}))
+    dispatch(inbox_activity(community, activity_type='Announce',
+                            object={'id': 'https://peer.example/activities/like/6', 'actor': user_url}))
 
     log = ActivityPubLog.query.one()
     assert log.result == 'failure'
@@ -413,7 +414,7 @@ def test_an_announce_whose_inner_actor_is_unfound_is_refused(
     http_mock.get(ghost_url).respond(404)
 
     activity = inbox_activity(community, activity_type='Announce',
-                              object={'actor': ghost_url})
+                              object={'id': 'https://peer.example/activities/like/7', 'actor': ghost_url})
 
     dispatch(activity)
 
@@ -470,7 +471,8 @@ def test_an_announce_whose_inner_actor_is_a_community_is_refused(
     assert isinstance(inner_community, Community)
 
     activity = inbox_activity(community, activity_type='Announce',
-                              object={'actor': inner_community.ap_profile_id})
+                              object={'id': 'https://peer.example/activities/like/8',
+                                      'actor': inner_community.ap_profile_id})
 
     dispatch(activity)
 
