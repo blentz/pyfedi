@@ -18,6 +18,7 @@ from sqlalchemy import func
 import app.activitypub.util as ap_util   # the module, not names: app.activitypub.util imports this module
 from app import cache, celery, db
 from app.activitypub.signature import HttpSignature
+from app.constants import AP_FETCH_ACCEPT
 from app.discovery.filters import ascii_host, clean_https_url, clean_name, url_is_excluded
 from app.discovery.podcast import podcast_community_for
 from app.models import Post, Site, User
@@ -31,7 +32,7 @@ PODCAST_NAMESPACE = 'https://podcastindex.org/namespace/1.0'
 HOST_ROLES = ('host', 'co-host')
 MAX_ACTOR_BYTES = 256 * 1024
 CREDIT_ACTOR_TYPES = ('Person', 'Service')
-_ACTOR_ACCEPT = 'application/activity+json, application/ld+json; profile="https://www.w3.org/ns/activitystreams"'
+_ACTOR_ACCEPT = AP_FETCH_ACCEPT   # the one outgoing ActivityPub Accept (interop C1 item 5); the value is unchanged
 
 _PERSON = f'{{{PODCAST_NAMESPACE}}}person'
 

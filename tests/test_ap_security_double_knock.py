@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from app import db
+from app.constants import AP_FETCH_ACCEPT
 from app.activitypub import signature_rfc9421 as rfc9421
 from app.activitypub.signature import HttpSignature, double_knock, post_request, signed_get_capped, \
     signed_get_request
@@ -282,14 +283,14 @@ class TestSignedGet:
         assert instance.signature_format == 'rfc9421'
 
 
-    def test_the_request_is_signed_and_asks_for_json_ld(self, app, db_session, http_mock):
+    def test_the_request_is_signed_and_asks_for_activitypub(self, app, db_session, http_mock):
         """The signer's headers go out on the capped fetch: its Signature, Date, Host and Accept."""
         route = http_mock.get(ACTOR).respond(200, json={'id': ACTOR})
 
         assert signed_get_request(ACTOR, a_keypair()[0], KEY_ID).json() == {'id': ACTOR}
         sent = route.calls[0].request.headers
         assert 'signature' in sent and 'date' in sent
-        assert sent['accept'] == 'application/ld+json'
+        assert sent['accept'] == AP_FETCH_ACCEPT
         assert sent['host'] == 'peer.example'
         assert sent['user-agent'].startswith('PieFed/')
 

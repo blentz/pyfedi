@@ -59,7 +59,7 @@ from app.models import Community, CommunityMember, Post, Site, User, utcnow, Top
 from app.ldap_utils import test_ldap_connection, sync_user_to_ldap, login_with_ldap
 from app.rss_extras import RSSFeed
 import boto3
-from app.activitypub.routes import replay_inbox_request, paged_outbox, AP_CACHE_COLLECTION
+from app.activitypub.routes import replay_inbox_request, paged_outbox, AP_CACHE_COLLECTION, ap_media_type
 import app as app_pkg
 
 
@@ -69,8 +69,7 @@ import app as app_pkg
 @bp.route('/home/<sort>/<view_filter>', methods=['GET'])
 @login_required_if_private_instance
 def index(sort=None, view_filter=None):
-    if 'application/ld+json' in request.headers.get('Accept', '') or 'application/activity+json' in request.headers.get(
-            'Accept', ''):
+    if is_activitypub_request():
         return activitypub_application()
 
     if sort is None:
@@ -1276,7 +1275,12 @@ def verification_warning():
         flash(_('Please click the link in your email inbox to verify your account.'), 'warning')
 
 
-@cache.cached(timeout=6)
+def ap_application_cache_key() -> str:
+    """activitypub_application's content type follows the Accept header (ap_media_type), so its cache entry does."""
+    return f'view/activitypub_application/{ap_media_type()}'
+
+
+@cache.cached(timeout=6, key_prefix=ap_application_cache_key)
 def activitypub_application():
     application_data = {
         '@context': default_context(),
@@ -1305,7 +1309,7 @@ def activitypub_application():
         }
     }
     resp = jsonify(application_data)
-    resp.content_type = 'application/activity+json'
+    resp.content_type = ap_media_type()
     resp.headers.set('Cache-Control', 'public, max-age=30')
     resp.headers.set('Vary', 'Accept')
     return resp
@@ -1337,7 +1341,7 @@ def instance_actor():
         }
     }
     resp = jsonify(application_data)
-    resp.content_type = 'application/activity+json'
+    resp.content_type = ap_media_type()
     return resp
 
 
@@ -1347,7 +1351,7 @@ def instance_actor_outbox():
     peers that dereference an advertised outbox got 404 before."""
     outbox = paged_outbox(f"{current_app.config['SERVER_URL']}/actor/outbox", 0, lambda offset, limit: [])
     resp = jsonify(outbox)
-    resp.content_type = 'application/activity+json'
+    resp.content_type = ap_media_type()
     resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
     return resp
 
@@ -1438,7 +1442,7 @@ def list_feeds():
         site_data['site_view']['public_feeds'] = feeds_list
         site_data['site_view']['counts']['public_feeds'] = len(feeds_list)
         resp = jsonify(site_data)
-        resp.content_type = 'application/activity+json'
+        resp.content_type = ap_media_type()
         return resp
     else:
         # render the page

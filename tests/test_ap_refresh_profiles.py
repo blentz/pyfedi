@@ -19,6 +19,7 @@ import pytest
 
 from app import db
 from app.activitypub import util as ap_util
+from app.constants import AP_FETCH_ACCEPT
 from app.activitypub.util import (refresh_community_profile_task,
                                   refresh_feed_profile_task,
                                   refresh_user_profile_task)
@@ -2120,7 +2121,7 @@ def test_the_following_collection_fetch_asks_for_activity_json(app, db_session, 
     content-negotiates is free to answer an ActivityPub URL with HTML. The
     other two `get_request` calls in `refresh_feed_profile_task` -- the
     actor fetch and the owners-collection fetch -- each pass
-    `headers={'Accept': 'application/activity+json'}`.
+    `headers={'Accept': AP_FETCH_ACCEPT}`.
 
     WHAT THE PEER SAW BEFORE THE FIX WAS `*/*`, not nothing: httpx's own
     client defaults supply an `Accept` when the caller sets none, and `*/*`
@@ -2157,7 +2158,7 @@ def test_the_following_collection_fetch_asks_for_activity_json(app, db_session, 
 
     assert following_route.call_count == 1
     sent = following_route.calls.last.request
-    assert sent.headers['accept'] == 'application/activity+json'
+    assert sent.headers['accept'] == AP_FETCH_ACCEPT
     assert db.session.query(FeedItem).one().community_id == community.id
 
 

@@ -23,6 +23,7 @@ import pytest
 from unittest.mock import patch
 
 from app import db
+from app.constants import AP_FETCH_ACCEPT
 from app.activitypub.actor import (create_actor_from_remote, fetch_actor_from_webfinger,
                                    fetch_remote_actor_data, find_actor_by_url,
                                    find_local_user, find_remote_actor,
@@ -1072,7 +1073,7 @@ def test_a_webfinger_lookup_returns_the_actor_it_points_at(app, db_session):
     assert webfinger.closed is True and actor_response.closed is True
     assert request.call_args_list[0].args[0] == 'https://remote.example/.well-known/webfinger'
     assert request.call_args_list[0].kwargs['params'] == {'resource': 'acct:alice@remote.example'}
-    assert request.call_args_list[1].kwargs['headers'] == {'Accept': 'application/activity+json'}
+    assert request.call_args_list[1].kwargs['headers'] == {'Accept': AP_FETCH_ACCEPT}
 
 
 def test_a_link_advertising_its_own_type_is_asked_for_that_type(app, db_session):

@@ -10,6 +10,7 @@ from sqlalchemy import func, text
 from app import db
 from app.activitypub.util import actor_json_to_model
 from app.community.util import search_for_community, retrieve_mods_and_backfill
+from app.constants import AP_FETCH_ACCEPT
 from app.models import BannedInstances, Feed, FeedItem, Community, _as_dict
 from app.utils import feed_tree, get_request
 
@@ -86,7 +87,7 @@ def search_for_feed(address: str, allow_fetch: bool = True, retry: bool = False)
                 if 'rel' in links and links['rel'] == 'self':  # this contains the URL of the activitypub profile
                     if 'href' not in links:  # a peer may advertise several, so keep walking
                         continue
-                    type = links['type'] if 'type' in links else 'application/activity+json'
+                    type = links['type'] if 'type' in links else AP_FETCH_ACCEPT
                     # retrieve the activitypub profile
                     feed_data = get_request(links['href'], headers={'Accept': type})
                     if feed_data.status_code == 200:

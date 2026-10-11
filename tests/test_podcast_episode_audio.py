@@ -1,6 +1,7 @@
 """C1: a Castopod episode announcement Note gets its audio from the PodcastEpisode object it links to."""
 import httpx
 
+from app.constants import AP_FETCH_ACCEPT
 from tests.factories import (make_community, make_instance, make_site, make_user, peer_actor_json, peer_instance,
                              seed_signing_site)
 
@@ -44,7 +45,7 @@ def test_an_episode_announcement_gets_its_audio_and_image(db_session, http_mock)
 
     post = _ingest(ANNOUNCEMENT)
 
-    assert route.calls.last.request.headers['Accept'] == 'application/activity+json'
+    assert route.calls.last.request.headers['Accept'] == AP_FETCH_ACCEPT
     assert post.type == POST_TYPE_LINK
     assert post.url == AUDIO
     assert post.image.source_url == COVER
