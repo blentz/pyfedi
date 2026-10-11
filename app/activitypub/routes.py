@@ -665,6 +665,10 @@ def user_outbox(actor):
     if not is_activitypub_request():
         return redirect(url_for('activitypub.user_profile', actor=actor))
     user = local_actor_user(actor)
+    # D194, as post_ap_refusal and comment_ap: an instance the user blocked may not read their history in bulk
+    requesting_domain = signed_requestor_domain()
+    if user.has_blocked_instance(known_instance_id(requesting_domain)):
+        return make_response(f'Author has blocked {requesting_domain}'), 401
     rows = user_outbox_rows(user)
     total = db.session.execute(select(func.count()).select_from(rows)).scalar()
     outbox = paged_outbox(f"{user.public_url()}/outbox", total,
@@ -672,7 +676,8 @@ def user_outbox(actor):
     resp = jsonify(outbox)
     resp.content_type = ap_media_type()
     resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
-    resp.headers.set('Vary', 'Accept')
+    # refused to some requesters and served to others, so a shared cache keys on who asks (ap_content_headers)
+    resp.headers.set('Vary', 'Accept, User-Agent, Signature' if user.has_blocked_instances() else 'Accept')
     return resp
 
 
