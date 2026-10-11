@@ -11,14 +11,14 @@ from flask import current_app
 from sqlalchemy import text, select, func
 from sqlalchemy.exc import SQLAlchemyError
 
-from app import celery, cache, httpx_client
+from app import celery, cache
 from app.activitypub.util import find_actor_or_create, find_language_or_create, find_instance_id
 from app.constants import NOTIF_UNBAN, SRC_WEB
 from app.models import Notification, SendQueue, CommunityBan, CommunityMember, User, Community, Post, PostReply, \
     DefederationSubscription, Instance, ActivityPubLog, InstanceRole, utcnow, InstanceChooser, \
     InstanceBan, Emoji, RevokedToken, BotChallenge
 from app.shared.post import delete_post
-from app.utils import get_task_session, download_defeds, instance_banned, get_request_instance, get_request, \
+from app.utils import _capped_request, get_task_session, download_defeds, instance_banned, get_request_instance, get_request, \
     shorten_string, patch_db_session, archive_post, get_setting, set_setting, communities_banned_from_all_users, \
     banned_instances, blocked_or_banned_instances, get_emoji_replacements, store_files_in_s3, ensure_directory_exists
 from app.utils import communities_banned_from, joined_communities, moderating_communities

@@ -5,9 +5,9 @@ from sqlalchemy import text
 import random
 import string
 
-from app import celery, httpx_client, db
+from app import celery, db
 from app.models import UserRegistration
-from app.utils import get_setting, get_task_session
+from app.utils import _capped_request, get_setting, get_task_session
 
 
 @celery.task
@@ -34,10 +34,13 @@ def check_user_application(application_id, send_async=True):
                 ip_index = random.randint(0, len(fake_ips))
                 ip_list = fake_ips[:]
                 ip_list.insert(ip_index, application.user.ip_address)
-                ip_response = httpx_client.post(
+                # a peer-controlled domain: its answer is read under the cap and the deadline, the status kept
+                ip_response = _capped_request(
+                    'POST',
                     f'https://{domain.strip()}/api/is_ip_banned',
                     data={'ip_addresses': ','.join(ip_list)},
-                    timeout=5
+                    timeout=5,
+                    keep_status=True,
                 )
 
                 try:
@@ -62,10 +65,12 @@ def check_user_application(application_id, send_async=True):
                 email_index = random.randint(0, len(fake_emails))
                 email_list = fake_emails[:]
                 email_list.insert(email_index, application.user.email)
-                email_response = httpx_client.post(
+                email_response = _capped_request(
+                    'POST',
                     f'https://{domain.strip()}/api/is_email_banned',
                     data={'emails': ','.join(email_list)},
-                    timeout=5
+                    timeout=5,
+                    keep_status=True,
                 )
 
                 try:

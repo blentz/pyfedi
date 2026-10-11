@@ -55,6 +55,7 @@ call, so there is no live bug; the distinction matters only if a future
 target is shared more widely than this module's tests are.
 """
 
+import json
 import os
 import tempfile
 import time
@@ -1062,6 +1063,19 @@ class TestRefreshInstanceChooser:
 
         db.session.expire_all()
         assert {r.domain for r in db.session.query(InstanceChooser).all()} == {'peer.example'}
+
+    def test_an_endless_observer_answer_ends_the_task_instead_of_pinning_it(self, db_session, http_mock):
+        """The POST goes through _capped_request: an endless answer keeps its 200 and loses its body, so `json()`
+        fails out of the task (as a malformed answer always did) instead of holding the worker. timeout=30 stays
+        the per-read timeout."""
+        route = http_mock.post(self.OBSERVER).respond(200, content=(b'{"data": ' * 10000 for _ in iter(int, 1)))
+
+        with pytest.raises(ValueError):
+            refresh_instance_chooser()
+        sent = route.calls[0].request
+        assert sent.extensions['timeout']['read'] == 30
+        assert json.loads(sent.content)['query'].startswith('{ nodes(')
+        assert sent.headers['content-type'] == 'application/json'
 
     def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch, http_mock):
         """`:1062-1064`'s handler.

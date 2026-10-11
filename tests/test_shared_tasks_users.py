@@ -15,7 +15,8 @@ THREE CONTROLS, ALL PATCHED IN `app.shared.tasks.users`:
 2. `random.randint` -- stubbed to return its lower bound, which makes
    `ip_index` and `email_index` 0, fixes the fake octets, and makes `:50`
    sleep 1 (still patched away by control 1).
-3. `httpx_client` -- replaced by a RECORDING DOUBLE, not respx.
+3. `_capped_request` (the capped POST both legs go through) -- replaced by a
+   RECORDING DOUBLE, not respx.
 
 WHY A DOUBLE AND NOT respx. One of this sub-project's three production changes
 is that `email_response` is never closed, against `ip_response.close()` at
@@ -141,11 +142,12 @@ def _recording_client(monkeypatch, *responses):
       `closed`  -- the `_Response` objects on which `close()` was called.
                    THIS LIST IS THE SUBJECT of the email-close test.
     """
-    record = SimpleNamespace(posts=[], closed=[])
+    record = SimpleNamespace(posts=[], closed=[], sends=[])
     scripted = list(responses)
 
-    def post(url, data=None, timeout=None):
+    def post(method, url, data=None, timeout=None, keep_status=False):
         record.posts.append((url, data))
+        record.sends.append((method, timeout, keep_status))
         if not scripted:
             raise AssertionError(
                 f'the double was scripted for {len(responses)} responses '
@@ -153,8 +155,7 @@ def _recording_client(monkeypatch, *responses):
         status_code, payload = scripted.pop(0)
         return _Response(status_code, payload, record.closed)
 
-    monkeypatch.setattr('app.shared.tasks.users.httpx_client',
-                        SimpleNamespace(post=post))
+    monkeypatch.setattr('app.shared.tasks.users._capped_request', post)
     return record
 
 
@@ -243,6 +244,40 @@ def test_the_seed_supplies_an_ip_address(db_session):
 
     assert s.user.ip_address == APPLICANT_IP
     assert s.user.email == APPLICANT_EMAIL
+
+
+def test_each_leg_is_a_capped_post_keeping_its_status(db_session, monkeypatch):
+    """Both ban checks POST to a peer-controlled domain, so both go through
+    _capped_request: the answer is read under the 1 MiB cap and the fetch
+    deadline, timeout=5 per read as before."""
+    s = _seed()
+    set_setting('ban_check_servers', 'real.example')
+    _no_sleep(monkeypatch)
+    _lowest_randint(monkeypatch)
+    client = _recording_client(monkeypatch, (200, [False]), (200, [False]))
+
+    check_user_application(s.application.id)
+
+    assert client.sends == [('POST', 5, True), ('POST', 5, True)]
+
+
+def test_an_endless_answer_is_cut_off_and_counts_nothing(db_session, monkeypatch, http_mock):
+    """The real capped path: a peer answering the IP check with an endless
+    body gets its status kept and its body dropped, so `json()` fails into
+    `:76`'s except, the domain counts nothing, and the task does not hang."""
+    s = _seed()
+    set_setting('ban_check_servers', 'real.example')
+    _no_sleep(monkeypatch)
+    _lowest_randint(monkeypatch)
+    route = http_mock.post('https://real.example/api/is_ip_banned').respond(
+        200, content=(b'[true, ' * 10000 for _ in iter(int, 1)))
+
+    check_user_application(s.application.id)
+
+    assert route.call_count == 1
+    assert route.calls[0].request.extensions['timeout']['read'] == 5
+    db.session.expire_all()
+    assert db.session.get(UserRegistration, s.application.id).warning is None
 
 
 def test_a_blank_line_in_the_setting_is_skipped(db_session, monkeypatch):
