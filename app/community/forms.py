@@ -269,6 +269,10 @@ class CreatePostForm(FlaskForm):
                                render_kw={'class': 'form-multicheck-columns'})
     sticky = BooleanField(_l('Sticky'))
     nsfw = BooleanField(_l('NSFW'))
+    # Amendment B (S7.1): offered only in the local microblogs community (add_post passes show_visibility), and
+    # deleted from the edit form -- visibility is fixed when the post is created
+    visibility = SelectField(_l('Visibility'), choices=[('public', _l('Public')), ('followers', _l('Followers only'))],
+                             default='public', render_kw={'class': 'form-select'})
     nsfl = BooleanField(_l('Gore/gross'))
     ai_generated = BooleanField(_l('AI generated'))
     notify_author = BooleanField(_l('Notify about replies'))

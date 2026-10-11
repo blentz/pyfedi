@@ -29,7 +29,7 @@ from app.utils import render_template, authorise_api_user, shorten_string, gibbe
     opengraph_parse, url_to_thumbnail_file, can_create_post, is_video_hosting_site, recently_upvoted_posts, \
     is_image_url, add_to_modlog, store_files_in_s3, guess_mime_type, retrieve_image_hash, \
     hash_matches_blocked_image, can_upvote, can_downvote, get_recipient_language, to_srgb, can_upload_video, \
-    is_video_url, sanitize_svg, user_ip_banned, ip_address, inspect_image_c2pa, make_gallery_thumbnail, get_request, community_membership_private, communities_banned_from, can_moderate, can_create_post_reply
+    is_video_url, sanitize_svg, user_ip_banned, ip_address, inspect_image_c2pa, make_gallery_thumbnail, get_request, community_membership_private, communities_banned_from, can_moderate, can_create_post_reply, is_local_microblogs
 import app as app_pkg
 
 
@@ -201,6 +201,23 @@ def extra_rate_limit_check(user):
     return False
 
 
+def requested_visibility(input, src, community) -> str:
+    """The visibility a new local post asks for (Amendment B, S7.1).
+
+    Only the local microblogs community takes 'followers'. A value that is absent or empty means public. Anything
+    else, or 'followers' anywhere else, is refused, before any row is written."""
+    if src == SRC_API:
+        visibility = input.get('visibility') or VISIBILITY_PUBLIC
+    else:
+        field = getattr(input, 'visibility', None)
+        visibility = (field.data if field is not None else None) or VISIBILITY_PUBLIC
+    if visibility not in (VISIBILITY_PUBLIC, VISIBILITY_FOLLOWERS):
+        raise Exception('invalid visibility')
+    if visibility == VISIBILITY_FOLLOWERS and not is_local_microblogs(community):
+        raise Exception('invalid visibility')
+    return visibility
+
+
 def make_post(input, community, type, src, auth=None, uploaded_file=None, uploaded_files=None, image_alt_texts=None):
     if src == SRC_API:
         user = authorise_api_user(auth, return_type='model')
@@ -243,6 +260,8 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None, upload
     if not can_create_post(user, community) or user_ip_banned():
         raise Exception('You are not permitted to make posts in this community')
 
+    visibility = requested_visibility(input, src, community)
+
     if url:
         url = url.strip()
         domain = domain_from_url(url)
@@ -261,7 +280,7 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None, upload
 
     post = Post(user_id=user.id, community_id=community.id, instance_id=user.instance_id,
                 from_bot=user.bot or user.bot_override, from_reposter=user.reposter or user.reposter_override,
-                posted_at=utcnow(), ap_id=gibberish(), title=title, language_id=language_id)
+                posted_at=utcnow(), ap_id=gibberish(), title=title, language_id=language_id, visibility=visibility)
     if user.ban_posts:
         post.status = POST_STATUS_REVIEWING
     db.session.add(post)

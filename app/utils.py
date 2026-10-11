@@ -249,6 +249,12 @@ def get_request_instance(uri, instance: Instance, params=None, headers=None) -> 
         return httpx.Response(status_code=500)
 
 
+def is_local_microblogs(community) -> bool:
+    """The local `microblogs` community (find_microblogging_community): the only place a local user may publish a
+    followers-only post (Amendment B, S7.1). A remote community with the same name does not count."""
+    return community.name == 'microblogs' and community.is_local()
+
+
 # Saves an arbitrary object into a persistent key-value store. cached.
 # Similar to g.site.* except g.site.* is populated on every single page load so g.site is best for settings that are
 # accessed very often (e.g. every page load)
