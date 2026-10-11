@@ -359,6 +359,31 @@ class TestCompressedBodies:
             get_request(URI)
         assert len(pulled) * len(empty_blocks) <= FETCH_MAX_BYTES + len(empty_blocks)
 
+    def test_a_zlib_deflate_body_whose_first_chunk_is_one_byte_is_read(self, app, http_mock):
+        """A chunked server may flush after one byte; one byte cannot say which deflate framing follows."""
+        document = json.dumps({'id': URI}).encode()
+        packed = zlib.compress(document)
+        http_mock.get(URI).respond(200, content=iter([packed[:1], packed[1:]]), headers={'Content-Encoding': 'deflate'})
+
+        assert _capped_get(URI).content == document
+
+    def test_a_raw_deflate_body_that_begins_like_a_zlib_header_is_read(self, app, http_mock):
+        """08 1d is a valid zlib header and also a raw non-final stored block of 29 bytes (its padding bits set).
+        zlib framing fails at the stored block's lengths, before any output, so raw deflate is tried on the bytes
+        read so far."""
+        data = b'abcdefghijklmnopqrstuvwxyz012'
+        body = bytes([0x08, 0x1d, 0x00, 0xe2, 0xff]) + data + bytes([0x01, 0x00, 0x00, 0xff, 0xff])
+        assert int.from_bytes(body[:2], 'big') % 31 == 0
+        http_mock.get(URI).respond(200, content=iter([body[:3], body[3:]]), headers={'Content-Encoding': 'deflate'})
+
+        assert _capped_get(URI).content == data
+
+    def test_a_deflate_body_that_is_neither_framing_is_a_decoding_error(self, app, http_mock):
+        http_mock.get(URI).respond(200, content=iter([b'\xff\xff\xff\xff']), headers={'Content-Encoding': 'deflate'})
+
+        with pytest.raises(httpx.DecodingError):
+            _capped_get(URI)
+
     def test_a_body_decoded_to_exactly_the_cap_is_read(self, app, http_mock):
         http_mock.get(URI).respond(200, content=gzip.compress(b'x' * 1000), headers={'Content-Encoding': 'gzip'})
 
@@ -378,7 +403,7 @@ class TestCompressedBodies:
             def flush(self, *args):
                 return b'x' * 11
 
-        monkeypatch.setattr('app.utils._decompressor', lambda encoding, first: HoldsBack())
+        monkeypatch.setattr('app.utils._Inflater', lambda encoding: HoldsBack())
         http_mock.get(URI).respond(200, content=iter([b'packed']), headers={'Content-Encoding': 'gzip'})
 
         with pytest.raises(ResponseTooLarge):
