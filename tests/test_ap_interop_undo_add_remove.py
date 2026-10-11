@@ -305,3 +305,65 @@ def test_a_moderator_cannot_feature_or_unfeature_a_post_in_another_community(mod
     db.session.expire_all()
     assert db.session.get(Post, local_post.id).sticky is sticky_before
     assert only_log() == (log_type, 'failure', 'Cannot find: https://test.piefed.local/post/42')
+
+
+# --- a direct Undo, and an Undo naming another community's collection ------------------
+
+@pytest.mark.parametrize('inner_type, sticky_before, log_type', [('Add', True, 'Remove'), ('Remove', False, 'Add')])
+def test_a_direct_undo_finds_the_community_the_undone_activity_names(modcomm, inner_type, sticky_before, log_type):
+    """Unannounced, the moderator's own signed Undo: the community is the one the undone activity's audience
+    names, and the authority is checked against it exactly as for a direct Add or Remove."""
+    instance, community, moderator, admin, post = modcomm
+    post.sticky = sticky_before
+    db.session.commit()
+    inner = {'id': f'{moderator.ap_profile_id}/activities/{inner_type.lower()}-3', 'type': inner_type,
+             'actor': moderator.ap_profile_id, 'object': post.ap_id, 'audience': community.ap_profile_id,
+             'target': community.ap_profile_id + '/featured'}
+
+    dispatch(inbox_activity(moderator, activity_type='Undo', object=inner))
+
+    db.session.expire_all()
+    assert db.session.get(Post, post.id).sticky is (not sticky_before)
+    assert only_log() == (log_type, 'success', None)
+
+
+def test_an_undo_naming_another_communitys_featured_collection_changes_nothing(modcomm):
+    instance, community, moderator, admin, post = modcomm
+    post.sticky = True
+    db.session.commit()
+    other = make_community(name='othercomm', host='peer.example')
+    other.ap_featured_url = other.ap_profile_id + '/featured'
+    db.session.commit()
+
+    dispatch(undo_from_community(community, moderator, 'Add', post.ap_id, other.ap_featured_url))
+
+    db.session.expire_all()
+    assert db.session.get(Post, post.id).sticky is True
+    assert only_log() == ('Remove', 'failure', 'Unknown target for Remove')
+
+
+# --- a feed's Add or Remove whose object is not a community object ---------------------
+
+@pytest.mark.parametrize('object_value', ['https://peer.example/c/videos', None, 42, 'missing'])
+@pytest.mark.parametrize('shape, log_type', [('Add', 'Add'), ('Undo Remove', 'Add'), ('Remove', 'Remove'),
+                                             ('Undo Add', 'Remove')])
+def test_a_feeds_add_or_remove_whose_object_is_not_a_dict_is_refused_and_logged(feedcomm, shape, log_type,
+                                                                                object_value):
+    """'id' in a string is a substring test: a community URL containing 'id' used to reach object['id'] and raise.
+    None, an int, or no object at all raised too. Each is now a logged refusal."""
+    community, feed = feedcomm
+    make_feed_item(feed, community)
+    inner = {'id': f'{feed.ap_profile_id}/activities/odd-1', 'type': shape.split()[-1],
+             'actor': feed.ap_profile_id, 'object': object_value, 'target': feed.ap_profile_id}
+    if object_value == 'missing':
+        del inner['object']
+    if shape.startswith('Undo '):
+        inner = {'id': f'{feed.ap_profile_id}/activities/undo-3', 'type': 'Undo', 'actor': feed.ap_profile_id,
+                 'object': inner}
+
+    dispatch(inbox_activity(feed, activity_type='Announce', object=inner))
+
+    db.session.expire_all()
+    assert FeedItem.query.filter_by(feed_id=feed.id).count() == 1
+    assert feed.num_communities == 3
+    assert only_log() == (log_type, 'failure', f'{log_type}: cannot find community or feed')
