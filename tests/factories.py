@@ -1054,7 +1054,7 @@ AS_PUBLIC_URI = 'https://www.w3.org/ns/activitystreams#Public'
 
 def seed_signing_site() -> Site:
     """A Site row (id 1) carrying a real RSA keypair, required before the
-    401 branch's signed_get_request call can run at all.
+    401 branch's signed fetch (signed_get_capped) can run at all.
     """
     site = make_site()
     private_key, _public_key = a_keypair()
@@ -1100,8 +1100,9 @@ def serve_remote_object(http_mock, uri: str = PEER_OBJECT_URI, document: dict = 
       also changing the status code.
 
     `document` is passed through untouched -- `{}` and `[]` are legitimate
-    arguments, since a peer serving a 200 with an empty JSON body is exactly
-    how remote_object_to_json returns a value that is falsy but not None.
+    arguments. A peer serving a 200 with `{}` is exactly how
+    remote_object_to_json returns a value that is falsy but not None; `[]` is
+    not a JSON object, so it comes back as None.
     """
     if content is not None:
         http_mock.get(uri).respond(status, content=content,

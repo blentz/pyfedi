@@ -5148,43 +5148,63 @@ def ensure_domains_match(activity: dict) -> bool:
     return False
 
 
-def remote_object_to_json(uri):
+# The largest object document fetch_object_capped reads (both fetches, unsigned and signed). Mastodon caps the JSON
+# it fetches at 1 MB too; an AP object is a few kilobytes.
+OBJECT_MAX_BYTES = 1024 * 1024
+
+
+def fetch_object_capped(uri: str, retry_delay: float = 0) -> Tuple[Union[dict, None], Union[str, None]]:
+    """GET the ActivityPub object at `uri`: unsigned first, then signed (signed_get_capped) when the origin answers
+    401. Every attempt goes through get_request_capped -- at most OBJECT_MAX_BYTES of body, a wall-clock deadline,
+    no redirects -- so a hostile origin cannot pin the process with a huge or slow-drip body.
+
+    Returns `(object, None)` when the answering fetch was a 200 whose body is a JSON object, and `(None, reason)`
+    otherwise; a signed non-200 is refused, its body never parsed. With retry_delay, a transport error on either
+    fetch sleeps that long and tries that fetch once more (remote_object_to_json's long-standing retry); without it,
+    no fetch is retried and nothing sleeps (verify_object_from_source, R-NORETRY)."""
+    def attempt(fetch):
+        try:
+            return fetch()
+        except httpx.HTTPError:
+            if not retry_delay:
+                raise
+            time.sleep(retry_delay)
+            return fetch()
+
     try:
-        object_request = get_request(uri, headers={'Accept': 'application/activity+json'})
+        status, body = attempt(lambda: get_request_capped(uri, OBJECT_MAX_BYTES,
+                                                          headers={'Accept': 'application/activity+json'}))
     except httpx.HTTPError:
-        time.sleep(3)
-        try:
-            object_request = get_request(uri, headers={'Accept': 'application/activity+json'})
-        except httpx.HTTPError:
-            return None
-    if object_request.status_code == 200:
-        try:
-            object = object_request.json()
-            return object
-        except:
-            object_request.close()
-            return None
-        finally:
-            object_request.close()
-    elif object_request.status_code == 401:
+        return None, 'the object could not be fetched'
+    prefix = 'the object'
+    if status == 401:
         site = db.session.get(Site, 1)
+        if site is None:
+            return None, 'the object needs a signed fetch and there is no Site row to sign it'
         try:
-            object_request = signed_get_request(uri, site.private_key, f"{current_app.config['SERVER_URL']}/actor#main-key")
+            status, body = attempt(lambda: signed_get_capped(uri, site.private_key,
+                                                             f"{current_app.config['SERVER_URL']}/actor#main-key",
+                                                             OBJECT_MAX_BYTES))
         except httpx.HTTPError:
-            time.sleep(3)
-            try:
-                object_request = signed_get_request(uri, site.private_key, f"{current_app.config['SERVER_URL']}/actor#main-key")
-            except httpx.HTTPError:
-                return None
-        try:
-            object = object_request.json()
-            return object
-        except:
-            return None
-        finally:
-            object_request.close()
-    else:
-        return None
+            return None, 'the object could not be fetched with a signed request'
+        prefix = 'the signed object'
+    if status != 200:
+        return None, f'{prefix} fetch returned HTTP {status}'
+    if body is None:
+        return None, f'{prefix} response was over the size or time limit'
+    try:
+        object = json.loads(body)
+    except (ValueError, RecursionError):   # JSONDecodeError, UnicodeDecodeError; RecursionError: deep nesting
+        return None, f'{prefix} response was not JSON'
+    if not isinstance(object, dict):
+        return None, 'the fetched object is not a JSON object'
+    return object, None
+
+
+def remote_object_to_json(uri):
+    """The ActivityPub object at `uri` as a dict, or None (fetch_object_capped; a transport error is retried once
+    after 3 seconds)."""
+    return fetch_object_capped(uri, retry_delay=3)[0]
 
 
 # called from incoming activitypub, when the object in an Announce is just a URL
@@ -5493,11 +5513,6 @@ def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
     return None
 
 
-# The largest object document verify_object_from_source reads (both fetches, unsigned and signed). Mastodon caps
-# the JSON it fetches at 1 MB too; an AP object is a few kilobytes.
-OBJECT_MAX_BYTES = 1024 * 1024
-
-
 # called from activitypub/routes if something is posted to us without any kind of signature (typically from PeerTube)
 def verify_object_from_source(request_json) -> Tuple[Union[dict, None], Union[str, None]]:
     """Decide whether the object URI an unsigned activity names really belongs
@@ -5531,32 +5546,9 @@ def verify_object_from_source(request_json) -> Tuple[Union[dict, None], Union[st
     if create_domain != uri_domain:
         return None, 'the announcing actor is on a different host than the object URI'
 
-    try:
-        status, body = get_request_capped(uri, OBJECT_MAX_BYTES, headers={'Accept': 'application/activity+json'})
-    except httpx.HTTPError:
-        return None, 'the object could not be fetched'
-    prefix = 'the object'
-    if status == 401:
-        site = db.session.get(Site, 1)
-        if site is None:
-            return None, 'the object needs a signed fetch and there is no Site row to sign it'
-        try:
-            status, body = signed_get_capped(uri, site.private_key, f"{current_app.config['SERVER_URL']}/actor#main-key",
-                                             OBJECT_MAX_BYTES)
-        except httpx.HTTPError:
-            return None, 'the object could not be fetched with a signed request'
-        prefix = 'the signed object'
-    if status != 200:
-        return None, f'{prefix} fetch returned HTTP {status}'
-    if body is None:
-        return None, f'{prefix} response was over the size or time limit'
-    try:
-        object = json.loads(body)
-    except (ValueError, RecursionError):   # JSONDecodeError, UnicodeDecodeError; RecursionError: deep nesting
-        return None, f'{prefix} response was not JSON'
-
-    if not isinstance(object, dict):
-        return None, 'the fetched object is not a JSON object'
+    object, reason = fetch_object_capped(uri)
+    if object is None:
+        return None, reason
     if not 'id' in object or not 'type' in object or not 'attributedTo' in object:
         return None, 'the fetched object has no id, type or attributedTo'
 
