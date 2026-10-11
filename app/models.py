@@ -5030,6 +5030,7 @@ class Report(db.Model):
     created_at = db.Column(db.DateTime, default=utcnow)
     updated = db.Column(db.DateTime, default=utcnow)
     targets = db.Column(db.JSON)
+    ap_id = db.Column(db.String(255), index=True)   # the inbound Flag's id, so its Undo can find this report
 
     # textual representation of self.type
     def type_text(self):
