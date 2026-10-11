@@ -2689,7 +2689,7 @@ class Post(db.Model):
         ),
         Index(   # interop C1 item 7: the user outbox, newest first
             'ix_post_user_posted',
-            'user_id', desc('posted_at'),
+            'user_id', desc('posted_at').nulls_last(),
             postgresql_where=db.text('deleted = false')
         ),
     )
@@ -4127,7 +4127,7 @@ class PostReply(db.Model):
         ),
         db.Index(   # interop C1 item 7: the user outbox, newest first
             'ix_post_reply_user_posted',
-            'user_id', desc('posted_at'),
+            'user_id', desc('posted_at').nulls_last(),
             postgresql_where=db.text('deleted = false')
         ),
     )

@@ -1442,7 +1442,9 @@ def test_an_outbox_page_keeps_the_collection_cache_policy(app, db_session, monke
     assert response.headers['Vary'] == 'Accept, Accept-Encoding'
 
 
-@pytest.mark.parametrize('page', ['0', '-1', 'two', ''])
+# '²' is a digit to str.isdigit but not to int(); a page past int8 would overflow OFFSET; '9' * 5000 is past
+# int()'s digit limit; '3' is past the last page of an empty outbox
+@pytest.mark.parametrize('page', ['0', '-1', 'two', '', '²', '1²', '9' * 30, '9' * 5000, '3'])
 def test_a_page_that_is_not_a_positive_number_is_a_400(app, db_session, page):
     seed_actors()
     seed_local_community('books')

@@ -96,11 +96,14 @@ def paged_outbox(outbox_id: str, total: int, items_from) -> dict:
     """The outbox document a request asks for. `items_from(offset, limit)` lists one page's items. The collection
     itself keeps its first page inline, as before paging, for peers that read no further than it."""
     page = request.args.get('page')
+    last = max(1, -(-total // OUTBOX_PAGE_SIZE))
     if page is None:
         return {"@context": default_context(), "type": "OrderedCollection", "id": outbox_id, "totalItems": total,
-                "first": f"{outbox_id}?page=1", "last": f"{outbox_id}?page={max(1, -(-total // OUTBOX_PAGE_SIZE))}",
+                "first": f"{outbox_id}?page=1", "last": f"{outbox_id}?page={last}",
                 "orderedItems": items_from(0, OUTBOX_PAGE_SIZE)}
-    if not page.isdigit() or int(page) < 1:
+    # ASCII digits only ('²'.isdigit() is True, but int('²') raises), and no page past the last, so OFFSET never
+    # reaches past the rows there are and cannot overflow; the length test keeps int() off a huge string
+    if not (page.isascii() and page.isdigit()) or len(page) > len(str(last)) or not 1 <= int(page) <= last:
         abort(400)
     page = int(page)
     result = {"@context": default_context(), "type": "OrderedCollectionPage", "id": f"{outbox_id}?page={page}",

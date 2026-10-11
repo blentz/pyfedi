@@ -13,12 +13,17 @@ depends_on = None
 
 
 def upgrade():
-    op.create_index('ix_post_user_posted', 'post', ['user_id', sa.literal_column('posted_at DESC')], unique=False,
-                    postgresql_where=sa.text('deleted = false'))
-    op.create_index('ix_post_reply_user_posted', 'post_reply', ['user_id', sa.literal_column('posted_at DESC')],
-                    unique=False, postgresql_where=sa.text('deleted = false'))
+    # `post` and `post_reply` are the biggest tables: a plain CREATE INDEX would block every write to them for the
+    # whole build, so both are built concurrently, which cannot run inside a transaction. NULLS LAST is the order the
+    # outbox pages in; a DESC index is NULLS FIRST unless told otherwise, and could not give it.
+    with op.get_context().autocommit_block():
+        op.create_index('ix_post_user_posted', 'post', ['user_id', sa.text('posted_at DESC NULLS LAST')], unique=False,
+                        postgresql_where=sa.text('deleted = false'), postgresql_concurrently=True)
+        op.create_index('ix_post_reply_user_posted', 'post_reply', ['user_id', sa.text('posted_at DESC NULLS LAST')],
+                        unique=False, postgresql_where=sa.text('deleted = false'), postgresql_concurrently=True)
 
 
 def downgrade():
-    op.drop_index('ix_post_reply_user_posted', table_name='post_reply')
-    op.drop_index('ix_post_user_posted', table_name='post')
+    with op.get_context().autocommit_block():
+        op.drop_index('ix_post_reply_user_posted', table_name='post_reply', postgresql_concurrently=True)
+        op.drop_index('ix_post_user_posted', table_name='post', postgresql_concurrently=True)
