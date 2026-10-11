@@ -173,13 +173,46 @@ class UnreadableEncoding(ResponseTooLarge):
 _DECODE_STEP = 64 * 1024
 
 
-def _decompressor(encoding: str, first: bytes):
-    """A zlib decompressor for a gzip or deflate body whose first chunk is `first`. HTTP's deflate is zlib-wrapped
-    (RFC 9110 section 8.4.1.2), but some servers send raw deflate: a zlib header says which."""
-    if encoding in ('gzip', 'x-gzip'):
-        return zlib.decompressobj(16 + zlib.MAX_WBITS)
-    zlib_wrapped = len(first) >= 2 and first[0] & 0x0F == 8 and int.from_bytes(first[:2], 'big') % 31 == 0
-    return zlib.decompressobj(zlib.MAX_WBITS if zlib_wrapped else -zlib.MAX_WBITS)
+class _Inflater:
+    """A zlib decompressor for a gzip or deflate body. HTTP's deflate is zlib-wrapped (RFC 9110 section 8.4.1.2),
+    but some servers send raw deflate, and the first bytes cannot always say which (one byte cannot; a raw stored
+    block can begin like a zlib header). So deflate is read as zlib-wrapped first and, on a zlib.error before any
+    output, read again as raw deflate from the bytes buffered so far -- what httpx's DeflateDecoder does. Until
+    there is output no step leaves an unconsumed_tail, so each byte is buffered once."""
+
+    def __init__(self, encoding: str):
+        gzipped = encoding in ('gzip', 'x-gzip')
+        self._decoder = zlib.decompressobj(16 + zlib.MAX_WBITS if gzipped else zlib.MAX_WBITS)
+        self._seen = None if gzipped else bytearray()   # input so far, while the raw fallback is still open
+
+    def decompress(self, data: bytes, max_length: int) -> bytes:
+        if self._seen is None:
+            return self._decoder.decompress(data, max_length)
+        self._seen.extend(data)
+        try:
+            output = self._decoder.decompress(data, max_length)
+        except zlib.error:
+            self._decoder = zlib.decompressobj(-zlib.MAX_WBITS)
+            seen, self._seen = bytes(self._seen), None
+            return self._decoder.decompress(seen, max_length)
+        if output:
+            self._seen = None
+        return output
+
+    def flush(self) -> bytes:
+        return self._decoder.flush()
+
+    @property
+    def unconsumed_tail(self) -> bytes:
+        return self._decoder.unconsumed_tail
+
+    @property
+    def unused_data(self) -> bytes:
+        return self._decoder.unused_data
+
+    @property
+    def eof(self) -> bool:
+        return self._decoder.eof
 
 
 class RequestNotSendable(httpx.HTTPError):
@@ -228,7 +261,7 @@ def _capped_get(uri, params=None, headers=None, timeout=10, max_bytes: int = FET
                     body.extend(chunk)
                 else:
                     if decoder is None:
-                        decoder = _decompressor(encoding, chunk)
+                        decoder = _Inflater(encoding)
                     elif decoder.eof:
                         raise ResponseTooLarge(f'{uri} sent data after the end of its {encoding} stream')
                     data = chunk
