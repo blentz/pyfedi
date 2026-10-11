@@ -280,6 +280,22 @@ def test_once_the_deadline_has_passed_a_call_is_refused_without_reaching_the_soc
     assert stream.timeouts == []
 
 
+def test_a_handshake_refused_at_the_deadline_closes_the_plain_socket(app, resolver, transport_clock):
+    """httpcore closes the TCP stream only when the handshake itself fails; a refusal before it must close it here."""
+    resolver.append([PUBLIC])
+    stream = TimedStream([b'x'], transport_clock)
+    closed = []
+    stream.close = lambda: closed.append(True)
+
+    with fetch_deadline(15):
+        wrapped = PinnedNetworkBackend(TimedBackend(stream)).connect_tcp('peer.example', 443)
+        transport_clock[0] += 15
+        with pytest.raises(httpcore.ConnectTimeout):
+            wrapped.start_tls(None, timeout=10)
+
+    assert closed == [True]
+
+
 def test_a_connect_after_the_deadline_is_refused(app, resolver, transport_clock):
     resolver.append([PUBLIC])
     backend = TimedBackend(TimedStream([], transport_clock))
