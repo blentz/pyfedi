@@ -6,7 +6,7 @@ from sqlalchemy import func
 from app import celery, db
 from app.activitypub.signature import (POST_REQUIRED, HttpSignature, VerificationError, request_key_id,
                                       verify_refreshing_key)
-from app.activitypub.util import (claim_activity, create_resolved_object, find_microblogging_community, host_of,
+from app.activitypub.util import (claim_activity, release_activity, create_resolved_object, find_microblogging_community, host_of,
                                   log_incoming_ap, remote_object_to_json)
 from app.constants import APLOG_ANNOUNCE, APLOG_DUPLICATE, APLOG_FAILURE, APLOG_FOLLOW, APLOG_IGNORED, APLOG_NOTYPE, APLOG_SUCCESS
 from app.discovery.instance_answers import instance_actor_url
@@ -132,18 +132,22 @@ def relay_actor_gate(request, request_json):
         log_incoming_ap(request_json.get('id') or '', APLOG_DUPLICATE, APLOG_IGNORED, None,
                         'Already aware of this activity')
         return '', 200
-    if activity_type == 'Announce':
-        obj = request_json.get('object')
-        uri = obj.get('id') if isinstance(obj, dict) else obj
-        if isinstance(uri, str):
-            if current_app.debug:
-                process_relayed_announce(relay.id, uri)
-            else:
-                process_relayed_announce.apply_async(args=(relay.id, uri), queue='background')
-    elif activity_type == 'Follow':
-        _accept_follow_back(relay, request_json)
-    else:
-        _answer_follow(relay, request_json, activity_type, None)
+    try:
+        if activity_type == 'Announce':
+            obj = request_json.get('object')
+            uri = obj.get('id') if isinstance(obj, dict) else obj
+            if isinstance(uri, str):
+                if current_app.debug:
+                    process_relayed_announce(relay.id, uri)
+                else:
+                    process_relayed_announce.apply_async(args=(relay.id, uri), queue='background')
+        elif activity_type == 'Follow':
+            _accept_follow_back(relay, request_json)
+        else:
+            _answer_follow(relay, request_json, activity_type, None)
+    except Exception:
+        release_activity(request_json.get('id') or '', actor)   # R-DEDUPEUNDO: the relay's retry must be processed
+        raise
     return '', 200
 
 
