@@ -7,6 +7,7 @@ from app.activitypub import signature_rfc9421 as rfc9421
 from app.activitypub.signature import HttpSignature, double_knock, post_request, signed_get_request
 from app.models import ActivityPubLog, Instance, SendQueue
 from tests.factories import a_keypair, make_instance
+from tests.test_ap_security_rfc9421 import GET_COMPONENTS, POST_COMPONENTS
 
 INBOX = 'https://peer.example/inbox'
 KEY_ID = 'https://test.piefed.local/u/alice#main-key'
@@ -24,14 +25,14 @@ class TestSignedRequest:
                                                           signature_format='rfc9421')
         assert 'Signature' in headers and 'Signature-Input' in headers and 'Content-Digest' in headers
         assert 'Digest' not in headers and '(request-target)' not in headers
-        assert rfc9421.verify('POST', INBOX, headers, body, public_key, rfc9421.RFC9421_POST_REQUIRED)
+        assert rfc9421.verify('POST', INBOX, headers, body, public_key, POST_COMPONENTS)
 
     def test_rfc9421_signs_the_target_uri_as_sent(self, app):
         """The query is part of the target URI; a fragment never goes on the wire, so it is not signed."""
         private_key, public_key = a_keypair()
         uri, headers, body = HttpSignature.signed_request(INBOX + '?x=1#frag', _body(), private_key, KEY_ID,
                                                           send_via_async=True, signature_format='rfc9421')
-        assert rfc9421.verify('POST', INBOX + '?x=1', headers, body, public_key, rfc9421.RFC9421_POST_REQUIRED)
+        assert rfc9421.verify('POST', INBOX + '?x=1', headers, body, public_key, POST_COMPONENTS)
 
     def test_cavage_is_the_default(self, app):
         _uri, headers, _body_bytes = HttpSignature.signed_request(INBOX, _body(), a_keypair()[0], KEY_ID,
@@ -130,6 +131,6 @@ class TestSignedGet:
         assert response.status_code == 200 and route.call_count == 2
         second = route.calls[1].request
         assert rfc9421.verify('GET', 'https://peer.example/u/bob', second.headers, b'', public_key,
-                              rfc9421.RFC9421_GET_REQUIRED)
+                              GET_COMPONENTS)
         db.session.refresh(instance)
         assert instance.signature_format == 'rfc9421'
