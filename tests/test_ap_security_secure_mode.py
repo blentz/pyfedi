@@ -3,6 +3,7 @@ no stored actor validly signed gets 401. The instance actor, WebFinger and NodeI
 affected. Spec: "Secure mode". Review Focus 4.
 """
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,9 +14,11 @@ from flask import g
 from sqlalchemy import inspect, text
 
 from app import db
-from app.activitypub.entitlement import signed_fetch_exempt, signed_fetch_refusal
+from app.activitypub.entitlement import SIGNED_FETCH_AP_ONLY_PREFIXES, SIGNED_FETCH_EXEMPT_PREFIXES, \
+    signed_fetch_exempt, signed_fetch_refusal
+from app.activitypub.util import AS_PUBLIC
 from app.models import Site
-from tests.factories import a_keypair, make_instance, make_site, make_user
+from tests.factories import a_keypair, make_activitypub_log, make_instance, make_site, make_user, signed_get_headers
 from tests.test_ap_content_objects import AP_ACCEPT, _double_the_delegates, ap_get, browser_get, seed_local_post, \
     signed_ap_get
 
@@ -35,6 +38,12 @@ def test_the_exempt_routes(path, exempt):
     assert signed_fetch_exempt(path) is exempt
 
 
+def test_the_exempt_and_ap_only_lists_are_pinned():
+    """Widening either list changes what secure mode protects: it must be a deliberate edit to this test too."""
+    assert SIGNED_FETCH_EXEMPT_PREFIXES == ('/actor', '/.well-known/', '/nodeinfo/')
+    assert SIGNED_FETCH_AP_ONLY_PREFIXES == ('/activities/', '/quote_boost_auth')
+
+
 def _refusal(app, path='/post/1', method='GET', accept=AP_ACCEPT, secure=True):
     """g lives on the app context, which the session-wide app fixture keeps pushed: drop g.site after, or it leaks."""
     with app.test_request_context(path, method=method, headers={'Accept': accept}):
@@ -51,6 +60,15 @@ def test_an_unsigned_activitypub_fetch_is_refused_with_a_no_store_401(app, metho
 
     assert response.status_code == 401
     assert response.headers['Cache-Control'] == 'no-store'
+    assert response.headers['WWW-Authenticate'] == 'Signature'
+    assert response.get_data() == b''
+
+
+@pytest.mark.parametrize('accept', ['', '*/*', 'application/json', 'text/html'])
+@pytest.mark.parametrize('path', ['/activities/create/x', '/quote_boost_auth'])
+def test_an_ap_only_route_is_refused_whatever_the_accept_header(app, path, accept):
+    """These answer ActivityPub JSON for any Accept, so the header cannot be what decides."""
+    assert _refusal(app, path=path, accept=accept).status_code == 401
 
 
 @pytest.mark.parametrize('kwargs', [{'method': 'POST'}, {'accept': 'text/html'}, {'secure': False},
@@ -120,7 +138,11 @@ def test_secure_mode_leaves_every_exempt_route_open_end_to_end(app, secure_post,
     """P13: a peer must reach the instance actor, WebFinger and NodeInfo unsigned, or it can never learn a key."""
     server = app.config['SERVER_NAME']
 
-    assert ap_get(app, path.format(server=server)).status_code != 401
+    response = ap_get(app, path.format(server=server))
+
+    assert response.status_code == 200
+    if 'webfinger' in path:
+        assert response.json['subject'] == f'acct:{server}@{server}'
 
 
 def test_with_secure_mode_off_an_unsigned_fetch_is_served(app, db_session, monkeypatch):
@@ -170,3 +192,80 @@ def test_downgrade_then_upgrade_restores_the_column_off(app, db_session):
             assert connection.execute(text('SELECT require_signed_fetch FROM site WHERE id = 1')).scalar() is False
         finally:
             transaction.rollback()
+
+
+# --- R-SECURECACHE: a signed answer must not reach an unsigned requester through a shared cache ---
+
+def _signed_get(app, path, signer):
+    """Production's signer adds and signs 'Accept: application/ld+json', so the header is sent as signed."""
+    headers = signed_get_headers(path, signer)
+    headers['User-Agent'] = UA
+    with app.test_client() as client:
+        return client.get(path, headers=headers)
+
+
+def _privately_cached(response):
+    directives = [d.strip() for d in response.headers['Cache-Control'].split(',')]
+    vary = [v.strip() for v in response.headers['Vary'].split(',')]
+    return 'private' in directives and 'public' not in directives and 'Signature' in vary
+
+
+@pytest.mark.parametrize('suffix', ['', '/replies'])
+def test_under_secure_mode_a_signed_answer_is_private_and_varies_on_the_signature(app, secure_post, suffix):
+    signer = make_user(make_instance('peer2.example'), 'bob', with_keys=True)
+
+    response = _signed_get(app, f'/post/{secure_post.post.id}{suffix}', signer)
+
+    assert response.status_code == 200
+    assert _privately_cached(response)
+    assert 'max-age=' in response.headers['Cache-Control']    # the signer's own cache may still keep it
+
+
+@pytest.mark.parametrize('suffix', ['', '/replies'])
+def test_with_secure_mode_off_public_caching_is_unchanged(app, db_session, monkeypatch, suffix):
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+
+    response = ap_get(app, f'/post/{post.id}{suffix}')
+
+    assert response.status_code == 200
+    assert response.headers['Cache-Control'] == 'public, max-age=120'
+    assert 'Accept' in response.headers['Vary'] and 'Signature' not in response.headers['Vary']
+
+
+def test_secure_mode_leaves_the_exempt_routes_publicly_cacheable(app, secure_post):
+    response = ap_get(app, '/actor/outbox')
+
+    assert response.headers['Cache-Control'] == 'public, max-age=60'
+    assert 'Signature' not in response.headers.get('Vary', '')
+
+
+@pytest.fixture
+def secure_activity(app, db_session, redis_double):
+    make_site()
+    activity_id = f"https://{app.config['SERVER_NAME']}/activities/create/pub"
+    make_activitypub_log(activity_id, direction='out', activity_type='Create',
+                         activity_json=json.dumps({'id': activity_id, 'type': 'Create', 'to': [AS_PUBLIC[0]]}))
+    db.session.get(Site, 1).require_signed_fetch = True
+    db.session.commit()
+    return '/activities/create/pub'
+
+
+
+@pytest.mark.parametrize('accept', [None, '*/*', 'application/json'])
+def test_secure_mode_refuses_an_unsigned_activity_whatever_the_accept(app, secure_activity, accept):
+    headers = {'Accept': accept} if accept else {}
+    with app.test_client() as client:
+        response = client.get(secure_activity, headers=headers)
+
+    assert response.status_code == 401
+
+
+def test_secure_mode_serves_a_signed_activity_privately(app, secure_activity):
+    signer = make_user(make_instance('peer2.example'), 'bob', with_keys=True)
+
+    response = _signed_get(app, secure_activity, signer)
+
+    assert response.status_code == 200
+    assert _privately_cached(response)
+
