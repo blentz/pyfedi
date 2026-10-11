@@ -255,6 +255,19 @@ class TestPostRequest:
 
 class TestSignedGet:
 
+    def test_a_synchronous_signed_get_refuses_an_oversize_body(self, app, db_session, http_mock):
+        """keep_status is for a request that does something. A GET sent synchronously through signed_request (no
+        caller does so today) gets ResponseTooLarge, not a 200 with an empty body it would parse as a document."""
+        http_mock.get(ACTOR).respond(200, content=(b' ' * 65536 for _ in iter(int, 1)))
+
+        with pytest.raises(ResponseTooLarge, match=f'HTTP Exception for {ACTOR}'):
+            HttpSignature.signed_request(ACTOR, None, a_keypair()[0], KEY_ID, method='get')
+
+    def test_a_synchronous_signed_get_under_the_cap_is_read(self, app, db_session, http_mock):
+        http_mock.get(ACTOR).respond(200, json={'id': ACTOR})
+
+        assert HttpSignature.signed_request(ACTOR, None, a_keypair()[0], KEY_ID, method='GET').json() == {'id': ACTOR}
+
     def test_a_401_then_200_remembers_rfc9421(self, app, db_session, http_mock):
         private_key, public_key = a_keypair()
         instance = make_instance('peer.example')
