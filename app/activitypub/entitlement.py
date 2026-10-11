@@ -161,9 +161,16 @@ def audience_entitles(addressees: list[str], requester, local_actor=None) -> boo
 # path segment, so '/actor' covers '/actor/outbox' and '/actor/inbox' but not '/actors'.
 SIGNED_FETCH_EXEMPT_PREFIXES = ('/actor', '/.well-known/', '/nodeinfo/')
 
+# Routes that answer ActivityPub JSON whatever the Accept header says, so secure mode covers them even when the
+# request does not ask for ActivityPub. Matched as SIGNED_FETCH_EXEMPT_PREFIXES are. /activity_result/ is left out
+# on purpose: it answers only 'Ok' or an error for an activity id the asking peer sent itself, which is no content.
+SIGNED_FETCH_AP_ONLY_PREFIXES = ('/activities/', '/quote_boost_auth')
 
-def signed_fetch_exempt(path: str) -> bool:
-    for prefix in SIGNED_FETCH_EXEMPT_PREFIXES:
+_AP_MIMETYPES = ('application/activity+json', 'application/ld+json')
+
+
+def _path_matches(path: str, prefixes) -> bool:
+    for prefix in prefixes:
         if prefix.endswith('/'):
             if path.startswith(prefix):
                 return True
@@ -172,17 +179,43 @@ def signed_fetch_exempt(path: str) -> bool:
     return False
 
 
+def signed_fetch_exempt(path: str) -> bool:
+    return _path_matches(path, SIGNED_FETCH_EXEMPT_PREFIXES)
+
+
+def _secure_mode_covers(ap_response: bool = False) -> bool:
+    """Whether secure mode governs the current request: it is on, and this is a GET or HEAD for ActivityPub (by its
+    Accept header, by an ActivityPub-only route, or, after the fact, by an ActivityPub answer) on no exempt route."""
+    if request.method not in ('GET', 'HEAD'):
+        return False
+    if not (ap_response or is_activitypub_request() or _path_matches(request.path, SIGNED_FETCH_AP_ONLY_PREFIXES)):
+        return False
+    site = getattr(g, 'site', None)
+    if site is None or not site.require_signed_fetch:
+        return False
+    return not signed_fetch_exempt(request.path)
+
+
 def signed_fetch_refusal():
     """The 401 secure mode answers an ActivityPub GET or HEAD that no actor stored here validly signed, else None.
 
     Never fetches: a signer this instance has not seen is refused until it is learned of some other way."""
-    if request.method not in ('GET', 'HEAD') or not is_activitypub_request():
-        return None
-    site = getattr(g, 'site', None)
-    if site is None or not site.require_signed_fetch:
-        return None
-    if signed_fetch_exempt(request.path) or signed_requester_actor() is not None:
+    if not _secure_mode_covers() or signed_requester_actor() is not None:
         return None
     response = make_response('', 401)
     response.headers['Cache-Control'] = 'no-store'
+    response.headers['WWW-Authenticate'] = 'Signature'
+    return response
+
+
+def secure_mode_cache_headers(response):
+    """Under secure mode an ActivityPub answer was earned by a signature, so no shared cache may hand it on: a proxy
+    cache answers before before_request runs, and an unsigned requester would get the signer's copy. The answer is
+    made private (the signer's own max-age stays) and varies on the signature. A no-store answer is left alone."""
+    if response.cache_control.no_store or not _secure_mode_covers(response.mimetype in _AP_MIMETYPES):
+        return response
+    response.cache_control.public = False
+    response.cache_control.s_maxage = None
+    response.cache_control.private = True
+    response.vary.add('Signature')
     return response

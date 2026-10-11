@@ -7,7 +7,7 @@ from flask_login import current_user
 from flask_wtf.csrf import generate_csrf
 
 from app import db
-from app.activitypub.entitlement import signed_fetch_refusal
+from app.activitypub.entitlement import secure_mode_cache_headers, signed_fetch_refusal
 from app.community.live import post_community_link
 import pendulum
 from flask import session, g, json, request, current_app
@@ -142,6 +142,8 @@ def register_request_hooks(app):
         response.headers['Access-Control-Allow-Origin'] = current_app.config.get('CORS_ALLOW_ORIGIN', '*')
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, User-Agent'
+
+        secure_mode_cache_headers(response)   # S6 secure mode: a signed answer must not reach a shared cache
 
         # Don't set cookies for static resources or ActivityPub responses to make them cachable
         if request.path.startswith('/static/') or request.path.startswith('/bootstrap/static/') or response.content_type == 'application/activity+json':

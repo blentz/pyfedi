@@ -129,9 +129,10 @@ class FederationForm(FlaskForm):
         validators=[InputRequired(), NumberRange(min=0, max=3600)], default=90)
     require_signed_fetch = BooleanField(
         _l('Require signed fetches (secure mode)'),
-        description=_l('Refuse ActivityPub requests that are not signed by a server this instance already knows. '
-                       'Unsigned fetchers, including some crawlers and tools, will be refused. The instance actor, '
-                       'WebFinger and NodeInfo stay open.'))
+        description=_l('Refuse ActivityPub fetches that are not signed by a server this instance already knows. '
+                       'Unsigned fetchers, including some crawlers and tools, will be refused. This does not make '
+                       'content private: public posts stay readable on web pages, through the API and in RSS feeds. '
+                       'The instance actor, WebFinger and NodeInfo stay open.'))
     submit = SubmitField(_l('Save'))
 
 
