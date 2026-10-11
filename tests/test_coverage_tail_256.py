@@ -35,6 +35,7 @@ def env(app, db_session):
     g.admin_ids = []
     instance = seed_community_owner(PEER)
     community = make_community('memes', host=PEER)
+    community.ap_id = f'memes@{PEER}'   # else is_local() is True, and the task applies only presentation fields
     community.ap_public_url = f'https://{PEER}/c/memes'
     community.ap_followers_url = None
     community.ap_fetched_at = utcnow()
