@@ -37,7 +37,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     _as_text, _as_int, _as_float, _as_dict, _as_url, property_value_fields, public_key_pem, \
     more_info_link, is_more_info_link, more_info_url_from, \
     language_from_ap, adjust_domain_post_count, actor_name_from_ap, PostReplyValidationError, post_file, GALLERY_BLOCKED_WEIGHT
-from app.utils import get_request, get_request_capped, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
+from app.utils import FETCH_MAX_BYTES, get_request, get_request_capped, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
     sanitise_posting_warning, \
     is_image_url, domain_from_url, gibberish, ensure_directory_exists, shorten_string, fixup_url, \
     microblog_content_to_title, is_video_url, \
@@ -5150,7 +5150,7 @@ def ensure_domains_match(activity: dict) -> bool:
 
 # The largest object document fetch_object_capped reads (both fetches, unsigned and signed). Mastodon caps the JSON
 # it fetches at 1 MB too; an AP object is a few kilobytes.
-OBJECT_MAX_BYTES = 1024 * 1024
+OBJECT_MAX_BYTES = FETCH_MAX_BYTES
 
 
 def fetch_object_capped(uri: str, retry_delay: float = 0) -> Tuple[Union[dict, None], Union[str, None]]:

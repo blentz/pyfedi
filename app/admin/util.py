@@ -15,7 +15,7 @@ from app.community.util import search_for_community
 from app.constants import POST_TYPE_IMAGE
 from app.models import User, Community, Instance, CommunityMember, Post, Topic
 from app.utils import gibberish, topic_tree, get_request, store_files_in_s3, ensure_directory_exists, guess_mime_type, get_task_session, patch_db_session, sanitize_svg_bytes, \
-    remote_instance_software
+    remote_instance_software, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, PAGE_MAX_BYTES
 import shutil
 from app.email import send_email
 
@@ -222,7 +222,8 @@ def move_community_images_to_here(community_id):
                                 response = None
                                 try:
                                     # Download the image
-                                    response = get_request(post.image.source_url)
+                                    response = get_request(post.image.source_url, max_bytes=MEDIA_MAX_BYTES,
+                                                           max_seconds=MEDIA_MAX_SECONDS)
                                     if response.status_code == 200:
                                         content_type = response.headers.get('content-type')
                                         if content_type and content_type.startswith('image'):
@@ -309,7 +310,8 @@ def move_community_images_to_here(community_id):
                                 response = None
                                 try:
                                     # Download the image
-                                    response = get_request(post.image.source_url)
+                                    response = get_request(post.image.source_url, max_bytes=MEDIA_MAX_BYTES,
+                                                           max_seconds=MEDIA_MAX_SECONDS)
                                     if response.status_code == 200:
                                         content_type = response.headers.get('content-type')
                                         if content_type and content_type.startswith('image'):
@@ -543,7 +545,7 @@ def fetch_mastodon_directory(remote_url: str, max_pages: int = 20) -> List[dict]
     for page in range(max_pages):
         params = {'local': 'true', 'order': 'active',
                   'limit': str(DIRECTORY_PAGE_SIZE), 'offset': str(page * DIRECTORY_PAGE_SIZE)}
-        response = get_request(f'{remote_url}/api/v1/directory', params=params)
+        response = get_request(f'{remote_url}/api/v1/directory', params=params, max_bytes=PAGE_MAX_BYTES)
         try:
             entries = response.json()
         finally:

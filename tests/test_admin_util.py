@@ -39,6 +39,7 @@ from app.admin.util import (directory_candidates, fetch_mastodon_directory,
 from app.constants import POST_TYPE_IMAGE
 from app.models import (Community, CommunityMember, File, Instance, Post,
                         Site, Topic, User)
+from app.utils import FETCH_MAX_BYTES, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, PAGE_MAX_BYTES
 from tests.factories import (make_community, make_community_member, make_file,
                              make_post, make_user)
 
@@ -426,6 +427,16 @@ class TestReadingTheDirectory:
             200, json=[an_account('a'), an_account('b')]))
         assert len(fetch_mastodon_directory('https://remote.test')) == 2
 
+    def test_a_page_over_the_default_cap_is_read_under_its_own(self, env, http_mock):
+        """80 accounts with long bios can pass get_request's default 1 MiB: a directory page is capped at
+        PAGE_MAX_BYTES instead."""
+        account = an_account('a')
+        account['note'] = 'x' * FETCH_MAX_BYTES
+        http_mock.get(self.URL).mock(return_value=httpx.Response(200, json=[account]))
+
+        assert len(fetch_mastodon_directory('https://remote.test')) == 1
+        assert PAGE_MAX_BYTES == 5 * 1024 * 1024
+
     def test_a_directory_that_is_empty(self, env, http_mock):
         http_mock.get(self.URL).mock(return_value=httpx.Response(200,
                                                                  json=[]))
@@ -642,8 +653,10 @@ class TestMovingAPostOntoThisInstance:
         before = written_files()
         with patch('app.admin.util.get_request', return_value=httpx.Response(
                 200, content=a_png(),
-                headers={'content-type': 'image/png'})):
+                headers={'content-type': 'image/png'})) as download:
             move_community_images_to_here(env.community.id)
+        assert download.call_args.kwargs == {'max_bytes': MEDIA_MAX_BYTES,
+                                             'max_seconds': MEDIA_MAX_SECONDS}
         db.session.expire_all()
         post = db.session.get(Post, image_post.id)
         try:
@@ -795,8 +808,10 @@ class TestMovingThemIntoS3:
                                                       image_post):
         with patch('app.admin.util.get_request', return_value=httpx.Response(
                 200, content=a_png(),
-                headers={'content-type': 'image/png'})):
+                headers={'content-type': 'image/png'})) as download:
             move_community_images_to_here(env.community.id)
+        assert download.call_args.kwargs == {'max_bytes': MEDIA_MAX_BYTES,
+                                             'max_seconds': MEDIA_MAX_SECONDS}
         db.session.expire_all()
         post = db.session.get(Post, image_post.id)
         assert post.image.source_url.startswith('https://cdn.probeland.test/')

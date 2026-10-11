@@ -50,8 +50,9 @@ from app.constants import (NOTIF_ANSWER, NOTIF_BAN, NOTIF_COMMUNITY,
                            NOTIF_REPORT_ESCALATION, NOTIF_TOPIC, NOTIF_UNBAN,
                            NOTIF_USER)
 from app.models import (AllowedInstances, BannedInstances, File, Post, Site)
-from app.utils import (download_defeds, download_defeds_worker,
-                       filtered_out_communities, find_next_occurrence,
+from app.utils import (FETCH_MAX_BYTES, INSTANCE_LIST_MAX_BYTES,
+                       INSTANCE_LIST_MAX_SECONDS, download_defeds,
+                       download_defeds_worker, filtered_out_communities, find_next_occurrence,
                        move_file_to_s3, notif_id_to_string,
                        retrieve_defederation_list, utcnow)
 from tests.factories import (make_community, make_community_member, make_file,
@@ -97,6 +98,24 @@ class TestReadingALemmyCompatibleList:
         http_mock.get(LEMMY_URL).mock(return_value=httpx.Response(200,
                                                                   json={}))
         assert retrieve_defederation_list(DOMAIN) == []
+
+    def test_a_list_over_the_default_cap_is_read_under_its_own(self, env, http_mock):
+        """lemmy.world's answer is 768 KB today, so a big instance's can pass get_request's default 1 MiB: this
+        fetch is capped at INSTANCE_LIST_MAX_BYTES instead."""
+        linked = [{'domain': f'peer{n}.test'} for n in range(FETCH_MAX_BYTES // 20)]
+        response = httpx.Response(200, json={'federated_instances': {'blocked': [{'domain': 'nasty.test'}],
+                                                                     'linked': linked}})
+        assert FETCH_MAX_BYTES < len(response.content) < INSTANCE_LIST_MAX_BYTES
+        http_mock.get(LEMMY_URL).mock(return_value=response)
+
+        assert retrieve_defederation_list(DOMAIN) == ['nasty.test']
+
+    def test_a_list_over_its_own_cap_is_not_read(self, env, http_mock):
+        http_mock.get(LEMMY_URL).respond(200, content=b'{}',
+                                         headers={'Content-Length': str(INSTANCE_LIST_MAX_BYTES + 1)})
+
+        assert retrieve_defederation_list(DOMAIN) is None
+        assert (INSTANCE_LIST_MAX_BYTES, INSTANCE_LIST_MAX_SECONDS) == (8 * 1024 * 1024, 30)
 
     def test_one_with_no_blocked_list(self, env, http_mock):
         http_mock.get(LEMMY_URL).mock(return_value=httpx.Response(

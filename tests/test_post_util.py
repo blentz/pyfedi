@@ -38,6 +38,7 @@ from app.post.util import (body_has_no_archive_link,
                            get_comment_branch, get_post_reply_count,
                            post_replies, post_type_to_form_url_type,
                            retrieve_archived_post, tags_to_string)
+from app.utils import FETCH_MAX_BYTES
 from tests.factories import (make_community, make_community_member, make_post,
                              make_post_flair, make_post_reply, make_user)
 
@@ -104,6 +105,14 @@ class TestReadingAnArchive:
             return_value=httpx.Response(200, content=orjson.dumps(ARCHIVED)))
         assert retrieve_archived_post(
             'https://archive.test/b.json.gz') == ARCHIVED
+
+    def test_an_archive_over_the_default_cap_is_read_under_its_own(self, env, http_mock):
+        """A long thread, decompressed by a proxy in transit, passes get_request's default 1 MiB: an archive is
+        capped at MEDIA_MAX_BYTES instead."""
+        big = {'replies': [dict(ARCHIVED['replies'][0], body='x' * FETCH_MAX_BYTES)]}
+        http_mock.get('https://archive.test/big.json.gz').mock(
+            return_value=httpx.Response(200, content=orjson.dumps(big)))
+        assert retrieve_archived_post('https://archive.test/big.json.gz') == big
 
     def test_an_archive_that_answers_404(self, env, http_mock):
         http_mock.get('https://archive.test/c.json.gz').mock(

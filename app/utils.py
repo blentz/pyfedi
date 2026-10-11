@@ -136,8 +136,74 @@ def getmtime(filename):
         return os.path.getmtime('app/static/' + filename)
 
 
-# do a GET request to a uri, return the result
-def get_request(uri, params=None, headers=None) -> httpx.Response:
+# The cap every outbound GET reads under unless its caller passes a bigger one: at most FETCH_MAX_BYTES of decoded
+# body, all of it within FETCH_MAX_SECONDS. A peer answering with an endless, huge or trickled body would otherwise
+# pin the worker and its memory.
+FETCH_MAX_BYTES = 1024 * 1024
+FETCH_MAX_SECONDS = 15
+# The bigger caps, for the callers whose bodies are legitimately bigger.
+PAGE_MAX_BYTES = 5 * 1024 * 1024                # an HTML page; one page of a remote directory or community list
+MEDIA_MAX_BYTES = 10 * 1024 * 1024              # an image (R207's upload cap), an RSS feed, an archived post
+MEDIA_MAX_SECONDS = 30
+INSTANCE_LIST_MAX_BYTES = 8 * 1024 * 1024       # a Lemmy /api/v3/federated_instances (768 KB on lemmy.world)
+INSTANCE_LIST_MAX_SECONDS = 30
+LEMMYVERSE_MAX_BYTES = 32 * 1024 * 1024         # data.lemmyverse.net's community.full.json (4.8 MB)
+LEMMYVERSE_MAX_SECONDS = 120
+
+# The headers that describe the body as it came over the wire. _capped_get's Response holds the decoded bytes, so
+# with these kept httpx would decode them a second time (or check a stale length).
+_WIRE_HEADERS = ('content-encoding', 'content-length', 'transfer-encoding')
+
+
+class ResponseTooLarge(httpx.HTTPError):
+    """A response body over the byte cap, or too slow: still arriving when the wall-clock deadline passed.
+    _capped_get raises it instead of reading on; get_request never retries it."""
+
+
+class RequestNotSendable(httpx.HTTPError):
+    """httpx refused the request itself (InvalidURL, ValueError, StreamError -- none an httpx.HTTPError), normalised
+    so callers need only one handler. Retrying the same request cannot help, so get_request does not."""
+
+
+def _capped_get(uri, params=None, headers=None, timeout=10, max_bytes: int = FETCH_MAX_BYTES,
+                max_seconds: float = FETCH_MAX_SECONDS, follow_redirects: bool = False) -> httpx.Response:
+    """GET `uri` through the pinned client as a stream, reading at most max_bytes of DECODED body (so a gzip bomb is
+    capped at its expanded size) within a wall-clock deadline of max_seconds over the whole download; timeout is the
+    per-read timeout. A declared Content-Length over the cap is refused before reading. Returns an httpx.Response
+    built from the bytes read: the peer's status and headers (less _WIRE_HEADERS), the body, and the request.
+
+    Raises only httpx.HTTPError subclasses: ResponseTooLarge over the cap or past the deadline, RequestNotSendable
+    when httpx refuses the request, and httpx's own transport errors. No SSRF check, no User-Agent and no retry: the
+    caller does those. Limit: the deadline is checked only once the response has started, so connecting (DNS
+    included) is bounded by timeout alone."""
+    deadline = time.monotonic() + max_seconds
+    try:
+        with httpx_client.stream('GET', uri, params=params, headers=headers, timeout=timeout,
+                                 follow_redirects=follow_redirects) as response:
+            declared = response.headers.get('Content-Length', '')
+            if declared.isdigit() and int(declared) > max_bytes:
+                raise ResponseTooLarge(f'{uri} declares a body of {declared} bytes, over the cap of {max_bytes}')
+            body = bytearray()
+            for chunk in response.iter_bytes():
+                body.extend(chunk)
+                if len(body) > max_bytes:
+                    raise ResponseTooLarge(f'{uri} sent a body over the cap of {max_bytes} bytes')
+                if time.monotonic() > deadline:
+                    raise ResponseTooLarge(f'{uri} was still sending after {max_seconds} seconds')
+            if time.monotonic() > deadline:   # the body ended (or the response came) only after the deadline
+                raise ResponseTooLarge(f'{uri} took longer than {max_seconds} seconds')
+            kept = [(name, value) for name, value in response.headers.multi_items()
+                    if name.lower() not in _WIRE_HEADERS]
+            return httpx.Response(response.status_code, headers=kept, content=bytes(body),
+                                  request=response.request)
+    except (httpx.InvalidURL, ValueError, httpx.StreamError) as error:
+        raise RequestNotSendable(f"HTTPError: {str(error)}") from None
+
+
+# do a GET request to a uri, return the result. At most max_bytes of body within max_seconds (_capped_get), or
+# ResponseTooLarge, which is not retried.
+def get_request(uri, params=None, headers=None, *, max_bytes: int = FETCH_MAX_BYTES,
+                max_seconds: float = FETCH_MAX_SECONDS) -> httpx.Response:
     if is_invalid_get_request_uri(uri):
         current_app.logger.info(f"invalid get request {uri}")
         raise httpx.HTTPError("HTTPError: invalid uri") from None
@@ -150,25 +216,24 @@ def get_request(uri, params=None, headers=None) -> httpx.Response:
         payload_str = urllib.parse.urlencode(params, safe=':@')
     else:
         payload_str = urllib.parse.urlencode(params) if params else None
+    def fetch(read_timeout):
+        return _capped_get(uri, params=payload_str, headers=headers, timeout=read_timeout, max_bytes=max_bytes,
+                           max_seconds=max_seconds)
+
     try:
-        response = httpx_client.get(uri, params=payload_str, headers=headers, timeout=timeout, follow_redirects=False)
-    except httpx.InvalidURL as invalid_url:
-        # Same normalisation as the ValueError clause below, for the same
-        # reason: callers of get_request catch httpx.HTTPError. httpx.InvalidURL
-        # is neither an HTTPError nor a ValueError -- it descends straight from
-        # Exception -- so without this it escaped past all four handlers here.
-        # Reachable whenever is_invalid_get_request_uri lets the uri through:
-        # under DEBUG it short-circuits to False, and 'http://[v1.x]/y' passes
-        # its checks even with DEBUG off.
-        raise httpx.HTTPError(f"HTTPError: {str(invalid_url)}") from None
-    except ValueError as ex:
-        # Convert to a more generic error we handle
-        raise httpx.HTTPError(f"HTTPError: {str(ex)}") from None
+        response = fetch(timeout)
+    except (ResponseTooLarge, RequestNotSendable):
+        # Neither is retried. Retrying a hostile body doubles what it costs. RequestNotSendable is httpx refusing
+        # the request (InvalidURL, ValueError, StreamError), normalised by _capped_get for the same reason these
+        # were always normalised here: callers of get_request catch httpx.HTTPError. httpx.InvalidURL is neither an
+        # HTTPError nor a ValueError -- it descends straight from Exception -- so without this it escaped past
+        # every handler here. Reachable whenever is_invalid_get_request_uri lets the uri through: under DEBUG it
+        # short-circuits to False, and 'http://[v1.x]/y' passes its checks even with DEBUG off.
+        raise
     except httpx.ReadError as connection_error:
         try:  # retry, this time with a longer timeout
             sleep(random.randint(3, 10))
-            response = httpx_client.get(uri, params=payload_str, headers=headers, timeout=timeout * 2,
-                                        follow_redirects=False)
+            response = fetch(timeout * 2)
         except Exception as e:
             current_app.logger.info(f"{uri} {connection_error}")
             # httpx.ReadError, not httpx_client.ReadError: httpx_client is an
@@ -182,14 +247,10 @@ def get_request(uri, params=None, headers=None) -> httpx.Response:
     except httpx.HTTPError as read_timeout:
         try:  # retry, this time with a longer timeout
             sleep(random.randint(3, 10))
-            response = httpx_client.get(uri, params=payload_str, headers=headers, timeout=timeout * 2,
-                                        follow_redirects=False)
+            response = fetch(timeout * 2)
         except Exception as e:
             current_app.logger.info(f"{uri} {read_timeout}")
             raise httpx.HTTPError(f"HTTPError: {str(e)}") from read_timeout
-    except httpx.StreamError as stream_error:
-        # Convert to a more generic error we handle
-        raise httpx.HTTPError(f"HTTPError: {str(stream_error)}") from None
 
     return response
 
@@ -3718,7 +3779,7 @@ def parse_page(page_url):
     #todo: do a head request head_request() and check content-type and size before proceeding
 
     # read the html from the page
-    response = get_request(page_url)
+    response = get_request(page_url, max_bytes=PAGE_MAX_BYTES)
 
     if response.status_code != 200:
         return False
@@ -4361,7 +4422,8 @@ def retrieve_defederation_list(domain: str) -> Optional[List[str]]:
     software = instance_software(domain)
     if software == 'lemmy' or software == 'piefed' or software == 'pylova':
         try:
-            response = get_request(f'https://{domain}/api/v3/federated_instances')
+            response = get_request(f'https://{domain}/api/v3/federated_instances', max_bytes=INSTANCE_LIST_MAX_BYTES,
+                                   max_seconds=INSTANCE_LIST_MAX_SECONDS)
         except:
             response = None
         if not response or response.status_code != 200:

@@ -44,6 +44,7 @@ from app.shared.post import make_post
 from app.relays.expiry import expire_relayed_posts
 from app.utils import retrieve_block_list, blocked_domains, retrieve_peertube_block_list, \
     shorten_string, get_request, blocked_communities, gibberish, \
+    LEMMYVERSE_MAX_BYTES, LEMMYVERSE_MAX_SECONDS, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, \
     recently_upvoted_post_replies, recently_upvoted_posts, jaccard_similarity, \
     get_redis_connection, instance_online, instance_gone_forever, find_next_occurrence, \
     guess_mime_type, ensure_directory_exists, \
@@ -1245,7 +1246,7 @@ def register(app):
         for feed in feeds:
             try:
                 # Fetch the RSS feed
-                response = get_request(feed.url)
+                response = get_request(feed.url, max_bytes=MEDIA_MAX_BYTES, max_seconds=MEDIA_MAX_SECONDS)
 
                 if response.status_code >= 400:
                     feed.last_error = utcnow()
@@ -1262,7 +1263,8 @@ def register(app):
                     continue
 
                 if response.status_code == 302:  # Follow redirections once only
-                    response = get_request(response.headers['Location'])
+                    response = get_request(response.headers['Location'], max_bytes=MEDIA_MAX_BYTES,
+                                           max_seconds=MEDIA_MAX_SECONDS)
                     if response.status_code >= 400:
                         feed.last_error = utcnow()
                         feed.error_count += 1
@@ -1811,7 +1813,8 @@ def register(app):
         with app.app_context():
             # pull down the community.full.json
             print('Pulling in the lemmyverse data ...')
-            resp = get_request('https://data.lemmyverse.net/data/community.full.json')
+            resp = get_request('https://data.lemmyverse.net/data/community.full.json', max_bytes=LEMMYVERSE_MAX_BYTES,
+                               max_seconds=LEMMYVERSE_MAX_SECONDS)
             community_json = resp.json()
             resp.close()
 

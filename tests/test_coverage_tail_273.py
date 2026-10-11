@@ -24,7 +24,7 @@ from flask import current_app, g
 
 from app import db
 from app.models import (Community, Feed, Post, PostReply, Site, User, UserNote)
-from app.utils import (add_to_modlog, favorite_communities, following_user_ids, parse_page,
+from app.utils import (FETCH_MAX_BYTES, add_to_modlog, favorite_communities, following_user_ids, parse_page,
                        user_notes)
 from tests.factories import (make_community, make_community_member, make_feed, make_instance,
                              make_post, make_post_reply, make_user)
@@ -247,6 +247,15 @@ class TestReadingARemotePage:
             tags = parse_page('https://x.example/a')
 
         assert tags['og:title'] == 'A title'
+
+    def test_a_page_over_the_default_cap_is_read_under_its_own(self, env, http_mock):
+        """A news page with inline scripts and styles passes get_request's default 1 MiB easily: the page is
+        capped at PAGE_MAX_BYTES (5 MiB) instead."""
+        html = (b'<html><head><meta property="og:title" content="A title"></head><body>'
+                + b'x' * FETCH_MAX_BYTES + b'</body></html>')
+        http_mock.get('https://x.example/a').respond(200, content=html, headers={'Content-Type': 'text/html'})
+
+        assert parse_page('https://x.example/a')['og:title'] == 'A title'
 
 
 # --------------------------------------------------------------------------
