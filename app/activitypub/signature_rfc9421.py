@@ -16,7 +16,8 @@ from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519, padding, rsa
 
-from app.activitypub.signature_errors import VerificationError, VerificationFormatError
+from app.activitypub.signature_errors import KeyMismatchError, UnusableKeyError, VerificationError, \
+    VerificationFormatError
 
 CREATED_MAX_AGE_SECONDS = 3600     # matches HttpSignature.precheck's Date window
 CREATED_MAX_SKEW_SECONDS = 300
@@ -262,7 +263,7 @@ def _load_public_key(public_key_pem: str):
     try:
         return serialization.load_pem_public_key(public_key_pem.encode('ascii'))
     except (ValueError, TypeError, AttributeError, UnsupportedAlgorithm):
-        raise VerificationFormatError('Public key is not a usable PEM')
+        raise UnusableKeyError('Public key is not a usable PEM')
 
 
 def _pkcs1v15_sha256():
@@ -281,14 +282,14 @@ RSA_SCHEMES = {'rsa-v1_5-sha256': (_pkcs1v15_sha256,), 'rsa-pss-sha512': (_pss_s
 def _verify_signature(key, alg, signature: bytes, data: bytes) -> None:
     if isinstance(key, ed25519.Ed25519PublicKey):
         if alg not in (None, 'ed25519'):
-            raise VerificationFormatError(f'Algorithm {alg} does not match an ed25519 key')
+            raise UnusableKeyError(f'Algorithm {alg} does not match an ed25519 key')
         try:
             key.verify(signature, data)
             return
         except InvalidSignature:
-            raise VerificationError('Signature mismatch')
+            raise KeyMismatchError('Signature mismatch')
     if not isinstance(key, rsa.RSAPublicKey):
-        raise VerificationFormatError('Unsupported key type')
+        raise UnusableKeyError('Unsupported key type')
     if alg not in RSA_SCHEMES:
         raise VerificationFormatError(f'Unsupported algorithm {alg}')
     for scheme in RSA_SCHEMES[alg]:
@@ -297,7 +298,7 @@ def _verify_signature(key, alg, signature: bytes, data: bytes) -> None:
             return
         except InvalidSignature:
             continue
-    raise VerificationError('Signature mismatch')
+    raise KeyMismatchError('Signature mismatch')
 
 
 def verify(method: str, url: str, headers: Mapping[str, str], body: bytes, public_key_pem: str,

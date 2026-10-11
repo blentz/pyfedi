@@ -1,13 +1,16 @@
 """S2.3: on a failed verification, one signed refetch of the signer's key, rate-limited, then one retry."""
 import json
+import time
 
 import httpx
 import pytest
 from flask import request
 
 from app import db
-from app.activitypub.signature import (KEY_REFETCH_SECONDS, HttpSignature, VerificationError, _fetch_actor_key,
-                                       request_key_id, verify_refreshing_key, verify_with_key_refresh)
+from app.activitypub import signature_rfc9421
+from app.activitypub.signature import (KEY_REFETCH_SECONDS, POST_REQUIRED, HttpSignature, VerificationError,
+                                       _fetch_actor_key, request_key_id, verify_refreshing_key,
+                                       verify_with_key_refresh)
 from app.models import Site
 from tests.factories import a_keypair, cavage_signed_headers, inbox_activity, make_instance, make_site, make_user
 
@@ -44,16 +47,17 @@ class TestRequestKeyId:
 class TestVerifyRefreshingKey:
     """The core, with real signatures and recording fetch/store callables."""
 
-    def _run(self, app, headers, stored_key, *, owner_url=OWNER, fetched=None, rate_key='sig-refetch:test'):
+    def _run(self, app, headers, stored_key, *, owner_url=OWNER, fetched=None, rate_key='sig-refetch:test',
+             required=frozenset(), method='POST', path='/inbox'):
         calls = {'fetch': 0, 'stored': []}
 
         def fetch_key():
             calls['fetch'] += 1
             return fetched
 
-        with app.test_request_context('/inbox', method='POST', headers=headers):
+        with app.test_request_context(path, method=method, headers=headers):
             try:
-                verify_refreshing_key(request, stored_key, owner_url=owner_url, rate_key=rate_key,
+                verify_refreshing_key(request, stored_key, required, owner_url=owner_url, rate_key=rate_key,
                                       fetch_key=fetch_key, store_key=calls['stored'].append)
                 calls['result'] = 'verified'
             except VerificationError as e:
@@ -128,6 +132,51 @@ class TestVerifyRefreshingKey:
         (private_key, _), (_, stale) = _two_keypairs()
         calls = self._run(app, cavage_signed_headers(private_key, f'{OWNER}#main-key'), stale, fetched='junk')
         assert calls['result'] == 'The refetched public key is not a usable PEM'
+
+
+    # --- only a failure a new key could cure triggers the refetch ---
+
+    def test_a_signature_for_another_host_never_fetches(self, app):
+        """It verified under the stored key; a new key cannot make another instance's request ours."""
+        (private_key, public_key), (_, other) = _two_keypairs()
+        headers = cavage_signed_headers(private_key, f'{OWNER}#main-key', host='other.example')
+        calls = self._run(app, headers, public_key, fetched=other)
+        assert calls['fetch'] == 0 and calls['result'] == 'Signed host other.example is not this instance'
+
+    def test_an_unsigned_required_header_never_fetches(self, app, monkeypatch):
+        monkeypatch.setitem(app.config, 'SIG_REQUIRED_HEADERS_ENFORCE', True)
+        (private_key, public_key), (_, other) = _two_keypairs()
+        headers = cavage_signed_headers(private_key, f'{OWNER}#main-key', signed=('(request-target)', 'date'))
+        calls = self._run(app, headers, public_key, fetched=other, required=POST_REQUIRED)
+        assert calls['fetch'] == 0 and calls['result'].startswith('unsigned required header')
+
+    def test_a_malformed_signature_never_fetches(self, app):
+        (private_key, public_key), (_, other) = _two_keypairs()
+        headers = cavage_signed_headers(private_key, f'{OWNER}#main-key')
+        headers['Signature'] = headers['Signature'].replace('rsa-sha256', 'hmac-sha256')
+        calls = self._run(app, headers, public_key, fetched=other)
+        assert calls['fetch'] == 0 and calls['result'] == 'Unknown signature algorithm'
+
+    def test_a_stale_rfc9421_signature_never_fetches(self, app):
+        (private_key, public_key), (_, other) = _two_keypairs()
+        headers = signature_rfc9421.sign('post', f"https://{app.config['SERVER_NAME']}/inbox", None, private_key,
+                                         f'{OWNER}#main-key', created=int(time.time()) - 7200)
+        calls = self._run(app, headers, public_key, fetched=other)
+        assert calls['fetch'] == 0 and calls['result'] == 'Signature is too old'
+
+    def test_an_rfc9421_mismatch_fetches(self, app):
+        (private_key, public_key), (_, stale) = _two_keypairs()
+        headers = signature_rfc9421.sign('post', f"https://{app.config['SERVER_NAME']}/inbox", None, private_key,
+                                         f'{OWNER}#main-key')
+        calls = self._run(app, headers, stale, fetched=public_key)
+        assert calls == {'fetch': 1, 'stored': [public_key], 'result': 'verified'}
+
+    def test_an_unusable_stored_pem_under_rfc9421_fetches(self, app):
+        (private_key, public_key), _ = _two_keypairs()
+        headers = signature_rfc9421.sign('post', f"https://{app.config['SERVER_NAME']}/inbox", None, private_key,
+                                         f'{OWNER}#main-key')
+        calls = self._run(app, headers, 'not a pem', fetched=public_key)
+        assert calls == {'fetch': 1, 'stored': [public_key], 'result': 'verified'}
 
 
 class TestFetchActorKey:

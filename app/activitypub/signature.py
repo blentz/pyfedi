@@ -55,7 +55,8 @@ from app import celery, db, httpx_client
 from app.activitypub import signature_rfc9421 as rfc9421
 from app.activitypub.ld_contexts import LDCoverageError, PYFEDI_CONTEXT_TERMS, check_ld_coverage, ld_document_loader, \
     strip_empty_values
-from app.activitypub.signature_errors import VerificationError, VerificationFormatError  # re-exported
+from app.activitypub.signature_errors import KeyMismatchError, KeyRefetchable, UnusableKeyError, VerificationError, \
+    VerificationFormatError  # VerificationError and VerificationFormatError are re-exported
 from app.constants import DATETIME_MS_FORMAT
 from app.discovery.instance_answers import record_delivery_refusal
 from app.relays.refusals import record_relay_refusal
@@ -403,17 +404,21 @@ def verify_refreshing_key(request, stored_key, required: frozenset[str] = frozen
 
     The refetch happens only when the keyId names a key on `owner_url`'s host (an unauthenticated request must not
     make this instance fetch from a host of its choosing), `owner_url` is set (None for a local actor), and
-    `rate_key` was not used in the last KEY_REFETCH_SECONDS. `fetch_key()` returns the published PEM or None;
-    `store_key(pem)` persists a new one. Raises VerificationError when the request does not verify."""
+    `rate_key` was not used in the last KEY_REFETCH_SECONDS, and the failure is one a new key could cure (no stored
+    key, an unusable one, or a signature that does not verify under it: KeyRefetchable). `fetch_key()` returns the
+    published PEM or None; `store_key(pem)` persists a new one. Raises VerificationError when the request does not
+    verify."""
     try:
         if not stored_key:
-            raise VerificationError('No public key is stored for the signer')
+            raise KeyMismatchError('No public key is stored for the signer')
         HttpSignature.verify_request(request, stored_key, required)
         return
     except (ValueError, TypeError, UnsupportedAlgorithm):
-        first_error = VerificationError('The stored public key is not a usable PEM')
+        first_error = UnusableKeyError('The stored public key is not a usable PEM')
     except VerificationError as e:
         first_error = e
+    if not isinstance(first_error, KeyRefetchable):
+        raise first_error
     key_host = activitypub_util.host_of(request_key_id(request) or '')
     if not owner_url or not key_host or key_host != activitypub_util.host_of(owner_url):
         raise first_error
@@ -586,7 +591,7 @@ class HttpSignature:
                 hashes.SHA256(),
             )
         except InvalidSignature:
-            raise VerificationError("Signature mismatch")
+            raise KeyMismatchError("Signature mismatch")
 
     @classmethod
     def precheck(cls, request: Request):
