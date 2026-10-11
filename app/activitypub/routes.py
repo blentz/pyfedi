@@ -3088,6 +3088,9 @@ def process_actor_update(user: User, actor_json: dict, id, saved_json):
     if not names_actor(actor_json.get('id'), user):
         log_incoming_ap(id, APLOG_UPDATE, APLOG_FAILURE, saved_json, 'Update of another actor refused')
         return
+    if not user.instance_id or not user.instance.online():   # the task's own guard: it would apply nothing
+        log_incoming_ap(id, APLOG_UPDATE, APLOG_IGNORED, saved_json, 'Update of an actor on an offline instance')
+        return
     refresh_user_profile_task(user.id, actor_json)
     log_incoming_ap(id, APLOG_UPDATE, APLOG_SUCCESS, saved_json)
 

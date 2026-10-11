@@ -337,6 +337,26 @@ def test_a_user_signed_group_update_with_no_community_is_refused_not_crashed(app
     assert ActivityPubLog.query.one().exception_message == 'Update of another Group refused'
 
 
+def test_an_actor_update_from_an_offline_instance_is_ignored_not_succeeded(app, db_session, monkeypatch):
+    """refresh_user_profile_task applies nothing for an actor whose instance is dormant or gone, so the Update is
+    logged as ignored rather than as a success it was not."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    user = _known_remote_user()
+    user_id = user.id
+    user.instance.dormant = True
+    db.session.commit()
+
+    dispatch(_actor_update(user, _person_document(fields={'name': 'Offline', 'publicKey': {'publicKeyPem': NEW_KEY}})))
+
+    db.session.expire_all()
+    user = db.session.get(User, user_id)
+    assert user.title != 'Offline'
+    assert user.public_key == OLD_KEY
+    log = ActivityPubLog.query.one()
+    assert log.result == 'ignored'
+    assert log.exception_message == 'Update of an actor on an offline instance'
+
+
 # --- a local community's identity is not a peer's to replace ---
 
 ATTACKER_KEY = '-----BEGIN PUBLIC KEY-----attacker'
