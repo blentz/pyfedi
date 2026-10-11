@@ -14,11 +14,12 @@ from flask import g
 from sqlalchemy import inspect, text
 
 from app import db
-from app.activitypub.entitlement import SIGNED_FETCH_AP_ONLY_PREFIXES, SIGNED_FETCH_EXEMPT_PREFIXES, \
-    signed_fetch_exempt, signed_fetch_refusal
+from app.activitypub.entitlement import MINIMAL_ACTOR_ENDPOINTS, MINIMAL_ACTOR_FIELDS, SIGNED_FETCH_AP_ONLY_PREFIXES, \
+    SIGNED_FETCH_EXEMPT_PREFIXES, actor_document, signed_fetch_exempt, signed_fetch_refusal
 from app.activitypub.util import AS_PUBLIC
 from app.models import Site
-from tests.factories import a_keypair, make_activitypub_log, make_instance, make_site, make_user, signed_get_headers
+from tests.factories import a_keypair, make_activitypub_log, make_instance, make_local_feed, make_site, make_user, \
+    signed_get_headers
 from tests.test_ap_content_objects import AP_ACCEPT, _double_the_delegates, ap_get, browser_get, seed_local_post, \
     signed_ap_get
 
@@ -42,6 +43,10 @@ def test_the_exempt_and_ap_only_lists_are_pinned():
     """Widening either list changes what secure mode protects: it must be a deliberate edit to this test too."""
     assert SIGNED_FETCH_EXEMPT_PREFIXES == ('/actor', '/.well-known/', '/nodeinfo/')
     assert SIGNED_FETCH_AP_ONLY_PREFIXES == ('/activities/', '/quote_boost_auth')
+    # R-SECUREACTORS: answered unsigned, but only in minimal form
+    assert MINIMAL_ACTOR_ENDPOINTS == ('activitypub.user_profile', 'activitypub.community_profile',
+                                       'activitypub.feed_profile')
+    assert MINIMAL_ACTOR_FIELDS == ('@context', 'id', 'type', 'preferredUsername', 'inbox', 'publicKey')
 
 
 def _refusal(app, path='/post/1', method='GET', accept=AP_ACCEPT, secure=True):
@@ -269,3 +274,88 @@ def test_secure_mode_serves_a_signed_activity_privately(app, secure_activity):
     assert response.status_code == 200
     assert _privately_cached(response)
 
+
+
+# --- R-SECUREACTORS: an unsigned fetch of a user, community or feed actor gets its keys, not a 401 ---
+
+MINIMAL_ACTOR_KEYS = {'@context', 'id', 'type', 'preferredUsername', 'inbox', 'endpoints', 'publicKey'}
+
+
+@pytest.fixture
+def secure_actors(app, db_session, monkeypatch):
+    """A local user, community and public feed, with secure mode on."""
+    _double_the_delegates(monkeypatch)
+    community, author, _post = seed_local_post()
+    feed = make_local_feed('localfeed', public=True)
+    db.session.get(Site, 1).require_signed_fetch = True
+    db.session.commit()
+    return {'user': f'/u/{author.user_name}', 'community': f'/c/{community.name}', 'feed': f'/f/{feed.name}'}
+
+
+def _public_actor_cache(response):
+    directives = [d.strip() for d in response.headers['Cache-Control'].split(',')]
+    vary = [v.strip() for v in response.headers['Vary'].split(',')]
+    return 'public' in directives and 'private' not in directives and 'Accept' in vary and 'Signature' in vary
+
+
+@pytest.mark.parametrize('kind', ['user', 'community', 'feed'])
+def test_an_unsigned_fetch_of_an_actor_gets_a_minimal_document(app, secure_actors, kind):
+    """A peer signing its key fetches with an instance actor this instance has never seen must still learn keys."""
+    response = ap_get(app, secure_actors[kind])
+
+    assert response.status_code == 200
+    document = response.json
+    assert set(document) == MINIMAL_ACTOR_KEYS
+    assert document['endpoints'] == {'sharedInbox': f"{app.config['SERVER_URL']}/inbox"}
+    assert document['publicKey']['owner'] == document['id']
+    assert 'publicKeyPem' in document['publicKey']
+    assert _public_actor_cache(response)   # the same for every unsigned requester; a signer never shares its entry
+
+
+@pytest.mark.parametrize('kind', ['user', 'community', 'feed'])
+def test_a_signer_never_seen_here_gets_the_minimal_document(app, secure_actors, kind):
+    private_key, _public = a_keypair()
+    ghost = SimpleNamespace(private_key=private_key, ap_profile_id='https://unknown.example/users/ghost')
+
+    response = signed_ap_get(app, secure_actors[kind], ghost, UA)
+
+    assert response.status_code == 200
+    assert set(response.json) == MINIMAL_ACTOR_KEYS
+
+
+@pytest.mark.parametrize('kind', ['user', 'community', 'feed'])
+def test_a_signer_stored_here_gets_the_full_document_privately(app, secure_actors, kind):
+    signer = make_user(make_instance('peer2.example'), 'bob', with_keys=True)
+
+    response = signed_ap_get(app, secure_actors[kind], signer, UA)
+
+    assert response.status_code == 200
+    assert 'outbox' in response.json and set(response.json) > MINIMAL_ACTOR_KEYS
+    assert _privately_cached(response)
+
+
+def test_an_unsigned_head_of_a_user_actor_is_answered(app, secure_actors):
+    with app.test_client() as client:
+        assert client.head(secure_actors['user'], headers={'Accept': AP_ACCEPT}).status_code == 200
+
+
+@pytest.mark.parametrize('suffix', ['/outbox', '/followers'])
+def test_an_actors_collections_stay_refused_unsigned(app, secure_actors, suffix):
+    assert ap_get(app, secure_actors['community'] + suffix).status_code == 401
+
+
+def test_with_secure_mode_off_an_unsigned_actor_fetch_gets_the_full_document(app, secure_actors):
+    db.session.get(Site, 1).require_signed_fetch = False
+    db.session.commit()
+
+    response = ap_get(app, secure_actors['user'])
+
+    assert 'outbox' in response.json
+    assert response.headers['Cache-Control'] == 'public, max-age=300'
+    assert 'Signature' not in response.headers['Vary']
+
+
+def test_a_minimal_document_omits_endpoints_the_actor_does_not_have(app):
+    with app.test_request_context('/u/alice') as context:
+        context.request.environ['pyfedi.minimal_actor_document'] = True
+        assert actor_document({'id': 'x', 'type': 'Person', 'outbox': 'o'}) == {'id': 'x', 'type': 'Person'}
