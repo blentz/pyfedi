@@ -71,7 +71,7 @@ Then add RFC 9421 signatures with double-knocking, and opt-in authorized fetch.
     - An announced Delete whose origin answers anything other than 404, 410 or 200 (401/403/5xx) is dropped with its status in the reason.
     - `process_inbox_request` is a Celery task, so S4 fetches run in a worker.
 11. **S6 details:**
-    - `post_to_page` and `comment_model_to_json` always address Public, so the addressees of a followers-only object are `[author.followers_url()]`. The served `to`/`cc`/`interactionPolicy` are rewritten by the same `followers_only_addressing` that `send_post` and `send_reply` push, and `audience` is dropped (Task 27 review carry-over).
+    - `post_to_page` and `comment_model_to_json` always address Public, so the addressees of a followers-only object are what it was pushed to: `[author.followers_url()]` plus its cc (ruling R-FETCHEQPUSH). The served `to`/`cc`/`interactionPolicy` are rewritten by the same `followers_only_addressing` that `send_post` and `send_reply` push, and `audience` is dropped (Task 27 review carry-over).
     - Local followers-only content exists only in the local microblogs community (Amendment B); the unlock applies to it.
     - The post and comment AP routes have no `@cache.cached` today. Task 22 adds `Signature` to their `Vary` (they already vary on the signer for D194) and pins "no server-side URL cache" with a ratchet test.
     - Secure mode is one hook in the app-wide `before_request` (`app/request_hooks.py`), not per-blueprint hooks, so AP GETs served by other blueprints are covered.
@@ -118,7 +118,7 @@ neighbouring tasks agree.
 | `verify_refreshing_key` | `app/activitypub/signature.py` | `(request, stored_key, required=frozenset(), *, owner_url, rate_key, fetch_key, store_key) -> None`. The core that both `verify_with_key_refresh` and the relay module use. | Task 8 |
 | `tombstone_response` | `app/activitypub/routes.py` | unchanged `(ap_id: str, former_type: str)`. Callers pass the real type. | Tasks 11–12 |
 | `former_type_of_post` | `app/activitypub/routes.py` | `(post: Post) -> str` = `post_to_page(post)['type']` (Page, Question or Event) | Task 12 |
-| `followers_only_addressees`, `followers_entitled` | `app/activitypub/routes.py` | `(obj) -> list[str]` (`[obj.author.followers_url()]`) and `(obj) -> bool` | Task 23 |
+| `pushed_addressees`, `followers_entitled` | `app/activitypub/routes.py` | `(obj) -> list[str]` (`addressees_of(followers_only_addressing(author, pushed recipients))`, ruling R-FETCHEQPUSH) and `(obj) -> bool` | Task 23 |
 | `verify_announced_inner` | `app/activitypub/util.py` | `(announce: dict) -> tuple[dict \| None, str \| None]`: `(possibly-replaced inner activity, None)` to process, `(None, reason)` to drop | Tasks 15–17 |
 | `content_digest` | `app/activitypub/signature_rfc9421.py` | `(body: bytes) -> str` | Task 18 |
 | `sign` | `app/activitypub/signature_rfc9421.py` | `(method: str, url: str, body: bytes \| None, private_key_pem: str, key_id: str, created: int \| None = None) -> dict[str, str]` | Task 18 |

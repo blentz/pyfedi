@@ -2586,14 +2586,13 @@ def comment_ap(comment_id):
         if reply.visibility not in OPEN_VISIBILITIES and not followers_entitled(reply):
             abort(404)
         if reply.deleted:
-            return tombstone_response(reply.ap_id, 'Note')
+            return tombstone_response(reply.ap_id, 'Note', private=not is_open(reply))
         requesting_domain = signed_requestor_domain()
         if reply.author.has_blocked_instance(known_instance_id(requesting_domain)):
             return make_response(f'Author has blocked {requesting_domain}'), 401
         reply_data = comment_model_to_json(reply) if request.method == 'GET' else []
         if request.method == 'GET' and not is_open(reply):   # S6: who it is for, as send_reply pushed it
-            parent = db.session.get(PostReply, reply.parent_id) if reply.parent_id else reply.post
-            addressed_as_pushed(reply_data, reply, shared_pages.reply_recipients(reply, parent, allow_fetch=False))
+            addressed_as_pushed(reply_data, reply)
         resp = jsonify(reply_data)
         resp.content_type = 'application/activity+json'
         ap_content_headers(resp, reply)
@@ -2611,30 +2610,51 @@ def former_type_of_post(post: Post) -> str:
     return post_to_page(post)['type']
 
 
-def tombstone_response(ap_id: str, former_type: str):
-    """410 Gone with an ActivityPub Tombstone for deleted content."""
+def tombstone_response(ap_id: str, former_type: str, private: bool = False):
+    """410 Gone with an ActivityPub Tombstone for deleted content.
+
+    `private` is for a non-public object, whose Tombstone only an entitled signer sees (S6): a shared cache must not
+    keep it, or it would tell the next, unsigned requester that the object existed."""
     resp = jsonify({'@context': default_context(), 'id': ap_id, 'type': 'Tombstone', 'formerType': former_type})
     resp.status_code = 410
     resp.content_type = 'application/activity+json'
+    if private:
+        resp.headers.update(PRIVATE_HEADERS)
     return resp
 
 
-def followers_only_addressees(obj) -> list[str]:
-    """Who a followers-only post or comment is for: its author's followers collection (S6)."""
-    return [obj.author.followers_url()]
+def pushed_addressing(obj) -> dict:
+    """The to, cc and interactionPolicy send_post or send_reply gave `obj`, a local followers-only post or comment.
+
+    The recipients are found as the push found them -- a reply's parent author, then the users it Mentions -- but
+    only among actors stored here: answering a GET never fetches."""
+    if isinstance(obj, PostReply):
+        parent = db.session.get(PostReply, obj.parent_id) if obj.parent_id else obj.post
+        recipients = shared_pages.reply_recipients(obj, parent, allow_fetch=False)
+    else:
+        recipients = shared_pages.mentioned_users(obj, allow_fetch=False)
+    return followers_only_addressing(obj.author, recipients)
+
+
+def pushed_addressees(obj) -> list[str]:
+    """Everyone a local followers-only post or comment was pushed to: the author's followers and its cc (S6)."""
+    return addressees_of(pushed_addressing(obj))
 
 
 def followers_entitled(obj) -> bool:
-    """True when this GET's signer may see `obj`, a local author's followers-only post or comment (S6)."""
+    """True when this GET's signer may see `obj`, a local author's followers-only post or comment (S6).
+
+    Ruling R-FETCHEQPUSH: whoever was pushed it may fetch it -- an accepted follower or a signer on a follower's
+    host, a user it answers or Mentions, or a signer on that user's host."""
     return (obj.visibility == VISIBILITY_FOLLOWERS and obj.author.is_local() and
-            audience_entitles(followers_only_addressees(obj), signed_requester_actor(), local_actor=obj.author))
+            audience_entitles(pushed_addressees(obj), signed_requester_actor(), local_actor=obj.author))
 
 
-def addressed_as_pushed(document: dict, obj, recipients: list) -> dict:
+def addressed_as_pushed(document: dict, obj) -> dict:
     """`document`, a non-public post or comment served to an entitled signer (S6), addressed as send_post or
     send_reply pushed it: the same followers_only_addressing, with no community audience and nothing Public, so a
     fetch can never tell a peer more, or other, than the push did."""
-    document.update(followers_only_addressing(obj.author, recipients))
+    document.update(pushed_addressing(obj))
     document.pop('audience', None)
     document.pop('searchableBy', None)
     return document
@@ -2701,7 +2721,7 @@ def post_ap_refusal(post: Post):
     if post.visibility not in OPEN_VISIBILITIES and not followers_entitled(post):
         abort(404)
     if post.deleted:
-        return tombstone_response(post.ap_id, former_type_of_post(post))
+        return tombstone_response(post.ap_id, former_type_of_post(post), private=not is_open(post))
     requesting_domain = signed_requestor_domain()
     if post.author.has_blocked_instance(known_instance_id(requesting_domain)):
         return make_response(f'Author has blocked {requesting_domain}'), 401
@@ -2725,7 +2745,7 @@ def post_ap(post_id):
                 post_data = post_to_page(post)
                 post_data['@context'] = default_context()
                 if not is_open(post):   # S6: who it is for, as send_post pushed it
-                    addressed_as_pushed(post_data, post, shared_pages.mentioned_users(post, allow_fetch=False))
+                    addressed_as_pushed(post_data, post)
             else:  # HEAD request
                 post_data = []
             resp = jsonify(post_data)
