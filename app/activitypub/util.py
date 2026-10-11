@@ -5672,7 +5672,11 @@ def _verify_announced_content(inner: dict, inner_host: str) -> Tuple[Union[dict,
     verified, reason = verify_object_from_source({'actor': actor_id, 'object': object_id})
     if verified is None:
         return None, reason
-    fetched = verified['object']
+    # interop C1 item 8: the origin's copy may carry an array type; the dispatcher reads one string
+    fetched = normalise_activity_types({'object': verified['object']})
+    if fetched is None:
+        return None, 'the fetched object has no single usable type'
+    fetched = fetched['object']
     if _id_of(fetched['id']) != object_id:
         return None, 'the fetched object id does not match the Announced object id'
     if actor_id not in _attributed_ids(fetched['attributedTo']):

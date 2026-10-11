@@ -376,3 +376,45 @@ def test_a_nested_collection_with_an_array_type_is_refused(app, db_session, kind
         announce['id'], announce, True)
 
     assert ActivityPubLog.query.one().exception_message == 'Announced list contains a nested list or collection'
+
+
+def test_a_refetched_object_with_an_array_type_is_normalised(monkeypatch):
+    actor = 'https://peer.example/u/alice'
+    fetched = {'id': 'https://peer.example/o/1', 'type': ['Note', 'as:Note'], 'attributedTo': actor}
+    monkeypatch.setattr(activitypub_util, 'verify_object_from_source', lambda request: ({'object': fetched}, None))
+
+    replaced, reason = activitypub_util._verify_announced_content(
+        {'actor': actor, 'object': {'id': 'https://peer.example/o/1', 'type': 'Note'}}, 'peer.example')
+
+    assert reason is None and replaced['object']['type'] == 'Note'
+    assert fetched['type'] == ['Note', 'as:Note']
+
+
+def test_a_refetched_object_with_an_ambiguous_type_is_refused(monkeypatch):
+    actor = 'https://peer.example/u/alice'
+    fetched = {'id': 'https://peer.example/o/1', 'type': ['Note', 'Page'], 'attributedTo': actor}
+    monkeypatch.setattr(activitypub_util, 'verify_object_from_source', lambda request: ({'object': fetched}, None))
+
+    replaced, reason = activitypub_util._verify_announced_content(
+        {'actor': actor, 'object': {'id': 'https://peer.example/o/1', 'type': 'Note'}}, 'peer.example')
+
+    assert replaced is None and 'no single usable type' in reason
+
+
+def test_an_ld_signed_create_is_processed_and_forwarded_with_the_origins_copy(app, db_session, monkeypatch):
+    """What reaches process_new_content, which forwards it, is the origin's content and a normalised type, never
+    the content or the array that came with the LD signature."""
+    author = _create_setup(app, monkeypatch)
+    calls = record_moderation(monkeypatch, 'process_new_content')
+    object_id = 'https://peer.example/post/1'
+    fetched = {'id': object_id, 'type': ['Note', 'as:Note'], 'content': 'what the origin serves',
+               'attributedTo': author.ap_profile_id}
+    monkeypatch.setattr(activitypub_util, 'verify_object_from_source', lambda request: ({'object': fetched}, None))
+    activity = create_activity(author, {'id': object_id, 'type': ['Note'], 'content': 'spoofed',
+                                        'attributedTo': author.ap_profile_id})
+
+    activitypub_routes.process_inbox_request(activity, True, ld_signed=True)
+
+    args, _kwargs = calls['process_new_content'][0]
+    assert args[3]['object']['content'] == 'what the origin serves'
+    assert args[3]['object']['type'] == 'Note'
