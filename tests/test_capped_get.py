@@ -9,6 +9,7 @@ deadline raises ResponseTooLarge, which is never retried.
 import gzip
 import json
 import time
+import zlib
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -16,8 +17,8 @@ import httpx
 import pytest
 
 from app import db
-from app.utils import FETCH_MAX_BYTES, FETCH_MAX_SECONDS, ResponseTooLarge, _capped_get, get_request, \
-    get_request_instance
+from app.utils import FETCH_MAX_BYTES, FETCH_MAX_SECONDS, ResponseTooLarge, UnreadableEncoding, _DECODE_STEP, \
+    _capped_get, get_request, get_request_instance
 from tests.factories import make_instance
 
 URI = 'https://peer.example/thing'
@@ -218,6 +219,147 @@ class TestTheReturnedResponse:
 
         with pytest.raises(httpx.HTTPStatusError):
             get_request(URI).raise_for_status()
+
+
+class _RecordingZlib:
+    """app.utils.zlib, with every decompressor recording the length of each piece it outputs."""
+
+    def __init__(self):
+        self.pieces = []
+
+    def __getattr__(self, name):
+        return getattr(zlib, name)
+
+    def decompressobj(self, *args, **kwargs):
+        real = zlib.decompressobj(*args, **kwargs)
+        pieces = self.pieces
+
+        class Recording:
+            def decompress(self, data, max_length=0):
+                piece = real.decompress(data, max_length)
+                pieces.append(len(piece))
+                return piece
+
+            def flush(self, *args):
+                piece = real.flush(*args)
+                pieces.append(len(piece))
+                return piece
+
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+        return Recording()
+
+
+@pytest.fixture
+def recording_zlib(monkeypatch):
+    recorder = _RecordingZlib()
+    monkeypatch.setattr('app.utils.zlib', recorder)
+    return recorder
+
+
+def _raw_deflate(data):
+    compressor = zlib.compressobj(wbits=-zlib.MAX_WBITS)
+    return compressor.compress(data) + compressor.flush()
+
+
+class TestCompressedBodies:
+    """_capped_get decompresses gzip and deflate itself, in steps of at most _DECODE_STEP bytes and never past the
+    remaining budget, so a bomb is refused having inflated at most the cap plus one step."""
+
+    def test_only_gzip_and_deflate_are_offered_whatever_the_caller_asked(self, app, http_mock):
+        route = http_mock.get(URI).respond(200, text='ok')
+
+        _capped_get(URI, headers={'Accept-Encoding': 'br, zstd'})
+
+        assert route.calls[0].request.headers.get_list('accept-encoding') == ['gzip, deflate']
+
+    @pytest.mark.parametrize('encoding, compress', [('gzip', gzip.compress), ('x-gzip', gzip.compress),
+                                                    ('deflate', zlib.compress), ('deflate', _raw_deflate)])
+    def test_a_real_bomb_is_refused_within_the_cap_plus_one_step(self, app, http_mock, recording_zlib, sleeps,
+                                                                 encoding, compress):
+        """Twenty mebibytes of zeros compress to a few kilobytes."""
+        bomb = compress(b'\0' * (20 * FETCH_MAX_BYTES))
+        assert len(bomb) < 64 * 1024
+        route = http_mock.get(URI).respond(200, content=bomb, headers={'Content-Encoding': encoding})
+
+        with pytest.raises(ResponseTooLarge):
+            get_request(URI)
+        assert route.call_count == 1
+        assert sum(recording_zlib.pieces) <= FETCH_MAX_BYTES + _DECODE_STEP
+        assert max(recording_zlib.pieces) <= _DECODE_STEP
+
+    @pytest.mark.parametrize('encoding, compress', [('gzip', gzip.compress), ('deflate', zlib.compress),
+                                                    ('deflate', _raw_deflate), ('identity', lambda data: data),
+                                                    (' GZIP ', gzip.compress)])
+    def test_a_body_under_the_cap_is_decoded_in_steps(self, app, http_mock, recording_zlib, encoding, compress):
+        """Over one step, so unconsumed_tail is fed back in; the Response carries the decoded body."""
+        document = json.dumps({'pad': 'x' * (3 * _DECODE_STEP)}).encode()
+        http_mock.get(URI).respond(200, content=compress(document), headers={'Content-Encoding': encoding})
+
+        response = _capped_get(URI)
+
+        assert response.content == document
+        assert 'content-encoding' not in response.headers
+        assert all(piece <= _DECODE_STEP for piece in recording_zlib.pieces)
+
+    @pytest.mark.parametrize('encoding, compress', [('gzip', gzip.compress), ('deflate', _raw_deflate)])
+    def test_a_body_arriving_in_several_chunks_keeps_one_decompressor(self, app, http_mock, encoding, compress):
+        """The decompressor (and, for deflate, the zlib-or-raw choice) comes from the first chunk only."""
+        document = json.dumps({'pad': 'y' * 5000, 'more': list(range(2000))}).encode()
+        packed = compress(document)
+        chunks = [packed[i:i + 100] for i in range(0, len(packed), 100)]
+        assert len(chunks) > 2
+        http_mock.get(URI).respond(200, content=iter(chunks), headers={'Content-Encoding': encoding})
+
+        assert _capped_get(URI).content == document
+
+    def test_a_body_decoded_to_exactly_the_cap_is_read(self, app, http_mock):
+        http_mock.get(URI).respond(200, content=gzip.compress(b'x' * 1000), headers={'Content-Encoding': 'gzip'})
+
+        assert len(_capped_get(URI, max_bytes=1000).content) == 1000
+
+    def test_bytes_left_for_the_final_flush_still_count(self, app, http_mock, monkeypatch):
+        """Output zlib still holds once all input is consumed comes out of flush(), and is counted against the cap
+        too. Real zlib holds back only a few bytes, so a decompressor whose flush returns more stands in."""
+        class HoldsBack:
+            unconsumed_tail = b''
+
+            def decompress(self, data, max_length=0):
+                return b''
+
+            def flush(self, *args):
+                return b'x' * 11
+
+        monkeypatch.setattr('app.utils._decompressor', lambda encoding, first: HoldsBack())
+        http_mock.get(URI).respond(200, content=iter([b'packed']), headers={'Content-Encoding': 'gzip'})
+
+        with pytest.raises(ResponseTooLarge):
+            _capped_get(URI, max_bytes=10)
+
+    def test_an_empty_compressed_body_is_empty(self, app, http_mock):
+        http_mock.get(URI).respond(200, content=b'', headers={'Content-Encoding': 'gzip'})
+
+        assert _capped_get(URI).content == b''
+
+    @pytest.mark.parametrize('encoding', ['br', 'zstd', 'compress', 'gzip, gzip', 'gzip,br'])
+    def test_any_other_or_stacked_encoding_is_refused_and_not_retried(self, app, http_mock, sleeps, encoding):
+        # A streamed body: respx would otherwise decode the bytes itself, as httpx would.
+        route = http_mock.get(URI).respond(200, content=iter([b'whatever']), headers={'Content-Encoding': encoding})
+
+        with pytest.raises(UnreadableEncoding):
+            get_request(URI)
+        assert issubclass(UnreadableEncoding, ResponseTooLarge)
+        assert route.call_count == 1
+        sleeps.assert_not_called()
+
+    def test_a_corrupt_body_is_a_decoding_error(self, app, http_mock):
+        """What httpx's own decoder raised for it."""
+        http_mock.get(URI).respond(200, content=iter([b'\x1f\x8b' + b'not gzip at all']),
+                                   headers={'Content-Encoding': 'gzip'})
+
+        with pytest.raises(httpx.DecodingError):
+            _capped_get(URI)
 
 
 class TestTheHelper:
