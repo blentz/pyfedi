@@ -70,6 +70,18 @@ def followers_only_reply_instances(reply) -> list:
     return instances
 
 
+def followers_only_addressing(author, recipients) -> dict:
+    """The `to`, `cc` and `interactionPolicy` of local `author`'s followers-only post or comment.
+
+    One answer for what is pushed (send_post, send_reply: Amendment B, S7.2 and S7.3) and what an entitled signer
+    fetches (S6), so the two cannot disagree: to the author's followers, cc each of `recipients` (the users it
+    answers or Mentions, never the follower list: R-FOCC), nothing Public, and only the author approves a quote.
+    The object carries no community `audience` either; that is for the caller to leave out."""
+    return {'to': [author.followers_url()],
+            'cc': [recipient.public_url() for recipient in recipients],
+            'interactionPolicy': {'canQuote': {'automaticApproval': [author.public_url()]}}}
+
+
 def post_title_for(post, viewer_id: Optional[int]) -> str:
     """A post's title as a notification, subscription name or page title tells it to `viewer_id`. Someone who may not
     view the post learns that one exists (its link still 404s for them), not what it is called."""

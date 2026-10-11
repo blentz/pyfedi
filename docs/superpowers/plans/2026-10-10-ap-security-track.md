@@ -71,7 +71,8 @@ Then add RFC 9421 signatures with double-knocking, and opt-in authorized fetch.
     - An announced Delete whose origin answers anything other than 404, 410 or 200 (401/403/5xx) is dropped with its status in the reason.
     - `process_inbox_request` is a Celery task, so S4 fetches run in a worker.
 11. **S6 details:**
-    - `post_to_page` and `comment_model_to_json` always address Public, so the addressees of a followers-only object are `[author.followers_url()]`. The served `to`/`cc` are rewritten to match.
+    - `post_to_page` and `comment_model_to_json` always address Public, so the addressees of a followers-only object are `[author.followers_url()]`. The served `to`/`cc`/`interactionPolicy` are rewritten by the same `followers_only_addressing` that `send_post` and `send_reply` push, and `audience` is dropped (Task 27 review carry-over).
+    - Local followers-only content exists only in the local microblogs community (Amendment B); the unlock applies to it.
     - The post and comment AP routes have no `@cache.cached` today. Task 22 adds `Signature` to their `Vary` (they already vary on the signer for D194) and pins "no server-side URL cache" with a ratchet test.
     - Secure mode is one hook in the app-wide `before_request` (`app/request_hooks.py`), not per-blueprint hooks, so AP GETs served by other blueprints are covered.
     - `admin_federation` now invalidates the memoized `get_site_as_dict`, which caches for 60 s.
