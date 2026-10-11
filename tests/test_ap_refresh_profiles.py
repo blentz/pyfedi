@@ -53,9 +53,13 @@ def _remote_community(name='memes'):
     `make_community` sets `ap_followers_url`; it is cleared so the followers
     collection is never fetched. `http_mock`'s `assert_all_called=True` would
     not catch that omission -- `block_outbound_http` would, by raising.
+
+    `make_community` leaves `ap_id` None, which makes `is_local()` True whatever the host; it is set as
+    actor_json_to_model sets it, since the task applies only presentation fields to a local community.
     """
     seed_community_owner(PEER)
     community = make_community(name, host=PEER)
+    community.ap_id = f'{name}@{PEER}'
     community.ap_public_url = f'https://{PEER}/c/{name}'
     community.ap_followers_url = None
     db.session.commit()

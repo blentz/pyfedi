@@ -19,7 +19,7 @@ from app.activitypub import util as activitypub_util
 from app.activitypub.util import (INBOX_URL_MAX, delivery_inbox_of, names_actor,
                                   refresh_community_profile_task, refresh_feed_profile_task)
 from app.models import ActivityPubLog, Community, Feed, User, utcnow
-from tests.factories import inbox_activity, make_community, make_user, seed_community_owner
+from tests.factories import inbox_activity, make_community, make_community_member, make_user, seed_community_owner
 from tests.test_ap_refresh_profiles import (PEER, _feed_document, _group_document, _person_document,
                                             _remote_community, _remote_feed, _remote_user)
 from tests.test_inbox_dispatch_create_update import create_activity
@@ -335,3 +335,115 @@ def test_a_user_signed_group_update_with_no_community_is_refused_not_crashed(app
 
     assert calls['refresh_community_profile'] == []
     assert ActivityPubLog.query.one().exception_message == 'Update of another Group refused'
+
+
+# --- a local community's identity is not a peer's to replace ---
+
+ATTACKER_KEY = '-----BEGIN PUBLIC KEY-----attacker'
+ATTACKER_FOLLOWERS = f'https://{PEER}/attacker/followers'
+ATTACKER_FEATURED = f'https://{PEER}/attacker/featured'
+ATTACKER_MODERATORS = f'https://{PEER}/attacker/moderators'
+ATTACKER_INBOX = f'https://{PEER}/attacker/inbox'
+
+
+def _hostile_group_document(community_id):
+    """A Group document for `community_id` that also tries to replace everything that makes up its identity."""
+    return {'type': 'Group', 'id': community_id, 'preferredUsername': 'microblogs',
+            'name': 'Renamed by a moderator', 'summary': '<p>a new description</p>',
+            'publicKey': {'publicKeyPem': ATTACKER_KEY},
+            'followers': ATTACKER_FOLLOWERS, 'featured': ATTACKER_FEATURED, 'attributedTo': ATTACKER_MODERATORS,
+            'inbox': ATTACKER_INBOX, 'endpoints': {'sharedInbox': ATTACKER_INBOX},
+            'postingWarning': 'attacker warning', 'theme': 'attacker', 'nsfl': True, 'genAI': True,
+            'postUrlType': 'ap',
+            'tag': [{'type': 'lemmy:CommunityTag', 'id': f'{community_id}/tag/x', 'display_name': 'x'}]}
+
+
+def _record_fetches(monkeypatch):
+    """Every get_request the refresh task makes, answered 404 so a task that should not fetch runs to its end."""
+    fetched = []
+
+    def _spy(url, *args, **kwargs):
+        fetched.append(url)
+        return SimpleNamespace(status_code=404, close=lambda: None)
+
+    monkeypatch.setattr(activitypub_util, 'get_request', _spy)
+    return fetched
+
+
+def test_a_moderators_update_of_a_local_community_keeps_its_key_and_ids(app, db_session, monkeypatch):
+    """A remote moderator of a LOCAL community may edit how it is presented. The pushed document reached
+    refresh_community_profile_task, which overwrote the key, inbox, followers, featured and moderators URLs too --
+    and the community's actor document would then publish the sender's key."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = seed_community_owner(PEER)
+    community = make_community(host=app.config['SERVER_NAME'])
+    community.public_key = OLD_KEY
+    community.ap_inbox_url = f"https://{app.config['SERVER_NAME']}/c/microblogs/inbox"
+    community.ap_featured_url = f"https://{app.config['SERVER_NAME']}/c/microblogs/featured"
+    community.ap_moderators_url = None
+    community.ap_followers_url = None
+    db.session.commit()
+    community_id, profile_id = community.id, community.ap_profile_id
+    before = {column: getattr(community, column) for column in
+              ('public_key', 'ap_inbox_url', 'ap_followers_url', 'ap_featured_url', 'ap_moderators_url',
+               'ap_profile_id', 'ap_public_url', 'ap_id', 'instance_id', 'posting_warning', 'theme', 'nsfl',
+               'ai_generated', 'post_url_type')}
+    moderator = make_user(instance, 'moderator')
+    moderator.ap_fetched_at = utcnow()   # else find_actor_or_create_cached refreshes it, a fetch of its own
+    make_community_member(moderator, community, is_moderator=True)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: community)
+    monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
+    record_moderation(monkeypatch, 'announce_activity_to_followers')
+    fetched = _record_fetches(monkeypatch)
+
+    dispatch(create_activity(moderator, _hostile_group_document(profile_id), activity_type='Update'))
+
+    db.session.expire_all()
+    community = db.session.get(Community, community_id)
+    assert {column: getattr(community, column) for column in before} == before
+    assert community.title == 'Renamed by a moderator'
+    assert 'a new description' in community.description_html
+    assert community.flair == []
+    assert fetched == []
+    assert ActivityPubLog.query.one().result == 'success'
+
+
+def test_the_same_document_for_a_remote_community_still_replaces_its_key(app, db_session, monkeypatch):
+    community = _remote_community()
+    community.public_key = OLD_KEY
+    db.session.commit()
+    community_id = community.id
+    fetched = _record_fetches(monkeypatch)
+
+    refresh_community_profile_task(community_id, _hostile_group_document(community.ap_profile_id))
+
+    db.session.expire_all()
+    community = db.session.get(Community, community_id)
+    assert community.public_key == ATTACKER_KEY
+    assert community.ap_inbox_url == ATTACKER_INBOX
+    assert community.ap_followers_url == ATTACKER_FOLLOWERS
+    assert community.ap_featured_url == ATTACKER_FEATURED
+    assert community.ap_moderators_url == ATTACKER_MODERATORS
+    assert community.posting_warning == 'attacker warning'
+    assert community.theme == 'attacker'
+    assert community.nsfl is True
+    assert community.ai_generated is True
+    assert community.post_url_type == 'ap'
+    assert [flair.flair for flair in community.flair] == ['x']
+    assert fetched == [ATTACKER_MODERATORS, ATTACKER_FOLLOWERS, ATTACKER_FEATURED]
+
+
+def test_a_remote_community_document_without_a_key_keeps_the_old_key(app, db_session):
+    community = _remote_community()
+    community.public_key = OLD_KEY
+    db.session.commit()
+    community_id = community.id
+    document = _group_document(fields={'summary': '<p>keyless</p>'})
+    del document['publicKey']
+
+    refresh_community_profile_task(community_id, document)
+
+    db.session.expire_all()
+    community = db.session.get(Community, community_id)
+    assert 'keyless' in community.description_html
+    assert community.public_key == OLD_KEY

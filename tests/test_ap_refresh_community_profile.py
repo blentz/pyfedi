@@ -78,9 +78,14 @@ def _community_awaiting_refresh(name='memes'):
 
     make_community sets ap_followers_url; it is cleared here so the followers
     collection is never fetched. See the module docstring.
+
+    make_community leaves ap_id None, and Community.is_local() is True whenever it is, so ap_id is set as
+    actor_json_to_model sets it for a remote community. The task applies only presentation fields to a LOCAL
+    community (interop C1 item 2), so a community left local would never reach the flair loop.
     """
     seed_community_owner(PEER)
-    community = make_community(name)
+    community = make_community(name, host=PEER)
+    community.ap_id = f'{name}@{PEER}'
     community.ap_followers_url = None
     db.session.commit()
     return community

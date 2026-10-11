@@ -1066,6 +1066,11 @@ def refresh_community_profile_task(community_id, activity_json=None):
                         actor_data.close()
 
                 if activity_json:
+                    # A LOCAL community's document is pushed by one of its moderators (a remote moderator's Group
+                    # Update) or fetched from ourselves. Either way it may change only how the community is presented:
+                    # title, description, icon, banner, nsfw, languages and posting restriction. Its key, inbox, ids and
+                    # collection URLs are this instance's; a pushed key would let the sender sign as the community
+                    remote = not community.is_local()
                     if 'attributedTo' in activity_json and isinstance(activity_json['attributedTo'], str):  # lemmy and mbin
                         mods_url = activity_json['attributedTo']
                     elif 'moderators' in activity_json and isinstance(activity_json['moderators'], str):  # kbin
@@ -1074,7 +1079,7 @@ def refresh_community_profile_task(community_id, activity_json=None):
                         mods_url = None
 
                     community.nsfw = activity_json['sensitive'] if 'sensitive' in activity_json else False
-                    if 'nsfl' in activity_json and activity_json['nsfl']:
+                    if remote and 'nsfl' in activity_json and activity_json['nsfl']:
                         community.nsfl = activity_json['nsfl']
                     # D1374. `activity_json['name'].strip()`. Absent was KeyError,
                     # a non-string was AttributeError and a value wider than
@@ -1088,42 +1093,43 @@ def refresh_community_profile_task(community_id, activity_json=None):
                     refreshed_title = actor_name_from_ap(activity_json, 'name', limit=256)
                     if refreshed_title:
                         community.title = refreshed_title
-                    community.posting_warning = posting_warning_from_ap(activity_json)  # D1377
                     community.restricted_to_mods = activity_json['postingRestrictedToMods'] if 'postingRestrictedToMods' in activity_json else False
-                    community.new_mods_wanted = activity_json['newModsWanted'] if 'newModsWanted' in activity_json else False
-                    community.private_mods = activity_json['privateMods'] if 'privateMods' in activity_json else False
-                    community.question_answer = activity_json['questionAnswer'] if 'questionAnswer' in activity_json else False
-                    # D1374. The guard read `'default_post_type'` and the value
-                    # read `'defaultPostType'`: two different keys, so the guard
-                    # could never be true for the key being fetched. This instance
-                    # PUBLISHES `defaultPostType` (app/activitypub/routes.py:546),
-                    # so between two PieFed instances the guard was always false and
-                    # every refresh silently reset a remote community's setting to
-                    # 'link' -- while a peer sending only the snake_case spelling
-                    # was `KeyError: 'defaultPostType'` and aborted the task.
-                    # `_as_text` carries the String(15) width with it; the
-                    # else-'link' arm is unchanged, and matches the five settings
-                    # around it that also take their default on a refresh.
-                    community.default_post_type = _as_text(
-                        activity_json.get('defaultPostType'), 15) or 'link'
-                    community.default_hashtag = activity_json['defaultHashtag'] if 'defaultHashtag' in activity_json else ''
-                    community.ap_moderators_url = mods_url
-                    if 'followers' in activity_json:
-                        community.ap_followers_url = activity_json['followers']
-                    if 'featured' in activity_json:
-                        community.ap_featured_url = activity_json['featured']
-                    community.ap_fetched_at = utcnow()
-                    # D1355, D1354's twin: a community that cannot be refreshed keeps
-                    # its stale name, icon, description, moderator list AND key.
-                    refreshed_pem = public_key_pem(activity_json)
-                    if refreshed_pem:
-                        community.public_key = refreshed_pem
-                    refreshed_inbox = delivery_inbox_of(activity_json)   # interop C1 item 2: absent keeps the old one
-                    if refreshed_inbox:
-                        community.ap_inbox_url = refreshed_inbox
+                    if remote:
+                        community.posting_warning = posting_warning_from_ap(activity_json)  # D1377
+                        community.new_mods_wanted = activity_json['newModsWanted'] if 'newModsWanted' in activity_json else False
+                        community.private_mods = activity_json['privateMods'] if 'privateMods' in activity_json else False
+                        community.question_answer = activity_json['questionAnswer'] if 'questionAnswer' in activity_json else False
+                        # D1374. The guard read `'default_post_type'` and the value
+                        # read `'defaultPostType'`: two different keys, so the guard
+                        # could never be true for the key being fetched. This instance
+                        # PUBLISHES `defaultPostType` (app/activitypub/routes.py:546),
+                        # so between two PieFed instances the guard was always false and
+                        # every refresh silently reset a remote community's setting to
+                        # 'link' -- while a peer sending only the snake_case spelling
+                        # was `KeyError: 'defaultPostType'` and aborted the task.
+                        # `_as_text` carries the String(15) width with it; the
+                        # else-'link' arm is unchanged, and matches the five settings
+                        # around it that also take their default on a refresh.
+                        community.default_post_type = _as_text(
+                            activity_json.get('defaultPostType'), 15) or 'link'
+                        community.default_hashtag = activity_json['defaultHashtag'] if 'defaultHashtag' in activity_json else ''
+                        community.ap_moderators_url = mods_url
+                        if 'followers' in activity_json:
+                            community.ap_followers_url = activity_json['followers']
+                        if 'featured' in activity_json:
+                            community.ap_featured_url = activity_json['featured']
+                        community.ap_fetched_at = utcnow()
+                        # D1355, D1354's twin: a community that cannot be refreshed keeps
+                        # its stale name, icon, description, moderator list AND key.
+                        refreshed_pem = public_key_pem(activity_json)
+                        if refreshed_pem:
+                            community.public_key = refreshed_pem
+                        refreshed_inbox = delivery_inbox_of(activity_json)   # interop C1 item 2: absent keeps the old one
+                        if refreshed_inbox:
+                            community.ap_inbox_url = refreshed_inbox
 
-                    if 'postUrlType' in activity_json and activity_json['postUrlType']:
-                        community.post_url_type = activity_json['postUrlType']
+                        if 'postUrlType' in activity_json and activity_json['postUrlType']:
+                            community.post_url_type = activity_json['postUrlType']
 
                     # D1355. Either key is whatever the peer sent, and a value that
                     # is not a string was `AttributeError: ... has no attribute
@@ -1145,7 +1151,7 @@ def refresh_community_profile_task(community_id, activity_json=None):
                         else:
                             community.description = html_to_text(community.description_html)
                    
-                    if 'theme' in activity_json and activity_json['theme']:
+                    if remote and 'theme' in activity_json and activity_json['theme']:
                         community.theme = activity_json['theme']
                     icon_changed = cover_changed = False
                     if 'icon' in activity_json:
@@ -1178,14 +1184,14 @@ def refresh_community_profile_task(community_id, activity_json=None):
                             new_language = find_language_or_create(*language, session)
                             if new_language not in community.languages:
                                 community.languages.append(new_language)
-                    if 'genAI' in activity_json and not community.ignore_remote_gen_ai:
+                    if remote and 'genAI' in activity_json and not community.ignore_remote_gen_ai:
                         community.ai_generated = activity_json['genAI']
                     instance = session.get(Instance, community.instance_id)
                     if instance and instance.software == 'peertube':
                         community.restricted_to_mods = True
                     session.commit()
 
-                    if 'lemmy:tagsForPosts' in activity_json and isinstance(activity_json['lemmy:tagsForPosts'], list) and "tag" not in activity_json:
+                    if remote and 'lemmy:tagsForPosts' in activity_json and isinstance(activity_json['lemmy:tagsForPosts'], list) and "tag" not in activity_json:
                         if len(community.flair) == 0:  # for now, all we do is populate community flair if there is not yet any. simpler.
                             for flair in activity_json['lemmy:tagsForPosts']:
                                 if not isinstance(flair, dict) or 'display_name' not in flair:
@@ -1218,7 +1224,7 @@ def refresh_community_profile_task(community_id, activity_json=None):
                                     community.flair.append(new_flair)
                             session.commit()
                     
-                    if "tag" in activity_json and isinstance(activity_json["tag"], list):
+                    if remote and "tag" in activity_json and isinstance(activity_json["tag"], list):
                         update_community_flair_from_tags(community, activity_json["tag"], session)
                         session.commit()
 
@@ -1227,7 +1233,7 @@ def refresh_community_profile_task(community_id, activity_json=None):
                     if community.image_id and cover_changed:
                         make_image_sizes(community.image_id, 700, 1600, 'communities')
 
-                    if community.ap_moderators_url:
+                    if remote and community.ap_moderators_url:
                         mods_request = get_request(community.ap_moderators_url,
                                                    headers={'Accept': AP_FETCH_ACCEPT})
                         if mods_request.status_code == 200:
@@ -1268,7 +1274,7 @@ def refresh_community_profile_task(community_id, activity_json=None):
                                                                                  is_moderator=True).delete()
                                         session.commit()
 
-                    if community.ap_followers_url:
+                    if remote and community.ap_followers_url:
                         followers_request = get_request(community.ap_followers_url, headers={'Accept': AP_FETCH_ACCEPT})
                         if followers_request.status_code == 200:
                             followers_data = followers_request.json()
@@ -1277,7 +1283,7 @@ def refresh_community_profile_task(community_id, activity_json=None):
                                 community.total_subscriptions_count = followers_data['totalItems']
                                 session.commit()
 
-                    if community.ap_featured_url:
+                    if remote and community.ap_featured_url:
                         featured_request = get_request(community.ap_featured_url, headers={'Accept': AP_FETCH_ACCEPT})
                         if featured_request.status_code == 200:
                             featured_data = featured_request.json()
