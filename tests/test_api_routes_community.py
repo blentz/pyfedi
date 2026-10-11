@@ -10,7 +10,7 @@ from flask import current_app, g
 
 from app import db
 from app.models import (Community, CommunityFlair, CommunityMember, Feed,
-                        FeedMember, InstanceBan, Language, Site)
+                        FeedMember, InstanceBan, Language, Site, utcnow)
 from tests.factories import (a_keypair, make_community, make_community_ban,
                              make_community_flair, make_community_member,
                              make_local_feed, make_post, make_user)
@@ -117,6 +117,24 @@ class TestJoiningAndLeaving:
                                          'follow': True})
         assert response.status_code == 400
         assert response.get_json()['message'] == 'community not found'
+
+    def test_joining_a_community_deleted_on_its_home_server_is_refused(self, env):
+        """Interop C1 item 10: a remote Group verified deleted at its origin is read-only, joins included."""
+        gone = make_community('gonegroup', host='peer.example')
+        gone.ap_id = 'gonegroup@peer.example'
+        gone.ap_deleted_at = utcnow()
+        db.session.commit()
+
+        response = env.client.post('/api/alpha/community/follow',
+                                   headers=auth(env.stranger),
+                                   json={'community_id': gone.id,
+                                         'follow': True})
+
+        assert response.status_code == 400
+        assert response.get_json()['message'] == 'This community was deleted on its home server'
+        assert CommunityMember.query.filter_by(
+            user_id=env.stranger.id,
+            community_id=gone.id).count() == 0
 
     def test_leaving(self, env):
         response = env.client.post('/api/alpha/community/follow',

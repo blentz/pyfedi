@@ -173,7 +173,7 @@ def send_post(post_id, edit=False, session=None):
         return
 
     # local_only communities do not federate
-    if community.local_only or community.private:
+    if community.local_only or community.private or community.is_gone():   # interop C1 item 10: nothing goes to a gone Group
         return
 
     banned = user_banned_from_community(user.id, community.id)  # D995
