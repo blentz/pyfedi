@@ -32,7 +32,7 @@ from app.activitypub.util import activity_dedupe_key, claim_activity, release_ac
     verify_announced_inner, verify_ld_accepted_activity, ANNOUNCED_DELETE_DEFERRED, cross_origin_delete_delay, _id_of, \
     post_replies_for_ap, is_vote, known_instance_id, resolve_remote_post_from_search, proactively_delete_content, \
     process_quote_boost, object_has_missing_fields, find_microblogging_community, process_announce_of_uri, \
-    announce_target_uri, undo_boost, LD_SIGNED_LOG_PREFIX, current_ld_signed, normalise_activity_types, current_as_sent_json, \
+    announce_target_uri, undo_boost, LD_SIGNED_LOG_PREFIX, current_ld_signed, normalise_activity_types, \
     NO_STRING_TYPE_MESSAGE
 # The module, not the name: app.community.routes reaches this file through
 # app.activitypub.signature before show_community is defined (U-circular-import)
@@ -1002,7 +1002,6 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
         session = get_task_session()
         token = current_relay_id.set(relay_id)   # Post.new records it as post.relay_id; reset in the finally
         ld_token = current_ld_signed.set(ld_signed)   # log_incoming_ap marks this delivery's rows unreplayable
-        sent_token = current_as_sent_json.set(None)   # set below when dispatch runs on a normalised copy
         try:
             # patch_db_session makes all db.session.whatever() use the session created with get_task_session, to guarantee proper connection clean-up at the end of the task.
             # although process_inbox_request uses session instead of db.session, many of the functions it calls, like find_actor_or_create_cached, do not which makes this necessary.
@@ -1011,7 +1010,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                 # the logs store. First, so the relay filter and the LD downgrade below read the type dispatch uses.
                 raw_json = request_json
                 request_json = normalise_activity_types(raw_json)
-                current_as_sent_json.set(raw_json if request_json is not raw_json else None)
+                had_array_type = request_json is not raw_json   # saved_json below
                 if request_json is None:
                     log_incoming_ap(raw_json.get('id', ''), APLOG_NOTYPE, APLOG_FAILURE,
                                     raw_json if store_ap_json else None, NO_STRING_TYPE_MESSAGE)
@@ -1037,7 +1036,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                 #   Using actors from inner objects has a vulnerability to spoofing attacks (e.g. if 'attributedTo' doesn't match the 'Create' actor)
                 # An LD-accepted activity keeps logging the verified document, as before, unless a type was an array:
                 # then the document as sent, which is what the LD signature covers and replay re-verifies
-                saved_json = (request_json if ld_signed and current_as_sent_json.get() is None else raw_json) if store_ap_json else None
+                saved_json = (request_json if ld_signed and not had_array_type else raw_json) if store_ap_json else None
                 id = request_json['id']
                 actor_id = request_json['actor']
                 if isinstance(actor_id, dict):  # Discourse does this
@@ -2290,7 +2289,6 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
         finally:
             current_relay_id.reset(token)   # before close(): a raising close must not leak relay_id into the next task
             current_ld_signed.reset(ld_token)
-            current_as_sent_json.reset(sent_token)
             session.close()
 
 
@@ -2300,7 +2298,10 @@ def process_announced_objects(request_json, objects, id, saved_json, store_ap_js
     D54 (owner ruling): a nested list or collection is refused rather than recursed into, and at most
     ANNOUNCE_MAX_OBJECTS objects are processed, the excess logged. `ld_signed` goes with each, so every object of
     an LD-accepted Announce gets the R-LDANNOUNCE refetch."""
-    if any(isinstance(obj, list) or (isinstance(obj, dict) and obj.get('type') in ('Collection', 'OrderedCollection'))
+    # an item's type may be an array (interop C1 item 8): a collection among its entries makes it one
+    if any(isinstance(obj, list) or (isinstance(obj, dict) and any(
+            kind in ('Collection', 'OrderedCollection')
+            for kind in (obj['type'] if isinstance(obj.get('type'), list) else [obj.get('type')])))
            for obj in objects):
         log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json, 'Announced list contains a nested list or collection')
         return
@@ -2352,8 +2353,14 @@ def process_delete_request(request_json, store_ap_json, ld_signed=False):
         try:
             with patch_db_session(session):
                 # this function processes self-deletes (retain case here, as user_removed_from_remote_server() uses a JSON request)
-                saved_json = request_json if store_ap_json else None
-                id = request_json['id']
+                # interop C1 item 8: the log keeps the document as sent; everything below reads the normalised copy
+                raw_json = request_json
+                saved_json = raw_json if store_ap_json else None
+                id = raw_json['id']
+                request_json = normalise_activity_types(raw_json)
+                if request_json is None:
+                    log_incoming_ap(id, APLOG_DELETE, APLOG_FAILURE, saved_json, NO_STRING_TYPE_MESSAGE)
+                    return
                 if ld_signed:   # R-LDDOWNGRADE: an LD-signed self-delete needs the origin to have stopped serving the actor
                     verified, reason = verify_ld_accepted_activity(request_json)
                     if verified is None:
@@ -2389,11 +2396,6 @@ def announce_activity_to_followers(community: Community, creator: User, activity
 
     if creator.banned:
         return
-
-    # interop C1 item 8: forward the document as sent, not the copy dispatch normalised; its LD signature covers it
-    as_sent = current_as_sent_json.get()
-    if as_sent is not None and as_sent.get('id') == activity.get('id'):
-        activity = as_sent
 
     # remove context from what will be inner object, on a copy so the caller's dict is untouched (D138)
     if '@context' in activity:

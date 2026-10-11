@@ -6,14 +6,14 @@ failed the Celery task. The inbox now reduces each array to one type on a copy i
 stored, logged and LD-verified stays as it was sent.
 """
 import json
-from types import SimpleNamespace
 
 import pytest
 
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.activitypub.routes import replay_inbox_request
-from app.activitypub.util import NO_STRING_TYPE_MESSAGE, current_as_sent_json, normalise_activity_types
+from app.activitypub import util as activitypub_util
+from app.activitypub.util import NO_STRING_TYPE_MESSAGE, normalise_activity_types, verify_ld_accepted_activity
 from app.models import ActivityPubLog
 from app.utils import utcnow
 from tests.conftest import ld_signed_body, unsigned_but_precheck_clean_headers
@@ -59,7 +59,7 @@ def test_an_activity_whose_types_are_all_strings_is_returned_as_it_is():
 
 
 def test_an_announced_activitys_object_type_is_normalised():
-    announce = {'type': 'Announce', 'object': {'type': 'Create', 'object': {'type': ['Note', 'Article']}}}
+    announce = {'type': 'Announce', 'object': {'type': 'Create', 'object': {'type': ['Note', 'as:Note']}}}
     assert normalise_activity_types(announce)['object']['object']['type'] == 'Note'
 
 
@@ -271,58 +271,6 @@ def test_an_ld_signed_array_type_is_stored_as_sent(app, db_session, monkeypatch)
     assert json.loads(log.activity_json)['object']['type'] == ['Foo', 'Bar']
 
 
-def test_dispatch_knows_the_document_as_sent_only_for_the_length_of_the_task(app, db_session, monkeypatch):
-    make_site()
-    actor = make_user(make_instance('peer.example'), 'alice')
-    actor.ap_fetched_at = utcnow()
-    db.session.commit()
-    seen = []
-    monkeypatch.setattr(activitypub_routes, 'process_upvote', lambda *a, **kw: seen.append(current_as_sent_json.get()))
-    activity = inbox_activity(actor, activity_type=['Like'])
-
-    dispatch(activity)
-
-    assert seen == [activity]
-    assert current_as_sent_json.get() is None
-
-
-def _forwarded(activity):
-    sent = []
-    instance = SimpleNamespace(id=2, online=lambda: True, inbox='https://peer.example/inbox', software='other')
-    community = SimpleNamespace(is_local=lambda: True, public_url=lambda: 'https://test.piefed.local/c/news',
-                                following_instances=lambda **kw: [instance],
-                                private_key='k', ap_profile_id='https://test.piefed.local/c/news')
-    creator = SimpleNamespace(banned=False, instance_id=1)
-    monkey = pytest.MonkeyPatch()
-    with monkey.context() as m:
-        m.setattr(activitypub_routes, 'send_to_remote_instance_fast', lambda inbox, key, key_id, payload: sent.append(payload))
-        m.setattr(activitypub_routes, 'instance_banned', lambda inbox: False)
-        m.setattr(activitypub_routes, 'awaken_dormant_instance', lambda instance: None)
-        activitypub_routes.announce_activity_to_followers(community, creator, activity)
-    return sent[0]['object']
-
-
-def test_a_forwarded_activity_is_the_one_as_sent(app):
-    sent = {'id': 'https://peer.example/a/1', 'type': ['Like'], 'object': 'https://test.piefed.local/post/1'}
-    token = current_as_sent_json.set(sent)
-    try:
-        forwarded = _forwarded(normalise_activity_types(sent))
-    finally:
-        current_as_sent_json.reset(token)
-
-    assert forwarded['type'] == ['Like']
-
-
-def test_another_activity_is_forwarded_as_given(app):
-    token = current_as_sent_json.set({'id': 'https://peer.example/a/1', 'type': ['Like']})
-    try:
-        forwarded = _forwarded({'id': 'https://peer.example/a/2', 'type': 'Like'})
-    finally:
-        current_as_sent_json.reset(token)
-
-    assert forwarded['id'].endswith('/a/2')
-
-
 def test_a_relayed_array_announce_is_refused_and_stored_as_sent(app, db_session, monkeypatch):
     """The relay filter reads the normalised type, so `['Announce']` is a boost; the log keeps what was sent."""
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
@@ -347,3 +295,84 @@ def test_a_relayed_array_like_is_dispatched(app, db_session, monkeypatch):
     activitypub_routes.process_inbox_request(inbox_activity(actor, activity_type=['Like']), True, relay_id=1)
 
     assert len(calls) == 1
+
+
+# ---- a gate and the handler behind it read the same type ----------------------------------------------------------
+
+@pytest.mark.parametrize('value', [['Create', 'Delete'], ['Like', 'Dislike'], ['ChatMessage', 'Note']])
+def test_an_array_naming_two_dispatched_types_is_refused(value):
+    assert normalise_activity_types({'type': value, 'object': 'https://peer.example/o/1'}) is None
+
+
+def test_an_array_naming_one_dispatched_type_and_extensions_resolves_to_it():
+    assert normalise_activity_types({'type': ['Foo', 'Create', 'Create']})['type'] == 'Create'
+
+
+def test_the_dispatcher_refuses_an_ambiguous_array_type(app, db_session):
+    app.config['LOG_ACTIVITYPUB_TO_DB'] = True
+    make_site()
+    actor = make_user(make_instance('peer.example'), 'alice')
+
+    dispatch(inbox_activity(actor, activity_type=['Create', 'Delete']))
+
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == NO_STRING_TYPE_MESSAGE
+    assert json.loads(log.activity_json)['type'] == ['Create', 'Delete']
+
+
+def test_an_ld_accepted_activity_with_an_array_type_is_refused():
+    verified, reason = verify_ld_accepted_activity({'type': ['Delete'], 'actor': 'a', 'object': 'a'})
+    assert verified is None and 'not a string' in reason
+
+
+def test_an_ld_signed_array_self_delete_still_needs_the_origin_to_agree(app, db_session, monkeypatch):
+    """`type: ['Delete']` once skipped verify_ld_accepted_activity's origin check and purged the account."""
+    app.config['LOG_ACTIVITYPUB_TO_DB'] = True
+    make_site()
+    victim = make_user(make_instance('peer.example'), 'victim')
+    asked = []
+    monkeypatch.setattr(activitypub_util, '_origin_refusal_of_delete',
+                        lambda object_id, label: asked.append(object_id) or 'origin still serves it')
+    activity = {'id': 'https://peer.example/a/d1', 'type': ['Delete'], 'actor': victim.ap_profile_id,
+                'object': victim.ap_profile_id, 'removeData': True}
+
+    activitypub_routes.process_delete_request(activity, True, ld_signed=True)
+
+    assert asked == [victim.ap_profile_id]
+    assert not db.session.get(type(victim), victim.id).deleted
+    assert 'LD-signed activity dropped' in ActivityPubLog.query.one().exception_message
+
+
+def test_an_array_self_delete_is_applied_when_it_passes(app, db_session):
+    make_site()
+    victim = make_user(make_instance('peer.example'), 'victim')
+
+    activitypub_routes.process_delete_request({'id': 'https://peer.example/a/d1', 'type': ['Delete'],
+                                               'actor': victim.ap_profile_id, 'object': victim.ap_profile_id}, False)
+
+    db.session.expire_all()
+    assert db.session.get(type(victim), victim.id).deleted
+
+
+def test_a_self_delete_with_an_ambiguous_type_is_refused(app, db_session):
+    app.config['LOG_ACTIVITYPUB_TO_DB'] = True
+    make_site()
+    victim = make_user(make_instance('peer.example'), 'victim')
+
+    activitypub_routes.process_delete_request({'id': 'https://peer.example/a/d1', 'type': ['Delete', 'Create'],
+                                               'actor': victim.ap_profile_id, 'object': victim.ap_profile_id}, True)
+
+    assert not db.session.get(type(victim), victim.id).deleted
+    assert ActivityPubLog.query.one().exception_message == NO_STRING_TYPE_MESSAGE
+
+
+@pytest.mark.parametrize('kind', [['OrderedCollection'], ['Foo', 'Collection']])
+def test_a_nested_collection_with_an_array_type_is_refused(app, db_session, kind):
+    app.config['LOG_ACTIVITYPUB_TO_DB'] = True
+    announce = {'id': 'https://peer.example/a/1', 'type': 'Announce', 'actor': 'https://peer.example/c/news'}
+
+    activitypub_routes.process_announced_objects(
+        announce, [{'id': 'https://peer.example/c1', 'type': kind, 'orderedItems': ['https://peer.example/p/1']}],
+        announce['id'], announce, True)
+
+    assert ActivityPubLog.query.one().exception_message == 'Announced list contains a nested list or collection'

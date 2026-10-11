@@ -751,17 +751,20 @@ DISPATCHED_AP_TYPES = frozenset({
     'Person', 'Podcast', 'Question', 'Service', 'Tombstone', 'Video',
 })
 
-NO_STRING_TYPE_MESSAGE = 'Activity type has no string value'
+NO_STRING_TYPE_MESSAGE = 'Activity type has no single string value'
 
 
 def _single_type(value):
-    """`value` unchanged unless it is an array. For an array: its first type the inbox dispatches on, else its
-    first string, else None."""
+    """`value` unchanged unless it is an array. For an array: its one type the inbox dispatches on, else its first
+    string, else None. None too when it names more than one dispatched type: picking one would let a peer that picks
+    another act on a type this instance never checked."""
     if not isinstance(value, list):
         return value
     strings = [entry for entry in value if isinstance(entry, str)]
-    dispatched = [entry for entry in strings if entry in DISPATCHED_AP_TYPES]
-    return (dispatched or strings or [None])[0]
+    dispatched = {entry for entry in strings if entry in DISPATCHED_AP_TYPES}
+    if len(dispatched) > 1:
+        return None
+    return (([entry for entry in strings if entry in dispatched]) or strings or [None])[0]
 
 
 def _type_holders(activity: dict) -> list:
@@ -780,7 +783,7 @@ def normalise_activity_types(activity: dict) -> dict | None:
 
     JSON-LD lets `type` be an array; the dispatcher compares it as a string. Returns `activity` itself when no type
     it covers is an array, else a deep copy with each array replaced by `_single_type`'s choice, so the original --
-    what is stored, logged and LD-verified -- is never changed. Returns None when an array holds no string."""
+    what is stored, logged and LD-verified -- is never changed. Returns None when an array holds no string or names more than one dispatched type."""
     if not any(isinstance(holder.get('type'), list) for holder in _type_holders(activity)):
         return activity
     normalised = copy.deepcopy(activity)
@@ -5826,6 +5829,8 @@ def verify_ld_accepted_activity(activity: dict) -> Tuple[Union[dict, None], Unio
       refetches every inner Create, Update or Delete (ruling R-LDANNOUNCE);
     - anything else keeps the verified, stripped document."""
     activity_type = activity.get('type')
+    if not isinstance(activity_type, str):   # an array type would skip the checks below; callers normalise first
+        return None, 'LD-signed activity type is not a string'
     if activity_type in ('Create', 'Update') and isinstance(activity.get('object'), dict):
         verified, reason = _verify_announced_content(activity, host_of(_id_of(activity.get('actor'))))
         return (_with_object_addressing(verified), None) if verified is not None else (None, reason)
@@ -5898,9 +5903,6 @@ def verify_announced_inner(announce: dict, community=None,
 # replay refuses them -- replay re-runs the stored JSON without the origin refetch the LD path depends on.
 LD_SIGNED_LOG_PREFIX = 'LD-signed'
 current_ld_signed: ContextVar = ContextVar('current_ld_signed', default=False)
-# The document as sent, while process_inbox_request dispatches a normalised copy of it (interop C1 item 8):
-# announce_activity_to_followers forwards this one, since an LD signature covers what was sent.
-current_as_sent_json: ContextVar = ContextVar('current_as_sent_json', default=None)
 
 
 def log_incoming_ap(id, aplog_type, aplog_result, saved_json, message=None, session=None):
