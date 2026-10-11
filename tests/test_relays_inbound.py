@@ -7,7 +7,7 @@ from flask import g, request
 
 import app as app_pkg
 from app import db
-from app.activitypub.signature import VerificationError
+from app.activitypub.signature_errors import KeyMismatchError
 from app.constants import ALLOWLIST_STRONG, APLOG_FAILURE, APLOG_IGNORED, APLOG_SUCCESS
 from app.models import BannedInstances, Community, Post, PostReply, Relay, Site, User, utcnow
 from app.relays import RELAY_ACCEPTED, RELAY_PENDING, RELAY_REFUSED, STYLE_LITEPUB, STYLE_MASTODON
@@ -40,7 +40,7 @@ def verifier(monkeypatch):
     def fake(request_, public_key, required=frozenset()):
         tried.append(public_key)
         if public_key != PEM:
-            raise VerificationError('wrong key')
+            raise KeyMismatchError('wrong key')   # a mismatch, which a refetched key could cure
         return True
 
     monkeypatch.setattr(inbound.HttpSignature, 'verify_request', fake)
