@@ -307,7 +307,7 @@ def test_a_comment_from_a_blocking_author_varies_on_user_agent(app, db_session, 
                       user_agent='Test (+https://peer2.example)')
 
     assert response.status_code == 200
-    assert response.headers['Vary'] == 'Accept, User-Agent, Accept-Encoding'
+    assert response.headers['Vary'] == 'Accept, User-Agent, Signature, Accept-Encoding'
 
 
 def test_a_browser_request_for_a_comment_delegates_to_the_discussion_view(app, db_session, monkeypatch):
@@ -410,7 +410,7 @@ def test_a_post_from_a_blocking_author_varies_on_user_agent(app, db_session, mon
                       user_agent='Test (+https://peer2.example)')
 
     assert response.status_code == 200
-    assert response.headers['Vary'] == 'Accept, User-Agent, Accept-Encoding'
+    assert response.headers['Vary'] == 'Accept, User-Agent, Signature, Accept-Encoding'
 
 
 def test_an_unknown_post_is_404_for_an_activitypub_request(app, db_session, monkeypatch):

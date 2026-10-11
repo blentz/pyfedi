@@ -2581,11 +2581,7 @@ def comment_ap(comment_id):
         reply_data = comment_model_to_json(reply) if request.method == 'GET' else []
         resp = jsonify(reply_data)
         resp.content_type = 'application/activity+json'
-        if reply.author.has_blocked_instances():
-            resp.headers.set('Vary', 'Accept, User-Agent')
-        else:
-            resp.headers.set('Vary', 'Accept')
-        resp.headers.set('Cache-Control', AP_CACHE_CONTENT)
+        ap_content_headers(resp, reply)
         resp.headers.set('Link',
                          f'<https://{current_app.config["SERVER_NAME"]}/comment/{reply.id}>; rel="alternate"; type="text/html"')
         return resp
@@ -2606,6 +2602,15 @@ def tombstone_response(ap_id: str, former_type: str):
     resp.status_code = 410
     resp.content_type = 'application/activity+json'
     return resp
+
+
+def ap_content_headers(resp, obj):
+    """Cache-Control and Vary for a served post or comment, or a post's replies or context collection.
+
+    An author who blocks instances is refused to some signers and served to others (D194), so the response then
+    varies on the signature as well as on the User-Agent that identifies an unsigned requester."""
+    resp.headers.set('Cache-Control', AP_CACHE_CONTENT)
+    resp.headers.set('Vary', 'Accept, User-Agent, Signature' if obj.author.has_blocked_instances() else 'Accept')
 
 
 @bp.route('/private_message/<int:message_id>')
@@ -2683,11 +2688,7 @@ def post_ap(post_id):
                 post_data = []
             resp = jsonify(post_data)
             resp.content_type = 'application/activity+json'
-            resp.headers.set('Cache-Control', AP_CACHE_CONTENT)
-            if post.author.has_blocked_instances():
-                resp.headers.set('Vary', 'Accept, User-Agent')
-            else:
-                resp.headers.set('Vary', 'Accept')
+            ap_content_headers(resp, post)
             if post.slug:
                 resp.headers.set('Link',
                                  f'<https://{current_app.config["SERVER_NAME"]}{post.slug}>; rel="alternate"; type="text/html"')
@@ -2724,8 +2725,7 @@ def post_replies_ap(post_id):
         replies_collection['@context'] = default_context()
         resp = jsonify(replies_collection)
         resp.content_type = 'application/activity+json'
-        resp.headers.set('Vary', 'Accept')
-        resp.headers.set('Cache-Control', AP_CACHE_CONTENT)
+        ap_content_headers(resp, post)
         return resp
     else:
         abort(400)
@@ -2752,8 +2752,7 @@ def post_ap_context(post_id):
 
         resp = jsonify(replies_collection)
         resp.content_type = 'application/activity+json'
-        resp.headers.set('Vary', 'Accept')
-        resp.headers.set('Cache-Control', AP_CACHE_CONTENT)
+        ap_content_headers(resp, post)
         return resp
     else:
         abort(400)
