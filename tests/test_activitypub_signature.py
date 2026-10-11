@@ -794,11 +794,15 @@ def test_an_unknown_signature_algorithm_is_refused(app):
 
 
 @pytest.mark.parametrize('algorithm', ['rsa-sha256', 'hs2019'])
-def test_a_genuinely_signed_request_verifies_under_both_algorithms(app, algorithm):
+def test_a_genuinely_signed_request_verifies_under_both_algorithms(app, monkeypatch, algorithm):
     """The end-to-end shape: sign with signed_request, verify with
     verify_request, against a real keypair. Both accepted algorithm names are
     rows, which is what stops a mutant dropping one of the two comparisons.
+
+    The request is signed for remote.example, so this instance plays
+    remote.example: a signed Host that is not SERVER_NAME is refused (R-HOSTPIN).
     """
+    monkeypatch.setitem(app.config, 'SERVER_NAME', 'remote.example')
     from flask import request
     from app.activitypub.signature import HttpSignature, RsaKeys
 

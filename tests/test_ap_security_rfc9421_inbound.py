@@ -13,8 +13,8 @@ from app.activitypub import signature_rfc9421 as rfc9421
 from app.activitypub.entitlement import signed_requester_actor
 from app.activitypub.signature import GET_REQUIRED, POST_REQUIRED, HttpSignature, VerificationError, \
     VerificationFormatError, http_date, request_key_id
-from app.models import ActivityPubLog
-from tests.factories import a_keypair, inbox_activity, rfc9421_inbox_post
+from app.models import ActivityPubLog, Site
+from tests.factories import a_keypair, cavage_signed_headers, inbox_activity, make_site, rfc9421_inbox_post
 
 pytestmark = pytest.mark.usefixtures('redis_double')
 
@@ -251,3 +251,110 @@ class TestSignedGet:
         headers = _custom(['@method'], signing_peer.private_key, f'{signing_peer.ap_profile_id}#main-key')
         with app.test_request_context('/post/1', method='GET', headers=dict(headers, Host=HOST)):
             assert signed_requester_actor() is None
+
+
+class TestHostPinning:
+    """R-HOSTPIN: a request signed for another instance and replayed here with that instance's Host is refused."""
+
+    EVIL = 'evil.example'
+
+    def _cavage_post(self, app, sender, host):
+        body = json.dumps(inbox_activity(sender)).encode()
+        headers = cavage_signed_headers(sender.private_key, f'{sender.ap_profile_id}#main-key', body=body, host=host)
+        with app.test_client() as client:
+            return client.post('/inbox', data=body, headers=headers, content_type='application/activity+json')
+
+    def _rfc9421_post(self, app, sender, host):
+        body = json.dumps(inbox_activity(sender)).encode()
+        headers = rfc9421.sign('post', f'https://{host}/inbox', body, sender.private_key,
+                               f'{sender.ap_profile_id}#main-key')
+        with app.test_client() as client:
+            return client.post('/inbox', data=body, headers=dict(headers, Host=host),
+                               content_type='application/activity+json')
+
+    @pytest.mark.parametrize('post', ['_cavage_post', '_rfc9421_post'])
+    def test_an_inbox_post_replayed_with_another_host_is_refused(self, app, signing_peer, dispatched, post):
+        response = getattr(self, post)(app, signing_peer, self.EVIL)
+        assert response.status_code == 400 and dispatched == []
+        assert ActivityPubLog.query.one().exception_message.startswith('Could not verify HTTP signature')
+
+    @pytest.mark.parametrize('post', ['_cavage_post', '_rfc9421_post'])
+    def test_the_same_post_with_this_host_is_dispatched(self, app, signing_peer, dispatched, post):
+        response = getattr(self, post)(app, signing_peer, HOST)
+        assert response.status_code == 200 and len(dispatched) == 1
+
+    def _cavage_get(self, sender, host):
+        return cavage_signed_headers(sender.private_key, f'{sender.ap_profile_id}#main-key', method='get',
+                                     path='/post/1', signed=('(request-target)', 'host', 'date'), host=host)
+
+    def _rfc9421_get(self, sender, host):
+        return dict(rfc9421.sign('get', f'https://{host}/post/1', None, sender.private_key,
+                                 f'{sender.ap_profile_id}#main-key'), Host=host)
+
+    @pytest.mark.parametrize('sign', ['_cavage_get', '_rfc9421_get'])
+    @pytest.mark.parametrize('host, identified', [(EVIL, False), (HOST, True)])
+    def test_a_signed_get_identifies_its_signer_only_for_this_host(self, app, signing_peer, sign, host, identified):
+        with app.test_request_context('/post/1', method='GET', headers=getattr(self, sign)(signing_peer, host)):
+            assert signed_requester_actor() == (signing_peer if identified else None)
+
+    def test_a_cavage_replay_names_the_host_in_its_error(self, app):
+        private_key, public_key = a_keypair()
+        headers = cavage_signed_headers(private_key, 'https://peer.example/u/a#k', host=self.EVIL)
+        with app.test_request_context('/inbox', method='POST', headers=headers, data=b''):
+            with pytest.raises(VerificationError, match='Signed host evil.example is not this instance'):
+                HttpSignature.verify_request(request, public_key)
+
+    @pytest.mark.parametrize('host', ['TEST.piefed.local', 'test.piefed.local:443', 'test.piefed.local:80'])
+    def test_case_and_a_default_port_are_the_same_host(self, app, host):
+        private_key, public_key = a_keypair()
+        headers = cavage_signed_headers(private_key, 'https://peer.example/u/a#k', host=host)
+        with app.test_request_context('/inbox', method='POST', headers=headers, data=b''):
+            assert HttpSignature.verify_request(request, public_key) is True
+
+    @pytest.mark.parametrize('host, accepted', [('test.piefed.local:8443', True), ('test.piefed.local', False)])
+    def test_a_server_name_with_a_port_must_match_it(self, app, monkeypatch, host, accepted):
+        monkeypatch.setitem(app.config, 'SERVER_NAME', 'test.piefed.local:8443')
+        monkeypatch.setitem(app.config, 'SERVER_URL', 'https://test.piefed.local:8443')
+        private_key, public_key = a_keypair()
+        cavage = cavage_signed_headers(private_key, 'k', host=host)
+        signed = dict(rfc9421.sign('post', f'https://{host}/inbox', b'', private_key, 'k'), Host=host)
+        for headers in (cavage, signed):
+            with app.test_request_context('/inbox', method='POST', headers=headers, data=b''):
+                if accepted:
+                    assert HttpSignature.verify_request(request, public_key) is True
+                else:
+                    with pytest.raises(VerificationError):
+                        HttpSignature.verify_request(request, public_key)
+
+    def test_an_unsigned_host_is_not_checked(self, app):
+        """Leaving host unsigned is _check_required's business (a warning, or a refusal under enforcement)."""
+        private_key, public_key = a_keypair()
+        headers = cavage_signed_headers(private_key, 'https://peer.example/u/a#k', host=self.EVIL,
+                                        signed=('(request-target)', 'date', 'digest'))
+        with app.test_request_context('/inbox', method='POST', headers=headers, data=b''):
+            assert HttpSignature.verify_request(request, public_key) is True
+
+
+class TestInboxPaths:
+    """An RFC 9421 POST through the key refetch and the keyId-host refusal, as cavage ones go."""
+
+    def test_a_rotated_key_is_accepted_after_one_refetch(self, app, signing_peer, http_mock, dispatched):
+        site = db.session.get(Site, 1) or make_site()
+        site.private_key, _ = a_keypair()
+        private_key, public_key = signing_peer.private_key, signing_peer.public_key
+        signing_peer.public_key = next(p for _, p in (a_keypair() for _ in range(16)) if p != public_key)
+        db.session.commit()
+        route = http_mock.get(signing_peer.ap_profile_id).respond(
+            200, json={'id': signing_peer.ap_profile_id, 'publicKey': {'publicKeyPem': public_key}})
+        with app.test_client() as client:
+            response = rfc9421_inbox_post(client, inbox_activity(signing_peer), signing_peer)
+        assert response.status_code == 200 and len(dispatched) == 1 and route.call_count == 1
+        db.session.refresh(signing_peer)
+        assert signing_peer.public_key == public_key
+
+    def test_a_key_id_on_another_host_is_refused(self, app, signing_peer, dispatched):
+        with app.test_client() as client:
+            response = rfc9421_inbox_post(client, inbox_activity(signing_peer), signing_peer,
+                                          key_id='https://other.example/actor#main-key')
+        assert response.status_code == 400 and dispatched == []
+        assert ActivityPubLog.query.one().exception_message == 'Signature keyId host does not match actor'
