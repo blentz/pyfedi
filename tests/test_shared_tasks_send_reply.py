@@ -628,61 +628,35 @@ def test_two_different_local_users_are_both_added(db_session):
 
 
 # ---------------------------------------------------------------------------
-# The unguarded mention scan, :92 -- a LATENT crash, measured not assumed
+# The mention scan, now shared with send_post -- the LATENT crash it closed
 # ---------------------------------------------------------------------------
 
 
-def test_a_none_body_crashes_the_unguarded_mention_scan(db_session):
-    """:92 scans `reply.body` with no guard, where `pages.py:97` guards its
-    equivalent with `if post.body:`. `PostReply.body` is nullable
-    (`app/models.py:2901`), so the column permits the state this test seeds.
+def test_a_none_body_is_scanned_by_the_guarded_shared_helper(db_session, http_mock):
+    """send_reply used to scan `reply.body` with no guard, where `pages.py`
+    guards its equivalent with `if post.body:`; a None body (the column is
+    nullable) raised TypeError. That crash was LATENT -- every writer that can
+    put a reply in front of `send_reply` stores a `str`; only the inbound
+    paths for REMOTE replies can store None, and they dispatch neither task.
 
-    THE SEVERITY CLAIM HERE IS WRITTEN AFTER THE MEASUREMENT. Every writer that
-    can put a reply in front of `send_reply` writes a `str`:
-
-      * `app/shared/reply.py:182` (make_reply), `app/post/routes.py:917` (the
-        inline reply route) and `app/shared/reply.py:219` (edit_reply) each
-        assign `piefed_markdown_to_lemmy_markdown(content)`, which is one
-        `re.sub` (`app/utils.py:1233-1237`). `re.sub` RAISES this same
-        TypeError on None, so a None `content` dies in the writer before any
-        row is committed -- it cannot produce a None-bodied row.
-      * Those three sites are also the ONLY dispatchers of the `make_reply` /
-        `edit_reply` tasks that call this function (`app/shared/reply.py:194`,
-        `:232`, `app/post/routes.py:928`), and all three are gated on a local
-        author: `:1897` compares `post_reply.user_id == current_user.id` and
-        the API path passes `id_match=reply.user_id` to `authorise_api_user`
-        (`app/shared/reply.py:204`).
-      * The two writers that CAN store a None body --
-        `app/activitypub/util.py:3020`, and `PostReply.new`'s `body=` from
-        `app/community/util.py:272` -- are inbound/import paths for REMOTE
-        replies and dispatch neither task, so nothing they write reaches `:92`.
-
-    So the crash is LATENT: no production path currently reaches `:92` with a
-    None body. This test pins the behaviour rather than asserting the absence
-    of a crash, because a test that asserted "does not crash" would be a
-    permanently failing test, and one that skipped the state entirely would
-    leave the divergence from `pages.py:97` unrecorded. An empty-string body is
-    NOT the same state -- `re.finditer` accepts `''` -- so `''` is not a
-    substitute witness.
-
-    If a future writer ever stores a None body on a locally-authored reply,
-    this test starts describing a live crash and `:92` needs `pages.py:97`'s
-    guard. Adding that guard is expected to fail this test; that failure is the
-    signal to re-register the finding, not a reason to delete the test.
+    Task 28 moved the reply's mention scan onto `pages.mentioned_users`, so it
+    now inherits the guard: a None body has no mentions and the reply is still
+    delivered. This test pinned the crash and said adding the guard would fail
+    it; it is re-registered here as the closed finding.
     """
-    s = _seed()
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
     s.reply.body = None
     db.session.commit()
 
-    with pytest.raises(TypeError,
-                       match="expected string or bytes-like object, got 'NoneType'"):
-        _send(s)
+    _send(s)
+
+    assert _sent_activity(route)['object']['source']['content'] is None
 
 
 def test_an_empty_body_scans_cleanly_and_still_delivers(db_session, http_mock):
-    """The falsy body `:92` DOES survive, which is what makes the None case
-    above the only witness for the missing guard. `pages.py:97`'s `if post.body:`
-    would skip both; `:92` skips neither and only one of them raises."""
+    """The falsy body: the shared scan's `if post.body:` skips it, as it skips
+    the None case above, and the reply is still delivered."""
     s = _seed(body='', local_community=False, with_keys=True)
     route = _remote_inbox(s, http_mock)
 

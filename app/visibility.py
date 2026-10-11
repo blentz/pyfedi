@@ -59,6 +59,17 @@ def follower_instances(user) -> list:
             .distinct().all())
 
 
+def followers_only_reply_instances(reply) -> list:
+    """Where a local followers-only reply was delivered (Amendment B, S7.3): its author's follower instances, plus
+    the instance of the author it replies to when that author is remote. Each instance once."""
+    parent = db.session.get(PostReply, reply.parent_id) if reply.parent_id else reply.post
+    instances = follower_instances(reply.author)
+    parent_instance = parent.author.instance
+    if parent_instance is not None and parent_instance.id != 1 and parent_instance not in instances:
+        instances.append(parent_instance)
+    return instances
+
+
 def post_title_for(post, viewer_id: Optional[int]) -> str:
     """A post's title as a notification, subscription name or page title tells it to `viewer_id`. Someone who may not
     view the post learns that one exists (its link still 404s for them), not what it is called."""

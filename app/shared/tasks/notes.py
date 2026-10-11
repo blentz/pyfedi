@@ -4,16 +4,14 @@ from app.activitypub.signature import default_context, post_request, send_post_r
 from app.constants import NOTIF_MENTION
 from app.models import Community, CommunityJoinRequest, CommunityMember, Notification, Post, \
     PostReply, utcnow, User
-from app.user.utils import search_for_user
-from app.visibility import can_view
+from app.shared.tasks.pages import can_deliver_to, mentioned_users
+from app.visibility import can_view, follower_instances, is_open
 from app.utils import user_banned_from_community, community_membership, gibberish, joined_communities, instance_banned, ap_datetime, \
     recently_upvoted_posts, recently_downvoted_posts, recently_upvoted_post_replies, \
     recently_downvoted_post_replies, get_recipient_language, get_task_session, patch_db_session
 
 from flask import current_app
 from flask_babel import _, force_locale, gettext
-
-import re
 
 
 """ Reply JSON format
@@ -87,34 +85,9 @@ def send_reply(reply_id, parent_id, edit=False, session=None):
         parent = reply.post
     community = reply.community
 
-    # Find any users Mentioned in reply with @user@instance syntax
+    # The parent's author, then any users Mentioned in reply with @user@instance syntax, once each
     recipients = [parent.author]
-    pattern = r"@([a-zA-Z0-9_.-]*)@([a-zA-Z0-9_.-]*)\b"
-    matches = re.finditer(pattern, reply.body)
-    for match in matches:
-        recipient = None
-        if match.group(2) == current_app.config['SERVER_NAME']:
-            user_name = match.group(1)
-            if user_name != user.user_name:
-                try:
-                    recipient = search_for_user(user_name)
-                except:
-                    pass
-        else:
-            ap_id = f"{match.group(1)}@{match.group(2)}"
-            try:
-                recipient = search_for_user(ap_id)
-            except:
-                pass
-        if recipient:
-            add_recipient = True
-            for existing_recipient in recipients:
-                if ((not recipient.ap_id and recipient.user_name == existing_recipient.user_name) or
-                    (recipient.ap_id and recipient.ap_id == existing_recipient.ap_id)):
-                    add_recipient = False
-                    break
-            if add_recipient:
-                recipients.append(recipient)
+    recipients.extend(recipient for recipient in mentioned_users(reply) if recipient.id != parent.author.id)
 
     # Notify any local users that have been Mentioned
     for recipient in recipients:
@@ -151,8 +124,15 @@ def send_reply(reply_id, parent_id, edit=False, session=None):
         if user.has_blocked_instance(community.instance.id) or instance_banned(community.instance.domain):
             return
 
-    to = ["https://www.w3.org/ns/activitystreams#Public"]
-    cc = [community.public_url()]
+    # Amendment B (S7.3): a followers-only reply goes to the replier's followers, cc the people it answers or names
+    # (R-FOCC: never the follower list), with no Public and no community audience
+    followers_only = not is_open(reply)
+    if followers_only:
+        to = [user.followers_url()]
+        cc = []
+    else:
+        to = ["https://www.w3.org/ns/activitystreams#Public"]
+        cc = [community.public_url()]
     tag = []
     for recipient in recipients:
         tag.append({'href': recipient.public_url(), 'name': recipient.mention_tag(), 'type': 'Mention'})
@@ -196,11 +176,17 @@ def send_reply(reply_id, parent_id, edit=False, session=None):
       '@context': default_context(),
       'audience': community.public_url()
     }
+    if followers_only:
+        del note['audience']
+        del create['audience']
 
     domains_sent_to = [current_app.config['SERVER_NAME']]
 
-    # send the activity as an Announce if the community is local, or as a Create if not
-    if community.is_local():
+    # send the activity as an Announce if the community is local, or as a Create if not. A followers-only reply is
+    # never Announced, and a remote community's inbox is not its audience either.
+    if followers_only:
+        pass
+    elif community.is_local():
         del create['@context']
 
         announce_id = f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}"
@@ -227,7 +213,15 @@ def send_reply(reply_id, parent_id, edit=False, session=None):
         create['@context'] = default_context()
     for recipient in recipients:
         if recipient.instance.domain not in domains_sent_to:
+            if followers_only and not can_deliver_to(user, recipient.instance):
+                continue
             send_post_request(recipient.instance.inbox, create, user.private_key, user.public_url() + '#main-key')
+            domains_sent_to.append(recipient.instance.domain)     # two people on one host get one delivery
+    if followers_only:
+        for instance in follower_instances(user):
+            if instance.domain not in domains_sent_to and can_deliver_to(user, instance):
+                send_post_request(instance.inbox, create, user.private_key, user.public_url() + '#main-key')
+                domains_sent_to.append(instance.domain)
 
 
 @celery.task
