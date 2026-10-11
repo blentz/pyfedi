@@ -591,13 +591,12 @@ class LDSignature:
         try:
             # Strip out the signature from the incoming document
             signature = document.pop("signature")
-            # Create the options document
-            options = {
-                "@context": "https://w3id.org/security/v1",
-                "creator": signature["creator"],
-                "created": signature["created"],
-            }
-        except KeyError:
+            # Create the options document: like Mastodon, every key of the signature section except these three,
+            # so an `expires` the signer included is hashed too
+            options = {key: value for key, value in signature.items() if key not in ("type", "id", "signatureValue")}
+            options["@context"] = "https://w3id.org/security/v1"
+            signature["creator"], signature["created"]
+        except (KeyError, AttributeError):
             raise VerificationFormatError("Invalid signature section")
         if signature["type"].lower() != "rsasignature2017":
             raise VerificationFormatError("Unknown signature type")
