@@ -89,3 +89,21 @@ def test_an_unreadable_expiry_is_a_format_error(app, monkeypatch):
     document['signature']['expires'] = 'soon'
     with pytest.raises(VerificationFormatError, match='Invalid signature expiry'):
         LDSignature.verify_signature(document, MASTODON_PUBLIC_KEY)
+
+
+def test_an_expiry_without_a_timezone_is_read_as_utc(app, monkeypatch):
+    """A naive `expires` is taken as UTC, as `created` is, so one that has passed is still refused."""
+    at(monkeypatch, '2026-10-13T02:30:00')
+    document = copy.deepcopy(MASTODON_SIGNED_DELETE)
+    document['signature']['expires'] = '2026-10-13T02:11:06'
+    with pytest.raises(VerificationError, match='Signature expired'):
+        LDSignature.verify_signature(document, MASTODON_PUBLIC_KEY)
+
+
+def test_a_signature_section_json_ld_cannot_expand_is_a_format_error(app, monkeypatch):
+    """The expiry is read from the expanded options, so options that do not expand cannot be checked for one."""
+    at(monkeypatch, '2026-10-11T03:00:00')
+    document = copy.deepcopy(MASTODON_SIGNED_DELETE)
+    document['signature']['@id'] = 5
+    with pytest.raises(VerificationFormatError, match='Invalid signature section'):
+        LDSignature.verify_signature(document, MASTODON_PUBLIC_KEY)
