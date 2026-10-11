@@ -348,3 +348,16 @@ Item 4 must land before item 2's inbox refresh relies on it, or item 2 uses `sha
 - Group-host admin Delete of a remote Group, and community undelete.
 - Full follower and following lists (ruled count-only).
 - Quote posts, multi-language, media-type posts, and the likes/shares/liked collections (C2-C5).
+
+## Amendment A: rulings from plan review (2026-10-11)
+
+These supersede the item text above where they differ.
+
+| Topic | Ruling |
+|---|---|
+| Item 10, who may delete a remote Group | Accept a Delete of a remote Group from the Group itself, one of its known moderators, or an admin on the Group's host (the rule the security track uses for Group-host admins). The origin refetch must still answer 410 or a Tombstone. A Delete from anyone else is refused and logged. Lemmy sends community deletions with a moderator as the actor. |
+| Item 9, scope of the reverse check | One shared helper, used by every WebFinger resolver: `fetch_actor_from_webfinger`'s caller, `search_for_user` (`app/user/utils.py`), `search_for_community` (`app/community/util.py`) and `search_for_feed` (`app/feed/util.py`). |
+| Item 1, `fediverse:creator` | Every post type by a local author gets the tag, image posts included. The test pinning image posts as excluded (`tests/test_post_show.py`) is flipped. |
+| Item 2, unknown actor | The inbox's HTTP gate still creates an unknown signer, because signature verification needs its key. Dispatch looks the signer up without creating it, and logs and drops a miss. |
+| Item 2, Group Update | The object id must name the community the activity is processed for. For a remote Group, the Group must also be the signer, either sending the Update itself or announcing it. A local community's moderator edit stays allowed. |
+| Item 3, Flag withdrawal | There is no reusable discard path. A new `withdraw_report` deletes the report, lowers the suspect's report counter (floor 0, leaving -1 untouched), deletes the unread report notifications it raised, and recounts unread counts. "Open" means `status == REPORT_STATE_NEW`. |
