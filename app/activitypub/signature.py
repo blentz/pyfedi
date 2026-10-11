@@ -521,14 +521,16 @@ class HttpSignature:
             raise ValueError(f"Unknown digest algorithm {algorithm}")
 
     @classmethod
-    def headers_from_request(cls, request: Request, header_names: list[str]) -> str:
+    def headers_from_request(cls, request: Request, header_names: list[str], with_query: bool = True) -> str:
         """
-        Creates the to-be-signed header payload from a Flask request
+        Creates the to-be-signed header payload from a Flask request. (request-target) is '<method> <path>?<query>'
+        when the request has a query (draft-cavage section 2.3); `with_query=False` builds the legacy path-only form.
         """
         headers = {}
         for header_name in header_names:
             if header_name == "(request-target)":
-                value = f"{request.method.lower()} {request.path}"
+                target = request.full_path if with_query and request.query_string else request.path
+                value = f"{request.method.lower()} {target}"
             elif header_name == '(created)':
                 value = signature_part(request.headers.get('Signature'), 'created')
             elif header_name == '(expires)':
@@ -659,12 +661,17 @@ class HttpSignature:
             raise VerificationFormatError("Unknown signature algorithm")
         # Create the signature payload
         headers_string = cls.headers_from_request(request, signature_details["headers"])
-        cls.verify_signature(
-            signature_details["signature"],
-            headers_string,
-            public_key,
-        )
         signed = {name.lower() for name in signature_details["headers"]}
+        try:
+            cls.verify_signature(signature_details["signature"], headers_string, public_key)
+        except VerificationError:
+            # Earlier PieFed and Mastodon signed (request-target) without the query; Mastodon still accepts that
+            # form, and so does this, so such a signature covers no more than it ever did
+            if not request.query_string or "(request-target)" not in signed:
+                raise
+            cls.verify_signature(signature_details["signature"],
+                                 cls.headers_from_request(request, signature_details["headers"], with_query=False),
+                                 public_key)
         if "host" in signed:
             _check_signed_host(request)
         _check_required(signed, required, signature_details["keyid"], enforce)
@@ -696,8 +703,9 @@ class HttpSignature:
         # Create the core header field set
         uri_parts = urlparse(uri)
         date_string = http_date()
+        target = f"{uri_parts.path}?{uri_parts.query}" if uri_parts.query else uri_parts.path   # draft-cavage 2.3
         headers = {
-            "(request-target)": f"{method} {uri_parts.path}",
+            "(request-target)": f"{method} {target}",
             "Host": uri_parts.hostname,
             "Date": date_string,
         }

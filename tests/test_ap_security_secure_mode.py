@@ -18,8 +18,8 @@ from app.activitypub.entitlement import MINIMAL_ACTOR_ENDPOINTS, MINIMAL_ACTOR_F
     SIGNED_FETCH_EXEMPT_PREFIXES, actor_document, signed_fetch_exempt, signed_fetch_refusal
 from app.activitypub.util import AS_PUBLIC
 from app.models import Site
-from tests.factories import a_keypair, make_activitypub_log, make_instance, make_local_feed, make_site, make_user, \
-    signed_get_headers
+from tests.factories import a_keypair, cavage_signed_headers, make_activitypub_log, make_instance, make_local_feed, \
+    make_site, make_user, signed_get_headers
 from tests.test_ap_content_objects import AP_ACCEPT, _double_the_delegates, ap_get, browser_get, seed_local_post, \
     signed_ap_get
 
@@ -359,3 +359,47 @@ def test_a_minimal_document_omits_endpoints_the_actor_does_not_have(app):
     with app.test_request_context('/u/alice') as context:
         context.request.environ['pyfedi.minimal_actor_document'] = True
         assert actor_document({'id': 'x', 'type': 'Person', 'outbox': 'o'}) == {'id': 'x', 'type': 'Person'}
+
+
+# --- R-SECUREACTORS (b): a cavage (request-target) covers the query string ---
+
+PAGED = '/c/books/outbox?page=1'
+
+
+def _cavage_get(app, path, signer, target):
+    """GET `path` with a cavage signature whose (request-target) is `get <target>`."""
+    headers = cavage_signed_headers(signer.private_key, f'{signer.ap_profile_id}#main-key', method='get', path=target,
+                                    signed=('(request-target)', 'host', 'date'))
+    headers.update({'Accept': AP_ACCEPT, 'User-Agent': UA})
+    with app.test_client() as client:
+        return client.get(path, headers=headers)
+
+
+def test_a_paged_collection_signed_in_the_spec_form_is_served(app, secure_post):
+    """Mastodon (4.2+) and GoToSocial sign '<method> <path>?<query>'."""
+    signer = make_user(make_instance('peer2.example'), 'bob', with_keys=True)
+
+    assert _cavage_get(app, PAGED, signer, target=PAGED).status_code == 200
+
+
+def test_a_paged_collection_signed_without_its_query_is_still_served(app, secure_post):
+    """Older senders (earlier PieFed, older Mastodon) left the query out; Mastodon still accepts that form too."""
+    signer = make_user(make_instance('peer2.example'), 'bob', with_keys=True)
+
+    assert _cavage_get(app, PAGED, signer, target='/c/books/outbox').status_code == 200
+
+
+def test_a_signature_over_another_query_is_refused(app, secure_post):
+    signer = make_user(make_instance('peer2.example'), 'bob', with_keys=True)
+
+    assert _cavage_get(app, PAGED, signer, target='/c/books/outbox?page=2').status_code == 401
+
+
+def test_this_instance_signs_the_query_of_a_get(app, secure_post):
+    """Production's signer covers the query: its signature for ?page=1 does not verify for ?page=2."""
+    signer = make_user(make_instance('peer2.example'), 'bob', with_keys=True)
+    headers = signed_get_headers(PAGED, signer)
+    headers['User-Agent'] = UA
+    with app.test_client() as client:
+        assert client.get(PAGED, headers=headers).status_code == 200
+        assert client.get('/c/books/outbox?page=2', headers=headers).status_code == 401
