@@ -233,11 +233,11 @@ def signed_get_capped(uri: str, private_key: str, key_id: str, max_bytes: int,
     max_bytes of body and a wall-clock deadline of max_seconds per attempt. Returns (status, body) as
     get_request_capped does (body None when over the cap or late; max_bytes=0 reads the status only).
 
-    signed_get_request buffers an uncapped body with only a per-read timeout, so a hostile origin could answer it
-    with a huge or slow body and pin a worker. The signature format alternates as in double_knock: the format the
-    instance is known to accept first, the other exactly once on a 401 (remembered on a 2xx) -- at most two signed
-    requests, so at most 2 * max_seconds once each response has started. Raises httpx.HTTPError on transport
-    failure."""
+    signed_get_request is capped too (_capped_get, an httpx.Response or ResponseTooLarge); this is the variant for
+    callers that want (status, body) and a cap of their own, with an over-cap or late body as None rather than an
+    exception. The signature format alternates as in double_knock: the format the instance is known to accept first,
+    the other exactly once on a 401 (remembered on a 2xx) -- at most two signed requests, so at most
+    2 * max_seconds. Raises httpx.HTTPError on transport failure."""
     domain = activitypub_util.host_of(uri)
 
     def send(signature_format: str) -> tuple[int, bytes | None]:
