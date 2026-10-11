@@ -9,8 +9,9 @@ from unittest.mock import patch
 import pytest
 
 from app import db
-from app.activitypub.entitlement import (PRIVATE_HEADERS, addressees_of, audience_entitles,
+from app.activitypub.entitlement import (PRIVATE_HEADERS, _owner_candidates, addressees_of, audience_entitles,
                                          signed_requester_actor)
+from app.activitypub.util import host_of
 from app.activitypub.signature import http_date
 from app.models import Instance
 from tests.test_ap_content_objects import seed_local_post
@@ -370,3 +371,27 @@ def test_signed_requestor_domain_falls_back_to_the_user_agent(app, db_session):
     with app.test_request_context('/post/1', method='GET',
                                   headers={'User-Agent': 'Test (+https://agent.example)'}):
         assert signed_requestor_domain() == 'agent.example'
+
+
+# ---- R-SECUREACTORS (c): keyIds whose actor id is a root URL or carries a query ----
+
+@pytest.mark.parametrize('actor_id, key_id', [
+    ('https://lemmy.example/', 'https://lemmy.example/#main-key'),            # Lemmy's site actor
+    ('https://blog.example/?author=1', 'https://blog.example/?author=1#main-key'),   # WordPress ActivityPub
+])
+def test_a_root_or_query_actor_id_names_its_owner(app, db_session, actor_id, key_id):
+    make_site()
+    signer = _remote(host_of(actor_id), 'site')
+    signer.ap_profile_id = actor_id
+    db.session.commit()
+
+    headers = signed_get_headers('/post/1', signer, key_id=key_id)
+
+    assert _requester_for(app, '/post/1', headers) == signer
+
+
+def test_owner_candidates_keep_the_root_slash_and_the_query():
+    assert _owner_candidates('https://lemmy.example/#main-key') == ['https://lemmy.example/', 'https://lemmy.example']
+    assert _owner_candidates('https://blog.example/?author=1#main-key')[0] == 'https://blog.example/?author=1'
+    assert _owner_candidates('https://peer.example/users/alice/main-key') == [
+        'https://peer.example/users/alice/main-key', 'https://peer.example/users/alice', 'https://peer.example/users']
