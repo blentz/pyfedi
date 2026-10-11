@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -201,6 +202,35 @@ class TestLabels:
     def test_no_signature_input_fails(self):
         with pytest.raises(VerificationFormatError, match='No Signature-Input header present'):
             rfc9421.verify('GET', URL, {}, b'', a_keypair()[1], now=NOW)
+
+    def test_with_a_key_id_only_a_label_naming_it_is_accepted(self):
+        private_key, public_key = a_keypair()
+        headers = _custom(['@method'], _v15(private_key), method='GET')
+        assert rfc9421.verify('GET', URL, headers, b'', public_key, now=NOW, key_id='k') == frozenset({'@method'})
+        with pytest.raises(VerificationError, match='Label sig1 names another key'):
+            rfc9421.verify('GET', URL, headers, b'', public_key, now=NOW, key_id='other')
+
+
+class TestCheckFresh:
+
+    @pytest.mark.parametrize('now', [NOW - rfc9421.CREATED_MAX_SKEW_SECONDS, NOW + rfc9421.CREATED_MAX_AGE_SECONDS])
+    def test_created_inside_the_window_passes(self, now):
+        rfc9421.check_fresh({'Signature-Input': f'sig1=();created={NOW}'}, now=now)
+
+    def test_now_defaults_to_the_clock(self):
+        rfc9421.check_fresh({'Signature-Input': f'sig1=();created={int(time.time())}'})
+
+    @pytest.mark.parametrize('headers, message', [
+        ({}, 'No Signature-Input header present'),
+        ({'Signature-Input': 'sig1=()'}, 'Signature-Input has no created time'),
+        ({'Signature-Input': f'sig1=();created={NOW - rfc9421.CREATED_MAX_AGE_SECONDS - 1}'}, 'Signature is too old'),
+        ({'Signature-Input': f'sig1=();created={NOW + rfc9421.CREATED_MAX_SKEW_SECONDS + 1}'},
+         'Signature is from the future'),
+        ({'Signature-Input': f'sig1=();created={NOW}, sig2=();created=1'}, 'Signature is too old'),
+    ])
+    def test_every_label_must_be_fresh_and_failures_are_format_errors(self, headers, message):
+        with pytest.raises(VerificationFormatError, match=message):
+            rfc9421.check_fresh(headers, now=NOW)
 
 
 class TestCoveredComponents:

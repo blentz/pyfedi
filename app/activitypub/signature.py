@@ -52,6 +52,7 @@ from sqlalchemy import text
 
 import app as app_pkg
 from app import celery, db, httpx_client
+from app.activitypub import signature_rfc9421 as rfc9421
 from app.activitypub.ld_contexts import LDCoverageError, PYFEDI_CONTEXT_TERMS, check_ld_coverage, ld_document_loader, \
     strip_empty_values
 from app.activitypub.signature_errors import VerificationError, VerificationFormatError  # re-exported
@@ -278,12 +279,37 @@ def _check_required(signed: set[str], required: frozenset[str], key_id: str | No
     current_app.logger.warning(f'Signature from {activitypub_util.host_of(key_id or "")} does not sign: {names}')
 
 
+# The RFC 9421 components that stand in for each cavage header a signature must cover. "date" has none: an RFC 9421
+# signature's `created` parameter is checked at verification instead.
+CAVAGE_TO_RFC9421 = {'(request-target)': {'@method', '@target-uri'}, 'host': {'@target-uri'}, 'date': set(),
+                     'digest': {'content-digest'}}
+
+
+def _rfc9421_required(required: frozenset[str]) -> frozenset[str]:
+    return frozenset().union(*(CAVAGE_TO_RFC9421[name] for name in required))
+
+
+def _target_uri(request) -> str:
+    """The URI an RFC 9421 signer signed: this instance's federation scheme (SERVER_URL's, which is https in
+    HTTP_PROTOCOL 'mixed'), the Host it addressed, the path and query."""
+    path = request.full_path if request.query_string else request.path
+    return f"{urlparse(current_app.config['SERVER_URL']).scheme}://{request.host}{path}"
+
+
+def is_rfc9421(request) -> bool:
+    """True when the request carries an RFC 9421 signature (Signature-Input), which then decides verification,
+    freshness and the keyId; otherwise it is a cavage request."""
+    return 'signature-input' in request.headers
+
+
 # A signer whose signature fails gets at most one key refetch in this many seconds (S2.3)
 KEY_REFETCH_SECONDS = 300
 
 
 def request_key_id(request) -> str | None:
-    """The keyId the request's signature names, or None. Every keyId read goes through here."""
+    """The keyId the request's signature names (RFC 9421 or cavage), or None. Every keyId read goes through here."""
+    if is_rfc9421(request):
+        return rfc9421.parse_key_id(request.headers)
     return parse_signature_header(request.headers.get('Signature')).get('keyid') or None
 
 
@@ -500,16 +526,23 @@ class HttpSignature:
     @classmethod
     def precheck(cls, request: Request):
         """
-        Checks digest and date headers before signature verification.
-        Digest is required and must match the body. Date must be within 1 hour.
+        Checks digest and freshness before signature verification.
+        Digest or Content-Digest is required, and each present must match the body. A cavage request's Date must
+        be within 1 hour; an RFC 9421 request needs no Date, its created time must be in rfc9421's window instead.
         """
-        if "digest" not in request.headers:
+        has_digest = "digest" in request.headers
+        has_content_digest = "content-digest" in request.headers
+        if not has_digest and not has_content_digest:
             raise VerificationFormatError("No digest header present")
-        expected_digest = HttpSignature.calculate_digest(request.data)
-        if request.headers["digest"] != expected_digest:
+        if has_digest and request.headers["digest"] != HttpSignature.calculate_digest(request.data):
             raise VerificationFormatError("Digest is incorrect")
+        if has_content_digest:
+            rfc9421.check_content_digest(request.headers, request.data)
 
-        cls.check_date(request)
+        if is_rfc9421(request):
+            rfc9421.check_fresh(request.headers)
+        else:
+            cls.check_date(request)
 
     @classmethod
     def check_date(cls, request: Request):
@@ -536,8 +569,18 @@ class HttpSignature:
         """
         Verifies that the request has a valid signature for its body, and that the signature covers every
         header in `required` (see _check_required; `enforce` refuses a gap whatever SIG_REQUIRED_HEADERS_ENFORCE
-        says)
+        says). An RFC 9421 request (see is_rfc9421) is verified as one, its created time checked, and only a
+        label naming the keyId request_key_id reads (the one the caller resolved `public_key` from) can verify.
         """
+        if is_rfc9421(request):
+            key_id = request_key_id(request)
+            if key_id is None:
+                raise VerificationFormatError("Signature-Input names no keyid")
+            covered = rfc9421.verify(request.method, _target_uri(request), request.headers, request.get_data(),
+                                     public_key, key_id=key_id)
+            _check_required(set(rfc9421.normalise_covered(covered)), _rfc9421_required(required), key_id, enforce)
+            return True
+
         # Get the signature details
         if "signature" not in request.headers:
             raise VerificationFormatError("No signature header present")
