@@ -13,6 +13,7 @@ import random
 import time
 import urllib
 import warnings
+import zlib
 from collections import defaultdict, OrderedDict
 from contextlib import contextmanager
 from datetime import datetime, timedelta, date
@@ -162,6 +163,25 @@ class ResponseTooLarge(httpx.HTTPError):
     _capped_get raises it instead of reading on; get_request never retries it."""
 
 
+class UnreadableEncoding(ResponseTooLarge):
+    """A body in a Content-Encoding _capped_get will not decode within the cap: anything but gzip or deflate, or
+    stacked encodings. Refused, like a body over the cap, and likewise never retried."""
+
+
+# The most one decompression step may output. _capped_get inflates a compressed body in steps of at most this much
+# and never past the bytes left in the cap, so a bomb is refused having inflated at most the cap plus one step.
+_DECODE_STEP = 64 * 1024
+
+
+def _decompressor(encoding: str, first: bytes):
+    """A zlib decompressor for a gzip or deflate body whose first chunk is `first`. HTTP's deflate is zlib-wrapped
+    (RFC 9110 section 8.4.1.2), but some servers send raw deflate: a zlib header says which."""
+    if encoding in ('gzip', 'x-gzip'):
+        return zlib.decompressobj(16 + zlib.MAX_WBITS)
+    zlib_wrapped = len(first) >= 2 and first[0] & 0x0F == 8 and int.from_bytes(first[:2], 'big') % 31 == 0
+    return zlib.decompressobj(zlib.MAX_WBITS if zlib_wrapped else -zlib.MAX_WBITS)
+
+
 class RequestNotSendable(httpx.HTTPError):
     """httpx refused the request itself (InvalidURL, ValueError, StreamError -- none an httpx.HTTPError), normalised
     so callers need only one handler. Retrying the same request cannot help, so get_request does not."""
@@ -169,29 +189,57 @@ class RequestNotSendable(httpx.HTTPError):
 
 def _capped_get(uri, params=None, headers=None, timeout=10, max_bytes: int = FETCH_MAX_BYTES,
                 max_seconds: float = FETCH_MAX_SECONDS, follow_redirects: bool = False) -> httpx.Response:
-    """GET `uri` through the pinned client as a stream, reading at most max_bytes of DECODED body (so a gzip bomb is
-    capped at its expanded size) within a wall-clock deadline of max_seconds over the whole download; timeout is the
-    per-read timeout. A declared Content-Length over the cap is refused before reading. Returns an httpx.Response
-    built from the bytes read: the peer's status and headers (less _WIRE_HEADERS), the body, and the request.
+    """GET `uri` through the pinned client as a stream, reading at most max_bytes of DECODED body within a wall-clock
+    deadline of max_seconds over the whole download; timeout is the per-read timeout. A declared Content-Length over
+    the cap is refused before reading. Only gzip and deflate are offered (Accept-Encoding), and a compressed body is
+    inflated here, from the raw bytes, in steps of at most _DECODE_STEP that never pass the bytes left in the cap --
+    so a gzip bomb is refused having inflated at most max_bytes plus one step. Returns an httpx.Response built from
+    the bytes read: the peer's status and headers (less _WIRE_HEADERS), the decoded body, and the request.
 
-    Raises only httpx.HTTPError subclasses: ResponseTooLarge over the cap or past the deadline, RequestNotSendable
-    when httpx refuses the request, and httpx's own transport errors. No SSRF check, no User-Agent and no retry: the
+    Raises only httpx.HTTPError subclasses: ResponseTooLarge over the cap or past the deadline, UnreadableEncoding for
+    any other or stacked Content-Encoding, httpx.DecodingError for a corrupt compressed body, RequestNotSendable when
+    httpx refuses the request, and httpx's own transport errors. No SSRF check, no User-Agent and no retry: the
     caller does those. Limit: the deadline is checked only once the response has started, so connecting (DNS
     included) is bounded by timeout alone."""
     deadline = time.monotonic() + max_seconds
+    headers = httpx.Headers(headers)
+    headers['Accept-Encoding'] = 'gzip, deflate'
     try:
         with httpx_client.stream('GET', uri, params=params, headers=headers, timeout=timeout,
                                  follow_redirects=follow_redirects) as response:
             declared = response.headers.get('Content-Length', '')
             if declared.isdigit() and int(declared) > max_bytes:
                 raise ResponseTooLarge(f'{uri} declares a body of {declared} bytes, over the cap of {max_bytes}')
+            encoding = response.headers.get('Content-Encoding', '').strip().lower()
+            if encoding not in ('', 'identity', 'gzip', 'x-gzip', 'deflate'):
+                raise UnreadableEncoding(f'{uri} sent a body in Content-Encoding {encoding!r}')
+            compressed = encoding not in ('', 'identity')
+            decoder = None
             body = bytearray()
-            for chunk in response.iter_bytes():
-                body.extend(chunk)
+            for chunk in response.iter_raw():
+                if not compressed:
+                    body.extend(chunk)
+                else:
+                    if decoder is None:
+                        decoder = _decompressor(encoding, chunk)
+                    data = chunk
+                    while data:   # whatever one step leaves unread is fed back in until the chunk is consumed
+                        try:
+                            body.extend(decoder.decompress(data, min(_DECODE_STEP, max_bytes - len(body) + 1)))
+                        except zlib.error as error:
+                            raise httpx.DecodingError(f'{uri} sent a corrupt {encoding} body: {error}',
+                                                      request=response.request) from None
+                        if len(body) > max_bytes:
+                            break
+                        data = decoder.unconsumed_tail
                 if len(body) > max_bytes:
                     raise ResponseTooLarge(f'{uri} sent a body over the cap of {max_bytes} bytes')
                 if time.monotonic() > deadline:
                     raise ResponseTooLarge(f'{uri} was still sending after {max_seconds} seconds')
+            if decoder is not None:
+                body.extend(decoder.flush())   # all input is consumed, so only a few pending bytes are left
+                if len(body) > max_bytes:
+                    raise ResponseTooLarge(f'{uri} sent a body over the cap of {max_bytes} bytes')
             if time.monotonic() > deadline:   # the body ended (or the response came) only after the deadline
                 raise ResponseTooLarge(f'{uri} took longer than {max_seconds} seconds')
             kept = [(name, value) for name, value in response.headers.multi_items()
