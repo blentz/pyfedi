@@ -1149,8 +1149,13 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                         return
 
                     # A feed's Announce leaves user and community None. Only Add/Remove act on the feed itself, and
-                    # Create/Update refuse this case on their own; every other arm needs a user or community (D115)
-                    if user is None and community is None and request_json['object']['type'] not in ('Add', 'Remove', 'Create', 'Update'):
+                    # Create/Update refuse this case on their own; every other arm needs a user or community (D115).
+                    # An Undo of the feed's own Add/Remove acts on the feed too (interop C1 item 3).
+                    undoes_feed_change = request_json['object']['type'] == 'Undo' and \
+                        isinstance(request_json['object'].get('object'), dict) and \
+                        request_json['object']['object'].get('type') in ('Add', 'Remove')
+                    if user is None and community is None and not undoes_feed_change and \
+                            request_json['object']['type'] not in ('Add', 'Remove', 'Create', 'Update'):
                         log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json,
                                         f"{request_json['object']['type']} announced by a feed has no user or community")
                         return
@@ -1785,192 +1790,11 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                     return
 
                 if core_activity['type'] == 'Add':  # Add mods, sticky a post, or add a community to a feed
-                    if user is not None:
-                        mod = user
-                    if not announced and not feed:
-                        community = find_community(core_activity)
-                    if feed and 'id' in core_activity['object']:
-                        community_to_add = find_actor_or_create_cached(core_activity['object']['id'], community_only=True)
-                        # if community found or created - add the FeedItem and update Feed info
-                        if community_to_add and isinstance(community_to_add, Community):
-                            feed_item = FeedItem(feed_id=feed.id, community_id=community_to_add.id)
-                            session.add(feed_item)
-                            feed.num_communities += 1
-                            session.commit()
-                            # also autosubscribe any feedmembers to the new community
-                            feed_members = session.query(FeedMember).filter_by(feed_id=feed.id).all()
-                            for fm in feed_members:
-                                fm_user = session.get(User, fm.user_id)
-                                if fm_user.id == feed.user_id:
-                                    continue
-                                if fm_user.is_local() and fm_user.feed_auto_follow:
-                                    # user is local so lets auto-subscribe them to the community
-                                    actor = community_to_add.ap_id if community_to_add.ap_id else community_to_add.name
-                                    community_routes.do_subscribe(actor, fm_user.id, joined_via_feed=True)
-                            log_incoming_ap(id, APLOG_ADD, APLOG_SUCCESS, saved_json)
-                        else:
-                            log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json, 'Cannot find community to add to feed')
-                    elif community:
-                        if not community.is_moderator(mod) and not community.is_instance_admin(mod):
-                            log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json, 'Does not have permission')
-                            return
-                        if not isinstance(core_activity.get('target'), str):
-                            log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json, 'Add has no target')
-                            return
-                        target = core_activity['target']
-                        if not community.ap_featured_url:
-                            community.ap_featured_url = community.ap_profile_id + '/featured'
-                        featured_url = community.ap_featured_url
-                        moderators_url = community.ap_moderators_url
-                        if target.lower() == featured_url.lower():
-                            post = Post.get_by_ap_id(core_activity['object'])
-                            if post:
-                                post.sticky = True
-                                session.commit()
-                                log_incoming_ap(id, APLOG_ADD, APLOG_SUCCESS, saved_json)
-                            else:
-                                log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json,
-                                                'Cannot find: ' + core_activity['object'])
-                            return
-                        if target == moderators_url:
-                            new_mod = find_actor_or_create_cached(core_activity['object'])
-                            if new_mod:
-                                existing_membership = session.query(CommunityMember).filter_by(community_id=community.id,
-                                                                                      user_id=new_mod.id).first()
-                                if existing_membership:
-                                    existing_membership.is_moderator = True
-                                else:
-                                    new_membership = CommunityMember(community_id=community.id, user_id=new_mod.id,
-                                                                     is_moderator=True)
-                                    session.add(new_membership)
-                                add_to_modlog('add_mod', actor=mod, target_user=new_mod, community=community,
-                                              link_text=new_mod.display_name(), link=new_mod.link())
-                                session.commit()
-                                cache.delete_memoized(moderating_communities, new_mod.id)
-                                cache.delete_memoized(joined_communities, new_mod.id)
-                                cache.delete_memoized(community_moderators, community.id)
-                                cache.delete_memoized(moderating_communities_ids, new_mod.id)
-                                cache.delete_memoized(moderating_communities_ids_all_users)
-                                cache.delete_memoized(Community.moderators, community)
-                                log_incoming_ap(id, APLOG_ADD, APLOG_SUCCESS, saved_json)
-                            else:
-                                log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json,
-                                                'Cannot find: ' + core_activity['object'])
-                            return
-                        log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json, 'Unknown target for Add')
-                    else:
-                        log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json, 'Add: cannot find community or feed')
+                    process_add(core_activity, user, community, feed, announced, id, saved_json, session)
                     return
 
                 if core_activity['type'] == 'Remove':  # Remove mods, unsticky a post, or remove a community from a feed
-                    if user is not None:
-                        mod = user
-                    if not announced and not feed:
-                        community = find_community(core_activity)
-                    if feed and 'id' in core_activity['object']:
-                        community_to_remove = find_actor_or_create_cached(core_activity['object']['id'], community_only=True)
-                        # if community found or created - remove the FeedItem and update Feed info
-                        if community_to_remove and isinstance(community_to_remove, Community):
-                            feed_item = session.query(FeedItem).filter_by(feed_id=feed.id,
-                                                                 community_id=community_to_remove.id).first()
-                            if feed_item:
-                                session.delete(feed_item)
-                                feed.num_communities -= 1
-                                session.commit()
-                                log_incoming_ap(id, APLOG_REMOVE, APLOG_SUCCESS, saved_json)
-                            else:
-                                log_incoming_ap(id, APLOG_REMOVE, APLOG_IGNORED, saved_json, 'Community is not in feed')
-                            # also auto-unsubscribe any feedmembers from the community
-                            # who have feed_auto_leave enabled
-                            feed_members = session.query(FeedMember).filter_by(feed_id=feed.id).all()
-                            for fm in feed_members:
-                                fm_user = session.get(User, fm.user_id)
-                                if fm_user.id == feed.user_id:
-                                    continue
-                                if fm_user.is_local() and fm_user.feed_auto_leave:
-                                    subscription = community_membership(fm_user, community_to_remove)
-                                    cm = session.query(CommunityMember).filter_by(user_id=fm_user.id,
-                                                                         community_id=community_to_remove.id).first()
-                                    if subscription != SUBSCRIPTION_OWNER and cm and cm.joined_via_feed:
-                                        proceed = True
-                                        # Undo the Follow
-                                        if not community_to_remove.is_local():  # this is a remote community, so activitypub is needed
-                                            if not community_to_remove.instance.gone_forever:
-                                                follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{gibberish(15)}"
-                                                # D89 (owner ruling): the original Follow's id, for every peer rather than only ovo.st
-                                                join_request = session.query(CommunityJoinRequest).filter_by(user_id=fm_user.id,
-                                                                                                    community_id=community_to_remove.id).first()
-                                                if join_request:
-                                                    follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{join_request.uuid}"
-                                                undo_id = f"{current_app.config['SERVER_URL']}/activities/undo/" + gibberish(15)
-                                                follow = {'actor': fm_user.public_url(),
-                                                          'to': [community_to_remove.public_url()],
-                                                          'object': community_to_remove.public_url(), 'type': 'Follow',
-                                                          'id': follow_id}
-                                                undo = {'actor': fm_user.public_url(),
-                                                        'to': [community_to_remove.public_url()], 'type': 'Undo',
-                                                        'id': undo_id, 'object': follow}
-                                                send_post_request(community_to_remove.ap_inbox_url, undo,
-                                                                  fm_user.private_key, fm_user.public_url() + '#main-key',
-                                                                  timeout=10)
-
-                                        if proceed:
-                                            session.query(CommunityMember).filter_by(user_id=fm_user.id,
-                                                                                        community_id=community_to_remove.id).delete()
-                                            session.query(CommunityJoinRequest).filter_by(user_id=fm_user.id,
-                                                                                             community_id=community_to_remove.id).delete()
-                                            community_to_remove.subscriptions_count -= 1
-                                            session.commit()
-                                            log_incoming_ap(id, APLOG_REMOVE, APLOG_SUCCESS, saved_json,
-                                                            f'{fm_user.user_name} auto-unfollowed {community_to_remove.ap_public_url} during a feed/remove')
-                        else:
-                            log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json, 'Cannot find community to remove from feed')
-                    elif community:
-                        if not community.is_moderator(mod) and not community.is_instance_admin(mod):
-                            log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json, 'Does not have permission')
-                            return
-                        if not isinstance(core_activity.get('target'), str):
-                            log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json, 'Remove has no target')
-                            return
-                        target = core_activity['target']
-                        if not community.ap_featured_url:
-                            community.ap_featured_url = community.ap_profile_id + '/featured'
-                        featured_url = community.ap_featured_url
-                        moderators_url = community.ap_moderators_url
-                        if target.lower() == featured_url.lower():
-                            post = Post.get_by_ap_id(core_activity['object'])
-                            if post:
-                                post.sticky = False
-                                session.commit()
-                                log_incoming_ap(id, APLOG_REMOVE, APLOG_SUCCESS, saved_json)
-                            else:
-                                log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json,
-                                                'Cannot find: ' + core_activity['object'])
-                            return
-                        if target == moderators_url:
-                            old_mod = find_actor_or_create_cached(core_activity['object'])
-                            if old_mod:
-                                existing_membership = session.query(CommunityMember).filter_by(community_id=community.id,
-                                                                                      user_id=old_mod.id).first()
-                                if existing_membership:
-                                    existing_membership.is_moderator = False
-                                    session.commit()
-                                    cache.delete_memoized(moderating_communities, old_mod.id)
-                                    cache.delete_memoized(joined_communities, old_mod.id)
-                                    cache.delete_memoized(community_moderators, community.id)
-                                    cache.delete_memoized(moderating_communities_ids, old_mod.id)
-                                    cache.delete_memoized(moderating_communities_ids_all_users)
-                                    cache.delete_memoized(Community.moderators, community)
-                                    log_incoming_ap(id, APLOG_REMOVE, APLOG_SUCCESS, saved_json)
-                                    add_to_modlog('remove_mod', actor=mod, target_user=old_mod, community=community,
-                                                  link_text=old_mod.display_name(), link=old_mod.link())
-                            else:
-                                log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json,
-                                                'Cannot find: ' + core_activity['object'])
-                            return
-                        log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json, 'Unknown target for Remove')
-                    else:
-                        log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json, 'Remove: cannot find community or feed')
+                    process_remove(core_activity, user, community, feed, announced, id, saved_json, session)
                     return
 
                 if core_activity['type'] == 'Move':
@@ -2302,6 +2126,18 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                 post_reply.answer = False
                                 session.commit()
                             log_incoming_ap(id, APLOG_LOCK, APLOG_SUCCESS, saved_json)
+                        return
+
+                    # Interop C1 item 3: an Undo of an Add runs the Remove, an Undo of a Remove runs the Add, with the
+                    # original handlers' authority checks. `user` is the signed Undo's actor, never the inner one's.
+                    if core_activity['object']['type'] == 'Add':
+                        process_remove(core_activity['object'], user, community, feed, announced, id, saved_json,
+                                       session, undo=True)
+                        return
+
+                    if core_activity['object']['type'] == 'Remove':
+                        process_add(core_activity['object'], user, community, feed, announced, id, saved_json,
+                                    session, undo=True)
                         return
 
                     if core_activity['object']['type'] == 'Flag':  # Withdraw a report (interop C1 item 3)
@@ -3225,6 +3061,222 @@ def process_question_answer(user, store_ap_json, request_json, announced):
 
 # Private Messages, for both Create / ChatMessage (PieFed / Lemmy), and Create / Note (Mastodon, NodeBB)
 # returns True if Create / Note was a PM (irrespective of whether the chat was successful)
+def may_moderate(community: Community, actor) -> bool:
+    """The authority an inbound Add or Remove asks of its actor, and so does an Undo of either: a moderator of
+    the community, or an admin of the community's instance (interop C1 item 3)."""
+    return community.is_moderator(actor) or community.is_instance_admin(actor)
+
+
+def process_add(core_activity, user, community, feed, announced, id, saved_json, session, undo=False):
+    """An Add: make a moderator, sticky a post, or add a community to a feed.
+
+    `undo` is set when this runs for an Undo of a Remove (interop C1 item 3). A target that is already in the
+    added state is then a logged no-op, not a second write."""
+    if not announced and not feed:
+        community = find_community(core_activity)
+    if feed and 'id' in core_activity['object']:
+        community_to_add = find_actor_or_create_cached(core_activity['object']['id'], community_only=True)
+        # if community found or created - add the FeedItem and update Feed info
+        if community_to_add and isinstance(community_to_add, Community):
+            if undo and session.query(FeedItem).filter_by(feed_id=feed.id, community_id=community_to_add.id).first():
+                log_incoming_ap(id, APLOG_ADD, APLOG_IGNORED, saved_json, 'Undo: community is already in feed')
+                return
+            feed_item = FeedItem(feed_id=feed.id, community_id=community_to_add.id)
+            session.add(feed_item)
+            feed.num_communities += 1
+            session.commit()
+            # also autosubscribe any feedmembers to the new community
+            feed_members = session.query(FeedMember).filter_by(feed_id=feed.id).all()
+            for fm in feed_members:
+                fm_user = session.get(User, fm.user_id)
+                if fm_user.id == feed.user_id:
+                    continue
+                if fm_user.is_local() and fm_user.feed_auto_follow:
+                    # user is local so lets auto-subscribe them to the community
+                    actor = community_to_add.ap_id if community_to_add.ap_id else community_to_add.name
+                    community_routes.do_subscribe(actor, fm_user.id, joined_via_feed=True)
+            log_incoming_ap(id, APLOG_ADD, APLOG_SUCCESS, saved_json)
+        else:
+            log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json, 'Cannot find community to add to feed')
+    elif community:
+        if not may_moderate(community, user):
+            log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json, 'Does not have permission')
+            return
+        if not isinstance(core_activity.get('target'), str):
+            log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json, 'Add has no target')
+            return
+        target = core_activity['target']
+        if not community.ap_featured_url:
+            community.ap_featured_url = community.ap_profile_id + '/featured'
+        featured_url = community.ap_featured_url
+        moderators_url = community.ap_moderators_url
+        if target.lower() == featured_url.lower():
+            post = Post.get_by_ap_id(core_activity['object'])
+            if post:
+                if undo and post.sticky:
+                    log_incoming_ap(id, APLOG_ADD, APLOG_IGNORED, saved_json, 'Undo: post is already sticky')
+                    return
+                post.sticky = True
+                session.commit()
+                log_incoming_ap(id, APLOG_ADD, APLOG_SUCCESS, saved_json)
+            else:
+                log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json,
+                                'Cannot find: ' + core_activity['object'])
+            return
+        if target == moderators_url:
+            new_mod = find_actor_or_create_cached(core_activity['object'])
+            if new_mod:
+                existing_membership = session.query(CommunityMember).filter_by(community_id=community.id,
+                                                                      user_id=new_mod.id).first()
+                if undo and existing_membership and existing_membership.is_moderator:
+                    log_incoming_ap(id, APLOG_ADD, APLOG_IGNORED, saved_json, 'Undo: already a moderator')
+                    return
+                if existing_membership:
+                    existing_membership.is_moderator = True
+                else:
+                    new_membership = CommunityMember(community_id=community.id, user_id=new_mod.id,
+                                                     is_moderator=True)
+                    session.add(new_membership)
+                add_to_modlog('add_mod', actor=user, target_user=new_mod, community=community,
+                              link_text=new_mod.display_name(), link=new_mod.link())
+                session.commit()
+                cache.delete_memoized(moderating_communities, new_mod.id)
+                cache.delete_memoized(joined_communities, new_mod.id)
+                cache.delete_memoized(community_moderators, community.id)
+                cache.delete_memoized(moderating_communities_ids, new_mod.id)
+                cache.delete_memoized(moderating_communities_ids_all_users)
+                cache.delete_memoized(Community.moderators, community)
+                log_incoming_ap(id, APLOG_ADD, APLOG_SUCCESS, saved_json)
+            else:
+                log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json,
+                                'Cannot find: ' + core_activity['object'])
+            return
+        log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json, 'Unknown target for Add')
+    else:
+        log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json, 'Add: cannot find community or feed')
+
+
+def process_remove(core_activity, user, community, feed, announced, id, saved_json, session, undo=False):
+    """A Remove: demote a moderator, unsticky a post, or take a community out of a feed.
+
+    `undo` is set when this runs for an Undo of an Add (interop C1 item 3). A target that is already in the
+    removed state is then a logged no-op, and a feed's auto-unsubscribe loop does not run for it."""
+    if not announced and not feed:
+        community = find_community(core_activity)
+    if feed and 'id' in core_activity['object']:
+        community_to_remove = find_actor_or_create_cached(core_activity['object']['id'], community_only=True)
+        # if community found or created - remove the FeedItem and update Feed info
+        if community_to_remove and isinstance(community_to_remove, Community):
+            feed_item = session.query(FeedItem).filter_by(feed_id=feed.id,
+                                                 community_id=community_to_remove.id).first()
+            if feed_item:
+                session.delete(feed_item)
+                feed.num_communities -= 1
+                session.commit()
+                log_incoming_ap(id, APLOG_REMOVE, APLOG_SUCCESS, saved_json)
+            else:
+                log_incoming_ap(id, APLOG_REMOVE, APLOG_IGNORED, saved_json, 'Community is not in feed')
+                if undo:
+                    return
+            # also auto-unsubscribe any feedmembers from the community
+            # who have feed_auto_leave enabled
+            feed_members = session.query(FeedMember).filter_by(feed_id=feed.id).all()
+            for fm in feed_members:
+                fm_user = session.get(User, fm.user_id)
+                if fm_user.id == feed.user_id:
+                    continue
+                if fm_user.is_local() and fm_user.feed_auto_leave:
+                    subscription = community_membership(fm_user, community_to_remove)
+                    cm = session.query(CommunityMember).filter_by(user_id=fm_user.id,
+                                                         community_id=community_to_remove.id).first()
+                    if subscription != SUBSCRIPTION_OWNER and cm and cm.joined_via_feed:
+                        proceed = True
+                        # Undo the Follow
+                        if not community_to_remove.is_local():  # this is a remote community, so activitypub is needed
+                            if not community_to_remove.instance.gone_forever:
+                                follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{gibberish(15)}"
+                                # D89 (owner ruling): the original Follow's id, for every peer rather than only ovo.st
+                                join_request = session.query(CommunityJoinRequest).filter_by(user_id=fm_user.id,
+                                                                                    community_id=community_to_remove.id).first()
+                                if join_request:
+                                    follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{join_request.uuid}"
+                                undo_id = f"{current_app.config['SERVER_URL']}/activities/undo/" + gibberish(15)
+                                follow = {'actor': fm_user.public_url(),
+                                          'to': [community_to_remove.public_url()],
+                                          'object': community_to_remove.public_url(), 'type': 'Follow',
+                                          'id': follow_id}
+                                undo_follow = {'actor': fm_user.public_url(),
+                                               'to': [community_to_remove.public_url()], 'type': 'Undo',
+                                               'id': undo_id, 'object': follow}
+                                send_post_request(community_to_remove.ap_inbox_url, undo_follow,
+                                                  fm_user.private_key, fm_user.public_url() + '#main-key',
+                                                  timeout=10)
+
+                        if proceed:
+                            session.query(CommunityMember).filter_by(user_id=fm_user.id,
+                                                                        community_id=community_to_remove.id).delete()
+                            session.query(CommunityJoinRequest).filter_by(user_id=fm_user.id,
+                                                                             community_id=community_to_remove.id).delete()
+                            community_to_remove.subscriptions_count -= 1
+                            session.commit()
+                            log_incoming_ap(id, APLOG_REMOVE, APLOG_SUCCESS, saved_json,
+                                            f'{fm_user.user_name} auto-unfollowed {community_to_remove.ap_public_url} during a feed/remove')
+        else:
+            log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json, 'Cannot find community to remove from feed')
+    elif community:
+        if not may_moderate(community, user):
+            log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json, 'Does not have permission')
+            return
+        if not isinstance(core_activity.get('target'), str):
+            log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json, 'Remove has no target')
+            return
+        target = core_activity['target']
+        if not community.ap_featured_url:
+            community.ap_featured_url = community.ap_profile_id + '/featured'
+        featured_url = community.ap_featured_url
+        moderators_url = community.ap_moderators_url
+        if target.lower() == featured_url.lower():
+            post = Post.get_by_ap_id(core_activity['object'])
+            if post:
+                if undo and not post.sticky:
+                    log_incoming_ap(id, APLOG_REMOVE, APLOG_IGNORED, saved_json, 'Undo: post is not sticky')
+                    return
+                post.sticky = False
+                session.commit()
+                log_incoming_ap(id, APLOG_REMOVE, APLOG_SUCCESS, saved_json)
+            else:
+                log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json,
+                                'Cannot find: ' + core_activity['object'])
+            return
+        if target == moderators_url:
+            old_mod = find_actor_or_create_cached(core_activity['object'])
+            if old_mod:
+                existing_membership = session.query(CommunityMember).filter_by(community_id=community.id,
+                                                                      user_id=old_mod.id).first()
+                if undo and not (existing_membership and existing_membership.is_moderator):
+                    log_incoming_ap(id, APLOG_REMOVE, APLOG_IGNORED, saved_json, 'Undo: not a moderator')
+                    return
+                if existing_membership:
+                    existing_membership.is_moderator = False
+                    session.commit()
+                    cache.delete_memoized(moderating_communities, old_mod.id)
+                    cache.delete_memoized(joined_communities, old_mod.id)
+                    cache.delete_memoized(community_moderators, community.id)
+                    cache.delete_memoized(moderating_communities_ids, old_mod.id)
+                    cache.delete_memoized(moderating_communities_ids_all_users)
+                    cache.delete_memoized(Community.moderators, community)
+                    log_incoming_ap(id, APLOG_REMOVE, APLOG_SUCCESS, saved_json)
+                    add_to_modlog('remove_mod', actor=user, target_user=old_mod, community=community,
+                                  link_text=old_mod.display_name(), link=old_mod.link())
+            else:
+                log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json,
+                                'Cannot find: ' + core_activity['object'])
+            return
+        log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json, 'Unknown target for Remove')
+    else:
+        log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json, 'Remove: cannot find community or feed')
+
+
 def process_chat(user, store_ap_json, core_activity, session):
     saved_json = core_activity if store_ap_json else None
     id = core_activity['id']
