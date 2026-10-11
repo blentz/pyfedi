@@ -1002,3 +1002,51 @@ def test_the_form_shows_the_current_cross_origin_delete_delay(admin_client, stor
         client.get('/admin/federation')
 
     assert render.call_args.kwargs['form'].cross_origin_delete_delay.data == shown
+
+
+# --------------------------------------------------------------------------
+# admin_federation: secure mode (security track S6)
+# --------------------------------------------------------------------------
+
+
+def test_secure_mode_is_saved_from_the_federation_form(admin_client):
+    client, token = admin_client
+
+    _post(client, token, require_signed_fetch='y')
+
+    db.session.expire_all()
+    assert db.session.get(Site, 1).require_signed_fetch is True
+
+
+def test_secure_mode_is_turned_off_when_the_box_is_unticked(admin_client):
+    client, token = admin_client
+    db.session.get(Site, 1).require_signed_fetch = True
+    db.session.commit()
+
+    _post(client, token)
+
+    db.session.expire_all()
+    assert db.session.get(Site, 1).require_signed_fetch is False
+
+
+def test_the_federation_form_shows_the_stored_secure_mode(admin_client):
+    client, token = admin_client
+    db.session.get(Site, 1).require_signed_fetch = True
+    db.session.commit()
+
+    with patch('app.admin.routes.render_template', return_value='rendered') as render:
+        client.get('/admin/federation')
+
+    assert render.call_args.kwargs['form'].require_signed_fetch.data is True
+
+
+def test_saving_the_federation_form_drops_the_memoized_site(admin_client, monkeypatch):
+    """g.site comes from get_site_as_dict, memoized for 60 s: without this, secure mode would lag the checkbox."""
+    client, token = admin_client
+    dropped = []
+    monkeypatch.setattr('app.admin.routes.cache.delete_memoized',
+                        lambda function, *args: dropped.append(getattr(function, '__name__', function)))
+
+    _post(client, token)
+
+    assert 'get_site_as_dict' in dropped

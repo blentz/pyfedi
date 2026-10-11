@@ -5209,6 +5209,7 @@ class Site(db.Model):
     language_id = db.Column(db.Integer)
     honeypot = db.Column(db.Boolean, default=True)
     allowlist_mode = db.Column(db.Integer, default=0)   # 0 = weak, 1 = strong, 2 = intense
+    require_signed_fetch = db.Column(db.Boolean, default=False, server_default='false', nullable=False)  # S6 secure mode: refuse unsigned AP GETs
 
 
     @staticmethod

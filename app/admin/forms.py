@@ -127,6 +127,11 @@ class FederationForm(FlaskForm):
     cross_origin_delete_delay = IntegerField(
         _l("Seconds to wait before applying a moderator's Delete of a post from another server"),
         validators=[InputRequired(), NumberRange(min=0, max=3600)], default=90)
+    require_signed_fetch = BooleanField(
+        _l('Require signed fetches (secure mode)'),
+        description=_l('Refuse ActivityPub requests that are not signed by a server this instance already knows. '
+                       'Unsigned fetchers, including some crawlers and tools, will be refused. The instance actor, '
+                       'WebFinger and NodeInfo stay open.'))
     submit = SubmitField(_l('Save'))
 
 

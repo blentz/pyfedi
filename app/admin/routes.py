@@ -507,6 +507,7 @@ def admin_federation():
         site = db.session.get(Site, 1)    # g.site.* is read only so we need a local copy of the model to save into.
         site.blocked_phrases = form.blocked_phrases.data
         site.allowlist_mode = int(form.allowlist_mode.data)
+        site.require_signed_fetch = form.require_signed_fetch.data
         set_setting('actor_blocked_words', form.blocked_actors.data)
         set_setting('actor_bio_blocked_words', form.blocked_bio.data)
         set_setting('auto_add_remote_communities', form.auto_add_remote_communities.data)
@@ -514,6 +515,7 @@ def admin_federation():
         cache.delete_memoized(blocked_phrases)
         cache.delete_memoized(get_setting, 'actor_blocked_words')
         db.session.commit()
+        cache.delete_memoized(get_site_as_dict)   # g.site is read from it: secure mode and allowlist mode apply now
 
         flash(_('Admin settings saved'))
 
@@ -530,6 +532,7 @@ def admin_federation():
         form.blocked_actors.data = get_setting('actor_blocked_words', '')
         form.blocked_bio.data = get_setting('actor_bio_blocked_words', '')
         form.auto_add_remote_communities.data = get_setting('auto_add_remote_communities', False)
+        form.require_signed_fetch.data = g.site.require_signed_fetch
         form.cross_origin_delete_delay.data = cross_origin_delete_delay()
 
     return render_template('admin/federation.html', title=_('Federation settings'),
