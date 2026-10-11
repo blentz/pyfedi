@@ -569,6 +569,33 @@ def test_an_unreachable_origin_on_the_signed_retry_drops_the_delete(app, db_sess
     assert route.call_count == 2
 
 
+def test_the_signed_delete_check_reads_the_status_only(app, db_session, http_mock):
+    """A hostile origin answering the signed fetch with an endless body is not read: the status decides."""
+    seed_signing_site()
+    pulled = []
+
+    def endless():
+        while True:
+            pulled.append(1)
+            yield b'x' * 65536
+
+    route = http_mock.get(DELETED_ID).mock(side_effect=[httpx.Response(401), httpx.Response(404, content=endless())])
+    inner = _delete()
+
+    assert verify_announced_inner(_announce(inner)) == (inner, None)
+    assert route.call_count == 2 and len(pulled) <= 1
+
+
+def test_a_signed_delete_check_does_not_follow_a_redirect(app, db_session, http_mock):
+    """No route serves the Location, so following it would error the test."""
+    seed_signing_site()
+    http_mock.get(DELETED_ID).mock(side_effect=[
+        httpx.Response(401), httpx.Response(301, headers={'Location': 'https://elsewhere.example/gone'})])
+
+    assert verify_announced_inner(_announce(_delete())) == (
+        None, 'Announced Delete: the object answers HTTP 301 to a signed fetch')
+
+
 def test_with_no_site_key_an_origin_refusing_unsigned_fetches_drops_the_delete(app, db_session, http_mock):
     route = http_mock.get(DELETED_ID).respond(401)
 

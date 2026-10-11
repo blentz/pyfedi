@@ -61,7 +61,7 @@ from app.constants import DATETIME_MS_FORMAT
 from app.discovery.instance_answers import record_delivery_refusal
 from app.relays.refusals import record_relay_refusal
 from app.models import utcnow, ActivityPubLog, Community, Instance, CommunityMember, Site, User, SendQueue, public_key_pem
-from app.utils import get_task_session, is_invalid_get_request_uri
+from app.utils import get_request_capped, get_task_session, is_invalid_get_request_uri
 import app.activitypub.util as activitypub_util
 
 
@@ -211,6 +211,36 @@ def signed_get_request(uri: str, private_key: str, key_id: str, content_type: st
                        method: Literal["get", "post"] = "get", timeout: int = 10, ):
     return double_knock(uri, lambda signature_format: HttpSignature.signed_request(
         uri, None, private_key, key_id, content_type, method, timeout, signature_format=signature_format))
+
+
+def signed_get_capped(uri: str, private_key: str, key_id: str, max_bytes: int,
+                      max_seconds: float = 15) -> tuple[int, bytes | None]:
+    """A GET of `uri` signed as `key_id`, sent through get_request_capped: its SSRF guards, no redirects, at most
+    max_bytes of body and a wall-clock deadline of max_seconds per attempt. Returns (status, body) as
+    get_request_capped does (body None when over the cap or late; max_bytes=0 reads the status only).
+
+    signed_get_request buffers an uncapped body with only a per-read timeout, so a hostile origin could answer it
+    with a huge or slow body and pin a worker. The signature format alternates as in double_knock: the format the
+    instance is known to accept first, the other exactly once on a 401 (remembered on a 2xx) -- at most two signed
+    requests, so at most 2 * max_seconds once each response has started. Raises httpx.HTTPError on transport
+    failure."""
+    domain = activitypub_util.host_of(uri)
+
+    def send(signature_format: str) -> tuple[int, bytes | None]:
+        # send_via_async: sign only; the GET itself goes through get_request_capped's cap and deadline
+        _uri, headers, _body = HttpSignature.signed_request(uri, None, private_key, key_id, method='get',
+                                                            send_via_async=True, signature_format=signature_format)
+        return get_request_capped(uri, max_bytes, headers=headers, max_seconds=max_seconds)
+
+    signature_format = _instance_signature_format(domain)
+    status, body = send(signature_format)
+    if status != 401:
+        return status, body
+    alternate = _other_signature_format(signature_format)
+    status, body = send(alternate)
+    if 200 <= status < 300:
+        _remember_signature_format(domain, alternate)
+    return status, body
 
 
 # pyld's default loader fetches every @context over the network, uncached and
