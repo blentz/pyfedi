@@ -209,7 +209,7 @@ def requested_visibility(input, src, community) -> str:
     if src == SRC_API:
         visibility = input.get('visibility') or VISIBILITY_PUBLIC
     else:
-        field = getattr(input, 'visibility', None)
+        field = getattr(input, 'visibility', None)     # a form object without the field means public
         visibility = (field.data if field is not None else None) or VISIBILITY_PUBLIC
     if visibility not in (VISIBILITY_PUBLIC, VISIBILITY_FOLLOWERS):
         raise Exception('invalid visibility')
