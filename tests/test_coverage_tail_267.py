@@ -227,14 +227,14 @@ class TestEveryFetchFailureBecomesAnHttpError:
     """
 
     def test_a_value_error_is_converted(self, env):
-        with patch('app.utils.httpx_client.get',
+        with patch('app.utils.httpx_client.stream',
                    side_effect=ValueError('not a url httpx will accept')):
             with pytest.raises(httpx.HTTPError, match='not a url httpx will accept'):
                 get_request('https://peer.example/thing')
 
     def test_a_stream_error_is_converted(self, env):
         """`httpx.StreamError` descends from `RuntimeError`, not from `HTTPError`."""
-        with patch('app.utils.httpx_client.get',
+        with patch('app.utils.httpx_client.stream',
                    side_effect=httpx.StreamError('the stream went away')):
             with pytest.raises(httpx.HTTPError, match='the stream went away'):
                 get_request('https://peer.example/thing')
@@ -242,7 +242,7 @@ class TestEveryFetchFailureBecomesAnHttpError:
     def test_an_invalid_url_is_converted(self, env):
         """`httpx.InvalidURL` descends straight from Exception, which is the case the comment above
         that handler records."""
-        with patch('app.utils.httpx_client.get',
+        with patch('app.utils.httpx_client.stream',
                    side_effect=httpx.InvalidURL('that is not a url')):
             with pytest.raises(httpx.HTTPError, match='that is not a url'):
                 get_request('https://peer.example/thing')

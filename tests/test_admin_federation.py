@@ -33,6 +33,7 @@ import pytest
 from app import cache, db
 from app.models import (AllowedInstances, BannedInstances,
                         DefederationSubscription, Domain, Site, Tag, User)
+from app.utils import LEMMYVERSE_MAX_BYTES, LEMMYVERSE_MAX_SECONDS
 from tests.factories import grant_permission, make_instance, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -385,6 +386,18 @@ def test_each_preload_filter_excludes_its_own_case(admin_client, lemmyverse,
 
     assert '1 out of 1 communities were excluded using current filters' in \
         ' '.join(_flashes(flashed))
+
+
+def test_the_lemmyverse_list_is_fetched_under_its_own_bigger_cap(admin_client, lemmyverse):
+    """community.full.json is 4.8 MB today, over get_request's default 1 MiB cap: the route passes 32 MiB and two
+    minutes instead."""
+    client, token = admin_client
+    lemmyverse.return_value.json.return_value = []
+
+    _preload(client, token, [])
+
+    assert lemmyverse.call_args.kwargs == {'max_bytes': LEMMYVERSE_MAX_BYTES, 'max_seconds': LEMMYVERSE_MAX_SECONDS}
+    assert (LEMMYVERSE_MAX_BYTES, LEMMYVERSE_MAX_SECONDS) == (32 * 1024 * 1024, 120)
 
 
 @pytest.mark.parametrize('posts, active, included', [

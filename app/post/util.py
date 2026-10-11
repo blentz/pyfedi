@@ -14,7 +14,7 @@ from app.constants import POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_VIDEO, POST
 from app.models import PostReply, Post, Community, User, Language, utcnow, UserFlair, UserExtraField
 from app.visibility import mark_restricted, OPEN_VISIBILITIES, RestrictedReply
 from app.utils import blocked_or_banned_instances, blocked_users, is_video_hosting_site, get_request, \
-    silenced_instances, html_to_text
+    silenced_instances, html_to_text, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS
 
 
 @cache.memoize(timeout=600)
@@ -26,7 +26,7 @@ def retrieve_archived_post(archived_url: str) -> dict:
     try:
         if archived_url.startswith('http'):
             # Load from S3 via HTTP
-            response = get_request(archived_url)
+            response = get_request(archived_url, max_bytes=MEDIA_MAX_BYTES, max_seconds=MEDIA_MAX_SECONDS)
             if response.status_code == 200:
                 # Try to decompress, but if it fails (i.e., Cloudflare already decompressed it during transit),
                 # use the content directly

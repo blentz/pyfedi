@@ -53,6 +53,7 @@ from app.translation import LibreTranslateAPI
 from app.utils import render_template, permission_required, set_setting, get_setting, gibberish, markdown_to_html, \
     moderating_communities, joined_communities, finalize_user_setup, theme_list, blocked_phrases, blocked_referrers, \
     topic_tree, languages_for_form, menu_topics, ensure_directory_exists, add_to_modlog, get_request, \
+    LEMMYVERSE_MAX_BYTES, LEMMYVERSE_MAX_SECONDS, PAGE_MAX_BYTES, \
     download_defeds, instance_banned, login_required, referrer, \
     community_membership, retrieve_image_hash, posts_with_blocked_images, user_access, reported_posts, user_notes, \
     decrement_unread_counts, \
@@ -561,7 +562,8 @@ def admin_federation_preload():
             communities_to_add = 25
 
         # pull down the community.full.json
-        resp = get_request('https://data.lemmyverse.net/data/community.full.json')
+        resp = get_request('https://data.lemmyverse.net/data/community.full.json', max_bytes=LEMMYVERSE_MAX_BYTES,
+                           max_seconds=LEMMYVERSE_MAX_SECONDS)
         community_json = resp.json()
         resp.close()
 
@@ -795,7 +797,7 @@ def admin_federation_remote_scan():
             get_more_communities = True
             while get_more_communities:
                 params = {"sort": "Active", "type_": "Local", "limit": "50", "page": f"{page}", "show_nsfw": "false"}
-                resp = get_request(f"{remote_url}/api/v3/community/list", params=params)
+                resp = get_request(f"{remote_url}/api/v3/community/list", params=params, max_bytes=PAGE_MAX_BYTES)
                 page_dict = json.loads(resp.text)
                 # get the individual communities out of the communities[] list in the response and
                 # add them to a holding list[] of our own
@@ -869,7 +871,7 @@ def admin_federation_remote_scan():
             get_more_communities = True
             while get_more_communities:
                 params = {"sort": "Active", "type_": "Local", "limit": "50", "page": f"{page}", "show_nsfw": "false"}
-                resp = get_request(f"{remote_url}/api/alpha/community/list", params=params)
+                resp = get_request(f"{remote_url}/api/alpha/community/list", params=params, max_bytes=PAGE_MAX_BYTES)
                 page_dict = json.loads(resp.text)
                 # get the individual communities out of the communities[] list in the response and
                 # add them to a holding list[] of our own
@@ -947,7 +949,7 @@ def admin_federation_remote_scan():
             while get_more_magazines:
                 params = {"p": f"{page}", "perPage": "50", "sort": "active", "federation": "local",
                           "hide_adult": "hide"}
-                resp = get_request(f"{remote_url}/api/magazines", params=params)
+                resp = get_request(f"{remote_url}/api/magazines", params=params, max_bytes=PAGE_MAX_BYTES)
                 page_dict = json.loads(resp.text)
                 # get the individual magazines out of the items[] list in the response and
                 # add them to a holding list[] of our own

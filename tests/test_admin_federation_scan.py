@@ -24,6 +24,7 @@ import pytest
 
 from app import cache, db
 from app.models import BannedInstances, Community, User
+from app.utils import PAGE_MAX_BYTES
 from tests.factories import grant_permission, make_instance, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -337,6 +338,9 @@ def test_a_dry_run_reports_the_counts_without_subscribing(
     message = ' '.join(_flashes(flashed))
     assert dry_label in message
     assert subscribe.delay.call_args_list == []
+    # A page of 50 communities with long descriptions can pass get_request's default 1 MiB.
+    assert get_request.call_args_list[2].kwargs == {'params': get_request.call_args_list[2].kwargs['params'],
+                                                    'max_bytes': PAGE_MAX_BYTES}
 
 
 @pytest.mark.parametrize('software, page_key, builder', [
