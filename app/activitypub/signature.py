@@ -290,10 +290,29 @@ def _rfc9421_required(required: frozenset[str]) -> frozenset[str]:
 
 
 def _target_uri(request) -> str:
-    """The URI an RFC 9421 signer signed: this instance's federation scheme (SERVER_URL's, which is https in
-    HTTP_PROTOCOL 'mixed'), the Host it addressed, the path and query."""
+    """The URI an RFC 9421 signer must have signed: SERVER_URL's scheme and authority (https in HTTP_PROTOCOL
+    'mixed'), then the path and query. Never the Host header (R-HOSTPIN): a signature made for another instance,
+    replayed here with that instance's Host, must not verify."""
     path = request.full_path if request.query_string else request.path
-    return f"{urlparse(current_app.config['SERVER_URL']).scheme}://{request.host}{path}"
+    server = urlparse(current_app.config['SERVER_URL'])
+    return f"{server.scheme}://{server.netloc}{path}"
+
+
+def _authority(value: str) -> str:
+    """A Host value compared as an authority: lowercased, a default port (:443, :80) dropped."""
+    value = value.strip().lower()
+    for port in (':443', ':80'):
+        if value.endswith(port):
+            return value[:-len(port)]
+    return value
+
+
+def _check_signed_host(request) -> None:
+    """Refuse a cavage signature whose signed Host is not this instance (R-HOSTPIN): otherwise a request signed
+    for another instance verifies here when replayed with that instance's Host."""
+    host = request.headers.get('Host', '')
+    if _authority(host) != _authority(current_app.config['SERVER_NAME']):
+        raise VerificationError(f'Signed host {host} is not this instance')
 
 
 def is_rfc9421(request) -> bool:
@@ -601,8 +620,10 @@ class HttpSignature:
             headers_string,
             public_key,
         )
-        _check_required({name.lower() for name in signature_details["headers"]}, required,
-                        signature_details["keyid"], enforce)
+        signed = {name.lower() for name in signature_details["headers"]}
+        if "host" in signed:
+            _check_signed_host(request)
+        _check_required(signed, required, signature_details["keyid"], enforce)
         return True
 
     @classmethod
