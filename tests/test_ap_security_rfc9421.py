@@ -11,7 +11,8 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519, padding
 
 from app.activitypub import signature_rfc9421 as rfc9421
-from app.activitypub.signature import VerificationError as ReExportedError
+from app.activitypub.signature import GET_REQUIRED, POST_REQUIRED, VerificationError as ReExportedError, \
+    _rfc9421_required
 from app.activitypub.signature_errors import VerificationError, VerificationFormatError
 from tests.factories import a_keypair
 
@@ -19,6 +20,9 @@ VECTORS = json.loads((Path(__file__).parent / 'fixtures' / 'rfc9421' / 'appendix
 URL = 'https://peer.example/inbox'
 BODY = b'{"type": "Create"}'
 NOW = 1_800_000_000
+# What HttpSignature.verify_request requires of an RFC 9421 signature: the cavage requirements mapped across
+POST_COMPONENTS = _rfc9421_required(POST_REQUIRED)
+GET_COMPONENTS = _rfc9421_required(GET_REQUIRED)
 # The components each Appendix B vector covers, as its Signature-Input lists them
 VECTOR_COVERED = {'B.2.1': frozenset(),
                   'B.2.6': frozenset({'date', '@method', '@path', '@authority', 'content-type', 'content-length'})}
@@ -88,14 +92,14 @@ class TestRoundTrip:
         assert headers['Content-Digest'] == rfc9421.content_digest(BODY)
         assert headers['Signature-Input'].startswith('sig1=("@method" "@target-uri" "@authority" "content-digest")')
         assert 'alg="rsa-v1_5-sha256"' in headers['Signature-Input']
-        covered = rfc9421.verify('POST', URL, headers, BODY, public_key, rfc9421.RFC9421_POST_REQUIRED, now=NOW)
+        covered = rfc9421.verify('POST', URL, headers, BODY, public_key, POST_COMPONENTS, now=NOW)
         assert covered == frozenset({'@method', '@target-uri', '@authority', 'content-digest'})
 
     def test_a_get_without_a_body(self):
         private_key, public_key = a_keypair()
         headers = rfc9421.sign('get', URL, None, private_key, 'k', created=NOW)
         assert 'Content-Digest' not in headers
-        assert rfc9421.verify('GET', URL, headers, b'', public_key, rfc9421.RFC9421_GET_REQUIRED, now=NOW) == \
+        assert rfc9421.verify('GET', URL, headers, b'', public_key, GET_COMPONENTS, now=NOW) == \
             frozenset({'@method', '@target-uri', '@authority'})
 
     def test_created_defaults_to_now(self):
@@ -162,12 +166,12 @@ class TestTampering:
         private_key, public_key = a_keypair()
         headers = _custom(['@method', '@target-uri'], _v15(private_key))
         with pytest.raises(VerificationError, match='unsigned required component: content-digest'):
-            rfc9421.verify('POST', URL, headers, b'', public_key, rfc9421.RFC9421_POST_REQUIRED, now=NOW)
+            rfc9421.verify('POST', URL, headers, b'', public_key, POST_COMPONENTS, now=NOW)
 
     def test_authority_and_path_count_as_the_target_uri(self):
         private_key, public_key = a_keypair()
         headers = _custom(['@method', '@authority', '@path'], _v15(private_key), method='GET')
-        assert rfc9421.verify('GET', URL, headers, b'', public_key, rfc9421.RFC9421_GET_REQUIRED, now=NOW) == \
+        assert rfc9421.verify('GET', URL, headers, b'', public_key, GET_COMPONENTS, now=NOW) == \
             frozenset({'@method', '@authority', '@path'})
 
 
@@ -417,3 +421,14 @@ class TestStructuredFieldParser:
     def test_malformed_input_is_a_format_error(self, text, message):
         with pytest.raises(VerificationFormatError, match=re.escape(message)):
             rfc9421.parse_dictionary(text)
+
+
+def test_the_cavage_requirements_map_to_these_components():
+    """'@target-uri' includes the authority, and normalise_covered counts '@authority' + '@path' as '@target-uri'."""
+    assert POST_COMPONENTS == frozenset({'@method', '@target-uri', 'content-digest'})
+    assert GET_COMPONENTS == frozenset({'@method', '@target-uri'})
+
+
+def test_the_module_defines_no_requirement_of_its_own():
+    """One source for what a signature must cover (signature.py's cavage sets, mapped), not two that can drift."""
+    assert not [name for name in vars(rfc9421) if name.endswith('_REQUIRED')]

@@ -18,10 +18,6 @@ from cryptography.hazmat.primitives.asymmetric import ed25519, padding, rsa
 
 from app.activitypub.signature_errors import VerificationError, VerificationFormatError
 
-# The components an inbound signature must cover. "@target-uri" includes the authority, and normalise_covered
-# counts "@authority" + "@path" as "@target-uri".
-RFC9421_POST_REQUIRED = frozenset({'@method', '@target-uri', 'content-digest'})
-RFC9421_GET_REQUIRED = frozenset({'@method', '@target-uri'})
 CREATED_MAX_AGE_SECONDS = 3600     # matches HttpSignature.precheck's Date window
 CREATED_MAX_SKEW_SECONDS = 300
 SIGN_LABEL = 'sig1'
