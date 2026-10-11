@@ -3112,7 +3112,8 @@ def process_add(core_activity, user, community, feed, announced, id, saved_json,
         moderators_url = community.ap_moderators_url
         if target.lower() == featured_url.lower():
             post = Post.get_by_ap_id(core_activity['object'])
-            if post:
+            # The featured collection holds only this community's posts: one elsewhere is not found here
+            if post and post.community_id == community.id:
                 if undo and post.sticky:
                     log_incoming_ap(id, APLOG_ADD, APLOG_IGNORED, saved_json, 'Undo: post is already sticky')
                     return
@@ -3237,7 +3238,8 @@ def process_remove(core_activity, user, community, feed, announced, id, saved_js
         moderators_url = community.ap_moderators_url
         if target.lower() == featured_url.lower():
             post = Post.get_by_ap_id(core_activity['object'])
-            if post:
+            # The featured collection holds only this community's posts: one elsewhere is not found here
+            if post and post.community_id == community.id:
                 if undo and not post.sticky:
                     log_incoming_ap(id, APLOG_REMOVE, APLOG_IGNORED, saved_json, 'Undo: post is not sticky')
                     return

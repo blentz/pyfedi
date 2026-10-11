@@ -268,3 +268,40 @@ def test_a_feeds_announce_of_an_undo_of_something_else_is_still_refused(feedcomm
     dispatch(inbox_activity(feed, activity_type='Announce', object=undo))
 
     assert only_log() == ('Announce', 'failure', 'Undo announced by a feed has no user or community')
+
+
+# --- the featured collection holds only the community's own posts ----------------------
+
+def add_or_remove_from_community(community, actor, activity_type, object_value, target):
+    """An Announce by `community` of `actor`'s plain Add or Remove."""
+    inner = {'id': f'{community.ap_profile_id}/activities/{activity_type.lower()}-2', 'type': activity_type,
+             'actor': actor.ap_profile_id, 'object': object_value, 'target': target}
+    return inbox_activity(community, activity_type='Announce', object=inner)
+
+
+@pytest.mark.parametrize('shape, sticky_before, log_type', [
+    ('Add', False, 'Add'),
+    ('Remove', True, 'Remove'),
+    ('Undo Add', True, 'Remove'),
+    ('Undo Remove', False, 'Add'),
+])
+def test_a_moderator_cannot_feature_or_unfeature_a_post_in_another_community(modcomm, shape, sticky_before,
+                                                                              log_type):
+    """A moderator of one community naming its own featured collection, and a post of a local community they do
+    not moderate: the post is not in that collection's community, so it is not found and keeps its sticky."""
+    instance, community, moderator, admin, post = modcomm
+    local_community = make_community(name='localnews')
+    local_author = make_user(instance, 'localauthor')
+    local_post = make_post(local_community, local_author, ap_id='https://test.piefed.local/post/42')
+    local_post.sticky = sticky_before
+    db.session.commit()
+    featured = community.ap_profile_id + '/featured'
+
+    if shape.startswith('Undo '):
+        dispatch(undo_from_community(community, moderator, shape.split()[1], local_post.ap_id, featured))
+    else:
+        dispatch(add_or_remove_from_community(community, moderator, shape, local_post.ap_id, featured))
+
+    db.session.expire_all()
+    assert db.session.get(Post, local_post.id).sticky is sticky_before
+    assert only_log() == (log_type, 'failure', 'Cannot find: https://test.piefed.local/post/42')
