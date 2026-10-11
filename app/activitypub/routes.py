@@ -33,7 +33,7 @@ from app.activitypub.util import activity_dedupe_key, claim_activity, release_ac
     post_replies_for_ap, is_vote, known_instance_id, resolve_remote_post_from_search, proactively_delete_content, \
     process_quote_boost, object_has_missing_fields, find_microblogging_community, process_announce_of_uri, \
     announce_target_uri, undo_boost, LD_SIGNED_LOG_PREFIX, current_ld_signed, normalise_activity_types, \
-    NO_STRING_TYPE_MESSAGE
+    NO_STRING_TYPE_MESSAGE, names_actor, refresh_user_profile_task
 # The module, not the name: app.community.routes reaches this file through
 # app.activitypub.signature before show_community is defined (U-circular-import)
 import app.chat.util as chat_util
@@ -84,6 +84,10 @@ AP_CACHE_MISS = 'no-store'
 
 # D173 (owner ruling): an outbox is an OrderedCollection naming its pages, each ?page=N an OrderedCollectionPage
 OUTBOX_PAGE_SIZE = 50
+
+# Interop C1 item 2: an Update of one of these refreshes the signer from the pushed document. 'Podcast' is
+# Castopod's custom actor type, which actor_json_to_model already treats as a user (G1).
+ACTOR_UPDATE_TYPES = ('Person', 'Service', 'Application', 'Podcast')
 
 
 def paged_outbox(outbox_id: str, total: int, items_from) -> dict:
@@ -1056,7 +1060,13 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                         log_incoming_ap(id, aplog_type, APLOG_FAILURE, saved_json, 'Actor was not a user, feed or a community')
                         return
                 else:
-                    actor = find_actor_or_create_cached(actor_id)
+                    # Interop C1 item 2: an Update of an actor refreshes a known actor; it never creates one
+                    actor_update = (request_json['type'] == 'Update' and isinstance(request_json['object'], dict)
+                                    and request_json['object'].get('type') in ACTOR_UPDATE_TYPES)
+                    actor = find_actor_or_create_cached(actor_id, create_if_not_found=not actor_update)
+                    if actor is None and actor_update:
+                        log_incoming_ap(id, APLOG_UPDATE, APLOG_IGNORED, saved_json, 'Update of an unknown actor')
+                        return
                     if actor and isinstance(actor, User):
                         user = actor
                     elif actor and isinstance(actor, Community):  # Process a few activities from NodeBB and a.gup.pe
@@ -1511,6 +1521,13 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                         log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json,
                                         'Cannot process Create/Update: no user or community resolved')
                         return
+                    if core_activity['type'] == 'Update' and core_activity['object'].get('type') in ACTOR_UPDATE_TYPES:
+                        if announced:   # the Group signed the Announce, not the actor the document describes
+                            log_incoming_ap(id, APLOG_UPDATE, APLOG_FAILURE, saved_json,
+                                            'Announced actor Update refused: only the actor itself may send it')
+                        else:
+                            process_actor_update(user, core_activity['object'], id, saved_json)
+                        return
                     if core_activity['object']['type'] == 'ChatMessage':
                         process_chat(user, store_ap_json, core_activity, session)
                         return
@@ -1574,8 +1591,15 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                 log_incoming_ap(id, APLOG_UPDATE, APLOG_FAILURE, saved_json, 'PeerTube post not found')
                                 return
                         elif object_type == 'Group' and core_activity['type'] == 'Update':  # update community/category info
-                            if community.is_local() and not community.is_moderator(user):
+                            # Interop C1 item 2: the document must describe the community this activity is for, and a
+                            # remote Group's document comes only from the Group (it announced this, or sent it itself)
+                            if not names_actor(core_activity['object'].get('id'), community):
+                                log_incoming_ap(id, APLOG_UPDATE, APLOG_FAILURE, saved_json, 'Update of another Group refused')
+                            elif community.is_local() and not community.is_moderator(user):
                                 log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, 'Comm edit by non-moderator')
+                            elif not community.is_local() and not announced and user is not None:
+                                log_incoming_ap(id, APLOG_UPDATE, APLOG_FAILURE, saved_json,
+                                                'Update of a remote Group not sent by the Group')
                             else:
                                 refresh_community_profile(community.id, core_activity['object'])
                                 log_incoming_ap(id, APLOG_UPDATE, APLOG_SUCCESS, saved_json)
@@ -3049,6 +3073,23 @@ def process_new_content(user, community, store_ap_json, request_json, announced)
 
                 log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, 'User cannot create reply in Community')
                 return
+
+
+def process_actor_update(user: User, actor_json: dict, id, saved_json):
+    """Interop C1 item 2: apply a remote actor's pushed Update of itself at once, from the pushed document, so a
+    new name, bio, inbox or rotated key takes effect now rather than at the daily refresh.
+
+    The signed actor is the only identity: a document describing anyone else is refused, and so is one for a local
+    actor. The task is called directly, not through refresh_user_profile, which outside debug defers it by up to
+    ten seconds -- this already runs in the inbox worker, and the document needs no fetch."""
+    if user.is_local():
+        log_incoming_ap(id, APLOG_UPDATE, APLOG_FAILURE, saved_json, 'Update of a local actor refused')
+        return
+    if not names_actor(actor_json.get('id'), user):
+        log_incoming_ap(id, APLOG_UPDATE, APLOG_FAILURE, saved_json, 'Update of another actor refused')
+        return
+    refresh_user_profile_task(user.id, actor_json)
+    log_incoming_ap(id, APLOG_UPDATE, APLOG_SUCCESS, saved_json)
 
 
 def process_upvote(user, store_ap_json, request_json, announced):

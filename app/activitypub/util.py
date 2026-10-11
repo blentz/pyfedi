@@ -743,6 +743,33 @@ def shared_inbox_of(actor_json: dict) -> str | None:
     return shared_inbox if isinstance(shared_inbox, str) and shared_inbox else None
 
 
+# The width of ap_inbox_url on User, Community and Feed. A longer URL from a peer is not stored: it would be a
+# DataError at commit, which aborts the refresh task and leaves the actor unrefreshable (the D1372 family).
+INBOX_URL_MAX = 255
+
+
+def delivery_inbox_of(actor_json: dict) -> str | None:
+    """The inbox to deliver to, as a refresh stores it: the shared inbox when `endpoints` carries a usable one, else
+    the actor's own `inbox`. Each must be a non-empty string that fits the column. None when neither is usable, and
+    the refresh then keeps the inbox it already holds (interop C1 item 2)."""
+    for candidate in (shared_inbox_of(actor_json), actor_json.get('inbox')):
+        if isinstance(candidate, str) and candidate and len(candidate) <= INBOX_URL_MAX:
+            return candidate
+    return None
+
+
+def names_actor(candidate, actor) -> bool:
+    """Whether `candidate`, an id taken from a peer's document, names `actor`.
+
+    Compared the way actor ids are stored and looked up everywhere else (actor_json_to_model stores
+    `id.lower()`, find_actor_by_url strips and lowercases): stripped and lowercased, against the lowercased
+    `ap_profile_id`. A missing actor, a non-string or an actor with no `ap_profile_id` names nothing
+    (interop C1 item 2)."""
+    if actor is None or not isinstance(candidate, str) or not actor.ap_profile_id:
+        return False
+    return candidate.strip().lower() == actor.ap_profile_id.lower()
+
+
 # Every `type` the inbox dispatches on (process_inbox_request in routes.py and the handlers it calls), so an
 # array-valued type resolves to the one this instance acts on rather than to an extension alias listed first.
 DISPATCHED_AP_TYPES = frozenset({
@@ -934,6 +961,9 @@ def refresh_user_profile_task(user_id, activity_json=None):
                     refreshed_pem = public_key_pem(activity_json)
                     if refreshed_pem:
                         user.public_key = refreshed_pem
+                    refreshed_inbox = delivery_inbox_of(activity_json)   # interop C1 item 2: absent keeps the old one
+                    if refreshed_inbox:
+                        user.ap_inbox_url = refreshed_inbox
                     user.accept_private_messages = activity_json['acceptPrivateMessages'] if 'acceptPrivateMessages' in activity_json else 3
                     user.indexable = new_indexable
 
@@ -1094,6 +1124,9 @@ def refresh_community_profile_task(community_id, activity_json=None):
                     refreshed_pem = public_key_pem(activity_json)
                     if refreshed_pem:
                         community.public_key = refreshed_pem
+                    refreshed_inbox = delivery_inbox_of(activity_json)   # interop C1 item 2: absent keeps the old one
+                    if refreshed_inbox:
+                        community.ap_inbox_url = refreshed_inbox
 
                     if 'postUrlType' in activity_json and activity_json['postUrlType']:
                         community.post_url_type = activity_json['postUrlType']
@@ -1333,6 +1366,9 @@ def refresh_feed_profile_task(feed_id, activity_json=None):
                     refreshed_pem = public_key_pem(activity_json)  # D1355
                     if refreshed_pem:
                         feed.public_key = refreshed_pem
+                    refreshed_inbox = delivery_inbox_of(activity_json)   # interop C1 item 2: absent keeps the old one
+                    if refreshed_inbox:
+                        feed.ap_inbox_url = refreshed_inbox
 
                     description_html = ''
                     # D1355. Either key is whatever the peer sent, and a value that
