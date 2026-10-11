@@ -597,27 +597,15 @@ def test_a_group_update_from_a_non_moderator_of_a_LOCAL_community_is_refused(app
     assert log.exception_message == 'Comm edit by non-moderator'
 
 
-def test_a_group_update_of_a_REMOTE_community_refreshes_without_announcing(app, db_session, monkeypatch):
-    """A remote community: `is_local()` is False, so the permission guard's
-    first conjunct short-circuits and the refresh runs. `announce_activity_to_followers`
-    is gated on `community.is_local()` a second time, so it must NOT fire here --
-    which is what distinguishes this test from a local-community success.
+def test_a_user_signed_group_update_of_a_REMOTE_community_is_refused(app, db_session, monkeypatch):
+    """Interop C1 item 2. A remote Group's document is taken only from the Group itself -- announced by it or sent
+    by it (tests/test_ap_interop_actor_update.py). A user's direct Update of a remote community used to refresh it
+    from whatever document that user pushed; it is now refused before the refresh.
 
-    The bare factory is NOT enough to make this community remote: `make_community`
-    never sets `ap_id`, and `Community.is_local()` returns True whenever
-    `ap_id is None` regardless of `host` -- so a community built only with
-    `host='peer.example'` is still `is_local() == True` and this test would
-    exercise the wrong branch. `editor` here is never made a moderator, so
-    without the `ap_id` fix below this test would not silently pass -- it
-    would fail loudly, with the guard denying as 'Comm edit by
-    non-moderator' instead of succeeding. `ap_id` is set explicitly here to
-    a URL that does not start with `SERVER_URL`, which is the only thing
-    `is_local()` actually checks once `ap_id` is not None. The local
-    community's moderator-edit combination (`refresh_community_profile`
-    AND `announce_activity_to_followers` both firing) is exercised
-    separately by
-    `test_a_group_update_from_a_LOCAL_communitys_moderator_refreshes_and_announces`
-    below.
+    The bare factory is NOT enough to make this community remote: `make_community` never sets `ap_id`, and
+    `Community.is_local()` returns True whenever `ap_id is None` regardless of `host`. `ap_id` is set explicitly
+    to a URL that does not start with `SERVER_URL`, which is the only thing `is_local()` checks once `ap_id` is
+    not None. Without it the moderator guard would answer 'Comm edit by non-moderator' instead.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance = seed_community_owner('peer.example')
@@ -633,10 +621,11 @@ def test_a_group_update_of_a_REMOTE_community_refreshes_without_announcing(app, 
     dispatch(create_activity(editor, {'type': 'Group', 'id': remote_community.ap_profile_id},
                              activity_type='Update'))
 
-    assert len(calls['refresh_community_profile']) == 1
+    assert calls['refresh_community_profile'] == []
     assert calls['announce_activity_to_followers'] == []
     log = ActivityPubLog.query.one()
-    assert log.result == 'success'
+    assert log.result == 'failure'
+    assert log.exception_message == 'Update of a remote Group not sent by the Group'
 
 
 def test_a_group_update_from_a_LOCAL_communitys_moderator_refreshes_and_announces(app, db_session, monkeypatch):

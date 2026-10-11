@@ -1,0 +1,337 @@
+"""Interop C1 item 2 (docs/superpowers/specs/2026-10-11-ap-interop-c1-design.md): inbound actor Update.
+
+An Update whose object is a Person, Service, Application or Podcast reached the Create/Update arm and logged
+`Unacceptable type (create): Person`, so a peer's new name, bio or rotated key arrived only with the daily
+refresh. It now refreshes the signer from the pushed document at once -- no fetch -- but only when the document
+describes the signer itself, the signer is a known remote user, and the Update was not merely Announced.
+
+The Group Update path gains the same rule: the document must describe the community the activity is for, and a
+remote Group's document is taken only from the Group. The three refresh tasks also take the actor's inbox from
+the document, keeping the stored one when the document has none.
+"""
+from types import SimpleNamespace
+
+import pytest
+
+from app import db
+from app.activitypub import routes as activitypub_routes
+from app.activitypub import util as activitypub_util
+from app.activitypub.util import (INBOX_URL_MAX, delivery_inbox_of, names_actor,
+                                  refresh_community_profile_task, refresh_feed_profile_task)
+from app.models import ActivityPubLog, Community, Feed, User, utcnow
+from tests.factories import inbox_activity, make_community, make_user, seed_community_owner
+from tests.test_ap_refresh_profiles import (PEER, _feed_document, _group_document, _person_document,
+                                            _remote_community, _remote_feed, _remote_user)
+from tests.test_inbox_dispatch_create_update import create_activity
+from tests.test_inbox_dispatch_lock_delete import record_moderation
+from tests.test_inbox_dispatch_preamble import dispatch
+
+OLD_KEY = '-----BEGIN PUBLIC KEY-----old'
+NEW_KEY = '-----BEGIN PUBLIC KEY-----rotated'
+
+
+def _known_remote_user(name='wakko'):
+    """A remote user the dispatcher resolves without a fetch.
+
+    ap_fetched_at is stamped so find_actor_or_create_cached's schedule_actor_refresh does not run a refresh
+    inline (eager Celery) -- that would fetch the actor and hide what the pushed document did."""
+    user = _remote_user(name)
+    user.ap_fetched_at = utcnow()
+    user.public_key = OLD_KEY
+    user.ap_inbox_url = f'https://{PEER}/u/{name}/inbox'
+    db.session.commit()
+    return user
+
+
+def _remote_group(name='books'):
+    """A REMOTE community the dispatcher resolves without a fetch. make_community leaves ap_id None, which makes
+    is_local() True whatever the host, so ap_id is set to a non-local URL."""
+    community = make_community(name, host=PEER)
+    community.ap_id = f'https://{PEER}/c/{name}'
+    community.ap_fetched_at = utcnow()
+    db.session.commit()
+    return community
+
+
+def _actor_update(user, document):
+    return create_activity(user, document, activity_type='Update')
+
+
+# --- names_actor and delivery_inbox_of ---
+
+ACTOR = SimpleNamespace(ap_profile_id=f'https://{PEER}/u/wakko')
+
+
+@pytest.mark.parametrize('candidate,expected', [
+    (f'https://{PEER}/u/wakko', True),
+    ('https://PEER.example/u/Wakko', True),
+    (f'  https://{PEER}/u/wakko\n', True),
+    (f'https://{PEER}/u/yakko', False),
+    (None, False),
+    (['https://peer.example/u/wakko'], False),
+    ('', False),
+])
+def test_names_actor(candidate, expected):
+    assert names_actor(candidate, ACTOR) is expected
+
+
+def test_names_actor_without_an_actor_or_profile_id_is_false():
+    assert names_actor('', SimpleNamespace(ap_profile_id=None)) is False
+    assert names_actor(f'https://{PEER}/u/wakko', None) is False
+
+
+SHARED = f'https://{PEER}/inbox'
+OWN = f'https://{PEER}/u/wakko/inbox'
+TOO_LONG = f'https://{PEER}/' + 'x' * INBOX_URL_MAX
+
+
+@pytest.mark.parametrize('document,expected', [
+    ({'endpoints': {'sharedInbox': SHARED}, 'inbox': OWN}, SHARED),
+    ({'inbox': OWN}, OWN),
+    ({'endpoints': {'sharedInbox': TOO_LONG}, 'inbox': OWN}, OWN),
+    ({'inbox': TOO_LONG}, None),
+    ({'inbox': ''}, None),
+    ({'inbox': ['x']}, None),
+    ({}, None),
+], ids=['shared', 'own', 'shared-too-long', 'own-too-long', 'empty', 'non-string', 'none'])
+def test_delivery_inbox_of(document, expected):
+    assert delivery_inbox_of(document) == expected
+
+
+# --- the actor Update ---
+
+@pytest.mark.parametrize('actor_type,bot', [('Person', False), ('Service', True), ('Application', False)])
+def test_an_actor_update_refreshes_the_name_summary_and_key(app, db_session, monkeypatch, actor_type, bot):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    user = _known_remote_user()
+    user_id = user.id
+    document = _person_document(fields={'type': actor_type, 'name': 'Wakko Warner',
+                                        'summary': '<p>a new bio</p>',
+                                        'publicKey': {'publicKeyPem': NEW_KEY}})
+
+    dispatch(_actor_update(user, document))
+
+    db.session.expire_all()
+    user = db.session.get(User, user_id)
+    assert user.title == 'Wakko Warner'
+    assert 'a new bio' in user.about_html
+    assert user.public_key == NEW_KEY
+    assert user.bot is bot
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_a_podcast_update_keeps_the_podcast_community_handling(app, db_session, monkeypatch):
+    """Castopod's `Podcast` actor: the refresh still calls ensure_podcast_community (U:910, D24)."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    user = _known_remote_user()
+    user_id = user.id
+    calls = []
+    monkeypatch.setattr(activitypub_util, 'ensure_podcast_community',
+                        lambda podcast_user, actor_json: calls.append((podcast_user.id, actor_json['type'])))
+
+    dispatch(_actor_update(user, _person_document(fields={'type': 'Podcast'})))
+
+    assert calls == [(user_id, 'Podcast')]
+    assert ActivityPubLog.query.one().result == 'success'
+
+
+def test_an_update_describing_another_actor_is_refused(app, db_session, monkeypatch):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    user = _known_remote_user()
+    user_id = user.id
+    document = _person_document('yakko', fields={'name': 'Not Wakko',
+                                                 'publicKey': {'publicKeyPem': NEW_KEY}})
+
+    dispatch(_actor_update(user, document))
+
+    db.session.expire_all()
+    user = db.session.get(User, user_id)
+    assert user.title != 'Not Wakko'
+    assert user.public_key == OLD_KEY
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Update of another actor refused'
+
+
+def test_an_update_from_an_unknown_actor_is_dropped_and_creates_nothing(app, db_session, monkeypatch):
+    """No route is registered: the old preamble's find_actor_or_create_cached(actor_id) would fetch the unknown
+    actor to create it, which block_outbound_http refuses."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    seed_community_owner(PEER)
+    stranger = f'https://{PEER}/u/stranger'
+    users_before = User.query.count()
+
+    dispatch({'id': f'{stranger}/activities/1', 'type': 'Update', 'actor': stranger,
+              'object': _person_document('stranger')})
+
+    assert User.query.count() == users_before
+    log = ActivityPubLog.query.one()
+    assert log.result == 'ignored'
+    assert log.exception_message == 'Update of an unknown actor'
+
+
+def test_an_update_from_a_local_actor_is_refused(app, db_session, monkeypatch):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    seed_community_owner(PEER)
+    local = make_user(None, 'local', local=True)
+    local.ap_profile_id = f"{app.config['SERVER_URL']}/u/local".lower()
+    db.session.commit()
+
+    dispatch(_actor_update(local, {'type': 'Person', 'id': local.ap_profile_id, 'preferredUsername': 'local',
+                                   'name': 'Renamed'}))
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Update of a local actor refused'
+
+
+def test_an_announced_actor_update_is_refused(app, db_session, monkeypatch):
+    """The Group signed the Announce, not the actor the document describes, so the signer rule cannot hold."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    user = _known_remote_user()
+    user_id = user.id
+    group = _remote_group()
+
+    dispatch(inbox_activity(group, activity_type='Announce',
+                            object={'id': f'https://{PEER}/activities/update-1', 'type': 'Update',
+                                    'actor': user.ap_profile_id,
+                                    'object': _person_document(fields={'name': 'Via Group'})}))
+
+    db.session.expire_all()
+    assert db.session.get(User, user_id).title != 'Via Group'
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Announced actor Update refused: only the actor itself may send it'
+
+
+def test_a_document_without_a_key_keeps_the_old_key(app, db_session, monkeypatch):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    user = _known_remote_user()
+    user_id = user.id
+    document = _person_document(fields={'name': 'Keyless'})
+    del document['publicKey']
+
+    dispatch(_actor_update(user, document))
+
+    db.session.expire_all()
+    user = db.session.get(User, user_id)
+    assert user.title == 'Keyless'
+    assert user.public_key == OLD_KEY
+
+
+@pytest.mark.parametrize('fields,expected', [
+    ({'endpoints': {'sharedInbox': SHARED}, 'inbox': OWN}, SHARED),
+    ({'inbox': f'https://{PEER}/u/wakko/new-inbox'}, f'https://{PEER}/u/wakko/new-inbox'),
+    ({}, OWN),
+], ids=['shared', 'own', 'absent-keeps-old'])
+def test_an_actor_update_refreshes_the_inbox(app, db_session, monkeypatch, fields, expected):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    user = _known_remote_user()
+    user_id = user.id
+
+    dispatch(_actor_update(user, _person_document(fields=fields)))
+
+    db.session.expire_all()
+    assert db.session.get(User, user_id).ap_inbox_url == expected
+
+
+# --- the refresh tasks take the inbox too ---
+
+@pytest.mark.parametrize('fields,expected', [
+    ({'endpoints': {'sharedInbox': SHARED}}, SHARED),
+    ({}, 'https://peer.example/c/memes/old-inbox'),
+], ids=['shared', 'absent-keeps-old'])
+def test_a_community_refresh_takes_the_inbox_from_the_document(app, db_session, http_mock, fields, expected):
+    community = _remote_community()
+    community.ap_inbox_url = 'https://peer.example/c/memes/old-inbox'
+    db.session.commit()
+    community_id = community.id
+
+    refresh_community_profile_task(community_id, _group_document(fields=fields))
+
+    db.session.expire_all()
+    assert db.session.get(Community, community_id).ap_inbox_url == expected
+
+
+@pytest.mark.parametrize('fields,expected', [
+    ({'inbox': 'https://peer.example/f/news/inbox'}, 'https://peer.example/f/news/inbox'),
+    ({}, 'https://peer.example/f/news/old-inbox'),
+], ids=['own', 'absent-keeps-old'])
+def test_a_feed_refresh_takes_the_inbox_from_the_document(app, db_session, http_mock, fields, expected):
+    feed = _remote_feed()
+    feed.ap_inbox_url = 'https://peer.example/f/news/old-inbox'
+    db.session.commit()
+    feed_id = feed.id
+
+    refresh_feed_profile_task(feed_id, _feed_document(fields=fields))
+
+    db.session.expire_all()
+    assert db.session.get(Feed, feed_id).ap_inbox_url == expected
+
+
+# --- the Group Update path ---
+
+def test_a_groups_own_update_of_itself_refreshes_without_announcing(app, db_session, monkeypatch):
+    """The a.gup.pe / NodeBB shape: the Group itself sends Update{Group} (preamble R:1047-1050)."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    seed_community_owner(PEER)
+    group = _remote_group()
+    calls = record_moderation(monkeypatch, 'refresh_community_profile', 'announce_activity_to_followers')
+
+    dispatch(inbox_activity(group, activity_type='Update',
+                            object={'type': 'Group', 'id': group.ap_profile_id}))
+
+    assert len(calls['refresh_community_profile']) == 1
+    assert calls['announce_activity_to_followers'] == []
+    assert ActivityPubLog.query.one().result == 'success'
+
+
+def test_a_group_announcing_a_moderators_update_of_itself_refreshes(app, db_session, monkeypatch):
+    """The Lemmy shape: the Group Announces its moderator's Update{Group}. The announcing Group is the signer."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = seed_community_owner(PEER)
+    group = _remote_group()
+    moderator = make_user(instance, 'moderator')
+    moderator.ap_fetched_at = utcnow()
+    db.session.commit()
+    calls = record_moderation(monkeypatch, 'refresh_community_profile', 'announce_activity_to_followers')
+
+    dispatch(inbox_activity(group, activity_type='Announce',
+                            object={'id': f'https://{PEER}/activities/update-group-1', 'type': 'Update',
+                                    'actor': moderator.ap_profile_id,
+                                    'object': {'type': 'Group', 'id': group.ap_profile_id}}))
+
+    assert len(calls['refresh_community_profile']) == 1
+    assert ActivityPubLog.query.one().result == 'success'
+
+
+def test_a_group_update_describing_another_group_is_refused(app, db_session, monkeypatch):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    seed_community_owner(PEER)
+    group = _remote_group()
+    calls = record_moderation(monkeypatch, 'refresh_community_profile')
+
+    dispatch(inbox_activity(group, activity_type='Update',
+                            object={'type': 'Group', 'id': f'https://{PEER}/c/someone_else'}))
+
+    assert calls['refresh_community_profile'] == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Update of another Group refused'
+
+
+def test_a_user_signed_group_update_with_no_community_is_refused_not_crashed(app, db_session, monkeypatch):
+    """find_community finds nothing, process_chat declines: `community` is None at the Group branch, which used to
+    raise AttributeError on `community.is_local()`. names_actor(..., None) is False, so it is refused."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = seed_community_owner(PEER)
+    editor = make_user(instance, 'editor')
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: None)
+    monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
+    calls = record_moderation(monkeypatch, 'refresh_community_profile', 'process_chat')
+
+    dispatch(create_activity(editor, {'type': 'Group', 'id': f'https://{PEER}/c/books'}, activity_type='Update'))
+
+    assert calls['refresh_community_profile'] == []
+    assert ActivityPubLog.query.one().exception_message == 'Update of another Group refused'
