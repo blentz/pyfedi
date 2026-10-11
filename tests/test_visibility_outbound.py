@@ -194,7 +194,8 @@ def test_a_vote_in_a_remote_community_still_goes_to_its_inbox(db_session, monkey
 @pytest.mark.parametrize('remote', [False, True], ids=['local-community', 'remote-community'])
 def test_the_author_deleting_a_followers_only_post_still_tells_their_own_followers(db_session, sent, remote):
     """E9 skips the community fan-out, not delete_object's send to the author's followers: they are the audience a
-    followers-only post was delivered to."""
+    followers-only post was delivered to. A local author's followers-only object never went to a remote community's
+    inbox either (send_post skips it), so its Delete does not go there (Task 28): R-a covers only a remote author's."""
     w = scene(db_session, remote)
     home = make_instance('g.example')
     home.inbox = 'https://g.example/inbox'
@@ -204,4 +205,4 @@ def test_the_author_deleting_a_followers_only_post_still_tells_their_own_followe
 
     deletes.delete_post(None, w.stranger.id, w.post.id)
 
-    assert sent == (['https://c.example/c/c1/inbox'] if remote else []) + ['https://g.example/inbox']
+    assert sent == ['https://g.example/inbox']

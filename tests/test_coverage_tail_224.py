@@ -292,10 +292,10 @@ class TestAnUnresolvableMention:
         from tests.test_shared_tasks_send_reply import _seed, _send
 
         calls = []
-        # The LOCAL host. `match.group(2) == SERVER_NAME` selects the branch whose
-        # `except: pass` is lines 100-101; a remote host takes the other pair at 106-107,
-        # which was already covered -- and a row using one to cover the other passes while
-        # the line stays red, which is how the first version of this test was wrong.
+        # The LOCAL host. `match.group(2) == SERVER_NAME` selects mentioned_users' local-name
+        # branch and its `except: pass`; a remote host takes the other pair, which was already
+        # covered -- and a row using one to cover the other passes while the line stays red,
+        # which is how the first version of this test was wrong.
         s = _seed(body='hello @someone@test.piefed.local')
         monkeypatch.setattr(pages, 'search_for_user', self._raising_spy(calls))
 

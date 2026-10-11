@@ -124,13 +124,16 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
     else:
         community = object.community
 
-    # Amendment B (S7.2): the Delete of a followers-only object in a local community goes where the object went --
-    # the author's followers and the people it mentions -- with no Public. A remote community is the object's home
-    # (R-a) and is unchanged. R-FODELETE: that audience is the author's, so a moderator's or admin's removal is sent
-    # as the author too (this instance is authoritative for its own accounts; Mastodon honours only the owner's
-    # Delete), never to the remover's own followers, and its reason stays local.
-    followers_only_local = community.is_local() and not is_open(object)
-    if followers_only_local:
+    # Amendment B (S7.2, S7.3): the Delete of a followers-only object goes where the object went -- the author's
+    # followers, the author it replies to and the people it mentions -- with no Public, and never to a community's
+    # followers. That holds in a remote community too when the author is local: we sent it, not the community (a
+    # followers-only reply is never given to the community's inbox). Only a remote author's followers-only object in
+    # a remote community takes the ordinary path: the community is its home (R-a). R-FODELETE: the audience is the
+    # author's, so a moderator's or admin's removal is sent as the author too (this instance is authoritative for its
+    # own accounts; Mastodon honours only the owner's Delete), never to the remover's own followers, and its reason
+    # stays local.
+    followers_only = not is_open(object) and (community.is_local() or object.author.is_local())
+    if followers_only:
         user = object.author
         reason = None
 
@@ -142,7 +145,9 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
     if not followers and community.local_only:
         return
 
-    if community.private or not (community.instance_id and community.instance.online()):
+    if community.private:
+        return
+    if not followers_only and not (community.instance_id and community.instance.online()):
         return
 
     # commented out because surely we still want to be able to delete stuff in banned/blocked places?
@@ -154,14 +159,12 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
     #        return
 
     delete_id = f"{current_app.config['SERVER_URL']}/activities/delete/{gibberish(15)}"
-    if followers_only_local:
+    if followers_only:
         recipients = mentioned_users(object, allow_fetch=False)
-        if not is_post:     # S7.3: a reply also named the author it answers, as send_reply addressed it
-            parent = session.get(PostReply, object.parent_id) if object.parent_id else object.post
-            recipients = [parent.author] + [recipient for recipient in recipients
-                                            if recipient.id != parent.author.id]
         to = [user.followers_url()]
         cc = [recipient.public_url() for recipient in recipients]
+        if not is_post:     # S7.3: a reply also named the author it answers, as send_reply addressed it
+            cc = [object.to()] + [actor for actor in cc if actor != object.to()]
     else:
         to = ["https://www.w3.org/ns/activitystreams#Public"]
         cc = [community.public_url()]
@@ -177,7 +180,7 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
     }
     if reason:
         delete['summary'] = reason
-    if followers_only_local:
+    if followers_only:
         del delete['audience']
 
     if is_restore:
@@ -193,15 +196,16 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
           'to': to,
           'cc': cc
         }
-        if followers_only_local:
+        if followers_only:
             del undo['audience']
 
     domains_sent_to = []
 
     # a local_only community federates nothing itself; only the author's followers (below) are reached. Nor does a
-    # followers-only object in a local community (E9): it never reached the community's followers, so its Delete and
-    # Undo do not either. A remote community is its home and already holds it, so its inbox is still sent them (R-a).
-    if community.local_only or followers_only_local:
+    # followers-only object (E9): it never reached the community's followers, nor a remote community's inbox when its
+    # author is local, so its Delete and Undo do not either. Anything else in a remote community has that community
+    # as its home, which already holds it, so its inbox is still sent them (R-a).
+    if community.local_only or followers_only:
         pass
     elif community.is_local():
         if is_restore:
@@ -233,9 +237,10 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
         domains_sent_to.append(community.instance.domain)
 
 
-    if followers_only_local:
+    if followers_only:
         # only a local author's instance speaks for the audience; a remote author's post or reply is theirs to delete.
-        # A reply went to the replier's followers, the parent's author and its mentions (S7.3).
+        # A reply went to the replier's followers, the parent's author and its mentions (S7.3); the parent's host
+        # comes from followers_only_reply_instances.
         if user.is_local():
             payload = undo if is_restore else delete
             audience = follower_instances(user) if is_post else followers_only_reply_instances(object)
