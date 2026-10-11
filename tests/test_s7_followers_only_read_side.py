@@ -14,7 +14,7 @@ from flask import current_app, g
 
 from app import db
 from app.constants import POST_TYPE_ARTICLE, SRC_API
-from app.models import Language, Site
+from app.models import Language
 from app.shared.post import make_post
 from tests.factories import bearer, feed_ids, make_community, make_follow, make_instance, make_site, make_user
 from tests.test_shared_post_edit import _api_input
@@ -49,6 +49,9 @@ def world(app, db_session, monkeypatch):
         _, hidden = make_post(_api_input(title=f'{WORD} hidden', visibility='followers'), community,
                               POST_TYPE_ARTICLE, SRC_API, auth='t')
         _, shown = make_post(_api_input(title=f'{WORD} shown'), community, POST_TYPE_ARTICLE, SRC_API, auth='t')
+    # search lists only indexable posts, and the search_vector trigger fills the vector on commit
+    hidden.indexable = shown.indexable = True
+    db.session.commit()
     return SimpleNamespace(author=author, follower=follower, stranger=stranger, community=community,
                            hidden=hidden, shown=shown)
 
@@ -69,8 +72,7 @@ def test_no_listing_offers_it(app, world, surface, who):
     assert response.status_code == 200, surface
     shown = post_links(response)
     assert world.hidden.id not in shown, surface
-    if surface != 'search':     # search ranking depends on the index; the hidden post's absence is the pin
-        assert world.shown.id in shown, surface
+    assert world.shown.id in shown, surface
 
 
 @pytest.mark.parametrize('who', ['follower', 'stranger'])
