@@ -56,7 +56,7 @@ from wtforms.validators import ValidationError
 from markupsafe import Markup
 import boto3
 from app import db, cache, httpx_client, celery, get_ip_address, plugins
-from app.pinned_http import is_refused_address
+from app.pinned_http import fetch_deadline, is_refused_address
 from app.visibility import OPEN_VISIBILITIES, listable_sql, visible_to_sql
 from app.constants import *
 import re
@@ -233,14 +233,17 @@ def _capped_get(uri, params=None, headers=None, timeout=10, max_bytes: int = FET
     Raises only httpx.HTTPError subclasses: ResponseTooLarge over the cap or past the deadline, UnreadableEncoding for
     any other or stacked Content-Encoding, httpx.DecodingError for a corrupt compressed body, RequestNotSendable when
     httpx refuses the request, and httpx's own transport errors. No SSRF check, no User-Agent and no retry: the
-    caller does those. Limit: the deadline is checked only once the response has started, so connecting (DNS
-    included) is bounded by timeout alone."""
+    caller does those. The deadline also holds at the transport (fetch_deadline, app/pinned_http.py): every connect,
+    read and write gets at most the time left, so a peer that keeps the connection busy without sending body bytes
+    is cut off too, and a timeout at the deadline is ResponseTooLarge. Limit: DNS resolution is a blocking lookup
+    the deadline does not interrupt."""
     deadline = time.monotonic() + max_seconds
     headers = httpx.Headers(headers)
     headers['Accept-Encoding'] = 'gzip, deflate'
     try:
-        with httpx_client.stream('GET', uri, params=params, headers=headers, timeout=timeout,
-                                 follow_redirects=follow_redirects) as response:
+        with fetch_deadline(max_seconds), \
+                httpx_client.stream('GET', uri, params=params, headers=headers, timeout=timeout,
+                                    follow_redirects=follow_redirects) as response:
             declared = response.headers.get('Content-Length', '')
             if declared.isdigit() and int(declared) > max_bytes:
                 raise ResponseTooLarge(f'{uri} declares a body of {declared} bytes, over the cap of {max_bytes}')
@@ -290,6 +293,10 @@ def _capped_get(uri, params=None, headers=None, timeout=10, max_bytes: int = FET
                     if name.lower() not in _WIRE_HEADERS]
             return httpx.Response(response.status_code, headers=kept, content=bytes(body),
                                   request=response.request)
+    except httpx.TimeoutException:
+        if time.monotonic() >= deadline:   # the transport refused a call at the deadline: the response was too slow
+            raise ResponseTooLarge(f'{uri} took longer than {max_seconds} seconds') from None
+        raise
     except (httpx.InvalidURL, ValueError, httpx.StreamError) as error:
         raise RequestNotSendable(f"HTTPError: {str(error)}") from None
 
@@ -355,8 +362,10 @@ def get_request_capped(uri, max_bytes: int, headers=None, max_seconds: float = 1
     lying response is never buffered whole. The whole download also has a wall-clock deadline (max_seconds), and
     only an identity-encoded body is read (raw bytes), so a compressed body cannot expand past the cap. Returns
     (status_code, body); body is None when over max_bytes or when the body is complete only after the deadline.
-    Limit: DNS resolution is a blocking lookup that neither httpx's timeouts nor the deadline interrupt (the deadline
-    is only checked once the response has started), so a slow resolver can hold the call past max_seconds.
+    The deadline also holds at the transport (fetch_deadline): every connect, read and write gets at most the time
+    left, and one past it raises httpx.ReadTimeout (or another httpx.TimeoutException). Limit: DNS resolution is a
+    blocking lookup that neither httpx's timeouts nor the deadline interrupt, so a slow resolver can hold the call
+    past max_seconds.
     No retry: callers use it for optional, best-effort fetches."""
     if is_invalid_get_request_uri(uri):
         current_app.logger.info(f"invalid get request {uri}")
@@ -366,8 +375,9 @@ def get_request_capped(uri, max_bytes: int, headers=None, max_seconds: float = 1
     headers['Accept-Encoding'] = 'identity'
     deadline = time.monotonic() + max_seconds
     try:
-        with httpx_client.stream('GET', uri, headers=headers, timeout=min(10, max_seconds),
-                                follow_redirects=False) as response:
+        with fetch_deadline(max_seconds), \
+                httpx_client.stream('GET', uri, headers=headers, timeout=min(10, max_seconds),
+                                    follow_redirects=False) as response:
             if response.headers.get('Content-Encoding', 'identity').strip().lower() not in ('', 'identity'):
                 return response.status_code, None
             declared = response.headers.get('Content-Length', '')
