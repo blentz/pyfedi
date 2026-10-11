@@ -197,6 +197,16 @@ def test_an_unknown_or_remote_user_outbox_is_not_served(app, db_session, path):
     assert ap_get(app, path).status_code == 404
 
 
+@pytest.mark.parametrize('page', ['²', '99999999999999999999999', '2'])
+def test_a_page_that_is_not_one_of_the_outbox_pages_is_a_400(app, db_session, page):
+    """Every local user's outbox now reaches the database, so a page that could make it raise is refused first:
+    a non-ASCII digit, a number that would overflow OFFSET, a page past the last."""
+    author, community = _world()
+    _post(community, author, 5)
+
+    assert ap_get(app, f'/u/alice/outbox?page={page}').status_code == 400
+
+
 def _statements_for(app, path):
     """How many SQL statements one request runs. The session is closed first, so both measurements start from an
     empty identity map and neither is cheaper for objects an earlier request left loaded."""
