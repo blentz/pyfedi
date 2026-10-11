@@ -40,6 +40,7 @@ from app.activitypub.util import (find_instance_by_domain,
                                   new_instance_profile,
                                   new_instance_profile_task)
 from app.models import Instance, InstanceRole, Site, User
+from app.utils import FETCH_MAX_BYTES
 from tests.factories import make_instance, make_user
 
 DOMAIN = 'faraway.test'
@@ -175,6 +176,14 @@ class TestWhatTheActorDocumentSays:
 
     def test_an_answer_that_is_not_json(self, env):
         answer(env, actor=httpx.Response(200, text='<html>hello</html>'))
+        new_instance_profile_task(env.instance.id)
+        assert reload(env).inbox == f'https://{DOMAIN}/inbox'
+
+    def test_a_homepage_over_the_default_cap_is_read_as_not_json(self, env):
+        """The root page with an AP Accept header is often an HTML homepage, which can pass get_request's default
+        1 MiB: it is fetched under PAGE_MAX_BYTES, so it is read (and is not JSON) rather than refused, and the
+        refresh goes on."""
+        answer(env, actor=httpx.Response(200, text='<html>' + 'x' * FETCH_MAX_BYTES + '</html>'))
         new_instance_profile_task(env.instance.id)
         assert reload(env).inbox == f'https://{DOMAIN}/inbox'
 

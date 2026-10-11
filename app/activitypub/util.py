@@ -38,7 +38,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     more_info_link, is_more_info_link, more_info_url_from, \
     language_from_ap, adjust_domain_post_count, actor_name_from_ap, PostReplyValidationError, post_file, GALLERY_BLOCKED_WEIGHT
 from app.utils import FETCH_MAX_BYTES, get_request, get_request_capped, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
-    MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, \
+    MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, PAGE_MAX_BYTES, \
     sanitise_posting_warning, \
     is_image_url, domain_from_url, gibberish, ensure_directory_exists, shorten_string, fixup_url, \
     microblog_content_to_title, is_video_url, \
@@ -2563,10 +2563,13 @@ def new_instance_profile_task(instance_id: int):
             instance: Instance = session.get(Instance, instance_id)
             protocol = 'https'
             try:
-                instance_data = get_request(f"{protocol}://{instance.domain}", headers={'Accept': 'application/activity+json'})
+                # the root is often an HTML homepage, so it gets a page's cap, not an AP document's
+                instance_data = get_request(f"{protocol}://{instance.domain}", headers={'Accept': 'application/activity+json'},
+                                            max_bytes=PAGE_MAX_BYTES)
             except:
                 try:
-                    instance_data = get_request(f"http://{instance.domain}", headers={'Accept': 'application/activity+json'})
+                    instance_data = get_request(f"http://{instance.domain}", headers={'Accept': 'application/activity+json'},
+                                                max_bytes=PAGE_MAX_BYTES)
                     protocol = 'http'
                 except:
                     return
