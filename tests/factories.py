@@ -12,6 +12,7 @@ here.
 """
 
 import itertools
+import json
 import uuid
 from collections.abc import Iterable
 from datetime import datetime
@@ -24,6 +25,7 @@ from flask import current_app
 from flask_login import login_user
 
 from app import db
+from app.activitypub import signature_rfc9421
 from app.activitypub.signature import HttpSignature, RsaKeys, http_date
 from app.constants import NOTIF_POST, NOTIF_REPORT
 from app.utils import markdown_to_html
@@ -1155,6 +1157,21 @@ def inbox_activity(actor, *, activity_type: str = 'Like', object_uri: str = None
     }
     activity.update(fields)
     return activity
+
+
+def rfc9421_inbox_post(client, activity: dict, sender, *, path: str = '/inbox', key_id: str = None,
+                       date: bool = False):
+    """POST `activity` to `path` with a REAL RFC 9421 signature made by `sender` (production's signer).
+
+    No Date header unless `date`: an RFC 9421 signature carries its own `created` time."""
+    host = current_app.config['SERVER_NAME']
+    body = json.dumps(activity).encode('utf8')
+    headers = signature_rfc9421.sign('post', f'https://{host}{path}', body, sender.private_key,
+                                     key_id or f'{sender.ap_profile_id}#main-key')
+    headers['Host'] = host
+    if date:
+        headers['Date'] = http_date()
+    return client.post(path, data=body, headers=headers, content_type='application/activity+json')
 
 
 def signed_inbox_post(client, activity: dict, sender, *, path: str = '/inbox',

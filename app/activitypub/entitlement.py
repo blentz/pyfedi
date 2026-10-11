@@ -14,7 +14,7 @@ from sqlalchemy import or_
 
 from app import db
 from app.activitypub.actor import find_actor_by_url
-from app.activitypub.signature import GET_REQUIRED, HttpSignature, VerificationError, request_key_id
+from app.activitypub.signature import GET_REQUIRED, HttpSignature, VerificationError, is_rfc9421, request_key_id
 from app.activitypub.util import AS_PUBLIC, host_of
 from app.models import Community, CommunityMember, User, UserFollower
 
@@ -59,14 +59,16 @@ def signed_requester_actor():
     """The stored User or Community whose key validly signed the current GET, else None.
 
     GET_REQUIRED is enforced whatever SIG_REQUIRED_HEADERS_ENFORCE says: authorized fetch is a new privilege, and
-    with `date` unsigned the Date check below would mean nothing."""
+    with `date` unsigned the Date check below would mean nothing. An RFC 9421 GET needs no Date: verify_request
+    checks its signed `created` time instead, and GET_REQUIRED maps onto "@method" and "@target-uri"."""
     key_id = request_key_id(request)
     if not key_id:
         return None
-    try:
-        HttpSignature.check_date(request)
-    except VerificationError:
-        return None
+    if not is_rfc9421(request):
+        try:
+            HttpSignature.check_date(request)
+        except VerificationError:
+            return None
     for candidate in _owner_candidates(key_id):
         actor = find_actor_by_url(candidate)
         if not actor or not getattr(actor, 'public_key', None):

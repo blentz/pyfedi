@@ -305,12 +305,14 @@ def _verify_signature(key, alg, signature: bytes, data: bytes) -> None:
 
 
 def verify(method: str, url: str, headers: Mapping[str, str], body: bytes, public_key_pem: str,
-           required: frozenset[str] = frozenset(), *, now: int | None = None) -> frozenset[str]:
+           required: frozenset[str] = frozenset(), *, now: int | None = None,
+           key_id: str | None = None) -> frozenset[str]:
     """Verify the request's RFC 9421 signature against `public_key_pem`; return the components it covers.
 
     With several labels the first that verifies wins; if none does, the last label's error is raised. Every
     component in `required` must be covered (after normalise_covered). Content-Digest, when present, must match
-    `body` whether or not it is covered."""
+    `body` whether or not it is covered. With `key_id` (the keyId the caller resolved `public_key_pem` from) only
+    a label whose keyid parameter is exactly that can verify, so a label naming another key is never accepted."""
     inputs = parse_dictionary(_header(headers, 'signature-input') or '')
     if not inputs:
         raise VerificationFormatError('No Signature-Input header present')
@@ -321,6 +323,8 @@ def verify(method: str, url: str, headers: Mapping[str, str], body: bytes, publi
     error = None
     for label, (value, params, raw) in inputs.items():
         try:
+            if key_id is not None and params.get('keyid') != key_id:
+                raise VerificationError(f'Label {label} names another key')
             covered = _covered(value)
             signature = signatures.get(label, (None,))[0]
             if not isinstance(signature, bytes):
@@ -335,6 +339,20 @@ def verify(method: str, url: str, headers: Mapping[str, str], body: bytes, publi
         except VerificationError as e:
             error = e
     raise error
+
+
+def check_fresh(headers: Mapping[str, str], *, now: int | None = None) -> None:
+    """Raise VerificationFormatError unless every Signature-Input label has a created time inside the window: the
+    RFC 9421 counterpart of HttpSignature.precheck's Date check, made before any key is looked up."""
+    inputs = parse_dictionary(_header(headers, 'signature-input') or '')
+    if not inputs:
+        raise VerificationFormatError('No Signature-Input header present')
+    now = int(time.time()) if now is None else now
+    for _value, params, _raw in inputs.values():
+        try:
+            _check_created(params, now)
+        except VerificationError as e:
+            raise VerificationFormatError(str(e)) from None
 
 
 def parse_key_id(headers: Mapping[str, str]) -> str | None:
