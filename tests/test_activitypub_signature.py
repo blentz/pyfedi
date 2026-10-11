@@ -931,19 +931,24 @@ def test_a_status_is_always_returned_rather_than_raised(app, status, method):
 
 
 def test_a_signed_get_is_the_same_request_without_a_body(app):
-    """signed_get_request is two lines and they are both delegation, so the
-    assertion is on what it passes through -- a None body and the get method.
+    """signed_get_request only signs -- a None body, the get method, send_via_async -- and sends the signer's
+    headers through _capped_get, whose Response it returns.
     """
     from unittest.mock import patch
     from app.activitypub.signature import signed_get_request
 
-    with patch('app.activitypub.signature.HttpSignature.signed_request') as signed:
-        signed.return_value = _Response(200)
+    with patch('app.activitypub.signature.HttpSignature.signed_request') as signed, \
+            patch('app.activitypub.signature._capped_get') as fetch:
+        signed.return_value = ('https://remote.example/u/bob', {'Signature': 'sig'}, b'')
+        fetch.return_value = _Response(200)
         result = signed_get_request('https://remote.example/u/bob', 'k', 'kid')
 
-    assert result is signed.return_value
+    assert result is fetch.return_value
     assert signed.call_args.args[1] is None
-    assert signed.call_args.args[5] == 'get'
+    assert signed.call_args.kwargs['method'] == 'get'
+    assert signed.call_args.kwargs['send_via_async'] is True
+    assert fetch.call_args.args == ('https://remote.example/u/bob',)
+    assert fetch.call_args.kwargs == {'headers': {'Signature': 'sig'}, 'timeout': 10}
 
 
 def test_an_ld_signature_round_trips(app, no_network_ld_signing):
