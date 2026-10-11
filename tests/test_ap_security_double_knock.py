@@ -164,6 +164,21 @@ class TestPostRequest:
         assert ActivityPubLog.query.one().result == 'failure'
         assert SendQueue.query.count() == 1
 
+    @pytest.mark.parametrize('error', [httpx.InvalidURL('bad url'), ValueError('bad value'),
+                                       httpx.StreamError('stream')])
+    def test_an_unsendable_delivery_is_logged_and_never_requeued(self, app, db_session, http_mock, error):
+        """httpx refusing the request itself will refuse it again on every retry, so it is a failure, not a
+        transport failure: logged, and no SendQueue row."""
+        make_instance('peer.example')
+        route = http_mock.post(INBOX).mock(side_effect=error)
+
+        post_request(uri=INBOX, body=_body(), private_key=a_keypair()[0], key_id=KEY_ID)
+
+        assert route.call_count == 1
+        log = ActivityPubLog.query.one()
+        assert log.result == 'failure' and INBOX in log.exception_message
+        assert SendQueue.query.count() == 0
+
     def test_a_delivery_goes_out_capped_with_its_signed_body(self, app, db_session, http_mock):
         make_instance('peer.example')
         route = http_mock.post(INBOX).respond(202)

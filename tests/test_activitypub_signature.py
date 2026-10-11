@@ -27,6 +27,7 @@ from app import db
 from app.activitypub.signature import (HttpSignature, VerificationFormatError,
                                        signature_part)
 from app.models import SendQueue, utcnow
+from app.utils import RequestNotSendable
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -880,9 +881,11 @@ def test_a_transport_error_is_reraised_with_the_url(app, http_mock, failure):
     private_key, _ = RsaKeys.generate_keypair()
     http_mock.post('https://remote.example/inbox').mock(side_effect=failure)
 
-    with pytest.raises(httpx.HTTPError, match='HTTP Exception for https://remote.example/inbox'):
+    with pytest.raises(httpx.HTTPError, match='HTTP Exception for https://remote.example/inbox') as raised:
         HttpSignature.signed_request('https://remote.example/inbox', {'id': 'x'},
                                      private_key, 'kid')
+    # an unsendable request stays one through the rewrap, so post_request does not requeue it
+    assert isinstance(raised.value, RequestNotSendable) == isinstance(failure, httpx.InvalidURL)
 
 
 @pytest.mark.parametrize('status', [400, 403, 404, 410, 418, 500])
