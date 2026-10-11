@@ -168,7 +168,7 @@
         </div>
     </div>
     {% endif -%}
-    {% if current_user.is_authenticated and post.type == POST_TYPE_LINK and post.author.bot and (post.cross_posts is none or len(post.cross_posts) == 0) -%}
+    {% if current_user.is_authenticated and post.type == POST_TYPE_LINK and post.visibility in ('public', 'unlisted') and post.author.bot and (post.cross_posts is none or len(post.cross_posts) == 0) -%}
         <div class="post_cross_post_link">
             <a rel="nofollow" aria-label="{{ _('Cross-post') }}" href="{{ '/post/' + post.id|string + '/cross-post' }}"><span class="fe fe-cross-post"></span></a>
         </div>

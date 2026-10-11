@@ -69,6 +69,11 @@ def send_vote(user_id, object, vote_to_undo, vote_direction, emoji):
             if user.has_blocked_instance(community.instance.id) or instance_banned(community.instance.domain):
                 return
 
+        # E9: a followers-only object never reached a community's followers, so no vote on it does either. A remote
+        # community holds a remote author's (R-a); a local author's went to their followers only (Task 29).
+        if not is_open(object) and (community.is_local() or object.author.is_local()):
+            return
+
         if vote_to_undo:
             type = vote_to_undo
         else:
@@ -107,9 +112,6 @@ def send_vote(user_id, object, vote_to_undo, vote_direction, emoji):
             }
 
         if community.is_local():
-            if not is_open(object):  # E9: it never reached the community's followers, so no vote on it does either
-                return
-
             # Select the appropriate payload
             if vote_to_undo:
                 payload_copy = undo_public.copy()

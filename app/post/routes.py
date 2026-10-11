@@ -37,7 +37,7 @@ from app.models import Post, PostReply, PostReplyValidationError, \
     PostReplyBookmark, CommunityBlock, File, CommunityFlair, UserFlair, BlockedImage, CommunityBan, Language, Event, \
     Reminder, Emoji
 from app.post import bp
-from app.visibility import can_view, is_open, post_title_for
+from app.visibility import can_view, is_open, post_title_for, visible_to_clause
 from app.post.forms import NewReplyForm, ReportPostForm, MeaCulpaForm, CrossPostForm, ConfirmationForm, \
     ConfirmationMultiDeleteForm, EditReplyForm, FlairPostForm, DeleteConfirmationForm, NewReminderForm, \
     ShareMastodonForm, ChooseEmojiForm, MovePostForm
@@ -2608,7 +2608,8 @@ def post_cross_posts(post_id: int):
     post = db.session.get(Post, post_id) or abort(404)
     refuse_invisible(post)
     if post.cross_posts:
-        cross_posts = Post.query.filter(Post.id.in_(post.cross_posts))
+        cross_posts = Post.query.filter(Post.id.in_(post.cross_posts),
+                                        visible_to_clause(Post, current_user.id if current_user.is_authenticated else None))
         return render_template('post/post_cross_posts.html', cross_posts=cross_posts)
     else:
         abort(404)

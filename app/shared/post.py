@@ -22,7 +22,7 @@ from app.models import File, Notification, NotificationSubscription, Poll, PollC
     PostBookmark, PostVote, Report, Site, User, utcnow, Instance, Event, Community, CommunityFlair, \
     votes_cast_today, adjust_domain_post_count, served_path, _as_url
 from app.shared.tasks import task_selector
-from app.visibility import post_title_for
+from app.visibility import is_open, post_title_for
 from app.utils import render_template, authorise_api_user, shorten_string, gibberish, ensure_directory_exists, \
     piefed_markdown_to_lemmy_markdown, markdown_to_html, fixup_url, domain_from_url, \
     opengraph_parse, url_to_thumbnail_file, can_create_post, is_video_hosting_site, recently_upvoted_posts, \
@@ -1107,6 +1107,15 @@ def move_post(post_id: int, target_id: int, src, auth=None):
         user = current_user
 
     post = db.session.get(Post, post_id) or abort(404)
+
+    if not is_open(post):
+        # Amendment B (S7.4): a followers-only post lives only in the local microblogs community and was never
+        # sent to any community's followers -- moving it would publish it to a new audience
+        msg = 'A followers-only post cannot be moved.'
+        if src == SRC_API:
+            raise Exception(msg)
+        flash(_(msg), 'error')
+        return
 
     if can_mod_post(post, user):
         old_community_id = post.community_id

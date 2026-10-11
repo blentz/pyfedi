@@ -65,8 +65,9 @@ def remove_object(session, user_id, object, community_id=None):
         return
 
     # E9: a followers-only object never reached a local community's followers, so nothing about it does either. A
-    # remote community is its home and already holds it, so that community's own inbox is still sent it (R-a).
-    if community.is_local() and not is_open(object):
+    # remote community holds a remote author's, so that community's own inbox is still sent it (R-a) -- but a local
+    # author's went to their followers only, and the community would relay this to its followers (Task 29).
+    if not is_open(object) and (community.is_local() or object.author.is_local()):
         return
 
     remove_id = f"{current_app.config['SERVER_URL']}/activities/remove/{gibberish(15)}"

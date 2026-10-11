@@ -440,6 +440,8 @@ def move_object(session, user_id, object, origin, target):
 
     if community.local_only or community.private or not (community.instance_id and community.instance.online()):
         return
+    if not is_open(object):     # Amendment B (S7.4): move_post refuses this; never federate one that got through
+        return
 
     move_id = f"{current_app.config['SERVER_URL']}/activities/move/{gibberish(15)}"
     to = ["https://www.w3.org/ns/activitystreams#Public"]

@@ -51,7 +51,7 @@ import app.activitypub.actor as activitypub_actor
 import app.discovery.credits as discovery_credits   # the module: app.discovery.credits imports this one
 import urllib.parse
 from app.utils import site_language_id
-from app.visibility import OPEN_VISIBILITIES, can_view, post_title_for
+from app.visibility import OPEN_VISIBILITIES, can_view, is_open, post_title_for
 from app.discovery.podcast import ensure_podcast_community, podcast_twin_named_by_other
 from app.interop.workarounds import is_castopod_podcast
 import app as app_pkg
@@ -4701,7 +4701,8 @@ def process_quote_boost(core_activity: dict, post_ap: str, their_post_ap: str):
     post = Post.get_by_ap_id(post_ap)
     if post is None:
         post = PostReply.get_by_ap_id(post_ap)
-    if post is not None and post.author.is_local():
+    # Amendment B (S7.4): a followers-only object publishes canQuote: [author] -- nobody else is authorized to quote it
+    if post is not None and post.author.is_local() and is_open(post):
         # R205: the decision is recorded, so /quote_boost_auth vouches for this quote and no other
         quoted = {'post_id': post.id} if isinstance(post, Post) else {'post_reply_id': post.id}
         if QuoteAuthorization.query.filter_by(quoting_uri=their_post_ap, **quoted).first() is None:

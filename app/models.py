@@ -37,7 +37,7 @@ from app.constants import SUBSCRIPTION_NONMEMBER, SUBSCRIPTION_MEMBER, SUBSCRIPT
     SUBSCRIPTION_BANNED, SUBSCRIPTION_PENDING, NOTIF_USER, NOTIF_COMMUNITY, NOTIF_TOPIC, NOTIF_POST, NOTIF_REPLY, \
     NOTIF_FEED, NOTIF_DEFAULT, NOTIF_REPORT, NOTIF_MENTION, POST_STATUS_REVIEWING, \
     POST_STATUS_PUBLISHED, POST_TYPE_VIDEO, INVITE_MEMBERS_ONLY, INVITE_MODS_ONLY, INVITE_OWNER_ONLY, ROLE_ADMIN_NAME, \
-    ROLE_STAFF_NAME, VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC
+    ROLE_STAFF_NAME, VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC, VISIBILITY_UNLISTED
 import app as app_pkg
 from app.relays import current_relay_id
 
@@ -3354,6 +3354,12 @@ class Post(db.Model):
         if delete_only:
             return
 
+        # Amendment B (S7.4): a followers-only post is never cross-referenced with another post, either way -- the
+        # other post's page would link to it. (app.visibility imports this module, so is_open is spelled out here.)
+        open_visibilities = (VISIBILITY_PUBLIC, VISIBILITY_UNLISTED)
+        if self.visibility not in open_visibilities:
+            return
+
         if self.url.count('/') < 3 or (self.url.count('/') == 3 and self.url.endswith('/')):
             # reject if url is just a domain without a path
             return
@@ -3364,7 +3370,8 @@ class Post(db.Model):
 
         limit = 9
         new_cross_posts = db.session.query(Post).filter(Post.id != self.id, Post.url == self.url, Post.deleted == False,
-                                                        Post.status > POST_STATUS_REVIEWING).order_by(desc(Post.id)).limit(limit).all()
+                                                        Post.status > POST_STATUS_REVIEWING,
+                                                        Post.visibility.in_(open_visibilities)).order_by(desc(Post.id)).limit(limit).all()
 
         # grab these rows in id order first, otherwise the same url hitting a few communities at
         # once ends up with two of these running at the same time and deadlocking on each other
