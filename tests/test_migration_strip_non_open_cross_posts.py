@@ -87,6 +87,26 @@ def test_a_list_left_empty_counts_only_the_posts_own_replies(posts):
     assert a.reply_count_cross_posted == 1
 
 
+def test_a_null_reply_count_counts_as_zero(posts):
+    """PostReply.new's sum() skips NULLs; the recount must not turn the whole total NULL."""
+    a = _get(posts, 'a')
+    a.reply_count = None
+    db.session.commit()
+    _run()
+    assert _get(posts, 'a').reply_count_cross_posted == 6     # 0 + b 2 + u 4
+    assert _get(posts, 'b').reply_count_cross_posted == 6     # 2 + a NULL + u 4
+
+
+def test_a_post_listing_its_own_id_counts_its_replies_once(posts):
+    a = _get(posts, 'a')
+    a.cross_posts = [a.id, posts['b'], posts['f']]
+    db.session.commit()
+    _run()
+    a = _get(posts, 'a')
+    assert sorted(a.cross_posts) == sorted([posts['a'], posts['b']])
+    assert a.reply_count_cross_posted == 3     # 1 + b 2, not 1 + 1 + 2
+
+
 def test_posts_whose_lists_name_no_followers_only_post_are_left_alone(posts):
     _run()
     x, y = _get(posts, 'x'), _get(posts, 'y')

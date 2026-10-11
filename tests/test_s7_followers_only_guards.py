@@ -292,6 +292,27 @@ def test_the_post_page_shows_no_comments_from_a_cross_posted_post_the_viewer_may
     assert [c.id for c in rendered['more_replies']] == [third.community_id]
 
 
+def test_the_lazy_replies_show_no_comments_from_a_cross_posted_post_the_viewer_may_not_see(db_session, app,
+                                                                                            monkeypatch):
+    """show_post hands the thread to lazy_replies past 100 comments; that route walks cross_posts the same way."""
+    w = _cross_world()
+    _site_open()
+    third = make_post(make_community('third'), w.author, ap_id='https://test.piefed.local/post/3', title='again')
+    third.url = LINK
+    for p in (w.post, third):
+        reply = make_post_reply(p, w.author, f'a reply on {p.id}')
+        reply.body_html = f'<p>a reply on {p.id}</p>'
+        reply.visibility = p.visibility
+    w.public.cross_posts = [w.post.id, third.id]
+    db.session.commit()
+    rendered = {}
+    monkeypatch.setattr('app.post.routes.render_template',
+                        lambda template, **kw: rendered.update(kw) or 'rendered')
+    response = app.test_client().get(f'/post/{w.public.id}/lazy_replies/abc')
+    assert response.status_code == 200
+    assert [c.id for c in rendered['more_replies']] == [third.community_id]
+
+
 @pytest.mark.parametrize('visibility, offered', [(VISIBILITY_PUBLIC, True), (VISIBILITY_FOLLOWERS, False)],
                          ids=['public', 'followers-only'])
 def test_the_options_menu_offers_moving_only_an_open_post(db_session, app, monkeypatch, visibility, offered):

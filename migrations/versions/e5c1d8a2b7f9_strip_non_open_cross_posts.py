@@ -14,8 +14,10 @@ list. The code no longer does that; this repairs rows already stored:
 2. a non-open post's own cross_posts is cleared, and its reply_count_cross_posted
    falls back to its own reply_count;
 3. each post whose list lost an id has reply_count_cross_posted recomputed the way
-   PostReply.new maintains it: the post's reply_count plus that of every post still
-   in its list (just its reply_count when the list is now empty).
+   PostReply.new maintains it: the post's reply_count plus that of every other post
+   still in its list (just its reply_count when the list is now empty). As in
+   PostReply.new's sum(), a NULL reply_count counts as 0, and a post that lists
+   its own id is counted once.
 """
 from alembic import op
 from sqlalchemy import text
@@ -42,8 +44,9 @@ WHERE visibility NOT IN ('public', 'unlisted') AND cross_posts IS NOT NULL
 
 RECOUNT_SQL = """
 UPDATE post
-SET reply_count_cross_posted = post.reply_count + coalesce(
-    (SELECT sum(other.reply_count) FROM post AS other WHERE other.id = ANY(post.cross_posts)), 0)
+SET reply_count_cross_posted = coalesce(post.reply_count, 0) + coalesce(
+    (SELECT sum(other.reply_count) FROM post AS other
+     WHERE other.id = ANY(post.cross_posts) AND other.id <> post.id), 0)
 WHERE post.id = ANY(:ids)
 """
 
