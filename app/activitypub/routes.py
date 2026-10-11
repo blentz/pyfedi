@@ -1035,7 +1035,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                 #   Because of the earlier check, we know that they already exist, and so don't need to check again
                 #   Using actors from inner objects has a vulnerability to spoofing attacks (e.g. if 'attributedTo' doesn't match the 'Create' actor)
                 # An LD-accepted activity keeps logging the verified document, as before, unless a type was an array:
-                # then the document as sent, which is what the LD signature covers and replay re-verifies
+                # then the document as sent, which is what the LD signature covers (replay refuses LD-signed rows)
                 saved_json = (request_json if ld_signed and not had_array_type else raw_json) if store_ap_json else None
                 id = request_json['id']
                 actor_id = request_json['actor']
@@ -1490,6 +1490,13 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                             log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json,
                                             f'Could not verify unsigned request from source: {unverified_reason}')
                             return
+                        # interop C1 item 8: the fetched object may carry an array type. In place, so that
+                        # request_json, which is core_activity unless announced, sees it too
+                        fetched = normalise_activity_types({'object': core_activity['object']})
+                        if fetched is None:
+                            log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, NO_STRING_TYPE_MESSAGE)
+                            return
+                        core_activity['object'] = fetched['object']
 
                     if user is None and community is None:
                         # An Announce whose outer actor resolved to a Feed leaves both

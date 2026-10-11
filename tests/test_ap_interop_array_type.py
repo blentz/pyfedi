@@ -418,3 +418,28 @@ def test_an_ld_signed_create_is_processed_and_forwarded_with_the_origins_copy(ap
     args, _kwargs = calls['process_new_content'][0]
     assert args[3]['object']['content'] == 'what the origin serves'
     assert args[3]['object']['type'] == 'Note'
+
+
+def test_an_object_fetched_by_uri_with_an_array_type_is_dispatched(app, db_session, monkeypatch):
+    author = _create_setup(app, monkeypatch)
+    calls = record_moderation(monkeypatch, 'process_new_content')
+    object_id = 'https://peer.example/post/1'
+    fetched = {'id': object_id, 'type': ['Note'], 'attributedTo': author.ap_profile_id}
+    monkeypatch.setattr(activitypub_routes, 'verify_object_from_source',
+                        lambda activity: (activity.update(object=fetched), None) and (activity, None))
+
+    dispatch(create_activity(author, object_id))
+
+    args, _kwargs = calls['process_new_content'][0]
+    assert args[3]['object']['type'] == 'Note'
+
+
+def test_an_object_fetched_by_uri_with_an_ambiguous_type_is_refused(app, db_session, monkeypatch):
+    author = _create_setup(app, monkeypatch)
+    fetched = {'id': 'https://peer.example/post/1', 'type': ['Note', 'Page']}
+    monkeypatch.setattr(activitypub_routes, 'verify_object_from_source',
+                        lambda activity: (activity.update(object=fetched), None) and (activity, None))
+
+    dispatch(create_activity(author, 'https://peer.example/post/1'))
+
+    assert ActivityPubLog.query.one().exception_message == NO_STRING_TYPE_MESSAGE
