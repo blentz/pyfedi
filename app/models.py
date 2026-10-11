@@ -48,6 +48,13 @@ def utcnow(naive=True):
     return datetime.now(ZoneInfo('UTC'))
 
 
+def is_local_url(url) -> bool:
+    """True when `url` is on this instance: SERVER_URL itself or SERVER_URL then '/'. A bare prefix test took a
+    lookalike host (https://piefed.example.evil.com for https://piefed.example) for this one."""
+    base = current_app.config['SERVER_URL']
+    return isinstance(url, str) and (url == base or url.startswith(base + '/'))
+
+
 def votes_cast_today(user_id: int) -> int:
     num = app_pkg.redis_client.get(f'votes_cast_{date.today()}_{user_id}')
     if num is None:
@@ -1473,7 +1480,7 @@ class Community(db.Model):
         return result
 
     def is_local(self):
-        return self.ap_id is None or self.profile_id().startswith(f"{current_app.config['SERVER_URL']}")
+        return self.ap_id is None or is_local_url(self.profile_id())
 
     def local_url(self):
         if self.is_local():
@@ -1943,7 +1950,7 @@ class User(UserMixin, db.Model):
         return content
 
     def is_local(self):
-        return self.ap_id is None or self.ap_profile_id.startswith(current_app.config['SERVER_URL'])
+        return self.ap_id is None or is_local_url(self.ap_profile_id)
 
     def waiting_for_approval(self):
         application = UserRegistration.query.filter_by(user_id=self.id, status=0).first()
@@ -2638,7 +2645,7 @@ class Post(db.Model):
     )
 
     def is_local(self):
-        return self.ap_id is None or self.ap_id.startswith(current_app.config['SERVER_URL'])
+        return self.ap_id is None or is_local_url(self.ap_id)
 
     @classmethod
     def get_by_ap_id(cls, ap_id):
@@ -4287,7 +4294,7 @@ class PostReply(db.Model):
             return 'English'
 
     def is_local(self):
-        return self.ap_id is None or self.ap_id.startswith(current_app.config['SERVER_URL'])
+        return self.ap_id is None or is_local_url(self.ap_id)
 
     @classmethod
     def get_by_ap_id(cls, ap_id):
@@ -5447,7 +5454,7 @@ class Feed(db.Model):
         return result
 
     def is_local(self):
-        return self.ap_id is None or self.profile_id().startswith(current_app.config['SERVER_URL'])
+        return self.ap_id is None or is_local_url(self.profile_id())
 
     def local_url(self):
         if self.is_local():
