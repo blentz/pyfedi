@@ -52,3 +52,14 @@ def test_background_work_never_shares_a_worker_with_the_inbox(compose_file):
 def test_the_entrypoint_takes_its_queues_and_concurrency_from_the_environment():
     text = ENTRYPOINT.read_text()
     assert '--queues="${CELERY_QUEUES:-' in text and '--concurrency="${CELERY_CONCURRENCY:-' in text
+
+
+def test_the_entrypoint_prefetches_one_task_and_recycles_children():
+    """Owner sizing (4 vCPU / 8 GiB): a slot holds one task at a time, so a slow inbox task cannot hoard a backlog
+    behind it, and a child is replaced after a bounded number of tasks so a leak cannot grow without limit."""
+    text = ENTRYPOINT.read_text()
+    assert '--prefetch-multiplier="${CELERY_PREFETCH_MULTIPLIER:-' in text
+    assert '--max-tasks-per-child="${CELERY_MAX_TASKS_PER_CHILD:-' in text
+    assert _default('CELERY_PREFETCH_MULTIPLIER') == '1'
+    assert _default('CELERY_MAX_TASKS_PER_CHILD') == '1000'
+
