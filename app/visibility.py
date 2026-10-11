@@ -4,11 +4,13 @@ One predicate in three shapes (Python, ORM, raw SQL) so every read surface asks
 the same question. No moderator exemption (ruling D19): moderators see
 followers-only content through the report queue's snapshot, nowhere else.
 """
+import re
 from dataclasses import dataclass
 from typing import Optional
 
+from flask import current_app
 from flask_babel import _
-from sqlalchemy import and_, exists, or_
+from sqlalchemy import and_, exists, inspect as sa_inspect, or_
 from sqlalchemy.orm import aliased
 
 from app import db
@@ -26,13 +28,45 @@ def _follows(viewer_id: int, author_id: int) -> bool:
         UserFollower.is_accepted.is_(True))).scalar()
 
 
+# The @user@instance syntax send_post and send_reply resolve Mentions from (app/shared/tasks/pages.py:mentioned_users)
+MENTION_PATTERN = re.compile(r"@([a-zA-Z0-9_.-]*)@([a-zA-Z0-9_.-]*)\b")
+
+
+def _parent_author_id(reply) -> Optional[int]:
+    """Who a reply answers: its parent reply's author, else its post's author."""
+    if reply.parent_id is not None:
+        return db.session.query(PostReply.user_id).filter(PostReply.id == reply.parent_id).scalar()
+    return db.session.query(Post.user_id).filter(Post.id == reply.post_id).scalar()
+
+
+def _mentions(obj, viewer_id: int) -> bool:
+    """True when `obj`'s body Mentions local user `viewer_id` as send_post/send_reply would resolve it (cc'd): an
+    @name@SERVER_NAME match whose name is that user's user_name exactly, as search_for_user looks a local name up."""
+    if not obj.body:
+        return False
+    server = current_app.config['SERVER_NAME']
+    names = {match.group(1) for match in MENTION_PATTERN.finditer(obj.body) if match.group(2) == server}
+    if not names:
+        return False
+    viewer = db.session.get(User, viewer_id)
+    return viewer is not None and viewer.ap_id is None and viewer.user_name in names
+
+
 def can_view(obj, viewer_id: Optional[int]) -> bool:
+    """A followers-only object is visible to its author, the author's accepted followers and, as Mastodon does, the
+    users it was pushed to (R-REPLYVIEW): the author a reply answers, and locally Mentioned users. visible_to_clause
+    and visible_to_sql agree on all of it except Mentions, which they cannot resolve: a Mentioned user can open the
+    object and is notified of it, but it is not listed for them."""
     visibility = obj.visibility if obj.visibility is not None else VISIBILITY_PUBLIC
     if visibility in OPEN_VISIBILITIES:
         return True
     if visibility != VISIBILITY_FOLLOWERS or not viewer_id:
         return False
-    return viewer_id == obj.user_id or _follows(viewer_id, obj.user_id)
+    if viewer_id == obj.user_id or _follows(viewer_id, obj.user_id):
+        return True
+    if isinstance(obj, PostReply) and _parent_author_id(obj) == viewer_id:
+        return True
+    return _mentions(obj, viewer_id)
 
 
 def is_open(obj) -> bool:
@@ -89,6 +123,7 @@ def post_title_for(post, viewer_id: Optional[int]) -> str:
 
 
 def visible_to_clause(model, viewer_id: Optional[int]):
+    """ORM twin of can_view for Post or PostReply (or an alias of either); Mentions are not resolved (see can_view)."""
     open_audience = or_(model.visibility.in_(OPEN_VISIBILITIES), model.visibility.is_(None))
     if not viewer_id:
         return open_audience
@@ -96,9 +131,16 @@ def visible_to_clause(model, viewer_id: Optional[int]):
                              UserFollower.remote_user_id == model.user_id,
                              UserFollower.is_inward.is_(False),
                              UserFollower.is_accepted.is_(True))
+    audience = [model.user_id == viewer_id, follows]
+    if sa_inspect(model).mapper.class_ is PostReply:
+        parent = aliased(PostReply)
+        audience.append(or_(
+            and_(model.parent_id.isnot(None),
+                 exists().where(parent.id == model.parent_id, parent.user_id == viewer_id)),
+            and_(model.parent_id.is_(None),
+                 exists().where(Post.id == model.post_id, Post.user_id == viewer_id))))
     return or_(open_audience,
-               and_(model.visibility == VISIBILITY_FOLLOWERS,
-                    or_(model.user_id == viewer_id, follows)))
+               and_(model.visibility == VISIBILITY_FOLLOWERS, or_(*audience)))
 
 
 def _open(model):
@@ -124,12 +166,17 @@ def listable_sql(alias: str) -> str:
     return f"{alias}.visibility = 'public'"
 
 
-def visible_to_sql(alias: str) -> str:
-    """Raw-SQL twin of visible_to_clause. Binds :visibility_viewer_id (NULL for anonymous)."""
+def visible_to_sql(alias: str, reply: bool = False) -> str:
+    """Raw-SQL twin of visible_to_clause. Binds :visibility_viewer_id (NULL for anonymous). `reply` says `alias` is
+    a post_reply row, which its parent's author may also see (R-REPLYVIEW)."""
+    answers = (f" OR ({alias}.parent_id IS NOT NULL AND EXISTS (SELECT 1 FROM post_reply vpr "
+               f"WHERE vpr.id = {alias}.parent_id AND vpr.user_id = :visibility_viewer_id))"
+               f" OR ({alias}.parent_id IS NULL AND EXISTS (SELECT 1 FROM post vp "
+               f"WHERE vp.id = {alias}.post_id AND vp.user_id = :visibility_viewer_id))") if reply else ''
     return (f"({alias}.visibility IN ('public', 'unlisted') OR {alias}.visibility IS NULL OR ({alias}.visibility = 'followers' AND "
             f"({alias}.user_id = :visibility_viewer_id OR EXISTS (SELECT 1 FROM user_follower vf "
             f"WHERE vf.local_user_id = :visibility_viewer_id AND vf.remote_user_id = {alias}.user_id "
-            f"AND vf.is_inward IS FALSE AND vf.is_accepted IS TRUE))))")
+            f"AND vf.is_inward IS FALSE AND vf.is_accepted IS TRUE){answers})))")
 
 
 @dataclass(frozen=True)

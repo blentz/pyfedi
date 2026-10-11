@@ -324,7 +324,7 @@ def _get_user_posts_and_replies(user, page):
         reply_select = f"SELECT id, posted_at, 'reply' AS type FROM post_reply WHERE user_id={user_id} AND deleted = 'False' AND {hidden.format(table='post_reply')}"
 
     post_select += f" AND {visible_to_sql('post')}"
-    reply_select += f" AND {visible_to_sql('post_reply')}"
+    reply_select += f" AND {visible_to_sql('post_reply', reply=True)}"
 
     full_query = post_select + " UNION " + reply_select + f" ORDER BY posted_at DESC LIMIT {per_page + 1} OFFSET {offset_val};"
     query_result = db.session.execute(text(full_query), {'visibility_viewer_id': viewer_id})

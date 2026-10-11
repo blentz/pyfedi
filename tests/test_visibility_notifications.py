@@ -117,19 +117,22 @@ def test_a_reply_is_judged_by_its_own_visibility_not_its_posts(world):
     assert _notified(w.stranger) == 1
 
 
-def test_followers_only_reply_to_a_comment_notifies_a_follower_but_not_a_stranger(world):
+def test_followers_only_reply_to_a_comment_notifies_a_follower_and_the_parent_author_but_not_a_stranger(world):
+    """R-REPLYVIEW: the stranger wrote the comment answered, so the answer was pushed to them and they may see it;
+    pat (a pending follower, otherwise a stranger) may not."""
     w = world
     child = make_post_reply(w.public_post, w.author, 'followers-only answer')
     child.visibility = 'followers'
     child.parent_id = w.public_child.id
     db.session.commit()
-    for user in (w.follower, w.stranger):
+    for user in (w.follower, w.stranger, w.pending):
         make_notification_subscription(user, w.public_child.id, NOTIF_REPLY)
 
     notify_about_post_reply(w.public_child, child)
 
     assert _notified(w.follower) == 1
-    assert _notified(w.stranger) == 0
+    assert _notified(w.stranger) == 1
+    assert _notified(w.pending) == 0
 
 
 def test_the_unread_digest_lists_public_posts_only_even_for_a_follower(world, monkeypatch):
@@ -225,7 +228,8 @@ def test_a_created_followers_only_reply_mentions_only_a_follower(world, monkeypa
     assert _notified(stranger) == 0
 
 
-def test_a_local_followers_only_post_mentions_only_a_follower(db_session):
+def test_a_local_followers_only_post_notifies_every_mentioned_user(db_session):
+    """R-REPLYVIEW: a Mentioned user was sent it (cc) and may see it, follower or not."""
     from tests.test_shared_tasks_send_post import _seed, _send
     s = _seed(body='hello @fran@test.piefed.local and @sam@test.piefed.local')
     follower = make_user(s.instance, 'fran', local=True)
@@ -237,10 +241,11 @@ def test_a_local_followers_only_post_mentions_only_a_follower(db_session):
     _send(s.post)
 
     assert _notified(follower) == 1
-    assert _notified(stranger) == 0
+    assert _notified(stranger) == 1
 
 
-def test_a_local_followers_only_reply_mentions_only_a_follower(db_session):
+def test_a_local_followers_only_reply_notifies_every_mentioned_user(db_session):
+    """R-REPLYVIEW: a Mentioned user was sent it (cc) and may see it, follower or not."""
     from tests.test_shared_tasks_send_reply import _seed, _send
     s = _seed(body='hello @fran@test.piefed.local and @sam@test.piefed.local')
     follower = make_user(s.instance, 'fran', local=True)
@@ -252,4 +257,4 @@ def test_a_local_followers_only_reply_mentions_only_a_follower(db_session):
     _send(s)
 
     assert _notified(follower) == 1
-    assert _notified(stranger) == 0
+    assert _notified(stranger) == 1
