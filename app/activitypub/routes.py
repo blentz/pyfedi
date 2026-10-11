@@ -55,8 +55,11 @@ from app.models import User, Community, CommunityJoinRequest, CommunityMember, A
 # The module, not the names: app.post.routes reaches this file through
 # app.activitypub.signature before they are defined (import cycle: post.routes)
 import app.post.routes as post_routes
-from app.visibility import OPEN_VISIBILITIES, is_open, listable_clause, post_title_for
+from app.visibility import OPEN_VISIBILITIES, followers_only_addressing, is_open, listable_clause, post_title_for
 from app.shared.tasks import task_selector
+# The module, not the names: app.shared.tasks.pages reaches this file through
+# app.activitypub.signature before they are defined (import cycle: shared.tasks.pages)
+import app.shared.tasks.pages as shared_pages
 # The module, not the name: app.user.routes reaches this file through
 # app.activitypub.signature before show_profile is defined (import cycle: user.routes)
 import app.user.routes as user_routes
@@ -2580,7 +2583,7 @@ def comment_ap(comment_id):
             return redirect(reply.ap_id, code=301)
         if reply.community.local_only or reply.community.private:
             abort(403)
-        if reply.visibility not in OPEN_VISIBILITIES:
+        if reply.visibility not in OPEN_VISIBILITIES and not followers_entitled(reply):
             abort(404)
         if reply.deleted:
             return tombstone_response(reply.ap_id, 'Note')
@@ -2588,6 +2591,9 @@ def comment_ap(comment_id):
         if reply.author.has_blocked_instance(known_instance_id(requesting_domain)):
             return make_response(f'Author has blocked {requesting_domain}'), 401
         reply_data = comment_model_to_json(reply) if request.method == 'GET' else []
+        if request.method == 'GET' and not is_open(reply):   # S6: who it is for, as send_reply pushed it
+            parent = db.session.get(PostReply, reply.parent_id) if reply.parent_id else reply.post
+            addressed_as_pushed(reply_data, reply, shared_pages.reply_recipients(reply, parent, allow_fetch=False))
         resp = jsonify(reply_data)
         resp.content_type = 'application/activity+json'
         ap_content_headers(resp, reply)
@@ -2613,11 +2619,36 @@ def tombstone_response(ap_id: str, former_type: str):
     return resp
 
 
+def followers_only_addressees(obj) -> list[str]:
+    """Who a followers-only post or comment is for: its author's followers collection (S6)."""
+    return [obj.author.followers_url()]
+
+
+def followers_entitled(obj) -> bool:
+    """True when this GET's signer may see `obj`, a local author's followers-only post or comment (S6)."""
+    return (obj.visibility == VISIBILITY_FOLLOWERS and obj.author.is_local() and
+            audience_entitles(followers_only_addressees(obj), signed_requester_actor(), local_actor=obj.author))
+
+
+def addressed_as_pushed(document: dict, obj, recipients: list) -> dict:
+    """`document`, a non-public post or comment served to an entitled signer (S6), addressed as send_post or
+    send_reply pushed it: the same followers_only_addressing, with no community audience and nothing Public, so a
+    fetch can never tell a peer more, or other, than the push did."""
+    document.update(followers_only_addressing(obj.author, recipients))
+    document.pop('audience', None)
+    document.pop('searchableBy', None)
+    return document
+
+
 def ap_content_headers(resp, obj):
     """Cache-Control and Vary for a served post or comment, or a post's replies or context collection.
 
-    An author who blocks instances is refused to some signers and served to others (D194), so the response then
+    A non-public object is served only to an entitled signer (S6), so it is never stored by a shared cache. An
+    author who blocks instances is refused to some signers and served to others (D194), so the response then
     varies on the signature as well as on the User-Agent that identifies an unsigned requester."""
+    if not is_open(obj):
+        resp.headers.update(PRIVATE_HEADERS)
+        return
     resp.headers.set('Cache-Control', AP_CACHE_CONTENT)
     resp.headers.set('Vary', 'Accept, User-Agent, Signature' if obj.author.has_blocked_instances() else 'Accept')
 
@@ -2667,7 +2698,7 @@ def post_ap_refusal(post: Post):
     may not see."""
     if post.community.local_only or post.community.private or post.status < POST_STATUS_PUBLISHED:
         abort(403)
-    if post.visibility not in OPEN_VISIBILITIES:
+    if post.visibility not in OPEN_VISIBILITIES and not followers_entitled(post):
         abort(404)
     if post.deleted:
         return tombstone_response(post.ap_id, former_type_of_post(post))
@@ -2693,6 +2724,8 @@ def post_ap(post_id):
             if request.method == 'GET':
                 post_data = post_to_page(post)
                 post_data['@context'] = default_context()
+                if not is_open(post):   # S6: who it is for, as send_post pushed it
+                    addressed_as_pushed(post_data, post, shared_pages.mentioned_users(post, allow_fetch=False))
             else:  # HEAD request
                 post_data = []
             resp = jsonify(post_data)

@@ -7,7 +7,7 @@ from app.constants import POST_TYPE_LINK, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, PO
 from app.models import Instance, Notification, Poll, PollChoice, Post, User, UserFollower, utcnow, Event, \
     Community, more_info_link
 from app.user.utils import search_for_user
-from app.visibility import can_view, follower_instances, is_open
+from app.visibility import can_view, follower_instances, followers_only_addressing, is_open
 from app.utils import user_banned_from_community, gibberish, instance_banned, ap_datetime, get_recipient_language, get_task_session, \
     patch_db_session, TaskError
 
@@ -127,6 +127,14 @@ def mentioned_users(post, allow_fetch=True) -> list:
     return recipients
 
 
+def reply_recipients(reply, parent, allow_fetch=True) -> list:
+    """Who a reply answers or names: `parent`'s author, then the users `reply` Mentions, once each."""
+    recipients = [parent.author]
+    recipients.extend(recipient for recipient in mentioned_users(reply, allow_fetch=allow_fetch)
+                      if recipient.id != parent.author.id)
+    return recipients
+
+
 def send_post(post_id, edit=False, session=None):
     post = session.get(Post, post_id)
     user = post.author
@@ -184,14 +192,16 @@ def send_post(post_id, edit=False, session=None):
     # Amendment B (S7.2): a followers-only post is addressed to the author's followers, never to Public or the community
     followers_only = not is_open(post)
     if followers_only:
-        to = [user.followers_url()]
+        addressing = followers_only_addressing(user, recipients)
     else:
-        to = [community.public_url(), "https://www.w3.org/ns/activitystreams#Public"]
-    cc = []
+        addressing = {'to': [community.public_url(), "https://www.w3.org/ns/activitystreams#Public"],
+                      'cc': [recipient.public_url() for recipient in recipients],
+                      'interactionPolicy': {'canQuote': {
+                          'automaticApproval': ['https://www.w3.org/ns/activitystreams#Public']}}}
+    to, cc = addressing['to'], addressing['cc']
     tag = post.tags_for_activitypub()
     for recipient in recipients:
         tag.append({'href': recipient.public_url(), 'name': recipient.mention_tag(), 'type': 'Mention'})
-        cc.append(recipient.public_url())
     language = {'identifier': post.language_code(), 'name': post.language_name()}
     source = {'content': post.body, 'mediaType': 'text/markdown'}
     attachment = []
@@ -221,11 +231,7 @@ def send_post(post_id, edit=False, session=None):
       'nsfl': post.nsfl,
       'genAI': post.ai_generated,
       'stickied': post.sticky,
-      'interactionPolicy': {
-        'canQuote': {
-          'automaticApproval': [user.public_url()] if followers_only else ['https://www.w3.org/ns/activitystreams#Public']
-        }
-      },
+      'interactionPolicy': addressing['interactionPolicy'],
     }
     if post.type != POST_TYPE_POLL:
         page['name'] = post.title

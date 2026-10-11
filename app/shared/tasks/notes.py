@@ -4,8 +4,8 @@ from app.activitypub.signature import default_context, post_request, send_post_r
 from app.constants import NOTIF_MENTION
 from app.models import Community, CommunityJoinRequest, CommunityMember, Notification, Post, \
     PostReply, utcnow, User
-from app.shared.tasks.pages import can_deliver_to, mentioned_users
-from app.visibility import can_view, follower_instances, is_open
+from app.shared.tasks.pages import can_deliver_to, reply_recipients
+from app.visibility import can_view, follower_instances, followers_only_addressing, is_open
 from app.utils import user_banned_from_community, community_membership, gibberish, joined_communities, instance_banned, ap_datetime, \
     recently_upvoted_posts, recently_downvoted_posts, recently_upvoted_post_replies, \
     recently_downvoted_post_replies, get_recipient_language, get_task_session, patch_db_session
@@ -86,8 +86,7 @@ def send_reply(reply_id, parent_id, edit=False, session=None):
     community = reply.community
 
     # The parent's author, then any users Mentioned in reply with @user@instance syntax, once each
-    recipients = [parent.author]
-    recipients.extend(recipient for recipient in mentioned_users(reply) if recipient.id != parent.author.id)
+    recipients = reply_recipients(reply, parent)
 
     # Notify any local users that have been Mentioned
     for recipient in recipients:
@@ -133,15 +132,14 @@ def send_reply(reply_id, parent_id, edit=False, session=None):
                 return
 
     if followers_only:
-        to = [user.followers_url()]
-        cc = []
+        addressing = followers_only_addressing(user, recipients)
+        to, cc = addressing['to'], addressing['cc']
     else:
         to = ["https://www.w3.org/ns/activitystreams#Public"]
-        cc = [community.public_url()]
+        cc = [community.public_url()] + [recipient.public_url() for recipient in recipients]
     tag = []
     for recipient in recipients:
         tag.append({'href': recipient.public_url(), 'name': recipient.mention_tag(), 'type': 'Mention'})
-        cc.append(recipient.public_url())
     tag.extend(reply.tags_for_activitypub())
     language = {'identifier': reply.language_code(), 'name': reply.language_name()}
     content_map = {reply.language_code(): reply.body_html}
@@ -184,6 +182,7 @@ def send_reply(reply_id, parent_id, edit=False, session=None):
     if followers_only:
         del note['audience']
         del create['audience']
+        note['interactionPolicy'] = addressing['interactionPolicy']
 
     domains_sent_to = [current_app.config['SERVER_NAME']]
 
