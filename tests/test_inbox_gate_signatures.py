@@ -201,7 +201,7 @@ import pytest
 
 from app import db
 from app.activitypub.signature import HttpSignature, RsaKeys
-from app.models import ActivityPubLog
+from app.models import ActivityPubLog, Site
 from app.utils import utcnow
 from tests.conftest import ld_signed_body, unsigned_but_precheck_clean_headers
 from tests.factories import inbox_activity, make_instance, make_site, make_user, signed_inbox_post
@@ -349,6 +349,25 @@ def test_an_invalid_ld_signature_is_refused(app, signing_peer, monkeypatch, no_n
     assert response.status_code == 400
     assert ActivityPubLog.query.one().exception_message == 'Could not verify LD signature: Signature mismatch'
     assert set(no_network_ld_signing) == {'https://www.w3.org/ns/activitystreams', 'https://w3id.org/security/v1'}
+
+
+def test_a_refused_ld_signature_is_logged_with_its_signature(app, signing_peer, monkeypatch, no_network_ld_signing):
+    """With Site.log_activitypub_json on, the logged JSON is the body as received. LDSignature.verify_signature
+    pops `signature` from the document it is given, so logging the same dict lost the one key needed to work out
+    why verification failed."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    db.session.get(Site, 1).log_activitypub_json = True
+    db.session.commit()
+    wrong_private_key, _wrong_public_key = RsaKeys.generate_keypair()
+    body_bytes = ld_signed_body(signing_peer, signing_key=wrong_private_key)
+
+    with app.test_client() as client:
+        response = client.post('/inbox', data=body_bytes,
+                               headers=unsigned_but_precheck_clean_headers(body_bytes),
+                               content_type='application/activity+json')
+
+    assert response.status_code == 400
+    assert json.loads(ActivityPubLog.query.one().activity_json) == json.loads(body_bytes)
 
 
 def test_a_valid_ld_signature_is_accepted(app, signing_peer, monkeypatch, no_network_ld_signing):

@@ -1,3 +1,5 @@
+import copy
+
 import werkzeug.exceptions
 from flask import request, current_app, abort, jsonify, json, g, url_for, redirect, make_response, flash
 from flask_babel import _
@@ -726,7 +728,8 @@ def shared_inbox():
 
     g.site = db.session.get(Site, 1)  # g.site is not initialized by @app.before_request when request.path == '/inbox'
     store_ap_json = g.site.log_activitypub_json or False
-    saved_json = request_json if store_ap_json else None
+    # a copy: LDSignature.verify_signature pops `signature` from request_json, which the log must keep
+    saved_json = copy.deepcopy(request_json) if store_ap_json else None
 
     if not 'id' in request_json or not 'type' in request_json or not 'actor' in request_json or not 'object' in request_json:
         log_incoming_ap('', APLOG_NOTYPE, APLOG_FAILURE, saved_json, 'Missing minimum expected fields in JSON')
