@@ -938,10 +938,10 @@ def test_a_signed_get_is_the_same_request_without_a_body(app):
     from app.activitypub.signature import signed_get_request
 
     with patch('app.activitypub.signature.HttpSignature.signed_request') as signed:
-        signed.return_value = 'the response'
+        signed.return_value = _Response(200)
         result = signed_get_request('https://remote.example/u/bob', 'k', 'kid')
 
-    assert result == 'the response'
+    assert result is signed.return_value
     assert signed.call_args.args[1] is None
     assert signed.call_args.args[5] == 'get'
 
