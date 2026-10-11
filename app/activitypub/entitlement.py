@@ -32,7 +32,9 @@ def _owner_candidates(key_id: str) -> list[str]:
     """Actor ids a keyId may belong to, most specific first, all on the keyId's own host.
 
     The fragment is dropped (Mastodon '#main-key'), the host is lowercased and a default port removed
-    (Review Focus 3), then up to _KEY_PATH_TRIMS trailing path segments are trimmed (GoToSocial '/main-key').
+    (Review Focus 3). The first candidate keeps the path exactly, root slash and query included (R-SECUREACTORS:
+    Lemmy's site actor is 'https://host/', WordPress authors are 'https://host/?author=1'); then the path without
+    its trailing slash and query, and up to _KEY_PATH_TRIMS trailing path segments trimmed (GoToSocial '/main-key').
     A wrong candidate is harmless: the signature still has to verify against that actor's own key."""
     owner = key_id.split('#', 1)[0].strip()
     host = host_of(owner)
@@ -46,8 +48,10 @@ def _owner_candidates(key_id: str) -> list[str]:
     base = f'{parsed.scheme.lower()}://{host}'
     if port and port not in (80, 443):
         base += f':{port}'
+    candidates = [base + parsed.path + (f'?{parsed.query}' if parsed.query else '')]
     path = parsed.path.rstrip('/')
-    candidates = [base + path]
+    if base + path != candidates[0]:
+        candidates.append(base + path)
     for _ in range(_KEY_PATH_TRIMS):
         path = path.rsplit('/', 1)[0]
         if not path:
