@@ -308,8 +308,8 @@ def test_an_array_naming_one_dispatched_type_and_extensions_resolves_to_it():
     assert normalise_activity_types({'type': ['Foo', 'Create', 'Create']})['type'] == 'Create'
 
 
-def test_the_dispatcher_refuses_an_ambiguous_array_type(app, db_session):
-    app.config['LOG_ACTIVITYPUB_TO_DB'] = True
+def test_the_dispatcher_refuses_an_ambiguous_array_type(app, db_session, monkeypatch):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     make_site()
     actor = make_user(make_instance('peer.example'), 'alice')
 
@@ -327,7 +327,7 @@ def test_an_ld_accepted_activity_with_an_array_type_is_refused():
 
 def test_an_ld_signed_array_self_delete_still_needs_the_origin_to_agree(app, db_session, monkeypatch):
     """`type: ['Delete']` once skipped verify_ld_accepted_activity's origin check and purged the account."""
-    app.config['LOG_ACTIVITYPUB_TO_DB'] = True
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     make_site()
     victim = make_user(make_instance('peer.example'), 'victim')
     asked = []
@@ -354,8 +354,8 @@ def test_an_array_self_delete_is_applied_when_it_passes(app, db_session):
     assert db.session.get(type(victim), victim.id).deleted
 
 
-def test_a_self_delete_with_an_ambiguous_type_is_refused(app, db_session):
-    app.config['LOG_ACTIVITYPUB_TO_DB'] = True
+def test_a_self_delete_with_an_ambiguous_type_is_refused(app, db_session, monkeypatch):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     make_site()
     victim = make_user(make_instance('peer.example'), 'victim')
 
@@ -367,8 +367,8 @@ def test_a_self_delete_with_an_ambiguous_type_is_refused(app, db_session):
 
 
 @pytest.mark.parametrize('kind', [['OrderedCollection'], ['Foo', 'Collection']])
-def test_a_nested_collection_with_an_array_type_is_refused(app, db_session, kind):
-    app.config['LOG_ACTIVITYPUB_TO_DB'] = True
+def test_a_nested_collection_with_an_array_type_is_refused(app, db_session, monkeypatch, kind):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     announce = {'id': 'https://peer.example/a/1', 'type': 'Announce', 'actor': 'https://peer.example/c/news'}
 
     activitypub_routes.process_announced_objects(
