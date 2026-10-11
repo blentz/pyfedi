@@ -2648,6 +2648,11 @@ class Post(db.Model):
             'community_id', desc('sticky'), desc('posted_at'),
             postgresql_where=db.text('deleted = false AND status > 0')
         ),
+        Index(   # interop C1 item 7: the user outbox, newest first
+            'ix_post_user_posted',
+            'user_id', desc('posted_at'),
+            postgresql_where=db.text('deleted = false')
+        ),
     )
 
     def is_local(self):
@@ -4053,7 +4058,12 @@ class PostReply(db.Model):
             'ix_post_reply_community_posted_bot',
             'community_id', 'posted_at',
             postgresql_where=db.text('from_bot = false')
-        )
+        ),
+        db.Index(   # interop C1 item 7: the user outbox, newest first
+            'ix_post_reply_user_posted',
+            'user_id', desc('posted_at'),
+            postgresql_where=db.text('deleted = false')
+        ),
     )
 
     @classmethod

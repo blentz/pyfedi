@@ -13,7 +13,7 @@ from furl import furl
 # the whole inbox request down with a 500 instead of logging the membership as
 # already existing.
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import desc, or_, text, func
+from sqlalchemy import desc, or_, text, func, select, union_all, literal_column
 
 from app import db, cache, celery, limiter
 from app.activitypub import bp
@@ -34,7 +34,7 @@ from app.activitypub.util import activity_dedupe_key, claim_activity, release_ac
     process_quote_boost, object_has_missing_fields, find_microblogging_community, process_announce_of_uri, \
     announce_target_uri, undo_boost, withdraw_flag, LD_SIGNED_LOG_PREFIX, current_ld_signed, normalise_activity_types, \
     NO_STRING_TYPE_MESSAGE, names_actor, refresh_user_profile_task, delete_remote_group, GROUP_DELETED_MESSAGE, \
-    may_delete_group, ANNOUNCED_GROUP_DELETE_REFUSED, user_followers_count, user_following_count
+    may_delete_group, ANNOUNCED_GROUP_DELETE_REFUSED, user_followers_count, user_following_count, create_activity_of
 # The module, not the name: app.community.routes reaches this file through
 # app.activitypub.signature before show_community is defined (U-circular-import)
 import app.chat.util as chat_util
@@ -57,7 +57,8 @@ from app.models import User, Community, CommunityJoinRequest, CommunityMember, A
 # The module, not the names: app.post.routes reaches this file through
 # app.activitypub.signature before they are defined (import cycle: post.routes)
 import app.post.routes as post_routes
-from app.visibility import OPEN_VISIBILITIES, followers_only_addressing, is_open, listable_clause, post_title_for
+from app.visibility import OPEN_VISIBILITIES, followers_only_addressing, is_open, listable_clause, post_title_for, \
+    visible_to_clause
 from app.shared.tasks import task_selector
 # The module, not the names: app.shared.tasks.pages reaches this file through
 # app.activitypub.signature before they are defined (import cycle: shared.tasks.pages)
@@ -617,13 +618,57 @@ def count_only_collection(collection_id: str, total: int):
     return resp
 
 
+def user_outbox_rows(user: User):
+    """One row per post or comment of local `user` that a logged-out viewer may see (interop C1 item 7), as
+    (kind, id, posted_at) with kind 'post' or 'reply'. A subquery: the count and each page select from it.
+
+    Seen by no viewer (visible_to_clause), narrowed to public (listable_clause), because post_to_page and
+    comment_model_to_json address everything to Public and an unlisted object must not be republished as public.
+    Not deleted, not under review, and not in a private, local-only or banned community (show_post answers a
+    logged-out viewer 404 for a banned one). A comment's post must pass the same tests a logged-out viewer's
+    comment page puts it to: not deleted, published, and not followers-only. A community that deleted itself
+    (Community.is_gone) stays readable, so what was posted there stays listed. A private message is a ChatMessage,
+    never one of these rows. The author is already known to be active: local_actor_user refused a banned or deleted
+    one."""
+    posts = (select(literal_column("'post'").label('kind'), Post.id.label('id'), Post.posted_at.label('posted_at'))
+             .join(Community, Community.id == Post.community_id)
+             .where(Post.user_id == user.id, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
+                    visible_to_clause(Post, None), listable_clause(Post),
+                    Community.private.isnot(True), Community.local_only.isnot(True), Community.banned.isnot(True)))
+    replies = (select(literal_column("'reply'").label('kind'), PostReply.id.label('id'),
+                      PostReply.posted_at.label('posted_at'))
+               .join(Post, Post.id == PostReply.post_id)
+               .join(Community, Community.id == PostReply.community_id)
+               .where(PostReply.user_id == user.id, PostReply.deleted == False, Post.deleted == False,
+                      Post.status > POST_STATUS_REVIEWING, visible_to_clause(Post, None),
+                      visible_to_clause(PostReply, None), listable_clause(PostReply),
+                      Community.private.isnot(True), Community.local_only.isnot(True), Community.banned.isnot(True)))
+    return union_all(posts, replies).subquery()
+
+
+def user_outbox_page(rows, offset: int, limit: int) -> list[dict]:
+    """One page of a user outbox, newest first, as Create activities. One bounded query picks the page's rows out of
+    the union (the (user_id, posted_at DESC) indexes serve both halves), then one query per kind loads them."""
+    page = db.session.execute(select(rows.c.kind, rows.c.id)
+                              .order_by(desc(rows.c.posted_at).nulls_last(), desc(rows.c.id), rows.c.kind)
+                              .offset(offset).limit(limit)).all()
+    posts = {post.id: post for post in Post.query.filter(Post.id.in_([row.id for row in page if row.kind == 'post']))}
+    replies = {reply.id: reply for reply in
+               PostReply.query.filter(PostReply.id.in_([row.id for row in page if row.kind == 'reply']))}
+    return [create_activity_of(posts[row.id] if row.kind == 'post' else replies[row.id]) for row in page]
+
+
 @bp.route('/u/<actor>/outbox', methods=['GET'])
 def user_outbox(actor):
     # D177 (owner ruling): a browser asking for a collection is sent to the page of the actor it belongs to,
     # as the actor endpoints negotiate
     if not is_activitypub_request():
         return redirect(url_for('activitypub.user_profile', actor=actor))
-    outbox = paged_outbox(f"{current_app.config['SERVER_URL']}/u/{actor}/outbox", 0, lambda offset, limit: [])
+    user = local_actor_user(actor)
+    rows = user_outbox_rows(user)
+    total = db.session.execute(select(func.count()).select_from(rows)).scalar()
+    outbox = paged_outbox(f"{user.public_url()}/outbox", total,
+                          lambda offset, limit: user_outbox_page(rows, offset, limit))
     resp = jsonify(outbox)
     resp.content_type = ap_media_type()
     resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)

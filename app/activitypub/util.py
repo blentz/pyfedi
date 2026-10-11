@@ -134,28 +134,36 @@ def local_communities():
     return db.session.execute(text('SELECT COUNT(*) as c FROM "community" WHERE instance_id = 1')).scalar()
 
 
+def create_activity_of(obj: Post | PostReply) -> dict:
+    """The Create a post or comment is wrapped in where an outbox lists it: inside the community outbox's Announce
+    (post_to_activity) and in its author's outbox (interop C1 item 7). A local object has no stored Create id, so
+    one is made up, as the community outbox always has."""
+    community = obj.community
+    create_id = obj.ap_create_id if obj.ap_create_id else f"{current_app.config['SERVER_URL']}/activities/create/{gibberish(15)}"
+    return {
+        "id": create_id,
+        "actor": obj.author.public_url(),
+        "to": [
+            "https://www.w3.org/ns/activitystreams#Public"
+        ],
+        "object": post_to_page(obj) if isinstance(obj, Post) else comment_model_to_json(obj),
+        "cc": [
+            community.public_url()
+        ],
+        "type": "Create",
+        "audience": community.public_url()
+    }
+
+
 def post_to_activity(post: Post, community: Community):
     # local PieFed posts do not have a create or announce id
-    create_id = post.ap_create_id if post.ap_create_id else f"{current_app.config['SERVER_URL']}/activities/create/{gibberish(15)}"
     announce_id = post.ap_announce_id if post.ap_announce_id else f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}"
     activity_data = {
         "actor": community.public_url(),
         "to": [
             "https://www.w3.org/ns/activitystreams#Public"
         ],
-        "object": {
-            "id": create_id,
-            "actor": post.author.public_url(),
-            "to": [
-                "https://www.w3.org/ns/activitystreams#Public"
-            ],
-            "object": post_to_page(post),
-            "cc": [
-                community.public_url()
-            ],
-            "type": "Create",
-            "audience": community.public_url()
-        },
+        "object": create_activity_of(post),   # its only caller, community_outbox, passes post.community
         "cc": [
             f"{community.public_url()}/followers"
         ],

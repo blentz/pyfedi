@@ -149,8 +149,10 @@ class TestWhoMayMakeThisServerFetchAnother:
 
 
 class TestTheUserOutbox:
-    """Every peer polls `/u/<actor>/outbox`. It is a fixed empty collection -- PieFed does
-    not publish a user outbox -- and nothing had ever asked for it.
+    """Every peer polls `/u/<actor>/outbox`. Since interop C1 item 7 it lists the user's public
+    posts and comments; an account with none answers an empty collection. The owner is looked
+    up, as the Person document is: `/u/<name>` already tells anyone whether the name exists, so
+    answering an unknown name with 404 here discloses nothing new.
     """
 
     def test_it_answers_an_empty_ordered_collection(self, env):
@@ -169,6 +171,9 @@ class TestTheUserOutbox:
         """The three headers. `Vary: Accept` is what stops a cache handing an HTML answer
         to a peer asking for JSON, and this endpoint is cacheable for the collection
         max-age (D180, fixed by owner ruling: ten seconds before)."""
+        make_user(env.baseline.instance_local, 'anybody', local=True)
+        db.session.commit()
+
         response = env.client.get('/u/anybody/outbox', headers={'Accept': 'application/activity+json'})
 
         assert response.content_type == 'application/activity+json'
@@ -178,15 +183,10 @@ class TestTheUserOutbox:
                             for part in response.headers['Vary'].split(',')]
         assert response.headers['Cache-Control'] == 'public, max-age=60'
 
-    def test_it_does_not_require_the_actor_to_exist(self, env):
-        """Asserted rather than assumed: the route never looks the name up, so it answers
-        the same empty collection for an account nobody holds. That is a disclosure
-        decision -- it means the endpoint cannot be used to test whether a username
-        exists."""
+    def test_an_unknown_actor_is_404(self, env):
         response = env.client.get('/u/nobody-at-all/outbox', headers={'Accept': 'application/activity+json'})
 
-        assert response.status_code == 200
-        assert response.get_json()['totalItems'] == 0
+        assert response.status_code == 404
 
 
 class TestACommunityThisInstanceDoesNotHave:
