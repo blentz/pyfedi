@@ -549,11 +549,8 @@ def test_the_community_followers_items_list_is_always_empty(app, db_session):
 
     `feed_followers` does the same -- pinned by
     `test_the_feed_followers_items_list_is_always_empty`. `user_followers` --
-    the third -- populates its items with real follower URLs and filters
-    blocked and unaccepted follows, pinned by `test_a_users_followers_are_listed`.
-    So both siblings are exercised here and the two-of-three pattern is proved
-    in the suite, not merely read off the source. Two of three contradict
-    themselves; one does not.
+    the third -- is count-only too since interop C1 item 6, pinned by
+    `test_a_users_followers_are_counted_not_listed`.
 
     `member.deleted` is set explicitly for the same reason as the previous
     test: `make_user` leaves it at the column default, and no assertion here
@@ -608,10 +605,11 @@ def _follow(local_user, follower, accepted=True):
     return row
 
 
-def test_a_users_followers_are_listed(app, db_session):
-    """`user_followers` guards on `user is not None AND user.ap_followers_url`.
-    `User.ap_followers_url` has no declared default and `make_user` never sets
-    it, so a plain local user 404s -- every positive test here must set it.
+def test_a_users_followers_are_counted_not_listed(app, db_session):
+    """Interop C1 item 6 (owner ruling): count-only, like D175. The collection
+    used to list every follower's URL; it now carries the real count and no
+    items. Its `id` is still `User.followers_url()`, so `ap_followers_url` is
+    honoured when set.
     """
     site, instance = seed_actors()
     alice = make_user(instance, 'alice', local=True)
@@ -623,10 +621,10 @@ def test_a_users_followers_are_listed(app, db_session):
     response = collection_get(app, '/u/alice/followers')
 
     assert response.status_code == 200
-    assert response.json['type'] == 'Collection'
+    assert response.json['type'] == 'OrderedCollection'
     assert response.json['id'] == 'https://test.piefed.local/u/alice/followers'
     assert response.json['totalItems'] == 1
-    assert bob.ap_public_url in response.json['items']
+    assert response.json['orderedItems'] == []
 
 
 def test_a_user_without_a_followers_url_is_served(app, db_session):
