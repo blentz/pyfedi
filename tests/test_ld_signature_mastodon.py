@@ -6,8 +6,11 @@ with Mastodon about what is hashed still passes them. The document below was rel
 every key of the signature section except type, id and signatureValue, so its `expires` is part of the signature.
 """
 import copy
+from datetime import datetime
 
-from app.activitypub.signature import LDSignature
+import pytest
+
+from app.activitypub.signature import LDSignature, VerificationError, VerificationFormatError
 
 MASTODON_PUBLIC_KEY = """-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnHPQwmF4ObGgWnJ5KMAX
@@ -48,5 +51,30 @@ MASTODON_SIGNED_DELETE = {
 }
 
 
-def test_a_signature_mastodon_made_with_an_expiry_verifies(app):
+def at(monkeypatch, when: str):
+    """Pin the verifier's clock (naive UTC, as app.models.utcnow returns)."""
+    monkeypatch.setattr('app.activitypub.signature.utcnow', lambda: datetime.fromisoformat(when))
+
+
+def test_a_signature_mastodon_made_with_an_expiry_verifies(app, monkeypatch):
+    at(monkeypatch, '2026-10-11T03:00:00')
     LDSignature.verify_signature(copy.deepcopy(MASTODON_SIGNED_DELETE), MASTODON_PUBLIC_KEY)
+
+
+def test_a_signature_past_its_expiry_is_refused(app, monkeypatch):
+    at(monkeypatch, '2026-10-13T02:30:00')
+    with pytest.raises(VerificationError, match='Signature expired'):
+        LDSignature.verify_signature(copy.deepcopy(MASTODON_SIGNED_DELETE), MASTODON_PUBLIC_KEY)
+
+
+def test_a_signature_just_past_its_expiry_is_within_clock_skew(app, monkeypatch):
+    at(monkeypatch, '2026-10-13T02:14:00')
+    LDSignature.verify_signature(copy.deepcopy(MASTODON_SIGNED_DELETE), MASTODON_PUBLIC_KEY)
+
+
+def test_an_unreadable_expiry_is_a_format_error(app, monkeypatch):
+    at(monkeypatch, '2026-10-11T03:00:00')
+    document = copy.deepcopy(MASTODON_SIGNED_DELETE)
+    document['signature']['expires'] = 'soon'
+    with pytest.raises(VerificationFormatError, match='Invalid signature expiry'):
+        LDSignature.verify_signature(document, MASTODON_PUBLIC_KEY)
