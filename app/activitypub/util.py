@@ -68,6 +68,33 @@ def community_members(community_id):
     return db.session.execute(text(sql), {'community_id': community_id}).scalar()
 
 
+def user_followers_count(user_id: int) -> int:
+    """How many accepted followers local user `user_id` has, local and remote (interop C1 item 6).
+
+    A remote follower's row is inward (local_user_id is this user); a local follower's row is the follower's own
+    outward follow (remote_user_id is this user). A pending or refused follow, a banned or deleted follower and a
+    follower this user has blocked (D182) do not count."""
+    sql = ('SELECT COUNT(*) FROM user_follower uf '
+           'JOIN "user" u ON u.id = CASE WHEN uf.is_inward THEN uf.remote_user_id ELSE uf.local_user_id END '
+           'WHERE uf.is_accepted IS TRUE AND u.banned IS FALSE AND u.deleted IS FALSE '
+           'AND ((uf.is_inward IS TRUE AND uf.local_user_id = :user_id) '
+           'OR (uf.is_inward IS FALSE AND uf.remote_user_id = :user_id)) '
+           'AND NOT EXISTS (SELECT 1 FROM user_block ub WHERE ub.blocker_id = :user_id AND ub.blocked_id = u.id)')
+    return db.session.execute(text(sql), {'user_id': user_id}).scalar()
+
+
+def user_following_count(user_id: int) -> int:
+    """How many accounts local user `user_id` follows (interop C1 item 6): accepted follows of users, plus
+    communities joined -- a join is a Follow of a Group actor, so peers count it too. A followed account that is
+    banned or deleted, a membership the user is banned from, and a banned community do not count."""
+    sql = ('SELECT (SELECT COUNT(*) FROM user_follower uf JOIN "user" u ON u.id = uf.remote_user_id '
+           'WHERE uf.local_user_id = :user_id AND uf.is_inward IS FALSE AND uf.is_accepted IS TRUE '
+           'AND u.banned IS FALSE AND u.deleted IS FALSE) + '
+           '(SELECT COUNT(*) FROM community_member cm JOIN community c ON c.id = cm.community_id '
+           'WHERE cm.user_id = :user_id AND cm.is_banned IS FALSE AND c.banned IS NOT TRUE)')
+    return db.session.execute(text(sql), {'user_id': user_id}).scalar()
+
+
 def users_total():
     return db.session.execute(text(
         'SELECT COUNT(*) as c FROM "user" WHERE ap_id is null AND verified is true AND banned is false AND deleted is false')).scalar()

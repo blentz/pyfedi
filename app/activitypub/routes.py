@@ -34,7 +34,7 @@ from app.activitypub.util import activity_dedupe_key, claim_activity, release_ac
     process_quote_boost, object_has_missing_fields, find_microblogging_community, process_announce_of_uri, \
     announce_target_uri, undo_boost, withdraw_flag, LD_SIGNED_LOG_PREFIX, current_ld_signed, normalise_activity_types, \
     NO_STRING_TYPE_MESSAGE, names_actor, refresh_user_profile_task, delete_remote_group, GROUP_DELETED_MESSAGE, \
-    may_delete_group, ANNOUNCED_GROUP_DELETE_REFUSED
+    may_delete_group, ANNOUNCED_GROUP_DELETE_REFUSED, user_followers_count, user_following_count
 # The module, not the name: app.community.routes reaches this file through
 # app.activitypub.signature before show_community is defined (U-circular-import)
 import app.chat.util as chat_util
@@ -498,6 +498,8 @@ def user_profile(actor):
                           "name": user.title if user.title else user.user_name,
                           "inbox": f"{user.public_url()}/inbox",
                           "outbox": f"{user.public_url()}/outbox",
+                          "followers": user.followers_url(),
+                          "following": f"{user.public_url()}/following",
                           "discoverable": user.searchable,
                           "indexable": user.indexable,
                           "acceptPrivateMessages": user.accept_private_messages,
@@ -588,6 +590,31 @@ def resolve_remote_handle(actor: str):
         return search_for_user(actor)
     except Exception:
         return None
+
+
+def local_actor_user(actor: str) -> User:
+    """The local user an actor collection (`/u/<actor>/...`) belongs to, else abort with what user_profile answers
+    an ActivityPub request: 410 for a deleted account (S3.2), 404 for a banned, unknown or remote one. The name is
+    matched case-insensitively, as user_profile matches it."""
+    name = actor.strip().lower()
+    user = User.query.filter(func.lower(User.user_name) == name, User.ap_id.is_(None),
+                             User.deleted.is_(False), User.banned.is_(False)).first()
+    if user is not None:
+        return user
+    gone = User.query.filter(func.lower(User.user_name) == name, User.ap_id.is_(None),
+                             User.deleted.is_(True)).first()
+    abort(410 if gone is not None else 404)
+
+
+def count_only_collection(collection_id: str, total: int):
+    """A user's followers or following collection (interop C1 item 6, owner ruling): the real count and no items, as
+    D175 serves a community's followers, so no follower or followed account is disclosed."""
+    resp = jsonify({"@context": default_context(), "type": "OrderedCollection", "id": collection_id,
+                    "totalItems": total, "orderedItems": []})
+    resp.content_type = ap_media_type()
+    resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
+    resp.headers.set('Vary', 'Accept')
+    return resp
 
 
 @bp.route('/u/<actor>/outbox', methods=['GET'])
@@ -2486,33 +2513,18 @@ def user_followers(actor):
     # D177, as user_outbox above
     if not is_activitypub_request():
         return redirect(url_for('activitypub.user_profile', actor=actor))
-    user = db.session.query(User).filter_by(user_name=actor, banned=False, ap_id=None).first()
-    if user is not None:
-        # Get all followers, except those that are blocked by user by doing an outer join
-        followers = db.session.query(User).join(UserFollower, User.id == UserFollower.remote_user_id) \
-            .outerjoin(UserBlock,
-                       (UserFollower.local_user_id == UserBlock.blocker_id) & (User.id == UserBlock.blocked_id)) \
-            .filter((UserFollower.local_user_id == user.id) & (UserBlock.id == None)) \
-            .filter(UserFollower.is_accepted == True) \
-            .all()
+    user = local_actor_user(actor)
+    return count_only_collection(user.followers_url(), user_followers_count(user.id))
 
-        items = []
-        for f in followers:
-            items.append(f.ap_public_url)
-        result = {
-            "@context": default_context(),
-            "id": user.followers_url(),
-            "type": "Collection",
-            "totalItems": len(items),
-            "items": items
-        }
-        resp = jsonify(result)
-        resp.content_type = ap_media_type()
-        resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
-        resp.headers.set('Vary', 'Accept')
-        return resp
-    else:
-        abort(404)
+
+@bp.route('/u/<actor>/following', methods=['GET'])
+def user_following(actor):
+    actor = actor.strip()
+    # D177, as user_outbox above
+    if not is_activitypub_request():
+        return redirect(url_for('activitypub.user_profile', actor=actor))
+    user = local_actor_user(actor)
+    return count_only_collection(f"{user.public_url()}/following", user_following_count(user.id))
 
 
 @bp.route('/comment/<int:comment_id>', methods=['GET', 'HEAD'])
