@@ -239,6 +239,16 @@ class TestWhatItAuthorises:
         assert response.status_code == 200
         assert response.get_json()['interactionTarget'] == env.reply.profile_id()
 
+    @pytest.mark.parametrize('which', ['post', 'reply'])
+    def test_a_followers_only_object_is_not_vouched_for_even_if_recorded(self, env, which):
+        """Amendment B (S7.4): its canQuote names only the author, so a QuoteAuthorization row written before the
+        guard in process_quote_boost does not make this answer for it."""
+        quoted = getattr(env, which)
+        _approve(quoted, f'https://{PEER}/p/2')
+        quoted.visibility = 'followers'
+        db.session.commit()
+        assert _auth(env, f'{quoted.profile_id()};https://{PEER}/p/2').status_code == 404
+
     def test_the_document_is_served_as_activitypub(self, env):
         _approve(env.post, f'https://{PEER}/p/2')
         response = _auth(env, f'{env.post.profile_id()};https://{PEER}/p/2')

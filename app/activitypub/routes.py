@@ -55,7 +55,7 @@ from app.models import User, Community, CommunityJoinRequest, CommunityMember, A
 # The module, not the names: app.post.routes reaches this file through
 # app.activitypub.signature before they are defined (import cycle: post.routes)
 import app.post.routes as post_routes
-from app.visibility import OPEN_VISIBILITIES, listable_clause, post_title_for
+from app.visibility import OPEN_VISIBILITIES, is_open, listable_clause, post_title_for
 from app.shared.tasks import task_selector
 # The module, not the name: app.user.routes reaches this file through
 # app.activitypub.signature before show_profile is defined (import cycle: user.routes)
@@ -1924,14 +1924,23 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                         # retrieve post from remote instance
                         post = resolve_remote_post_from_search(core_activity['object'].replace('/context', ''))
                     if origin_community and target_community and post:
-                        if user.id == post.user_id or origin_community.is_moderator(user) or (origin_community.instance_id == user.instance_id and origin_community.is_instance_admin(user)):
+                        if post.community_id != origin_community.id:
+                            # R-MOVEBIND: the permission below is asked of the origin, so the origin must be where the
+                            # post is -- else a moderator of any community could move any post
+                            log_incoming_ap(id, APLOG_MOVE, APLOG_FAILURE, saved_json,
+                                            'Move origin is not the post\'s community')
+                        elif not is_open(post):
+                            # Amendment B (S7.4): a followers-only post is never moved to a new audience
+                            log_incoming_ap(id, APLOG_MOVE, APLOG_FAILURE, saved_json,
+                                            'A followers-only post cannot be moved')
+                        elif user.id == post.user_id or origin_community.is_moderator(user) or (origin_community.instance_id == user.instance_id and origin_community.is_instance_admin(user)):
                             post.move_to(target_community)
                             session.commit()
 
                             add_to_modlog('move_post', actor=user, target_user=post.author, reason='',
                                           community=target_community, post=post,
                                           link_text=shorten_string(post.title), link=f'post/{post.id}')
-                            if origin_community.is_local() and post.visibility in OPEN_VISIBILITIES:
+                            if origin_community.is_local():   # the post is open: refused above otherwise
                                 announce_activity_to_followers(origin_community, user, request_json)
                             log_incoming_ap(id, APLOG_MOVE, APLOG_SUCCESS, saved_json,
                                             f'{user.user_name} moved post to {target_community.link()}')
@@ -3490,6 +3499,8 @@ def quote_boost_auth():
     if quoted is None:
         quoted = PostReply.get_by_ap_id(local_post_id)
     if quoted is None or quoted.author is None or not quoted.author.is_local():
+        return abort(404)
+    if not is_open(quoted):     # Amendment B (S7.4): its canQuote names only the author
         return abort(404)
     approved = {'post_id': quoted.id} if isinstance(quoted, Post) else {'post_reply_id': quoted.id}
     if QuoteAuthorization.query.filter_by(quoting_uri=remote_post_id, **approved).first() is None:

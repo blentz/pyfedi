@@ -248,7 +248,9 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
                     cbf = communities_banned_from(current_user.get_id())
                     bc = blocked_communities(current_user.get_id())
                     bi = blocked_or_banned_instances(current_user.get_id())
-                    for cross_posted_post in Post.query.filter(Post.id.in_(post.cross_posts)):
+                    viewer_id = current_user.id if current_user.is_authenticated else None
+                    for cross_posted_post in Post.query.filter(Post.id.in_(post.cross_posts),
+                                                               visible_to_clause(Post, viewer_id)):
                         if cross_posted_post.community_id not in cbf \
                                 and cross_posted_post.community_id not in bc \
                                 and cross_posted_post.community.instance_id not in bi:

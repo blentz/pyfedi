@@ -28,7 +28,7 @@
                     {{ _('Delete') }}
                 </a>
             </li>
-            {% if post.user_id == current_user.id or post.community.is_moderator() or post.community.is_owner() or (post.community.is_local() and current_user.get_id() in admin_ids) or user_access('administer all communities', current_user.get_id()) -%}
+            {% if post.visibility in ('public', 'unlisted') and (post.user_id == current_user.id or post.community.is_moderator() or post.community.is_owner() or (post.community.is_local() and current_user.get_id() in admin_ids) or user_access('administer all communities', current_user.get_id())) -%}
                 <li>
                     <a href="{{ url_for('post.post_move', post_id=post.id) }}" style="white-space: normal" class="dropdown-item no-underline" rel="nofollow noindex">
                         <span class="fe fe-move"></span>

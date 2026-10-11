@@ -509,6 +509,68 @@ def test_a_move_by_an_unrelated_user_is_refused_and_logged(app, db_session, monk
     assert log.exception_message == 'Move attempt denied'
 
 
+def test_a_move_of_a_followers_only_post_is_refused_and_logged(app, db_session, monkeypatch):
+    """Amendment B (S7.4): even its author cannot move a followers-only post to a new audience."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, origin_community, target_community, post, author = _seed_move_scenario()
+    author.ap_fetched_at = utcnow()
+    post.visibility = 'followers'
+    db.session.commit()
+    announced = []
+    monkeypatch.setattr(activitypub_routes, 'announce_activity_to_followers', lambda *a, **k: announced.append(a))
+
+    dispatch(inbox_activity(author, activity_type='Move', object=post.ap_id,
+                            origin=origin_community.ap_profile_id, target=target_community.ap_profile_id))
+
+    db.session.expire_all()
+    assert db.session.get(Post, post.id).community_id == origin_community.id
+    assert announced == []
+    log = ActivityPubLog.query.one()
+    assert (log.result, log.exception_message) == ('failure', 'A followers-only post cannot be moved')
+
+
+def test_a_move_out_of_a_remote_community_moves_the_post_without_announcing(app, db_session, monkeypatch):
+    """Only a local origin relays the Move to its followers; a remote origin's own instance does that."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, origin_community, target_community, post, author = _seed_move_scenario()
+    author.ap_fetched_at = utcnow()
+    origin_community.ap_id = f'https://{instance.domain}/c/origincomm'
+    db.session.commit()
+    assert not origin_community.is_local()
+    announced = []
+    monkeypatch.setattr(activitypub_routes, 'announce_activity_to_followers', lambda *a, **k: announced.append(a))
+
+    dispatch(inbox_activity(author, activity_type='Move', object=post.ap_id,
+                            origin=origin_community.ap_profile_id, target=target_community.ap_profile_id))
+
+    db.session.expire_all()
+    assert db.session.get(Post, post.id).community_id == target_community.id
+    assert announced == []
+    assert ActivityPubLog.query.one().result == 'success'
+
+
+def test_a_move_naming_an_origin_the_post_is_not_in_is_refused_and_logged(app, db_session, monkeypatch):
+    """R-MOVEBIND: the permission is asked of `origin`, so a moderator of their OWN community who names it as the
+    origin of a post living elsewhere must not move that post."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, origin_community, target_community, post, author = _seed_move_scenario()
+    theirs = make_community('theirs', host=instance.domain)
+    theirs.ap_fetched_at = utcnow()
+    mover = make_user(instance, 'othermod')
+    mover.ap_fetched_at = utcnow()
+    make_community_member(mover, theirs, is_moderator=True)
+    db.session.commit()
+    monkeypatch.setattr(activitypub_routes, 'announce_activity_to_followers', lambda *a, **k: None)
+
+    dispatch(inbox_activity(mover, activity_type='Move', object=post.ap_id,
+                            origin=theirs.ap_profile_id, target=target_community.ap_profile_id))
+
+    db.session.expire_all()
+    assert db.session.get(Post, post.id).community_id == origin_community.id
+    log = ActivityPubLog.query.one()
+    assert (log.result, log.exception_message) == ('failure', "Move origin is not the post's community")
+
+
 def test_a_move_whose_post_is_unknown_locally_is_resolved_remotely(app, db_session, monkeypatch):
     """routes.py:1575-1577 -- `Post.get_by_ap_id` misses on the activity's own
     `object` URI, so `resolve_remote_post_from_search` is called instead,
