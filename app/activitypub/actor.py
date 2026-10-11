@@ -9,6 +9,7 @@ from flask import current_app
 from sqlalchemy import or_, func
 
 from app import cache, db
+from app.constants import AP_FETCH_ACCEPT
 from app.activitypub.util import get_request, signed_get_request, actor_json_to_model, refresh_user_profile, \
     refresh_community_profile, refresh_feed_profile, extract_domain_and_actor, normalise_actor_string
 from app.discovery.podcast import podcast_community_for
@@ -194,7 +195,7 @@ def fetch_remote_actor_data(url: str, retry=False, retry_count=1):
     for attempt in range(retry_count + 1):
         response = None
         try:
-            response = get_request(url, headers={'Accept': 'application/activity+json'})
+            response = get_request(url, headers={'Accept': AP_FETCH_ACCEPT})
             if response.status_code == 200:
                 try:
                     return response.json()
@@ -272,7 +273,7 @@ def fetch_actor_from_webfinger(address: str, server: str, retry=False):
             if link.get('rel') == 'self':
                 if 'href' not in link:  # a peer may advertise several, so keep walking
                     continue
-                type_header = link.get('type', 'application/activity+json')
+                type_header = link.get('type', AP_FETCH_ACCEPT)
                 try:
                     actor_data = get_request(link['href'], headers={'Accept': type_header})
                 except httpx.HTTPError:

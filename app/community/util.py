@@ -26,7 +26,7 @@ from app.activitypub.signature import post_request, default_context, send_post_r
 from app.activitypub.util import find_actor_or_create, actor_json_to_model, \
     find_hashtag_or_create, create_post, remote_object_to_json, find_flair, activitypub_visibility, host_of
 from app.community.forms import CreateLinkForm
-from app.constants import SRC_WEB, POST_TYPE_LINK
+from app.constants import SRC_WEB, POST_TYPE_LINK, AP_FETCH_ACCEPT
 from app.models import Community, File, PostReply, Post, utcnow, CommunityMember, Site, _as_dict, parse_ap_published, \
     Instance, User, Tag, CommunityFlair, CommunityThemeAllowed, markdown_source, \
     language_from_ap, _as_url
@@ -97,7 +97,7 @@ def search_for_community(address: str, allow_fetch: bool = True) -> Community | 
                 if 'rel' in links and links['rel'] == 'self':  # this contains the URL of the activitypub profile
                     if 'href' not in links:  # as search_for_feed:80 already does
                         continue
-                    type = links['type'] if 'type' in links else 'application/activity+json'
+                    type = links['type'] if 'type' in links else AP_FETCH_ACCEPT
                     # retrieve the activitypub profile
                     community_data = get_request(links['href'], headers={'Accept': type})
                     # to see the structure of the json contained in community_data, do a GET to https://lemmy.world/c/technology with header Accept: application/activity+json

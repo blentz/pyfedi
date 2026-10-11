@@ -190,3 +190,10 @@ ROLE_PERMISSIONS = (
 # not represented on the page -- which is why the page's DELETE is scoped to
 # these ids rather than clearing the whole table.
 EDITABLE_ROLE_IDS = (3, 4)
+
+# ActivityPub media types (interop C1 item 5)
+AP_MEDIA_TYPE = 'application/activity+json'
+AS2_PROFILE = 'https://www.w3.org/ns/activitystreams'
+AS2_LD_MEDIA_TYPE = f'application/ld+json; profile="{AS2_PROFILE}"'
+AP_MEDIA_TYPES = (AP_MEDIA_TYPE, 'application/ld+json')   # compared with a mimetype, which carries no parameters
+AP_FETCH_ACCEPT = f'{AP_MEDIA_TYPE}, {AS2_LD_MEDIA_TYPE}'   # every outgoing ActivityPub GET, signed or not

@@ -57,7 +57,7 @@ from app.activitypub.ld_contexts import LDCoverageError, PYFEDI_CONTEXT_TERMS, c
     strip_empty_values
 from app.activitypub.signature_errors import KeyMismatchError, KeyRefetchable, UnusableKeyError, VerificationError, \
     VerificationFormatError  # VerificationError and VerificationFormatError are re-exported
-from app.constants import DATETIME_MS_FORMAT
+from app.constants import AP_FETCH_ACCEPT, DATETIME_MS_FORMAT
 from app.discovery.instance_answers import record_delivery_refusal
 from app.relays.refusals import record_relay_refusal
 from app.models import utcnow, ActivityPubLog, Community, Instance, CommunityMember, Site, User, SendQueue, public_key_pem
@@ -770,9 +770,10 @@ class HttpSignature:
             headers["Content-Type"] = content_type
         else:
             body_bytes = b""
-        # GET requests get implicit accept headers added
+        # GET requests get implicit accept headers added. A cavage signature covers every header set here, so the
+        # Accept sent is the Accept signed.
         if method == "get":
-            headers["Accept"] = "application/ld+json"
+            headers["Accept"] = AP_FETCH_ACCEPT
         if signature_format == 'rfc9421':
             del headers["(request-target)"]
             # Sign the target URI exactly as it goes on the wire: httpx never sends a fragment

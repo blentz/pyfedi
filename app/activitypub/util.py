@@ -48,7 +48,8 @@ from app.utils import FETCH_MAX_BYTES, get_request, get_request_capped, allowlis
     blocked_users, piefed_markdown_to_lemmy_markdown, store_files_in_s3, guess_mime_type, get_recipient_language, \
     patch_db_session, to_srgb, communities_banned_from_all_users, blocked_communities, blocked_or_banned_instances, \
     instance_community_ids, banned_instances, communities_run_by_inactive_mods, inspect_image_c2pa, \
-    url_is_storable, can_create_post, can_create_post_reply, retrieve_image_hash, hash_matches_blocked_image
+    url_is_storable, can_create_post, can_create_post_reply, retrieve_image_hash, hash_matches_blocked_image, \
+    is_activitypub_request
 import app.activitypub.actor as activitypub_actor
 import app.discovery.credits as discovery_credits   # the module: app.discovery.credits imports this one
 import urllib.parse
@@ -851,7 +852,7 @@ def refresh_user_profile_task(user_id, activity_json=None):
             if user and user.instance_id and user.instance.online():
                 if not activity_json:
                     try:
-                        actor_data = get_request(user.ap_public_url, headers={'Accept': 'application/activity+json'})
+                        actor_data = get_request(user.ap_public_url, headers={'Accept': AP_FETCH_ACCEPT})
                     except httpx.HTTPError:  # get_request has already retried once (D224)
                         return
                     except Exception:  # not bare: a worker shutdown must propagate (D220)
@@ -1022,7 +1023,7 @@ def refresh_community_profile_task(community_id, activity_json=None):
             if community and community.instance_id and community.instance.online():
                 if not activity_json:
                     try:
-                        actor_data = get_request(community.ap_public_url, headers={'Accept': 'application/activity+json'})
+                        actor_data = get_request(community.ap_public_url, headers={'Accept': AP_FETCH_ACCEPT})
                     except httpx.HTTPError:  # get_request has already retried once (D224)
                         return
                     except Exception:  # a peer that requires signed fetches, as for users (D221)
@@ -1201,7 +1202,7 @@ def refresh_community_profile_task(community_id, activity_json=None):
 
                     if community.ap_moderators_url:
                         mods_request = get_request(community.ap_moderators_url,
-                                                   headers={'Accept': 'application/activity+json'})
+                                                   headers={'Accept': AP_FETCH_ACCEPT})
                         if mods_request.status_code == 200:
                             mods_data = mods_request.json()
                             mods_request.close()
@@ -1241,7 +1242,7 @@ def refresh_community_profile_task(community_id, activity_json=None):
                                         session.commit()
 
                     if community.ap_followers_url:
-                        followers_request = get_request(community.ap_followers_url, headers={'Accept': 'application/activity+json'})
+                        followers_request = get_request(community.ap_followers_url, headers={'Accept': AP_FETCH_ACCEPT})
                         if followers_request.status_code == 200:
                             followers_data = followers_request.json()
                             followers_request.close()
@@ -1250,7 +1251,7 @@ def refresh_community_profile_task(community_id, activity_json=None):
                                 session.commit()
 
                     if community.ap_featured_url:
-                        featured_request = get_request(community.ap_featured_url, headers={'Accept': 'application/activity+json'})
+                        featured_request = get_request(community.ap_featured_url, headers={'Accept': AP_FETCH_ACCEPT})
                         if featured_request.status_code == 200:
                             featured_data = featured_request.json()
                             featured_request.close()
@@ -1293,7 +1294,7 @@ def refresh_feed_profile_task(feed_id, activity_json=None):
             if feed and feed.instance_id and feed.instance.online() and not feed.is_local():
                 if not activity_json:
                     try:
-                        actor_data = get_request(feed.ap_public_url, headers={'Accept': 'application/activity+json'})
+                        actor_data = get_request(feed.ap_public_url, headers={'Accept': AP_FETCH_ACCEPT})
                     except httpx.HTTPError:  # get_request has already retried once (D224)
                         return
                     except Exception:  # a peer that requires signed fetches, as for users (D221)
@@ -1384,7 +1385,7 @@ def refresh_feed_profile_task(feed_id, activity_json=None):
 
                     if feed.ap_moderators_url:
                         owners_request = get_request(feed.ap_moderators_url,
-                                                     headers={'Accept': 'application/activity+json'})
+                                                     headers={'Accept': AP_FETCH_ACCEPT})
                         if owners_request.status_code == 200:
                             owners_data = owners_request.json()
                             owners_request.close()
@@ -1428,7 +1429,7 @@ def refresh_feed_profile_task(feed_id, activity_json=None):
                     # also make sure we have all the feeditems from the /following collection
                     if feed.ap_following_url:
                         res = get_request(feed.ap_following_url,
-                                          headers={'Accept': 'application/activity+json'})
+                                          headers={'Accept': AP_FETCH_ACCEPT})
                         if res.status_code == 200:
                             try:
                                 following_collection = res.json()
@@ -1839,7 +1840,7 @@ def actor_json_to_model(activity_json, address, server):
                 f"moderators url, so the feed has no owner to belong to")
             return None
         owner_users = []
-        owners_data = get_request(owners_url, headers={'Accept': 'application/activity+json'})
+        owners_data = get_request(owners_url, headers={'Accept': AP_FETCH_ACCEPT})
         if owners_data.status_code == 200:
             owners_json = owners_data.json()
             for owner in owners_json['orderedItems']:
@@ -1871,7 +1872,7 @@ def actor_json_to_model(activity_json, address, server):
         # also get the communities in the remote feed's /following list 
         feed_following = []
         try:
-            following_data = get_request(activity_json['following'], headers={'Accept': 'application/activity+json'})
+            following_data = get_request(activity_json['following'], headers={'Accept': AP_FETCH_ACCEPT})
         except KeyError:
             current_app.logger.error(f'KeyError for {address}@{server} while parsing ' + str(activity_json))
             return None
@@ -2619,11 +2620,11 @@ def new_instance_profile_task(instance_id: int):
             protocol = 'https'
             try:
                 # the root is often an HTML homepage, so it gets a page's cap, not an AP document's
-                instance_data = get_request(f"{protocol}://{instance.domain}", headers={'Accept': 'application/activity+json'},
+                instance_data = get_request(f"{protocol}://{instance.domain}", headers={'Accept': AP_FETCH_ACCEPT},
                                             max_bytes=PAGE_MAX_BYTES)
             except:
                 try:
-                    instance_data = get_request(f"http://{instance.domain}", headers={'Accept': 'application/activity+json'},
+                    instance_data = get_request(f"http://{instance.domain}", headers={'Accept': AP_FETCH_ACCEPT},
                                                 max_bytes=PAGE_MAX_BYTES)
                     protocol = 'http'
                 except:
@@ -2721,10 +2722,6 @@ def new_instance_profile_task(instance_id: int):
         raise
     finally:
         session.close()
-
-
-def is_activitypub_request():
-    return 'application/ld+json' in request.headers.get('Accept', '') or 'application/activity+json' in request.headers.get('Accept', '')
 
 
 def delete_post_or_comment(deletor, to_delete, store_ap_json, request_json, reason):
@@ -4104,11 +4101,11 @@ def update_post_from_activity(post: Post, request_json: dict):
             for endpoint in endpoints:
                 if endpoint in request_json['object']:
                     try:
-                        object_request = get_request(request_json['object'][endpoint], headers={'Accept': 'application/activity+json'})
+                        object_request = get_request(request_json['object'][endpoint], headers={'Accept': AP_FETCH_ACCEPT})
                     except httpx.HTTPError:
                         time.sleep(3)
                         try:
-                            object_request = get_request(request_json['object'][endpoint], headers={'Accept': 'application/activity+json'})
+                            object_request = get_request(request_json['object'][endpoint], headers={'Accept': AP_FETCH_ACCEPT})
                         except httpx.HTTPError:
                             object_request = None
                     if object_request and object_request.status_code == 200:
@@ -5234,7 +5231,7 @@ def fetch_object_capped(uri: str, retry_delay: float = 0) -> Tuple[Union[dict, N
 
     try:
         status, body = attempt(lambda: get_request_capped(uri, OBJECT_MAX_BYTES,
-                                                          headers={'Accept': 'application/activity+json'}))
+                                                          headers={'Accept': AP_FETCH_ACCEPT}))
     except httpx.HTTPError:
         return None, 'the object could not be fetched'
     prefix = 'the object'
@@ -5781,7 +5778,7 @@ def _origin_refusal_of_delete(object_id: str, label: str) -> Union[str, None]:
     private = _stored_private(object_id)
     max_bytes = TOMBSTONE_MAX_BYTES if private else 0
     try:
-        status, body = get_request_capped(object_id, max_bytes, headers={'Accept': 'application/activity+json'})
+        status, body = get_request_capped(object_id, max_bytes, headers={'Accept': AP_FETCH_ACCEPT})
     except httpx.HTTPError:
         return f'{label}: the object could not be fetched'
     suffix = ''

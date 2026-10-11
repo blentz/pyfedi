@@ -71,7 +71,7 @@ from app.utils import user_banned_from_community, gibberish, get_setting, commun
     feed_membership, get_task_session, patch_db_session, \
     blocked_phrases, orjson_response, moderating_communities, joined_communities, moderating_communities_ids, \
     moderating_communities_ids_all_users, publish_sse_event, blocked_users, block_honey_pot, instance_allowed, \
-    requestor_domain
+    requestor_domain, accepted_media_ranges
 import urllib.parse
 import app as app_pkg
 
@@ -479,7 +479,7 @@ def user_profile(actor):
         if request.method == 'HEAD':
             if is_activitypub_request():
                 resp = jsonify('')
-                resp.content_type = 'application/activity+json'
+                resp.content_type = ap_media_type()
                 return resp
             elif (user.deleted or user.banned) and current_user.is_anonymous:
                 abort(404)  # what show_profile answers the same GET
@@ -545,7 +545,7 @@ def user_profile(actor):
                                                      'name': field.label,
                                                      'value': field.text})
             resp = jsonify(actor_document(actor_data))
-            resp.content_type = 'application/activity+json'
+            resp.content_type = ap_media_type()
             resp.headers.set('Cache-Control', AP_CACHE_ACTOR)
             resp.headers.set('Vary', 'Accept')
             resp.headers.set('Link',
@@ -593,7 +593,7 @@ def user_outbox(actor):
         return redirect(url_for('activitypub.user_profile', actor=actor))
     outbox = paged_outbox(f"{current_app.config['SERVER_URL']}/u/{actor}/outbox", 0, lambda offset, limit: [])
     resp = jsonify(outbox)
-    resp.content_type = 'application/activity+json'
+    resp.content_type = ap_media_type()
     resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
     resp.headers.set('Vary', 'Accept')
     return resp
@@ -606,7 +606,7 @@ def community_profile(actor):
     actor = actor.strip()
     if '@' in actor:
         # don't provide activitypub info for remote communities
-        if 'application/ld+json' in request.headers.get('Accept', '') or 'application/activity+json' in request.headers.get('Accept', ''):
+        if is_activitypub_request():
             abort(400)
         community: Community = Community.query.filter_by(ap_id=actor.lower(), banned=False).first()
     else:
@@ -685,7 +685,7 @@ def community_profile(actor):
             for language in community.languages:
                 actor_data['language'].append({'identifier': language.code, 'name': language.name})
             resp = jsonify(actor_document(actor_data))
-            resp.content_type = 'application/activity+json'
+            resp.content_type = ap_media_type()
             resp.headers.set('Cache-Control', AP_CACHE_ACTOR)
             resp.headers.set('Vary', 'Accept')
             resp.headers.set('Link',
@@ -2480,7 +2480,7 @@ def community_outbox(actor):
                                    for post in ordered.offset(offset).limit(limit).all()])
 
         resp = jsonify(community_data)
-        resp.content_type = 'application/activity+json'
+        resp.content_type = ap_media_type()
         resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
         resp.headers.set('Vary', 'Accept')
         return resp
@@ -2513,7 +2513,7 @@ def community_featured(actor):
             community_data['orderedItems'].append(post_to_page(post))
 
         resp = jsonify(community_data)
-        resp.content_type = 'application/activity+json'
+        resp.content_type = ap_media_type()
         resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
         resp.headers.set('Vary', 'Accept')
         return resp
@@ -2545,7 +2545,7 @@ def community_moderators_route(actor):
             community_data['orderedItems'].append(moderator.public_url())
 
         resp = jsonify(community_data)
-        resp.content_type = 'application/activity+json'
+        resp.content_type = ap_media_type()
         resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
         resp.headers.set('Vary', 'Accept')
         return resp
@@ -2571,7 +2571,7 @@ def community_followers(actor):
             "items": []  # D175: intended (owner ruling) - a real count, but the member list is private
         }
         resp = jsonify(result)
-        resp.content_type = 'application/activity+json'
+        resp.content_type = ap_media_type()
         resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
         resp.headers.set('Vary', 'Accept')
         return resp
@@ -2606,7 +2606,7 @@ def user_followers(actor):
             "items": items
         }
         resp = jsonify(result)
-        resp.content_type = 'application/activity+json'
+        resp.content_type = ap_media_type()
         resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
         resp.headers.set('Vary', 'Accept')
         return resp
@@ -2633,7 +2633,7 @@ def comment_ap(comment_id):
         if request.method == 'GET' and not is_open(reply):   # S6: who it is for, as send_reply pushed it
             addressed_as_pushed(reply_data, reply)
         resp = jsonify(reply_data)
-        resp.content_type = 'application/activity+json'
+        resp.content_type = ap_media_type()
         ap_content_headers(resp, reply)
         resp.headers.set('Link',
                          f'<https://{current_app.config["SERVER_NAME"]}/comment/{reply.id}>; rel="alternate"; type="text/html"')
@@ -2656,7 +2656,7 @@ def tombstone_response(ap_id: str, former_type: str, private: bool = False):
     keep it, or it would tell the next, unsigned requester that the object existed."""
     resp = jsonify({'@context': default_context(), 'id': ap_id, 'type': 'Tombstone', 'formerType': former_type})
     resp.status_code = 410
-    resp.content_type = 'application/activity+json'
+    resp.content_type = ap_media_type()
     if private:
         resp.headers.update(PRIVATE_HEADERS)
     return resp
@@ -2699,6 +2699,21 @@ def addressed_as_pushed(document: dict, obj) -> dict:
     return document
 
 
+def ap_media_type() -> str:
+    """The content type to serve an ActivityPub document as (interop C1 item 5).
+
+    The AS2 JSON-LD form when the Accept header lists application/ld+json -- plain, or with the activitystreams
+    profile -- at a higher q-value than application/activity+json, or without application/activity+json at all;
+    else application/activity+json. The answer depends on Accept, so app/request_hooks.py adds `Vary: Accept` to
+    any ActivityPub answer that lacks it."""
+    ranges = accepted_media_ranges(request.headers.get('Accept', ''))
+    ld = max((quality for media_type, params, quality in ranges
+              if media_type == 'application/ld+json' and AS2_PROFILE in params.get('profile', AS2_PROFILE).split()),
+             default=0.0)
+    activity = max((quality for media_type, _params, quality in ranges if media_type == AP_MEDIA_TYPE), default=0.0)
+    return AS2_LD_MEDIA_TYPE if ld > activity else AP_MEDIA_TYPE
+
+
 def ap_content_headers(resp, obj):
     """Cache-Control and Vary for a served post or comment, or a post's replies or context collection.
 
@@ -2734,7 +2749,7 @@ def private_message_ap(message_id):
         abort(404)
     document = {'@context': default_context(), **chat_util.chat_message_ap_object(message, recipient)}
     resp = jsonify(document)
-    resp.content_type = 'application/activity+json'
+    resp.content_type = ap_media_type()
     resp.headers.update(PRIVATE_HEADERS)
     return resp
 
@@ -2788,7 +2803,7 @@ def post_ap(post_id):
             else:  # HEAD request
                 post_data = []
             resp = jsonify(post_data)
-            resp.content_type = 'application/activity+json'
+            resp.content_type = ap_media_type()
             ap_content_headers(resp, post)
             if post.slug:
                 resp.headers.set('Link',
@@ -2825,7 +2840,7 @@ def post_replies_ap(post_id):
         replies_collection = {"type": "OrderedCollection", "totalItems": len(replies), "orderedItems": replies}
         replies_collection['@context'] = default_context()
         resp = jsonify(replies_collection)
-        resp.content_type = 'application/activity+json'
+        resp.content_type = ap_media_type()
         ap_content_headers(resp, post)
         return resp
     else:
@@ -2852,7 +2867,7 @@ def post_ap_context(post_id):
         replies_collection['audience'] = post.community.profile_id()
 
         resp = jsonify(replies_collection)
-        resp.content_type = 'application/activity+json'
+        resp.content_type = ap_media_type()
         ap_content_headers(resp, post)
         return resp
     else:
@@ -2871,7 +2886,7 @@ def activities_json(type, id):
         addressees = addressees_of(activity_json)
         if audience_entitles(addressees, None):
             resp = jsonify(activity_json)
-            resp.content_type = 'application/activity+json'
+            resp.content_type = ap_media_type()
             resp.headers['Cache-Control'] = AP_CACHE_CONTENT
             return resp
         actor_url = activity_json.get('actor')
@@ -2880,7 +2895,7 @@ def activities_json(type, id):
         local_actor = named_actor if named_actor and named_actor.is_local() else None
         if audience_entitles(addressees, signed_requester_actor(), local_actor):
             resp = jsonify(activity_json)
-            resp.content_type = 'application/activity+json'
+            resp.content_type = ap_media_type()
             resp.headers.update(PRIVATE_HEADERS)
             return resp
     # a refusal and a miss are indistinguishable, and neither may be cached
@@ -3279,9 +3294,7 @@ def feed_profile(actor, feed_owner=None):
         actor = actor + '/' + feed_owner
     if '@' in actor:
         # don't provide activitypub info for remote communities
-        if 'application/ld+json' in request.headers.get('Accept',
-                                                        '') or 'application/activity+json' in request.headers.get(
-                'Accept', ''):
+        if is_activitypub_request():
             abort(400)
         feed: Feed = db.session.query(Feed).filter_by(ap_id=actor.lower(), banned=False).first()
     else:
@@ -3349,7 +3362,7 @@ def feed_profile(actor, feed_owner=None):
             for child_feed in feed.children.all():
                 actor_data['childFeeds'].append(child_feed.ap_profile_id)
             resp = jsonify(actor_document(actor_data))
-            resp.content_type = 'application/activity+json'
+            resp.content_type = ap_media_type()
             resp.headers.set('Cache-Control', AP_CACHE_ACTOR)
             resp.headers.set('Vary', 'Accept')
             resp.headers.set('Link',
@@ -3398,7 +3411,7 @@ def feed_outbox(actor):
     result = paged_outbox(feed.ap_outbox_url, listed.count(),
                           lambda offset, limit: [c.public_url() for c in ordered.offset(offset).limit(limit).all()])
     resp = jsonify(result)
-    resp.content_type = 'application/activity+json'
+    resp.content_type = ap_media_type()
     resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
     resp.headers.set('Vary', 'Accept')
     return resp
@@ -3442,7 +3455,7 @@ def feed_following(actor):
         "items": items
     }
     resp = jsonify(result)
-    resp.content_type = 'application/activity+json'
+    resp.content_type = ap_media_type()
     resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
     resp.headers.set('Vary', 'Accept')
     return resp
@@ -3483,7 +3496,7 @@ def feed_moderators_route(actor):
             moderators_data['orderedItems'].append(moderator.public_url())  # D183: as community_moderators_route
 
         resp = jsonify(moderators_data)
-        resp.content_type = 'application/activity+json'
+        resp.content_type = ap_media_type()
         resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
         resp.headers.set('Vary', 'Accept')
         return resp
@@ -3514,7 +3527,7 @@ def feed_followers(actor):
                 "items": []  # D175: intended (owner ruling) - a real count, but the member list is private
             }
             resp = jsonify(result)
-            resp.content_type = 'application/activity+json'
+            resp.content_type = ap_media_type()
             resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
             resp.headers.set('Vary', 'Accept')
             return resp
@@ -3621,5 +3634,5 @@ def quote_boost_auth():
         'interactingObject': remote_post_id,
     }
     response = make_response(response_payload)
-    response.headers['Content-Type'] = 'application/activity+json'
+    response.headers['Content-Type'] = ap_media_type()
     return response

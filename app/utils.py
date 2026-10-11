@@ -2335,8 +2335,36 @@ def mimetype_from_url(url):
     return mime_type
 
 
+def accepted_media_ranges(accept_header: str) -> list:
+    """(media type, parameters, q) for each media range of an Accept header, in order. The media type and the
+    parameter names are lowercased and quotes are stripped from values; an absent or unreadable q is 1, and q is
+    clamped to 0..1 (RFC 9110 section 12.4.2)."""
+    ranges = []
+    for part in accept_header.split(','):
+        pieces = [piece.strip() for piece in part.split(';')]
+        media_type = pieces[0].lower()
+        if not media_type:
+            continue
+        params, quality = {}, 1.0
+        for piece in pieces[1:]:
+            name, _, value = piece.partition('=')
+            name, value = name.strip().lower(), value.strip().strip('"')
+            if name == 'q':
+                try:
+                    quality = min(max(float(value), 0.0), 1.0)
+                except ValueError:
+                    quality = 1.0
+            else:
+                params[name] = value
+        ranges.append((media_type, params, quality))
+    return ranges
+
+
 def is_activitypub_request():
-    return 'application/ld+json' in request.headers.get('Accept', '') or 'application/activity+json' in request.headers.get('Accept', '')
+    """Whether the Accept header asks for ActivityPub: it lists application/activity+json or application/ld+json with
+    a q-value above 0. A wildcard does not count. (A substring test used to count q=0, which means "not this".)"""
+    return any(media_type in AP_MEDIA_TYPES and quality > 0
+               for media_type, _params, quality in accepted_media_ranges(request.headers.get('Accept', '')))
 
 
 def validation_required(func):
@@ -4056,7 +4084,7 @@ def fixup_url(url):
         peertube_domains = db.session.execute(text("SELECT domain FROM instance WHERE software = 'peertube'")).scalars()
         if parsed_url.netloc in peertube_domains:
             try:
-                response = get_request(url, headers={'Accept': 'application/activity+json'})
+                response = get_request(url, headers={'Accept': AP_FETCH_ACCEPT})
                 if response.status_code == 200:
                     try:
                         video_json = response.json()

@@ -203,7 +203,7 @@ def test_downgrade_then_upgrade_restores_the_column_off(app, db_session):
 # --- R-SECURECACHE: a signed answer must not reach an unsigned requester through a shared cache ---
 
 def _signed_get(app, path, signer):
-    """Production's signer adds and signs 'Accept: application/ld+json', so the header is sent as signed."""
+    """Production's signer adds and signs its Accept header (AP_FETCH_ACCEPT), so the header is sent as signed."""
     headers = signed_get_headers(path, signer)
     headers['User-Agent'] = UA
     with app.test_client() as client:

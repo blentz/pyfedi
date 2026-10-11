@@ -14,7 +14,7 @@ from flask import session, g, json, request, current_app
 from sqlalchemy import text
 from app.constants import POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_ARTICLE, POST_TYPE_VIDEO, POST_TYPE_POLL, \
     SUBSCRIPTION_MODERATOR, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, SUBSCRIPTION_PENDING, ROLE_ADMIN_NAME, VERSION, \
-    POST_TYPE_EVENT
+    POST_TYPE_EVENT, AP_MEDIA_TYPES
 from app.models import Site, utcnow
 from app.utils import getmtime, gibberish, shorten_string, shorten_url, digits, user_access, community_membership, \
     can_upvote, can_downvote, shorten_number, ap_datetime, current_theme, community_link_to_href, \
@@ -145,8 +145,12 @@ def register_request_hooks(app):
 
         secure_mode_cache_headers(response)   # S6 secure mode: a signed answer must not reach a shared cache
 
+        # An ActivityPub answer's content type follows the Accept header (ap_media_type), so it varies on it
+        ap_response = response.mimetype in AP_MEDIA_TYPES
+        if ap_response:
+            response.vary.add('Accept')
         # Don't set cookies for static resources or ActivityPub responses to make them cachable
-        if request.path.startswith('/static/') or request.path.startswith('/bootstrap/static/') or response.content_type == 'application/activity+json':
+        if request.path.startswith('/static/') or request.path.startswith('/bootstrap/static/') or ap_response:
             # Remove session cookies that mess up caching
             # Why the pragma below: this module already does
             # `from flask import session` at the top (module import time), so if

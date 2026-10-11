@@ -113,7 +113,7 @@ def test_an_ld_json_accept_header_also_selects_the_activitypub_document(app, db_
     response = profile_get(app, '/c/books', accept=LD_ACCEPT)
 
     assert response.status_code == 200
-    assert response.content_type == 'application/activity+json'
+    assert response.content_type == 'application/ld+json; profile="https://www.w3.org/ns/activitystreams"'
 
 
 def test_a_browser_accept_header_selects_the_html_renderer(app, db_session, monkeypatch):

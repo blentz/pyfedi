@@ -26,7 +26,7 @@ from app.community.forms import CreateLinkForm, CreateDiscussionForm, CreateVide
 from app.community.util import send_to_remote_instance, flair_from_form, hashtags_used_in_community, \
     search_for_community
 from app.constants import NOTIF_REPORT, NOTIF_REPORT_ESCALATION, POST_STATUS_SCHEDULED, POST_STATUS_PUBLISHED, \
-    POST_TYPE_EVENT, NOTIF_MENTION, NOTIF_ANSWER, SRC_API
+    POST_TYPE_EVENT, NOTIF_MENTION, NOTIF_ANSWER, SRC_API, AP_FETCH_ACCEPT
 from app.constants import SUBSCRIPTION_OWNER, SUBSCRIPTION_MODERATOR, POST_TYPE_LINK, \
     POST_TYPE_IMAGE, \
     POST_TYPE_ARTICLE, POST_TYPE_VIDEO, POST_TYPE_POLL, SRC_WEB
@@ -2754,7 +2754,7 @@ def post_fixup_from_remote(post_id: int):
 
     # will fail for some MBIN objects for same reason that 'View original on ...' does
     # (ap_id is lowercase, but original URL was mixed-case and remote instance software is case-sensitive)
-    remote_post_request = get_request(post.ap_id, headers={'Accept': 'application/activity+json'})
+    remote_post_request = get_request(post.ap_id, headers={'Accept': AP_FETCH_ACCEPT})
     if remote_post_request.status_code == 200:
         remote_post_json = remote_post_request.json()
         remote_post_request.close()

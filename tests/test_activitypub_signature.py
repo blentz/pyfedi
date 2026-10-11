@@ -24,6 +24,7 @@ import httpx
 import pytest
 
 from app import db
+from app.constants import AP_FETCH_ACCEPT
 from app.activitypub.signature import (HttpSignature, VerificationFormatError,
                                        signature_part)
 from app.models import SendQueue, utcnow
@@ -866,7 +867,7 @@ def test_a_get_request_signs_no_body_and_asks_for_json_ld(app):
 
     assert body_bytes == b''
     assert 'Digest' not in headers
-    assert headers['Accept'] == 'application/ld+json'
+    assert headers['Accept'] == AP_FETCH_ACCEPT
 
 
 @pytest.mark.parametrize('failure', [httpx.ConnectError('refused'), httpx.InvalidURL('bad url')])

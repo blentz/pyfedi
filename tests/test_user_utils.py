@@ -38,6 +38,7 @@ from flask import current_app, g
 from flask_login import login_user, logout_user
 
 from app import db
+from app.constants import AP_FETCH_ACCEPT
 from app.models import BannedInstances, Post, PostReply, Site, User, UserNote
 from app.user.utils import (SimplePagination, _get_user_archived_replies,
                             _get_user_moderates, _get_user_post_replies,
@@ -219,15 +220,14 @@ class TestWhatWebfingerSays:
             200, json={'links': [{'href': ACTOR}]}))
         assert search_for_user('@someone@remote.test') is None
 
-    def test_a_self_link_with_no_type_is_asked_for_as_activity_json(
+    def test_a_self_link_with_no_type_is_asked_for_as_activitypub(
             self, env, http_mock):
         http_mock.get(WEBFINGER).mock(return_value=httpx.Response(
             200, json={'links': [{'rel': 'self', 'href': ACTOR}]}))
         actor = http_mock.get(ACTOR).mock(
             return_value=httpx.Response(200, json=PERSON))
         search_for_user('@someone@remote.test')
-        assert actor.calls[0].request.headers['Accept'] == \
-            'application/activity+json'
+        assert actor.calls[0].request.headers['Accept'] == AP_FETCH_ACCEPT
 
     def test_a_webfinger_that_never_answers_raises(self, env, http_mock):
         """Nothing here catches it -- the source says so: "todo: try, except
