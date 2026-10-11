@@ -270,6 +270,38 @@ def test_the_cross_posts_list_leaves_out_a_post_the_viewer_may_not_see(db_sessio
     assert [p.id for p in rendered['cross_posts']] == [third.id]
 
 
+def test_the_post_page_shows_no_comments_from_a_cross_posted_post_the_viewer_may_not_see(db_session, app,
+                                                                                         monkeypatch):
+    """"Comments from other communities" walks cross_posts too: a stale id naming a followers-only post must not
+    pull in its replies (nor its community)."""
+    w = _cross_world()
+    _site_open()
+    third = make_post(make_community('third'), w.author, ap_id='https://test.piefed.local/post/3', title='again')
+    third.url = LINK
+    for p in (w.post, third):
+        reply = make_post_reply(p, w.author, f'a reply on {p.id}')
+        reply.body_html = f'<p>a reply on {p.id}</p>'
+        reply.visibility = p.visibility
+    w.public.cross_posts = [w.post.id, third.id]
+    db.session.commit()
+    rendered = {}
+    monkeypatch.setattr('app.post.routes.render_template',
+                        lambda template, **kw: rendered.update(kw) or app.response_class('rendered'))
+    response = app.test_client().get(f'/post/{w.public.id}')
+    assert response.status_code == 200
+    assert [c.id for c in rendered['more_replies']] == [third.community_id]
+
+
+@pytest.mark.parametrize('visibility, offered', [(VISIBILITY_PUBLIC, True), (VISIBILITY_FOLLOWERS, False)],
+                         ids=['public', 'followers-only'])
+def test_the_options_menu_offers_moving_only_an_open_post(db_session, app, monkeypatch, visibility, offered):
+    w = _world(visibility)
+    _site_open()
+    response = _client(app, w.author).get(f'/post/{w.post.id}/options_menu')
+    assert response.status_code == 200
+    assert (f'/post/{w.post.id}/move'.encode() in response.data) is offered
+
+
 def _site_open():
     site = db.session.get(Site, 1)
     site.private_instance = False
