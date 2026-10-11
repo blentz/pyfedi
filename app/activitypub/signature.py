@@ -61,7 +61,8 @@ from app.constants import DATETIME_MS_FORMAT
 from app.discovery.instance_answers import record_delivery_refusal
 from app.relays.refusals import record_relay_refusal
 from app.models import utcnow, ActivityPubLog, Community, Instance, CommunityMember, Site, User, SendQueue, public_key_pem
-from app.utils import RequestNotSendable, _capped_get, _capped_request, get_request_capped, get_task_session, is_invalid_get_request_uri
+from app.utils import RequestNotSendable, ResponseTooLarge, _capped_get, _capped_request, get_request_capped, \
+    get_task_session, is_invalid_get_request_uri
 import app.activitypub.util as activitypub_util
 
 
@@ -807,9 +808,10 @@ class HttpSignature:
             return uri, headers, body_bytes
         else:
             try:
-                # Through _capped_request, keeping the status: the inbox's answer is read under the 1 MiB cap and
-                # the fetch deadline, and an answer over either is dropped rather than raised -- the activity was
-                # delivered, and raising would have post_request send it again. It never follows a redirect, which
+                # Through _capped_request: the answer is read under the 1 MiB cap and the fetch deadline. For a
+                # POST the status is kept and an answer over either is dropped rather than raised -- the activity
+                # was delivered, and raising would have post_request send it again. A GET gets ResponseTooLarge
+                # instead, not an empty document to parse. It never follows a redirect, which
                 # is what `follow_redirects=method == "GET"` here always meant: every caller passes "post" (or
                 # "get") lowercase, and no caller sends a GET through this path any more -- signed GETs only sign
                 # (send_via_async) and fetch through _capped_get.
@@ -828,13 +830,13 @@ class HttpSignature:
                     # the HTTP signature over the digest requires.
                     content=body_bytes,
                     timeout=timeout,
-                    keep_status=True,
+                    keep_status=method.lower() != 'get',
                 )
-            except RequestNotSendable as ex:
-                # httpx refused the request itself, which it will do again on every retry: it stays a
-                # RequestNotSendable, so post_request logs it and does not queue it to be sent again. It carries no
-                # request, so the url is the one this was asked to send to.
-                raise RequestNotSendable(f"HTTP Exception for {uri} - {ex}") from None
+            except (RequestNotSendable, ResponseTooLarge) as ex:
+                # Kept as their own type, as neither is worth a retry: httpx refused the request itself, which it
+                # will do again (post_request logs it and does not queue it to be sent again), or a GET's answer was
+                # over the cap or the deadline. Neither carries a request, so the url is the one asked for.
+                raise type(ex)(f"HTTP Exception for {uri} - {ex}") from None
             except httpx.HTTPError as ex:
                 # Convert to a more generic error we handle
                 raise httpx.HTTPError(f"HTTP Exception for {ex.request.url} - {ex}") from None
