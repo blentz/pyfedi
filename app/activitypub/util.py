@@ -5898,6 +5898,9 @@ def verify_announced_inner(announce: dict, community=None,
 # replay refuses them -- replay re-runs the stored JSON without the origin refetch the LD path depends on.
 LD_SIGNED_LOG_PREFIX = 'LD-signed'
 current_ld_signed: ContextVar = ContextVar('current_ld_signed', default=False)
+# The document as sent, while process_inbox_request dispatches a normalised copy of it (interop C1 item 8):
+# announce_activity_to_followers forwards this one, since an LD signature covers what was sent.
+current_as_sent_json: ContextVar = ContextVar('current_as_sent_json', default=None)
 
 
 def log_incoming_ap(id, aplog_type, aplog_result, saved_json, message=None, session=None):
