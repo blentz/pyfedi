@@ -34,13 +34,11 @@ not request the `http_mock` fixture at all, and register no route anywhere.
 The session-scoped autouse `block_outbound_http` router (tests/conftest.py)
 is still active, and it registers zero routes, so any outbound httpx
 request raises respx's AllMockedAssertionError. That error is neither
-httpx.HTTPError nor any of the five exception types app.utils.get_request
-handles -- its clauses are httpx.InvalidURL, ValueError, httpx.ReadError,
-httpx.HTTPError and httpx.StreamError -- so it is normalised
-by nothing in app.utils.get_request and caught by nothing in
-verify_object_from_source -- the function's two `except JSONDecodeError`
-clauses wrap `object_request.json()`, not the network call -- so it
-propagates and the test ERRORS. "No fetch happened" is therefore proved by
+httpx.HTTPError nor any of the exception types app.utils.get_request_capped
+normalises (httpx.InvalidURL, ValueError, httpx.StreamError), so it is
+caught by nothing in verify_object_from_source -- its JSON `except` wraps
+the parse of the body, not the network call -- so it propagates and the
+test ERRORS. "No fetch happened" is therefore proved by
 the absence of a route plus a passing test, not by interrogating a mock.
 
 HOSTS RATHER THAN AUTHORITIES. Both guards go through `host_of`, which
@@ -66,7 +64,7 @@ guards -- see the two "will not parse" tests. Under the previous authority
 comparison those two inputs raised ValueError out of the function instead.
 
 TIMING. R-NORETRY: verify_object_from_source fetches once and never sleeps
-(get_request(retry=False); the signed fetch is also a single attempt). The
+(get_request_capped, which never retries; the signed fetch is signed_get_capped). The
 transport-failure tests patch both sleep bindings with a Mock and assert it
 was never called and that the respx route saw exactly the expected requests.
 
@@ -100,8 +98,11 @@ from unittest.mock import Mock
 import httpx
 import pytest
 
-from app.activitypub.util import verify_object_from_source
-from app.utils import get_request
+import time
+from types import SimpleNamespace
+
+from app.activitypub.util import OBJECT_MAX_BYTES, verify_object_from_source
+from app.utils import get_request_capped
 from tests.factories import (PEER_ACTOR_URI, PEER_OBJECT_HOST, PEER_OBJECT_URI,
                              announce_activity, note_document, seed_signing_site)
 
@@ -124,6 +125,8 @@ NO_SIGNING_SITE = 'the object needs a signed fetch and there is no Site row to s
 MISSING_KEYS = 'the fetched object has no id, type or attributedTo'
 UNUSABLE_ATTRIBUTED_TO = 'the fetched object has an attributedTo of an unusable type'
 ATTRIBUTED_ELSEWHERE = 'the fetched object is attributed to a different host than its URI'
+TOO_BIG = 'the object response was over the size or time limit'
+SIGNED_TOO_BIG = 'the signed object response was over the size or time limit'
 
 # Both sleep call sites reachable from this function are neutralised by the
 # shared no_real_sleeping fixture -- see the module docstring's TIMING
@@ -155,7 +158,7 @@ class TestSuccessfulVerification:
 class TestPreFetchHostComparison:
     """Guard 1, which runs BEFORE the fetch. No test here requests
     `http_mock` or registers any route, so a fetch would raise out of
-    get_request and error the test -- see the module docstring's PROVING THE
+    get_request_capped and error the test -- see the module docstring's PROVING THE
     PRE-FETCH REFUSALS DO NOT FETCH paragraph.
     """
 
@@ -482,8 +485,8 @@ class TestFetchOutcomes:
 
     def test_a_401_retries_with_a_signed_request_and_uses_its_body(self, app, db_session, http_mock):
         """respx matches by (method, url), so both fetches share one route
-        with an ordered side_effect list: the first entry answers the plain
-        get_request, the second the signed retry. The signed body carries a
+        with an ordered side_effect list: the first entry answers the unsigned
+        get_request_capped, the second the signed retry. The signed body carries a
         marker absent from anything else, so the returned object proves the
         SIGNED response is what was used."""
         seed_signing_site()
@@ -544,8 +547,8 @@ class TestFetchOutcomes:
         assert request_json['object'] == URI
 
     def test_a_transport_failure_makes_one_request_and_refuses(self, app, db_session, http_mock, monkeypatch):
-        """R-NORETRY: get_request's own retry and the outer retry are both
-        gone. Production change that fails this: any second attempt or sleep."""
+        """R-NORETRY: get_request_capped never retries, and nor does the caller.
+        Production change that fails this: any second attempt or sleep."""
         sleeps = Mock()
         monkeypatch.setattr('time.sleep', sleeps)
         monkeypatch.setattr('app.utils.sleep', sleeps)
@@ -561,7 +564,7 @@ class TestFetchOutcomes:
         assert request_json['object'] == URI
 
     def test_a_read_error_makes_one_request_and_refuses(self, app, db_session, http_mock, monkeypatch):
-        """httpx.ReadError took its own retry clause in get_request."""
+        """httpx.ReadError once took its own retry clause in get_request."""
         sleeps = Mock()
         monkeypatch.setattr('time.sleep', sleeps)
         monkeypatch.setattr('app.utils.sleep', sleeps)
@@ -573,14 +576,14 @@ class TestFetchOutcomes:
 
     @pytest.mark.parametrize('error', [httpx.InvalidURL('bad url'), ValueError('bad value'), httpx.StreamError('stream')])
     def test_a_non_http_error_from_the_client_is_normalised_and_refused(self, app, db_session, monkeypatch, error):
-        """get_request(retry=False) maps InvalidURL, ValueError and StreamError (none an
+        """get_request_capped maps InvalidURL, ValueError and StreamError (none an
         HTTPError) to httpx.HTTPError, so the caller refuses instead of raising."""
         def boom(*args, **kwargs):
             raise error
-        monkeypatch.setattr('app.utils.httpx_client.get', boom)
+        monkeypatch.setattr('app.utils.httpx_client.stream', boom)
 
         with pytest.raises(httpx.HTTPError):
-            get_request(URI, retry=False)
+            get_request_capped(URI, OBJECT_MAX_BYTES)
         assert verify_object_from_source(announce_activity()) == (None, FETCH_FAILED)
 
     @pytest.mark.parametrize('body', ['"just a string"', '[1, 2]', '42', 'null'])
@@ -590,3 +593,86 @@ class TestFetchOutcomes:
 
         assert verify_object_from_source(request_json) == (None, 'the fetched object is not a JSON object')
         assert request_json['object'] == URI
+
+
+def _endless(pulled):
+    while True:
+        pulled.append(1)
+        yield b' ' * 65536
+
+
+class TestCappedFetch:
+    """Both fetches go through get_request_capped: a hostile origin's huge or slow body is cut off, not buffered,
+    and the signed retry (signed_get_capped) is no exception -- it was the uncapped path."""
+
+    def test_a_huge_unsigned_body_is_refused_unbuffered(self, app, db_session, http_mock):
+        pulled = []
+        http_mock.get(URI).respond(200, content=_endless(pulled))
+
+        assert verify_object_from_source(announce_activity()) == (None, TOO_BIG)
+        assert len(pulled) * 65536 <= OBJECT_MAX_BYTES + 65536
+
+    def test_a_huge_signed_body_is_refused_unbuffered(self, app, db_session, http_mock):
+        seed_signing_site()
+        pulled = []
+        http_mock.get(URI).mock(side_effect=[httpx.Response(401), httpx.Response(200, content=_endless(pulled))])
+
+        assert verify_object_from_source(announce_activity()) == (None, SIGNED_TOO_BIG)
+        assert len(pulled) * 65536 <= OBJECT_MAX_BYTES + 65536
+
+    def test_a_slow_signed_body_is_cut_at_the_wall_clock(self, app, db_session, http_mock, monkeypatch):
+        seed_signing_site()
+        now = [1000.0]
+        monkeypatch.setattr('app.utils.time', SimpleNamespace(**{**vars(time), 'monotonic': lambda: now[0]}))
+        pulled = []
+
+        def trickle():
+            for _ in range(1000):
+                pulled.append(1)
+                now[0] += 5   # five fake seconds per byte
+                yield b' '
+
+        http_mock.get(URI).mock(side_effect=[httpx.Response(401), httpx.Response(200, content=trickle())])
+
+        assert verify_object_from_source(announce_activity()) == (None, SIGNED_TOO_BIG)
+        assert len(pulled) <= 5
+
+    def test_a_declared_oversize_body_is_refused_without_reading(self, app, db_session, http_mock):
+        http_mock.get(URI).respond(200, content=b'{}', headers={'Content-Length': str(OBJECT_MAX_BYTES + 1)})
+
+        assert verify_object_from_source(announce_activity()) == (None, TOO_BIG)
+
+    def test_a_signed_redirect_is_not_followed(self, app, db_session, http_mock):
+        """No route serves the Location, so following it would error the test."""
+        seed_signing_site()
+        route = http_mock.get(URI).mock(side_effect=[
+            httpx.Response(401), httpx.Response(302, headers={'Location': 'https://elsewhere.example/x'})])
+
+        assert verify_object_from_source(announce_activity()) == (None, 'the signed object fetch returned HTTP 302')
+        assert route.call_count == 2
+
+    def test_a_signed_non_200_is_refused_even_with_a_json_body(self, app, db_session, http_mock):
+        """The signed body used to be parsed whatever the status, so a 404 carrying a Note was accepted."""
+        seed_signing_site()
+        http_mock.get(URI).mock(side_effect=[httpx.Response(401), httpx.Response(404, json=note_document())])
+
+        assert verify_object_from_source(announce_activity()) == (None, 'the signed object fetch returned HTTP 404')
+
+    def test_a_peer_refusing_both_signature_formats_gets_exactly_two_signed_requests(self, app, db_session,
+                                                                                     http_mock):
+        seed_signing_site()
+        route = http_mock.get(URI).respond(401)
+
+        assert verify_object_from_source(announce_activity()) == (None, 'the signed object fetch returned HTTP 401')
+        assert route.call_count == 3
+        assert ['signature' in call.request.headers for call in route.calls] == [False, True, True]
+
+    def test_a_deeply_nested_body_refuses_rather_than_raising(self, app, db_session, http_mock):
+        http_mock.get(URI).respond(200, content=b'[' * 100000 + b']' * 100000)
+
+        assert verify_object_from_source(announce_activity()) == (None, NOT_JSON)
+
+    def test_a_body_that_is_not_utf8_refuses(self, app, db_session, http_mock):
+        http_mock.get(URI).respond(200, content=b'\xff\xfe{}')
+
+        assert verify_object_from_source(announce_activity()) == (None, NOT_JSON)

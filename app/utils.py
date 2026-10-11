@@ -137,8 +137,7 @@ def getmtime(filename):
 
 
 # do a GET request to a uri, return the result
-# retry=False: one attempt, no sleep, any transport failure raises httpx.HTTPError (inbox processing is no-retry)
-def get_request(uri, params=None, headers=None, retry=True) -> httpx.Response:
+def get_request(uri, params=None, headers=None) -> httpx.Response:
     if is_invalid_get_request_uri(uri):
         current_app.logger.info(f"invalid get request {uri}")
         raise httpx.HTTPError("HTTPError: invalid uri") from None
@@ -151,13 +150,6 @@ def get_request(uri, params=None, headers=None, retry=True) -> httpx.Response:
         payload_str = urllib.parse.urlencode(params, safe=':@')
     else:
         payload_str = urllib.parse.urlencode(params) if params else None
-    if not retry:
-        try:
-            return httpx_client.get(uri, params=payload_str, headers=headers, timeout=timeout, follow_redirects=False)
-        except httpx.HTTPError as failure:
-            raise failure from None
-        except (httpx.InvalidURL, ValueError, httpx.StreamError) as failure:
-            raise httpx.HTTPError(f"HTTPError: {str(failure)}") from None
     try:
         response = httpx_client.get(uri, params=payload_str, headers=headers, timeout=timeout, follow_redirects=False)
     except httpx.InvalidURL as invalid_url:

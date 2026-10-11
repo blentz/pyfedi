@@ -27,7 +27,7 @@ from sqlalchemy import text, Integer, update
 from sqlalchemy.exc import IntegrityError
 
 from app import db, cache, celery, plugins
-from app.activitypub.signature import signed_get_request, send_post_request, default_context, RsaKeys
+from app.activitypub.signature import signed_get_capped, signed_get_request, send_post_request, default_context, RsaKeys
 from app.constants import *
 from app.models import User, Post, Community, File, PostReply, Instance, utcnow, \
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
@@ -5493,6 +5493,11 @@ def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
     return None
 
 
+# The largest object document verify_object_from_source reads (both fetches, unsigned and signed). Mastodon caps
+# the JSON it fetches at 1 MB too; an AP object is a few kilobytes.
+OBJECT_MAX_BYTES = 1024 * 1024
+
+
 # called from activitypub/routes if something is posted to us without any kind of signature (typically from PeerTube)
 def verify_object_from_source(request_json) -> Tuple[Union[dict, None], Union[str, None]]:
     """Decide whether the object URI an unsigned activity names really belongs
@@ -5527,32 +5532,28 @@ def verify_object_from_source(request_json) -> Tuple[Union[dict, None], Union[st
         return None, 'the announcing actor is on a different host than the object URI'
 
     try:
-        object_request = get_request(uri, headers={'Accept': 'application/activity+json'}, retry=False)
+        status, body = get_request_capped(uri, OBJECT_MAX_BYTES, headers={'Accept': 'application/activity+json'})
     except httpx.HTTPError:
         return None, 'the object could not be fetched'
-    if object_request.status_code == 200:
-        try:
-            object = object_request.json()
-        except JSONDecodeError:
-            object_request.close()
-            return None, 'the object response was not JSON'
-        object_request.close()
-    elif object_request.status_code == 401:
+    prefix = 'the object'
+    if status == 401:
         site = db.session.get(Site, 1)
         if site is None:
             return None, 'the object needs a signed fetch and there is no Site row to sign it'
         try:
-            object_request = signed_get_request(uri, site.private_key, f"{current_app.config['SERVER_URL']}/actor#main-key")
+            status, body = signed_get_capped(uri, site.private_key, f"{current_app.config['SERVER_URL']}/actor#main-key",
+                                             OBJECT_MAX_BYTES)
         except httpx.HTTPError:
             return None, 'the object could not be fetched with a signed request'
-        try:
-            object = object_request.json()
-        except JSONDecodeError:
-            object_request.close()
-            return None, 'the signed object response was not JSON'
-        object_request.close()
-    else:
-        return None, f'the object fetch returned HTTP {object_request.status_code}'
+        prefix = 'the signed object'
+    if status != 200:
+        return None, f'{prefix} fetch returned HTTP {status}'
+    if body is None:
+        return None, f'{prefix} response was over the size or time limit'
+    try:
+        object = json.loads(body)
+    except (ValueError, RecursionError):   # JSONDecodeError, UnicodeDecodeError; RecursionError: deep nesting
+        return None, f'{prefix} response was not JSON'
 
     if not isinstance(object, dict):
         return None, 'the fetched object is not a JSON object'
@@ -5694,8 +5695,9 @@ def _origin_refusal_of_delete(object_id: str, label: str) -> Union[str, None]:
 
     R-DELSIGNED: GoToSocial and authorized-fetch Mastodon/Akkoma answer 401/403 to every unsigned GET, even for an
     object they deleted, so a 401/403 is asked again exactly once, signed as the instance actor (as
-    verify_object_from_source does; signed_get_request's double knock is the one sanctioned extra attempt). With no
-    Site key to sign with, the unsigned answer stands."""
+    verify_object_from_source does; signed_get_capped's double knock is the one sanctioned extra attempt), status
+    only: signed_get_capped reads no body, follows no redirect and has a deadline. With no Site key to sign with,
+    the unsigned answer stands."""
     try:
         status, _body = get_request_capped(object_id, 0, headers={'Accept': 'application/activity+json'})
     except httpx.HTTPError:
@@ -5705,12 +5707,11 @@ def _origin_refusal_of_delete(object_id: str, label: str) -> Union[str, None]:
         site = db.session.get(Site, 1)
         if site is not None and site.private_key:
             try:
-                response = signed_get_request(object_id, site.private_key,
-                                              f"{current_app.config['SERVER_URL']}/actor#main-key")
+                status, _body = signed_get_capped(object_id, site.private_key,
+                                                  f"{current_app.config['SERVER_URL']}/actor#main-key", 0)
             except httpx.HTTPError:
                 return f'{label}: the object could not be fetched with a signed request'
-            response.close()
-            status, suffix = response.status_code, ' to a signed fetch'
+            suffix = ' to a signed fetch'
     if status in (404, 410):
         return None
     if status == 200:
