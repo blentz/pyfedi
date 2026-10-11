@@ -145,8 +145,10 @@ FETCH_MAX_SECONDS = 15
 PAGE_MAX_BYTES = 5 * 1024 * 1024                # an HTML page; one page of a remote directory or community list
 MEDIA_MAX_BYTES = 10 * 1024 * 1024              # an image (R207's upload cap), an RSS feed, an archived post
 MEDIA_MAX_SECONDS = 30
-INSTANCE_LIST_MAX_BYTES = 8 * 1024 * 1024       # a Lemmy /api/v3/federated_instances (768 KB on lemmy.world)
-INSTANCE_LIST_MAX_SECONDS = 30
+# A list of domains: a Lemmy /api/v3/federated_instances (768 KB on lemmy.world), the disposable-email domains.txt
+# (1.5 MB).
+DOMAIN_LIST_MAX_BYTES = 8 * 1024 * 1024
+DOMAIN_LIST_MAX_SECONDS = 30
 LEMMYVERSE_MAX_BYTES = 32 * 1024 * 1024         # data.lemmyverse.net's community.full.json (4.8 MB)
 LEMMYVERSE_MAX_SECONDS = 120
 
@@ -4422,8 +4424,8 @@ def retrieve_defederation_list(domain: str) -> Optional[List[str]]:
     software = instance_software(domain)
     if software == 'lemmy' or software == 'piefed' or software == 'pylova':
         try:
-            response = get_request(f'https://{domain}/api/v3/federated_instances', max_bytes=INSTANCE_LIST_MAX_BYTES,
-                                   max_seconds=INSTANCE_LIST_MAX_SECONDS)
+            response = get_request(f'https://{domain}/api/v3/federated_instances', max_bytes=DOMAIN_LIST_MAX_BYTES,
+                                   max_seconds=DOMAIN_LIST_MAX_SECONDS)
         except:
             response = None
         if not response or response.status_code != 200:

@@ -43,6 +43,7 @@ from PIL import Image
 from app import db
 from app.activitypub.util import make_image_sizes, make_image_sizes_async
 from app.models import File, Post, Site
+from app.utils import MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS
 from tests.factories import (make_community, make_community_member, make_file,
                              make_post)
 
@@ -257,9 +258,11 @@ class TestAnImageBehindLemmysProxy:
     def test_the_real_url_is_tried_when_the_proxy_fails(self, env):
         file = a_file(env, self.PROXIED)
         asked = []
+        caps = []
 
         def answer(url, *args, **kwargs):
             asked.append(url)
+            caps.append(kwargs)
             if 'image_proxy' in url:
                 return httpx.Response(404)
             return answered_with(image_bytes(400, 300, fmt='JPEG'),
@@ -270,6 +273,8 @@ class TestAnImageBehindLemmysProxy:
         stored = cleanup(file)
         assert asked[-1] == 'https://i.guim.test/img/photo.jpg'
         assert stored.file_path is not None
+        # A photo passes get_request's default 1 MiB easily: both downloads take the image cap.
+        assert caps == [{'max_bytes': MEDIA_MAX_BYTES, 'max_seconds': MEDIA_MAX_SECONDS}] * 2
 
     def test_a_500_from_the_proxy_counts_too(self, env):
         file = a_file(env, self.PROXIED)

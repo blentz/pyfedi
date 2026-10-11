@@ -38,6 +38,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     more_info_link, is_more_info_link, more_info_url_from, \
     language_from_ap, adjust_domain_post_count, actor_name_from_ap, PostReplyValidationError, post_file, GALLERY_BLOCKED_WEIGHT
 from app.utils import FETCH_MAX_BYTES, get_request, get_request_capped, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
+    MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, \
     sanitise_posting_warning, \
     is_image_url, domain_from_url, gibberish, ensure_directory_exists, shorten_string, fixup_url, \
     microblog_content_to_title, is_video_url, \
@@ -2125,7 +2126,8 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
                     if file.source_url.endswith('.gif'):    # don't resize gifs, it breaks their animation
                         return
                     try:
-                        source_image_response = get_request(file.source_url)
+                        source_image_response = get_request(file.source_url, max_bytes=MEDIA_MAX_BYTES,
+                                                            max_seconds=MEDIA_MAX_SECONDS)
                     except:
                         pass
                     else:
@@ -2137,7 +2139,8 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
                             query_params = parse_qs(parsed_url.query)
                             if 'url' in query_params:
                                 url_value = query_params['url'][0]
-                                source_image_response = get_request(url_value)
+                                source_image_response = get_request(url_value, max_bytes=MEDIA_MAX_BYTES,
+                                                                    max_seconds=MEDIA_MAX_SECONDS)
                             else:
                                 source_image_response = None
                         if source_image_response and source_image_response.status_code == 200:

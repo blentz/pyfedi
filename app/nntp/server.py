@@ -49,7 +49,7 @@ import logging
 from app.models import Post, PostReply, User, utcnow, Site, Community
 from sqlalchemy.orm import load_only
 from app.utils import communities_banned_from, blocked_or_banned_instances, filtered_out_communities, get_setting, \
-    get_request
+    get_request, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS
 from sqlalchemy import func
 from app import db
 from app.visibility import can_view, visible_to_clause
@@ -753,7 +753,7 @@ class PieFedNNTPServer(NNTPServer):
         if image_url:
             try:
                 # R162: through the SSRF guard and the pinned client, not urllib
-                resp = get_request(image_url)
+                resp = get_request(image_url, max_bytes=MEDIA_MAX_BYTES, max_seconds=MEDIA_MAX_SECONDS)
                 try:
                     if resp.status_code != 200:
                         raise ValueError(f'status {resp.status_code}')

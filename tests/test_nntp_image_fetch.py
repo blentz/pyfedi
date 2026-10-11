@@ -11,6 +11,7 @@ from unittest.mock import patch
 import httpx
 
 from app.nntp.server import PieFedNNTPServer
+from app.utils import FETCH_MAX_BYTES
 
 
 def a_post(image_url):
@@ -31,6 +32,16 @@ def test_the_image_is_attached(app, http_mock):
     assert 'filename="image.png"' in body
     assert 'UE5HREFUQQ==' in body          # base64 of PNGDATA
     assert headers['MIME-Version'] == '1.0'
+
+
+def test_an_image_over_the_default_cap_is_attached(app, http_mock):
+    """A photo passes get_request's default 1 MiB easily: the NNTP image fetch takes the image cap
+    (MEDIA_MAX_BYTES) instead."""
+    http_mock.get('https://cdn.example/a.png').mock(return_value=httpx.Response(
+        200, content=b'P' * (FETCH_MAX_BYTES + 1), headers={'Content-Type': 'image/png'}))
+    with app.app_context():
+        body, headers = build(a_post('https://cdn.example/a.png'))
+    assert 'filename="image.png"' in body
 
 
 def test_a_private_address_is_not_fetched(app, monkeypatch):

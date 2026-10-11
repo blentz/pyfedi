@@ -44,7 +44,8 @@ from app.shared.post import make_post
 from app.relays.expiry import expire_relayed_posts
 from app.utils import retrieve_block_list, blocked_domains, retrieve_peertube_block_list, \
     shorten_string, get_request, blocked_communities, gibberish, \
-    LEMMYVERSE_MAX_BYTES, LEMMYVERSE_MAX_SECONDS, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, \
+    DOMAIN_LIST_MAX_BYTES, DOMAIN_LIST_MAX_SECONDS, LEMMYVERSE_MAX_BYTES, LEMMYVERSE_MAX_SECONDS, \
+    MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, \
     recently_upvoted_post_replies, recently_upvoted_posts, jaccard_similarity, \
     get_redis_connection, instance_online, instance_gone_forever, find_next_occurrence, \
     guess_mime_type, ensure_directory_exists, \
@@ -1869,7 +1870,8 @@ def register(app):
 
             print('Getting disposable email domain list...')
             resp = get_request(
-                'https://raw.githubusercontent.com/disposable/disposable-email-domains/master/domains.txt')
+                'https://raw.githubusercontent.com/disposable/disposable-email-domains/master/domains.txt',
+                max_bytes=DOMAIN_LIST_MAX_BYTES, max_seconds=DOMAIN_LIST_MAX_SECONDS)
             if resp.status_code == 200:
                 with open('app/static/tmp/disposable_domains.txt', 'w') as f:
                     f.write(resp.content.decode('utf-8'))
