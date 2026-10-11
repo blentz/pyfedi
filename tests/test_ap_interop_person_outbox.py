@@ -13,10 +13,11 @@ from sqlalchemy import event
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.constants import POST_STATUS_REVIEWING, VISIBILITY_FOLLOWERS, VISIBILITY_UNLISTED
-from app.models import Community, Post, User, utcnow
-from tests.factories import make_chat_message, make_community, make_instance, make_post, make_post_reply, make_user
+from app.models import Community, Instance, Post, User, utcnow
+from tests.factories import make_chat_message, make_community, make_instance, make_instance_block, make_post, \
+    make_post_reply, make_user
 from tests.test_actor_profiles import seed_actors
-from tests.test_ap_content_objects import ap_get
+from tests.test_ap_content_objects import ap_get, signed_ap_get
 
 SERVER = 'https://test.piefed.local'
 OUTBOX = f'{SERVER}/u/alice/outbox'
@@ -237,3 +238,46 @@ def test_a_page_costs_the_same_queries_however_much_the_user_has_written(app, db
     large = _statements_for(app, '/u/alice/outbox?page=1')
 
     assert small == large
+
+
+def _blocking(author):
+    """alice blocks blocked.example; peer2.example is a known instance she has not blocked."""
+    make_instance_block(author, make_instance('blocked.example'))
+    make_instance('peer2.example')
+
+
+def test_an_instance_the_user_blocked_is_refused(app, db_session):
+    """D194, as post_ap_refusal and comment_ap: a blocked instance may not read in bulk what it may not fetch one
+    object at a time."""
+    author, community = _world()
+    hidden = _post(community, author, 5)
+    _blocking(author)
+
+    response = ap_get(app, '/u/alice/outbox', user_agent='Test (+https://blocked.example)')
+
+    assert response.status_code == 401
+    assert b'blocked.example' in response.data
+    assert hidden.ap_id.encode() not in response.data
+
+
+def test_a_blocked_signer_is_refused_whatever_its_user_agent_claims(app, db_session):
+    author, community = _world()
+    _blocking(author)
+    signer = make_user(db.session.query(Instance).filter_by(domain='blocked.example').one(), 'signer', with_keys=True)
+
+    response = signed_ap_get(app, '/u/alice/outbox', signer, 'Test (+https://peer2.example)')
+
+    assert response.status_code == 401
+
+
+def test_a_user_who_blocks_instances_has_an_outbox_that_varies_on_the_requester(app, db_session):
+    """Served to some instances and refused to others, so a shared cache must key on who asks."""
+    author, community = _world()
+    shown = _post(community, author, 5)
+    _blocking(author)
+
+    response = ap_get(app, '/u/alice/outbox', user_agent='Test (+https://peer2.example)')
+
+    assert response.status_code == 200
+    assert _object_ids(response.json) == [shown.ap_id]
+    assert [part.strip() for part in response.headers['Vary'].split(',')][:3] == ['Accept', 'User-Agent', 'Signature']
