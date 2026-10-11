@@ -3059,8 +3059,6 @@ def process_question_answer(user, store_ap_json, request_json, announced):
 
 
 
-# Private Messages, for both Create / ChatMessage (PieFed / Lemmy), and Create / Note (Mastodon, NodeBB)
-# returns True if Create / Note was a PM (irrespective of whether the chat was successful)
 def may_moderate(community: Community, actor) -> bool:
     """The authority an inbound Add or Remove asks of its actor, and so does an Undo of either: a moderator of
     the community, or an admin of the community's instance (interop C1 item 3)."""
@@ -3074,7 +3072,7 @@ def process_add(core_activity, user, community, feed, announced, id, saved_json,
     added state is then a logged no-op, not a second write."""
     if not announced and not feed:
         community = find_community(core_activity)
-    if feed and 'id' in core_activity['object']:
+    if feed and isinstance(core_activity.get('object'), dict) and 'id' in core_activity['object']:
         community_to_add = find_actor_or_create_cached(core_activity['object']['id'], community_only=True)
         # if community found or created - add the FeedItem and update Feed info
         if community_to_add and isinstance(community_to_add, Community):
@@ -3164,7 +3162,7 @@ def process_remove(core_activity, user, community, feed, announced, id, saved_js
     removed state is then a logged no-op, and a feed's auto-unsubscribe loop does not run for it."""
     if not announced and not feed:
         community = find_community(core_activity)
-    if feed and 'id' in core_activity['object']:
+    if feed and isinstance(core_activity.get('object'), dict) and 'id' in core_activity['object']:
         community_to_remove = find_actor_or_create_cached(core_activity['object']['id'], community_only=True)
         # if community found or created - remove the FeedItem and update Feed info
         if community_to_remove and isinstance(community_to_remove, Community):
@@ -3213,7 +3211,7 @@ def process_remove(core_activity, user, community, feed, announced, id, saved_js
                                                   fm_user.private_key, fm_user.public_url() + '#main-key',
                                                   timeout=10)
 
-                        if proceed:
+                        if proceed:  # pragma: no branch -- proceed is set True just above
                             session.query(CommunityMember).filter_by(user_id=fm_user.id,
                                                                         community_id=community_to_remove.id).delete()
                             session.query(CommunityJoinRequest).filter_by(user_id=fm_user.id,
@@ -3279,6 +3277,8 @@ def process_remove(core_activity, user, community, feed, announced, id, saved_js
         log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json, 'Remove: cannot find community or feed')
 
 
+# Private Messages, for both Create / ChatMessage (PieFed / Lemmy), and Create / Note (Mastodon, NodeBB)
+# returns True if Create / Note was a PM (irrespective of whether the chat was successful)
 def process_chat(user, store_ap_json, core_activity, session):
     saved_json = core_activity if store_ap_json else None
     id = core_activity['id']
