@@ -32,7 +32,7 @@ from app.activitypub.util import activity_dedupe_key, claim_activity, release_ac
     verify_announced_inner, verify_ld_accepted_activity, ANNOUNCED_DELETE_DEFERRED, cross_origin_delete_delay, _id_of, \
     post_replies_for_ap, is_vote, known_instance_id, resolve_remote_post_from_search, proactively_delete_content, \
     process_quote_boost, object_has_missing_fields, find_microblogging_community, process_announce_of_uri, \
-    announce_target_uri, undo_boost, LD_SIGNED_LOG_PREFIX, current_ld_signed, normalise_activity_types, \
+    announce_target_uri, undo_boost, withdraw_flag, LD_SIGNED_LOG_PREFIX, current_ld_signed, normalise_activity_types, \
     NO_STRING_TYPE_MESSAGE, names_actor, refresh_user_profile_task
 # The module, not the name: app.community.routes reaches this file through
 # app.activitypub.signature before show_community is defined (U-circular-import)
@@ -2302,6 +2302,11 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                 post_reply.answer = False
                                 session.commit()
                             log_incoming_ap(id, APLOG_LOCK, APLOG_SUCCESS, saved_json)
+                        return
+
+                    if core_activity['object']['type'] == 'Flag':  # Withdraw a report (interop C1 item 3)
+                        result, message = withdraw_flag(user, core_activity['object'], session)
+                        log_incoming_ap(id, APLOG_REPORT, result, saved_json, message)
                         return
 
                     log_incoming_ap(id, APLOG_MONITOR, APLOG_PROCESSING, request_json, 'Unmatched activity')

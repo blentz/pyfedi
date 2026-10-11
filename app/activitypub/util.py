@@ -4654,6 +4654,11 @@ def process_report(user, reported, request_json, session) -> bool:
     `conversation_report.html`. What this change fixes is the claim, so the caller can
     log a report it dropped as dropped.
     """
+    # Report.ap_id lets an Undo of this Flag find the report (interop C1 item 3). An id too long for the
+    # column is not truncated: a truncated id matches no Undo, and the reporter-and-target fallback still does.
+    flag_id = request_json.get('id')
+    ap_id = flag_id if isinstance(flag_id, str) and len(flag_id) <= 255 else None
+
     if 'summary' not in request_json:  # reports from peertube have no summary
         reasons = ''
         description = ''
@@ -4682,7 +4687,7 @@ def process_report(user, reported, request_json, session) -> bool:
                         }
         report = Report(reasons=reasons[:255], description=description[:255],
                         type=type, reporter_id=user.id, suspect_user_id=reported.id,
-                        source_instance_id=user.instance_id, targets=targets_data)
+                        source_instance_id=user.instance_id, targets=targets_data, ap_id=ap_id)
         session.add(report)
 
         # Notify site admin
@@ -4720,7 +4725,7 @@ def process_report(user, reported, request_json, session) -> bool:
         report = Report(reasons=reasons[:255], description=description[:255], type=type, reporter_id=user.id,
                         suspect_user_id=reported.author.id, suspect_post_id=reported.id,
                         suspect_community_id=reported.community.id, in_community_id=reported.community.id,
-                        source_instance_id=user.instance_id, targets=targets_data)
+                        source_instance_id=user.instance_id, targets=targets_data, ap_id=ap_id)
         session.add(report)
 
         already_notified = set()
@@ -4788,7 +4793,7 @@ def process_report(user, reported, request_json, session) -> bool:
                         suspect_user_id=reported.author.id, suspect_post_reply_id=reported.id,
                         in_community_id=post.community.id,
                         source_instance_id=user.instance_id,
-                        targets=targets_data)
+                        targets=targets_data, ap_id=ap_id)
         session.add(report)
         # Notify moderators
         already_notified = set()
@@ -4829,6 +4834,83 @@ def process_report(user, reported, request_json, session) -> bool:
     # Anything else `find_reported_object` can hand us, which today means a Feed:
     # `find_actor_or_create` returns one and no arm above matches it.
     return False
+
+
+# What a report is about, by the type find_reported_object resolves: the Report column naming it, and the
+# Report.type process_report gives it. Communities and conversations are not recorded (process_report, D1401).
+REPORT_SUSPECT = {Post: ('suspect_post_id', REPORT_TYPE_POST),
+                  PostReply: ('suspect_post_reply_id', REPORT_TYPE_REPLY),
+                  User: ('suspect_user_id', REPORT_TYPE_USER)}
+
+
+def withdraw_report(report: Report, session) -> None:
+    """Delete an open report and correct what it raised.
+
+    process_report added one to the suspect's `reports` counter and sent NOTIF_REPORT notifications, authored
+    by the reporter and carrying the suspect's id in `targets`. Withdrawing takes the one back (never below 0:
+    a moderator resolving another report on the same suspect resets the counter to 0, and -1 means exempt),
+    deletes those notifications while unread, and recounts each recipient's `unread_notifications`.
+
+    The moderators' Ignore (community_moderate_report_ignore) is not reused: it keeps the report as discarded
+    and sets the counter to -1, which exempts the suspect from all future reports. A withdrawn report is one
+    that should never have been filed, not one a moderator judged."""
+    if report.suspect_post_reply_id:
+        suspect = session.get(PostReply, report.suspect_post_reply_id)
+        subtype, target_key, target_id = 'comment_reported', 'suspect_comment_id', report.suspect_post_reply_id
+    elif report.suspect_post_id:
+        suspect = session.get(Post, report.suspect_post_id)
+        subtype, target_key, target_id = 'post_reported', 'suspect_post_id', report.suspect_post_id
+    else:
+        suspect = session.get(User, report.suspect_user_id)
+        subtype, target_key, target_id = 'user_reported', 'suspect_user_id', report.suspect_user_id
+    if suspect.reports > 0:
+        suspect.reports -= 1
+    notifications = session.query(Notification).\
+        filter_by(notif_type=NOTIF_REPORT, subtype=subtype, author_id=report.reporter_id, read=False).\
+        filter(Notification.targets[target_key].as_integer() == target_id).all()
+    recipient_ids = {notification.user_id for notification in notifications}
+    for notification in notifications:
+        session.delete(notification)
+    session.delete(report)
+    session.flush()
+    for recipient_id in recipient_ids:
+        recipient = session.get(User, recipient_id)
+        recipient.unread_notifications = session.query(Notification).filter_by(user_id=recipient_id,
+                                                                                read=False).count()
+    session.commit()
+
+
+def withdraw_flag(user: User, flag: dict, session) -> tuple:
+    """An Undo of a Flag by `user`, the signed actor. Returns (aplog_result, message) for the caller to log.
+
+    Owner ruling (interop C1, 2026-10-11): withdraw the report if it is still open; if moderators already
+    acted on it (escalated, appealed, resolved or discarded) keep it and log the Undo. Only the reporter may
+    undo.
+
+    The report is found by the Flag's id (Report.ap_id). Failing that -- a report filed before the column
+    existed, or a Flag without an id -- the newest report by `user` about the same target. The target is
+    resolved without fetching (find_reported_object never creates an actor)."""
+    report = None
+    flag_id = flag.get('id')
+    if isinstance(flag_id, str):
+        report = session.query(Report).filter_by(ap_id=flag_id).first()
+    if report is None:
+        target = flag.get('object')
+        reported = find_reported_object(target) if isinstance(target, str) else None
+        suspect = REPORT_SUSPECT.get(type(reported))
+        if suspect is not None:
+            column, report_type = suspect
+            report = session.query(Report).filter_by(reporter_id=user.id, type=report_type,
+                                                     **{column: reported.id}).\
+                order_by(Report.created_at.desc(), Report.id.desc()).first()
+    if report is None:
+        return APLOG_IGNORED, 'Undo Flag: no matching report'
+    if report.reporter_id != user.id:
+        return APLOG_FAILURE, 'Undo Flag: only the reporter may withdraw a report'
+    if report.status != REPORT_STATE_NEW:
+        return APLOG_IGNORED, f'Undo Flag: report {report.id} was already acted on and is kept'
+    withdraw_report(report, session)
+    return APLOG_SUCCESS, None
 
 
 def process_quote_boost(core_activity: dict, post_ap: str, their_post_ap: str):
