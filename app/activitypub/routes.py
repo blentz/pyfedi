@@ -18,7 +18,7 @@ from sqlalchemy import desc, or_, text, func
 from app import db, cache, celery, limiter
 from app.activitypub import bp
 from app.activitypub.actor import find_actor_by_url
-from app.activitypub.entitlement import PRIVATE_HEADERS, addressees_of, audience_entitles, signed_requester_actor
+from app.activitypub.entitlement import PRIVATE_HEADERS, actor_document, addressees_of, audience_entitles, signed_requester_actor
 from app.activitypub.signature import POST_REQUIRED, HttpSignature, VerificationError, VerificationFormatError, default_context, LDSignature, \
     send_post_request, verify_with_key_refresh, request_key_id
 from app.activitypub.util import activity_dedupe_key, claim_activity, release_activity, host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
@@ -543,7 +543,7 @@ def user_profile(actor):
                     actor_data['attachment'].append({'type': 'PropertyValue',
                                                      'name': field.label,
                                                      'value': field.text})
-            resp = jsonify(actor_data)
+            resp = jsonify(actor_document(actor_data))
             resp.content_type = 'application/activity+json'
             resp.headers.set('Cache-Control', AP_CACHE_ACTOR)
             resp.headers.set('Vary', 'Accept')
@@ -683,7 +683,7 @@ def community_profile(actor):
             actor_data['language'] = []
             for language in community.languages:
                 actor_data['language'].append({'identifier': language.code, 'name': language.name})
-            resp = jsonify(actor_data)
+            resp = jsonify(actor_document(actor_data))
             resp.content_type = 'application/activity+json'
             resp.headers.set('Cache-Control', AP_CACHE_ACTOR)
             resp.headers.set('Vary', 'Accept')
@@ -3313,7 +3313,7 @@ def feed_profile(actor, feed_owner=None):
             actor_data['childFeeds'] = []
             for child_feed in feed.children.all():
                 actor_data['childFeeds'].append(child_feed.ap_profile_id)
-            resp = jsonify(actor_data)
+            resp = jsonify(actor_document(actor_data))
             resp.content_type = 'application/activity+json'
             resp.headers.set('Cache-Control', AP_CACHE_ACTOR)
             resp.headers.set('Vary', 'Accept')

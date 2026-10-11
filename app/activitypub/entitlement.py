@@ -168,6 +168,17 @@ SIGNED_FETCH_AP_ONLY_PREFIXES = ('/activities/', '/quote_boost_auth')
 
 _AP_MIMETYPES = ('application/activity+json', 'application/ld+json')
 
+# R-SECUREACTORS: actor documents secure mode answers in minimal form instead of refusing. A peer that signs its key
+# fetches with an instance actor this instance has never stored could otherwise never learn a key at all. Matched on
+# the routed endpoint, so an actor's collections (/u/<name>/outbox, /c/<name>/followers...) stay refused.
+MINIMAL_ACTOR_ENDPOINTS = ('activitypub.user_profile', 'activitypub.community_profile', 'activitypub.feed_profile')
+
+# What the minimal actor document keeps: enough to verify a signature and to deliver, nothing about the actor.
+MINIMAL_ACTOR_FIELDS = ('@context', 'id', 'type', 'preferredUsername', 'inbox', 'publicKey')
+
+# Set in the WSGI environ, which is per request (g is not, while a test keeps an app context pushed).
+_MINIMAL_ACTOR_FLAG = 'pyfedi.minimal_actor_document'
+
 
 def _path_matches(path: str, prefixes) -> bool:
     for prefix in prefixes:
@@ -199,8 +210,13 @@ def _secure_mode_covers(ap_response: bool = False) -> bool:
 def signed_fetch_refusal():
     """The 401 secure mode answers an ActivityPub GET or HEAD that no actor stored here validly signed, else None.
 
-    Never fetches: a signer this instance has not seen is refused until it is learned of some other way."""
+    Never fetches: a signer this instance has not seen is refused until it is learned of some other way. A user,
+    community or feed actor document (MINIMAL_ACTOR_ENDPOINTS) is not refused but flagged, and its route serves the
+    minimal form (actor_document)."""
     if not _secure_mode_covers() or signed_requester_actor() is not None:
+        return None
+    if request.endpoint in MINIMAL_ACTOR_ENDPOINTS:
+        request.environ[_MINIMAL_ACTOR_FLAG] = True   # answered by the route, in minimal form (actor_document)
         return None
     response = make_response('', 401)
     response.headers['Cache-Control'] = 'no-store'
@@ -208,11 +224,30 @@ def signed_fetch_refusal():
     return response
 
 
+def actor_document(actor_data: dict) -> dict:
+    """The actor document to serve: `actor_data` itself, or, when secure mode let an unsigned (or unknown-signer)
+    fetch through to an actor route, only its MINIMAL_ACTOR_FIELDS and its shared inbox."""
+    if not request.environ.get(_MINIMAL_ACTOR_FLAG):
+        return actor_data
+    minimal = {field: actor_data[field] for field in MINIMAL_ACTOR_FIELDS if field in actor_data}
+    shared_inbox = (actor_data.get('endpoints') or {}).get('sharedInbox')
+    if shared_inbox:
+        minimal['endpoints'] = {'sharedInbox': shared_inbox}
+    return minimal
+
+
 def secure_mode_cache_headers(response):
     """Under secure mode an ActivityPub answer was earned by a signature, so no shared cache may hand it on: a proxy
     cache answers before before_request runs, and an unsigned requester would get the signer's copy. The answer is
-    made private (the signer's own max-age stays) and varies on the signature. A no-store answer is left alone."""
+    made private (the signer's own max-age stays) and varies on the signature. A no-store answer is left alone.
+
+    A minimal actor document (actor_document) is the same for every unsigned requester and holds only public key
+    material, so it keeps the route's public cache policy: varying on the signature keeps it from ever answering a
+    signed request, and the signer's full document is private."""
     if response.cache_control.no_store or not _secure_mode_covers(response.mimetype in _AP_MIMETYPES):
+        return response
+    if request.environ.get(_MINIMAL_ACTOR_FLAG):
+        response.vary.add('Signature')
         return response
     response.cache_control.public = False
     response.cache_control.s_maxage = None
