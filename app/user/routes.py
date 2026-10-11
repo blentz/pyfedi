@@ -1487,7 +1487,7 @@ def import_settings_task(user_id, redis_key):
                 # Follow communities
                 for community_ap_id in import_entries(contents_json, 'followed_communities'):
                     community = find_actor_or_create(community_ap_id, community_only=True, retry=True)
-                    if community:
+                    if community and not community.is_gone():   # interop C1 item 10: a gone Group takes no new members
                         if community.posts.count() == 0:
                             server, name = extract_domain_and_actor(community.ap_profile_id)
                             if current_app.debug:

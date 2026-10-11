@@ -61,7 +61,8 @@ def add_object(session, user_id, object, community_id=None):
     else:
         community = session.query(Community).filter_by(id=community_id).one()
 
-    if community.local_only or community.private or not (community.instance_id and community.instance.online()):
+    if community.local_only or community.private or community.is_gone() or \
+            not (community.instance_id and community.instance.online()):   # is_gone: interop C1 item 10
         return
 
     # E9: a followers-only object never reached a local community's followers, so nothing about it does either. A

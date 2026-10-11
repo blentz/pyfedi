@@ -266,6 +266,13 @@ def edit_reply(input, reply, post, src, auth=None):
         language_id = input.language_id.data
         distinguished = input.distinguished.data
 
+    if reply.community.is_gone():   # interop C1 item 10: a Group deleted on its home server is read-only
+        msg = 'This community was deleted on its home server'
+        if src == SRC_API:
+            raise Exception(msg)
+        flash(_(msg), 'error')
+        return
+
     reply.body = piefed_markdown_to_lemmy_markdown(content)
     reply.body_html = markdown_to_html(content)
     reply.notify_author = notify_author

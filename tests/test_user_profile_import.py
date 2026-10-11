@@ -1009,6 +1009,32 @@ def test_importing_a_remote_community_asks_to_follow(app, env):
     assert backfill.delay.call_args is not None
 
 
+def test_a_community_deleted_on_its_home_server_is_not_joined_or_asked(app, env):
+    """Interop C1 item 10: a gone Group takes no new members, and nothing is sent to it."""
+    from app.models import CommunityJoinRequest, CommunityMember, utcnow
+
+    client, viewer, other = env
+    other_instance = make_instance('other.example', software='piefed')
+    remote = make_community('remote', host='other.example')
+    remote.ap_id = 'remote@other.example'
+    remote.instance_id = other_instance.id
+    remote.ap_inbox_url = 'https://other.example/c/remote/inbox'
+    remote.ap_deleted_at = utcnow()
+    db.session.commit()
+
+    with patch('app.user.routes.send_post_request') as send:
+        with patch('app.user.routes.retrieve_mods_and_backfill') as backfill:
+            run_import_with(app, viewer,
+                            {'followed_communities': [remote.ap_profile_id]},
+                            lambda *a, **k: remote)
+
+    assert send.call_args is None
+    assert backfill.delay.call_args is None
+    assert CommunityJoinRequest.query.filter_by(user_id=viewer.id).count() == 0
+    assert CommunityMember.query.filter_by(user_id=viewer.id,
+                                           community_id=remote.id).count() == 0
+
+
 def test_a_remote_community_on_a_dead_instance_is_not_asked(app, env):
     """`if not community.instance.gone_forever:` -- there is nobody to accept
     the follow, and the request would be a wasted delivery attempt."""

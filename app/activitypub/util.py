@@ -5935,12 +5935,15 @@ def _stored_private(object_id: str) -> bool:
     return stored is not None and not is_open(stored)
 
 
-def _is_tombstone(body: Union[bytes, None]) -> bool:
+def _is_tombstone(body: Union[bytes, None], object_id: str) -> bool:
+    """True when `body` is a Tombstone for `object_id` itself. The id is compared without case: Group ids are
+    stored lowercased here (interop C1 item 10), while the origin may serve its own casing."""
     try:
         document = json.loads(body) if body else None
     except (ValueError, RecursionError):   # JSONDecodeError, UnicodeDecodeError; RecursionError: deep nesting
         return False
-    return isinstance(document, dict) and document.get('type') == 'Tombstone'
+    return isinstance(document, dict) and document.get('type') == 'Tombstone' and \
+        _id_of(document.get('id')).lower() == object_id.lower()
 
 
 def _origin_refusal_of_delete(object_id: str, label: str, tombstone_required: bool = False) -> Union[str, None]:
@@ -5979,7 +5982,7 @@ def _origin_refusal_of_delete(object_id: str, label: str, tombstone_required: bo
                 return f'{label}: the object could not be fetched with a signed request'
             suffix = ' to a signed fetch'
     if private:
-        if status == 410 or (status == 200 and _is_tombstone(body)):
+        if status == 410 or (status == 200 and _is_tombstone(body, object_id)):
             return None
         if status == 404:
             return f"{label}: origin 404 does not prove {'it' if tombstone_required else 'a private object'} deleted"

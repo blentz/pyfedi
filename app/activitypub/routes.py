@@ -1599,6 +1599,9 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                         elif object_type == 'Video':  # PeerTube: editing a video (mostly used to update post score)
                             post = Post.get_by_ap_id(core_activity['object']['id'])
                             if post:
+                                if post.community.is_gone():   # interop C1 item 10: read-only, edits included
+                                    log_incoming_ap(id, APLOG_UPDATE, APLOG_IGNORED, saved_json, GROUP_DELETED_MESSAGE)
+                                    return
                                 if user.id == post.user_id:
                                     update_post_from_activity(post, request_json)
                                     log_incoming_ap(id, APLOG_UPDATE, APLOG_SUCCESS, saved_json)

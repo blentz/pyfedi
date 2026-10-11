@@ -86,7 +86,7 @@ from contextlib import contextmanager
 
 from app import db
 from app.constants import NOTIF_POST, NOTIF_REPORT, NOTIF_REPORT_ESCALATION, SRC_API, SRC_WEB
-from app.models import ModLog, Notification, hidden_posts
+from app.models import ModLog, Notification, hidden_posts, utcnow
 from app.shared.post import (
     hide_post,
     lock_post,
@@ -487,6 +487,21 @@ def test_the_api_refuses_a_move_into_a_community_with_no_standing(db_session):
     seed_moderator(s)
     target = make_community('target')
     target.private = True
+    db.session.commit()
+
+    with pytest.raises(Exception, match='cannot post in that community'):
+        move_post(s.post.id, target.id, SRC_API, auth=bearer(s.voter))
+
+    db.session.refresh(s.post)
+    assert s.post.community_id == s.community.id
+
+
+def test_the_api_refuses_a_move_into_a_community_deleted_on_its_home_server(db_session):
+    """Interop C1 item 10: a gone Group is read-only, so nothing is filed into it either."""
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    target = make_community('target')
+    target.ap_deleted_at = utcnow()
     db.session.commit()
 
     with pytest.raises(Exception, match='cannot post in that community'):

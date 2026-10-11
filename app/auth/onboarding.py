@@ -118,7 +118,7 @@ def join_topic(topic_id):
     # to carry the topic. Measured: `PROBE ay4 status: 302 | member of the
     # private community: True`.
     communities = Community.query.filter_by(topic_id=topic_id, banned=False,
-                                            private=False).all()
+                                            private=False, ap_deleted_at=None).all()   # interop C1 item 10
     for community in communities:
         if not user_banned_from_community(current_user.id, community.id) and community_membership(current_user, community) == SUBSCRIPTION_NONMEMBER:
             if not community.is_local():

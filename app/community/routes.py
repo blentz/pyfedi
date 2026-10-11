@@ -1151,8 +1151,8 @@ def join_then_add(actor):
     community = actor_to_community(actor)
     # D992's shape, third instance in this file. The actor comes from the URL,
     # so an unresolvable one was an AttributeError on the next line rather than
-    # a 404.
-    if community is None:
+    # a 404. Interop C1 item 10: a Group deleted on its home server takes no new members.
+    if community is None or community.is_gone():
         abort(404)
 
     if not current_user.subscribed(community.id):

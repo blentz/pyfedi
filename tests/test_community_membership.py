@@ -19,7 +19,7 @@ from flask_login import login_user
 from app import cache, db
 from app.auth.onboarding import join_topic
 from app.models import (Community, CommunityBan, CommunityJoinRequest,
-                        CommunityMember, InstanceBan, Topic, User)
+                        CommunityMember, InstanceBan, Topic, User, utcnow)
 from app.utils import user_banned_from_community
 from tests.factories import (make_community, make_community_member,
                              make_instance, make_user)
@@ -1450,3 +1450,49 @@ def test_onboarding_does_not_join_an_instance_banned_user_to_a_topic_community(a
     assert joined == 0
     assert not _is_member(community, joiner)
 
+
+
+# --------------------------------------------------------------------------
+# Interop C1 item 10: a community deleted on its home server takes no joins
+# --------------------------------------------------------------------------
+
+
+def _gone(community):
+    """`Community.is_gone()` reads only `ap_deleted_at`; the delete path sets it for remote Groups."""
+    community.ap_deleted_at = utcnow()
+    db.session.commit()
+
+
+def test_join_then_add_on_a_gone_community_is_a_404_and_joins_nothing(app, world):
+    community, joiner, founder = world
+    _able_to_post(joiner)
+    _gone(community)
+    client = app.test_client()
+    login(client, joiner)
+
+    response = client.post(url(app, 'community.join_then_add', actor=community.name),
+                           data={'csrf_token': csrf(app, client)})
+
+    assert response.status_code == 404
+    assert not _is_member(community, joiner)
+    assert CommunityJoinRequest.query.filter_by(user_id=joiner.id).count() == 0
+
+
+def test_onboarding_does_not_join_a_gone_topic_community(app, world):
+    community, joiner, founder = world
+    live = make_community('live')
+    topic = Topic(name='Books', machine_name='books')
+    db.session.add(topic)
+    db.session.commit()
+    community.topic_id = topic.id
+    live.topic_id = topic.id
+    db.session.commit()
+    _gone(community)
+
+    with app.test_request_context('/'):
+        login_user(joiner)
+        joined = join_topic(topic.id)
+
+    assert joined == 1
+    assert not _is_member(community, joiner)
+    assert _is_member(live, joiner)
