@@ -54,7 +54,8 @@ def report_post(send_async, user_id, post_id, summary, instance_ids):
 def report_object(session, user_id, object, summary, instance_ids):
     user = session.get(User, user_id)
     community = object.community
-    if community.local_only or community.private or not (community.instance_id and community.instance.online()):
+    if community.local_only or community.private or community.is_gone() or \
+            not (community.instance_id and community.instance.online()):   # is_gone: interop C1 item 10
         return
 
     flag_id = f"{current_app.config['SERVER_URL']}/activities/flag/{gibberish(15)}"

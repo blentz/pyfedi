@@ -25,15 +25,20 @@ from app.community.routes import do_subscribe
 from app.constants import POST_TYPE_ARTICLE, SRC_API, SRC_WEB
 from app.models import (ActivityPubLog, Community, CommunityJoinRequest, CommunityMember, InstanceRole, Language,
                         Post, PostReply, PostVote, utcnow)
-from app.shared.post import make_post as shared_make_post, vote_for_post
-from app.shared.reply import make_reply
+from app.shared.post import edit_post, make_post as shared_make_post, vote_for_post
+from app.shared.reply import edit_reply, make_reply
+from app.shared.tasks.adds import add_object
+from app.shared.tasks.blocks import ban_person
 from app.shared.tasks.deletes import delete_post
+from app.shared.tasks.flags import report_object
+from app.shared.tasks.locks import lock_object
+from app.shared.tasks.removes import remove_object
 from app.utils import (can_create_post, can_create_post_reply, can_downvote, can_upvote, community_membership,
                        joined_communities, moderating_communities)
 from tests.conftest import unsigned_but_precheck_clean_headers
 from tests.factories import (a_keypair, bearer, inbox_activity, make_community, make_community_member,
-                             make_instance, make_post, make_site, make_user, resolvable_remote_author,
-                             signed_inbox_post, web_ctx)
+                             make_instance, make_post, make_post_reply, make_site, make_user,
+                             resolvable_remote_author, signed_inbox_post, web_ctx)
 from tests.test_inbox_dispatch_preamble import dispatch
 from tests.test_shared_post_edit import _Field, _api_input, _web_form
 from tests.test_shared_tasks_deletes import PEER_INBOX as DELETE_INBOX
@@ -142,6 +147,36 @@ def test_an_unproven_self_delete_changes_nothing(app, db_session, http_mock, mon
     assert db.session.query(CommunityMember).filter_by(community_id=community_id, user_id=member_id).count() == 1
     log = ActivityPubLog.query.one()
     assert (log.result, log.exception_message) == ('failure', reason)
+
+
+@pytest.mark.parametrize('body', [{'id': f'https://{PEER}/c/other', 'type': 'Tombstone'}, {'type': 'Tombstone'}],
+                         ids=['another-id', 'no-id'])
+def test_a_tombstone_for_another_id_is_not_proof(app, db_session, http_mock, monkeypatch, body):
+    """A Tombstone proves the deletion of the object it names, and only that one."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    w = _world()
+    community_id = w.community.id
+    http_mock.get(GROUP).respond(200, json=body)
+
+    dispatch(_self_delete(w))
+
+    db.session.expire_all()
+    assert db.session.get(Community, community_id).ap_deleted_at is None
+    log = ActivityPubLog.query.one()
+    assert (log.result, log.exception_message) == ('failure', 'Group Delete of an object that still exists')
+
+
+def test_a_tombstone_naming_the_group_in_another_case_is_proof(app, db_session, http_mock, monkeypatch):
+    """Group ids are stored lowercased here, so the Tombstone's id is compared without case."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    w = _world()
+    community_id = w.community.id
+    http_mock.get(GROUP).respond(200, json={'id': GROUP.replace('memes', 'Memes'), 'type': 'Tombstone'})
+
+    dispatch(_self_delete(w))
+
+    db.session.expire_all()
+    assert db.session.get(Community, community_id).ap_deleted_at is not None
 
 
 def test_an_unreachable_origin_is_not_proof(app, db_session, http_mock, monkeypatch):
@@ -751,3 +786,119 @@ def test_the_community_page_lists_its_posts_and_says_when_the_group_was_deleted(
     assert [post.id for post in render.call_args.kwargs['posts'].items] == [w.post.id]
     messages = ' '.join(str(call.args[0]) for call in flashed.call_args_list)
     assert ('deleted on its home server' in messages) is gone
+
+
+# --- edits: read-only covers them too ---
+
+GONE_MESSAGE = 'This community was deleted on its home server'
+
+
+def _own_post(w):
+    return make_post(w.community, w.member, 'https://test.piefed.local/post/90')
+
+
+def test_an_api_post_edit_is_refused(app, db_session):
+    w = _world()
+    post = _own_post(w)
+    _gone(w)
+
+    with pytest.raises(Exception, match=GONE_MESSAGE):
+        edit_post(_api_input(title='changed'), post, POST_TYPE_ARTICLE, SRC_API, auth=bearer(w.member))
+
+    db.session.refresh(post)
+    assert post.title != 'changed'
+
+
+def test_a_web_post_edit_is_refused(app, db_session):
+    w = _world()
+    post = _own_post(w)
+    _gone(w)
+
+    with web_ctx(app, w.member):
+        with pytest.raises(Exception, match=GONE_MESSAGE):
+            edit_post(_web_form(title=_Field('changed')), post, POST_TYPE_ARTICLE, SRC_WEB)
+
+    db.session.refresh(post)
+    assert post.title != 'changed'
+
+
+def test_an_api_reply_edit_is_refused(app, db_session):
+    w = _world()
+    reply = make_post_reply(w.post, w.member, body='before')
+    _gone(w)
+
+    with pytest.raises(Exception, match=GONE_MESSAGE):
+        edit_reply({'body': 'after', 'notify_author': True, 'language_id': None, 'distinguished': False}, reply,
+                   w.post, SRC_API, auth=bearer(w.member))
+
+    db.session.refresh(reply)
+    assert reply.body == 'before'
+
+
+def test_a_web_reply_edit_is_refused_with_a_flash(app, db_session):
+    w = _world()
+    reply = make_post_reply(w.post, w.member, body='before')
+    _gone(w)
+    form = SimpleNamespace(body=_Field('after'), notify_author=_Field(True), language_id=_Field(None),
+                           distinguished=_Field(False))
+
+    with web_ctx(app, w.member):
+        with patch('app.shared.reply.flash') as flashed:
+            edit_reply(form, reply, w.post, SRC_WEB)
+
+    assert flashed.call_args.args == (GONE_MESSAGE, 'error')
+    db.session.refresh(reply)
+    assert reply.body == 'before'
+
+
+def test_an_inbox_video_update_is_ignored(app, db_session, monkeypatch):
+    """PeerTube's Video Update edits a post with no can_* predicate in the way, so it asks is_gone() itself."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    w = _world()
+    _gone(w)
+    update = {'id': f'https://{PEER}/activities/update/{uuid.uuid4().hex}', 'type': 'Update',
+              'actor': w.alice.ap_profile_id, 'object': {'type': 'Video', 'id': w.post.ap_id}}
+
+    monkeypatch.setattr('app.activitypub.routes.find_community', lambda request_json, author=None: w.community)
+    monkeypatch.setattr('app.activitypub.routes.ensure_domains_match', lambda activity: True)
+
+    with patch('app.activitypub.routes.update_post_from_activity') as updated:
+        dispatch(update)
+
+    assert updated.call_args is None
+    assert _inbound_logs() == [('Update', 'ignored', GROUP_DELETED_MESSAGE)]
+
+
+# --- nothing is delivered to it: moderation actions and reports too ---
+
+def _deliveries(w, monkeypatch):
+    """Every send_post_request the five moderation/report tasks would make, collected instead of sent."""
+    sent = []
+    for module in ('locks', 'adds', 'removes', 'blocks', 'flags'):
+        monkeypatch.setattr(f'app.shared.tasks.{module}.send_post_request',
+                            lambda inbox, *a, **kw: sent.append(inbox))
+    w.peer.inbox = f'https://{PEER}/inbox'
+    db.session.commit()
+    return sent
+
+
+TASKS = {
+    'lock': lambda w: lock_object(db.session, w.member.id, w.post),
+    'add': lambda w: add_object(db.session, w.member.id, w.post),
+    'remove': lambda w: remove_object(db.session, w.member.id, w.post),
+    'ban': lambda w: ban_person(db.session, w.alice.id, w.member.id, w.community.id, None, 'spam', False),
+    'flag': lambda w: report_object(db.session, w.member.id, w.post, 'spam', [w.peer.id]),
+}
+
+
+@pytest.mark.parametrize('task', sorted(TASKS))
+@pytest.mark.parametrize('gone', [False, True], ids=['live', 'gone'])
+def test_moderation_and_report_tasks_deliver_only_to_a_live_group(app, db_session, monkeypatch, task, gone):
+    w = _world()
+    sent = _deliveries(w, monkeypatch)
+    if gone:
+        _gone(w)
+
+    TASKS[task](w)
+
+    assert (sent == []) is gone
