@@ -18,7 +18,8 @@ from app.models import Language, PostReply
 from app.shared.post import make_post as shared_make_post
 from app.shared.tasks.notes import send_reply
 from app.shared.tasks.pages import send_post
-from tests.factories import make_community, make_follow, make_instance, make_post, make_site, make_user
+from tests.factories import (make_community, make_follow, make_instance, make_instance_block, make_post,
+                             make_post_reply, make_site, make_user)
 from tests.test_ap_content_objects import AP_ACCEPT, ap_get, signed_ap_get
 from tests.test_shared_post_edit import _api_input
 
@@ -79,7 +80,7 @@ def world(app, db_session, monkeypatch):
                            neighbour=neighbour, stranger=stranger)
 
 
-def _assert_private(response, author):
+def _assert_private(response):
     assert response.status_code == 200
     assert response.headers['Cache-Control'] == 'private, no-store'
     assert 'Signature' in _vary(response)
@@ -88,7 +89,7 @@ def _assert_private(response, author):
 def test_an_accepted_follower_gets_a_followers_only_post_privately(app, world):
     response = signed_ap_get(app, f'/post/{world.post.id}', world.follower, UA)
 
-    _assert_private(response, world.author)
+    _assert_private(response)
     # post_to_page always says Public; what an entitled signer gets says who it is for
     assert response.json['to'] == [world.author.followers_url()]
     assert response.json['cc'] == []
@@ -98,7 +99,7 @@ def test_an_accepted_follower_gets_a_followers_only_post_privately(app, world):
 
 
 def test_a_signer_on_a_followers_host_gets_it_too(app, world):
-    _assert_private(signed_ap_get(app, f'/post/{world.post.id}', world.neighbour, UA), world.author)
+    _assert_private(signed_ap_get(app, f'/post/{world.post.id}', world.neighbour, UA))
 
 
 def test_a_signer_sharing_no_host_with_a_follower_gets_404(app, world):
@@ -124,7 +125,7 @@ def test_an_entitled_answer_is_not_left_for_the_next_requester(app, world):
 def test_a_followers_only_comment_is_served_privately_to_a_follower(app, world):
     response = signed_ap_get(app, f'/comment/{world.reply.id}', world.follower, UA)
 
-    _assert_private(response, world.author)
+    _assert_private(response)
     assert response.json['to'] == [world.author.followers_url()]
     # as send_reply cc's it (R-FOCC): the parent's author, then any mentions -- here alice answers herself
     assert response.json['cc'] == [world.author.public_url()]
@@ -145,13 +146,13 @@ def test_a_followers_only_comment_is_404_to_a_stranger(app, world):
 def test_a_signed_head_is_answered_privately_with_no_body(app, world, path):
     response = signed_ap_head(app, path.format(post=world.post.id, reply=world.reply.id), world.follower)
 
-    _assert_private(response, world.author)
+    _assert_private(response)
     assert response.get_data() == b''
 
 
 @pytest.mark.parametrize('suffix', ['/replies', '/context'])
 def test_a_followers_only_posts_collections_are_served_privately_to_a_follower(app, world, suffix):
-    _assert_private(signed_ap_get(app, f'/post/{world.post.id}{suffix}', world.follower, UA), world.author)
+    _assert_private(signed_ap_get(app, f'/post/{world.post.id}{suffix}', world.follower, UA))
 
 
 def test_a_remote_authors_followers_only_post_stays_404_even_for_a_follower(app, world):
@@ -178,6 +179,100 @@ def test_a_public_post_keeps_its_public_cache_headers(app, world):
 
     assert response.status_code == 200
     assert response.headers['Cache-Control'] == 'public, max-age=120'
+
+
+@pytest.mark.parametrize('suffix', ['/replies', '/context'])
+@pytest.mark.parametrize('who', ['stranger', None])
+def test_a_followers_only_posts_collections_are_404_to_anyone_else(app, world, suffix, who):
+    path = f'/post/{world.post.id}{suffix}'
+    response = signed_ap_get(app, path, world.stranger, UA) if who else ap_get(app, path)
+    assert response.status_code == 404
+
+
+def test_an_author_who_blocks_a_followers_instance_still_refuses_it(app, world):
+    """D194 holds on the unlock path: entitlement does not outrank the author's instance block."""
+    make_instance_block(world.author, world.follower.instance)
+
+    assert signed_ap_get(app, f'/post/{world.post.id}', world.follower, UA).status_code == 401
+    assert signed_ap_get(app, f'/comment/{world.reply.id}', world.follower, UA).status_code == 401
+
+
+# --------------------------------------------------------------------------
+# R-FETCHEQPUSH: whoever was pushed it may fetch it
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mentioned(world):
+    """carol on peer4 is Mentioned in the post, so send_post cc'd her; carl shares her host. Neither follows alice."""
+    host = _peer('peer4.example')
+    carol = make_user(host, 'carol', with_keys=True)
+    carl = make_user(host, 'carl', with_keys=True)
+    world.post.body = 'for friends, and @carol@peer4.example'
+    db.session.commit()
+    return SimpleNamespace(carol=carol, carl=carl)
+
+
+def test_a_mentioned_user_gets_the_post(app, world, mentioned):
+    response = signed_ap_get(app, f'/post/{world.post.id}', mentioned.carol, UA)
+
+    _assert_private(response)
+    assert response.json['cc'] == [mentioned.carol.public_url()]
+
+
+def test_a_signer_on_a_mentioned_users_host_gets_the_post(app, world, mentioned):
+    _assert_private(signed_ap_get(app, f'/post/{world.post.id}', mentioned.carl, UA))
+
+
+def test_a_mention_does_not_unlock_it_for_a_stranger(app, world, mentioned):
+    assert signed_ap_get(app, f'/post/{world.post.id}', world.stranger, UA).status_code == 404
+
+
+def test_a_remote_parent_author_who_does_not_follow_gets_the_comment(app, world):
+    rob = make_user(_peer('peer5.example'), 'rob', with_keys=True)
+    parent = make_post_reply(world.post, rob)
+    reply = PostReply.new(world.author, world.post, parent, 'yes', '<p>yes</p>', True, None, False, False)
+    assert reply.visibility == 'followers'
+
+    response = signed_ap_get(app, f'/comment/{reply.id}', rob, UA)
+
+    _assert_private(response)
+    assert response.json['cc'] == [rob.public_url()]
+    assert signed_ap_get(app, f'/comment/{reply.id}', world.stranger, UA).status_code == 404
+
+
+# --------------------------------------------------------------------------
+# a deleted followers-only object: its Tombstone is private too
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize('kind', ['post', 'comment'])
+def test_a_deleted_followers_only_objects_tombstone_is_private(app, world, kind):
+    obj = world.post if kind == 'post' else world.reply
+    obj.deleted = True
+    db.session.commit()
+    path = f'/{kind}/{obj.id}'
+
+    response = signed_ap_get(app, path, world.follower, UA)
+
+    assert response.status_code == 410
+    assert response.json['type'] == 'Tombstone'
+    # ap_miss_is_not_cached rewrites every 404 and 410 to plain no-store, which is stricter than private, no-store
+    assert response.headers['Cache-Control'] == 'no-store'
+    assert 'Signature' in _vary(response)
+    assert signed_ap_get(app, path, world.stranger, UA).status_code == 404
+    assert ap_get(app, path).status_code == 404
+
+
+def test_a_deleted_public_posts_tombstone_does_not_vary_on_the_signer(app, world):
+    world.post.visibility = 'public'
+    world.post.deleted = True
+    db.session.commit()
+
+    response = ap_get(app, f'/post/{world.post.id}')
+
+    assert response.status_code == 410
+    assert 'Signature' not in _vary(response)
 
 
 # --------------------------------------------------------------------------
