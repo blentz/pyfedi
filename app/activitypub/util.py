@@ -5676,8 +5676,8 @@ def _verify_announced_delete(inner: dict, community) -> Tuple[Union[dict, None],
     From the announcing community's moderator or owner, or an admin of its host, the Delete is deferred: the
     dispatcher schedules apply_delayed_delete so the home server's own Delete can win. That applies only to an
     object not stored here in another community (R-SAMECOMMUNITY). From anyone else, or for such an object, it is
-    processed only once the object's origin no longer serves it (404 or 410): an unreachable origin, or any other
-    answer, drops the Delete (_origin_refusal_of_delete)."""
+    processed only once the object's origin no longer serves it (404 or 410; for a stored private object, 410 or
+    a Tombstone): an unreachable origin, or any other answer, drops the Delete (_origin_refusal_of_delete)."""
     object_id = _id_of(inner.get('object'))
     if not object_id:
         return None, 'Announced Delete names no object'
@@ -5687,19 +5687,44 @@ def _verify_announced_delete(inner: dict, community) -> Tuple[Union[dict, None],
     return (inner, None) if refusal is None else (None, refusal)
 
 
+# The most of a 200 answer read to see whether it is a Tombstone (a stored private object's Delete only)
+TOMBSTONE_MAX_BYTES = 64 * 1024
+
+
+def _stored_private(object_id: str) -> bool:
+    """True when the post or reply `object_id` is stored here and is not open (followers-only or direct). Lookup only."""
+    stored = (db.session.query(Post.visibility).filter_by(ap_id=object_id).first() or
+              db.session.query(PostReply.visibility).filter_by(ap_id=object_id).first())
+    return stored is not None and not is_open(stored)
+
+
+def _is_tombstone(body: Union[bytes, None]) -> bool:
+    try:
+        document = json.loads(body) if body else None
+    except (ValueError, RecursionError):   # JSONDecodeError, UnicodeDecodeError; RecursionError: deep nesting
+        return False
+    return isinstance(document, dict) and document.get('type') == 'Tombstone'
+
+
 def _origin_refusal_of_delete(object_id: str, label: str) -> Union[str, None]:
     """None when the object's origin no longer serves it (404 or 410), else why the Delete is dropped.
 
     One unsigned fetch and no sleep or transport retry (D775). get_request_capped, not get_request: get_request
     sleeps and retries on every transport error, and only the status matters here, so no body is read.
 
+    A stored object that is not open (followers-only or direct) is the exception (owner ruling): origins answer 404
+    to a fetch they may not show, so a 404 does not prove it deleted. For it only a 410, or a 200 serving a
+    Tombstone (read up to TOMBSTONE_MAX_BYTES), counts.
+
     R-DELSIGNED: GoToSocial and authorized-fetch Mastodon/Akkoma answer 401/403 to every unsigned GET, even for an
     object they deleted, so a 401/403 is asked again exactly once, signed as the instance actor (as
     verify_object_from_source does; signed_get_capped's double knock is the one sanctioned extra attempt), status
     only: signed_get_capped reads no body, follows no redirect and has a deadline. With no Site key to sign with,
     the unsigned answer stands."""
+    private = _stored_private(object_id)
+    max_bytes = TOMBSTONE_MAX_BYTES if private else 0
     try:
-        status, _body = get_request_capped(object_id, 0, headers={'Accept': 'application/activity+json'})
+        status, body = get_request_capped(object_id, max_bytes, headers={'Accept': 'application/activity+json'})
     except httpx.HTTPError:
         return f'{label}: the object could not be fetched'
     suffix = ''
@@ -5707,12 +5732,17 @@ def _origin_refusal_of_delete(object_id: str, label: str) -> Union[str, None]:
         site = db.session.get(Site, 1)
         if site is not None and site.private_key:
             try:
-                status, _body = signed_get_capped(object_id, site.private_key,
-                                                  f"{current_app.config['SERVER_URL']}/actor#main-key", 0)
+                status, body = signed_get_capped(object_id, site.private_key,
+                                                 f"{current_app.config['SERVER_URL']}/actor#main-key", max_bytes)
             except httpx.HTTPError:
                 return f'{label}: the object could not be fetched with a signed request'
             suffix = ' to a signed fetch'
-    if status in (404, 410):
+    if private:
+        if status == 410 or (status == 200 and _is_tombstone(body)):
+            return None
+        if status == 404:
+            return f'{label}: origin 404 does not prove a private object deleted'
+    elif status in (404, 410):
         return None
     if status == 200:
         return f'{label} of an object that still exists'
@@ -5740,8 +5770,8 @@ def verify_ld_accepted_activity(activity: dict) -> Tuple[Union[dict, None], Unio
     - Create or Update with an embedded object: the object is replaced by the copy its origin serves, which must
       be on the actor's host, carry the same id and be attributed to the activity's actor (as for announced
       content, Task 16), and the activity's addressing (to, cc, audience, target) is taken from that copy;
-    - Delete: processed only once the object's origin no longer serves it (404 or 410, as for a cross-origin
-      Announced Delete, Task 17);
+    - Delete: processed only once the object's origin no longer serves it (404 or 410; for a stored private
+      object, 410 or a Tombstone), as for a cross-origin Announced Delete (Task 17);
     - an Announce keeps the verified document here; the dispatcher's verify_announced_inner, told ld_signed,
       refetches every inner Create, Update or Delete (ruling R-LDANNOUNCE);
     - anything else keeps the verified, stripped document."""

@@ -14,7 +14,9 @@ from sqlalchemy import inspect as sa_inspect
 import app.activitypub.routes as activitypub_routes
 from app import db
 from app.activitypub.signature import LDSignature, VerificationFormatError, default_context
-from app.activitypub.util import ANNOUNCED_DELETE_DEFERRED, cross_origin_delete_delay, verify_announced_inner
+from app.activitypub.util import ANNOUNCED_DELETE_DEFERRED, cross_origin_delete_delay, verify_announced_inner, \
+    verify_ld_accepted_activity
+from app.constants import VISIBILITY_DIRECT, VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC, VISIBILITY_UNLISTED
 from app.models import ActivityPubLog, InstanceRole, Post, User, utcnow
 from app.utils import set_setting
 from tests.factories import AS_PUBLIC_URI, a_keypair, make_community, make_community_member, make_instance, \
@@ -858,3 +860,121 @@ def test_the_delay_setting_is_coerced_and_bounded(app, db_session, stored, expec
     set_setting('cross_origin_delete_delay', stored)
 
     assert cross_origin_delete_delay() == expected
+
+
+# --- owner ruling: an origin's 404 does not prove a private object deleted ---
+# Mastodon and others answer 404 to a fetch they may not show, so for a stored followers-only or direct object
+# only 410, or a 200 serving a Tombstone, counts as deleted.
+
+PRIVATE_404 = 'Announced Delete: origin 404 does not prove a private object deleted'
+
+
+def _stored(visibility, reply=False):
+    _instance, community = _seed_announcing_community()
+    carol = _carol()
+    post = make_post(community, carol, ap_id='https://other.example/objects/parent' if reply else DELETED_ID)
+    target = make_post_reply(post, carol) if reply else post
+    if reply:
+        target.ap_id = DELETED_ID
+    target.visibility = visibility
+    db.session.commit()
+    return target
+
+
+@pytest.mark.parametrize('visibility', [VISIBILITY_FOLLOWERS, VISIBILITY_DIRECT])
+@pytest.mark.parametrize('reply', [False, True])
+def test_a_404_does_not_delete_a_stored_private_object(app, db_session, http_mock, visibility, reply):
+    _stored(visibility, reply)
+    http_mock.get(DELETED_ID).respond(404)
+
+    assert verify_announced_inner(_announce(_delete())) == (None, PRIVATE_404)
+
+
+@pytest.mark.parametrize('reply', [False, True])
+def test_a_410_deletes_a_stored_private_object(app, db_session, http_mock, reply):
+    _stored(VISIBILITY_FOLLOWERS, reply)
+    http_mock.get(DELETED_ID).respond(410)
+    inner = _delete()
+
+    assert verify_announced_inner(_announce(inner)) == (inner, None)
+
+
+def test_a_200_tombstone_deletes_a_stored_private_object(app, db_session, http_mock):
+    _stored(VISIBILITY_FOLLOWERS)
+    http_mock.get(DELETED_ID).respond(200, json={'id': DELETED_ID, 'type': 'Tombstone'})
+    inner = _delete()
+
+    assert verify_announced_inner(_announce(inner)) == (inner, None)
+
+
+@pytest.mark.parametrize('body', [b'{"type": "Note"}', b'not json', b'["Tombstone"]', b'\xff'])
+def test_a_200_that_is_not_a_tombstone_keeps_a_stored_private_object(app, db_session, http_mock, body):
+    _stored(VISIBILITY_FOLLOWERS)
+    http_mock.get(DELETED_ID).respond(200, content=body)
+
+    assert verify_announced_inner(_announce(_delete())) == (None, 'Announced Delete of an object that still exists')
+
+
+def test_an_oversized_200_keeps_a_stored_private_object(app, db_session, http_mock):
+    _stored(VISIBILITY_FOLLOWERS)
+    http_mock.get(DELETED_ID).respond(200, content=b'{}', headers={'Content-Length': str(10 * 1024 * 1024)})
+
+    assert verify_announced_inner(_announce(_delete())) == (None, 'Announced Delete of an object that still exists')
+
+
+def test_a_signed_404_does_not_delete_a_stored_private_object(app, db_session, http_mock):
+    seed_signing_site()
+    _stored(VISIBILITY_FOLLOWERS)
+    route = http_mock.get(DELETED_ID).mock(side_effect=_signed_or_not(401, [404]))
+
+    assert verify_announced_inner(_announce(_delete())) == (None, PRIVATE_404)
+    assert route.call_count == 2
+
+
+def test_a_signed_200_tombstone_deletes_a_stored_private_object(app, db_session, http_mock):
+    seed_signing_site()
+    _stored(VISIBILITY_FOLLOWERS)
+    http_mock.get(DELETED_ID).mock(side_effect=[
+        httpx.Response(403), httpx.Response(200, json={'id': DELETED_ID, 'type': 'Tombstone'})])
+    inner = _delete()
+
+    assert verify_announced_inner(_announce(inner)) == (inner, None)
+
+
+@pytest.mark.parametrize('visibility', [VISIBILITY_PUBLIC, VISIBILITY_UNLISTED])
+def test_a_404_still_deletes_a_stored_open_object(app, db_session, http_mock, visibility):
+    _stored(visibility)
+    http_mock.get(DELETED_ID).respond(404)
+    inner = _delete()
+
+    assert verify_announced_inner(_announce(inner)) == (inner, None)
+
+
+def test_an_open_object_still_reads_the_status_only(app, db_session, http_mock):
+    """A 200 Tombstone counts only for a private object; an open one is still served, so the Delete is dropped."""
+    _stored(VISIBILITY_PUBLIC)
+    http_mock.get(DELETED_ID).respond(200, json={'id': DELETED_ID, 'type': 'Tombstone'})
+
+    assert verify_announced_inner(_announce(_delete())) == (None, 'Announced Delete of an object that still exists')
+
+
+def test_the_ld_signed_delete_path_keeps_a_stored_private_object_on_a_404(app, db_session, http_mock):
+    _stored(VISIBILITY_FOLLOWERS)
+    http_mock.get(DELETED_ID).respond(404)
+
+    assert verify_ld_accepted_activity(_delete()) == (
+        None, 'LD-signed Delete: origin 404 does not prove a private object deleted')
+
+
+def test_the_ld_signed_announced_delete_path_keeps_a_stored_private_object_on_a_404(app, db_session, http_mock):
+    _stored(VISIBILITY_FOLLOWERS)
+    http_mock.get(DELETED_ID).respond(404)
+
+    assert verify_announced_inner(_announce(_delete()), ld_signed=True) == (None, PRIVATE_404)
+
+
+def test_the_ld_signed_delete_path_still_deletes_an_unstored_object_on_a_404(app, db_session, http_mock):
+    http_mock.get(DELETED_ID).respond(404)
+    inner = _delete()
+
+    assert verify_ld_accepted_activity(inner) == (inner, None)
