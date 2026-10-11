@@ -19,7 +19,8 @@ from app.activitypub import util as activitypub_util
 from app.activitypub.util import (INBOX_URL_MAX, delivery_inbox_of, names_actor,
                                   refresh_community_profile_task, refresh_feed_profile_task)
 from app.models import ActivityPubLog, Community, Feed, User, utcnow
-from tests.factories import inbox_activity, make_community, make_community_member, make_user, seed_community_owner
+from tests.factories import (inbox_activity, make_community, make_community_member, make_site, make_user,
+                             seed_community_owner)
 from tests.test_ap_refresh_profiles import (PEER, _feed_document, _group_document, _person_document,
                                             _remote_community, _remote_feed, _remote_user)
 from tests.test_inbox_dispatch_create_update import create_activity
@@ -468,3 +469,25 @@ def test_a_remote_community_document_without_a_key_keeps_the_old_key(app, db_ses
     community = db.session.get(Community, community_id)
     assert 'keyless' in community.description_html
     assert community.public_key == OLD_KEY
+
+
+@pytest.mark.parametrize('enabled', [True, False])
+def test_a_local_communitys_nsfw_and_nsfl_obey_the_site_settings(app, db_session, enabled):
+    """R203, as on the local edit path (app/shared/community.py): the site's switch wins over a moderator's
+    choice, and a pushed document is a moderator's choice too."""
+    seed_community_owner(PEER)
+    site = make_site()
+    site.enable_nsfw = enabled
+    site.enable_nsfl = enabled
+    community = make_community(host=app.config['SERVER_NAME'])
+    community.ap_followers_url = None
+    db.session.commit()
+    community_id = community.id
+
+    refresh_community_profile_task(community_id, {'type': 'Group', 'id': community.ap_profile_id,
+                                                  'name': 'microblogs', 'sensitive': True, 'nsfl': True})
+
+    db.session.expire_all()
+    community = db.session.get(Community, community_id)
+    assert community.nsfw is enabled
+    assert community.nsfl is enabled
