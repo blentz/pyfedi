@@ -5888,6 +5888,22 @@ def _stored_elsewhere(object_id: str, community) -> bool:
     return stored is not None and stored.community_id != community.id
 
 
+ANNOUNCED_GROUP_DELETE_REFUSED = 'Announced Delete of a Group not announced by that Group'
+
+
+def _announced_group_delete(inner: dict, object_id: str, community) -> Union[Tuple[Union[dict, None], Union[str, None]], None]:
+    """None when `object_id` names no stored Group; else the verdict on an Announced Delete of one (interop C1 item
+    10). Only the Group itself vouches for a Delete of itself (Lemmy's shape: the Group Announces its moderator's
+    Delete). It is passed on with no deferral (apply_delayed_delete knows only posts and comments) and no plain
+    404/410 check: the dispatcher asks may_delete_group, then the origin (410/Tombstone). Any other announcer is
+    refused before anything is fetched, since nothing vouches for the inner actor it names."""
+    if db.session.query(Community.id).filter_by(ap_profile_id=object_id.lower()).first() is None:
+        return None
+    if community is not None and object_id.lower() == community.profile_id():
+        return inner, None
+    return None, ANNOUNCED_GROUP_DELETE_REFUSED
+
+
 def _verify_announced_delete(inner: dict, community) -> Tuple[Union[dict, None], Union[str, None]]:
     """A cross-origin Announced Delete (spec S4 item 4, Amendment A).
 
@@ -5899,10 +5915,9 @@ def _verify_announced_delete(inner: dict, community) -> Tuple[Union[dict, None],
     object_id = _id_of(inner.get('object'))
     if not object_id:
         return None, 'Announced Delete names no object'
-    # interop C1 item 10: a Delete of a stored Group is never deferred (apply_delayed_delete knows only posts and
-    # comments) and never needs this check: the dispatcher asks may_delete_group, then the origin (410/Tombstone)
-    if db.session.query(Community.id).filter_by(ap_profile_id=object_id.lower()).first() is not None:
-        return inner, None
+    group_verdict = _announced_group_delete(inner, object_id, community)
+    if group_verdict is not None:
+        return group_verdict
     if _may_remove_from(_id_of(inner.get('actor')), community) and not _stored_elsewhere(object_id, community):
         return None, ANNOUNCED_DELETE_DEFERRED
     refusal = _origin_refusal_of_delete(object_id, 'Announced Delete')
@@ -6120,6 +6135,9 @@ def verify_announced_inner(announce: dict, community=None,
             object_id = _id_of(inner.get('object'))
             if not object_id:
                 return None, 'Announced Delete names no object'
+            group_verdict = _announced_group_delete(inner, object_id, community)
+            if group_verdict is not None:
+                return group_verdict
             refusal = _origin_refusal_of_delete(object_id, 'Announced Delete')
             return (inner, None) if refusal is None else (None, refusal)
         return _verify_announced_delete(inner, community)

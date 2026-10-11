@@ -19,7 +19,7 @@ from flask import g
 
 import app.activitypub.util as activitypub_util
 from app import db
-from app.activitypub.routes import process_new_content, process_upvote
+from app.activitypub.routes import process_inbox_request, process_new_content, process_upvote
 from app.activitypub.util import GROUP_DELETED_MESSAGE, delete_remote_group, mark_community_gone, may_delete_group
 from app.community.routes import do_subscribe
 from app.constants import POST_TYPE_ARTICLE, SRC_API, SRC_WEB
@@ -168,12 +168,13 @@ def _moderator(w, name='mod', instance=None):
     return mod
 
 
-def _lemmy_delete(actor):
-    """Lemmy's shape: the moderator's Delete of the community, Announced by the Group."""
+def _lemmy_delete(actor, announcer=GROUP):
+    """Lemmy's shape: the moderator's Delete of the community, Announced by the Group (or, to test the refusal,
+    by `announcer`)."""
     inner = {'id': f'{actor.ap_profile_id}/activities/delete/{uuid.uuid4().hex}', 'type': 'Delete',
              'actor': actor.ap_profile_id, 'object': GROUP,
              'to': ['https://www.w3.org/ns/activitystreams#Public'], 'cc': [GROUP]}
-    return {'id': f'{GROUP}/activities/announce/{uuid.uuid4().hex}', 'type': 'Announce', 'actor': GROUP,
+    return {'id': f'{announcer}/activities/announce/{uuid.uuid4().hex}', 'type': 'Announce', 'actor': announcer,
             'object': inner}
 
 
@@ -240,7 +241,8 @@ def test_a_moderator_delete_is_not_applied_while_the_origin_still_serves_the_gro
 def test_a_moderator_on_another_host_is_verified_not_deferred(app, db_session, http_mock, monkeypatch):
     """A cross-origin Announced Delete by a moderator is normally deferred for cross_origin_delete_delay
     (apply_delayed_delete), which only knows posts and comments and would drop a Group as 'superseded'.
-    A Delete naming a stored Group skips the deferral and goes straight to the origin check."""
+    The Group announcing its own moderator's Delete of itself (Lemmy's shape) skips the deferral and goes
+    straight to the origin check."""
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     w = _world()
     mod = _moderator(w, 'farmod', instance=make_instance('far.example'))
@@ -251,6 +253,98 @@ def test_a_moderator_on_another_host_is_verified_not_deferred(app, db_session, h
 
     db.session.expire_all()
     assert db.session.get(Community, community_id).ap_deleted_at is not None
+
+
+ANNOUNCED_GROUP_DELETE_REFUSED = 'Announced Delete of a Group not announced by that Group'
+
+
+def _other_group(host):
+    group = make_community('other', host=host)
+    group.ap_id = f'other@{host}'
+    group.ap_fetched_at = utcnow()
+    db.session.commit()
+    return group
+
+
+def test_another_group_on_another_host_cannot_relay_a_moderators_delete_of_the_group(
+        app, db_session, monkeypatch):
+    """Only the Group vouches for a Delete of itself: a Group on far.example announcing "memes' moderator deletes
+    memes" proves nothing about that moderator, and is refused before anything is fetched (no http_mock route)."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    w = _world()
+    mod = _moderator(w)
+    other = _other_group('far.example')
+    community_id = w.community.id
+
+    dispatch(_lemmy_delete(mod, announcer=other.ap_profile_id))
+
+    db.session.expire_all()
+    assert db.session.get(Community, community_id).ap_deleted_at is None
+    assert _inbound_logs() == [('Announce', 'failure', ANNOUNCED_GROUP_DELETE_REFUSED)]
+
+
+def test_another_group_on_the_same_host_cannot_relay_a_moderators_delete_of_the_group(
+        app, db_session, monkeypatch):
+    """A same-host Announce passes the S4 check unverified; the dispatcher still requires the announcer to be the
+    Group the Delete names."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    w = _world()
+    mod = _moderator(w)
+    other = _other_group(PEER)
+    community_id = w.community.id
+
+    dispatch(_lemmy_delete(mod, announcer=other.ap_profile_id))
+
+    db.session.expire_all()
+    assert db.session.get(Community, community_id).ap_deleted_at is None
+    assert _inbound_logs() == [('Delete', 'failure', ANNOUNCED_GROUP_DELETE_REFUSED)]
+
+
+@pytest.mark.parametrize('host', ['far.example', PEER], ids=['other-host', 'same-host'])
+def test_a_user_cannot_relay_a_moderators_delete_of_the_group(app, db_session, monkeypatch, host):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    w = _world()
+    mod = _moderator(w)
+    relayer = resolvable_remote_author(w.peer if host == PEER else make_instance(host), 'relayer')
+    community_id = w.community.id
+
+    dispatch(_lemmy_delete(mod, announcer=relayer.ap_profile_id))
+
+    db.session.expire_all()
+    assert db.session.get(Community, community_id).ap_deleted_at is None
+    assert db.session.query(ActivityPubLog).filter_by(direction='in', result='failure').one().exception_message \
+        == ANNOUNCED_GROUP_DELETE_REFUSED
+
+
+def test_an_ld_signed_announce_of_the_groups_own_moderator_delete_is_verified_once_and_marks_it(
+        app, db_session, http_mock, monkeypatch):
+    """R-LDANNOUNCE treats every inner Delete as cross-origin; the Group's own relay of it skips the plain
+    404/410 check and gets the one Tombstone-or-410 fetch delete_remote_group makes."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    w = _world()
+    mod = _moderator(w)
+    community_id = w.community.id
+    route = http_mock.get(GROUP).respond(410)
+
+    process_inbox_request(_lemmy_delete(mod), True, ld_signed=True)
+
+    db.session.expire_all()
+    assert route.call_count == 1
+    assert db.session.get(Community, community_id).ap_deleted_at is not None
+
+
+def test_an_ld_signed_announce_by_another_group_of_a_moderator_delete_is_refused(app, db_session, monkeypatch):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    w = _world()
+    mod = _moderator(w)
+    other = _other_group(PEER)
+    community_id = w.community.id
+
+    process_inbox_request(_lemmy_delete(mod, announcer=other.ap_profile_id), True, ld_signed=True)
+
+    db.session.expire_all()
+    assert db.session.get(Community, community_id).ap_deleted_at is None
+    assert _inbound_logs() == [('Announce', 'failure', f'LD-signed: {ANNOUNCED_GROUP_DELETE_REFUSED}')]
 
 
 def test_an_admin_on_the_groups_host_may_delete_it(app, db_session, http_mock, monkeypatch):
