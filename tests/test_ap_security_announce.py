@@ -18,7 +18,7 @@ from app.activitypub.util import ANNOUNCED_DELETE_DEFERRED, cross_origin_delete_
 from app.models import ActivityPubLog, InstanceRole, Post, User, utcnow
 from app.utils import set_setting
 from tests.factories import AS_PUBLIC_URI, a_keypair, make_community, make_community_member, make_instance, \
-    make_post, make_post_reply, make_user, note_document, serve_remote_object
+    make_post, make_post_reply, make_user, note_document, seed_signing_site, serve_remote_object
 from tests.test_inbox_dispatch_announce import _seed_announcing_community
 from tests.test_inbox_dispatch_lock_delete import record_moderation
 from tests.test_inbox_dispatch_preamble import dispatch
@@ -495,11 +495,85 @@ def test_an_announced_delete_of_an_object_the_origin_still_serves_is_dropped(app
     assert verify_announced_inner(_announce(_delete())) == (None, 'Announced Delete of an object that still exists')
 
 
-@pytest.mark.parametrize('status', [401, 403, 500])
+@pytest.mark.parametrize('status', [500, 302])
 def test_any_other_origin_answer_drops_the_delete(app, db_session, http_mock, status):
     http_mock.get(DELETED_ID).respond(status)
 
     assert verify_announced_inner(_announce(_delete())) == (None, f'Announced Delete: the object answers HTTP {status}')
+
+
+def _signed_or_not(unsigned_status, signed_responses):
+    """A respx side effect answering an unsigned GET with `unsigned_status` and each signed GET (it carries a
+    Signature header, cavage or RFC 9421) with the next status from `signed_responses`."""
+    signed = iter(signed_responses)
+
+    def answer(request):
+        if 'signature' not in request.headers:
+            return httpx.Response(unsigned_status)
+        status = next(signed)
+        if status == 200:
+            return httpx.Response(200, json=note_document(attributed_to=CAROL, uri=DELETED_ID))
+        return httpx.Response(status)
+    return answer
+
+
+@pytest.mark.parametrize('unsigned_status', [401, 403])
+@pytest.mark.parametrize('signed_status', [404, 410])
+def test_an_origin_refusing_unsigned_fetches_is_asked_again_signed(app, db_session, http_mock, unsigned_status,
+                                                                  signed_status):
+    """R-DELSIGNED: GoToSocial and authorized-fetch Mastodon/Akkoma answer 401/403 to every unsigned GET, deleted
+    object or not; one signed retry as the instance actor, no sleep (D775)."""
+    seed_signing_site()
+    route = http_mock.get(DELETED_ID).mock(side_effect=_signed_or_not(unsigned_status, [signed_status]))
+    inner = _delete()
+
+    assert verify_announced_inner(_announce(inner)) == (inner, None)
+    assert route.call_count == 2
+    assert 'signature' not in route.calls[0].request.headers
+    assert 'signature' in route.calls[1].request.headers
+
+
+def test_an_object_the_origin_still_serves_to_a_signed_fetch_is_not_deleted(app, db_session, http_mock):
+    seed_signing_site()
+    route = http_mock.get(DELETED_ID).mock(side_effect=_signed_or_not(401, [200]))
+
+    assert verify_announced_inner(_announce(_delete())) == (None, 'Announced Delete of an object that still exists')
+    assert route.call_count == 2
+
+
+@pytest.mark.parametrize('signed_status', [401, 403, 500])
+def test_an_origin_refusing_the_signed_fetch_too_drops_the_delete(app, db_session, http_mock, signed_status):
+    """A signed 401 is retried once in the other signature format (double_knock, the sanctioned single extra
+    attempt); any other answer is final."""
+    seed_signing_site()
+    route = http_mock.get(DELETED_ID).mock(side_effect=_signed_or_not(401, [signed_status, signed_status]))
+
+    assert verify_announced_inner(_announce(_delete())) == (
+        None, f'Announced Delete: the object answers HTTP {signed_status} to a signed fetch')
+    assert route.call_count == (3 if signed_status == 401 else 2)
+
+
+def test_an_unreachable_origin_on_the_signed_retry_drops_the_delete(app, db_session, http_mock):
+    seed_signing_site()
+    calls = iter([httpx.Response(403), httpx.ConnectError('down')])
+
+    def answer(request):
+        outcome = next(calls)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+    route = http_mock.get(DELETED_ID).mock(side_effect=answer)
+
+    assert verify_announced_inner(_announce(_delete())) == (
+        None, 'Announced Delete: the object could not be fetched with a signed request')
+    assert route.call_count == 2
+
+
+def test_with_no_site_key_an_origin_refusing_unsigned_fetches_drops_the_delete(app, db_session, http_mock):
+    route = http_mock.get(DELETED_ID).respond(401)
+
+    assert verify_announced_inner(_announce(_delete())) == (None, 'Announced Delete: the object answers HTTP 401')
+    assert route.call_count == 1
 
 
 def test_an_unreachable_origin_drops_the_delete_without_a_retry(app, db_session, http_mock):
