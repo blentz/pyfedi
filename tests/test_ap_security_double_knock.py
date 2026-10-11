@@ -4,7 +4,7 @@ import pytest
 
 from app import db
 from app.activitypub import signature_rfc9421 as rfc9421
-from app.activitypub.signature import HttpSignature, double_knock, post_request
+from app.activitypub.signature import HttpSignature, double_knock, post_request, signed_get_request
 from app.models import ActivityPubLog, Instance, SendQueue
 from tests.factories import a_keypair, make_instance
 
@@ -117,3 +117,19 @@ class TestPostRequest:
         log = ActivityPubLog.query.one()
         assert log.result == 'failure' and log.exception_message.startswith('401: blocked')
         assert SendQueue.query.count() == 0
+
+
+class TestSignedGet:
+
+    def test_a_401_then_200_remembers_rfc9421(self, app, db_session, http_mock):
+        private_key, public_key = a_keypair()
+        instance = make_instance('peer.example')
+        route = http_mock.get('https://peer.example/u/bob').mock(
+            side_effect=[httpx.Response(401), httpx.Response(200, json={'id': 'https://peer.example/u/bob'})])
+        response = signed_get_request('https://peer.example/u/bob', private_key, KEY_ID)
+        assert response.status_code == 200 and route.call_count == 2
+        second = route.calls[1].request
+        assert rfc9421.verify('GET', 'https://peer.example/u/bob', second.headers, b'', public_key,
+                              rfc9421.RFC9421_GET_REQUIRED)
+        db.session.refresh(instance)
+        assert instance.signature_format == 'rfc9421'

@@ -208,8 +208,8 @@ def post_request(uri: str, body: dict | None, private_key: str, key_id: str,
 
 def signed_get_request(uri: str, private_key: str, key_id: str, content_type: str = "application/activity+json",
                        method: Literal["get", "post"] = "get", timeout: int = 10, ):
-    result = HttpSignature.signed_request(uri, None, private_key, key_id, content_type, method, timeout)
-    return result
+    return double_knock(uri, lambda signature_format: HttpSignature.signed_request(
+        uri, None, private_key, key_id, content_type, method, timeout, signature_format=signature_format))
 
 
 # pyld's default loader fetches every @context over the network, uncached and
