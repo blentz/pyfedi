@@ -145,7 +145,7 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
     if not followers and community.local_only:
         return
 
-    if community.private:
+    if community.private or community.is_gone():   # interop C1 item 10: nothing goes to a gone Group
         return
     if not followers_only and not (community.instance_id and community.instance.online()):
         return

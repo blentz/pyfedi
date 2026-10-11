@@ -754,6 +754,9 @@ def show_community(community: Community, from_instance=None):
         is_dead = community.instance.gone_forever if community.instance else False
         if is_dead:
             flash(_("This instance no longer online, so posts and comments will only be visible locally"), "warning")
+        if community.is_gone():   # interop C1 item 10
+            flash(_('This community was deleted on its home server. Its posts and comments can still be read here, '
+                    'but nothing new can be added.'), 'warning')
     else:
         is_dead = False
 
@@ -1000,7 +1003,7 @@ def do_subscribe(actor, user_id, admin_preload=False, joined_via_feed=False):
                     # no attribute 'banned'`. The "community not found" path at
                     # the bottom of this function is where that belongs, and it
                     # was never reached.
-                    if community is not None and community.banned:
+                    if community is not None and (community.banned or community.is_gone()):   # interop C1 item 10
                         community = None
                     remote = True
                 else:

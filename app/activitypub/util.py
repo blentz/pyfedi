@@ -44,7 +44,8 @@ from app.utils import FETCH_MAX_BYTES, get_request, get_request_capped, allowlis
     is_image_url, domain_from_url, gibberish, ensure_directory_exists, shorten_string, fixup_url, \
     microblog_content_to_title, is_video_url, \
     notification_subscribers, communities_banned_from, html_to_text, add_to_modlog, joined_communities, \
-    moderating_communities, get_task_session, is_video_hosting_site, opengraph_parse, mastodon_extra_field_link, \
+    moderating_communities, community_membership, get_task_session, is_video_hosting_site, opengraph_parse, \
+    mastodon_extra_field_link, \
     blocked_users, piefed_markdown_to_lemmy_markdown, store_files_in_s3, guess_mime_type, get_recipient_language, \
     patch_db_session, to_srgb, communities_banned_from_all_users, blocked_communities, blocked_or_banned_instances, \
     instance_community_ids, banned_instances, communities_run_by_inactive_mods, inspect_image_c2pa, \
@@ -5898,6 +5899,10 @@ def _verify_announced_delete(inner: dict, community) -> Tuple[Union[dict, None],
     object_id = _id_of(inner.get('object'))
     if not object_id:
         return None, 'Announced Delete names no object'
+    # interop C1 item 10: a Delete of a stored Group is never deferred (apply_delayed_delete knows only posts and
+    # comments) and never needs this check: the dispatcher asks may_delete_group, then the origin (410/Tombstone)
+    if db.session.query(Community.id).filter_by(ap_profile_id=object_id.lower()).first() is not None:
+        return inner, None
     if _may_remove_from(_id_of(inner.get('actor')), community) and not _stored_elsewhere(object_id, community):
         return None, ANNOUNCED_DELETE_DEFERRED
     refusal = _origin_refusal_of_delete(object_id, 'Announced Delete')
@@ -5923,7 +5928,7 @@ def _is_tombstone(body: Union[bytes, None]) -> bool:
     return isinstance(document, dict) and document.get('type') == 'Tombstone'
 
 
-def _origin_refusal_of_delete(object_id: str, label: str) -> Union[str, None]:
+def _origin_refusal_of_delete(object_id: str, label: str, tombstone_required: bool = False) -> Union[str, None]:
     """None when the object's origin no longer serves it (404 or 410), else why the Delete is dropped.
 
     One unsigned fetch and no sleep or transport retry (D775). get_request_capped, not get_request: get_request
@@ -5937,8 +5942,12 @@ def _origin_refusal_of_delete(object_id: str, label: str) -> Union[str, None]:
     object they deleted, so a 401/403 is asked again exactly once, signed as the instance actor (as
     verify_object_from_source does; signed_get_capped's double knock is the one sanctioned extra attempt), status
     only: signed_get_capped reads no body, follows no redirect and has a deadline. With no Site key to sign with,
-    the unsigned answer stands."""
-    private = _stored_private(object_id)
+    the unsigned answer stands.
+
+    `tombstone_required` holds the object to that private rule whatever is stored here: a remote Group's Delete of
+    itself (interop C1 item 10, owner ruling) counts only on a 410 or a Tombstone, since a 404 does not prove a
+    Group deleted either."""
+    private = tombstone_required or _stored_private(object_id)
     max_bytes = TOMBSTONE_MAX_BYTES if private else 0
     try:
         status, body = get_request_capped(object_id, max_bytes, headers={'Accept': AP_FETCH_ACCEPT})
@@ -5958,12 +5967,66 @@ def _origin_refusal_of_delete(object_id: str, label: str) -> Union[str, None]:
         if status == 410 or (status == 200 and _is_tombstone(body)):
             return None
         if status == 404:
-            return f'{label}: origin 404 does not prove a private object deleted'
+            return f"{label}: origin 404 does not prove {'it' if tombstone_required else 'a private object'} deleted"
     elif status in (404, 410):
         return None
     if status == 200:
         return f'{label} of an object that still exists'
     return f'{label}: the object answers HTTP {status}{suffix}'
+
+
+GROUP_DELETED_MESSAGE = 'Community was deleted on its home server'
+
+
+def may_delete_group(actor_id, community: Community) -> bool:
+    """Who may delete a remote Group (interop C1 item 10, spec Amendment A): the Group itself, one of its stored
+    moderators or owners, or an admin of the instance hosting it -- the security track's Group-host rule,
+    _may_remove_from. Lemmy sends a community's deletion with a moderator as the actor. Lookup only: an actor not
+    stored here is never fetched. Authority alone never deletes: delete_remote_group still asks the origin."""
+    if not isinstance(actor_id, str) or not actor_id.strip():
+        return False
+    if actor_id.strip().lower() == community.profile_id():
+        return True
+    return _may_remove_from(actor_id, community)
+
+
+def mark_community_gone(community: Community) -> None:
+    """Record that a remote Group's home server deleted it (interop C1 item 10); the caller verified it there.
+
+    Its posts and comments stay. Local members are unsubscribed WITHOUT an Undo Follow -- there is no Group left to
+    tell -- and their pending join requests go with them. Rows of remote users (moderators read from the Group's
+    moderators collection) are the Group's own record, not local subscriptions, and are kept."""
+    community.ap_deleted_at = utcnow()
+    local_members = db.session.query(User).join(CommunityMember, CommunityMember.user_id == User.id).filter(
+        CommunityMember.community_id == community.id, User.ap_id.is_(None)).all()
+    local_ids = [member.id for member in local_members]
+    db.session.query(CommunityMember).filter(CommunityMember.community_id == community.id,
+                                             CommunityMember.user_id.in_(local_ids)).delete(synchronize_session=False)
+    db.session.query(CommunityJoinRequest).filter(CommunityJoinRequest.community_id == community.id,
+                                                  CommunityJoinRequest.user_id.in_(local_ids)).delete(
+        synchronize_session=False)
+    community.subscriptions_count = max(0, (community.subscriptions_count or 0) - len(local_ids))
+    db.session.commit()
+    for member in local_members:
+        cache.delete_memoized(community_membership, member, community)
+        cache.delete_memoized(joined_communities, member.id)
+        cache.delete_memoized(moderating_communities, member.id)
+
+
+def delete_remote_group(community: Community, activity_id: str, saved_json) -> None:
+    """A Delete of a remote Group (interop C1 item 10) by an actor may_delete_group accepts. Applied only once the
+    Group's origin no longer serves it: one capped fetch, and only a 410 or a Tombstone counts
+    (_origin_refusal_of_delete, tombstone_required). A 404, a Group still served or an unreachable origin is logged
+    and changes nothing. No retry (D775)."""
+    if community.is_local():
+        log_incoming_ap(activity_id, APLOG_DELETE, APLOG_FAILURE, saved_json, 'Delete of a local community is not accepted')
+        return
+    refusal = _origin_refusal_of_delete(community.ap_profile_id, 'Group Delete', tombstone_required=True)
+    if refusal is not None:
+        log_incoming_ap(activity_id, APLOG_DELETE, APLOG_FAILURE, saved_json, refusal)
+        return
+    mark_community_gone(community)
+    log_incoming_ap(activity_id, APLOG_DELETE, APLOG_SUCCESS, saved_json)
 
 
 ADDRESSING_FIELDS = ('to', 'cc', 'audience', 'target')

@@ -33,7 +33,8 @@ from app.activitypub.util import activity_dedupe_key, claim_activity, release_ac
     post_replies_for_ap, is_vote, known_instance_id, resolve_remote_post_from_search, proactively_delete_content, \
     process_quote_boost, object_has_missing_fields, find_microblogging_community, process_announce_of_uri, \
     announce_target_uri, undo_boost, withdraw_flag, LD_SIGNED_LOG_PREFIX, current_ld_signed, normalise_activity_types, \
-    NO_STRING_TYPE_MESSAGE, names_actor, refresh_user_profile_task
+    NO_STRING_TYPE_MESSAGE, names_actor, refresh_user_profile_task, delete_remote_group, GROUP_DELETED_MESSAGE, \
+    may_delete_group
 # The module, not the name: app.community.routes reaches this file through
 # app.activitypub.signature before show_community is defined (U-circular-import)
 import app.chat.util as chat_util
@@ -808,8 +809,12 @@ def shared_inbox():
         account_deletion = True
         actor = db.session.query(User).filter_by(ap_profile_id=request_json['actor'].lower()).first()
         if not actor:
-            log_incoming_ap(id, APLOG_DELETE, APLOG_IGNORED, saved_json, 'Does not exist here')
-            return '', 200
+            # interop C1 item 10: a known Group deleting itself goes to the dispatcher, which verifies it at the origin
+            actor = db.session.query(Community).filter_by(ap_profile_id=request_json['actor'].lower()).first()
+            account_deletion = False
+            if not actor:
+                log_incoming_ap(id, APLOG_DELETE, APLOG_IGNORED, saved_json, 'Does not exist here')
+                return '', 200
     else:
         actor = find_actor_or_create_cached(request_json['actor'])
 
@@ -1059,6 +1064,9 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                         aplog_type = {'Announce': APLOG_ANNOUNCE, 'Accept': APLOG_ACCEPT, 'Reject': APLOG_REJECT}[request_json['type']]
                         log_incoming_ap(id, aplog_type, APLOG_FAILURE, saved_json, 'Actor was not a user, feed or a community')
                         return
+                    if community is not None and community.is_gone():   # interop C1 item 10: no undelete path
+                        log_incoming_ap(id, APLOG_NOTYPE, APLOG_IGNORED, saved_json, GROUP_DELETED_MESSAGE)
+                        return
                 else:
                     # Interop C1 item 2: an Update of an actor refreshes a known actor; it never creates one
                     actor_update = (request_json['type'] == 'Update' and isinstance(request_json['object'], dict)
@@ -1070,6 +1078,12 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                     if actor and isinstance(actor, User):
                         user = actor
                     elif actor and isinstance(actor, Community):  # Process a few activities from NodeBB and a.gup.pe
+                        if actor.is_gone():   # interop C1 item 10: no undelete path, so nothing more from it is processed
+                            log_incoming_ap(id, APLOG_NOTYPE, APLOG_IGNORED, saved_json, GROUP_DELETED_MESSAGE)
+                            return
+                        if request_json['type'] == 'Delete' and _id_of(request_json['object']).lower() == actor.profile_id():
+                            delete_remote_group(actor, id, saved_json)   # interop C1 item 10: verified at the origin first
+                            return
                         if request_json['type'] == 'Add' or request_json['type'] == 'Remove':
                             log_incoming_ap(id, APLOG_ADD, APLOG_IGNORED, saved_json, 'NodeBB Topic Management')
                             return
@@ -1660,6 +1674,19 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                         ap_id = core_activity['object']['id']  # kbin
                     else:
                         log_incoming_ap(id, APLOG_DELETE, APLOG_FAILURE, saved_json, 'Delete object has no id')
+                        return
+                    # interop C1 item 10 (Amendment A): a Group's moderator or an admin of its host may delete it too
+                    # (Lemmy's shape); the Group's own Delete is handled in the Community-actor branch above. Only the
+                    # Group the Delete names is looked up, and authority is asked of that Group alone
+                    target_group = session.query(Community).filter_by(ap_profile_id=_id_of(ap_id).lower()).first()
+                    if target_group is not None:
+                        if target_group.is_gone():
+                            log_incoming_ap(id, APLOG_DELETE, APLOG_IGNORED, saved_json, GROUP_DELETED_MESSAGE)
+                        elif may_delete_group(user.ap_profile_id, target_group):
+                            delete_remote_group(target_group, id, saved_json)   # still verified at the origin
+                        else:
+                            log_incoming_ap(id, APLOG_DELETE, APLOG_FAILURE, saved_json, 'Delete of a Group is '
+                                            'accepted only from the Group, its moderators or an admin of its host')
                         return
                     to_delete = find_liked_object(ap_id)  # Just for Posts and Replies (User deletes go through process_delete_request())
 

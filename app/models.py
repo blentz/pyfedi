@@ -1482,6 +1482,12 @@ class Community(db.Model):
     def is_local(self):
         return self.ap_id is None or is_local_url(self.profile_id())
 
+    def is_gone(self) -> bool:
+        """Interop C1 item 10: a remote Group whose home server deleted it, verified there (delete_remote_group).
+        Read-only from then on: its posts and comments stay readable and searchable, but nothing new is posted,
+        replied, voted or joined there, and nothing is delivered to it. There is no undelete."""
+        return self.ap_deleted_at is not None
+
     def local_url(self):
         if self.is_local():
             return self.ap_profile_id

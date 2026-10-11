@@ -3000,7 +3000,7 @@ def guess_mime_type(file_path: str) -> str:
 
 
 def can_downvote(user, community: Community, communities_banned_from_list=None) -> bool:
-    if user is None or community is None or user.banned or user.bot:
+    if user is None or community is None or user.banned or user.bot or community.is_gone():
         return False
 
     try:
@@ -3044,7 +3044,7 @@ def can_downvote(user, community: Community, communities_banned_from_list=None) 
 
 
 def can_upvote(user, community: Community, communities_banned_from_list=None) -> bool:
-    if user is None or community is None or user.banned or user.bot:
+    if user is None or community is None or user.banned or user.bot or community.is_gone():
         return False
 
     if communities_banned_from_list is not None:
@@ -3089,7 +3089,7 @@ def can_create_post(user, content: Community) -> bool:
         if user.created_very_recently() and user.post_count > 3 and not is_podcast_owner:    # new users can only do 3 posts in their first 24h
             return False
 
-    if content.banned:
+    if content.banned or content.is_gone():   # interop C1 item 10: a Group deleted on its home server is read-only
         return False
 
     if user.is_rss_bot() or content.is_moderator(user) or user.is_admin():
@@ -3136,7 +3136,7 @@ def can_create_post_reply(user, content: Community) -> bool:
             if instance_banned(user.ap_domain):
                 return False
 
-    if content.banned:
+    if content.banned or content.is_gone():   # interop C1 item 10: a Group deleted on its home server is read-only
         return False
 
     if content.is_moderator(user) or user.is_admin():

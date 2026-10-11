@@ -113,7 +113,7 @@ def send_reply(reply_id, parent_id, edit=False, session=None):
                     session.add(notification)
                     session.commit()
 
-    if community.local_only or community.private:
+    if community.local_only or community.private or community.is_gone():   # interop C1 item 10: nothing goes to a gone Group
         return
 
     banned = user_banned_from_community(user.id, community.id)  # D995
