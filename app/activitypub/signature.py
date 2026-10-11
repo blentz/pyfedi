@@ -61,7 +61,7 @@ from app.constants import DATETIME_MS_FORMAT
 from app.discovery.instance_answers import record_delivery_refusal
 from app.relays.refusals import record_relay_refusal
 from app.models import utcnow, ActivityPubLog, Community, Instance, CommunityMember, Site, User, SendQueue, public_key_pem
-from app.utils import get_request_capped, get_task_session, is_invalid_get_request_uri
+from app.utils import _capped_get, get_request_capped, get_task_session, is_invalid_get_request_uri
 import app.activitypub.util as activitypub_util
 
 
@@ -208,9 +208,21 @@ def post_request(uri: str, body: dict | None, private_key: str, key_id: str,
 
 
 def signed_get_request(uri: str, private_key: str, key_id: str, content_type: str = "application/activity+json",
-                       method: Literal["get", "post"] = "get", timeout: int = 10, ):
-    return double_knock(uri, lambda signature_format: HttpSignature.signed_request(
-        uri, None, private_key, key_id, content_type, method, timeout, signature_format=signature_format))
+                       method: Literal["get", "post"] = "get", timeout: int = 10, ) -> httpx.Response:
+    """A GET of `uri` signed as `key_id`, in the format double_knock picks (the other once on a 401). Each attempt
+    is signed only, then fetched through _capped_get like get_request: at most FETCH_MAX_BYTES of body within
+    FETCH_MAX_SECONDS (else ResponseTooLarge), no redirects, `timeout` per read, no sleep and no retry. It used to
+    read through HttpSignature.signed_request's own uncapped GET, so a hostile origin could pin a worker with a huge
+    or slow body. `content_type` and `method` stay for the callers' sake: a GET has no body to type, and every
+    caller asks for a GET. Raises ValueError for a URI the signer refuses, httpx.HTTPError on transport failure."""
+    def send(signature_format: str) -> httpx.Response:
+        # send_via_async: sign only; the GET itself goes through _capped_get's cap and deadline
+        _uri, headers, _body = HttpSignature.signed_request(uri, None, private_key, key_id, content_type, method='get',
+                                                            timeout=timeout, send_via_async=True,
+                                                            signature_format=signature_format)
+        return _capped_get(uri, headers=headers, timeout=timeout)
+
+    return double_knock(uri, send)
 
 
 def signed_get_capped(uri: str, private_key: str, key_id: str, max_bytes: int,

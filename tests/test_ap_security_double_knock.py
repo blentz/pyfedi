@@ -1,6 +1,9 @@
 """S5 outbound: signing in RFC 9421, and one retry in the other format on a 401."""
+import gzip
+import json
 import time
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -10,11 +13,13 @@ from app.activitypub import signature_rfc9421 as rfc9421
 from app.activitypub.signature import HttpSignature, double_knock, post_request, signed_get_capped, \
     signed_get_request
 from app.models import ActivityPubLog, Instance, SendQueue
+from app.utils import FETCH_MAX_BYTES, ResponseTooLarge
 from tests.factories import a_keypair, make_instance
 from tests.test_ap_security_rfc9421 import GET_COMPONENTS, POST_COMPONENTS
 
 INBOX = 'https://peer.example/inbox'
 KEY_ID = 'https://test.piefed.local/u/alice#main-key'
+ACTOR = 'https://peer.example/u/bob'
 
 
 def _body():
@@ -138,6 +143,93 @@ class TestSignedGet:
                               GET_COMPONENTS)
         db.session.refresh(instance)
         assert instance.signature_format == 'rfc9421'
+
+
+    def test_the_request_is_signed_and_asks_for_json_ld(self, app, db_session, http_mock):
+        """The signer's headers go out on the capped fetch: its Signature, Date, Host and Accept."""
+        route = http_mock.get(ACTOR).respond(200, json={'id': ACTOR})
+
+        assert signed_get_request(ACTOR, a_keypair()[0], KEY_ID).json() == {'id': ACTOR}
+        sent = route.calls[0].request.headers
+        assert 'signature' in sent and 'date' in sent
+        assert sent['accept'] == 'application/ld+json'
+        assert sent['host'] == 'peer.example'
+        assert sent['user-agent'].startswith('PieFed/')
+
+    def test_a_huge_body_is_refused_unbuffered(self, app, db_session, http_mock):
+        """signed_get_request used to read through HttpSignature.signed_request's own uncapped GET."""
+        pulled = []
+
+        def endless():
+            while True:
+                pulled.append(1)
+                yield b' ' * 65536
+
+        route = http_mock.get(ACTOR).respond(200, content=endless())
+
+        with pytest.raises(ResponseTooLarge):
+            signed_get_request(ACTOR, a_keypair()[0], KEY_ID)
+        assert route.call_count == 1
+        assert len(pulled) * 65536 <= FETCH_MAX_BYTES + 65536
+
+    def test_a_slow_drip_is_cut_at_the_wall_clock(self, app, db_session, http_mock, monkeypatch):
+        now = [1000.0]
+        monkeypatch.setattr('app.utils.time', SimpleNamespace(**{**vars(time), 'monotonic': lambda: now[0]}))
+
+        def trickle():
+            for _ in range(1000):
+                now[0] += 5   # five fake seconds per byte
+                yield b' '
+
+        http_mock.get(ACTOR).respond(200, content=trickle())
+
+        with pytest.raises(ResponseTooLarge):
+            signed_get_request(ACTOR, a_keypair()[0], KEY_ID)
+
+    def test_a_transport_error_is_not_retried_and_nothing_sleeps(self, app, db_session, http_mock, monkeypatch):
+        sleeps = Mock()
+        monkeypatch.setattr('app.utils.sleep', sleeps)
+        monkeypatch.setattr('time.sleep', sleeps)
+        route = http_mock.get(ACTOR).mock(side_effect=[httpx.ReadTimeout('slow'), httpx.Response(200, json={})])
+
+        with pytest.raises(httpx.HTTPError):
+            signed_get_request(ACTOR, a_keypair()[0], KEY_ID)
+        assert route.call_count == 1
+        sleeps.assert_not_called()
+
+    def test_a_401_alternates_the_format_once_and_nothing_sleeps(self, app, db_session, http_mock, monkeypatch):
+        sleeps = Mock()
+        monkeypatch.setattr('app.utils.sleep', sleeps)
+        monkeypatch.setattr('time.sleep', sleeps)
+        route = http_mock.get(ACTOR).respond(401)
+
+        assert signed_get_request(ACTOR, a_keypair()[0], KEY_ID).status_code == 401
+        assert route.call_count == 2
+        first, second = (call.request for call in route.calls)
+        assert 'signature-input' not in first.headers and 'signature-input' in second.headers
+        sleeps.assert_not_called()
+
+    def test_a_gzip_body_is_decoded_and_its_headers_kept(self, app, db_session, http_mock):
+        document = json.dumps({'id': ACTOR}).encode()
+        http_mock.get(ACTOR).respond(200, content=gzip.compress(document),
+                                     headers={'Content-Encoding': 'gzip', 'Content-Type': 'application/activity+json'})
+
+        response = signed_get_request(ACTOR, a_keypair()[0], KEY_ID)
+
+        assert response.json() == {'id': ACTOR}
+        assert response.headers['content-type'] == 'application/activity+json'
+        assert 'content-encoding' not in response.headers
+
+    def test_a_redirect_is_not_followed(self, app, db_session, http_mock):
+        """No route serves the Location: following it would raise out of respx and error the test."""
+        http_mock.get(ACTOR).respond(302, headers={'Location': 'https://elsewhere.example/u/bob'})
+
+        assert signed_get_request(ACTOR, a_keypair()[0], KEY_ID).status_code == 302
+
+    def test_a_uri_the_signer_refuses_is_still_a_value_error(self, app, db_session):
+        """HttpSignature.signed_request refuses it before any request; callers catch ValueError for this."""
+        with pytest.raises(ValueError):
+            signed_get_request('https://printer.local/u/bob', a_keypair()[0], KEY_ID)
 
 
 OBJECT = 'https://peer.example/post/1'
