@@ -734,13 +734,36 @@ def shared_inbox_of(actor_json: dict) -> str | None:
     """The actor's shared inbox, or None when `endpoints` does not carry a usable one.
 
     The spec lets `endpoints` omit sharedInbox or be a URI string naming a document to fetch. Neither is an
-    error: the caller falls back to the actor's own inbox. A string `endpoints` is not dereferenced (roadmap
-    tier C)."""
+    error: the caller falls back to the actor's own inbox. A string `endpoints` is fetched only on the actor's own
+    host, and its sharedInbox is used only on that host too (interop C1 item 4)."""
     endpoints = actor_json.get('endpoints')
+    if isinstance(endpoints, str):
+        return _shared_inbox_from_endpoints_document(endpoints, actor_json.get('id'))
     if not isinstance(endpoints, dict):
         return None
+    return _usable_shared_inbox(endpoints)
+
+
+def _usable_shared_inbox(endpoints: dict) -> str | None:
     shared_inbox = endpoints.get('sharedInbox')
     return shared_inbox if isinstance(shared_inbox, str) and shared_inbox else None
+
+
+def _shared_inbox_from_endpoints_document(endpoints_url: str, actor_id) -> str | None:
+    """The sharedInbox of the endpoints document at `endpoints_url`, fetched once with fetch_object_capped (capped,
+    no retry, no sleep). The URL and the sharedInbox it names must both be on the actor's own host, so a peer
+    cannot make us fetch from, or deliver to, a host it does not speak for. An actor id with no host matches
+    nothing, rather than '' matching ''."""
+    actor_host = host_of(actor_id) if isinstance(actor_id, str) else ''
+    if not actor_host or host_of(endpoints_url) != actor_host:
+        return None
+    document, _reason = fetch_object_capped(endpoints_url)
+    if document is None:
+        return None
+    shared_inbox = _usable_shared_inbox(document)
+    if shared_inbox is None or host_of(shared_inbox) != actor_host:
+        return None
+    return shared_inbox
 
 
 # The width of ap_inbox_url on User, Community and Feed. A longer URL from a peer is not stored: it would be a

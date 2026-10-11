@@ -19,7 +19,9 @@ SHARED = f'https://{PEER}/inbox'
 SHAPES = [
     ('dict with sharedInbox', {'sharedInbox': SHARED}, SHARED),
     ('dict without sharedInbox', {'oauthTokenEndpoint': f'https://{PEER}/token'}, None),
-    ('string endpoints', f'https://{PEER}/endpoints', None),
+    # Interop C1 item 4: a string on the actor's own host is now fetched (tests/test_ap_interop_string_endpoints.py).
+    # One on another host is still never fetched, so this row keeps its expectation without an HTTP route.
+    ('cross-host string endpoints', 'https://elsewhere.example/endpoints', None),
     ('non-string sharedInbox', {'sharedInbox': ['x']}, None),
     ('empty sharedInbox', {'sharedInbox': ''}, None),
 ]
