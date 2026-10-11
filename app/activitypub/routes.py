@@ -32,7 +32,8 @@ from app.activitypub.util import activity_dedupe_key, claim_activity, release_ac
     verify_announced_inner, verify_ld_accepted_activity, ANNOUNCED_DELETE_DEFERRED, cross_origin_delete_delay, _id_of, \
     post_replies_for_ap, is_vote, known_instance_id, resolve_remote_post_from_search, proactively_delete_content, \
     process_quote_boost, object_has_missing_fields, find_microblogging_community, process_announce_of_uri, \
-    announce_target_uri, undo_boost, LD_SIGNED_LOG_PREFIX, current_ld_signed
+    announce_target_uri, undo_boost, LD_SIGNED_LOG_PREFIX, current_ld_signed, normalise_activity_types, \
+    NO_STRING_TYPE_MESSAGE
 # The module, not the name: app.community.routes reaches this file through
 # app.activitypub.signature before show_community is defined (U-circular-import)
 import app.chat.util as chat_util
@@ -748,9 +749,15 @@ def shared_inbox():
         log_incoming_ap('', APLOG_NOTYPE, APLOG_FAILURE, saved_json, 'Missing minimum expected fields in JSON')
         return '', 200
 
+    # interop C1 item 8: the checks below read one type each. request_json stays as sent, for the LD signature.
+    typed_json = normalise_activity_types(request_json)
+    if typed_json is None:
+        log_incoming_ap(request_json['id'], APLOG_NOTYPE, APLOG_FAILURE, saved_json, NO_STRING_TYPE_MESSAGE)
+        return '', 200
+
     id = request_json['id']
-    if request_json['type'] == 'Announce' and isinstance(request_json['object'], dict):
-        object = request_json['object']
+    if typed_json['type'] == 'Announce' and isinstance(typed_json['object'], dict):
+        object = typed_json['object']
         if object_has_missing_fields(object):
             if 'type' in object and (object['type'] == 'Page' or object['type'] == 'Note'):
                 log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, 'Intended for Mastodon')
@@ -786,13 +793,13 @@ def shared_inbox():
         log_incoming_ap(id, APLOG_NOTYPE, APLOG_FAILURE, saved_json, 'Precheck failed: ' + str(e))
         return '', 400
 
-    answered = relay_inbound.relay_actor_gate(request, request_json)   # after the precheck; relays (spec 2026-10-08): never a User row
+    answered = relay_inbound.relay_actor_gate(request, typed_json)   # after the precheck; relays (spec 2026-10-08): never a User row
     if answered is not None:
         return answered
 
     # Ignore account deletion requests from users that do not already exist here
     account_deletion = False
-    if request_json['type'] == 'Delete' and 'object' in request_json and isinstance(request_json['object'], str) and \
+    if typed_json['type'] == 'Delete' and 'object' in request_json and isinstance(request_json['object'], str) and \
             request_json['actor'] == request_json['object']:
         account_deletion = True
         actor = db.session.query(User).filter_by(ap_profile_id=request_json['actor'].lower()).first()
@@ -937,8 +944,9 @@ def replay_inbox_request(request_json):
         return
 
     id = request_json['id']
-    if request_json['type'] == 'Announce' and isinstance(request_json['object'], dict):
-        object = request_json['object']
+    typed_json = normalise_activity_types(request_json) or request_json   # process_inbox_request refuses a None
+    if typed_json['type'] == 'Announce' and isinstance(typed_json['object'], dict):
+        object = typed_json['object']
         if object_has_missing_fields(object):
             if 'type' in object and (object['type'] == 'Page' or object['type'] == 'Note'):
                 log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, request_json, 'REPLAY: Intended for Mastodon')
@@ -958,7 +966,7 @@ def replay_inbox_request(request_json):
 
     # Ignore account deletion requests from users that do not already exist here
     account_deletion = False
-    if (request_json['type'] == 'Delete' and
+    if (typed_json['type'] == 'Delete' and
             'object' in request_json and isinstance(request_json['object'], str) and
             request_json['actor'] == request_json['object']):
         account_deletion = True
@@ -998,17 +1006,25 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
             # patch_db_session makes all db.session.whatever() use the session created with get_task_session, to guarantee proper connection clean-up at the end of the task.
             # although process_inbox_request uses session instead of db.session, many of the functions it calls, like find_actor_or_create_cached, do not which makes this necessary.
             with patch_db_session(session):
+                # interop C1 item 8: dispatch reads one type each, on a copy; raw_json is what was sent, and is what
+                # the logs store. First, so the relay filter and the LD downgrade below read the type dispatch uses.
+                raw_json = request_json
+                request_json = normalise_activity_types(raw_json)
+                if request_json is None:
+                    log_incoming_ap(raw_json.get('id', ''), APLOG_NOTYPE, APLOG_FAILURE,
+                                    raw_json if store_ap_json else None, NO_STRING_TYPE_MESSAGE)
+                    return
                 if relay_id is not None:   # relays: a forwarded activity is kept only when top-level and wanted
                     allowed, reason = relay_inbound.relayed_activity_allowed(request_json)
                     if not allowed:
                         log_incoming_ap(request_json.get('id', ''), APLOG_NOTYPE, APLOG_IGNORED,
-                                        request_json if store_ap_json else None, reason)
+                                        raw_json if store_ap_json else None, reason)
                         return
                 if ld_signed:   # R-LDDOWNGRADE: an LD signature vouches for who and which object, not content
                     verified, reason = verify_ld_accepted_activity(request_json)
                     if verified is None:
                         log_incoming_ap(request_json.get('id', ''), APLOG_NOTYPE, APLOG_FAILURE,
-                                        request_json if store_ap_json else None, f'LD-signed activity dropped: {reason}')
+                                        raw_json if store_ap_json else None, f'LD-signed activity dropped: {reason}')
                         return
                     request_json = verified
                 # For an Announce, Accept, or Reject, we have the community/feed, and need to find the user
@@ -1017,7 +1033,8 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                 #   It's the actor who signed the request, and whose signature has been verified
                 #   Because of the earlier check, we know that they already exist, and so don't need to check again
                 #   Using actors from inner objects has a vulnerability to spoofing attacks (e.g. if 'attributedTo' doesn't match the 'Create' actor)
-                saved_json = request_json if store_ap_json else None
+                # An LD-accepted activity keeps logging the verified document, as before
+                saved_json = (request_json if ld_signed else raw_json) if store_ap_json else None
                 id = request_json['id']
                 actor_id = request_json['actor']
                 if isinstance(actor_id, dict):  # Discourse does this
@@ -1556,7 +1573,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                 if community.is_local():
                                     announce_activity_to_followers(community, user, request_json)
                         else:
-                            log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, 'Unacceptable type (create): ' + object_type)
+                            log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, f'Unacceptable type (create): {object_type}')
                     return
 
                 if core_activity['type'] == 'Delete':

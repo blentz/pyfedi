@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import html
 import os
 from contextvars import ContextVar
@@ -739,6 +740,57 @@ def shared_inbox_of(actor_json: dict) -> str | None:
         return None
     shared_inbox = endpoints.get('sharedInbox')
     return shared_inbox if isinstance(shared_inbox, str) and shared_inbox else None
+
+
+# Every `type` the inbox dispatches on (process_inbox_request in routes.py and the handlers it calls), so an
+# array-valued type resolves to the one this instance acts on rather than to an extension alias listed first.
+DISPATCHED_AP_TYPES = frozenset({
+    'Accept', 'Add', 'Announce', 'Block', 'ChooseAnswer', 'Create', 'Delete', 'Dislike', 'EmojiReact', 'Flag',
+    'Follow', 'Like', 'Lock', 'Move', 'PollVote', 'QuoteRequest', 'Reject', 'Remove', 'Undo', 'Update',
+    'Application', 'Article', 'ChatMessage', 'Event', 'Feed', 'Group', 'Link', 'Note', 'OrderedCollection', 'Page',
+    'Person', 'Podcast', 'Question', 'Service', 'Tombstone', 'Video',
+})
+
+NO_STRING_TYPE_MESSAGE = 'Activity type has no string value'
+
+
+def _single_type(value):
+    """`value` unchanged unless it is an array. For an array: its first type the inbox dispatches on, else its
+    first string, else None."""
+    if not isinstance(value, list):
+        return value
+    strings = [entry for entry in value if isinstance(entry, str)]
+    dispatched = [entry for entry in strings if entry in DISPATCHED_AP_TYPES]
+    return (dispatched or strings or [None])[0]
+
+
+def _type_holders(activity: dict) -> list:
+    """The dicts whose `type` the dispatcher reads: the activity, its object, and an Announce's announced object."""
+    holders = [activity]
+    obj = activity.get('object')
+    if isinstance(obj, dict):
+        holders.append(obj)
+        if _single_type(activity.get('type')) == 'Announce' and isinstance(obj.get('object'), dict):
+            holders.append(obj['object'])
+    return holders
+
+
+def normalise_activity_types(activity: dict) -> dict | None:
+    """The activity with each array-valued `type` the dispatcher reads reduced to one string (interop C1 item 8).
+
+    JSON-LD lets `type` be an array; the dispatcher compares it as a string. Returns `activity` itself when no type
+    it covers is an array, else a deep copy with each array replaced by `_single_type`'s choice, so the original --
+    what is stored, logged and LD-verified -- is never changed. Returns None when an array holds no string."""
+    if not any(isinstance(holder.get('type'), list) for holder in _type_holders(activity)):
+        return activity
+    normalised = copy.deepcopy(activity)
+    for holder in _type_holders(normalised):
+        if isinstance(holder.get('type'), list):
+            single = _single_type(holder['type'])
+            if single is None:
+                return None
+            holder['type'] = single
+    return normalised
 
 
 def on_owner_host(entry, owner_url: str) -> bool:
