@@ -134,11 +134,15 @@ class TestPrecheck:
 
     @pytest.mark.parametrize('signature_input, message', [
         ('sig1=()', 'Signature-Input has no created time'),
-        (f'sig1=();created={int(time.time()) - STALE}', 'Signature is too old'),
-        (f'sig1=();created={int(time.time()) + STALE}', 'Signature is from the future'),
+        ('sig1=();created={now_minus_stale}', 'Signature is too old'),
+        ('sig1=();created={now_plus_stale}', 'Signature is from the future'),
         ('', 'No Signature-Input header present'),
     ])
     def test_an_rfc9421_request_without_a_fresh_created_time_fails(self, app, signature_input, message):
+        # the created time is filled in here, not in the parameter list: an id holding the collection-time clock
+        # differs between xdist workers that collect in different seconds, and the run then refuses to start
+        now = int(time.time())
+        signature_input = signature_input.format(now_minus_stale=now - STALE, now_plus_stale=now + STALE)
         body = b'{}'
         headers = {'Content-Digest': rfc9421.content_digest(body), 'Signature-Input': signature_input}
         with _context(app, headers, body=body):
