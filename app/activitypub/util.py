@@ -4567,40 +4567,41 @@ def update_post_from_activity(post: Post, request_json: dict):
             set_post_gallery(post, request_json, post.community.low_quality)
 
 
-def undo_vote(comment, post, target_ap_id, user):
+def undo_vote(comment, post, target_ap_id, user, emoji: str | None = None):
+    """Take back `user`'s vote on the post or comment at `target_ap_id`, and return that post or comment.
+
+    Returns None when `target_ap_id` names neither. A target with no vote from this user still returns the
+    target: a repeated Undo is a successful no-op. `comment` and `post` are unused and kept for the callers.
+
+    `emoji` is set for an Undo of an EmojiReact. An EmojiReact is stored as the user's one vote row with the
+    emoji in its `emoji` column (process_upvote), so the row is taken back only while it still carries that
+    emoji: a user who has switched to another reaction since keeps the new one.
+
+    A deleted vote that carried an emoji was counted in the target's `emoji_reactions` cache, so the cache is
+    rebuilt (interop C1 item 3). It used to be left stale, which showed an undone reaction forever."""
     voted_on = find_liked_object(target_ap_id)
     if isinstance(voted_on, Post):
-        post = voted_on
-        existing_vote = PostVote.query.filter_by(user_id=user.id, post_id=post.id).first()
-        if existing_vote:
-            with db.session.begin_nested():
-                db.session.execute(text('UPDATE "user" SET reputation = reputation - :effect WHERE id = :user_id'),
-                                   {'effect': existing_vote.effect, 'user_id': post.user_id})
-            if existing_vote.effect < 0:  # Lemmy sends 'like' for upvote and 'dislike' for down votes. Cool! When it undoes an upvote it sends an 'Undo Like'. Fine. When it undoes a downvote it sends an 'Undo Like' - not 'Undo Dislike'?!
-                post.down_votes -= 1
-            else:
-                post.up_votes -= 1
-            post.score -= existing_vote.effect
-            db.session.delete(existing_vote)
+        existing_vote = PostVote.query.filter_by(user_id=user.id, post_id=voted_on.id).first()
+    elif isinstance(voted_on, PostReply):
+        existing_vote = PostReplyVote.query.filter_by(user_id=user.id, post_reply_id=voted_on.id).first()
+    else:
+        return None
+    if existing_vote and (emoji is None or existing_vote.emoji == emoji):
+        had_emoji = existing_vote.emoji is not None
+        with db.session.begin_nested():
+            db.session.execute(text('UPDATE "user" SET reputation = reputation - :effect WHERE id = :user_id'),
+                               {'effect': existing_vote.effect, 'user_id': voted_on.user_id})
+        if existing_vote.effect < 0:  # Lemmy sends 'like' for upvote and 'dislike' for down votes. Cool! When it undoes an upvote it sends an 'Undo Like'. Fine. When it undoes a downvote it sends an 'Undo Like' - not 'Undo Dislike'?!
+            voted_on.down_votes -= 1
+        else:
+            voted_on.up_votes -= 1
+        voted_on.score -= existing_vote.effect
+        db.session.delete(existing_vote)
+        db.session.commit()
+        if had_emoji:
+            voted_on.update_reaction_cache()
             db.session.commit()
-        return post
-    if isinstance(voted_on, PostReply):
-        comment = voted_on
-        existing_vote = PostReplyVote.query.filter_by(user_id=user.id, post_reply_id=comment.id).first()
-        if existing_vote:
-            with db.session.begin_nested():
-                db.session.execute(text('UPDATE "user" SET reputation = reputation - :effect WHERE id = :user_id'),
-                                   {'effect': existing_vote.effect, 'user_id': comment.user_id})
-            if existing_vote.effect < 0:  # Lemmy sends 'like' for upvote and 'dislike' for down votes. Cool! When it undoes an upvote it sends an 'Undo Like'. Fine. When it undoes a downvote it sends an 'Undo Like' - not 'Undo Dislike'?!
-                comment.down_votes -= 1
-            else:
-                comment.up_votes -= 1
-            comment.score -= existing_vote.effect
-            db.session.delete(existing_vote)
-            db.session.commit()
-        return comment
-
-    return None
+    return voted_on
 
 
 def undo_boost(target_ap_id: str, user: User) -> Union[Post, None]:

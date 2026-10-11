@@ -297,7 +297,7 @@ def test_undo_like_calls_undo_vote_with_both_objects_none_and_announces_batchabl
     calls = record_moderation(monkeypatch, 'announce_activity_to_followers')
     seen_undo_vote_args = []
 
-    def fake_undo_vote(comment, post_, target_ap_id, user):
+    def fake_undo_vote(comment, post_, target_ap_id, user, emoji=None):
         seen_undo_vote_args.append((comment, post_))
         return post
 
@@ -326,7 +326,7 @@ def test_undo_dislike_takes_the_same_branch_as_undo_like(app, db_session, monkey
 
     record_moderation(monkeypatch, 'announce_activity_to_followers')
     monkeypatch.setattr(activitypub_routes, 'undo_vote',
-                        lambda comment, post_, target_ap_id, user: post)
+                        lambda comment, post_, target_ap_id, user, emoji=None: post)
 
     dispatch(undo_activity(voter, 'Dislike', 'https://peer.example/post/1'))
 
@@ -344,7 +344,7 @@ def test_undo_like_of_an_unfound_object_logs_failure_with_the_uri(app, db_sessio
 
     calls = record_moderation(monkeypatch, 'announce_activity_to_followers')
     monkeypatch.setattr(activitypub_routes, 'undo_vote',
-                        lambda comment, post_, target_ap_id, user: None)
+                        lambda comment, post_, target_ap_id, user, emoji=None: None)
 
     dispatch(undo_activity(voter, 'Like', 'https://peer.example/post/404'))
 

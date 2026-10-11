@@ -100,7 +100,7 @@ def test_an_undo_delete(scene, visibility, relays, monkeypatch):
 def test_an_undo_vote(scene, visibility, relays, monkeypatch):
     _hide(scene.post, visibility)
     post = scene.post
-    monkeypatch.setattr(activitypub_routes, 'undo_vote', lambda comment, post_, target_ap_id, user: post)
+    monkeypatch.setattr(activitypub_routes, 'undo_vote', lambda comment, post_, target_ap_id, user, emoji=None: post)
     dispatch(inbox_activity(scene.actor, activity_type='Undo', object={'type': 'Like', 'object': post.ap_id}))
     assert len(scene.announced) == relays
 

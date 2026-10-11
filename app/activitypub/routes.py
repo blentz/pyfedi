@@ -2170,10 +2170,13 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                             f"Delete: PM {ap_id} restored")
                         return
 
-                    if core_activity['object']['type'] == 'Like' or core_activity['object']['type'] == 'Dislike':  # Undoing an upvote or downvote
+                    if core_activity['object']['type'] in ('Like', 'Dislike', 'EmojiReact'):  # Undoing an upvote, downvote or reaction
                         post = comment = None
                         target_ap_id = core_activity['object']['object']
-                        post_or_comment = undo_vote(comment, post, target_ap_id, user)
+                        # An EmojiReact is stored as the user's vote carrying its emoji (process_upvote); its Undo
+                        # takes the vote back only while it still carries that emoji (interop C1 item 3)
+                        emoji = core_activity['object'].get('content') if core_activity['object']['type'] == 'EmojiReact' else None
+                        post_or_comment = undo_vote(comment, post, target_ap_id, user, emoji=emoji)
                         if post_or_comment:
                             log_incoming_ap(id, APLOG_UNDO_VOTE, APLOG_SUCCESS, saved_json)
                             if not announced and post_or_comment.visibility in OPEN_VISIBILITIES:
