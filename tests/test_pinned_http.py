@@ -14,13 +14,16 @@ block_outbound_http harness never sees them. The last row shows the harness stil
 serving an ordinary fetch through the pinned client.
 """
 import socket
+import time
+from types import SimpleNamespace
 
 import httpcore
+import httpx
 import pytest
 
 from app import httpx_client
-from app.pinned_http import PinnedNetworkBackend
-from app.utils import get_request, is_invalid_get_request_uri
+from app.pinned_http import PinnedNetworkBackend, fetch_deadline, remaining_time
+from app.utils import _capped_get, get_request, get_request_capped, is_invalid_get_request_uri
 
 PUBLIC = '93.184.216.34'
 PUBLIC_V6 = '2606:4700:4700::1111'
@@ -169,3 +172,163 @@ def test_an_ordinary_fetch_still_works_under_the_harness(app, http_mock):
 
     assert response.status_code == 200
     assert response.json() == {'id': 'https://peer.example/actor'}
+
+
+# --------------------------------------------------------------------------
+# The fetch deadline, enforced at the transport
+# --------------------------------------------------------------------------
+#
+# _capped_get's body loop checks its deadline only when body bytes arrive, so a peer that kept the connection busy
+# without sending any (h2 PINGs or empty DATA frames, an HTTP/1.1 header block trickled a byte at a time, each read
+# inside the per-read timeout) held the worker for as long as it liked. fetch_deadline sets a thread-local deadline
+# for one fetch; every stream PinnedNetworkBackend hands out clamps each read and write to the time left, and refuses
+# one once none is.
+
+
+class TimedStream(httpcore.MockStream):
+    """A MockStream that records the timeout of each call and advances the fake clock by `step` per read."""
+
+    def __init__(self, buffer, clock, step=0.0):
+        super().__init__(list(buffer))
+        self.clock = clock
+        self.step = step
+        self.timeouts = []
+
+    def read(self, max_bytes, timeout=None):
+        self.timeouts.append(('read', timeout))
+        self.clock[0] += self.step
+        return super().read(max_bytes, timeout)
+
+    def write(self, buffer, timeout=None):
+        self.timeouts.append(('write', timeout))
+
+    def start_tls(self, ssl_context, server_hostname=None, timeout=None):
+        self.timeouts.append(('start_tls', timeout))
+        return self
+
+
+class TimedBackend(httpcore.MockBackend):
+    def __init__(self, stream):
+        super().__init__([])
+        self.stream = stream
+        self.connect_timeouts = []
+
+    def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        self.connect_timeouts.append(timeout)
+        return self.stream
+
+
+@pytest.fixture
+def transport_clock(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr('app.pinned_http.time', SimpleNamespace(**{**vars(time), 'monotonic': lambda: now[0]}))
+    return now
+
+
+def test_with_no_deadline_every_timeout_passes_through_unchanged(app, resolver, transport_clock):
+    resolver.append([PUBLIC])
+    stream = TimedStream([b'x'], transport_clock)
+    backend = TimedBackend(stream)
+
+    wrapped = PinnedNetworkBackend(backend).connect_tcp('peer.example', 443, timeout=7)
+    tls = wrapped.start_tls(None, server_hostname='peer.example', timeout=7)
+    tls.write(b'GET', timeout=7)
+    assert tls.read(10, timeout=7) == b'x'
+    assert tls.read(10, timeout=None) == b''
+
+    assert backend.connect_timeouts == [7]
+    assert stream.timeouts == [('start_tls', 7), ('write', 7), ('read', 7), ('read', None)]
+    # httpcore reads the negotiated protocol (h2 or not) through it
+    assert type(tls.get_extra_info('ssl_object')) is type(stream.get_extra_info('ssl_object'))
+    tls.close()
+
+
+def test_under_a_deadline_each_call_gets_at_most_the_time_left(app, resolver, transport_clock):
+    resolver.append([PUBLIC])
+    stream = TimedStream([b'x', b'y'], transport_clock)
+    backend = TimedBackend(stream)
+
+    with fetch_deadline(15):
+        wrapped = PinnedNetworkBackend(backend).connect_tcp('peer.example', 443, timeout=20)
+        transport_clock[0] += 10
+        tls = wrapped.start_tls(None, timeout=20)
+        tls.write(b'GET', timeout=3)
+        tls.read(10, timeout=None)
+        transport_clock[0] += 4
+        tls.read(10, timeout=10)
+
+    assert backend.connect_timeouts == [15]
+    assert stream.timeouts == [('start_tls', 5), ('write', 3), ('read', 5), ('read', 1)]
+
+
+@pytest.mark.parametrize('call, error', [
+    (lambda stream: stream.read(10, timeout=10), httpcore.ReadTimeout),
+    (lambda stream: stream.write(b'x', timeout=10), httpcore.WriteTimeout),
+    (lambda stream: stream.start_tls(None, timeout=10), httpcore.ConnectTimeout),
+])
+def test_once_the_deadline_has_passed_a_call_is_refused_without_reaching_the_socket(app, resolver, transport_clock,
+                                                                                    call, error):
+    resolver.append([PUBLIC])
+    stream = TimedStream([b'x'], transport_clock)
+
+    with fetch_deadline(15):
+        wrapped = PinnedNetworkBackend(TimedBackend(stream)).connect_tcp('peer.example', 443)
+        transport_clock[0] += 15
+        with pytest.raises(error):
+            call(wrapped)
+
+    assert stream.timeouts == []
+
+
+def test_a_connect_after_the_deadline_is_refused(app, resolver, transport_clock):
+    resolver.append([PUBLIC])
+    backend = TimedBackend(TimedStream([], transport_clock))
+
+    with fetch_deadline(15):
+        transport_clock[0] += 16
+        with pytest.raises(httpcore.ConnectTimeout):
+            PinnedNetworkBackend(backend).connect_tcp('peer.example', 443, timeout=5)
+    assert backend.connect_timeouts == []
+
+
+def test_a_header_block_trickled_a_byte_at_a_time_is_cut_at_the_deadline(app, resolver, transport_clock):
+    """Each read answers inside any per-read timeout, five fake seconds apart; h11 would wait for 100 KiB of it."""
+    resolver.append([PUBLIC])
+    stream = TimedStream([bytes([byte]) for byte in b'HTTP/1.1 200 OK\r\nX-Slow: ' + b'a' * 1000], transport_clock,
+                         step=5)
+    origin = httpcore.Origin(b'https', b'peer.example', 443)
+    request = httpcore.Request('GET', 'https://peer.example/actor', headers=[(b'Host', b'peer.example')],
+                               extensions={'timeout': {'read': 10, 'write': 10, 'connect': 10, 'pool': 10}})
+
+    with fetch_deadline(15):
+        connected = PinnedNetworkBackend(TimedBackend(stream)).connect_tcp('peer.example', 443)
+        with pytest.raises(httpcore.ReadTimeout):
+            httpcore.HTTP11Connection(origin=origin, stream=connected).handle_request(request)
+
+    assert len([call for call in stream.timeouts if call[0] == 'read']) <= 3
+
+
+def test_the_deadline_is_cleared_after_the_fetch_even_when_it_raises(app, transport_clock):
+    with pytest.raises(RuntimeError):
+        with fetch_deadline(15):
+            assert remaining_time() == 15
+            raise RuntimeError('boom')
+
+    assert remaining_time() is None
+
+
+def test_capped_fetches_run_under_the_deadline_and_clear_it(app, http_mock):
+    seen = []
+
+    def answer(request):
+        seen.append(remaining_time())
+        return httpx.Response(200, text='ok')
+
+    http_mock.get('https://peer.example/a').mock(side_effect=answer)
+    http_mock.get('https://peer.example/b').mock(side_effect=answer)
+
+    _capped_get('https://peer.example/a', max_seconds=20)
+    get_request_capped('https://peer.example/b', 100, max_seconds=12)
+
+    assert 19 < seen[0] <= 20 and 11 < seen[1] <= 12
+    assert remaining_time() is None

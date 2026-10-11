@@ -134,6 +134,21 @@ class TestTheDeadline:
             get_request(URI, max_seconds=2)
 
 
+    def test_a_transport_timeout_at_the_deadline_is_too_slow_and_not_retried(self, app, http_mock, clock, sleeps):
+        """The transport refuses a read once the fetch's deadline is reached (app/pinned_http.py): that timeout is the
+        deadline refusing the response, so it is ResponseTooLarge, which get_request does not retry."""
+        def stalls(request):
+            clock[0] += FETCH_MAX_SECONDS
+            raise httpx.ReadTimeout('the deadline for this fetch has passed')
+
+        route = http_mock.get(URI).mock(side_effect=stalls)
+
+        with pytest.raises(ResponseTooLarge, match='took longer than'):
+            get_request(URI)
+        assert route.call_count == 1
+        sleeps.assert_not_called()
+
+
 class TestNoRetry:
 
     def test_too_large_is_not_retried(self, app, http_mock, sleeps):
