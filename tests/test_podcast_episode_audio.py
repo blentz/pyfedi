@@ -1,7 +1,8 @@
 """C1: a Castopod episode announcement Note gets its audio from the PodcastEpisode object it links to."""
 import httpx
 
-from tests.factories import make_community, make_instance, make_site, make_user, peer_actor_json, peer_instance
+from tests.factories import (make_community, make_instance, make_site, make_user, peer_actor_json, peer_instance,
+                             seed_signing_site)
 
 PEER = 'peer.example'
 PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
@@ -19,13 +20,14 @@ def _episode(**changes):
     return document
 
 
-def _ingest(content, note_id=f'https://{PEER}/@mypodcast/posts/1'):
+def _ingest(content, note_id=f'https://{PEER}/@mypodcast/posts/1', signing=False):
+    """signing: the Site row carries a real keypair, so a 401 on the episode fetch can be retried signed."""
     from app.activitypub.util import actor_json_to_model, create_post
     peer_instance(PEER)
     author = actor_json_to_model(peer_actor_json('Person', name='mypodcast', server=PEER,
                                                  fields={'type': 'Podcast'}), 'mypodcast', PEER)
     community = make_community()
-    make_site()
+    seed_signing_site() if signing else make_site()
     activity = {'id': f'{note_id}/activity', 'type': 'Create',
                 'object': {'id': note_id, 'type': 'Note', 'content': content,
                            'attributedTo': author.ap_profile_id, 'to': [PUBLIC], 'cc': []}}
@@ -191,26 +193,18 @@ def test_an_ordinary_note_is_never_fetched(db_session, http_mock):
     assert post is not None
 
 
-def test_an_unauthorised_episode_fetch_is_signed(db_session, http_mock, monkeypatch):
-    import app.activitypub.util as util
-    http_mock.get(EPISODE).respond(401)
-    signed = []
-
-    class Signed:
-        status_code = 200
-
-        def json(self):
-            return _episode()
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr(util, 'signed_get_request', lambda uri, *a, **k: signed.append(uri) or Signed())
+def test_an_unauthorised_episode_fetch_is_signed(db_session, http_mock):
+    """The origin refuses the unsigned GET with 401; the second GET carries an HTTP signature and its episode is
+    used. Driven through the real signer and http_mock: nothing in the fetch path is patched."""
+    route = http_mock.get(EPISODE).mock(side_effect=[httpx.Response(401), httpx.Response(200, json=_episode())])
     http_mock.get(COVER).respond(404)
 
-    post = _ingest(ANNOUNCEMENT)
+    post = _ingest(ANNOUNCEMENT, signing=True)
 
-    assert signed == [EPISODE]
+    assert route.call_count == 2
+    unsigned, signed = (call.request.headers for call in route.calls)
+    assert 'signature' not in unsigned and 'signature-input' not in unsigned
+    assert 'signature' in signed or 'signature-input' in signed
     assert post.url == AUDIO
 
 
