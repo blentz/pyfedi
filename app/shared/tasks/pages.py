@@ -86,14 +86,16 @@ def edit_post(send_async, post_id):
         session.close()
 
 
-def send_post(post_id, edit=False, session=None):
-    post = session.get(Post, post_id)
+def can_deliver_to(user, instance) -> bool:
+    """True when `user`'s activity may go to `instance`'s shared inbox: it has one, is up, and neither the user has
+    blocked it nor this instance banned it."""
+    return bool(instance.inbox and instance.online() and not user.has_blocked_instance(instance.id)
+                and not instance_banned(instance.domain))
+
+
+def mentioned_users(post, allow_fetch=True) -> list:
+    """The users a post's body Mentions with @user@instance syntax, once each, leaving out its author."""
     user = post.author
-    community = post.community
-
-    post_body_html = post.body_html if post.body_html else ''
-
-    # Find any users Mentioned in post body with @user@instance syntax
     recipients = []
     if post.body:
         pattern = r"@([a-zA-Z0-9_.-]*)@([a-zA-Z0-9_.-]*)\b"
@@ -104,13 +106,13 @@ def send_post(post_id, edit=False, session=None):
                 user_name = match.group(1)
                 if user_name != user.user_name:
                     try:
-                        recipient = search_for_user(user_name)
+                        recipient = search_for_user(user_name, allow_fetch=allow_fetch)
                     except:
                         pass
             else:
                 ap_id = f"{match.group(1)}@{match.group(2)}"
                 try:
-                    recipient = search_for_user(ap_id)
+                    recipient = search_for_user(ap_id, allow_fetch=allow_fetch)
                 except:
                     pass
             if recipient:
@@ -122,6 +124,18 @@ def send_post(post_id, edit=False, session=None):
                         break
                 if add_recipient:
                     recipients.append(recipient)
+    return recipients
+
+
+def send_post(post_id, edit=False, session=None):
+    post = session.get(Post, post_id)
+    user = post.author
+    community = post.community
+
+    post_body_html = post.body_html if post.body_html else ''
+
+    # Find any users Mentioned in post body with @user@instance syntax
+    recipients = mentioned_users(post)
 
     # Notify any local users that have been Mentioned
     for recipient in recipients:
@@ -350,6 +364,8 @@ def send_post(post_id, edit=False, session=None):
     if not community.local_only:  # pragma: no branch -- see proof in test_shared_tasks_send_post.py
         for recipient in recipients:
             if recipient.instance.domain not in domains_sent_to:
+                if followers_only and not can_deliver_to(user, recipient.instance):
+                    continue
                 send_post_request(recipient.instance.inbox, create, user.private_key, user.public_url() + '#main-key')
                 domains_sent_to.append(recipient.instance.domain)
 
@@ -361,7 +377,8 @@ def send_post(post_id, edit=False, session=None):
         return
 
     # send the amended copy of the Create to anyone who is following the User, but hasn't already received something
-    for follower in followers:
+    # S7.2: a followers-only post's cc is its mentions; the followers collection in `to` already names its followers
+    for follower in ([] if followers_only else followers):
         # remote_user_id is a nullable FK -- see the same shape in
         # app/shared/tasks/deletes.py. The None is kept out of .get(), which
         # SQLAlchemy warns may stop answering None, and `if user_details`
@@ -374,7 +391,7 @@ def send_post(post_id, edit=False, session=None):
     # a followers-only post got no Announce, so a piefed follower host has nothing yet and is sent the Create too
     for instance in (follower_instances(user) if followers_only else user.following_instances()):
         if instance.domain not in domains_sent_to and instance.id != 1 and (followers_only or instance.software != 'piefed'):
-            if instance.inbox and instance.online() and not user.has_blocked_instance(instance.id) and not instance_banned(instance.domain):
+            if can_deliver_to(user, instance):
                 send_post_request(instance.inbox, create, user.private_key, user.public_url() + '#main-key')
 
 

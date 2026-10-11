@@ -16,8 +16,8 @@ from app.models import UserFollower
 from app.shared.tasks import deletes
 from app.shared.tasks.pages import send_post
 from app.visibility import follower_instances
-from tests.factories import (make_community, make_community_member, make_follow, make_instance, make_post,
-                             make_site, make_user)
+from tests.factories import (make_community, make_community_member, make_follow, make_instance,
+                             make_instance_block, make_post, make_site, make_user)
 
 PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
 
@@ -135,12 +135,33 @@ def test_can_quote_is_the_author_only(db_session, sent):
         assert s.body['object']['interactionPolicy']['canQuote']['automaticApproval'] == [w.author.public_url()]
 
 
-def test_follower_cc_names_accepted_followers_only(db_session, sent):
+CAROL = 'https://peer4.example/users/carol'
+
+
+def test_cc_names_the_mentioned_users_only(db_session, sent):
+    """S7.2: cc is the mentions; the followers collection in `to` carries the follower audience, so no follower's
+    actor URL is listed."""
     w = _world()
     send_post(w.post.id, session=db.session)
-    last = sent[-1].body['cc']
-    assert 'https://peer1.example/users/bob' in last
-    assert 'https://peer2.example/users/pat' not in last
+    for s in sent:
+        assert s.body['cc'] == [CAROL]
+        assert s.body['object']['cc'] == [CAROL]
+
+
+def test_a_mention_on_a_follower_host_is_delivered_once(db_session, sent):
+    w = _world()
+    make_user(w.peers['peer1.example'], 'dan')
+    w.post.body = 'for friends, and @dan@peer1.example'
+    db.session.commit()
+    send_post(w.post.id, session=db.session)
+    assert sent.inboxes() == ['https://peer1.example/inbox', 'https://peer5.example/inbox']
+
+
+def test_a_mention_on_an_instance_the_author_blocked_is_not_sent(db_session, sent):
+    w = _world()
+    make_instance_block(w.author, w.peers['peer4.example'])
+    send_post(w.post.id, session=db.session)
+    assert sent.inboxes() == ['https://peer1.example/inbox', 'https://peer5.example/inbox']
 
 
 def test_with_no_accepted_followers_only_mentions_are_sent(db_session, sent):
@@ -165,15 +186,74 @@ def test_a_public_post_in_microblogs_is_still_announced(db_session, sent):
 # --------------------------------------------------------------------------
 
 
-def test_deleting_a_followers_only_post_tells_follower_hosts_without_public(db_session, sent):
+FOLLOWER_AND_MENTION_HOSTS = ['https://peer1.example/inbox', 'https://peer4.example/inbox',
+                              'https://peer5.example/inbox']
+
+
+def test_deleting_a_followers_only_post_tells_follower_and_mention_hosts_without_public(db_session, sent):
     w = _world()
     deletes.delete_post(None, w.author.id, w.post.id)
-    assert sent.inboxes() == ['https://peer1.example/inbox', 'https://peer5.example/inbox']
+    assert sent.inboxes() == FOLLOWER_AND_MENTION_HOSTS
     for s in sent:
         assert PUBLIC not in json.dumps(s.body)
         assert s.body['to'] == [w.author.followers_url()]
-        assert 'https://peer2.example/users/pat' not in s.body['cc']
+        assert s.body['cc'] == [CAROL]
         assert 'audience' not in s.body
+        assert s.key_id == w.author.public_url() + '#main-key'
+
+
+def test_deleting_with_a_mention_on_a_follower_host_delivers_once(db_session, sent):
+    w = _world()
+    make_user(w.peers['peer1.example'], 'dan')
+    w.post.body = 'for friends, and @dan@peer1.example'
+    db.session.commit()
+    deletes.delete_post(None, w.author.id, w.post.id)
+    assert sent.inboxes() == ['https://peer1.example/inbox', 'https://peer5.example/inbox']
+
+
+def _moderator(w):
+    """A local moderator with a follower of their own on peer6, a host that never saw the post."""
+    mod = make_user(w.author.instance, 'mod', local=True)
+    make_follow(mod, make_user(_peer('peer6.example'), 'modfan'), is_inward=True)
+    return mod
+
+
+@pytest.mark.parametrize('reason', [None, 'spam'], ids=['no-reason', 'reason'])
+def test_a_moderator_removal_is_sent_as_the_author_to_the_authors_audience(db_session, sent, reason):
+    """R-FODELETE: the post went to the author's followers and mentions, so its Delete does too, signed by its
+    author -- the instance is authoritative for its own accounts. The reason stays local."""
+    w = _world()
+    mod = _moderator(w)
+    deletes.delete_post(None, mod.id, w.post.id, reason=reason)
+    assert sent.inboxes() == FOLLOWER_AND_MENTION_HOSTS
+    for s in sent:
+        assert s.key_id == w.author.public_url() + '#main-key'
+        assert s.body['actor'] == w.author.public_url()
+        assert s.body['to'] == [w.author.followers_url()]
+        assert 'summary' not in s.body
+
+
+def test_a_moderator_restore_is_an_undo_from_the_author(db_session, sent):
+    w = _world()
+    mod = _moderator(w)
+    deletes.restore_post(None, mod.id, w.post.id, reason='mistake')
+    assert sent.inboxes() == FOLLOWER_AND_MENTION_HOSTS
+    for s in sent:
+        assert s.body['type'] == 'Undo'
+        assert s.key_id == w.author.public_url() + '#main-key'
+        assert s.body['object']['actor'] == w.author.public_url()
+        assert PUBLIC not in json.dumps(s.body)
+        assert 'audience' not in s.body and 'audience' not in s.body['object']
+        assert 'summary' not in s.body['object']
+
+
+def test_removing_a_remote_authors_followers_only_post_federates_nothing(db_session, sent):
+    """Only the author's own instance can speak for a followers-only post's audience; a remote author's is theirs."""
+    w = _world()
+    w.post.user_id = make_user(w.peers['peer1.example'], 'remote_author').id
+    db.session.commit()
+    deletes.delete_post(None, _moderator(w).id, w.post.id)
+    assert sent == []
 
 
 def test_deleting_a_public_post_keeps_public_addressing(db_session, sent):

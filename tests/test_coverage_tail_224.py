@@ -279,7 +279,7 @@ class TestAnUnresolvableMention:
 
     @staticmethod
     def _raising_spy(calls):
-        def _spy(name):
+        def _spy(name, **kwargs):
             calls.append(name)
             raise Exception('no such user')
 

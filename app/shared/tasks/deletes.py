@@ -3,6 +3,7 @@ from app.activitypub.signature import default_context, send_post_request
 from app.constants import NOTIF_REPORT, NOTIF_REPORT_ESCALATION
 from app.models import Community, Instance, Post, PostReply, User, UserFollower, File, Notification, ChatMessage
 from app.utils import gibberish, instance_banned, get_task_session, patch_db_session
+from app.shared.tasks.pages import can_deliver_to, mentioned_users
 from app.visibility import follower_instances, is_open
 
 from flask import current_app
@@ -123,6 +124,16 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
     else:
         community = object.community
 
+    # Amendment B (S7.2): the Delete of a followers-only object in a local community goes where the object went --
+    # the author's followers and the people it mentions -- with no Public. A remote community is the object's home
+    # (R-a) and is unchanged. R-FODELETE: that audience is the author's, so a moderator's or admin's removal is sent
+    # as the author too (this instance is authoritative for its own accounts; Mastodon honours only the owner's
+    # Delete), never to the remover's own followers, and its reason stays local.
+    followers_only_local = community.is_local() and not is_open(object)
+    if followers_only_local:
+        user = object.author
+        reason = None
+
     # local_only communities can also be used to send activity to User Followers (only applies to posts, not comments)
     # return now though, if there aren't any
     if not is_post and community.local_only:
@@ -143,12 +154,10 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
     #        return
 
     delete_id = f"{current_app.config['SERVER_URL']}/activities/delete/{gibberish(15)}"
-    # Amendment B (S7.2): the Delete of a followers-only object in a local community goes where the object went --
-    # the author's followers -- with no Public. A remote community is the object's home (R-a) and is unchanged.
-    followers_only_local = community.is_local() and not is_open(object)
     if followers_only_local:
+        recipients = mentioned_users(object, allow_fetch=False) if is_post else []
         to = [user.followers_url()]
-        cc = []
+        cc = [recipient.public_url() for recipient in recipients]
     else:
         to = ["https://www.w3.org/ns/activitystreams#Public"]
         cc = [community.public_url()]
@@ -188,7 +197,7 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
     # a local_only community federates nothing itself; only the author's followers (below) are reached. Nor does a
     # followers-only object in a local community (E9): it never reached the community's followers, so its Delete and
     # Undo do not either. A remote community is its home and already holds it, so its inbox is still sent them (R-a).
-    if community.local_only or (community.is_local() and not is_open(object)):
+    if community.local_only or followers_only_local:
         pass
     elif community.is_local():
         if is_restore:
@@ -220,11 +229,17 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
         domains_sent_to.append(community.instance.domain)
 
 
-    if is_post and followers and not reason:
+    if followers_only_local:
+        # only a local author's instance speaks for the audience; a remote author's post is theirs to delete
+        if is_post and user.is_local():
+            payload = undo if is_restore else delete
+            for instance in follower_instances(user) + [recipient.instance for recipient in recipients]:
+                if instance.id != 1 and instance.domain not in domains_sent_to and can_deliver_to(user, instance):
+                    send_post_request(instance.inbox, payload, user.private_key, user.public_url() + '#main-key')
+                    domains_sent_to.append(instance.domain)
+    elif is_post and followers and not reason:
         payload = undo if is_restore else delete
         for follower in followers:
-            if followers_only_local and not (follower.is_inward and follower.is_accepted is True):
-                continue    # only accepted followers ever received a followers-only post
             # remote_user_id is a nullable FK, so a follower row can carry no
             # account at all. The None is kept OUT of .get() rather than handed
             # to it: SQLAlchemy warns that a fully NULL primary key identity
@@ -236,11 +251,8 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
                             if follower.remote_user_id else None)
             if user_details:
                 payload['cc'].append(user_details.public_url())
-        if followers_only_local:
-            instances = follower_instances(user)
-        else:
-            instances = session.query(Instance).join(User, User.instance_id == Instance.id).join(UserFollower, UserFollower.remote_user_id == User.id)
-            instances = instances.filter(UserFollower.local_user_id == user.id).filter(Instance.gone_forever == False, Instance.dormant == False)
+        instances = session.query(Instance).join(User, User.instance_id == Instance.id).join(UserFollower, UserFollower.remote_user_id == User.id)
+        instances = instances.filter(UserFollower.local_user_id == user.id).filter(Instance.gone_forever == False, Instance.dormant == False)
         for instance in instances:
             if instance.inbox and instance.domain not in domains_sent_to:
                 send_post_request(instance.inbox, payload, user.private_key, user.public_url() + '#main-key')
