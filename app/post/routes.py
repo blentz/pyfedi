@@ -1299,6 +1299,7 @@ def post_edit(post_id: int):
         abort(404)
 
     del form.communities
+    del form.visibility     # Amendment B: visibility is fixed at creation
 
     flair_choices = flair_for_form(post.community_id)
     if len(flair_choices):

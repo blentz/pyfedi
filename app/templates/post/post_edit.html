@@ -176,6 +176,7 @@
             {% include "community/_body_edit_preview.html" %}
 
             {{ render_field(form.language_id) }}
+            {% if show_visibility and form.visibility %}{{ render_field(form.visibility) }}{% endif %}
 
             {% if post_type == POST_TYPE_POLL %}
                 <fieldset id="pollChoicesFieldset">

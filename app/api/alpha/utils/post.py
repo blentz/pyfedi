@@ -1694,6 +1694,9 @@ def post_post(auth, data):
     if 'poll' in data and data['poll']:
         input['poll'] = data['poll']
 
+    if 'visibility' in data:
+        input['visibility'] = data['visibility']
+
     community = a_community(community_id)
 
     # Fire hook for plugins
@@ -1719,6 +1722,8 @@ def post_post(auth, data):
 def put_post(auth, data):
     post_id = data['post_id']
     post = a_visible_post(post_id, auth)
+    if 'visibility' in data and data['visibility'] != post.visibility:
+        raise Exception('visibility cannot be changed')     # Amendment B: fixed at creation
 
     title = data['title'] if 'title' in data else post.title
     # `or ''`: Post.body is nullable and a link or image post routinely has no

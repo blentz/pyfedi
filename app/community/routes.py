@@ -77,7 +77,7 @@ from app.shared.tasks import task_selector
 # The module, not the names: app.shared.feed reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.feed)
 import app.shared.feed as shared_feed
-from app.utils import get_recipient_language, subscribed_feeds, feed_membership
+from app.utils import get_recipient_language, subscribed_feeds, feed_membership, is_local_microblogs
 from app.rss_extras import RSSFeed
 from datetime import timezone, timedelta
 from flask import render_template as flask_render_template
@@ -1377,7 +1377,7 @@ def add_post(actor, type=None):
             flash(_('This community prefers posts in %(language_names)s', language_names=language_names), 'warning')
 
     return render_template('community/add_post.html', title=_('Add post to community'), form=form,
-                           post_type=post_type, community=community, post=post, hide_community_actions=True,
+                           post_type=post_type, community=community, show_visibility=is_local_microblogs(community), post=post, hide_community_actions=True,
                            markdown_editor=current_user.markdown_editor, low_bandwidth=False, actor=actor, event_online=True,
                            inoculation=inoculation[randint(0, len(inoculation) - 1)] if g.site.show_inoculation_block else None,
                            )

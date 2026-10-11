@@ -1482,6 +1482,8 @@ class CreatePostRequest(DefaultSchema):
     language_id = fields.Integer()
     event = fields.Nested(PostEvent, allow_none=True)
     poll = fields.Nested(PostPoll, allow_none=True)
+    visibility = fields.String(metadata={"description": "'public' (default) or 'followers'. 'followers' is accepted "
+                                                        "only in the local microblogs community"})
 
 
 class EditPostRequest(DefaultSchema):
@@ -1496,6 +1498,7 @@ class EditPostRequest(DefaultSchema):
     poll = fields.Nested(PostPoll, allow_none=True)
     tags = fields.String(allow_none=True, metadata={"description": "Hashtags, separated by commas with no hash character"})
     flair = fields.String(allow_none=True, metadata={"description": "Flair, separated by commas with no hash character"})
+    visibility = fields.String(metadata={"description": "Fixed when the post is created: a different value is refused"})
 
 
 class DeletePostRequest(DefaultSchema):
