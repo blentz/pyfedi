@@ -84,8 +84,13 @@ class DeadlineStream(httpcore.NetworkStream):
         self._stream.close()
 
     def start_tls(self, ssl_context, server_hostname=None, timeout=None):
-        return DeadlineStream(self._stream.start_tls(ssl_context, server_hostname=server_hostname,
-                                                     timeout=_clamped(timeout, httpcore.ConnectTimeout)))
+        try:
+            timeout = _clamped(timeout, httpcore.ConnectTimeout)
+        except httpcore.ConnectTimeout:
+            # httpcore closes the plain stream only when the handshake itself fails
+            self._stream.close()
+            raise
+        return DeadlineStream(self._stream.start_tls(ssl_context, server_hostname=server_hostname, timeout=timeout))
 
     def get_extra_info(self, info):
         return self._stream.get_extra_info(info)
