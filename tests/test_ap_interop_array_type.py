@@ -6,13 +6,14 @@ failed the Celery task. The inbox now reduces each array to one type on a copy i
 stored, logged and LD-verified stays as it was sent.
 """
 import json
+from types import SimpleNamespace
 
 import pytest
 
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.activitypub.routes import replay_inbox_request
-from app.activitypub.util import NO_STRING_TYPE_MESSAGE, normalise_activity_types
+from app.activitypub.util import NO_STRING_TYPE_MESSAGE, current_as_sent_json, normalise_activity_types
 from app.models import ActivityPubLog
 from app.utils import utcnow
 from tests.conftest import ld_signed_body, unsigned_but_precheck_clean_headers
@@ -253,3 +254,96 @@ def test_replay_reads_an_array_announce_type(app, db_session, monkeypatch):
 
     assert ActivityPubLog.query.one().exception_message == \
         'REPLAY: Activity about local content which is already present'
+
+
+# ---- stored and forwarded as sent --------------------------------------------------------------------------------
+
+def test_an_ld_signed_array_type_is_stored_as_sent(app, db_session, monkeypatch):
+    """Replay re-verifies the LD signature against the stored JSON, so the array must still be there."""
+    author = _create_setup(app, monkeypatch)
+    monkeypatch.setattr(activitypub_routes, 'verify_ld_accepted_activity', lambda activity: (activity, None))
+
+    activitypub_routes.process_inbox_request(
+        create_activity(author, {'type': ['Foo', 'Bar'], 'id': 'https://peer.example/x/1'}), True, ld_signed=True)
+
+    log = ActivityPubLog.query.one()
+    assert log.exception_message.endswith('Unacceptable type (create): Foo')
+    assert json.loads(log.activity_json)['object']['type'] == ['Foo', 'Bar']
+
+
+def test_dispatch_knows_the_document_as_sent_only_for_the_length_of_the_task(app, db_session, monkeypatch):
+    make_site()
+    actor = make_user(make_instance('peer.example'), 'alice')
+    actor.ap_fetched_at = utcnow()
+    db.session.commit()
+    seen = []
+    monkeypatch.setattr(activitypub_routes, 'process_upvote', lambda *a, **kw: seen.append(current_as_sent_json.get()))
+    activity = inbox_activity(actor, activity_type=['Like'])
+
+    dispatch(activity)
+
+    assert seen == [activity]
+    assert current_as_sent_json.get() is None
+
+
+def _forwarded(activity):
+    sent = []
+    instance = SimpleNamespace(id=2, online=lambda: True, inbox='https://peer.example/inbox', software='other')
+    community = SimpleNamespace(is_local=lambda: True, public_url=lambda: 'https://test.piefed.local/c/news',
+                                following_instances=lambda **kw: [instance],
+                                private_key='k', ap_profile_id='https://test.piefed.local/c/news')
+    creator = SimpleNamespace(banned=False, instance_id=1)
+    monkey = pytest.MonkeyPatch()
+    with monkey.context() as m:
+        m.setattr(activitypub_routes, 'send_to_remote_instance_fast', lambda inbox, key, key_id, payload: sent.append(payload))
+        m.setattr(activitypub_routes, 'instance_banned', lambda inbox: False)
+        m.setattr(activitypub_routes, 'awaken_dormant_instance', lambda instance: None)
+        activitypub_routes.announce_activity_to_followers(community, creator, activity)
+    return sent[0]['object']
+
+
+def test_a_forwarded_activity_is_the_one_as_sent(app):
+    sent = {'id': 'https://peer.example/a/1', 'type': ['Like'], 'object': 'https://test.piefed.local/post/1'}
+    token = current_as_sent_json.set(sent)
+    try:
+        forwarded = _forwarded(normalise_activity_types(sent))
+    finally:
+        current_as_sent_json.reset(token)
+
+    assert forwarded['type'] == ['Like']
+
+
+def test_another_activity_is_forwarded_as_given(app):
+    token = current_as_sent_json.set({'id': 'https://peer.example/a/1', 'type': ['Like']})
+    try:
+        forwarded = _forwarded({'id': 'https://peer.example/a/2', 'type': 'Like'})
+    finally:
+        current_as_sent_json.reset(token)
+
+    assert forwarded['id'].endswith('/a/2')
+
+
+def test_a_relayed_array_announce_is_refused_and_stored_as_sent(app, db_session, monkeypatch):
+    """The relay filter reads the normalised type, so `['Announce']` is a boost; the log keeps what was sent."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    make_site()
+    actor = make_user(make_instance('peer.example'), 'alice')
+
+    activitypub_routes.process_inbox_request(inbox_activity(actor, activity_type=['Announce']), True, relay_id=1)
+
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'relayed boost'
+    assert json.loads(log.activity_json)['type'] == ['Announce']
+
+
+def test_a_relayed_array_like_is_dispatched(app, db_session, monkeypatch):
+    make_site()
+    actor = make_user(make_instance('peer.example'), 'alice')
+    actor.ap_fetched_at = utcnow()
+    db.session.commit()
+    calls = []
+    monkeypatch.setattr(activitypub_routes, 'process_upvote', lambda *args, **kwargs: calls.append(args))
+
+    activitypub_routes.process_inbox_request(inbox_activity(actor, activity_type=['Like']), True, relay_id=1)
+
+    assert len(calls) == 1
