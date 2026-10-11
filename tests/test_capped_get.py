@@ -10,13 +10,14 @@ import gzip
 import json
 import time
 import zlib
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import httpx
 import pytest
 
-from app import db
+from app import db, httpx_client
 from app.utils import FETCH_MAX_BYTES, FETCH_MAX_SECONDS, ResponseTooLarge, UnreadableEncoding, _DECODE_STEP, \
     _capped_get, _capped_request, get_request, get_request_instance
 from tests.factories import make_instance
@@ -482,6 +483,22 @@ class TestGetRequestInstance:
         assert instance.failures == 1
 
 
+@pytest.fixture
+def opened_streams(monkeypatch):
+    """Every streamed response _capped_request opens, to check it was closed once the request returned."""
+    opened = []
+    real = httpx_client.stream
+
+    @contextmanager
+    def recording(*args, **kwargs):
+        with real(*args, **kwargs) as response:
+            opened.append(response)
+            yield response
+
+    monkeypatch.setattr('app.utils.httpx_client.stream', recording)
+    return opened
+
+
 class TestCappedPost:
     """_capped_request with keep_status=True, for a POST: the request was already delivered, so a response body over
     the cap, past the deadline, unreadable or corrupt is dropped (empty content) and the peer's status kept, never
@@ -514,7 +531,7 @@ class TestCappedPost:
         assert form.calls[0].request.content == b'emails=a%2Cb'
         assert json.loads(document.calls[0].request.content) == {'query': 'q'}
 
-    def test_an_endless_body_keeps_the_status_and_drops_the_body(self, app, http_mock):
+    def test_an_endless_body_keeps_the_status_and_drops_the_body(self, app, http_mock, opened_streams):
         pulled = []
         http_mock.post(self.INBOX).respond(202, content=_endless(pulled), headers={'X-Thing': 'y'})
 
@@ -522,14 +539,16 @@ class TestCappedPost:
 
         assert (response.status_code, response.content, response.headers['x-thing']) == (202, b'', 'y')
         assert len(pulled) * CHUNK <= FETCH_MAX_BYTES + CHUNK
+        assert [stream.is_closed for stream in opened_streams] == [True]
 
-    def test_a_declared_oversize_body_is_dropped_without_reading(self, app, http_mock):
+    def test_a_declared_oversize_body_is_dropped_without_reading(self, app, http_mock, opened_streams):
         http_mock.post(self.INBOX).respond(410, content=b'gone',
                                            headers={'Content-Length': str(FETCH_MAX_BYTES + 1)})
 
         response = self.post()
 
         assert (response.status_code, response.content) == (410, b'')
+        assert [stream.is_closed for stream in opened_streams] == [True]
         assert 'content-length' not in response.headers or response.headers['content-length'] == '0'
 
     def test_a_gzip_bomb_keeps_the_status_and_drops_the_body(self, app, http_mock, recording_zlib):
