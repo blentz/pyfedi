@@ -1,12 +1,16 @@
 """S2.4: an activity id is remembered only once its signature has verified, for ACTIVITY_DEDUPE_SECONDS."""
 import json
+from types import SimpleNamespace
 
 import pytest
 
+from app import db
 from app.activitypub.util import ACTIVITY_DEDUPE_SECONDS, activity_dedupe_key, claim_activity
-from app.models import ActivityPubLog
+from app.models import ActivityPubLog, Relay
+from app.relays import RELAY_ACCEPTED, STYLE_MASTODON
+from app.relays import inbound as relay_inbound
 from tests.conftest import unsigned_but_precheck_clean_headers
-from tests.factories import inbox_activity, signed_inbox_post
+from tests.factories import a_keypair, inbox_activity, signed_inbox_post
 
 
 @pytest.fixture
@@ -78,3 +82,63 @@ def test_one_host_claiming_anothers_id_does_not_suppress_it(app, redis_double):
     assert claim_activity(shared_id, 'https://a.example/u/mallory')
     assert claim_activity(shared_id, 'https://b.example/u/genuine')
     assert not claim_activity(shared_id, 'https://b.example/u/genuine')
+
+
+# --- R-DEDUPEUNDO: a claim whose activity was never handed on is released ---
+
+class _Unreachable(Exception):
+    pass
+
+
+def _raise(*_args, **_kwargs):
+    raise _Unreachable('broker down')
+
+
+@pytest.mark.parametrize('failing', ['commit', 'dispatch'])
+def test_a_claim_is_released_when_the_activity_is_never_handed_on(app, signing_peer, redis_double, monkeypatch,
+                                                                  failing):
+    """The sender retries the same id after a 5xx; it must be processed then, not dropped as already seen."""
+    monkeypatch.setitem(app.config, 'DEBUG', True)   # signing to test.piefed.local needs DEBUG; dispatch is inline
+    activity = inbox_activity(signing_peer)
+    key = activity_dedupe_key(activity['id'], activity['actor'])
+    with monkeypatch.context() as failure:
+        if failing == 'commit':
+            failure.setattr('app.activitypub.routes.db.session.commit', _raise)
+        else:
+            failure.setattr('app.activitypub.routes.process_inbox_request', _raise)
+        with app.test_client() as client, pytest.raises(_Unreachable):
+            signed_inbox_post(client, activity, signing_peer)
+    assert redis_double.exists(key) == 0
+
+    dispatched = []
+    monkeypatch.setattr('app.activitypub.routes.process_inbox_request', lambda *a, **kw: dispatched.append(a))
+    with app.test_client() as client:
+        retried = signed_inbox_post(client, activity, signing_peer)
+    assert retried.status_code == 200
+    assert len(dispatched) == 1
+    assert redis_double.exists(key) == 1
+
+
+def test_a_claimed_account_deletion_is_released_when_its_dispatch_fails(app, signing_peer, redis_double, monkeypatch):
+    monkeypatch.setitem(app.config, 'DEBUG', True)
+    activity = inbox_activity(signing_peer, activity_type='Delete', object_uri=signing_peer.ap_profile_id)
+    monkeypatch.setattr('app.activitypub.routes.process_delete_request', _raise)
+    with app.test_client() as client, pytest.raises(_Unreachable):
+        signed_inbox_post(client, activity, signing_peer)
+    assert redis_double.exists(activity_dedupe_key(activity['id'], activity['actor'])) == 0
+
+
+def test_a_relay_claim_is_released_when_its_dispatch_fails(app, site, redis_double, monkeypatch):
+    private_key, public_key = a_keypair()
+    relay_actor = 'https://relay.example/actor'
+    db.session.add(Relay(url='https://relay.example/inbox', style=STYLE_MASTODON, inbox_url='https://relay.example/inbox',
+                         actor_id=relay_actor, public_key=public_key, follow_activity_id='x', state=RELAY_ACCEPTED))
+    db.session.commit()
+    monkeypatch.setitem(app.config, 'DEBUG', True)
+    monkeypatch.setattr(relay_inbound, 'process_relayed_announce', _raise)
+    announce = {'id': f'{relay_actor}/a/1', 'type': 'Announce', 'actor': relay_actor,
+                'object': 'https://other.example/notes/1'}
+    sender = SimpleNamespace(private_key=private_key, ap_profile_id=relay_actor)
+    with app.test_client() as client, pytest.raises(_Unreachable):
+        signed_inbox_post(client, announce, sender)
+    assert redis_double.exists(activity_dedupe_key(announce['id'], relay_actor)) == 0

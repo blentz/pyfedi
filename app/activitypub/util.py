@@ -673,6 +673,12 @@ def claim_activity(activity_id, actor_url) -> bool:
                                          ex=ACTIVITY_DEDUPE_SECONDS, nx=True))
 
 
+def release_activity(activity_id, actor_url) -> None:
+    """Forget a claim whose activity was never handed on for processing (R-DEDUPEUNDO): the request failed, the
+    sender will retry the same id, and that retry must be processed rather than dropped as already seen."""
+    app_pkg.redis_client.delete(activity_dedupe_key(activity_id, actor_url))
+
+
 def host_of(url_string: str) -> str:
     """The lowercased host of a URL, or '' when it has none.
 

@@ -21,7 +21,7 @@ from app.activitypub.actor import find_actor_by_url
 from app.activitypub.entitlement import PRIVATE_HEADERS, addressees_of, audience_entitles, signed_requester_actor
 from app.activitypub.signature import POST_REQUIRED, HttpSignature, VerificationError, VerificationFormatError, default_context, LDSignature, \
     send_post_request, verify_with_key_refresh, request_key_id
-from app.activitypub.util import activity_dedupe_key, claim_activity, host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
+from app.activitypub.util import activity_dedupe_key, claim_activity, release_activity, host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
     post_to_activity, find_actor_or_create_cached, find_liked_object, \
     lemmy_site_data, is_activitypub_request, delete_post_or_comment, community_members, \
     create_post, create_post_reply, update_post_reply_from_activity, \
@@ -855,34 +855,38 @@ def shared_inbox():
                         f'{LD_SIGNED_LOG_PREFIX}: Already aware of this activity' if ld_signed else 'Already aware of this activity')
         return '', 200
 
-    if actor.instance_id:
-        actor.instance.last_seen = utcnow()
-        actor.instance.dormant = False
-        actor.instance.gone_forever = False
-        actor.instance.failures = 0
-        actor.instance.ip_address = ip_address() if not bounced else ''
-    db.session.commit()
+    try:
+        if actor.instance_id:
+            actor.instance.last_seen = utcnow()
+            actor.instance.dormant = False
+            actor.instance.gone_forever = False
+            actor.instance.failures = 0
+            actor.instance.ip_address = ip_address() if not bounced else ''
+        db.session.commit()
 
-    # When a user is deleted, the only way to be fairly sure they get deleted everywhere is to tell the whole fediverse.
-    # Earlier check means this is only for users that already exist, processing it here means that http signature will have been verified
-    # relay_id and ld_signed are passed only when set: a worker still running the previous code (rolling deploy)
-    # would reject the unexpected keyword
-    ld_kwargs = {'ld_signed': True} if ld_signed else {}
-    if account_deletion == True:
+        # When a user is deleted, the only way to be fairly sure they get deleted everywhere is to tell the whole fediverse.
+        # Earlier check means this is only for users that already exist, processing it here means that http signature will have been verified
+        # relay_id and ld_signed are passed only when set: a worker still running the previous code (rolling deploy)
+        # would reject the unexpected keyword
+        ld_kwargs = {'ld_signed': True} if ld_signed else {}
+        if account_deletion == True:
+            if current_app.debug:
+                process_delete_request(request_json, store_ap_json, **ld_kwargs)
+            else:
+                process_delete_request.delay(request_json, store_ap_json, **ld_kwargs)
+            return ''
+
+        relay_kwargs = {'relay_id': relay.id} if relay else {}
+        relay_kwargs.update(ld_kwargs)
         if current_app.debug:
-            process_delete_request(request_json, store_ap_json, **ld_kwargs)
+            process_inbox_request(request_json, store_ap_json, **relay_kwargs)
         else:
-            process_delete_request.delay(request_json, store_ap_json, **ld_kwargs)
+            process_inbox_request.delay(request_json, store_ap_json, **relay_kwargs)
+
         return ''
-
-    relay_kwargs = {'relay_id': relay.id} if relay else {}
-    relay_kwargs.update(ld_kwargs)
-    if current_app.debug:
-        process_inbox_request(request_json, store_ap_json, **relay_kwargs)
-    else:
-        process_inbox_request.delay(request_json, store_ap_json, **relay_kwargs)
-
-    return ''
+    except Exception:
+        release_activity(id, request_json['actor'])   # R-DEDUPEUNDO: never handed on, so the retry must be processed
+        raise
 
 
 @bp.route('/actor/inbox', methods=['POST'])
