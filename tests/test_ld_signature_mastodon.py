@@ -10,7 +10,9 @@ from datetime import datetime
 
 import pytest
 
+from app.activitypub.ld_contexts import MASTODON_CONTEXT_TERMS, check_ld_coverage
 from app.activitypub.signature import LDSignature, VerificationError, VerificationFormatError
+from tests.factories import a_keypair
 
 MASTODON_PUBLIC_KEY = """-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnHPQwmF4ObGgWnJ5KMAX
@@ -107,3 +109,106 @@ def test_a_signature_section_json_ld_cannot_expand_is_a_format_error(app, monkey
     document['signature']['@id'] = 5
     with pytest.raises(VerificationFormatError, match='Invalid signature section'):
         LDSignature.verify_signature(document, MASTODON_PUBLIC_KEY)
+
+
+# --- a Mastodon Create with its usual inline term map ---
+# No genuine LD-signed Mastodon Create was at hand, so this one is signed with LDSignature.create_signature. Its
+# shape is a Mastodon 4.5 Note activity (ActivityPub::NoteSerializer: hashtag, custom emoji, mention, image
+# attachment with blurhash and focalPoint, replies/likes/shares collections, interactionPolicy), and every inline
+# term is copied from MASTODON_CONTEXT_TERMS, the copy of Mastodon's CONTEXT_EXTENSION_MAP. The context order is
+# the one the real Delete above carries: activitystreams, the inline map, security/v1.
+
+MASTODON_ACTOR = 'https://mastodon.example/users/alice'
+MASTODON_STATUS = f'{MASTODON_ACTOR}/statuses/115000000000000001'
+MASTODON_CREATE_TERMS = ('ostatus', 'atomUri', 'inReplyToAtomUri', 'conversation', 'sensitive', 'toot',
+                         'votersCount', 'blurhash', 'focalPoint', 'Hashtag', 'Emoji', 'gts', 'interactionPolicy',
+                         'canQuote', 'automaticApproval', 'manualApproval')
+
+
+def mastodon_create() -> dict:
+    public = 'https://www.w3.org/ns/activitystreams#Public'
+    followers = f'{MASTODON_ACTOR}/followers'
+    return {
+        '@context': [
+            'https://www.w3.org/ns/activitystreams',
+            {term: copy.deepcopy(MASTODON_CONTEXT_TERMS[term]) for term in MASTODON_CREATE_TERMS},
+            'https://w3id.org/security/v1',
+        ],
+        'id': f'{MASTODON_STATUS}/activity',
+        'type': 'Create',
+        'actor': MASTODON_ACTOR,
+        'published': '2026-10-11T02:00:00Z',
+        'to': [public],
+        'cc': [followers, 'https://piefed.example/u/bob'],
+        'object': {
+            'id': MASTODON_STATUS,
+            'type': 'Note',
+            'summary': None,
+            'inReplyTo': None,
+            'published': '2026-10-11T02:00:00Z',
+            'url': 'https://mastodon.example/@alice/115000000000000001',
+            'attributedTo': MASTODON_ACTOR,
+            'to': [public],
+            'cc': [followers, 'https://piefed.example/u/bob'],
+            'sensitive': False,
+            'atomUri': MASTODON_STATUS,
+            'inReplyToAtomUri': None,
+            'conversation': 'tag:mastodon.example,2026-10-11:objectId=1:objectType=Conversation',
+            'content': '<p>Hello <span class="h-card"><a href="https://piefed.example/u/bob">@bob</a></span> '
+                       ':blobcat: <a href="https://mastodon.example/tags/fediverse" rel="tag">#fediverse</a></p>',
+            'contentMap': {'en': '<p>Hello @bob :blobcat: #fediverse</p>'},
+            'updated': '2026-10-11T02:05:00Z',
+            'attachment': [{
+                'type': 'Document',
+                'mediaType': 'image/png',
+                'url': 'https://mastodon.example/system/media_attachments/files/1/original/1.png',
+                'name': 'a cat',
+                'blurhash': 'UBL_:rOpGG-oBUNG,qRj2so|=eE1w^n4S5NH',
+                'focalPoint': [0.0, 0.25],
+                'width': 640,
+                'height': 480,
+            }],
+            'tag': [
+                {'type': 'Mention', 'href': 'https://piefed.example/u/bob', 'name': '@bob@piefed.example'},
+                {'type': 'Hashtag', 'href': 'https://mastodon.example/tags/fediverse', 'name': '#fediverse'},
+                {'id': 'https://mastodon.example/emojis/1', 'type': 'Emoji', 'name': ':blobcat:',
+                 'updated': '2026-01-01T00:00:00Z',
+                 'icon': {'type': 'Image', 'mediaType': 'image/png',
+                          'url': 'https://mastodon.example/system/custom_emojis/images/1/original/1.png'}},
+            ],
+            'interactionPolicy': {'canQuote': {'automaticApproval': [public], 'manualApproval': []}},
+            'replies': {
+                'id': f'{MASTODON_STATUS}/replies',
+                'type': 'Collection',
+                'first': {'type': 'CollectionPage',
+                          'next': f'{MASTODON_STATUS}/replies?only_other_accounts=true&page=true',
+                          'partOf': f'{MASTODON_STATUS}/replies', 'items': []},
+            },
+            'likes': {'id': f'{MASTODON_STATUS}/likes', 'type': 'Collection', 'totalItems': 3},
+            'shares': {'id': f'{MASTODON_STATUS}/shares', 'type': 'Collection', 'totalItems': 1},
+        },
+    }
+
+
+def test_a_mastodon_create_with_its_inline_term_map_verifies(app):
+    """LDSignature.verify_signature runs check_ld_coverage before the hash, so this passing proves every key of a
+    usual Mastodon Create (toot:, sensitive, Hashtag, Emoji, blurhash, focalPoint, ostatus:, interactionPolicy) is
+    covered by its graph, not only that the signature matches."""
+    private_key, public_key = a_keypair()
+    document = mastodon_create()
+    check_ld_coverage(copy.deepcopy(document))
+    document['signature'] = LDSignature.create_signature(document, private_key, f'{MASTODON_ACTOR}#main-key')
+
+    LDSignature.verify_signature(document, public_key)
+
+    assert document['object']['tag'][2]['type'] == 'Emoji' and document['object']['sensitive'] is False
+
+
+def test_a_mastodon_create_whose_content_is_changed_after_signing_is_refused(app):
+    private_key, public_key = a_keypair()
+    document = mastodon_create()
+    document['signature'] = LDSignature.create_signature(document, private_key, f'{MASTODON_ACTOR}#main-key')
+    document['object']['content'] = '<p>forged</p>'
+
+    with pytest.raises(VerificationError, match='Signature mismatch'):
+        LDSignature.verify_signature(document, public_key)
