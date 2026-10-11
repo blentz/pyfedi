@@ -460,12 +460,14 @@ class TestTheHelper:
         assert route.calls[0].request.headers['accept'] == 'text/plain'
         assert route.calls[0].request.extensions['timeout']['read'] == 3
 
-    def test_it_follows_a_redirect_only_when_asked(self, app, http_mock):
+    def test_it_never_follows_a_redirect(self, app, http_mock):
+        """_capped_get does no SSRF check, so a followed redirect could reach an address is_invalid_get_request_uri
+        would refuse; there is no way to ask for one. No route serves the Location."""
         http_mock.get(URI).respond(302, headers={'Location': 'https://peer.example/there'})
-        http_mock.get('https://peer.example/there').respond(200, text='here')
 
         assert _capped_get(URI).status_code == 302
-        assert _capped_get(URI, follow_redirects=True).text == 'here'
+        with pytest.raises(TypeError):
+            _capped_get(URI, follow_redirects=True)
 
 
 class TestGetRequestInstance:

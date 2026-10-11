@@ -221,7 +221,7 @@ class RequestNotSendable(httpx.HTTPError):
 
 
 def _capped_get(uri, params=None, headers=None, timeout=10, max_bytes: int = FETCH_MAX_BYTES,
-                max_seconds: float = FETCH_MAX_SECONDS, follow_redirects: bool = False) -> httpx.Response:
+                max_seconds: float = FETCH_MAX_SECONDS) -> httpx.Response:
     """GET `uri` through the pinned client as a stream, reading at most max_bytes of DECODED body within a wall-clock
     deadline of max_seconds over the whole download; timeout is the per-read timeout. A declared Content-Length over
     the cap is refused before reading. Only gzip and deflate are offered (Accept-Encoding), and a compressed body is
@@ -233,7 +233,8 @@ def _capped_get(uri, params=None, headers=None, timeout=10, max_bytes: int = FET
     Raises only httpx.HTTPError subclasses: ResponseTooLarge over the cap or past the deadline, UnreadableEncoding for
     any other or stacked Content-Encoding, httpx.DecodingError for a corrupt compressed body, RequestNotSendable when
     httpx refuses the request, and httpx's own transport errors. No SSRF check, no User-Agent and no retry: the
-    caller does those. The deadline also holds at the transport (fetch_deadline, app/pinned_http.py): every connect,
+    caller does those. A redirect is never followed: with no SSRF check here it could reach an address the caller's
+    is_invalid_get_request_uri would refuse. The deadline also holds at the transport (fetch_deadline, app/pinned_http.py): every connect,
     read and write gets at most the time left, so a peer that keeps the connection busy without sending body bytes
     is cut off too, and a timeout at the deadline is ResponseTooLarge. Limit: DNS resolution is a blocking lookup
     the deadline does not interrupt."""
@@ -243,7 +244,7 @@ def _capped_get(uri, params=None, headers=None, timeout=10, max_bytes: int = FET
     try:
         with fetch_deadline(max_seconds), \
                 httpx_client.stream('GET', uri, params=params, headers=headers, timeout=timeout,
-                                    follow_redirects=follow_redirects) as response:
+                                    follow_redirects=False) as response:
             declared = response.headers.get('Content-Length', '')
             if declared.isdigit() and int(declared) > max_bytes:
                 raise ResponseTooLarge(f'{uri} declares a body of {declared} bytes, over the cap of {max_bytes}')
