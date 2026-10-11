@@ -167,18 +167,48 @@ def test_a_blocked_mention_host_is_not_sent_it(db_session, sent):
     assert sent.inboxes() == ['https://peer1.example/inbox']
 
 
-def test_a_followers_only_reply_in_a_remote_community_skips_the_community_inbox(db_session, sent):
-    """A remote community's inbox would relay it to the community's followers."""
-    w = _world(remote_parent_author=True)
-    remote = make_community('elsewhere', host='peer6.example')
-    remote.instance_id = w.peers['peer6.example'].id
-    remote.ap_inbox_url = 'https://peer6.example/c/elsewhere/inbox'
+def _remote_community(w, *replies, offline=False):
+    """Move the post (and `replies`) into a lemmy community on peer5, whose inbox would relay to its followers."""
+    peer5 = _peer('peer5.example', 'lemmy')
+    remote = make_community('elsewhere', host='peer5.example')
+    remote.ap_id = 'https://peer5.example/c/elsewhere'
+    remote.instance_id = peer5.id
+    remote.ap_inbox_url = 'https://peer5.example/c/elsewhere/inbox'
+    peer5.dormant = offline
     w.post.community_id = remote.id
-    reply = _reply(w, body='agreed')
-    reply.community_id = remote.id
+    for reply in replies:
+        reply.community_id = remote.id
     db.session.commit()
+    assert not remote.is_local()
+    return remote
+
+
+@pytest.mark.parametrize('offline', [False, True], ids=['online', 'offline'])
+def test_a_followers_only_reply_in_a_remote_community_skips_the_community_inbox(db_session, sent, offline):
+    """A remote community's inbox would relay it to the community's followers; and since the community is not its
+    audience, the community's host being offline does not stop it reaching the replier's followers."""
+    w = _world(remote_parent_author=True)
+    reply = _reply(w, body='agreed')
+    _remote_community(w, reply, offline=offline)
     send_reply(reply.id, None, session=db.session)
     assert sent.inboxes() == ['https://peer1.example/inbox', 'https://peer6.example/inbox']
+
+
+def test_a_reply_to_a_remote_authors_followers_only_reply_reaches_that_author(db_session, sent):
+    """parent_id is a followers-only reply by zed on peer8: zed is cc'd and peer8 is sent it, not the post's author."""
+    w = _world()
+    zed = make_user(_peer('peer8.example'), 'zed')
+    parent = make_post_reply(w.post, zed, 'parent')
+    parent.visibility = VISIBILITY_FOLLOWERS
+    db.session.commit()
+    child = PostReply.new(w.replier, w.post, parent, 'child', '<p>child</p>', True, None, False, False)
+    assert child.visibility == VISIBILITY_FOLLOWERS
+    send_reply(child.id, parent.id, session=db.session)
+    assert sent.inboxes() == ['https://peer1.example/inbox', 'https://peer8.example/inbox']
+    for s in sent:
+        assert s.body['cc'] == [zed.public_url()]
+        assert s.body['object']['inReplyTo'] == parent.public_url()
+        assert PUBLIC not in json.dumps(s.body)
 
 
 def test_a_public_reply_is_still_announced(db_session, sent):
@@ -261,3 +291,39 @@ def test_deleting_a_remote_authors_followers_only_reply_sends_nothing(db_session
     db.session.commit()
     deletes.delete_reply(None, w.replier.id, reply.id)
     assert sent == []
+
+
+@pytest.mark.parametrize('offline', [False, True], ids=['online', 'offline'])
+@pytest.mark.parametrize('task', [deletes.delete_reply, deletes.restore_reply], ids=['delete', 'restore'])
+def test_a_moderator_removal_of_a_followers_only_reply_in_a_remote_community_is_the_repliers(db_session, sent, task,
+                                                                                            offline):
+    """The reply never went to the remote community, so neither does its Delete or Undo: it goes, signed by the
+    replier, to the hosts that hold it -- the replier's followers, the parent author's and the mentions' -- with no
+    Public and no reason, even while the community's host is offline."""
+    w = _world(remote_parent_author=True)
+    mod = make_user(w.replier.instance, 'mod', local=True)
+    make_follow(mod, make_user(_peer('peer7.example'), 'modfan'), is_inward=True)
+    reply = _reply(w, body='agreed @carol@peer4.example')
+    _remote_community(w, reply, offline=offline)
+    task(None, mod.id, reply.id, reason='spam')
+    assert sent.inboxes() == ['https://peer1.example/inbox', 'https://peer4.example/inbox',
+                              'https://peer6.example/inbox']
+    for s in sent:
+        assert s.key_id == w.replier.public_url() + '#main-key'
+        assert s.body['actor'] == w.replier.public_url()
+        assert s.body['to'] == [w.replier.followers_url()]
+        assert s.body['cc'] == [w.author.public_url(), w.carol.public_url()]
+        assert 'summary' not in json.dumps(s.body)
+        assert 'audience' not in json.dumps(s.body)
+        assert PUBLIC not in json.dumps(s.body)
+
+
+def test_deleting_a_remote_authors_followers_only_reply_in_a_remote_community_keeps_the_ordinary_path(db_session,
+                                                                                                    sent):
+    """R-a: a remote author's reply in a remote community has that community as its home."""
+    w = _world(remote_parent_author=True)
+    reply = make_post_reply(w.post, w.author, 'theirs')
+    reply.visibility = VISIBILITY_FOLLOWERS
+    _remote_community(w, reply)
+    deletes.delete_reply(None, w.replier.id, reply.id)
+    assert sent.inboxes() == ['https://peer5.example/c/elsewhere/inbox']

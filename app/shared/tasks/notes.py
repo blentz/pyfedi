@@ -114,19 +114,24 @@ def send_reply(reply_id, parent_id, edit=False, session=None):
                     session.add(notification)
                     session.commit()
 
-    if community.local_only or community.private or not (community.instance_id and community.instance.online()):
+    if community.local_only or community.private:
         return
 
     banned = user_banned_from_community(user.id, community.id)  # D995
     if banned:
         return
-    if not community.is_local():
-        if user.has_blocked_instance(community.instance.id) or instance_banned(community.instance.domain):
-            return
 
     # Amendment B (S7.3): a followers-only reply goes to the replier's followers, cc the people it answers or names
-    # (R-FOCC: never the follower list), with no Public and no community audience
+    # (R-FOCC: never the follower list), with no Public and no community audience. It never goes to the community,
+    # so the community's host being offline, blocked or banned does not stop it.
     followers_only = not is_open(reply)
+    if not followers_only:
+        if not (community.instance_id and community.instance.online()):
+            return
+        if not community.is_local():
+            if user.has_blocked_instance(community.instance.id) or instance_banned(community.instance.domain):
+                return
+
     if followers_only:
         to = [user.followers_url()]
         cc = []
