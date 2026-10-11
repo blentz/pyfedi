@@ -578,6 +578,9 @@ class HttpSignatureDetails(TypedDict):
     keyid: str
 
 
+LD_SIGNATURE_EXPIRY_SKEW = timedelta(minutes=5)   # clock difference allowed past a signature's `expires`
+
+
 class LDSignature:
     """
     Creates and verifies signatures of JSON-LD documents
@@ -600,6 +603,16 @@ class LDSignature:
             raise VerificationFormatError("Invalid signature section")
         if signature["type"].lower() != "rsasignature2017":
             raise VerificationFormatError("Unknown signature type")
+        # An expiry the signer set is honoured, so a relay cannot replay an old signed body; none is still accepted
+        if "expires" in signature:
+            try:
+                expires = parser.isoparse(signature["expires"])
+            except (TypeError, ValueError):
+                raise VerificationFormatError("Invalid signature expiry")
+            if expires.tzinfo is not None:
+                expires = expires.astimezone(timezone.utc).replace(tzinfo=None)
+            if expires + LD_SIGNATURE_EXPIRY_SKEW < utcnow():
+                raise VerificationError("Signature expired")
         # Get the normalised hash of each document
         final_hash = cls.normalized_hash(options) + cls.normalized_hash(document)
         # Verify the signature
