@@ -5683,17 +5683,33 @@ def _verify_announced_delete(inner: dict, community) -> Tuple[Union[dict, None],
 def _origin_refusal_of_delete(object_id: str, label: str) -> Union[str, None]:
     """None when the object's origin no longer serves it (404 or 410), else why the Delete is dropped.
 
-    One fetch and no retry (D775). get_request_capped, not get_request: get_request sleeps and retries on every
-    transport error, and only the status matters here, so no body is read."""
+    One unsigned fetch and no sleep or transport retry (D775). get_request_capped, not get_request: get_request
+    sleeps and retries on every transport error, and only the status matters here, so no body is read.
+
+    R-DELSIGNED: GoToSocial and authorized-fetch Mastodon/Akkoma answer 401/403 to every unsigned GET, even for an
+    object they deleted, so a 401/403 is asked again exactly once, signed as the instance actor (as
+    verify_object_from_source does; signed_get_request's double knock is the one sanctioned extra attempt). With no
+    Site key to sign with, the unsigned answer stands."""
     try:
         status, _body = get_request_capped(object_id, 0, headers={'Accept': 'application/activity+json'})
     except httpx.HTTPError:
         return f'{label}: the object could not be fetched'
+    suffix = ''
+    if status in (401, 403):
+        site = db.session.get(Site, 1)
+        if site is not None and site.private_key:
+            try:
+                response = signed_get_request(object_id, site.private_key,
+                                              f"{current_app.config['SERVER_URL']}/actor#main-key")
+            except httpx.HTTPError:
+                return f'{label}: the object could not be fetched with a signed request'
+            response.close()
+            status, suffix = response.status_code, ' to a signed fetch'
     if status in (404, 410):
         return None
     if status == 200:
         return f'{label} of an object that still exists'
-    return f'{label}: the object answers HTTP {status}'
+    return f'{label}: the object answers HTTP {status}{suffix}'
 
 
 ADDRESSING_FIELDS = ('to', 'cc', 'audience', 'target')
