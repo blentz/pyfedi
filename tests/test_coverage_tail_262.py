@@ -32,7 +32,7 @@ import pytest
 from flask import current_app
 from PIL import Image as PILImage
 
-from app.utils import discard_unsanitized_svg, url_to_thumbnail_file
+from app.utils import FETCH_MAX_BYTES, MEDIA_MAX_BYTES, discard_unsanitized_svg, url_to_thumbnail_file
 
 pytestmark = pytest.mark.usefixtures('private_static_tree')
 
@@ -156,14 +156,23 @@ class TestTheContentTypeIsReadCaseInsensitively:
         case."""
         assert fetch(b'<html><script>alert(1)</script></html>', 'TEXT/HTML') is None
 
+    def test_an_image_over_the_default_cap_is_kept(self, fetch):
+        """A photo passes get_request's default 1 MiB easily: a thumbnail is capped at
+        MEDIA_MAX_BYTES (10 MiB) instead. Pillow ignores bytes after the PNG's end."""
+        assert fetch(a_png() + b'\0' * FETCH_MAX_BYTES, 'image/png') is not None
+
+    def test_an_image_over_the_cap_is_refused(self, fetch):
+        """ResponseTooLarge, into the bare `except:`: the same PNG grown past MEDIA_MAX_BYTES is cut
+        off, not buffered whole and stored."""
+        assert fetch(a_png() + b'\0' * MEDIA_MAX_BYTES, 'image/png') is None
+
     def test_a_response_with_no_content_type_is_refused(self, fetch):
         """`if content_type:` guards the fold itself. A peer may send no header at all, and
         `None.lower()` would be an AttributeError out of a function `edit_post` does not wrap."""
         url = 'https://thumbnails.example/headerless'
         # respx sends no content-type when the body is passed as raw bytes with none set.
-        with patch('app.utils.httpx_client') as client:
-            client.get.return_value = SimpleNamespace(
-                status_code=200, headers={}, content=a_png(), close=lambda: None)
+        with patch('app.utils._capped_get', return_value=SimpleNamespace(
+                status_code=200, headers={}, content=a_png(), close=lambda: None)):
             assert url_to_thumbnail_file(url) is None
 
 

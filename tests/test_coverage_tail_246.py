@@ -30,7 +30,8 @@ from app.models import (CommunityBan, CommunityBlock, DomainBlock, Domain, Insta
 from app.utils import (banned_instances, blocked_communities, blocked_domains,
                        blocked_instances, blocked_or_banned_instances, blocked_phrases,
                        blocked_referrers, blocked_users, communities_banned_from,
-                       opengraph_parse, url_to_thumbnail_file)
+                       MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, _capped_get, opengraph_parse,
+                       url_to_thumbnail_file)
 from tests.factories import make_community, make_instance, make_user
 
 
@@ -236,18 +237,30 @@ class TestFetchingARemoteThumbnail:
         """`is_invalid_get_request_uri` is the SSRF guard -- it refuses `.local` hosts and
         private addresses among others -- and it runs before the request, so the row asserts
         nothing was fetched rather than that nothing was stored."""
-        with patch('app.utils.httpx_client') as client:
+        with patch('app.utils._capped_get') as fetch:
             assert url_to_thumbnail_file('https://thing.local/image.png') is None
 
-        assert client.get.call_count == 0
+        assert fetch.call_count == 0
 
-    def test_a_failed_request_answers_none(self, env):
+    def test_a_failed_request_answers_none(self, env, http_mock):
         """The bare `except:`. The host is a peer's choice, so a refused connection is
         ordinary and must not raise out of whatever was rendering the post."""
-        with patch('app.utils.httpx_client') as client:
-            client.get.side_effect = httpx.ConnectError('no route to host')
+        http_mock.get('https://news.example/image.png').mock(side_effect=httpx.ConnectError('no route to host'))
 
+        assert url_to_thumbnail_file('https://news.example/image.png') is None
+
+    def test_the_fetch_is_capped_and_does_not_follow_a_redirect(self, env, http_mock):
+        """10 MiB within 30 seconds, the per-read timeout kept. No route serves the Location, so
+        following it would error the test."""
+        route = http_mock.get('https://news.example/image.png').respond(
+            302, headers={'Location': 'https://elsewhere.example/image.png'})
+
+        with patch('app.utils._capped_get', wraps=_capped_get) as fetch:
             assert url_to_thumbnail_file('https://news.example/image.png') is None
+
+        assert fetch.call_args.kwargs == {'timeout': 5, 'max_bytes': MEDIA_MAX_BYTES,
+                                          'max_seconds': MEDIA_MAX_SECONDS}
+        assert route.call_count == 1
 
     def test_the_slow_host_gets_a_longer_timeout(self, env):
         """A hardcoded exception for `washingtonpost.com`, whose thumbnails take longer than
@@ -256,12 +269,11 @@ class TestFetchingARemoteThumbnail:
         it."""
         timeouts = []
 
-        def record(url, timeout=None):
+        def record(url, timeout=None, **caps):
             timeouts.append(timeout)
             raise httpx.ConnectError('stop here')
 
-        with patch('app.utils.httpx_client') as client:
-            client.get.side_effect = record
+        with patch('app.utils._capped_get', side_effect=record):
             url_to_thumbnail_file('https://www.washingtonpost.com/i.png')
             url_to_thumbnail_file('https://news.example/i.png')
 

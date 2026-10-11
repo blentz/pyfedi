@@ -14,7 +14,7 @@ from sqlalchemy import or_, asc, desc, text
 from sqlalchemy.orm.exc import NoResultFound
 from ics import Calendar, Event, DisplayAlarm
 
-from app import db, cache, celery, httpx_client, limiter, plugins
+from app import db, cache, celery, limiter, plugins
 from app.activitypub.signature import RsaKeys, send_post_request
 from app.activitypub.util import extract_domain_and_actor, find_actor_or_create, find_microblogging_community
 from app.activitypub.actor import schedule_actor_refresh
@@ -54,7 +54,7 @@ from app.post.util import tags_to_string
 import app.shared.community as shared_community
 from app.visibility import is_open, listable_clause, visible_to_clause
 from app.utils import user_banned_from_community, back, get_setting, render_template, markdown_to_html, validation_required, can_moderate, \
-    shorten_string, gibberish, community_membership, \
+    shorten_string, gibberish, community_membership, _capped_get, PAGE_MAX_BYTES, \
     request_etag_matches, return_304, can_upvote, can_downvote, user_filters_posts, \
     joined_communities, moderating_communities, moderating_communities_ids, blocked_domains, \
     blocked_or_banned_instances, \
@@ -3167,7 +3167,7 @@ def lookup(community, domain):
 
 
 # D1025. `@login_required` because this route FETCHES A CALLER-SUPPLIED URL
-# from the server (`retrieve_metadata_of_url` -> `httpx_client.get`). Without
+# from the server (`retrieve_metadata_of_url` -> `_capped_get`). Without
 # it, anyone on the internet could make this instance issue outbound GETs, from
 # its own address, as fast as they liked. `is_invalid_get_request_uri` keeps
 # those requests off private ranges, so this was never SSRF to the inside; it

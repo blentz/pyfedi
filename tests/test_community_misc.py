@@ -22,6 +22,7 @@ measured:
 from unittest.mock import patch
 
 import pytest
+import respx
 from flask import render_template
 
 from app import db
@@ -29,7 +30,7 @@ from app.constants import POST_STATUS_REVIEWING
 from app.models import (Community, CommunityFlair, CommunityWikiPage, File,
                         Instance, Language, ModLog, Post, PostReply, Report,
                         Site, User)
-from app.utils import utcnow
+from app.utils import FETCH_MAX_BYTES, PAGE_MAX_BYTES, utcnow
 from tests.factories import (make_community, make_community_member,
                              make_instance, make_post, make_post_reply,
                              make_user)
@@ -111,7 +112,7 @@ def test_the_url_check_needs_a_login(app, env):
     was reachable with no session at all -- an unauthenticated outbound-fetch
     primitive, the same family as D993's unbounded email. Measured:
     `PROBE i1 outbound fetch attempted: True ('https://example.com/x',)`."""
-    with patch('app.community.routes.httpx_client.get') as fetch:
+    with patch('app.community.routes._capped_get') as fetch:
         response = app.test_client().get(
             '/community/check_url_already_posted?link_url=https://example.com/x')
 
@@ -126,7 +127,7 @@ def test_a_logged_in_user_can_check_a_url(app, env):
     posted.url = 'https://example.com/x'
     db.session.commit()
 
-    with patch('app.community.routes.httpx_client.get') as fetch:
+    with patch('app.community.routes._capped_get') as fetch:
         fetch.return_value.status_code = 200
         fetch.return_value.content = b'<html><head><title>A page</title></head></html>'
         response = client.get(
@@ -156,7 +157,7 @@ def test_the_url_check_normalises_the_link_first(app, env):
     posted.url = 'https://youtube.com/watch?v=abc123'
     db.session.commit()
 
-    with patch('app.community.routes.httpx_client.get') as fetch:
+    with patch('app.community.routes._capped_get') as fetch:
         fetch.return_value.status_code = 200
         fetch.return_value.content = b'<html></html>'
         response = client.get('/community/check_url_already_posted'
@@ -170,14 +171,33 @@ def test_the_url_check_normalises_the_link_first(app, env):
 # --------------------------------------------------------------------------
 
 
-def metadata(app, body=b'', status=200, url='https://example.com/x'):
+def metadata(app, body=b'', status=200, url='https://example.com/x', headers=None):
     from app.community.routes import retrieve_metadata_of_url
 
     with app.test_request_context():
-        with patch('app.community.routes.httpx_client.get') as fetch:
-            fetch.return_value.status_code = status
-            fetch.return_value.content = body
+        with respx.mock(assert_all_called=True) as router:
+            router.get(url).respond(status, content=body, headers=headers)
             return retrieve_metadata_of_url(url)
+
+
+def test_a_page_over_the_default_cap_is_read_under_its_own(app, env):
+    """A page with inline scripts passes the default 1 MiB easily: the metadata fetch is capped at
+    PAGE_MAX_BYTES instead."""
+    title, description = metadata(app, b'<html><head><title>Big</title></head><body>'
+                                       + b'x' * FETCH_MAX_BYTES + b'</body></html>')
+
+    assert title == 'Big'
+
+
+def test_a_page_over_its_cap_yields_nothing(app, env):
+    """ResponseTooLarge, into the `except Exception:` arm: refused before the body is read."""
+    assert metadata(app, b'<html><title>Ignored</title></html>',
+                    headers={'Content-Length': str(PAGE_MAX_BYTES + 1)}) == ('', '')
+
+
+def test_a_redirect_is_not_followed(app, env):
+    """No route serves the Location, so following it would error the test."""
+    assert metadata(app, status=302, headers={'Location': 'https://elsewhere.example/x'}) == ('', '')
 
 
 def test_the_open_graph_title_is_preferred(app, env):
@@ -231,7 +251,7 @@ def test_a_refused_uri_is_not_fetched(app, env):
     from app.community.routes import retrieve_metadata_of_url
 
     with app.test_request_context():
-        with patch('app.community.routes.httpx_client.get') as fetch:
+        with patch('app.community.routes._capped_get') as fetch:
             with patch('app.community.routes.is_invalid_get_request_uri',
                        return_value=True):
                 result = retrieve_metadata_of_url('https://internal.example/x')
@@ -246,7 +266,7 @@ def test_a_transport_failure_yields_nothing(app, env):
     from app.community.routes import retrieve_metadata_of_url
 
     with app.test_request_context():
-        with patch('app.community.routes.httpx_client.get',
+        with patch('app.community.routes._capped_get',
                    side_effect=RuntimeError('connection reset')):
             result = retrieve_metadata_of_url('https://example.com/x')
 
@@ -1268,7 +1288,7 @@ def test_an_empty_link_is_not_a_url_check(app, env):
     string must not become a lookup for every post with no url."""
     client, community, mod, member, outsider = env
 
-    with patch('app.community.routes.httpx_client.get') as fetch:
+    with patch('app.community.routes._capped_get') as fetch:
         response = client.get('/community/check_url_already_posted?link_url=')
 
     assert response.status_code == 404
@@ -1296,7 +1316,7 @@ def test_the_url_check_lists_only_posts_anyone_could_see(app, env, columns):
         setattr(hidden, column, value)
     db.session.commit()
 
-    with patch('app.community.routes.httpx_client.get') as fetch:
+    with patch('app.community.routes._capped_get') as fetch:
         fetch.return_value.status_code = 200
         fetch.return_value.content = b'<html></html>'
         response = client.get(

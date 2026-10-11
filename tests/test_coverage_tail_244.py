@@ -24,7 +24,7 @@ from flask import g
 
 from app import cache, db
 from app.models import Site, User
-from app.utils import (jaccard_similarity, libretranslate_string, retrieve_block_list,
+from app.utils import (FETCH_MAX_BYTES, jaccard_similarity, libretranslate_string, retrieve_block_list,
                        retrieve_peertube_block_list, user_in_restricted_country,
                        user2_cache)
 from tests.factories import (make_community, make_community_member, make_post,
@@ -71,6 +71,20 @@ class TestDownloadingTheDomainBlockList:
 
         assert retrieve_block_list() is None
 
+    def test_a_body_over_the_cap_answers_none(self, env, http_mock):
+        """The list is 33 KB; one over FETCH_MAX_BYTES is refused (ResponseTooLarge, into the bare `except:`)
+        rather than buffered whole."""
+        http_mock.get(BLOCK_LIST_URL).respond(200, content=b'x' * (FETCH_MAX_BYTES + 1))
+
+        assert retrieve_block_list() is None
+
+    def test_the_one_second_timeout_is_kept(self, env, http_mock):
+        route = http_mock.get(BLOCK_LIST_URL).respond(200, text='bad.example\n')
+
+        retrieve_block_list()
+
+        assert route.calls[0].request.extensions['timeout']['read'] == 1
+
     def test_a_non_200_answers_nothing_at_all(self, env, http_mock):
         """`if response and response.status_code == 200` -- with no `else`, so the function
         falls off the end and returns None for a 404 or a 500. The same answer as a
@@ -99,6 +113,18 @@ class TestDownloadingThePeertubeBlockList:
         http_mock.get(PEERTUBE_URL).respond(200, json={'data': [{'value': 'one.example'}]})
 
         assert retrieve_peertube_block_list() == 'one.example'
+
+    def test_a_body_over_the_cap_answers_none(self, env, http_mock):
+        http_mock.get(PEERTUBE_URL).respond(200, content=b'x' * (FETCH_MAX_BYTES + 1))
+
+        assert retrieve_peertube_block_list() is None
+
+    def test_the_one_second_timeout_is_kept(self, env, http_mock):
+        route = http_mock.get(PEERTUBE_URL).respond(200, json={'data': []})
+
+        retrieve_peertube_block_list()
+
+        assert route.calls[0].request.extensions['timeout']['read'] == 1
 
     def test_a_failed_request_answers_none(self, env, http_mock):
         http_mock.get(PEERTUBE_URL).mock(
