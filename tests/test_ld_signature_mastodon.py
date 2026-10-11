@@ -67,6 +67,17 @@ def test_a_signature_past_its_expiry_is_refused(app, monkeypatch):
         LDSignature.verify_signature(copy.deepcopy(MASTODON_SIGNED_DELETE), MASTODON_PUBLIC_KEY)
 
 
+@pytest.mark.parametrize('alias', ['expiration', 'sec:expiration', 'https://w3id.org/security#expiration'])
+def test_an_expiry_renamed_to_an_alias_is_still_enforced(app, monkeypatch, alias):
+    """Every alias expands to the same sec:expiration triple, so renaming `expires` keeps the hash and the
+    signature valid. The expiry must be read from what was signed, not from one JSON key."""
+    at(monkeypatch, '2026-10-13T02:30:00')
+    document = copy.deepcopy(MASTODON_SIGNED_DELETE)
+    document['signature'][alias] = document['signature'].pop('expires')
+    with pytest.raises(VerificationError, match='Signature expired'):
+        LDSignature.verify_signature(document, MASTODON_PUBLIC_KEY)
+
+
 def test_a_signature_just_past_its_expiry_is_within_clock_skew(app, monkeypatch):
     at(monkeypatch, '2026-10-13T02:14:00')
     LDSignature.verify_signature(copy.deepcopy(MASTODON_SIGNED_DELETE), MASTODON_PUBLIC_KEY)
