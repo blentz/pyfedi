@@ -10,7 +10,7 @@ import pytest
 
 from app import cli, db
 from app.models import RssFeed, utcnow
-from app.utils import LEMMYVERSE_MAX_BYTES, LEMMYVERSE_MAX_SECONDS, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS
+from app.utils import DOMAIN_LIST_MAX_BYTES, DOMAIN_LIST_MAX_SECONDS, LEMMYVERSE_MAX_BYTES, LEMMYVERSE_MAX_SECONDS, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS
 from tests.factories import make_community, make_instance, make_site, make_user
 
 
@@ -31,6 +31,9 @@ def test_the_lemmyverse_list_is_fetched_under_its_own_bigger_cap(commands):
     assert fetch.call_args_list[0].args == ('https://data.lemmyverse.net/data/community.full.json',)
     assert fetch.call_args_list[0].kwargs == {'max_bytes': LEMMYVERSE_MAX_BYTES,
                                               'max_seconds': LEMMYVERSE_MAX_SECONDS}
+    # The disposable-email domains.txt was 1,504,489 bytes on 2026-10-11.
+    assert fetch.call_args_list[1].kwargs == {'max_bytes': DOMAIN_LIST_MAX_BYTES,
+                                              'max_seconds': DOMAIN_LIST_MAX_SECONDS}
 
 
 def test_a_feed_and_its_redirect_are_fetched_under_the_media_cap(commands):

@@ -213,8 +213,10 @@ def signed_get_request(uri: str, private_key: str, key_id: str, content_type: st
     is signed only, then fetched through _capped_get like get_request: at most FETCH_MAX_BYTES of body within
     FETCH_MAX_SECONDS (else ResponseTooLarge), no redirects, `timeout` per read, no sleep and no retry. It used to
     read through HttpSignature.signed_request's own uncapped GET, so a hostile origin could pin a worker with a huge
-    or slow body. `content_type` and `method` stay for the callers' sake: a GET has no body to type, and every
-    caller asks for a GET. Raises ValueError for a URI the signer refuses, httpx.HTTPError on transport failure."""
+    or slow body. `content_type` and `method` are IGNORED, kept only so the six callers' signature still holds:
+    a GET has no body for content_type to describe, and the request is always signed and sent as a GET, since every
+    caller asks for one and _capped_get only GETs. Raises ValueError for a URI the signer refuses, httpx.HTTPError
+    on transport failure."""
     def send(signature_format: str) -> httpx.Response:
         # send_via_async: sign only; the GET itself goes through _capped_get's cap and deadline
         _uri, headers, _body = HttpSignature.signed_request(uri, None, private_key, key_id, content_type, method='get',
