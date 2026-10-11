@@ -9,7 +9,7 @@ request cannot make this instance issue a GET.
 """
 from urllib.parse import urlparse
 
-from flask import request
+from flask import g, make_response, request
 from sqlalchemy import or_
 
 from app import db
@@ -17,6 +17,7 @@ from app.activitypub.actor import find_actor_by_url
 from app.activitypub.signature import GET_REQUIRED, HttpSignature, VerificationError, is_rfc9421, request_key_id
 from app.activitypub.util import AS_PUBLIC, host_of
 from app.models import Community, CommunityMember, User, UserFollower
+from app.utils import is_activitypub_request
 
 ADDRESS_FIELDS = ('to', 'cc', 'audience', 'bto', 'bcc')
 
@@ -153,3 +154,35 @@ def audience_entitles(addressees: list[str], requester, local_actor=None) -> boo
     if local_actor is not None and _followers_url(local_actor) in lowered:
         return _hosts_a_follower(local_actor, requester, requester_host)
     return False
+
+
+# Routes secure mode never refuses: the instance actor (whose key a peer needs before it can sign anything at all),
+# WebFinger and NodeInfo. A prefix ending in '/' matches by prefix; one without matches exactly or as a whole
+# path segment, so '/actor' covers '/actor/outbox' and '/actor/inbox' but not '/actors'.
+SIGNED_FETCH_EXEMPT_PREFIXES = ('/actor', '/.well-known/', '/nodeinfo/')
+
+
+def signed_fetch_exempt(path: str) -> bool:
+    for prefix in SIGNED_FETCH_EXEMPT_PREFIXES:
+        if prefix.endswith('/'):
+            if path.startswith(prefix):
+                return True
+        elif path == prefix or path.startswith(prefix + '/'):
+            return True
+    return False
+
+
+def signed_fetch_refusal():
+    """The 401 secure mode answers an ActivityPub GET or HEAD that no actor stored here validly signed, else None.
+
+    Never fetches: a signer this instance has not seen is refused until it is learned of some other way."""
+    if request.method not in ('GET', 'HEAD') or not is_activitypub_request():
+        return None
+    site = getattr(g, 'site', None)
+    if site is None or not site.require_signed_fetch:
+        return None
+    if signed_fetch_exempt(request.path) or signed_requester_actor() is not None:
+        return None
+    response = make_response('', 401)
+    response.headers['Cache-Control'] = 'no-store'
+    return response

@@ -7,6 +7,7 @@ from flask_login import current_user
 from flask_wtf.csrf import generate_csrf
 
 from app import db
+from app.activitypub.entitlement import signed_fetch_refusal
 from app.community.live import post_community_link
 import pendulum
 from flask import session, g, json, request, current_app
@@ -118,6 +119,9 @@ def register_request_hooks(app):
                             ORDER BY id"""),
                     {'role_admin_name': ROLE_ADMIN_NAME}).scalars())  # D481: by name, as is_admin()
                 set_setting('admin_ids', g.admin_ids)
+            refusal = signed_fetch_refusal()   # S6 secure mode: an unsigned ActivityPub fetch is refused
+            if refusal is not None:
+                return refusal
 
         if current_user.is_authenticated:
             current_user.last_seen = utcnow()

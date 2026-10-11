@@ -1,0 +1,172 @@
+"""Phase S6 of the security track: secure mode. With Site.require_signed_fetch on, an ActivityPub GET or HEAD that
+no stored actor validly signed gets 401. The instance actor, WebFinger and NodeInfo stay open; HTML is never
+affected. Spec: "Secure mode". Review Focus 4.
+"""
+import importlib.util
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+from flask import g
+from sqlalchemy import inspect, text
+
+from app import db
+from app.activitypub.entitlement import signed_fetch_exempt, signed_fetch_refusal
+from app.models import Site
+from tests.factories import a_keypair, make_instance, make_site, make_user
+from tests.test_ap_content_objects import AP_ACCEPT, _double_the_delegates, ap_get, browser_get, seed_local_post, \
+    signed_ap_get
+
+MIGRATION = Path(__file__).resolve().parent.parent / 'migrations' / 'versions' / 'd9f3b7a15c2e_site_require_signed_fetch.py'
+UA = 'Test (+https://peer2.example)'
+
+
+# --- the exemption and the refusal, unit level ---
+
+@pytest.mark.parametrize('path, exempt', [
+    ('/actor', True), ('/actor/outbox', True), ('/actor/inbox', True),
+    ('/.well-known/webfinger', True), ('/.well-known/nodeinfo', True),
+    ('/nodeinfo/2.0', True), ('/nodeinfo/2.1.json', True),
+    ('/actors', False), ('/actorx/outbox', False), ('/nodeinfo', False), ('/post/1', False), ('/u/alice', False),
+])
+def test_the_exempt_routes(path, exempt):
+    assert signed_fetch_exempt(path) is exempt
+
+
+def _refusal(app, path='/post/1', method='GET', accept=AP_ACCEPT, secure=True):
+    """g lives on the app context, which the session-wide app fixture keeps pushed: drop g.site after, or it leaks."""
+    with app.test_request_context(path, method=method, headers={'Accept': accept}):
+        g.site = SimpleNamespace(require_signed_fetch=secure)
+        try:
+            return signed_fetch_refusal()
+        finally:
+            g.pop('site', None)
+
+
+@pytest.mark.parametrize('method', ['GET', 'HEAD'])
+def test_an_unsigned_activitypub_fetch_is_refused_with_a_no_store_401(app, method):
+    response = _refusal(app, method=method)
+
+    assert response.status_code == 401
+    assert response.headers['Cache-Control'] == 'no-store'
+
+
+@pytest.mark.parametrize('kwargs', [{'method': 'POST'}, {'accept': 'text/html'}, {'secure': False},
+                                    {'path': '/actor/outbox'}, {'path': '/.well-known/nodeinfo'}])
+def test_nothing_else_is_refused(app, kwargs):
+    assert _refusal(app, **kwargs) is None
+
+
+def test_a_request_with_no_site_loaded_is_not_refused(app):
+    """/inbox and /static/ never load g.site."""
+    with app.test_request_context('/post/1', headers={'Accept': AP_ACCEPT}):
+        g.pop('site', None)    # whatever an earlier request on the shared app context left behind
+        assert signed_fetch_refusal() is None
+
+
+# --- through the real request hook ---
+
+@pytest.fixture
+def secure_post(app, db_session, monkeypatch):
+    calls = _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    db.session.get(Site, 1).require_signed_fetch = True
+    db.session.commit()
+    return SimpleNamespace(post=post, calls=calls)
+
+
+def test_secure_mode_refuses_an_unsigned_fetch_of_a_post(app, secure_post):
+    response = ap_get(app, f'/post/{secure_post.post.id}')
+
+    assert response.status_code == 401
+    assert response.headers['Cache-Control'] == 'no-store'
+
+
+def test_secure_mode_refuses_an_unsigned_head_like_a_get(app, secure_post):
+    with app.test_client() as client:
+        assert client.head(f'/post/{secure_post.post.id}', headers={'Accept': AP_ACCEPT}).status_code == 401
+
+
+def test_secure_mode_serves_a_signer_stored_here(app, secure_post):
+    signer = make_user(make_instance('peer2.example'), 'bob', with_keys=True)
+
+    assert signed_ap_get(app, f'/post/{secure_post.post.id}', signer, UA).status_code == 200
+
+
+def test_secure_mode_refuses_a_signer_never_seen_here(app, secure_post):
+    """No fetch on the request path: an unknown signer is as good as no signature."""
+    private_key, _public = a_keypair()
+    ghost = SimpleNamespace(private_key=private_key, ap_profile_id='https://unknown.example/users/ghost')
+
+    assert signed_ap_get(app, f'/post/{secure_post.post.id}', ghost, UA).status_code == 401
+
+
+def test_secure_mode_leaves_a_browser_alone(app, secure_post):
+    response = browser_get(app, f'/post/{secure_post.post.id}')
+
+    assert response.status_code == 200
+    assert len(secure_post.calls['show_post']) == 1
+
+
+def test_secure_mode_leaves_nodeinfo_open(app, secure_post):
+    assert ap_get(app, '/.well-known/nodeinfo').status_code == 200
+
+
+@pytest.mark.parametrize('path', ['/actor', '/actor/outbox', '/.well-known/webfinger?resource=acct:{server}@{server}',
+                                  '/.well-known/nodeinfo', '/nodeinfo/2.0'])
+def test_secure_mode_leaves_every_exempt_route_open_end_to_end(app, secure_post, path):
+    """P13: a peer must reach the instance actor, WebFinger and NodeInfo unsigned, or it can never learn a key."""
+    server = app.config['SERVER_NAME']
+
+    assert ap_get(app, path.format(server=server)).status_code != 401
+
+
+def test_with_secure_mode_off_an_unsigned_fetch_is_served(app, db_session, monkeypatch):
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+
+    assert ap_get(app, f'/post/{post.id}').status_code == 200
+
+
+# --- the migration ---
+
+def _load_migration():
+    spec = importlib.util.spec_from_file_location('require_signed_fetch_migration', MIGRATION)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _column(connection):
+    return next((c for c in inspect(connection).get_columns('site') if c['name'] == 'require_signed_fetch'), None)
+
+
+def test_require_signed_fetch_is_not_null_and_defaults_to_false(app):
+    with db.engine.connect() as connection:
+        column = _column(connection)
+    assert column is not None
+    assert column['nullable'] is False
+    assert 'false' in column['default'].lower()
+
+
+def test_downgrade_then_upgrade_restores_the_column_off(app, db_session):
+    make_site()
+    db.session.commit()
+    db.session.close()    # nothing of the session's may still hold a lock on site
+    migration = _load_migration()
+    assert migration.down_revision == 'e5c1d8a2b7f9'
+
+    with db.engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            connection.execute(text("SET LOCAL lock_timeout = '5s'"))
+            with Operations.context(MigrationContext.configure(connection)):
+                migration.downgrade()
+                assert _column(connection) is None
+                migration.upgrade()
+            assert _column(connection)['nullable'] is False
+            assert connection.execute(text('SELECT require_signed_fetch FROM site WHERE id = 1')).scalar() is False
+        finally:
+            transaction.rollback()
