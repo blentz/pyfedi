@@ -1088,6 +1088,10 @@ def refresh_community_profile_task(community_id, activity_json=None):
                     community.nsfw = activity_json['sensitive'] if 'sensitive' in activity_json else False
                     if 'nsfl' in activity_json and activity_json['nsfl']:
                         community.nsfl = activity_json['nsfl']
+                    if not remote:   # R203: the site's switch wins, as on the local edit path (app/shared/community.py)
+                        site = session.get(Site, 1)
+                        community.nsfw = bool(community.nsfw) and getattr(site, 'enable_nsfw', None) is not False
+                        community.nsfl = bool(community.nsfl) and getattr(site, 'enable_nsfl', None) is not False
                     # D1374. `activity_json['name'].strip()`. Absent was KeyError,
                     # a non-string was AttributeError and a value wider than
                     # String(256) was DataError -- and this task re-raises after
