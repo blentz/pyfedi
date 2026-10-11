@@ -13,7 +13,7 @@ from sqlalchemy.orm import aliased
 
 from app import db
 from app.constants import VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC, VISIBILITY_UNLISTED
-from app.models import ModLog, Post, PostReply, UserFollower
+from app.models import Instance, ModLog, Post, PostReply, User, UserFollower
 
 OPEN_VISIBILITIES = (VISIBILITY_PUBLIC, VISIBILITY_UNLISTED)
 
@@ -41,6 +41,22 @@ def is_open(obj) -> bool:
     with no `visibility` (a user, a community) counts as open, as a NULL value does in `can_view`."""
     visibility = getattr(obj, 'visibility', None)
     return visibility is None or visibility in OPEN_VISIBILITIES
+
+
+def follower_instances(user) -> list:
+    """The remote instances holding at least one ACCEPTED follower of local `user`: where a followers-only object of
+    theirs is delivered (Amendment B, S7.2). Unlike `User.following_instances`, a pending or refused follow does not
+    count, and nor does a follow in the other direction."""
+    return (db.session.query(Instance)
+            .join(User, User.instance_id == Instance.id)
+            .join(UserFollower, UserFollower.remote_user_id == User.id)
+            .filter(UserFollower.local_user_id == user.id,
+                    UserFollower.is_inward.is_(True),
+                    UserFollower.is_accepted.is_(True),
+                    Instance.id != 1,
+                    Instance.dormant.is_(False),
+                    Instance.gone_forever.is_(False))
+            .distinct().all())
 
 
 def post_title_for(post, viewer_id: Optional[int]) -> str:

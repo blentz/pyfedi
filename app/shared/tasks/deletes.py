@@ -3,7 +3,7 @@ from app.activitypub.signature import default_context, send_post_request
 from app.constants import NOTIF_REPORT, NOTIF_REPORT_ESCALATION
 from app.models import Community, Instance, Post, PostReply, User, UserFollower, File, Notification, ChatMessage
 from app.utils import gibberish, instance_banned, get_task_session, patch_db_session
-from app.visibility import is_open
+from app.visibility import follower_instances, is_open
 
 from flask import current_app
 from sqlalchemy import Integer
@@ -143,8 +143,15 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
     #        return
 
     delete_id = f"{current_app.config['SERVER_URL']}/activities/delete/{gibberish(15)}"
-    to = ["https://www.w3.org/ns/activitystreams#Public"]
-    cc = [community.public_url()]
+    # Amendment B (S7.2): the Delete of a followers-only object in a local community goes where the object went --
+    # the author's followers -- with no Public. A remote community is the object's home (R-a) and is unchanged.
+    followers_only_local = community.is_local() and not is_open(object)
+    if followers_only_local:
+        to = [user.followers_url()]
+        cc = []
+    else:
+        to = ["https://www.w3.org/ns/activitystreams#Public"]
+        cc = [community.public_url()]
     delete = {
       'id': delete_id,
       'type': 'Delete',
@@ -157,6 +164,8 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
     }
     if reason:
         delete['summary'] = reason
+    if followers_only_local:
+        del delete['audience']
 
     if is_restore:
         del delete['@context']
@@ -171,6 +180,8 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
           'to': to,
           'cc': cc
         }
+        if followers_only_local:
+            del undo['audience']
 
     domains_sent_to = []
 
@@ -212,6 +223,8 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
     if is_post and followers and not reason:
         payload = undo if is_restore else delete
         for follower in followers:
+            if followers_only_local and not (follower.is_inward and follower.is_accepted is True):
+                continue    # only accepted followers ever received a followers-only post
             # remote_user_id is a nullable FK, so a follower row can carry no
             # account at all. The None is kept OUT of .get() rather than handed
             # to it: SQLAlchemy warns that a fully NULL primary key identity
@@ -223,8 +236,11 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
                             if follower.remote_user_id else None)
             if user_details:
                 payload['cc'].append(user_details.public_url())
-        instances = session.query(Instance).join(User, User.instance_id == Instance.id).join(UserFollower, UserFollower.remote_user_id == User.id)
-        instances = instances.filter(UserFollower.local_user_id == user.id).filter(Instance.gone_forever == False, Instance.dormant == False)
+        if followers_only_local:
+            instances = follower_instances(user)
+        else:
+            instances = session.query(Instance).join(User, User.instance_id == Instance.id).join(UserFollower, UserFollower.remote_user_id == User.id)
+            instances = instances.filter(UserFollower.local_user_id == user.id).filter(Instance.gone_forever == False, Instance.dormant == False)
         for instance in instances:
             if instance.inbox and instance.domain not in domains_sent_to:
                 send_post_request(instance.inbox, payload, user.private_key, user.public_url() + '#main-key')

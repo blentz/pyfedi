@@ -7,7 +7,7 @@ from app.constants import POST_TYPE_LINK, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, PO
 from app.models import Instance, Notification, Poll, PollChoice, Post, User, UserFollower, utcnow, Event, \
     Community, more_info_link
 from app.user.utils import search_for_user
-from app.visibility import can_view
+from app.visibility import can_view, follower_instances, is_open
 from app.utils import user_banned_from_community, gibberish, instance_banned, ap_datetime, get_recipient_language, get_task_session, \
     patch_db_session, TaskError
 
@@ -167,7 +167,12 @@ def send_post(post_id, edit=False, session=None):
         type = 'Event'
     else:
         type = 'Page'
-    to = [community.public_url(), "https://www.w3.org/ns/activitystreams#Public"]
+    # Amendment B (S7.2): a followers-only post is addressed to the author's followers, never to Public or the community
+    followers_only = not is_open(post)
+    if followers_only:
+        to = [user.followers_url()]
+    else:
+        to = [community.public_url(), "https://www.w3.org/ns/activitystreams#Public"]
     cc = []
     tag = post.tags_for_activitypub()
     for recipient in recipients:
@@ -204,7 +209,7 @@ def send_post(post_id, edit=False, session=None):
       'stickied': post.sticky,
       'interactionPolicy': {
         'canQuote': {
-          'automaticApproval': ['https://www.w3.org/ns/activitystreams#Public']
+          'automaticApproval': [user.public_url()] if followers_only else ['https://www.w3.org/ns/activitystreams#Public']
         }
       },
     }
@@ -265,6 +270,9 @@ def send_post(post_id, edit=False, session=None):
       '@context': default_context(),
       'audience': community.public_url()
     }
+    if followers_only:      # no community audience: Lemmy-likes would file it as a community post
+        del page['audience']
+        del create['audience']
 
     domains_sent_to = [current_app.config['SERVER_NAME']]
 
@@ -272,7 +280,9 @@ def send_post(post_id, edit=False, session=None):
     # if the community is local, and remote instance is something like Mastodon, Announce creates (so the community Boosts it), but send updates directly and from the user
     # Announce of Poll doesn't work for Mastodon, so don't add domain to domains_sent_to, so they receive it if they're also following the User or they get Mentioned
     # if the community is remote, send activity directly
-    if not community.local_only:  # pragma: no branch -- see proof in test_shared_tasks_send_post.py
+    if followers_only:
+        pass    # S7.2: it never reaches the community's followers, so the community never Announces it
+    elif not community.local_only:  # pragma: no branch -- see proof in test_shared_tasks_send_post.py
         if community.is_local():
             del create['@context']
 
@@ -343,7 +353,10 @@ def send_post(post_id, edit=False, session=None):
                 send_post_request(recipient.instance.inbox, create, user.private_key, user.public_url() + '#main-key')
                 domains_sent_to.append(recipient.instance.domain)
 
-    followers = session.query(UserFollower).filter_by(local_user_id=post.user_id, is_inward=True).all()
+    follower_query = session.query(UserFollower).filter_by(local_user_id=post.user_id, is_inward=True)
+    if followers_only:      # a pending follower has not been let in yet
+        follower_query = follower_query.filter_by(is_accepted=True)
+    followers = follower_query.all()
     if not followers:
         return
 
@@ -358,8 +371,9 @@ def send_post(post_id, edit=False, session=None):
         if user_details:
             create['cc'].append(user_details.public_url())
 
-    for instance in user.following_instances():
-        if instance.domain not in domains_sent_to and instance.id != 1 and instance.software != 'piefed':
+    # a followers-only post got no Announce, so a piefed follower host has nothing yet and is sent the Create too
+    for instance in (follower_instances(user) if followers_only else user.following_instances()):
+        if instance.domain not in domains_sent_to and instance.id != 1 and (followers_only or instance.software != 'piefed'):
             if instance.inbox and instance.online() and not user.has_blocked_instance(instance.id) and not instance_banned(instance.domain):
                 send_post_request(instance.inbox, create, user.private_key, user.public_url() + '#main-key')
 
