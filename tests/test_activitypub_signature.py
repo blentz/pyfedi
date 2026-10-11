@@ -668,7 +668,7 @@ def test_an_async_request_returns_the_parts_instead_of_sending(app):
 
     private_key, _ = RsaKeys.generate_keypair()
 
-    with patch('app.activitypub.signature.httpx_client') as client:
+    with patch('app.activitypub.signature._capped_request') as client:
         uri, headers, body_bytes = HttpSignature.signed_request(
             'https://remote.example/inbox', {'id': 'x'}, private_key,
             'https://local.example/u/alice#main-key', send_via_async=True)
@@ -676,7 +676,7 @@ def test_an_async_request_returns_the_parts_instead_of_sending(app):
     assert uri == 'https://remote.example/inbox'
     assert 'Signature' in headers
     assert b'"id": "x"' in body_bytes or b'"id":"x"' in body_bytes
-    assert client.request.call_count == 0
+    assert client.call_count == 0
 
 
 def test_a_document_with_no_signature_section_is_a_format_error(app):
@@ -761,7 +761,7 @@ def _signed_headers(app, private_key, key_id, body=b'{"type": "Create"}', algori
     from app.activitypub.signature import HttpSignature
     # the destination cannot be a .local host: is_invalid_get_request_uri
     # (app/utils.py:5503) rejects those outright unless the app is in debug
-    with patch('app.activitypub.signature.httpx_client'):
+    with patch('app.activitypub.signature._capped_request'):
         uri, headers, sent = HttpSignature.signed_request(
             'https://remote.example/inbox', None, private_key, key_id,
             send_via_async=True)
@@ -858,7 +858,7 @@ def test_a_get_request_signs_no_body_and_asks_for_json_ld(app):
 
     private_key, _ = RsaKeys.generate_keypair()
 
-    with patch('app.activitypub.signature.httpx_client'):
+    with patch('app.activitypub.signature._capped_request'):
         uri, headers, body_bytes = HttpSignature.signed_request(
             'https://remote.example/outbox', None, private_key, 'kid',
             method='get', send_via_async=True)
@@ -868,28 +868,26 @@ def test_a_get_request_signs_no_body_and_asks_for_json_ld(app):
     assert headers['Accept'] == 'application/ld+json'
 
 
-def test_a_transport_error_is_reraised_with_the_url(app):
+@pytest.mark.parametrize('failure', [httpx.ConnectError('refused'), httpx.InvalidURL('bad url')])
+def test_a_transport_error_is_reraised_with_the_url(app, http_mock, failure):
     """signature.py:517-519 rewraps httpx's error so the log names the url;
     the assertion reads the message, which is the only thing the rewrap adds.
+    InvalidURL comes back from _capped_request as RequestNotSendable, which
+    carries no request: the url is then the one asked for.
     """
-    from unittest.mock import patch
-    import httpx
     from app.activitypub.signature import HttpSignature, RsaKeys
 
     private_key, _ = RsaKeys.generate_keypair()
-    failure = httpx.ConnectError('refused')
-    failure.request = httpx.Request('POST', 'https://remote.example/inbox')
+    http_mock.post('https://remote.example/inbox').mock(side_effect=failure)
 
-    with patch('app.activitypub.signature.httpx_client') as client:
-        client.request.side_effect = failure
-        with pytest.raises(httpx.HTTPError, match='HTTP Exception for https://remote.example/inbox'):
-            HttpSignature.signed_request('https://remote.example/inbox', {'id': 'x'},
-                                         private_key, 'kid')
+    with pytest.raises(httpx.HTTPError, match='HTTP Exception for https://remote.example/inbox'):
+        HttpSignature.signed_request('https://remote.example/inbox', {'id': 'x'},
+                                     private_key, 'kid')
 
 
 @pytest.mark.parametrize('status', [400, 403, 404, 410, 418, 500])
 @pytest.mark.parametrize('method', ['post', 'POST'])
-def test_a_status_is_always_returned_rather_than_raised(app, status, method):
+def test_a_status_is_always_returned_rather_than_raised(app, http_mock, status, method):
     """D1322. This used to read
     `test_a_client_error_on_a_post_is_raised_but_404_and_5xx_are_returned`, and
     it pinned a branch that raised ValueError for a 4xx POST -- reaching it by
@@ -908,26 +906,16 @@ def test_a_status_is_always_returned_rather_than_raised(app, status, method):
     Both spellings of the method are asserted, so the removal holds for the
     entry point the old test used as well as the one callers use.
     """
-    from unittest.mock import patch
     from app.activitypub.signature import HttpSignature, RsaKeys
 
     private_key, _ = RsaKeys.generate_keypair()
+    http_mock.post('https://remote.example/inbox').respond(status, content=b'body')
 
-    class _Resp:
-        def __init__(self, code):
-            self.status_code = code
-            self.content = b'body'
+    result = HttpSignature.signed_request('https://remote.example/inbox',
+                                          {'id': 'x'}, private_key, 'kid',
+                                          method=method)
 
-        def close(self):
-            pass
-
-    with patch('app.activitypub.signature.httpx_client') as client:
-        client.request.return_value = _Resp(status)
-        result = HttpSignature.signed_request('https://remote.example/inbox',
-                                              {'id': 'x'}, private_key, 'kid',
-                                              method=method)
-
-    assert result.status_code == status
+    assert (result.status_code, result.content) == (status, b'body')
 
 
 def test_a_signed_get_is_the_same_request_without_a_body(app):
@@ -1060,7 +1048,7 @@ def test_a_body_that_already_carries_a_context_is_signed_unchanged(app):
     private_key, _ = RsaKeys.generate_keypair()
     body = {'id': 'x', '@context': ['https://example.test/ns']}
 
-    with patch('app.activitypub.signature.httpx_client'):
+    with patch('app.activitypub.signature._capped_request'):
         uri, headers, body_bytes = HttpSignature.signed_request(
             'https://remote.example/inbox', body, private_key, 'kid', send_via_async=True)
 
@@ -1152,27 +1140,21 @@ def test_the_ban_handler_runs_only_for_a_400(app, db_session):
     assert _log().result == 'failure'
 
 
-def test_a_client_error_on_a_GET_is_returned_rather_than_raised(app):
+def test_a_client_error_on_a_GET_is_returned_rather_than_raised(app, http_mock):
     """signed_request raises for a 4xx only when the method is POST
     (signature.py:520-523). A GET that 400s comes back as a response for the
     caller to read, which is what a webfinger lookup against a hostile peer
     looks like.
     """
-    from unittest.mock import patch
     from app.activitypub.signature import HttpSignature, RsaKeys
 
     private_key, _ = RsaKeys.generate_keypair()
+    http_mock.get('https://remote.example/u/bob').respond(400, content=b'nope')
 
-    class _Resp:
-        status_code = 400
-        content = b'nope'
+    result = HttpSignature.signed_request('https://remote.example/u/bob', None,
+                                          private_key, 'kid', method='get')
 
-    with patch('app.activitypub.signature.httpx_client') as client:
-        client.request.return_value = _Resp()
-        result = HttpSignature.signed_request('https://remote.example/u/bob', None,
-                                              private_key, 'kid', method='get')
-
-    assert result.status_code == 400
+    assert (result.status_code, result.content) == (400, b'nope')
 
 
 def _network_down(monkeypatch):
