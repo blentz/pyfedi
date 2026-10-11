@@ -2125,7 +2125,7 @@ def allowed_instance_domains() -> List[str]:
 
 def retrieve_block_list():
     try:
-        response = httpx_client.get('https://raw.githubusercontent.com/rimu/no-qanon/master/domains.txt', timeout=1)
+        response = _capped_get('https://raw.githubusercontent.com/rimu/no-qanon/master/domains.txt', timeout=1)
     except:
         return None
     if response and response.status_code == 200:
@@ -2134,7 +2134,7 @@ def retrieve_block_list():
 
 def retrieve_peertube_block_list():
     try:
-        response = httpx_client.get('https://peertube_isolation.frama.io/list/peertube_isolation.json', timeout=1)
+        response = _capped_get('https://peertube_isolation.frama.io/list/peertube_isolation.json', timeout=1)
     except:
         return None
     list = ''
@@ -3528,7 +3528,7 @@ def url_to_thumbnail_file(filename) -> File:
         return None
     try:
         timeout = 15 if 'washingtonpost.com' in filename else 5  # Washington Post is really slow for some reason
-        response = httpx_client.get(filename, timeout=timeout)
+        response = _capped_get(filename, timeout=timeout, max_bytes=MEDIA_MAX_BYTES, max_seconds=MEDIA_MAX_SECONDS)
     except:
         return None
 

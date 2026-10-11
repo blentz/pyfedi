@@ -2069,7 +2069,7 @@ class TestGenericOpengraphArm:
       - the HEAD on the submitted url, from `:601`'s `is_image_url`;
       - the GET on the submitted url, from `:642`'s `opengraph_parse`;
       - the GET on the OG:IMAGE url, from `:646`'s `url_to_thumbnail_file`
-        (app/utils.py:3015), which goes through `httpx_client.get` DIRECTLY
+        (app/utils.py:3015), which goes through `_capped_get` DIRECTLY
         rather than through `get_request`.
 
     A test that does not reach the third must not register it, and a test that
