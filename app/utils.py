@@ -193,7 +193,8 @@ def _capped_get(uri, params=None, headers=None, timeout=10, max_bytes: int = FET
     deadline of max_seconds over the whole download; timeout is the per-read timeout. A declared Content-Length over
     the cap is refused before reading. Only gzip and deflate are offered (Accept-Encoding), and a compressed body is
     inflated here, from the raw bytes, in steps of at most _DECODE_STEP that never pass the bytes left in the cap --
-    so a gzip bomb is refused having inflated at most max_bytes plus one step. Returns an httpx.Response built from
+    so a gzip bomb is refused having inflated at most max_bytes plus one step. The raw bytes read are capped at
+    max_bytes too, and anything after the end of a compressed stream is refused. Returns an httpx.Response built from
     the bytes read: the peer's status and headers (less _WIRE_HEADERS), the decoded body, and the request.
 
     Raises only httpx.HTTPError subclasses: ResponseTooLarge over the cap or past the deadline, UnreadableEncoding for
@@ -216,14 +217,22 @@ def _capped_get(uri, params=None, headers=None, timeout=10, max_bytes: int = FET
             compressed = encoding not in ('', 'identity')
             decoder = None
             body = bytearray()
+            wire_bytes = 0
             for chunk in response.iter_raw():
+                # The raw bytes count too: a compressed body can carry data that inflates to nothing (empty
+                # deflate blocks), and compressed input as large as the decoded cap is never one we want.
+                wire_bytes += len(chunk)
+                if wire_bytes > max_bytes:
+                    raise ResponseTooLarge(f'{uri} sent a body over the cap of {max_bytes} bytes')
                 if not compressed:
                     body.extend(chunk)
                 else:
                     if decoder is None:
                         decoder = _decompressor(encoding, chunk)
+                    elif decoder.eof:
+                        raise ResponseTooLarge(f'{uri} sent data after the end of its {encoding} stream')
                     data = chunk
-                    while data:   # whatever one step leaves unread is fed back in until the chunk is consumed
+                    while data and not decoder.eof:   # what one step leaves unread is fed back in
                         try:
                             body.extend(decoder.decompress(data, min(_DECODE_STEP, max_bytes - len(body) + 1)))
                         except zlib.error as error:
@@ -232,6 +241,8 @@ def _capped_get(uri, params=None, headers=None, timeout=10, max_bytes: int = FET
                         if len(body) > max_bytes:
                             break
                         data = decoder.unconsumed_tail
+                    if decoder.unused_data:   # zlib holds what follows the end of the stream here, uncounted
+                        raise ResponseTooLarge(f'{uri} sent data after the end of its {encoding} stream')
                 if len(body) > max_bytes:
                     raise ResponseTooLarge(f'{uri} sent a body over the cap of {max_bytes} bytes')
                 if time.monotonic() > deadline:

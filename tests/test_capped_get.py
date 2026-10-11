@@ -314,6 +314,51 @@ class TestCompressedBodies:
 
         assert _capped_get(URI).content == document
 
+    def test_endless_data_after_the_end_of_the_gzip_stream_is_refused_at_once(self, app, http_mock, sleeps):
+        """zlib keeps whatever follows the end of the stream in unused_data and outputs nothing, so a decoded-byte
+        count alone never fired: a valid gzip of `{}` then junk at line rate grew memory until the deadline."""
+        pulled = []
+
+        def junk_after_the_end():
+            pulled.append(1)
+            yield gzip.compress(b'{}') + b'junk' * 100
+            while True:
+                pulled.append(1)
+                yield b'j' * CHUNK
+
+        http_mock.get(URI).respond(200, content=junk_after_the_end(), headers={'Content-Encoding': 'gzip'})
+
+        with pytest.raises(ResponseTooLarge, match='after the end'):
+            get_request(URI)
+        assert len(pulled) == 1
+
+    def test_a_chunk_after_the_end_of_the_stream_is_refused(self, app, http_mock):
+        http_mock.get(URI).respond(200, content=iter([gzip.compress(b'{}'), b'more']),
+                                   headers={'Content-Encoding': 'gzip'})
+
+        with pytest.raises(ResponseTooLarge, match='after the end'):
+            _capped_get(URI)
+
+    @pytest.mark.parametrize('header', [b'\x78\x9c', b''])   # zlib-wrapped, raw
+    def test_an_endless_run_of_empty_deflate_blocks_is_refused_by_its_raw_size(self, app, http_mock, sleeps,
+                                                                                header):
+        """Empty non-final stored blocks inflate to nothing and never end the stream: only the raw bytes read count
+        them, and they are refused once those pass the cap -- not at the deadline."""
+        empty_blocks = b'\x00\x00\x00\xff\xff' * (CHUNK // 5)
+        pulled = []
+
+        def endless():
+            yield header
+            while True:
+                pulled.append(1)
+                yield empty_blocks
+
+        http_mock.get(URI).respond(200, content=endless(), headers={'Content-Encoding': 'deflate'})
+
+        with pytest.raises(ResponseTooLarge, match='over the cap'):
+            get_request(URI)
+        assert len(pulled) * len(empty_blocks) <= FETCH_MAX_BYTES + len(empty_blocks)
+
     def test_a_body_decoded_to_exactly_the_cap_is_read(self, app, http_mock):
         http_mock.get(URI).respond(200, content=gzip.compress(b'x' * 1000), headers={'Content-Encoding': 'gzip'})
 
@@ -324,6 +369,8 @@ class TestCompressedBodies:
         too. Real zlib holds back only a few bytes, so a decompressor whose flush returns more stands in."""
         class HoldsBack:
             unconsumed_tail = b''
+            unused_data = b''
+            eof = False
 
             def decompress(self, data, max_length=0):
                 return b''
