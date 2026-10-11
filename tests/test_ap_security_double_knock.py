@@ -13,9 +13,10 @@ from app.activitypub import signature_rfc9421 as rfc9421
 from app.activitypub.signature import HttpSignature, double_knock, post_request, signed_get_capped, \
     signed_get_request
 from app.models import ActivityPubLog, Instance, SendQueue
-from app.utils import FETCH_MAX_BYTES, ResponseTooLarge
+from app.utils import FETCH_MAX_BYTES, ResponseTooLarge, _DECODE_STEP, _capped_request
 from tests.factories import a_keypair, make_instance
 from tests.test_ap_security_rfc9421 import GET_COMPONENTS, POST_COMPONENTS
+from tests.test_capped_get import _RecordingZlib
 
 INBOX = 'https://peer.example/inbox'
 KEY_ID = 'https://test.piefed.local/u/alice#main-key'
@@ -129,29 +130,62 @@ class TestPostRequest:
         assert SendQueue.query.count() == 0
 
 
-    @pytest.mark.parametrize('answer', [
-        lambda: httpx.Response(202, content=(b' ' * 65536 for _ in iter(int, 1))),           # endless
-        lambda: httpx.Response(202, content=gzip.compress(b'\0' * (20 * FETCH_MAX_BYTES)),   # gzip bomb
-                               headers={'Content-Encoding': 'gzip'}),
-    ])
-    def test_a_huge_answer_to_a_delivery_is_a_delivery_not_a_requeue(self, app, db_session, http_mock, answer):
-        """signed_request used to buffer the inbox's whole answer. Now the body is capped and dropped, the status
-        kept: the activity was delivered, so it is logged a success and not queued to be sent again."""
+    def test_an_endless_answer_to_a_delivery_is_a_delivery_not_a_requeue(self, app, db_session, http_mock):
+        """Guards the keep_status wiring and the cap at delivery level: signed_request used to buffer the inbox's
+        whole answer, so an endless one never returned. Now the body is capped and dropped, the status kept -- the
+        activity was delivered, so it is logged a success and not queued to be sent again."""
         make_instance('peer.example')
-        route = http_mock.post(INBOX).mock(side_effect=lambda request: answer())
+        pulled = []
+
+        def endless():
+            while True:
+                pulled.append(1)
+                yield b' ' * 65536
+
+        route = http_mock.post(INBOX).respond(202, content=endless())
 
         post_request(uri=INBOX, body=_body(), private_key=a_keypair()[0], key_id=KEY_ID)
 
         assert route.call_count == 1
+        assert len(pulled) * 65536 <= FETCH_MAX_BYTES + 65536
+        assert ActivityPubLog.query.one().result == 'success'
+        assert SendQueue.query.count() == 0
+
+    def test_a_gzip_bomb_answer_is_inflated_only_to_the_cap(self, app, db_session, http_mock, monkeypatch):
+        """Guards the bounded decode at delivery level: the answer is inflated by _capped_request's own zlib, in
+        steps, and never past the cap plus one step. The old buffered send inflated all 20 MiB through httpx's
+        decoder, which app.utils.zlib never sees, so `pieces` stayed empty there."""
+        recorder = _RecordingZlib()
+        monkeypatch.setattr('app.utils.zlib', recorder)
+        make_instance('peer.example')
+        http_mock.post(INBOX).respond(202, content=gzip.compress(b'\0' * (20 * FETCH_MAX_BYTES)),
+                                      headers={'Content-Encoding': 'gzip'})
+
+        post_request(uri=INBOX, body=_body(), private_key=a_keypair()[0], key_id=KEY_ID)
+
+        assert recorder.pieces, 'the answer was not decoded by the capped path'
+        assert sum(recorder.pieces) <= FETCH_MAX_BYTES + _DECODE_STEP
         assert ActivityPubLog.query.one().result == 'success'
         assert SendQueue.query.count() == 0
 
     def test_a_delivery_with_no_status_line_by_the_deadline_is_requeued(self, app, db_session, http_mock,
                                                                          monkeypatch):
-        """Nothing came back, so nothing is known to be delivered: a transport failure, queued with backoff."""
+        """Guards that a timeout before any status line stays the transport's own timeout (not converted to
+        ResponseTooLarge, as it is for a GET): nothing came back, so nothing is known to be delivered -- a transport
+        failure, queued with backoff."""
         make_instance('peer.example')
         now = [1000.0]
         monkeypatch.setattr('app.utils.time', SimpleNamespace(**{**vars(time), 'monotonic': lambda: now[0]}))
+        raised = []
+
+        def recording(*args, **kwargs):
+            try:
+                return _capped_request(*args, **kwargs)
+            except Exception as error:
+                raised.append(error)
+                raise
+
+        monkeypatch.setattr('app.activitypub.signature._capped_request', recording)
 
         def stalls(request):
             now[0] += 15
@@ -161,8 +195,35 @@ class TestPostRequest:
 
         post_request(uri=INBOX, body=_body(), private_key=a_keypair()[0], key_id=KEY_ID)
 
-        assert ActivityPubLog.query.one().result == 'failure'
+        assert [type(error) for error in raised] == [httpx.ReadTimeout]
+        log = ActivityPubLog.query.one()
+        assert log.result == 'failure' and 'the deadline for this fetch has passed' in log.exception_message
         assert SendQueue.query.count() == 1
+
+    def test_a_410_with_an_endless_body_still_marks_the_peer_gone(self, app, db_session, http_mock):
+        """Guards that only the status is read once the body is dropped: 410 marks the instance gone forever and
+        empties its SendQueue, whatever the body."""
+        instance = make_instance('peer.example')
+        db.session.add(SendQueue(destination=INBOX, destination_domain='peer.example', actor=KEY_ID,
+                                 private_key='k', payload='{}'))
+        db.session.commit()
+        http_mock.post(INBOX).respond(410, content=(b' ' * 65536 for _ in iter(int, 1)))
+
+        post_request(uri=INBOX, body=_body(), private_key=a_keypair()[0], key_id=KEY_ID)
+
+        db.session.refresh(instance)
+        assert instance.gone_forever is True
+        assert SendQueue.query.count() == 0
+
+    def test_a_503_with_an_endless_body_is_requeued(self, app, db_session, http_mock):
+        """Guards that a dropped body does not hide a retryable status: a 503 is queued with backoff."""
+        make_instance('peer.example')
+        http_mock.post(INBOX).respond(503, content=(b' ' * 65536 for _ in iter(int, 1)))
+
+        post_request(uri=INBOX, body=_body(), private_key=a_keypair()[0], key_id=KEY_ID)
+
+        assert ActivityPubLog.query.one().result == 'failure'
+        assert SendQueue.query.one().destination == INBOX
 
     @pytest.mark.parametrize('error', [httpx.InvalidURL('bad url'), ValueError('bad value'),
                                        httpx.StreamError('stream')])
