@@ -37,7 +37,7 @@ from app.constants import SUBSCRIPTION_NONMEMBER, SUBSCRIPTION_MEMBER, SUBSCRIPT
     SUBSCRIPTION_BANNED, SUBSCRIPTION_PENDING, NOTIF_USER, NOTIF_COMMUNITY, NOTIF_TOPIC, NOTIF_POST, NOTIF_REPLY, \
     NOTIF_FEED, NOTIF_DEFAULT, NOTIF_REPORT, NOTIF_MENTION, POST_STATUS_REVIEWING, \
     POST_STATUS_PUBLISHED, POST_TYPE_VIDEO, INVITE_MEMBERS_ONLY, INVITE_MODS_ONLY, INVITE_OWNER_ONLY, ROLE_ADMIN_NAME, \
-    ROLE_STAFF_NAME
+    ROLE_STAFF_NAME, VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC
 import app as app_pkg
 from app.relays import current_relay_id
 
@@ -4061,8 +4061,13 @@ class PostReply(db.Model):
             parent_id = None
             depth = 0
 
-        visibility = activitypub_visibility(request_json['object']) \
-            if request_json and isinstance(request_json.get('object'), dict) else 'public'
+        if request_json and isinstance(request_json.get('object'), dict):
+            visibility = activitypub_visibility(request_json['object'])
+        elif (in_reply_to is not None and in_reply_to.visibility == VISIBILITY_FOLLOWERS) or \
+                post.visibility == VISIBILITY_FOLLOWERS:
+            visibility = VISIBILITY_FOLLOWERS   # Amendment B (S7.3): a reply under a followers-only parent inherits it
+        else:
+            visibility = VISIBILITY_PUBLIC
 
         reply = PostReply(user_id=user.id, post_id=post.id, parent_id=parent_id,
                           depth=depth,

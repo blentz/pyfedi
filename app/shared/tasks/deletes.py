@@ -4,7 +4,7 @@ from app.constants import NOTIF_REPORT, NOTIF_REPORT_ESCALATION
 from app.models import Community, Instance, Post, PostReply, User, UserFollower, File, Notification, ChatMessage
 from app.utils import gibberish, instance_banned, get_task_session, patch_db_session
 from app.shared.tasks.pages import can_deliver_to, mentioned_users
-from app.visibility import follower_instances, is_open
+from app.visibility import follower_instances, followers_only_reply_instances, is_open
 
 from flask import current_app
 from sqlalchemy import Integer
@@ -155,7 +155,11 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
 
     delete_id = f"{current_app.config['SERVER_URL']}/activities/delete/{gibberish(15)}"
     if followers_only_local:
-        recipients = mentioned_users(object, allow_fetch=False) if is_post else []
+        recipients = mentioned_users(object, allow_fetch=False)
+        if not is_post:     # S7.3: a reply also named the author it answers, as send_reply addressed it
+            parent = session.get(PostReply, object.parent_id) if object.parent_id else object.post
+            recipients = [parent.author] + [recipient for recipient in recipients
+                                            if recipient.id != parent.author.id]
         to = [user.followers_url()]
         cc = [recipient.public_url() for recipient in recipients]
     else:
@@ -230,10 +234,12 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
 
 
     if followers_only_local:
-        # only a local author's instance speaks for the audience; a remote author's post is theirs to delete
-        if is_post and user.is_local():
+        # only a local author's instance speaks for the audience; a remote author's post or reply is theirs to delete.
+        # A reply went to the replier's followers, the parent's author and its mentions (S7.3).
+        if user.is_local():
             payload = undo if is_restore else delete
-            for instance in follower_instances(user) + [recipient.instance for recipient in recipients]:
+            audience = follower_instances(user) if is_post else followers_only_reply_instances(object)
+            for instance in audience + [recipient.instance for recipient in recipients]:
                 if instance.id != 1 and instance.domain not in domains_sent_to and can_deliver_to(user, instance):
                     send_post_request(instance.inbox, payload, user.private_key, user.public_url() + '#main-key')
                     domains_sent_to.append(instance.domain)

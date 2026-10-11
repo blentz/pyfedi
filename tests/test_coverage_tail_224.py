@@ -287,8 +287,8 @@ class TestAnUnresolvableMention:
 
     def test_a_reply_still_sends_when_the_mention_cannot_be_resolved(self, db_session,
                                                                     monkeypatch):
-        """app/shared/tasks/notes.py:100-101."""
-        import app.shared.tasks.notes as notes
+        """send_reply resolves mentions through app/shared/tasks/pages.py:mentioned_users (Task 28)."""
+        import app.shared.tasks.pages as pages
         from tests.test_shared_tasks_send_reply import _seed, _send
 
         calls = []
@@ -297,7 +297,7 @@ class TestAnUnresolvableMention:
         # which was already covered -- and a row using one to cover the other passes while
         # the line stays red, which is how the first version of this test was wrong.
         s = _seed(body='hello @someone@test.piefed.local')
-        monkeypatch.setattr(notes, 'search_for_user', self._raising_spy(calls))
+        monkeypatch.setattr(pages, 'search_for_user', self._raising_spy(calls))
 
         _send(s)
 
