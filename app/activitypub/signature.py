@@ -129,7 +129,8 @@ def post_request(uri: str, body: dict | None, private_key: str, key_id: str,
             log.exception_message = 'empty uri'
         else:
             try:
-                result = HttpSignature.signed_request(uri, body, private_key, key_id, content_type, method, timeout)
+                result = double_knock(uri, lambda signature_format: HttpSignature.signed_request(
+                    uri, body, private_key, key_id, content_type, method, timeout, signature_format=signature_format))
                 http_status_code = result.status_code
                 if result.status_code != 200 and result.status_code != 202 and result.status_code != 204:
                     log.result = 'failure'
@@ -330,6 +331,49 @@ def request_key_id(request) -> str | None:
     if is_rfc9421(request):
         return rfc9421.parse_key_id(request.headers)
     return parse_signature_header(request.headers.get('Signature')).get('keyid') or None
+
+
+# The HTTP signature formats this instance can send (S5). A peer's preference is learned by double-knocking.
+SIGNATURE_FORMATS = ('cavage', 'rfc9421')
+
+
+def _other_signature_format(signature_format: str) -> str:
+    return 'rfc9421' if signature_format == 'cavage' else 'cavage'
+
+
+def _instance_signature_format(domain: str) -> str:
+    session = get_task_session()
+    try:
+        stored = session.query(Instance.signature_format).filter_by(domain=domain).scalar()
+    finally:
+        session.close()
+    return stored if stored in SIGNATURE_FORMATS else 'cavage'
+
+
+def _remember_signature_format(domain: str, signature_format: str) -> None:
+    session = get_task_session()
+    try:
+        session.query(Instance).filter_by(domain=domain).update({'signature_format': signature_format})
+        session.commit()
+    finally:
+        session.close()
+
+
+def double_knock(uri: str, send) -> httpx.Response:
+    """Send in the signature format `uri`'s instance is known to accept; on a 401 try the other format exactly
+    once, remembering it when that succeeds. `send(signature_format)` makes one signed request. The format is read
+    and written in short sessions of their own, so no database connection is held across the HTTP request."""
+    domain = activitypub_util.host_of(uri)
+    signature_format = _instance_signature_format(domain)
+    response = send(signature_format)
+    if response.status_code != 401:
+        return response
+    response.close()
+    alternate = _other_signature_format(signature_format)
+    response = send(alternate)
+    if 200 <= response.status_code < 300:
+        _remember_signature_format(domain, alternate)
+    return response
 
 
 def _fetch_actor_key(actor_url: str) -> str | None:
@@ -636,7 +680,8 @@ class HttpSignature:
             content_type: str = "application/activity+json",
             method: Literal["get", "post"] = "post",
             timeout: int = 5,
-            send_via_async=False
+            send_via_async=False,
+            signature_format: str = 'cavage'
     ):
         """
         Performs a request to the given path, with a document, signed
@@ -646,6 +691,8 @@ class HttpSignature:
             raise ValueError("URI does not contain a scheme")
         if is_invalid_get_request_uri(uri):
             raise ValueError("URI is invalid")
+        if signature_format not in SIGNATURE_FORMATS:
+            raise ValueError(f"Unknown signature format {signature_format}")
         # Create the core header field set
         uri_parts = urlparse(uri)
         date_string = http_date()
@@ -659,39 +706,45 @@ class HttpSignature:
             if '@context' not in body:  # add a default json-ld context if necessary
                 body['@context'] = default_context()
             body_bytes = json.dumps(body).encode("utf8")
-            headers["Digest"] = cls.calculate_digest(body_bytes)
+            if signature_format == 'cavage':  # RFC 9421 sends Content-Digest instead (P5)
+                headers["Digest"] = cls.calculate_digest(body_bytes)
             headers["Content-Type"] = content_type
         else:
             body_bytes = b""
         # GET requests get implicit accept headers added
         if method == "get":
             headers["Accept"] = "application/ld+json"
-        # Sign the headers
-        signed_string = "\n".join(
-            f"{name.lower()}: {value}" for name, value in headers.items()
-        )
+        if signature_format == 'rfc9421':
+            del headers["(request-target)"]
+            # Sign the target URI exactly as it goes on the wire: httpx never sends a fragment
+            headers.update(rfc9421.sign(method, uri_parts._replace(fragment='').geturl(),
+                                        body_bytes if body is not None else None, private_key, key_id))
+        else:
+            # Sign the headers
+            signed_string = "\n".join(
+                f"{name.lower()}: {value}" for name, value in headers.items()
+            )
 
-        private_key_instance = cls._get_private_key_instance(private_key)
+            private_key_instance = cls._get_private_key_instance(private_key)
 
-        # RSA signature generation
-        signature = private_key_instance.sign(
-            signed_string.encode("ascii"),
-            padding.PKCS1v15(),
-            hashes.SHA256(),
-        )
-        headers["Signature"] = cls.compile_signature(
-            {
-                "keyid": key_id,
-                "headers": list(headers.keys()),
-                "signature": signature,
-                "algorithm": "rsa-sha256",
-            }
-        )
+            # RSA signature generation
+            signature = private_key_instance.sign(
+                signed_string.encode("ascii"),
+                padding.PKCS1v15(),
+                hashes.SHA256(),
+            )
+            headers["Signature"] = cls.compile_signature(
+                {
+                    "keyid": key_id,
+                    "headers": list(headers.keys()),
+                    "signature": signature,
+                    "algorithm": "rsa-sha256",
+                }
+            )
+            # Send the request with all those headers except the pseudo one
+            del headers["(request-target)"]
 
         headers["User-Agent"] = f'PieFed/{current_app.config["VERSION"]}; +https://{current_app.config["SERVER_NAME"]}'
-
-        # Send the request with all those headers except the pseudo one
-        del headers["(request-target)"]
         if send_via_async:  # 'async' sending involves passing the data through to the piefed_notifs service. See announce_activity_to_followers().
             return uri, headers, body_bytes
         else:

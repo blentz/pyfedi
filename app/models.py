@@ -707,6 +707,7 @@ class Instance(db.Model):
     nodeinfo_href = db.Column(db.String(100))
     admin_note = db.Column(db.Text)
     popular = db.Column(db.Boolean, default=True)  # New communities from here have their popular flag set
+    signature_format = db.Column(db.String(16), nullable=False, server_default='cavage')  # S5: 'cavage' or 'rfc9421', learned by double-knocking
 
     __table_args__ = (
         Index('ix_instance_created_at_active', created_at.desc(),
