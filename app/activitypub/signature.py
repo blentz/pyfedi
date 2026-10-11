@@ -51,7 +51,7 @@ from pyld import jsonld
 from sqlalchemy import text
 
 import app as app_pkg
-from app import celery, db, httpx_client
+from app import celery, db
 from app.activitypub import signature_rfc9421 as rfc9421
 from app.activitypub.ld_contexts import LDCoverageError, PYFEDI_CONTEXT_TERMS, check_ld_coverage, ld_document_loader, \
     strip_empty_values
@@ -61,7 +61,7 @@ from app.constants import DATETIME_MS_FORMAT
 from app.discovery.instance_answers import record_delivery_refusal
 from app.relays.refusals import record_relay_refusal
 from app.models import utcnow, ActivityPubLog, Community, Instance, CommunityMember, Site, User, SendQueue, public_key_pem
-from app.utils import _capped_get, get_request_capped, get_task_session, is_invalid_get_request_uri
+from app.utils import _capped_get, _capped_request, get_request_capped, get_task_session, is_invalid_get_request_uri
 import app.activitypub.util as activitypub_util
 
 
@@ -806,7 +806,13 @@ class HttpSignature:
             return uri, headers, body_bytes
         else:
             try:
-                response = httpx_client.request(
+                # Through _capped_request, keeping the status: the inbox's answer is read under the 1 MiB cap and
+                # the fetch deadline, and an answer over either is dropped rather than raised -- the activity was
+                # delivered, and raising would have post_request send it again. It never follows a redirect, which
+                # is what `follow_redirects=method == "GET"` here always meant: every caller passes "post" (or
+                # "get") lowercase, and no caller sends a GET through this path any more -- signed GETs only sign
+                # (send_via_async) and fetch through _capped_get.
+                response = _capped_request(
                     method,
                     uri,
                     headers=headers,
@@ -821,11 +827,16 @@ class HttpSignature:
                     # the HTTP signature over the digest requires.
                     content=body_bytes,
                     timeout=timeout,
-                    follow_redirects=method == "GET",
+                    keep_status=True,
                 )
             except httpx.HTTPError as ex:
-                # Convert to a more generic error we handle
-                raise httpx.HTTPError(f"HTTP Exception for {ex.request.url} - {ex}") from None
+                # Convert to a more generic error we handle. RequestNotSendable carries no request, so its url is
+                # the one this was asked to send to.
+                try:
+                    url = ex.request.url
+                except RuntimeError:
+                    url = uri
+                raise httpx.HTTPError(f"HTTP Exception for {url} - {ex}") from None
 
             # D1322. There was a branch here raising ValueError for a 4xx POST.
             # It had never run: `method` is `Literal["get", "post"]` and every

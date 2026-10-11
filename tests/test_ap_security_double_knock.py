@@ -129,6 +129,54 @@ class TestPostRequest:
         assert SendQueue.query.count() == 0
 
 
+    @pytest.mark.parametrize('answer', [
+        lambda: httpx.Response(202, content=(b' ' * 65536 for _ in iter(int, 1))),           # endless
+        lambda: httpx.Response(202, content=gzip.compress(b'\0' * (20 * FETCH_MAX_BYTES)),   # gzip bomb
+                               headers={'Content-Encoding': 'gzip'}),
+    ])
+    def test_a_huge_answer_to_a_delivery_is_a_delivery_not_a_requeue(self, app, db_session, http_mock, answer):
+        """signed_request used to buffer the inbox's whole answer. Now the body is capped and dropped, the status
+        kept: the activity was delivered, so it is logged a success and not queued to be sent again."""
+        make_instance('peer.example')
+        route = http_mock.post(INBOX).mock(side_effect=lambda request: answer())
+
+        post_request(uri=INBOX, body=_body(), private_key=a_keypair()[0], key_id=KEY_ID)
+
+        assert route.call_count == 1
+        assert ActivityPubLog.query.one().result == 'success'
+        assert SendQueue.query.count() == 0
+
+    def test_a_delivery_with_no_status_line_by_the_deadline_is_requeued(self, app, db_session, http_mock,
+                                                                         monkeypatch):
+        """Nothing came back, so nothing is known to be delivered: a transport failure, queued with backoff."""
+        make_instance('peer.example')
+        now = [1000.0]
+        monkeypatch.setattr('app.utils.time', SimpleNamespace(**{**vars(time), 'monotonic': lambda: now[0]}))
+
+        def stalls(request):
+            now[0] += 15
+            raise httpx.ReadTimeout('the deadline for this fetch has passed')
+
+        http_mock.post(INBOX).mock(side_effect=stalls)
+
+        post_request(uri=INBOX, body=_body(), private_key=a_keypair()[0], key_id=KEY_ID)
+
+        assert ActivityPubLog.query.one().result == 'failure'
+        assert SendQueue.query.count() == 1
+
+    def test_a_delivery_goes_out_capped_with_its_signed_body(self, app, db_session, http_mock):
+        make_instance('peer.example')
+        route = http_mock.post(INBOX).respond(202)
+
+        post_request(uri=INBOX, body=_body(), private_key=a_keypair()[0], key_id=KEY_ID, timeout=7)
+
+        sent = route.calls[0].request
+        assert json.loads(sent.content)['id'] == _body()['id']
+        assert 'signature' in sent.headers and 'digest' in sent.headers
+        assert sent.headers['accept-encoding'] == 'gzip, deflate'
+        assert sent.extensions['timeout']['read'] == 7
+
+
 class TestSignedGet:
 
     def test_a_401_then_200_remembers_rfc9421(self, app, db_session, http_mock):

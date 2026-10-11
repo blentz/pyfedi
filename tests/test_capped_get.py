@@ -18,7 +18,7 @@ import pytest
 
 from app import db
 from app.utils import FETCH_MAX_BYTES, FETCH_MAX_SECONDS, ResponseTooLarge, UnreadableEncoding, _DECODE_STEP, \
-    _capped_get, get_request, get_request_instance
+    _capped_get, _capped_request, get_request, get_request_instance
 from tests.factories import make_instance
 
 URI = 'https://peer.example/thing'
@@ -480,3 +480,122 @@ class TestGetRequestInstance:
         assert get_request_instance(URI, instance).status_code == 500
         db.session.refresh(instance)
         assert instance.failures == 1
+
+
+class TestCappedPost:
+    """_capped_request with keep_status=True, for a POST: the request was already delivered, so a response body over
+    the cap, past the deadline, unreadable or corrupt is dropped (empty content) and the peer's status kept, never
+    raised -- raising would make a delivered activity look like a transport failure and re-send it."""
+
+    INBOX = 'https://peer.example/inbox'
+
+    def post(self, **kwargs):
+        return _capped_request('POST', self.INBOX, content=b'{"type": "Create"}', keep_status=True, **kwargs)
+
+    def test_the_request_goes_out_with_its_body_and_the_answer_comes_back(self, app, http_mock):
+        route = http_mock.post(self.INBOX).respond(202, json={'ok': True}, headers={'X-Thing': 'y'})
+
+        response = self.post(headers={'Content-Type': 'application/activity+json'}, timeout=5)
+
+        assert (response.status_code, response.json(), response.headers['x-thing']) == (202, {'ok': True}, 'y')
+        sent = route.calls[0].request
+        assert sent.content == b'{"type": "Create"}'
+        assert sent.headers['content-type'] == 'application/activity+json'
+        assert sent.headers['accept-encoding'] == 'gzip, deflate'
+        assert sent.extensions['timeout']['read'] == 5
+
+    def test_form_data_and_json_are_sent_as_httpx_sends_them(self, app, http_mock):
+        form = http_mock.post('https://peer.example/form').respond(200)
+        document = http_mock.post('https://peer.example/json').respond(200)
+
+        _capped_request('POST', 'https://peer.example/form', data={'emails': 'a,b'}, keep_status=True)
+        _capped_request('POST', 'https://peer.example/json', json={'query': 'q'}, keep_status=True)
+
+        assert form.calls[0].request.content == b'emails=a%2Cb'
+        assert json.loads(document.calls[0].request.content) == {'query': 'q'}
+
+    def test_an_endless_body_keeps_the_status_and_drops_the_body(self, app, http_mock):
+        pulled = []
+        http_mock.post(self.INBOX).respond(202, content=_endless(pulled), headers={'X-Thing': 'y'})
+
+        response = self.post()
+
+        assert (response.status_code, response.content, response.headers['x-thing']) == (202, b'', 'y')
+        assert len(pulled) * CHUNK <= FETCH_MAX_BYTES + CHUNK
+
+    def test_a_declared_oversize_body_is_dropped_without_reading(self, app, http_mock):
+        http_mock.post(self.INBOX).respond(410, content=b'gone',
+                                           headers={'Content-Length': str(FETCH_MAX_BYTES + 1)})
+
+        response = self.post()
+
+        assert (response.status_code, response.content) == (410, b'')
+        assert 'content-length' not in response.headers or response.headers['content-length'] == '0'
+
+    def test_a_gzip_bomb_keeps_the_status_and_drops_the_body(self, app, http_mock, recording_zlib):
+        bomb = gzip.compress(b'\0' * (20 * FETCH_MAX_BYTES))
+        http_mock.post(self.INBOX).respond(202, content=bomb, headers={'Content-Encoding': 'gzip'})
+
+        response = self.post()
+
+        assert (response.status_code, response.content) == (202, b'')
+        assert sum(recording_zlib.pieces) <= FETCH_MAX_BYTES + _DECODE_STEP
+
+    @pytest.mark.parametrize('encoding, body', [('br', b'whatever'), ('gzip', b'\x1f\x8b' + b'not gzip at all')])
+    def test_an_unreadable_or_corrupt_body_keeps_the_status(self, app, http_mock, encoding, body):
+        http_mock.post(self.INBOX).respond(202, content=iter([body]), headers={'Content-Encoding': encoding})
+
+        response = self.post()
+
+        assert (response.status_code, response.content) == (202, b'')
+
+    def test_a_slow_body_is_cut_at_the_deadline_keeping_the_status(self, app, http_mock, clock):
+        def trickle():
+            for _ in range(1000):
+                clock[0] += 5
+                yield b' '
+
+        http_mock.post(self.INBOX).respond(202, content=trickle())
+
+        response = self.post()
+
+        assert (response.status_code, response.content) == (202, b'')
+
+    def test_a_transport_timeout_at_the_deadline_after_the_status_keeps_it(self, app, http_mock, clock):
+        def stalls_mid_body():
+            yield b'{"partial'
+            clock[0] += FETCH_MAX_SECONDS
+            raise httpx.ReadTimeout('the deadline for this fetch has passed')
+
+        http_mock.post(self.INBOX).respond(202, content=stalls_mid_body())
+
+        response = self.post()
+
+        assert (response.status_code, response.content) == (202, b'')
+
+    def test_a_read_timeout_mid_body_before_the_deadline_is_still_a_transport_error(self, app, http_mock):
+        def times_out():
+            yield b'{"partial'
+            raise httpx.ReadTimeout('slow')
+
+        http_mock.post(self.INBOX).respond(202, content=times_out())
+
+        with pytest.raises(httpx.ReadTimeout):
+            self.post()
+
+    def test_no_status_line_by_the_deadline_is_a_transport_error(self, app, http_mock, clock):
+        """Nothing was answered, so nothing is known to be delivered: the error stands, unconverted."""
+        def stalls(request):
+            clock[0] += FETCH_MAX_SECONDS
+            raise httpx.ReadTimeout('the deadline for this fetch has passed')
+
+        http_mock.post(self.INBOX).mock(side_effect=stalls)
+
+        with pytest.raises(httpx.ReadTimeout):
+            self.post()
+
+    def test_a_get_through_the_general_helper_still_raises(self, app, http_mock):
+        http_mock.get(URI).respond(200, content=_endless([]))
+
+        with pytest.raises(ResponseTooLarge):
+            _capped_request('GET', URI)
