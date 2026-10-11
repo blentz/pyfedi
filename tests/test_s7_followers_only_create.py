@@ -14,7 +14,7 @@ from app.constants import POST_TYPE_ARTICLE, SRC_API, SRC_WEB, VISIBILITY_FOLLOW
 from app.models import Language, Post
 from app.shared.post import make_post, requested_visibility
 from app.utils import is_local_microblogs
-from tests.factories import bearer, make_community, make_community_member, make_instance, make_user
+from tests.factories import bearer, make_community, make_community_member, make_follow, make_instance, make_user
 from tests.test_community_add_post import _post_payload, able_to_post, csrf, instance, login, url
 from tests.test_shared_post_edit import _api_input
 from tests.test_shared_post_make import seed_make_context
@@ -61,7 +61,7 @@ def two_communities(db_session):
     (SRC_API, {'visibility': 'followers'}, VISIBILITY_FOLLOWERS),
     (SRC_WEB, SimpleNamespace(visibility=SimpleNamespace(data='followers')), VISIBILITY_FOLLOWERS),
     (SRC_WEB, SimpleNamespace(visibility=SimpleNamespace(data='public')), VISIBILITY_PUBLIC),
-    (SRC_WEB, SimpleNamespace(), VISIBILITY_PUBLIC),   # a form built without the field (community/util.py:1180)
+    (SRC_WEB, SimpleNamespace(), VISIBILITY_PUBLIC),   # a bare form object without the field, as tests/test_shared_post_make.py builds
 ], ids=['api-absent', 'api-null', 'api-public', 'api-followers', 'web-followers', 'web-public', 'web-no-field'])
 def test_microblogs_accepts_public_and_followers(two_communities, src, input_, expected):
     assert requested_visibility(input_, src, two_communities.microblogs) == expected
@@ -243,6 +243,9 @@ def test_a_web_followers_only_post_to_another_community_is_refused(app, web):
                                            title='Wrong place', visibility='followers'),
                         content_type='multipart/form-data')
     assert Post.query.filter_by(title='Wrong place').first() is None
+    with web.client.session_transaction() as sess:
+        flashed = [message for _, message in sess['_flashes']]
+    assert flashed == ['Followers-only posts can only be made in the local microblogs community.']
 
 
 def test_the_edit_form_never_offers_visibility(app, web):
@@ -254,3 +257,64 @@ def test_the_edit_form_never_offers_visibility(app, web):
     post = Post.query.filter_by(title='Edit me').one()
     body = web.client.get(url(app, 'post.post_edit', post_id=post.id)).get_data(as_text=True)
     assert 'name="visibility"' not in body
+
+
+# --------------------------------------------------------------------------
+# R-CROSSPOST: a followers-only post is never prefilled into a form and never cross-posted, for anyone
+# --------------------------------------------------------------------------
+
+
+def _make_web_post(app, web, title, visibility):
+    with patch('app.community.routes.render_template', return_value='rendered'):
+        web.client.post(url(app, 'community.add_post', actor='microblogs', type='discussion'),
+                        data=_post_payload(web.token, web.english, web.microblogs, title=title,
+                                           visibility=visibility),
+                        content_type='multipart/form-data')
+    return Post.query.filter_by(title=title).one()
+
+
+def _logged_in(app, user):
+    client = app.test_client()
+    login(client, user)
+    return client
+
+
+@pytest.fixture
+def viewers(app, web):
+    local = web.author.instance
+    stranger = able_to_post(make_user(local, 'stranger', local=True))
+    follower = able_to_post(make_user(local, 'follower', local=True))
+    make_follow(follower, web.author)
+    db.session.commit()
+    return SimpleNamespace(author=_logged_in(app, web.author), stranger=_logged_in(app, stranger),
+                           follower=_logged_in(app, follower), anonymous=app.test_client())
+
+
+@pytest.mark.parametrize('who', ['author', 'stranger', 'follower'])
+def test_a_followers_only_post_is_never_prefilled(app, web, viewers, who):
+    post = _make_web_post(app, web, 'Secret friends', 'followers')
+    response = getattr(viewers, who).get(url(app, 'community.add_post', actor='general', type='link',
+                                             source=post.id))
+    assert response.status_code == 404
+    assert 'Secret friends' not in response.get_data(as_text=True)
+
+
+def test_an_anonymous_visitor_does_not_get_a_followers_only_prefill(app, web, viewers):
+    post = _make_web_post(app, web, 'Secret friends', 'followers')
+    response = viewers.anonymous.get(url(app, 'community.add_post', actor='general', type='link', source=post.id))
+    assert response.status_code != 200
+    assert 'Secret friends' not in response.get_data(as_text=True)
+
+
+@pytest.mark.parametrize('who', ['author', 'stranger', 'follower'])
+def test_the_cross_post_route_404s_for_a_followers_only_post(app, web, viewers, who):
+    post = _make_web_post(app, web, 'Secret friends', 'followers')
+    assert getattr(viewers, who).get(url(app, 'post.post_cross_post', post_id=post.id)).status_code == 404
+
+
+def test_a_public_source_is_still_prefilled_and_cross_postable(app, web, viewers):
+    post = _make_web_post(app, web, 'Open to all', 'public')
+    prefill = viewers.stranger.get(url(app, 'community.add_post', actor='general', type='link', source=post.id))
+    assert prefill.status_code == 200
+    assert 'Open to all' in prefill.get_data(as_text=True)
+    assert viewers.stranger.get(url(app, 'post.post_cross_post', post_id=post.id)).status_code == 200

@@ -51,7 +51,7 @@ from app.post.util import tags_to_string
 # The module, not the names: app.shared.community reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
-from app.visibility import listable_clause, visible_to_clause
+from app.visibility import is_open, listable_clause, visible_to_clause
 from app.utils import user_banned_from_community, back, get_setting, render_template, markdown_to_html, validation_required, can_moderate, \
     shorten_string, gibberish, community_membership, \
     request_etag_matches, return_304, can_upvote, can_downvote, user_filters_posts, \
@@ -1279,7 +1279,12 @@ def add_post(actor, type=None):
             # straight onto the page. Same class as D895 and D950.
             current_app.logger.exception('post creation failed for user %s in community %s',
                                          current_user.id, community.id)
-            flash(_('Your post was not accepted. Please check the server log for details.'), 'error')
+            if str(ex) == 'invalid visibility':
+                # make_post's own fixed text (a followers-only post aimed at a community other than local
+                # microblogs: the community can be switched in the form), so it is safe to name
+                flash(_('Followers-only posts can only be made in the local microblogs community.'), 'error')
+            else:
+                flash(_('Your post was not accepted. Please check the server log for details.'), 'error')
             if current_app.debug:
                 raise ex
             return redirect(url_for('activitypub.community_profile',
@@ -1335,6 +1340,10 @@ def add_post(actor, type=None):
             # query parameter, so a stale cross-post link was an
             # `AttributeError: 'NoneType' object has no attribute 'deleted'`.
             if source_post is None or source_post.deleted:
+                abort(404)
+            # A followers-only post is never prefilled for anyone, author and followers included: copying it into
+            # a form would let it be re-published as a public post. Same 404 as refuse_invisible.
+            if not is_open(source_post):
                 abort(404)
 
             # And the caller has to be able to SEE it. This block copies the

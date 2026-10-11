@@ -162,7 +162,7 @@
         </a>
     </li>
     {% if post.user_id != current_user.id -%}
-        {% if post.type == POST_TYPE_LINK and post.author.bot and (post.cross_posts is none or len(post.cross_posts) == 0) -%}
+        {% if post.type == POST_TYPE_LINK and post.visibility in ('public', 'unlisted') and post.author.bot and (post.cross_posts is none or len(post.cross_posts) == 0) -%}
             <li>
                 <a class="dropdown-item no-underline" style="white-space: normal" aria-label="{{ _('Cross-post') }}" href="{{ url_for('post.post_cross_post', post_id=post.id) }}">
                     <span class="fe fe-cross-post"></span>

@@ -2784,6 +2784,8 @@ def post_cross_post(post_id: int):
     refuse_private_community(post)
     refuse_unpublished_post(post)
     refuse_invisible(post)
+    if not is_open(post):
+        abort(404)      # a followers-only post is never cross-posted
 
     form = CrossPostForm()
 
