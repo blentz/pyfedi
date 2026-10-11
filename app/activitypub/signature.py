@@ -61,7 +61,7 @@ from app.constants import DATETIME_MS_FORMAT
 from app.discovery.instance_answers import record_delivery_refusal
 from app.relays.refusals import record_relay_refusal
 from app.models import utcnow, ActivityPubLog, Community, Instance, CommunityMember, Site, User, SendQueue, public_key_pem
-from app.utils import _capped_get, _capped_request, get_request_capped, get_task_session, is_invalid_get_request_uri
+from app.utils import RequestNotSendable, _capped_get, _capped_request, get_request_capped, get_task_session, is_invalid_get_request_uri
 import app.activitypub.util as activitypub_util
 
 
@@ -176,8 +176,9 @@ def post_request(uri: str, body: dict | None, private_key: str, key_id: str,
                 if current_app.debug:
                     current_app.logger.error(f'Exception while sending post to {uri}')
                 http_status_code = 404
-                # couldn't connect, DNS, timeout etc - signed_request re-raises all of these as httpx.HTTPError
-                transport_failure = isinstance(e, httpx.HTTPError)
+                # couldn't connect, DNS, timeout etc - signed_request re-raises all of these as httpx.HTTPError. Not a
+                # request httpx refused to send (RequestNotSendable): a retry would be refused the same way.
+                transport_failure = isinstance(e, httpx.HTTPError) and not isinstance(e, RequestNotSendable)
         if log.result == 'processing':
             log.result = 'success'
         session.commit()
@@ -829,14 +830,14 @@ class HttpSignature:
                     timeout=timeout,
                     keep_status=True,
                 )
+            except RequestNotSendable as ex:
+                # httpx refused the request itself, which it will do again on every retry: it stays a
+                # RequestNotSendable, so post_request logs it and does not queue it to be sent again. It carries no
+                # request, so the url is the one this was asked to send to.
+                raise RequestNotSendable(f"HTTP Exception for {uri} - {ex}") from None
             except httpx.HTTPError as ex:
-                # Convert to a more generic error we handle. RequestNotSendable carries no request, so its url is
-                # the one this was asked to send to.
-                try:
-                    url = ex.request.url
-                except RuntimeError:
-                    url = uri
-                raise httpx.HTTPError(f"HTTP Exception for {url} - {ex}") from None
+                # Convert to a more generic error we handle
+                raise httpx.HTTPError(f"HTTP Exception for {ex.request.url} - {ex}") from None
 
             # D1322. There was a branch here raising ValueError for a 4xx POST.
             # It had never run: `method` is `Literal["get", "post"]` and every
