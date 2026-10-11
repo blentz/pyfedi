@@ -1075,8 +1075,8 @@ def refresh_community_profile_task(community_id, activity_json=None):
                 if activity_json:
                     # A LOCAL community's document is pushed by one of its moderators (a remote moderator's Group
                     # Update) or fetched from ourselves. Either way it may change only how the community is presented:
-                    # title, description, icon, banner, nsfw, languages and posting restriction. Its key, inbox, ids and
-                    # collection URLs are this instance's; a pushed key would let the sender sign as the community
+                    # title, description, icon, banner, nsfw, nsfl, languages and posting restriction. Its key, inbox,
+                    # ids and collection URLs are this instance's; a pushed key would let the sender sign as the community
                     remote = not community.is_local()
                     if 'attributedTo' in activity_json and isinstance(activity_json['attributedTo'], str):  # lemmy and mbin
                         mods_url = activity_json['attributedTo']
@@ -1086,7 +1086,7 @@ def refresh_community_profile_task(community_id, activity_json=None):
                         mods_url = None
 
                     community.nsfw = activity_json['sensitive'] if 'sensitive' in activity_json else False
-                    if remote and 'nsfl' in activity_json and activity_json['nsfl']:
+                    if 'nsfl' in activity_json and activity_json['nsfl']:
                         community.nsfl = activity_json['nsfl']
                     # D1374. `activity_json['name'].strip()`. Absent was KeyError,
                     # a non-string was AttributeError and a value wider than

@@ -406,7 +406,7 @@ def test_a_moderators_update_of_a_local_community_keeps_its_key_and_ids(app, db_
     community_id, profile_id = community.id, community.ap_profile_id
     before = {column: getattr(community, column) for column in
               ('public_key', 'ap_inbox_url', 'ap_followers_url', 'ap_featured_url', 'ap_moderators_url',
-               'ap_profile_id', 'ap_public_url', 'ap_id', 'instance_id', 'posting_warning', 'theme', 'nsfl',
+               'ap_profile_id', 'ap_public_url', 'ap_id', 'instance_id', 'posting_warning', 'theme',
                'ai_generated', 'post_url_type')}
     moderator = make_user(instance, 'moderator')
     moderator.ap_fetched_at = utcnow()   # else find_actor_or_create_cached refreshes it, a fetch of its own
@@ -422,6 +422,7 @@ def test_a_moderators_update_of_a_local_community_keeps_its_key_and_ids(app, db_
     community = db.session.get(Community, community_id)
     assert {column: getattr(community, column) for column in before} == before
     assert community.title == 'Renamed by a moderator'
+    assert community.nsfl is True   # a presentation flag, like nsfw
     assert 'a new description' in community.description_html
     assert community.flair == []
     assert fetched == []
