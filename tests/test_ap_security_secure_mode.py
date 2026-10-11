@@ -17,6 +17,7 @@ from app import db
 from app.activitypub.entitlement import MINIMAL_ACTOR_ENDPOINTS, MINIMAL_ACTOR_FIELDS, SIGNED_FETCH_AP_ONLY_PREFIXES, \
     SIGNED_FETCH_EXEMPT_PREFIXES, actor_document, signed_fetch_exempt, signed_fetch_refusal
 from app.activitypub.util import AS_PUBLIC
+from app.admin.forms import FederationForm
 from app.models import Site
 from tests.factories import a_keypair, cavage_signed_headers, make_activitypub_log, make_instance, make_local_feed, \
     make_site, make_user, signed_get_headers
@@ -403,3 +404,14 @@ def test_this_instance_signs_the_query_of_a_get(app, secure_post):
     with app.test_client() as client:
         assert client.get(PAGED, headers=headers).status_code == 200
         assert client.get('/c/books/outbox?page=2', headers=headers).status_code == 401
+
+
+# --- R-SECUREACTORS (d): the admin help text says what secure mode asks of peers and what stays open ---
+
+def test_the_admin_help_text_describes_secure_mode(app):
+    with app.test_request_context('/admin/misc'):
+        description = str(FederationForm(meta={'csrf': False}).require_signed_fetch.description)
+
+    assert 'sign their fetches with an actor key this instance already knows' in description
+    assert 'actor documents stay readable in a minimal form' in description
+    assert 'web pages, through the API and in RSS feeds' in description

@@ -130,9 +130,12 @@ class FederationForm(FlaskForm):
     require_signed_fetch = BooleanField(
         _l('Require signed fetches (secure mode)'),
         description=_l('Refuse ActivityPub fetches that are not signed by a server this instance already knows. '
-                       'Unsigned fetchers, including some crawlers and tools, will be refused. This does not make '
-                       'content private: public posts stay readable on web pages, through the API and in RSS feeds. '
-                       'The instance actor, WebFinger and NodeInfo stay open.'))
+                       'Peers must sign their fetches with an actor key this instance already knows; a fetch signed '
+                       'by an unknown actor is refused like an unsigned one. Unsigned fetchers, including some '
+                       'crawlers and tools, will be refused. User, community and feed actor documents stay readable '
+                       'in a minimal form (inbox and public key only), so peers can still learn keys. This does not '
+                       'make content private: public posts stay readable on web pages, through the API and in RSS '
+                       'feeds. The instance actor, WebFinger and NodeInfo stay open.'))
     submit = SubmitField(_l('Save'))
 
 
