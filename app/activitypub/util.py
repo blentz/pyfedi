@@ -4656,8 +4656,12 @@ def process_report(user, reported, request_json, session) -> bool:
     """
     # Report.ap_id lets an Undo of this Flag find the report (interop C1 item 3). An id too long for the
     # column is not truncated: a truncated id matches no Undo, and the reporter-and-target fallback still does.
+    # The id is the sender's choice, so it is kept only when it is on the host of the actor who signed the Flag.
     flag_id = request_json.get('id')
-    ap_id = flag_id if isinstance(flag_id, str) and len(flag_id) <= 255 else None
+    ap_id = None
+    if isinstance(flag_id, str) and len(flag_id) <= 255 and host_of(flag_id) and \
+            host_of(flag_id) == host_of(user.ap_profile_id or ''):
+        ap_id = flag_id
 
     if 'summary' not in request_json:  # reports from peertube have no summary
         reasons = ''
@@ -4887,13 +4891,20 @@ def withdraw_flag(user: User, flag: dict, session) -> tuple:
     acted on it (escalated, appealed, resolved or discarded) keep it and log the Undo. Only the reporter may
     undo.
 
-    The report is found by the Flag's id (Report.ap_id). Failing that -- a report filed before the column
-    existed, or a Flag without an id -- the newest report by `user` about the same target. The target is
-    resolved without fetching (find_reported_object never creates an actor)."""
+    The report is found by the Flag's id (Report.ap_id) among `user`'s own reports: the id is the sender's
+    choice and not unique, so another reporter's Flag under the same id must neither be withdrawn nor stand
+    in the way. Failing that -- a report filed before the column existed, or a Flag without an id -- the
+    newest report by `user` about the same target that has no ap_id; a report with an id is withdrawn only
+    by an Undo naming it. The target is resolved without fetching (find_reported_object never creates an
+    actor).
+
+    The report row is locked (FOR UPDATE) from the status check to the delete, so a moderator acting on it
+    at the same moment is not lost."""
     report = None
     flag_id = flag.get('id')
     if isinstance(flag_id, str):
-        report = session.query(Report).filter_by(ap_id=flag_id).first()
+        report = session.query(Report).filter_by(ap_id=flag_id, reporter_id=user.id).\
+            order_by(Report.id.desc()).with_for_update().first()
     if report is None:
         target = flag.get('object')
         reported = find_reported_object(target) if isinstance(target, str) else None
@@ -4902,12 +4913,12 @@ def withdraw_flag(user: User, flag: dict, session) -> tuple:
             column, report_type = suspect
             report = session.query(Report).filter_by(reporter_id=user.id, type=report_type,
                                                      **{column: reported.id}).\
-                order_by(Report.created_at.desc(), Report.id.desc()).first()
+                filter(Report.ap_id.is_(None)).\
+                order_by(Report.created_at.desc(), Report.id.desc()).with_for_update().first()
     if report is None:
         return APLOG_IGNORED, 'Undo Flag: no matching report'
-    if report.reporter_id != user.id:
-        return APLOG_FAILURE, 'Undo Flag: only the reporter may withdraw a report'
     if report.status != REPORT_STATE_NEW:
+        session.commit()  # release the row lock
         return APLOG_IGNORED, f'Undo Flag: report {report.id} was already acted on and is kept'
     withdraw_report(report, session)
     return APLOG_SUCCESS, None

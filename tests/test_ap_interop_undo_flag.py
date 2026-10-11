@@ -170,16 +170,62 @@ def test_an_undo_of_a_report_moderators_acted_on_keeps_it_and_logs(env, status):
 
 
 def test_only_the_reporter_may_withdraw_a_report(env):
-    """The signed actor is the only identity: an Undo naming someone else's Flag id is
-    refused, whatever the inner Flag's own `actor` says."""
+    """The signed actor is the only identity: an Undo naming someone else's Flag id finds
+    no report of the signer's, whatever the inner Flag's own `actor` says."""
     dispatch(flag(env.reporter, env.post.ap_id))
 
     dispatch(undo(env.other, flag(env.reporter, env.post.ap_id)))
 
     assert Report.query.count() == 1
     log = last_log()
-    assert log.result == 'failure'
-    assert log.exception_message == 'Undo Flag: only the reporter may withdraw a report'
+    assert log.result == 'ignored'
+    assert log.exception_message == 'Undo Flag: no matching report'
+
+
+def test_a_colliding_flag_id_from_another_reporter_cannot_block_a_withdrawal(env):
+    """Report.ap_id is chosen by the sender and is not unique. A second reporter filing a
+    Flag under the victim's id must not stand in the way of the victim's Undo."""
+    victim_flag = flag(env.reporter, env.post.ap_id)
+    dispatch(dict(victim_flag, actor=env.other.ap_profile_id))
+    dispatch(victim_flag)
+    assert Report.query.count() == 2
+
+    dispatch(undo(env.reporter, victim_flag))
+
+    db.session.expire_all()
+    assert [report.reporter_id for report in Report.query.all()] == [env.other.id]
+    assert last_log().result == 'success'
+
+
+def test_a_flag_id_off_the_senders_host_is_not_stored(env):
+    """A Flag's id is trusted only on the host of the actor who signed it."""
+    dispatch(dict(flag(env.reporter, env.post.ap_id), id='https://evil.test/activities/flag/1'))
+
+    assert Report.query.one().ap_id is None
+
+
+def test_an_undo_naming_another_id_leaves_a_report_with_a_real_id(env):
+    """The reporter-and-target fallback is for reports filed without an id. A report that
+    has one is withdrawn only by an Undo naming that id."""
+    dispatch(flag(env.reporter, env.post.ap_id))
+
+    dispatch(undo(env.reporter, dict(flag(env.reporter, env.post.ap_id),
+                                     id=f'https://{PEER}/activities/flag/another')))
+
+    assert Report.query.count() == 1
+    log = last_log()
+    assert log.result == 'ignored'
+    assert log.exception_message == 'Undo Flag: no matching report'
+
+
+def test_the_fallback_never_touches_another_reporters_report(env):
+    process_report(env.other, env.post, {'summary': 'theirs'}, db.session)
+
+    dispatch(undo(env.reporter, {'type': 'Flag', 'actor': env.reporter.ap_profile_id,
+                                 'object': env.post.ap_id}))
+
+    assert [report.reasons for report in Report.query.all()] == ['theirs']
+    assert last_log().exception_message == 'Undo Flag: no matching report'
 
 
 def test_an_undo_without_a_flag_id_withdraws_the_newest_matching_report(env):
