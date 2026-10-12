@@ -224,7 +224,7 @@ def move_community_images_to_here(community_id):
                                 try:
                                     # Download the image
                                     response = get_request(post.image.source_url, max_bytes=MEDIA_MAX_BYTES,
-                                                           max_seconds=MEDIA_MAX_SECONDS)
+                                                           max_seconds=MEDIA_MAX_SECONDS, retry=True)   # Celery task
                                     if response.status_code == 200:
                                         content_type = response.headers.get('content-type')
                                         if content_type and content_type.startswith('image'):
@@ -312,7 +312,7 @@ def move_community_images_to_here(community_id):
                                 try:
                                     # Download the image
                                     response = get_request(post.image.source_url, max_bytes=MEDIA_MAX_BYTES,
-                                                           max_seconds=MEDIA_MAX_SECONDS)
+                                                           max_seconds=MEDIA_MAX_SECONDS, retry=True)   # Celery task
                                     if response.status_code == 200:
                                         content_type = response.headers.get('content-type')
                                         if content_type and content_type.startswith('image'):

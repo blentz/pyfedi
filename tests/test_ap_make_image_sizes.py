@@ -274,7 +274,7 @@ class TestAnImageBehindLemmysProxy:
         assert asked[-1] == 'https://i.guim.test/img/photo.jpg'
         assert stored.file_path is not None
         # A photo passes get_request's default 1 MiB easily: both downloads take the image cap.
-        assert caps == [{'max_bytes': MEDIA_MAX_BYTES, 'max_seconds': MEDIA_MAX_SECONDS}] * 2
+        assert caps == [{'max_bytes': MEDIA_MAX_BYTES, 'max_seconds': MEDIA_MAX_SECONDS, 'retry': True}] * 2
 
     def test_a_500_from_the_proxy_counts_too(self, env):
         file = a_file(env, self.PROXIED)
@@ -432,3 +432,20 @@ class TestWhenTheInstanceStoresImagesInS3:
                      medium_width=None)
         assert stored.thumbnail_path.startswith('https://cdn.probeland.test/')
         assert stored.file_path is None
+
+
+def test_a_transport_error_is_retried_once(env, http_mock, monkeypatch):
+    """A Celery task off the request and inbox paths (D738/D775 do not apply), and a lost thumbnail is permanent:
+    get_request's own retry is asked for (R1 fix round 3)."""
+    slept = []
+    monkeypatch.setattr('app.utils.sleep', slept.append)
+    route = http_mock.get(SOURCE).mock(side_effect=[httpx.ConnectError('no route'),
+                                                    answered_with(image_bytes(400, 300))])
+    file = a_file(env)
+
+    make_image_sizes_async(file.id, 50, 120, 'posts', False)
+
+    stored = cleanup(file)
+    assert route.call_count == 2
+    assert len(slept) == 1
+    assert stored.thumbnail_path is not None
