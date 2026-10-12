@@ -835,7 +835,10 @@ def _shared_inbox_from_endpoints_document(endpoints_url: str, actor_host: str) -
     """The sharedInbox of the endpoints document at `endpoints_url`, fetched once with fetch_object_capped (capped,
     no retry, no sleep). The URL must be on the actor's own host, so a peer cannot make us fetch from a host it
     does not speak for; the callers hold the sharedInbox it names to that host too. An actor with no host matches
-    nothing, rather than '' matching ''."""
+    nothing, rather than '' matching ''.
+
+    Worst case, accepted (C1 residual R1 item 5): a same-host endpoints URL that answers slowly costs one unsigned
+    fetch and, on a 401, up to two signed ones, each with a 15 s deadline -- about 45 s inline on the inbox path."""
     if not actor_host or host_of(endpoints_url) != actor_host:
         return None
     document, _reason = fetch_object_capped(endpoints_url)
