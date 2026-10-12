@@ -50,7 +50,8 @@ from app.utils import FETCH_MAX_BYTES, get_request, get_request_capped, allowlis
     patch_db_session, to_srgb, communities_banned_from_all_users, blocked_communities, blocked_or_banned_instances, \
     instance_community_ids, banned_instances, communities_run_by_inactive_mods, inspect_image_c2pa, \
     url_is_storable, can_create_post, can_create_post_reply, retrieve_image_hash, hash_matches_blocked_image, \
-    is_activitypub_request, instance_allowed, instance_banned
+    is_activitypub_request, instance_allowed, instance_banned, community_moderators, moderating_communities_ids, \
+    moderating_communities_ids_all_users
 import app.activitypub.actor as activitypub_actor
 import app.discovery.credits as discovery_credits   # the module: app.discovery.credits imports this one
 import urllib.parse
@@ -6185,6 +6186,11 @@ def mark_community_gone(community: Community) -> None:
         cache.delete_memoized(community_membership, member, community)
         cache.delete_memoized(joined_communities, member.id)
         cache.delete_memoized(moderating_communities, member.id)
+        cache.delete_memoized(moderating_communities_ids, member.id)
+    # A local moderator's row went with the other local members: the community's moderator lists are stale
+    cache.delete_memoized(community_moderators, community.id)
+    cache.delete_memoized(Community.moderators, community)
+    cache.delete_memoized(moderating_communities_ids_all_users)
 
 
 def delete_remote_group(community: Community, activity_id: str, saved_json) -> None:
