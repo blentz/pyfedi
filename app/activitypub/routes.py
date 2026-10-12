@@ -101,11 +101,15 @@ def paged_outbox(outbox_id: str, total: int, items_from) -> dict:
         return {"@context": default_context(), "type": "OrderedCollection", "id": outbox_id, "totalItems": total,
                 "first": f"{outbox_id}?page=1", "last": f"{outbox_id}?page={last}",
                 "orderedItems": items_from(0, OUTBOX_PAGE_SIZE)}
-    # ASCII digits only ('²'.isdigit() is True, but int('²') raises), and no page past the last, so OFFSET never
-    # reaches past the rows there are and cannot overflow; the length test keeps int() off a huge string
-    if not (page.isascii() and page.isdigit()) or len(page) > len(str(last)) or not 1 <= int(page) <= last:
+    # ASCII digits only ('²'.isdigit() is True, but int('²') raises), and at most 15 of them, which keeps int() off a
+    # huge string; zero-padding is allowed and normalised away
+    if not (page.isascii() and page.isdigit()) or len(page) > 15 or int(page) < 1:
         abort(400)
     page = int(page)
+    if page > last:
+        # past the end, empty and never queried, so OFFSET cannot run past the rows there are or overflow
+        return {"@context": default_context(), "type": "OrderedCollectionPage", "id": f"{outbox_id}?page={page}",
+                "partOf": outbox_id, "totalItems": total, "orderedItems": [], "prev": f"{outbox_id}?page={last}"}
     result = {"@context": default_context(), "type": "OrderedCollectionPage", "id": f"{outbox_id}?page={page}",
               "partOf": outbox_id, "totalItems": total,
               "orderedItems": items_from((page - 1) * OUTBOX_PAGE_SIZE, OUTBOX_PAGE_SIZE)}

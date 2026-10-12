@@ -197,14 +197,33 @@ def test_an_unknown_or_remote_user_outbox_is_not_served(app, db_session, path):
     assert ap_get(app, path).status_code == 404
 
 
-@pytest.mark.parametrize('page', ['²', '99999999999999999999999', '2'])
-def test_a_page_that_is_not_one_of_the_outbox_pages_is_a_400(app, db_session, page):
+@pytest.mark.parametrize('page', ['²', '1234567890123456', '99999999999999999999999'])
+def test_a_malformed_page_is_a_400(app, db_session, page):
     """Every local user's outbox now reaches the database, so a page that could make it raise is refused first:
-    a non-ASCII digit, a number that would overflow OFFSET, a page past the last."""
+    a non-ASCII digit, or more than 15 digits, which could overflow OFFSET."""
     author, community = _world()
     _post(community, author, 5)
 
     assert ap_get(app, f'/u/alice/outbox?page={page}').status_code == 400
+
+
+@pytest.mark.parametrize('page', ['2', '999999999999999'])
+def test_a_page_past_the_end_is_empty_and_loads_nothing(app, db_session, monkeypatch, page):
+    """No page query is made for it: OFFSET is never past the rows there are."""
+    author, community = _world()
+    _post(community, author, 5)
+
+    def no_page_query(*args):
+        raise AssertionError('a page past the end was queried')
+
+    monkeypatch.setattr(activitypub_routes, 'user_outbox_page', no_page_query)
+
+    document = ap_get(app, f'/u/alice/outbox?page={page}').json
+
+    assert (document['type'], document['id'], document['partOf']) == ('OrderedCollectionPage', f'{OUTBOX}?page={page}',
+                                                                      OUTBOX)
+    assert (document['totalItems'], document['orderedItems'], document['prev']) == (1, [], f'{OUTBOX}?page=1')
+    assert 'next' not in document
 
 
 def _statements_for(app, path):
