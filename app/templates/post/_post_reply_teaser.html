@@ -207,7 +207,7 @@
                     {% endfor -%}
             {% else -%}
                 <a href="{{ url_for('post.continue_discussion', post_id=post_reply.post.id, comment_id=post_reply.id, _anchor='replies') }}"
-                   hx-post="{{ url_for('post.continue_discussion_ajax', post_id=post_reply.post.id, comment_id=post_reply.id, nonce=nonce) }}"
+                   hx-post="{{ url_for('post.continue_discussion_ajax', post_id=post_reply.post.id, comment_id=post_reply.id, nonce=nonce, lang=request.args.get('lang')) }}"
                    hx-target="#comment_{{ post_reply.id }}" hx-swap="outerHTML">{{ _('Continue thread') }}</a>
             {% endif -%}
         </div>
