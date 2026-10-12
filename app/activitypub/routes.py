@@ -688,7 +688,7 @@ def user_outbox(actor):
     if user.has_blocked_instance(known_instance_id(requesting_domain)):
         return make_response(f'Author has blocked {requesting_domain}'), 401
     rows = user_outbox_rows(user)
-    total = db.session.execute(select(func.count()).select_from(rows)).scalar()
+    total = db.session.scalar(select(func.count()).select_from(rows))
     outbox = paged_outbox(f"{user.public_url()}/outbox", total,
                           lambda offset, limit: user_outbox_page(rows, offset, limit))
     resp = jsonify(outbox)
