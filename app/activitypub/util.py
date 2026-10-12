@@ -5396,7 +5396,7 @@ def process_microblog_announce(request_json, id, store_ap_json) -> Union[Post, N
         record_boost(post, announcer)
         return post
 
-    post_data = remote_object_to_json(uri)
+    post_data = remote_object_to_json(uri, retry_delay=0)   # inbox processing: no sleep, no retry (D775)
     if not post_data:
         log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json, 'Could not fetch boosted object ' + uri)
         return None
@@ -5710,7 +5710,7 @@ def resolve_remote_post(uri: str, community, announce_id, store_ap_json, nodebb=
     if announce_actor_domain != 'ovo.st' and not nodebb and announce_actor_domain != uri_domain:
         return None
 
-    post_data = remote_object_to_json(uri)
+    post_data = remote_object_to_json(uri, retry_delay=0)   # inbox processing: no sleep, no retry (D775)
     if not post_data:
         return None
 

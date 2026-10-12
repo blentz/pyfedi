@@ -18,7 +18,7 @@ def fetch_spy(monkeypatch):
     """Replace the remote fetch, and count how many times it is called."""
     calls = []
 
-    def fake_fetch(uri):
+    def fake_fetch(uri, retry_delay=3):
         calls.append(uri)
         return fake_fetch.result
 

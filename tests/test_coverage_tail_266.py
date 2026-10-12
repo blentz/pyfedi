@@ -92,7 +92,7 @@ class TestABoostFromAnAccountThatIsBanned:
         with patch.object(ap_util, 'find_actor_or_create_cached',
                           return_value=followed_booster), \
                 patch.object(ap_util, 'remote_object_to_json',
-                             side_effect=lambda uri: fetched.append(uri)):
+                             side_effect=lambda uri, retry_delay=3: fetched.append(uri)):
             result = process_microblog_announce(
                 announce(followed_booster.ap_profile_id, f'https://{PEER}/statuses/1'),
                 'https://m.example/activities/1', False)
@@ -109,7 +109,7 @@ class TestABoostFromAnAccountThatIsBanned:
         fetched = []
 
         with patch.object(ap_util, 'remote_object_to_json',
-                          side_effect=lambda uri: fetched.append(uri)):
+                          side_effect=lambda uri, retry_delay=3: fetched.append(uri)):
             result = process_microblog_announce(
                 announce(followed_booster.ap_profile_id, f'https://{PEER}/statuses/1'),
                 'https://m.example/activities/1', False)
@@ -182,7 +182,7 @@ class TestABoostFromAnAccountThatIsBanned:
         boosted = []
 
         with patch.object(ap_util, 'remote_object_to_json',
-                          side_effect=lambda uri: fetched.append(uri)), \
+                          side_effect=lambda uri, retry_delay=3: fetched.append(uri)), \
                 patch.object(ap_util, 'record_boost',
                              side_effect=lambda p, a: boosted.append((p.id, a.id))):
             result = process_microblog_announce(

@@ -161,7 +161,7 @@ class TestSharedInbox:
 @pytest.fixture
 def fetch(monkeypatch):
     calls = []
-    monkeypatch.setattr(util, 'remote_object_to_json', lambda uri: calls.append(uri))
+    monkeypatch.setattr(util, 'remote_object_to_json', lambda uri, retry_delay=3: calls.append(uri))
     return calls
 
 
@@ -330,7 +330,7 @@ class TestOpenThreadRuleOnTheMastodonPath:
         messages = []
         monkeypatch.setattr(inbound, 'log_incoming_ap',
                             lambda id, kind, result, saved, message=None, session=None: messages.append(message))
-        monkeypatch.setattr(inbound, 'remote_object_to_json', lambda uri: note(inReplyTo=parent.ap_id))
+        monkeypatch.setattr(inbound, 'remote_object_to_json', lambda uri, retry_delay=3: note(inReplyTo=parent.ap_id))
         inbound.process_relayed_announce(relay.id, NOTE_URI)
         assert messages == ['relayed reply to a closed thread']
 
