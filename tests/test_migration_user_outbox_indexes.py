@@ -4,9 +4,11 @@ import importlib.util
 import io
 from pathlib import Path
 
+import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import IntegrityError
 
 from app import db
 
@@ -92,3 +94,65 @@ def test_downgrade_then_upgrade_restores_both_indexes(app, db_session):
                 run(connection, migration.upgrade)
             connection.execute(text('RESET lock_timeout'))
             connection.commit()
+
+
+def _rebuild_on_failure(connection, migration):
+    """The finally of the rerun tests: put back whatever a failure left missing or broken."""
+    connection.rollback()
+    if any(index(connection, table, name) is None or valid(connection, name) is not True
+           for table, name in INDEXES.items()):
+        for name in INDEXES.values():
+            connection.execute(text(f'DROP INDEX IF EXISTS {name}'))
+        connection.commit()
+        run(connection, migration.upgrade)
+    connection.execute(text('DROP TABLE IF EXISTS m5_interrupted'))
+    connection.execute(text('RESET lock_timeout'))
+    connection.commit()
+
+
+def test_the_upgrade_reruns_after_an_interrupted_build(app, db_session):
+    """Final review M5. An interrupted CREATE INDEX CONCURRENTLY (a deploy timeout, a cancelled lock wait) leaves an
+    INVALID index of that name behind, and the rerun failed with 'already exists', blocking the auto-deploy. The
+    leftover is made here the way PostgreSQL makes one: a concurrent unique build that fails part-way."""
+    db.session.close()
+    migration = load_migration()
+    with db.engine.connect() as connection:
+        connection.execute(text("SET lock_timeout = '5s'"))
+        try:
+            connection.commit()
+            connection.execute(text('DROP INDEX IF EXISTS ix_post_user_posted'))
+            connection.execute(text('CREATE TABLE m5_interrupted (x integer)'))
+            connection.execute(text('INSERT INTO m5_interrupted VALUES (1), (1)'))
+            connection.commit()
+            with db.engine.connect().execution_options(isolation_level='AUTOCOMMIT') as autocommit:
+                with pytest.raises(IntegrityError):
+                    autocommit.execute(text('CREATE UNIQUE INDEX CONCURRENTLY ix_post_user_posted ON m5_interrupted (x)'))
+            assert valid(connection, 'ix_post_user_posted') is False
+
+            run(connection, migration.upgrade)
+
+            for table, name in INDEXES.items():
+                assert index(connection, table, name) is not None
+                assert valid(connection, name) is True
+        finally:
+            _rebuild_on_failure(connection, migration)
+
+
+def test_the_upgrade_reruns_when_only_the_first_index_was_built(app, db_session):
+    """Interrupted between the two builds: the first index is there and valid, the second is not."""
+    db.session.close()
+    migration = load_migration()
+    with db.engine.connect() as connection:
+        connection.execute(text("SET lock_timeout = '5s'"))
+        try:
+            connection.commit()
+            connection.execute(text('DROP INDEX IF EXISTS ix_post_reply_user_posted'))
+            connection.commit()
+
+            run(connection, migration.upgrade)
+
+            for table, name in INDEXES.items():
+                assert index(connection, table, name) is not None
+                assert valid(connection, name) is True
+        finally:
+            _rebuild_on_failure(connection, migration)
