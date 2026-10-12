@@ -131,3 +131,9 @@ def test_object_language_with_nothing_is_none(languages):
 def test_columns_exist(app, db_session):
     assert Post.language_variants.type.__class__.__name__ == 'JSONB'
     assert PostReply.language_variants.type.__class__.__name__ == 'JSONB'
+
+
+def test_titles_false_drops_every_title():
+    obj = _obj(contentMap={'en': '<p>hello</p>', 'fr': '<p>bonjour</p>'}, nameMap={'fr': 'Bonjour'})
+    assert language_variants_from(obj)[1]['fr']['title'] == 'Bonjour'
+    assert language_variants_from(obj, titles=False)[1]['fr']['title'] is None
