@@ -196,7 +196,7 @@ def test_scan_walks_lists_tuples_pagination_and_comment_trees(world):
                'd': {'comment': target, 'replies': None}, 'e': {'unrelated': quoting}, 'f': shared, 'g': shared,
                'h': 'text', 'i': target}
     rows = _quoting_rows(context)
-    assert sorted(r.quote_ap_id for r in rows) == sorted([quoting.quote_ap_id] * 2 + [reply.quote_ap_id, nested.quote_ap_id])
+    assert sorted(r.quote_ap_id for r in rows) == sorted([quoting.quote_ap_id] * 3 + [reply.quote_ap_id, nested.quote_ap_id])
 
 
 def test_a_missed_row_falls_back_to_one_memoised_lookup(world, app):
@@ -498,3 +498,18 @@ def test_a_requests_viewer_cache_is_kept_per_viewer(world, app):
         assert quote_state(world['quoting'], world['viewer'])['kind'] == 'line'
         assert quote_state(world['quoting'], world['quoter'])['kind'] == 'card'  # a member
         assert quote_state(world['quoting'], world['viewer'])['kind'] == 'line'
+
+
+def test_scan_descends_plain_dicts_but_not_dict_like_objects(world):
+    from collections import defaultdict
+    from flask import Config
+    from app.quotes import _quoting_rows
+    quoting = world['quoting']
+    reply = make_post_reply(world['target'], world['quoter'])
+    reply.quote_ap_id = 'https://elsewhere.test/c/3'
+    more_replies = defaultdict(list)
+    more_replies[world['community']].append({'comment': reply, 'replies': []})
+    config = Config('.')
+    config['ROW'] = quoting
+    rows = _quoting_rows({'more_replies': more_replies, 'plain': {'key': quoting}, 'config': config})
+    assert sorted(r.quote_ap_id for r in rows) == sorted([reply.quote_ap_id, quoting.quote_ap_id])

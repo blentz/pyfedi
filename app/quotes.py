@@ -6,6 +6,7 @@ cache for every quoting row in a template's context with one query per table, so
 look each one up. What `_shows_card` needs of the viewer and of the site's bans is cached per request too
 (`g.quote_viewer`, `g.quote_banned_instances`), so a page of cards does not repeat those lookups per card."""
 import re
+from collections import defaultdict
 
 from flask import current_app, g, has_request_context
 from flask_login import current_user
@@ -91,6 +92,8 @@ def _quoting_rows(context: dict) -> list:
                 if 'comment' in value:  # a comment-tree node: {'comment': row, 'replies': [...]}
                     stack.append(value['comment'])
                     stack.extend(value.get('replies') or [])
+                elif type(value) in (dict, defaultdict):  # e.g. show_post's more_replies; not config or session
+                    stack.extend(value.values())
             elif isinstance(value, (list, tuple)):
                 stack.extend(value)
             else:  # a Pagination: its rows are already loaded
