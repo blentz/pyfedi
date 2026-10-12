@@ -695,3 +695,27 @@ def test_no_search_fetches_a_self_link_on_a_banned_instance(stored_as, http_mock
     assert search(address) is None
     assert [call.request.url.host for call in http_mock.calls] == ['alias.example']
     assert stored_as == []
+
+
+# --- a trailing dot is the same host (R1 fix round 2, item 3) ---------------
+#
+# `banned.example.` is the fully-qualified form of `banned.example`: DNS resolves it and httpx fetches it. The ban
+# list compares through inbox_domain, which lowercases and strips the trailing dot, so both gates the R1 resolvers
+# add refuse it.
+
+
+def test_a_self_link_on_a_banned_host_written_with_a_trailing_dot_is_not_fetched(app, db_session, http_mock):
+    make_banned_instance('banned.example')
+    serve_webfinger(http_mock, 'alias.example', 'https://BANNED.example./users/alice')
+
+    assert create_actor_from_remote('alice@alias.example') is None
+    assert [call.request.url.host for call in http_mock.calls] == ['alias.example']
+
+
+def test_an_id_on_a_banned_host_written_with_a_trailing_dot_is_refused_before_any_request(app, db_session,
+                                                                                         http_mock):
+    make_banned_instance('banned.example')
+
+    assert canonical_handle(actor_document('https://banned.example./users/alice', 'alice'),
+                            'alice', 'alias.example') is None
+    assert len(http_mock.calls) == 0
