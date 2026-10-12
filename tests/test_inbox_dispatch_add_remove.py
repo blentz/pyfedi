@@ -1280,6 +1280,28 @@ def test_remove_sends_an_undo_wrapping_a_follow_for_a_remote_community(app, db_s
     assert community.subscriptions_count == 0
 
 
+def test_a_feeds_remove_of_a_community_it_never_listed_unsubscribes_nobody(app, db_session, monkeypatch):
+    """Final review I1 (Task 7 ruling): a feed's plain Remove naming a community that has no FeedItem in that
+    feed is a logged no-op. A member who joined the community through a feed (this one before an earlier
+    removal, or another one) keeps the membership, and no Undo Follow is sent for them."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, feed = _seed_remote_removable_feed_community()
+    FeedItem.query.filter_by(feed_id=feed.id, community_id=community.id).delete()
+    community.subscriptions_count = 1
+    db.session.commit()
+    member, cm = _make_would_proceed_feed_member('keptmember', instance, feed, community)
+    sends = record_sends(monkeypatch)
+
+    dispatch(_remove_activity_for(feed, community))
+
+    db.session.expire_all()
+    assert sends == []
+    assert CommunityMember.query.filter_by(user_id=member.id, community_id=community.id).count() == 1
+    assert community.subscriptions_count == 1
+    log = ActivityPubLog.query.one()
+    assert (log.activity_type, log.result, log.exception_message) == ('Remove', 'ignored', 'Community is not in feed')
+
+
 def test_remove_sends_nothing_when_the_remote_instance_is_gone_forever(app, db_session, monkeypatch):
     """routes.py's current :1503: `if not community_to_remove.instance.
     gone_forever:` guards the Undo send. `gone_forever` True means no send,
