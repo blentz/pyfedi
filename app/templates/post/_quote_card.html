@@ -1,9 +1,9 @@
 {# C2: what an inbound post or comment quotes. A card for a quoted object the viewer may see, else a plain link. #}
-{% macro render_quote(item, locale=None) -%}
+{% macro render_quote(item, locale=None, blur=False) -%}
 {% set quote = quote_state(item) -%}
 {% if quote -%}
 {% if quote.kind == 'card' -%}
-<blockquote class="quote_card">
+<blockquote class="quote_card{{ ' blur' if blur }}">
     <div class="quote_card_meta">
         <a href="/u/{{ quote.author.link() }}">{{ quote.author.display_name() }}</a>
         {%- if quote.community %} · <a href="/c/{{ quote.community.link() }}">{{ quote.community.display_name() }}</a>{% endif %}
@@ -12,7 +12,7 @@
     <a class="quote_card_text" href="{{ quote.href }}">{{ quote.text }}</a>
 </blockquote>
 {%- else -%}
-<p class="quote_card quote_line">{{ _('Quoting:') }} <a href="{{ quote.url }}" rel="nofollow ugc">{{ quote.url }}</a></p>
+<p class="quote_card quote_line{{ ' blur' if blur }}">{{ _('Quoting:') }} <a href="{{ quote.url }}" rel="nofollow ugc">{{ quote.url }}</a></p>
 {%- endif %}
 {%- endif %}
 {%- endmacro %}

@@ -413,3 +413,48 @@ def test_a_titleless_quoted_post_with_a_content_warning_shows_the_warning(world)
     world['target'].content_warning = 'gore'
     state = quote_state(world['quoting'], world['viewer'])
     assert state['text'] == 'gore'
+
+
+TEASER = ("{% from '{theme}post/post_teaser/_macros.html' import render_{kind} %}"
+          "{{ render_{kind}(post, blur_content=blur, current_user=current_user, locale='en', request=request, user_pronouns={}, reported_posts=[], admin_ids=[], user_flair={}, user_notes={}, moderated_community_ids=[], joined_communities=[], communities_banned_from_list=[]) }}")
+TEASER_KINDS = ['article', 'event', 'link', 'poll', 'image']
+
+
+def render_teaser(app, theme, kind, post, blur=False):
+    source = TEASER.replace('{theme}', theme).replace('{kind}', kind)
+    with app.test_request_context('/'):
+        return BeautifulSoup(render_template_string(source, post=post, blur=blur), 'html.parser')
+
+
+@pytest.mark.parametrize('theme', ['', 'themes/dillo/'])
+@pytest.mark.parametrize('kind', TEASER_KINDS)
+def test_a_teaser_hides_the_card_behind_the_quoting_posts_content_warning(world, app, theme, kind):
+    world['quoting'].body_html = '<p>my take</p>'
+    assert render_teaser(app, theme, kind, world['quoting']).select_one('.quote_card') is not None
+    world['quoting'].content_warning = 'politics'
+    assert render_teaser(app, theme, kind, world['quoting']).select_one('.quote_card') is None
+
+
+@pytest.mark.parametrize('theme', ['', 'themes/dillo/'])
+@pytest.mark.parametrize('kind', TEASER_KINDS)
+def test_a_teaser_blurs_the_card_with_the_body(world, app, theme, kind):
+    world['quoting'].body_html = '<p>my take</p>'
+    assert 'blur' not in render_teaser(app, theme, kind, world['quoting']).select_one('.quote_card')['class']
+    assert 'blur' in render_teaser(app, theme, kind, world['quoting'], blur=True).select_one('.quote_card')['class']
+
+
+@pytest.mark.parametrize('theme', ['', 'themes/dillo/'])
+def test_a_teaser_blurs_the_line_too(world, app, theme):
+    world['quoting'].quote_ap_id = 'https://nowhere.test/1'
+    assert 'blur' in render_teaser(app, theme, 'article', world['quoting'], blur=True).select_one('.quote_line')['class']
+
+
+@pytest.mark.usefixtures('site', 'csrf_on')
+def test_a_comments_card_sits_inside_its_content_warning(world, app):
+    reply = make_post_reply(world['target'], world['quoter'], body='replying')
+    reply.quote_ap_id = world['target'].ap_id
+    reply.content_warning = 'politics'
+    db.session.commit()
+    response = logged_in_client(app, world['viewer']).get(f"/post/{world['target'].id}")
+    comment = BeautifulSoup(response.data, 'html.parser').select_one(f'#comment_{reply.id}')
+    assert comment.select_one('details.content_warning .quote_card') is not None
