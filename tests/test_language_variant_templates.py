@@ -185,3 +185,29 @@ def test_continue_discussion_ajax_shows_the_requested_variant(page_world, app):
     assert response.status_code == 200 and 'salut' in response.get_data(as_text=True)
 
 
+
+
+HOSTILE = '<script>alert(1)</script>'
+
+
+def test_a_hostile_variant_title_is_escaped_on_the_post_page(page_world, app):
+    page_world['post'].language_variants = {'fr': dict(FR_POST, title=HOSTILE)}
+    db.session.commit()
+    html = logged_in_client(app, page_world['viewer']).get(f"/post/{page_world['post'].id}?lang=fr").get_data(as_text=True)
+    title = BeautifulSoup(html, 'html.parser').select_one('h1.post_title')
+    assert title.select('script') == [] and title.get_text(strip=True) == HOSTILE
+    assert '&lt;script&gt;alert(1)&lt;/script&gt;' in html
+
+
+@pytest.mark.parametrize('theme', ['', 'themes/dillo/'])
+def test_a_hostile_variant_title_is_escaped_in_a_teaser(page_world, app, theme):
+    page_world['post'].language_variants = {'fr': dict(FR_POST, title=HOSTILE)}
+    db.session.commit()
+    source = (f"{{% from '{theme}post/post_teaser/_macros.html' import render_title %}}"
+              "{{ render_title(post, current_user=current_user, request=request, locale='en', "
+              "user_pronouns={}, reported_posts=[], admin_ids=[], user_flair={}, user_notes={}) }}")
+    with app.test_request_context('/?lang=fr'):
+        html = render_template_string(source, post=page_world['post'])
+    heading = BeautifulSoup(html, 'html.parser').select('h3')[-1]
+    assert heading.select('script') == [] and HOSTILE in heading.get_text()
+    assert '<script>' not in html

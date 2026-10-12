@@ -48,14 +48,6 @@ def logged_in_client(app, user):
     return client
 
 
-def logged_in_client(app, user):
-    client = app.test_client()
-    with client.session_transaction() as sess:
-        sess['_user_id'] = str(user.id)
-        sess['_fresh'] = True
-    return client
-
-
 @pytest.fixture
 def client(app, world, monkeypatch):
     monkeypatch.setitem(app.config, 'TRANSLATE_ENDPOINT', 'http://lt.test')

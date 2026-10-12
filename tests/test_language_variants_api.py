@@ -1,6 +1,4 @@
 """C3: the alpha API carries language variants."""
-import contextlib
-
 import pytest
 
 from app import db
@@ -12,18 +10,6 @@ from tests.factories import (make_community, make_community_member, make_instanc
 
 PEER = 'remote.test'
 FR = {'fr': {'title': 'Bonjour', 'body_html': '<p>bonjour</p>', 'cw': None}}
-
-
-class _RedisLockOnlyDouble:
-    """`app.redis_client` stand-in: only `.lock(...)`, as tests/test_ap_create_reply.py explains."""
-
-    def lock(self, *args, **kwargs):
-        return contextlib.nullcontext()
-
-
-@pytest.fixture
-def redis_lock_only_double(monkeypatch):
-    monkeypatch.setattr('app.redis_client', _RedisLockOnlyDouble())
 
 
 @pytest.fixture
