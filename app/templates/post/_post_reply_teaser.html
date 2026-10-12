@@ -1,3 +1,4 @@
+{% from 'post/_quote_card.html' import render_quote %}
 {# Options:
   teaser: Renders just a teaser
   disable_voting: Disable voting buttons (to prevent mass downvoting)
@@ -83,6 +84,7 @@
                 {% if post_reply.content_warning -%}<details class="content_warning"><summary>{{ post_reply.content_warning }}</summary>{% endif -%}
                 {{ post_reply.body_html | community_links | feed_links | person_links | safe }}
                 {% if post_reply.content_warning -%}</details>{% endif -%}
+                {{ render_quote(post_reply, locale=locale) }}
             {% endif -%}
         </div>
     </div>
