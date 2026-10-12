@@ -272,3 +272,15 @@ def test_private_community_target_is_a_card_only_for_a_member(world):
 def test_banned_community_target_is_a_line(world):
     world['community'].banned = True
     assert quote_state(world['quoting'], world['viewer'])['kind'] == 'line'
+
+
+@pytest.mark.parametrize('change', [{'deleted': True}, {'visibility': VISIBILITY_FOLLOWERS}, {'status': 0}])
+def test_a_quoted_comment_is_a_line_when_its_post_is_not_viewable(world, change):
+    reply = make_post_reply(world['target'], world['quoted_author'])
+    reply.ap_id = f'https://{PEER}/comment/5'
+    world['quoting'].quote_ap_id = reply.ap_id
+    db.session.commit()
+    assert quote_state(world['quoting'], world['viewer'])['kind'] == 'card'
+    for name, value in change.items():
+        setattr(world['target'], name, value)
+    assert quote_state(world['quoting'], world['viewer'])['kind'] == 'line'
