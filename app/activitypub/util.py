@@ -4282,6 +4282,7 @@ def notify_about_post_reply(parent_reply: Union[PostReply, None], new_reply: Pos
 def update_post_reply_from_activity(reply: PostReply, request_json: dict):
     # the same lock, content and language rules as update_post_from_activity (D249, D250, D252, D253)
     with app_pkg.redis_client.lock(f"lock:post_reply:{reply.id}", timeout=60, blocking_timeout=60):
+        reply.quote_ap_id = quote_id_from(request_json['object'])  # C2: an Update sets, changes or clears the quote
         if 'content' in request_json['object'] and request_json['object']['content'] is not None:   # Kbin, Mastodon, etc provide their posts as html
             # prefer Markdown in 'source' in provided
             source_markdown = markdown_source(request_json['object'])  # D1346
@@ -4442,6 +4443,7 @@ def _is_vote_count(value) -> bool:
 
 def update_post_from_activity(post: Post, request_json: dict):
     with app_pkg.redis_client.lock(f"lock:post:{post.id}", timeout=60, blocking_timeout=60):
+        post.quote_ap_id = quote_id_from(request_json['object'])  # C2: an Update sets, changes or clears the quote
         # C1. A Castopod episode Note carries no attachment: the url (audio) and image the post holds came from the
         # PodcastEpisode it links to. While the Note still opens with that link, the Update keeps them.
         episode_audio_url = None
