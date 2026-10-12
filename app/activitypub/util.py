@@ -12,7 +12,7 @@ from io import BytesIO
 from json import JSONDecodeError
 from random import randint
 from typing import Union, Tuple, List
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, urlsplit, parse_qs
 
 from bs4 import BeautifulSoup
 
@@ -6268,15 +6268,28 @@ def _stored_private(object_id: str) -> bool:
     return stored is not None and not is_open(stored)
 
 
+def _same_id(one: str, other: str) -> bool:
+    """Whether two ids name the same object: scheme and host compared without case (RFC 3986 section 6.2.2.1), the
+    rest exactly, since an origin's paths may be case-sensitive (final review M6). An id with no host, or one
+    urlsplit refuses, names nothing."""
+    try:
+        one_parts, other_parts = urlsplit(one), urlsplit(other)
+    except ValueError:
+        return False
+    return bool(one_parts.netloc) and \
+        (one_parts.scheme.lower(), one_parts.netloc.lower()) == (other_parts.scheme.lower(), other_parts.netloc.lower()) and \
+        one_parts[2:] == other_parts[2:]
+
+
 def _is_tombstone(body: Union[bytes, None], object_id: str) -> bool:
-    """True when `body` is a Tombstone for `object_id` itself. The id is compared without case: Group ids are
-    stored lowercased here (interop C1 item 10), while the origin may serve its own casing."""
+    """True when `body` is a Tombstone for `object_id` itself (_same_id). A Group is asked at the id as its origin
+    served it, not the lowercased one stored here (interop C1 item 10, final review M6)."""
     try:
         document = json.loads(body) if body else None
     except (ValueError, RecursionError):   # JSONDecodeError, UnicodeDecodeError; RecursionError: deep nesting
         return False
     return isinstance(document, dict) and document.get('type') == 'Tombstone' and \
-        _id_of(document.get('id')).lower() == object_id.lower()
+        _same_id(_id_of(document.get('id')), object_id)
 
 
 def _origin_refusal_of_delete(object_id: str, label: str, tombstone_required: bool = False) -> Union[str, None]:
@@ -6377,7 +6390,9 @@ def delete_remote_group(community: Community, activity_id: str, saved_json) -> N
     if community.is_local():
         log_incoming_ap(activity_id, APLOG_DELETE, APLOG_FAILURE, saved_json, 'Delete of a local community is not accepted')
         return
-    refusal = _origin_refusal_of_delete(community.ap_profile_id, 'Group Delete', tombstone_required=True)
+    # final review M6: ap_profile_id is stored lowercased, which an origin with case-sensitive paths answers 404
+    refusal = _origin_refusal_of_delete(community.ap_public_url or community.ap_profile_id, 'Group Delete',
+                                        tombstone_required=True)
     if refusal is not None:
         log_incoming_ap(activity_id, APLOG_DELETE, APLOG_FAILURE, saved_json, refusal)
         return
