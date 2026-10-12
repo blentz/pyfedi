@@ -498,6 +498,103 @@ def test_a_moderators_update_of_a_local_community_keeps_its_key_and_ids(app, db_
     assert ActivityPubLog.query.one().result == 'success'
 
 
+IDENTITY_KEYS = ('publicKey', 'inbox', 'outbox', 'endpoints', 'followers', 'featured', 'attributedTo', 'moderators',
+                 'preferredUsername', 'postingWarning', 'theme', 'genAI', 'postUrlType', 'tag')
+
+
+def _local_community_moderated_from(app, monkeypatch, enable_nsfw=True):
+    """A local community, a remote moderator of it, and the dispatcher pointed at it; announces are recorded."""
+    instance = seed_community_owner(PEER)
+    site = make_site()
+    site.enable_nsfw = site.enable_nsfl = enable_nsfw
+    community = make_community(host=app.config['SERVER_NAME'])
+    community.ap_followers_url = None
+    community.ap_moderators_url = None
+    moderator = make_user(instance, 'moderator')
+    moderator.ap_fetched_at = utcnow()
+    db.session.commit()
+    make_community_member(moderator, community, is_moderator=True)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: community)
+    monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
+    calls = record_moderation(monkeypatch, 'announce_activity_to_followers')
+    _record_fetches(monkeypatch)
+    monkeypatch.setattr(activitypub_util, 'make_image_sizes', lambda *args, **kwargs: None)
+    return community, moderator, calls
+
+
+def test_the_re_announce_of_a_moderators_update_forwards_only_what_was_applied(app, db_session, monkeypatch):
+    """Final review M1. The local community re-announced the moderator's document as sent, key, inbox and
+    collection URLs included, under its own signature. It forwards only the fields the local guard applied."""
+    community, moderator, calls = _local_community_moderated_from(app, monkeypatch)
+    document = _hostile_group_document(community.ap_profile_id)
+    document['sensitive'] = True
+    document['postingRestrictedToMods'] = True
+    update = create_activity(moderator, document, activity_type='Update')
+
+    dispatch(update)
+
+    [(args, kwargs)] = calls['announce_activity_to_followers']
+    forwarded = args[2]
+    assert forwarded['type'] == 'Update' and forwarded['id'] == update['id']
+    assert forwarded['object'] == {'type': 'Group', 'id': community.public_url(), 'name': 'Renamed by a moderator',
+                                   'summary': '<p>a new description</p>', 'sensitive': True, 'nsfl': True,
+                                   'postingRestrictedToMods': True}
+    assert not set(IDENTITY_KEYS) & set(forwarded['object'])
+    assert update['object']['publicKey'] == {'publicKeyPem': ATTACKER_KEY}   # the received document is untouched
+
+
+def test_the_re_announce_forwards_a_new_remote_icon_but_not_an_echo_of_our_own(app, db_session, monkeypatch,
+                                                                              tmp_path):
+    community, moderator, calls = _local_community_moderated_from(app, monkeypatch)
+    for column in ('icon', 'image'):
+        path = tmp_path / f'{column}.png'
+        path.write_bytes(b'png')
+        setattr(community, column, make_file(file_path=str(path)))
+    db.session.commit()
+    new_icon = f'https://{PEER}/pictrs/image/new-icon.png'
+    document = _lemmy_group_update_document(community, new_icon,
+                                            f"{app.config['SERVER_URL']}{community.header_image()}")
+    document['source'] = {'content': 'a moderator *edited* this', 'mediaType': 'text/markdown'}
+    document['language'] = [{'identifier': 'en', 'name': 'English'}]
+
+    dispatch(create_activity(moderator, document, activity_type='Update'))
+
+    [(args, kwargs)] = calls['announce_activity_to_followers']
+    forwarded = args[2]['object']
+    assert forwarded['icon'] == {'type': 'Image', 'url': new_icon}
+    assert 'image' not in forwarded
+    assert forwarded['source'] == document['source']
+    assert forwarded['language'] == document['language']
+    assert forwarded['sensitive'] is False and forwarded['postingRestrictedToMods'] is False
+    assert 'nsfl' not in forwarded
+
+
+def test_the_re_announce_states_the_sensitivity_the_site_allowed(app, db_session, monkeypatch):
+    """R203: with NSFW and NSFL disabled on the site the community stays neither, so that is what is forwarded."""
+    community, moderator, calls = _local_community_moderated_from(app, monkeypatch, enable_nsfw=False)
+    document = {'type': 'Group', 'id': community.ap_profile_id, 'name': 'x', 'content': '<p>plain content</p>',
+                'sensitive': True, 'nsfl': True, 'icon': 'not an image'}
+
+    dispatch(create_activity(moderator, document, activity_type='Update'))
+
+    [(args, kwargs)] = calls['announce_activity_to_followers']
+    assert args[2]['object'] == {'type': 'Group', 'id': community.public_url(), 'name': 'x',
+                                 'content': '<p>plain content</p>', 'sensitive': False,
+                                 'postingRestrictedToMods': False}
+
+
+def test_the_re_announce_of_a_bare_document_states_only_the_two_flags_it_resets(app, db_session, monkeypatch):
+    """An unusable name and no description change nothing, so neither is forwarded."""
+    community, moderator, calls = _local_community_moderated_from(app, monkeypatch)
+
+    dispatch(create_activity(moderator, {'type': 'Group', 'id': community.ap_profile_id, 'name': ' '},
+                             activity_type='Update'))
+
+    [(args, kwargs)] = calls['announce_activity_to_followers']
+    assert args[2]['object'] == {'type': 'Group', 'id': community.public_url(), 'sensitive': False,
+                                 'postingRestrictedToMods': False}
+
+
 def test_the_same_document_for_a_remote_community_still_replaces_its_key(app, db_session, monkeypatch):
     community = _remote_community()
     community.public_key = OLD_KEY
