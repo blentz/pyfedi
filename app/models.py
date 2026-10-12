@@ -2676,7 +2676,7 @@ class Post(db.Model):
             find_licence_or_create, make_image_sizes, notify_about_post, find_flair_or_create, host_of, \
             activitypub_visibility, set_post_gallery, content_warning_from, gallery_attachments, \
             gallery_image_is_blocked, castopod_episode_url, fetch_castopod_episode_audio, can_view, \
-            podcast_episode_title, quote_id_from
+            podcast_episode_title, quote_id_from, language_variants_from, object_language
         # cycle: app.utils imports from this module
         from app.utils import allowlist_html, markdown_to_html, html_to_text, microblog_content_to_title, \
             microblog_content_to_link, strip_quote_fallback, blocked_phrases, get_setting, \
@@ -3046,14 +3046,11 @@ class Post(db.Model):
             # nothing about their TYPES: `identifier: 5` reached a String(5) column
             # as `ProgrammingError: operator does not exist: character varying =
             # integer`, and a 50-character one was a DataError.
-            ap_language = language_from_ap(request_json['object'].get('language'))
-            if ap_language is not None:
-                post.language = find_language_or_create(*ap_language)
-            # A non-empty dict: an empty map names no language, like an absent one, and next(iter({})) raises
-            elif isinstance(request_json['object'].get('contentMap'), dict) and request_json['object']['contentMap']:
-                language = find_language(next(iter(request_json['object']['contentMap'])))
-                post.language_id = language.id if language else None
-            else:
+            map_code, post.language_variants = language_variants_from(request_json['object'], post.quote_ap_id)  # C3
+            language = object_language(request_json['object'], map_code)
+            if language is not None:
+                post.language = language
+            elif map_code is None:
                 from app.utils import site_language_id  # cycle: app.utils imports from this module
                 post.language_id = site_language_id()
             if 'licence' in request_json['object'] and isinstance(request_json['object']['licence'], dict) \
@@ -4080,7 +4077,7 @@ class PostReply(db.Model):
             reply_is_just_link_to_gif_reaction, reply_is_low_effort, wilson_confidence_lower_bound, get_setting
         # cycle: app.activitypub.util imports from this module
         from app.activitypub.util import notify_about_post_reply, activitypub_visibility, content_warning_from, \
-            quote_id_from
+            quote_id_from, language_variants_from
 
         if session is None:
             session = db.session
@@ -4118,6 +4115,9 @@ class PostReply(db.Model):
                           content_warning=content_warning_from(request_json['object']) if request_json else None,
                           ap_id=request_json['object']['id'] if request_json else None,
                           quote_ap_id=quote_id_from(request_json['object']) if request_json else None,
+                          language_variants=language_variants_from(request_json['object'],
+                                                                   quote_id_from(request_json['object']))[1]
+                          if request_json else None,
                           ap_create_id=request_json['id'] if request_json else None,
                           ap_announce_id=announce_id)
         # 'type' in request_json, not just request_json -- Post.new's equivalent

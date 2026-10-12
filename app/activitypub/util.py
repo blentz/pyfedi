@@ -3780,20 +3780,17 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
                 body = html_to_text(body_html)
 
         # Language - Lemmy uses 'language' while Mastodon uses 'contentMap'
+        # Language: C3 takes contentMap's default (the key whose text is `content`) as well as Lemmy's 'language'
         language_id = None
-        ap_language = language_from_ap(request_json['object'].get('language'))  # D1355
-        if ap_language is not None:
-            language = find_language_or_create(*ap_language)
+        map_code = language_variants_from(request_json['object'])[0]
+        language = object_language(request_json['object'], map_code)
+        if language is not None:
             if language.id is None:
                 # A newly created Language is only add()ed, and under autoflush=False its id
                 # stays None until a flush, so the reply was created with no language (D260).
                 db.session.flush()
             language_id = language.id
-        # A non-empty dict: an empty map names no language, like an absent one, and next(iter({})) raises (D272)
-        elif isinstance(request_json['object'].get('contentMap'), dict) and request_json['object']['contentMap']:
-            language = find_language(next(iter(request_json['object']['contentMap'])))  # Combination of next and iter gets the first key in a dict
-            language_id = language.id if language else None
-        else:
+        elif map_code is None:
             language_id = site_language_id()
 
         distinguished = request_json['object']['distinguished'] if 'distinguished' in request_json['object'] else False
@@ -4371,13 +4368,8 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
         reply.content_warning = content_warning_from(request_json['object'])
         # Language
         old_language_id = reply.language_id
-        new_language = None
-        ap_language = language_from_ap(request_json['object'].get('language'))  # D1355
-        if ap_language is not None:
-            new_language = find_language_or_create(*ap_language)
-        # A non-empty dict: an empty map names no language, like an absent one, and next(iter({})) raises (D255)
-        elif isinstance(request_json['object'].get('contentMap'), dict) and request_json['object']['contentMap']:
-            new_language = find_language(next(iter(request_json['object']['contentMap'])))
+        map_code, reply.language_variants = language_variants_from(request_json['object'], reply.quote_ap_id)  # C3
+        new_language = object_language(request_json['object'], map_code)
         # find_language_or_create() can return a row it has only add()ed, whose id is
         # still None (the app factory sets autoflush=False). Assign the relationship
         # and let SQLAlchemy resolve the id at flush, as the tag and flair arms do.
@@ -4595,13 +4587,8 @@ def update_post_from_activity(post: Post, request_json: dict):
 
         # Language
         old_language_id = post.language_id
-        new_language = None
-        ap_language = language_from_ap(request_json['object'].get('language'))  # D1355
-        if ap_language is not None:
-            new_language = find_language_or_create(*ap_language)
-        # A non-empty dict: an empty map names no language, like an absent one, and next(iter({})) raises (D255)
-        elif isinstance(request_json['object'].get('contentMap'), dict) and request_json['object']['contentMap']:
-            new_language = find_language(next(iter(request_json['object']['contentMap'])))
+        map_code, post.language_variants = language_variants_from(request_json['object'], post.quote_ap_id)  # C3
+        new_language = object_language(request_json['object'], map_code)
         # find_language_or_create() can return a row it has only add()ed, whose id is still
         # None (the app factory sets autoflush=False), so `id is None` means "brand new" and
         # not "same as a post that has no language". Assign the relationship and let
