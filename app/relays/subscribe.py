@@ -36,15 +36,18 @@ RELAY_ACTOR_TYPES = ('Application', 'Service')
 
 
 def detect_relay(url: str) -> dict:
+    """The relay at `url`: its style, inbox, actor and key. Reached from the admin relay page and the relay CLI
+    (add_relay, retry_relay) and from inbox signature verification (inbound._relay_key); no housekeeping task calls
+    it, so no fetch here sleeps or retries (D775)."""
     parts = urlsplit(url)
     if parts.path.rstrip('/').endswith('/inbox'):
         actor_url = urlunsplit(parts._replace(path=parts.path.rstrip('/')[:-len('inbox')] + 'actor'))
-        document = remote_object_to_json(actor_url)
+        document = remote_object_to_json(actor_url, retry_delay=0)
         is_relay = isinstance(document, dict) and document.get('type') in RELAY_ACTOR_TYPES
         found = _actor_parts(document) if is_relay else None
         actor_id, public_key = (found[0], found[2]) if found else (None, None)
         return {'style': STYLE_MASTODON, 'inbox_url': url, 'actor_id': actor_id, 'public_key': public_key}
-    document = remote_object_to_json(url)
+    document = remote_object_to_json(url, retry_delay=0)
     found = _actor_parts(document)
     if not found or not isinstance(found[1], str):
         raise RelayError(f'{url} is not a relay actor with an inbox')
@@ -104,17 +107,18 @@ def _lists_us_as_follower(relay) -> bool:
     """True when the relay's followers collection names the instance actor.
 
     barkshark ActivityRelay lists every instance it accepted there, and its Accept does not always arrive.
-    Only the collection itself and its first page are read, and only on the relay actor's own host."""
+    Only the collection itself and its first page are read, and only on the relay actor's own host. Called only
+    from retry_relay (the admin relay page, the relay CLI), so no fetch sleeps or retries (D775)."""
     if not relay.actor_id:
         return False
-    actor = remote_object_to_json(relay.actor_id)
+    actor = remote_object_to_json(relay.actor_id, retry_delay=0)
     followers = actor.get('followers') if isinstance(actor, dict) else None
     if not isinstance(followers, str) or urlsplit(followers).hostname != urlsplit(relay.actor_id).hostname:
         return False
-    collection = remote_object_to_json(followers)
+    collection = remote_object_to_json(followers, retry_delay=0)
     first = collection.get('first') if isinstance(collection, dict) else None
     if isinstance(first, str) and urlsplit(first).hostname == urlsplit(relay.actor_id).hostname:
-        first = remote_object_to_json(first)
+        first = remote_object_to_json(first, retry_delay=0)
     me = instance_actor_url()
     return me in _collection_items(collection) or me in _collection_items(first)
 

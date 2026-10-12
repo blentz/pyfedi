@@ -21,7 +21,7 @@ def net(monkeypatch):
     calls = {'get': [], 'post': []}
     documents = {}
 
-    def fake_get(uri):
+    def fake_get(uri, retry_delay=3):
         calls['get'].append(uri)
         return documents.get(uri)
 
