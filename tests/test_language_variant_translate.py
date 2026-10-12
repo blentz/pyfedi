@@ -73,20 +73,20 @@ def test_post_translate_sends_the_chosen_variant_with_its_language(world, client
     with patch('app.post.routes.libretranslate_string', side_effect=lambda text, source, target: f'[{source}]{text}') as lt:
         html = client.post(f"/post/{world['post'].id}/translate?lang=fr").get_data(as_text=True)
     assert lt.call_args_list[0].args[0] == '<p>bonjour</p>'
-    assert all(call.kwargs['source'] == 'fr' for call in lt.call_args_list)
+    assert all(call.kwargs['source'] == 'auto' for call in lt.call_args_list)  # a variant's language may not be loaded
     assert 'Bonjour' in html
 
 
 def test_teaser_translate_sends_the_variant_title(world, client):
     with patch('app.post.routes.libretranslate_string', return_value='Hi') as lt:
         client.post(f"/post_teaser/{world['post'].id}/translate?lang=fr")
-    assert lt.call_args.args[0] == 'Bonjour' and lt.call_args.kwargs['source'] == 'fr'
+    assert lt.call_args.args[0] == 'Bonjour' and lt.call_args.kwargs['source'] == 'auto'
 
 
 def test_reply_translate_sends_the_variant(world, client):
     with patch('app.post.routes.libretranslate_string', return_value='<p>hi</p>') as lt:
         client.post(f"/post_reply/{world['reply'].id}/translate?lang=fr")
-    assert lt.call_args.args[0] == '<p>bonjour</p>' and lt.call_args.kwargs['source'] == 'fr'
+    assert lt.call_args.args[0] == '<p>bonjour</p>' and lt.call_args.kwargs['source'] == 'auto'
 
 
 def test_without_lang_the_default_is_sent_as_before(world, client):
@@ -94,6 +94,15 @@ def test_without_lang_the_default_is_sent_as_before(world, client):
         client.post(f"/post/{world['post'].id}/translate")
     assert lt.call_args_list[0].args[0] == world['post'].body_html
     assert lt.call_args_list[0].kwargs['source'] == 'auto'  # English is the site language
+
+
+def test_a_default_language_other_than_the_sites_is_still_the_source(world, client):
+    world['post'].language = Language.query.filter_by(code='fr').first()
+    world['post'].language_variants = None
+    db.session.commit()
+    with patch('app.post.routes.libretranslate_string', return_value='x') as lt:
+        client.post(f"/post/{world['post'].id}/translate")
+    assert lt.call_args_list[0].kwargs['source'] == 'fr'
 
 
 def test_an_item_without_a_language_translates_from_auto(world, client):
