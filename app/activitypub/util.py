@@ -5149,16 +5149,22 @@ def withdraw_report(report: Report, session) -> None:
     that should never have been filed, not one a moderator judged."""
     if report.suspect_post_reply_id:
         suspect = session.get(PostReply, report.suspect_post_reply_id)
-        subtype, target_key, target_id = 'comment_reported', 'suspect_comment_id', report.suspect_post_reply_id
+        subtype, target_key, column = 'comment_reported', 'suspect_comment_id', 'suspect_post_reply_id'
     elif report.suspect_post_id:
         suspect = session.get(Post, report.suspect_post_id)
-        subtype, target_key, target_id = 'post_reported', 'suspect_post_id', report.suspect_post_id
+        subtype, target_key, column = 'post_reported', 'suspect_post_id', 'suspect_post_id'
     else:
         suspect = session.get(User, report.suspect_user_id)
-        subtype, target_key, target_id = 'user_reported', 'suspect_user_id', report.suspect_user_id
+        subtype, target_key, column = 'user_reported', 'suspect_user_id', 'suspect_user_id'
+    target_id = getattr(report, column)
     if suspect.reports > 0:
         suspect.reports -= 1
-    notifications = session.query(Notification).\
+    # A notification does not name the report that raised it. While another open report by the same reporter on
+    # the same target remains, its notifications cannot be told apart from this one's, so all are kept
+    another_open = session.query(Report.id).filter_by(reporter_id=report.reporter_id, type=report.type,
+                                                      status=REPORT_STATE_NEW, **{column: target_id}).\
+        filter(Report.id != report.id).first() is not None
+    notifications = [] if another_open else session.query(Notification).\
         filter_by(notif_type=NOTIF_REPORT, subtype=subtype, author_id=report.reporter_id, read=False).\
         filter(Notification.targets[target_key].as_integer() == target_id).all()
     recipient_ids = {notification.user_id for notification in notifications}
@@ -5178,7 +5184,7 @@ def withdraw_flag(user: User, flag: dict, session) -> tuple:
 
     Owner ruling (interop C1, 2026-10-11): withdraw the report if it is still open; if moderators already
     acted on it (escalated, appealed, resolved or discarded) keep it and log the Undo. Only the reporter may
-    undo.
+    undo: an Undo naming another reporter's Flag id changes nothing and logs a failure.
 
     The report is found by the Flag's id (Report.ap_id) among `user`'s own reports: the id is the sender's
     choice and not unique, so another reporter's Flag under the same id must neither be withdrawn nor stand
@@ -5205,6 +5211,9 @@ def withdraw_flag(user: User, flag: dict, session) -> tuple:
                 filter(Report.ap_id.is_(None)).\
                 order_by(Report.created_at.desc(), Report.id.desc()).with_for_update().first()
     if report is None:
+        if isinstance(flag_id, str) and session.query(Report.id).filter_by(ap_id=flag_id).first() is not None:
+            # someone else's report: nothing changes, but an attempt to withdraw it is worth a distinct line
+            return APLOG_FAILURE, 'Undo Flag: only the reporter may withdraw a report'
         return APLOG_IGNORED, 'Undo Flag: no matching report'
     if report.status != REPORT_STATE_NEW:
         session.commit()  # release the row lock
