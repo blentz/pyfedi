@@ -10,6 +10,7 @@ from flask import current_app, g
 from flask_login import current_user
 
 from app import db
+from app.constants import POST_STATUS_PUBLISHED
 from app.models import BannedInstances, Community, Instance, Post, PostReply, QuoteAuthorization
 from app.utils import blocked_communities, blocked_or_banned_instances, blocked_users, communities_banned_from, \
     shorten_string
@@ -97,6 +98,8 @@ def _shows_card(item, q, user) -> bool:
     if instance is not None and db.session.query(BannedInstances.id).filter_by(domain=instance.domain).first():
         return False
     post = q if isinstance(q, Post) else q.post
+    if post.status < POST_STATUS_PUBLISHED and uid != post.user_id:  # refuse_unpublished_post: the author's alone
+        return False
     for flag in ('nsfw', 'nsfl'):  # R4: only a signed-in viewer set to Show sees a sensitive card
         if getattr(post, flag) and (not uid or getattr(user, 'hide_' + flag) != 0):
             return False
