@@ -437,3 +437,33 @@ def test_a_deleted_replys_view_does_not_carry_the_quote(world):
     db.session.commit()
     view = reply_view(reply, variant=1)
     assert view['body'] == '' and view['quote_ap_id'] is None
+
+
+def test_a_legacy_event_whose_url_is_the_quote_loses_it_on_update(world, redis_lock_only_double):
+    post = _event_post(world, 18)
+    from app.models import File
+    post.url = QUOTED  # ingested before C2, when the quote's fallback link became the url
+    post.quote_ap_id = QUOTED
+    post.image = File(source_url='https://remote.test/banner.png')
+    db.session.commit()
+    banner_id = post.image_id
+    update_post_from_activity(post, {'id': 'u', 'type': 'Update', 'object': _note(18, quote=QUOTED)})
+    assert post.url is None and post.type == POST_TYPE_EVENT and post.image_id == banner_id
+
+
+def test_a_legacy_post_whose_url_is_the_quote_becomes_a_discussion_on_update(world, redis_lock_only_double):
+    from app.constants import POST_TYPE_ARTICLE, POST_TYPE_LINK
+    community, author, _ = world
+    post = Post.new(author, community, _create(_note(19)))
+    post.url, post.type, post.quote_ap_id = QUOTED, POST_TYPE_LINK, QUOTED
+    db.session.commit()
+    update_post_from_activity(post, {'id': 'u', 'type': 'Update', 'object': _note(19, quote=QUOTED)})
+    assert post.url is None and post.type == POST_TYPE_ARTICLE
+
+
+def test_an_event_keeps_a_url_that_is_not_the_quote(world, redis_lock_only_double):
+    post = _event_post(world, 20)
+    post.url = NEWS
+    db.session.commit()
+    update_post_from_activity(post, {'id': 'u', 'type': 'Update', 'object': _note(20, quote=QUOTED)})
+    assert post.url == NEWS
