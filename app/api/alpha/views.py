@@ -75,7 +75,8 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
                    'removed': False,
                    'locked': not post.comments_enabled,
                    'nsfw': post.nsfw if post.nsfw is not None else False,
-                   'ai_generated': post.ai_generated if post.ai_generated is not None else False})
+                   'ai_generated': post.ai_generated if post.ai_generated is not None else False,
+                   'quote_ap_id': post.quote_ap_id})
         if post.body:
             v1['body'] = post.body
         if post.deleted and (user_id is None or user_id not in g.admin_ids):
@@ -790,7 +791,8 @@ def reply_view(reply: PostReply | int, variant: int, user_id=None,
                    'language_id': reply.language_id if reply.language_id else 0,
                    'distinguished': reply.distinguished if reply.distinguished else False,
                    'locked': not reply.replies_enabled if reply.replies_enabled is not None else False,
-                   'removed': False})
+                   'removed': False,
+                   'quote_ap_id': reply.quote_ap_id})
         v1['repliesEnabled'] = not v1['locked']
 
         if not reply.path:
