@@ -119,6 +119,27 @@ def test_search_for_user_signs_once(env, http_mock, sleeps):
     sleeps.assert_not_called()
 
 
+def test_a_retrying_user_search_signs_again_after_a_failed_signature(env, http_mock, sleeps):
+    http_mock.get(WEBFINGER).respond(200, json=self_link())
+    http_mock.get(ACTOR).respond(401)
+    forbidden = Mock(status_code=403)
+
+    with patch('app.user.utils.signed_get_request', side_effect=[refused(), forbidden]) as signed:
+        assert search_for_user(f'@someone@{SERVER}', retry=True) is None
+    assert signed.call_count == 2
+    sleeps.assert_called_once_with(3)
+
+
+def test_a_retrying_user_search_gives_up_after_two_failed_signatures(env, http_mock, sleeps):
+    http_mock.get(WEBFINGER).respond(200, json=self_link())
+    http_mock.get(ACTOR).respond(401)
+
+    with patch('app.user.utils.signed_get_request', side_effect=refused()) as signed:
+        assert search_for_user(f'@someone@{SERVER}', retry=True) is None
+    assert signed.call_count == 2
+    sleeps.assert_called_once_with(3)
+
+
 def test_search_for_community_asks_webfinger_once(env, http_mock, sleeps):
     webfinger = http_mock.get(WEBFINGER).mock(side_effect=refused())
 
