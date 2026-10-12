@@ -1,0 +1,18 @@
+{# C2: what an inbound post or comment quotes. A card for a quoted object the viewer may see, else a plain link. #}
+{% macro render_quote(item, locale=None) -%}
+{% set quote = quote_state(item) -%}
+{% if quote -%}
+{% if quote.kind == 'card' -%}
+<blockquote class="quote_card">
+    <div class="quote_card_meta">
+        <a href="/u/{{ quote.author.link() }}">{{ quote.author.display_name() }}</a>
+        {%- if quote.community %} · <a href="/c/{{ quote.community.link() }}">{{ quote.community.display_name() }}</a>{% endif %}
+        · <time datetime="{{ quote.posted_at.isoformat() }}">{{ localize_datetime(quote.posted_at, locale or 'en') }}</time>
+    </div>
+    <a class="quote_card_text" href="{{ quote.href }}">{{ quote.text }}</a>
+</blockquote>
+{%- else -%}
+<p class="quote_card quote_line">{{ _('Quoting:') }} <a href="{{ quote.url }}" rel="nofollow ugc">{{ quote.url }}</a></p>
+{%- endif %}
+{%- endif %}
+{%- endmacro %}

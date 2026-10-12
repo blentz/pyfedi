@@ -304,3 +304,82 @@ def test_without_a_request_nothing_is_cached_in_g(world):
 def test_local_url_with_a_trailing_newline_is_not_an_id(world, app):
     world['quoting'].quote_ap_id = f"{app.config['SERVER_URL']}/post/{world['target'].id}\n"
     assert quote_target(world['quoting']) is None
+
+
+TEMPLATE = "{% from 'post/_quote_card.html' import render_quote %}{{ render_quote(item) }}"
+
+
+def logged_in_client(app, user):
+    client = app.test_client()
+    with client.session_transaction() as sess:
+        sess['_user_id'] = str(user.id)
+        sess['_fresh'] = True
+    return client
+
+
+def test_card_renders_author_text_and_link(world, app):
+    with app.test_request_context('/'):
+        html = render_template_string(TEMPLATE, item=world['quoting'])
+    assert 'class="quote_card"' in html and 'the quoted words' not in html  # a titled post shows its title
+    assert world['target'].title in html and f"/post/{world['target'].id}" in html
+
+
+def test_the_line_escapes_the_url(world, app):
+    world['quoting'].quote_ap_id = 'https://nowhere.test/a?b=<x>&c="d"'
+    with app.test_request_context('/'):
+        html = render_template_string(TEMPLATE, item=world['quoting'])
+    assert '<x>' not in html and '&lt;x&gt;' in html and 'rel="nofollow ugc"' in html
+
+
+def test_nothing_renders_without_a_quote(world, app):
+    with app.test_request_context('/'):
+        assert render_template_string(TEMPLATE, item=world['target']).strip() == ''
+
+
+def test_card_does_not_nest(world, app):
+    world['target'].quote_ap_id = world['quoting'].ap_id  # the quoted post itself quotes something
+    db.session.commit()
+    with app.test_request_context('/'):
+        html = render_template_string(TEMPLATE, item=world['quoting'])
+    assert html.count('<blockquote class="quote_card"') == 1 and world['quoting'].quote_ap_id not in html
+
+
+
+
+@pytest.fixture
+def csrf_on(app):
+    """The post page renders a reply form whose csrf_token only exists when CSRF is on."""
+    app.config['WTF_CSRF_ENABLED'] = True
+    yield
+    app.config['WTF_CSRF_ENABLED'] = False
+
+
+@pytest.mark.usefixtures('site', 'csrf_on')
+def test_post_page_shows_the_card(world, app):
+    response = logged_in_client(app, world['viewer']).get(f"/post/{world['quoting'].id}")
+    assert response.status_code == 200 and b'quote_card' in response.data
+
+
+@pytest.mark.usefixtures('site', 'csrf_on')
+def test_post_page_shows_the_card_on_a_comment(world, app):
+    reply = make_post_reply(world['target'], world['quoter'], body='replying')
+    reply.quote_ap_id = world['target'].ap_id
+    db.session.commit()
+    response = logged_in_client(app, world['viewer']).get(f"/post/{world['target'].id}")
+    assert response.status_code == 200 and b'quote_card' in response.data
+
+
+@pytest.mark.usefixtures('site')
+def test_community_listing_shows_the_card(world, app):
+    world['quoting'].body_html = '<p>my take</p>'
+    db.session.commit()
+    response = logged_in_client(app, world['viewer']).get(f"/c/{world['community'].name}")
+    assert response.status_code == 200 and b'quote_card' in response.data
+
+
+@pytest.mark.usefixtures('site')
+def test_a_quote_with_no_body_still_shows_in_the_listing(world, app):
+    world['quoting'].body_html = ''
+    db.session.commit()
+    response = logged_in_client(app, world['viewer']).get(f"/c/{world['community'].name}")
+    assert b'quote_card' in response.data

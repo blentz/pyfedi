@@ -1,3 +1,4 @@
+{% from 'post/_quote_card.html' import render_quote %}
 {# D1085: moderators and admins see a deleted post's original; anyone else sees a placeholder where its author deleted it #}
 {% set sees_deleted_original = not post.deleted or post.community.is_moderator() or post.community.is_owner() or current_user.get_id() in admin_ids -%}
 {% set deleted_by_author_placeholder = post.deleted and post.deleted_by == post.user_id and not sees_deleted_original -%}
@@ -287,6 +288,7 @@
                     {{ _('Licence') }}: {{ post.licence.name }}
                 </p>
             {% endif -%}
+            {% if sees_deleted_original %}{{ render_quote(post, locale=locale) }}{% endif %}
         </div>
         {% if post.content_warning and sees_deleted_original -%}</details>{% endif -%}
         {% if post.type == POST_TYPE_POLL and not post.deleted -%}
