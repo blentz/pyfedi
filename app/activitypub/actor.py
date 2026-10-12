@@ -315,7 +315,7 @@ def create_actor_from_remote(actor_address: str, community_only=False,
             handle = canonical_handle(actor_json, address, server)   # interop C1 item 9
             if handle is None:
                 return None
-            address, server = handle
+            address, server, actor_json = handle   # the origin's document, never an alias's copy
 
     if actor_json:
         actor_model = actor_json_to_model(actor_json, address, server)

@@ -189,8 +189,10 @@ def test_a_preferred_username_that_is_not_a_plain_name_is_refused_without_a_look
 def test_names_other_platforms_allow_are_plain(app, db_session, http_mock, name):
     """Dots and hyphens (PeerTube, Friendica) and non-Latin letters (Lemmy) are names, not syntax."""
     reverse = serve_webfinger(http_mock, 'social.example', ALICE)
+    serve_actor(http_mock, actor_document(ALICE, name))
 
-    assert canonical_handle(actor_document(ALICE, name), 'nick', 'alias.example') == (name.lower(), 'social.example')
+    assert canonical_handle(actor_document(ALICE, name), 'nick', 'alias.example')[:2] == (name.lower(),
+                                                                                          'social.example')
     assert reverse.call_count == 1
 
 
@@ -205,10 +207,11 @@ def test_an_actor_id_without_a_host_is_refused_without_a_lookup(app, db_session,
 def test_the_reverse_lookup_goes_to_the_id_host_not_one_the_document_names(app, db_session, http_mock):
     """`url`, `inbox` and the alias server are all ignored: only the id's host may confirm the handle."""
     reverse = serve_webfinger(http_mock, 'social.example', ALICE)   # no alias.example route: a call to it fails
+    serve_actor(http_mock, actor_document(ALICE, 'alice'))
     document = actor_document(ALICE, 'alice', url='https://alias.example/@alice', inbox='https://alias.example/inbox')
 
-    assert canonical_handle(document, 'alice', 'alias.example') == ('alice', 'social.example')
-    assert [call.request.url.host for call in http_mock.calls] == ['social.example']
+    assert canonical_handle(document, 'alice', 'alias.example')[:2] == ('alice', 'social.example')
+    assert [call.request.url.host for call in http_mock.calls] == ['social.example', 'social.example']
     assert reverse.call_count == 1
 
 
@@ -243,15 +246,125 @@ def test_under_an_allowlist_a_listed_canonical_host_is_asked(app, db_session, ht
                         lambda name, default=None: True if name == 'use_allowlist' else default)
     monkeypatch.setattr('app.activitypub.util.instance_allowed', lambda host: host == 'social.example')
     serve_webfinger(http_mock, 'social.example', ALICE)
+    serve_actor(http_mock, actor_document(ALICE, 'alice'))
 
-    assert canonical_handle(actor_document(ALICE, 'alice'), 'alice', 'alias.example') == ('alice', 'social.example')
+    assert canonical_handle(actor_document(ALICE, 'alice'), 'alice', 'alias.example')[:2] == ('alice',
+                                                                                              'social.example')
 
 
 def test_a_looked_up_server_with_a_port_matches_the_id_host(app, db_session, http_mock):
     """The handle's server is an authority, the id host is a host: compared as hosts, as actor_json_to_model does."""
-    assert canonical_handle(actor_document('https://social.example:8443/users/alice', 'alice'),
-                            'alice', 'social.example:8443') == ('alice', 'social.example:8443')
+    document = actor_document('https://social.example:8443/users/alice', 'alice')
+
+    assert canonical_handle(document, 'alice', 'social.example:8443') == ('alice', 'social.example:8443', document)
     assert len(http_mock.calls) == 0
+
+
+# --- an actor found through an alias is taken from its own host ------------
+#
+# The reverse check proves the canonical handle names actor_id. It proves nothing about the document the ALIAS
+# served: evil.example can serve `id: https://social.example/users/alice` with its own publicKey, and
+# social.example's WebFinger will truthfully confirm alice. So the actor is refetched from actor_id, and only that
+# document is stored.
+
+ALIAS_COPY = 'https://alias.example/users/alice'
+ATTACKER_PEM = '-----BEGIN PUBLIC KEY-----\nattacker-key\n-----END PUBLIC KEY-----\n'
+
+
+def impersonation(http_mock, actor_id=ALICE, name='alice', alias='alias.example', resolve_alias=True,
+                  **origin_fields):
+    """alias.example's WebFinger points at its own copy of actor_id, carrying the attacker's key and name; the
+    origin serves the real document. Returns (the alias copy, the origin document, the origin route).
+    resolve_alias=False leaves the alias's routes out, for a test that hands the copy to canonical_handle itself."""
+    alias_copy = actor_document(actor_id, name, publicKey={'id': f'{actor_id}#main-key', 'owner': actor_id,
+                                                           'publicKeyPem': ATTACKER_PEM})
+    alias_copy['name'] = 'Impostor'   # the display name; actor_document's own parameter is `name`
+    if resolve_alias:
+        serve_webfinger(http_mock, alias, ALIAS_COPY)
+        http_mock.get(ALIAS_COPY).respond(200, json=alias_copy)
+    serve_webfinger(http_mock, host_of_url(actor_id), actor_id)
+    origin = actor_document(actor_id, name, **origin_fields)
+    origin['name'] = 'Alice Origin'
+    return alias_copy, origin, http_mock.get(actor_id).respond(200, json=origin)
+
+
+def host_of_url(url):
+    return url.split('/')[2]
+
+
+def test_the_helper_hands_back_the_origin_document_not_the_alias_copy(app, db_session, http_mock):
+    alias_copy, origin, origin_route = impersonation(http_mock, resolve_alias=False)
+
+    assert canonical_handle(alias_copy, 'alice', 'alias.example') == ('alice', 'social.example', origin)
+    assert origin_route.call_count == 1
+
+
+def test_create_actor_from_remote_stores_the_origin_key_and_name_not_the_alias_copy(app, db_session, http_mock):
+    make_instance('social.example')
+    impersonation(http_mock)
+
+    user = create_actor_from_remote('alice@alias.example')
+
+    assert user.ap_profile_id == ALICE
+    assert user.public_key == PEER_ACTOR_PUBLIC_KEY_PEM
+    assert user.title == 'Alice Origin'
+
+
+def test_an_origin_refetch_that_fails_stores_nothing(app, db_session, http_mock, caplog):
+    make_instance('social.example')
+    serve_webfinger(http_mock, 'alias.example', ALIAS_COPY)
+    http_mock.get(ALIAS_COPY).respond(200, json=actor_document(ALICE, 'alice'))
+    serve_webfinger(http_mock, 'social.example', ALICE)
+    http_mock.get(ALICE).respond(503)
+
+    with caplog.at_level('WARNING', logger=app.logger.name):
+        assert create_actor_from_remote('alice@alias.example') is None
+
+    assert db.session.query(User).count() == 0
+    assert 'WebFinger reverse check refused alice@alias.example' in caplog.text
+
+
+def test_an_origin_refetch_is_not_retried(app, db_session, http_mock):
+    serve_webfinger(http_mock, 'social.example', ALICE)
+    origin = http_mock.get(ALICE).mock(side_effect=httpx.ConnectError('down'))
+
+    assert canonical_handle(actor_document(ALICE, 'alice'), 'alice', 'alias.example') is None
+    assert origin.call_count == 1
+
+
+def test_an_origin_that_answers_a_different_id_stores_nothing(app, db_session, http_mock, caplog):
+    make_instance('social.example')
+    impersonation(http_mock, id='https://social.example/users/somebody-else')
+
+    with caplog.at_level('WARNING', logger=app.logger.name):
+        assert create_actor_from_remote('alice@alias.example') is None
+
+    assert db.session.query(User).count() == 0
+    assert 'WebFinger reverse check refused alice@alias.example' in caplog.text
+
+
+def test_an_origin_id_that_differs_only_in_case_and_space_is_the_same_actor(app, db_session, http_mock):
+    """Normalised as names_actor does: stripped and lowercased."""
+    alias_copy, origin, _ = impersonation(http_mock, resolve_alias=False, id=f' {ALICE.upper()} ')
+
+    assert canonical_handle(alias_copy, 'alice', 'alias.example') == ('alice', 'social.example', origin)
+
+
+def test_an_origin_document_of_another_type_stores_nothing(app, db_session, http_mock):
+    """The resolver chose its branch by the alias copy's type; the origin must be the same kind of actor."""
+    alias_copy, _, _ = impersonation(http_mock, resolve_alias=False, type='Group')
+
+    assert canonical_handle(alias_copy, 'alice', 'alias.example') is None
+
+
+def test_a_same_host_alias_is_not_refetched(app, db_session, http_mock):
+    """The document came from the looked-up host's own WebFinger answer: the path before C1, unchanged."""
+    reverse = serve_webfinger(http_mock, 'social.example', ALICE)
+    document = actor_document(ALICE, 'alice')
+
+    assert canonical_handle(document, 'nick', 'social.example') == ('alice', 'social.example', document)
+    assert [call.request.url.path for call in http_mock.calls] == ['/.well-known/webfinger']
+    assert reverse.call_count == 1
 
 
 # --- the other three resolvers ask the same helper (Amendment A) -----------
@@ -263,15 +376,21 @@ GROUP = 'https://social.example/c/memes'
 FEED = 'https://social.example/f/news'
 
 
+stored_as_documents = []   # the documents stored_as saw, in order
+
+
 @pytest.fixture
 def stored_as(app, db_session, site, monkeypatch):
     """Record every actor_json_to_model call of the three resolver modules; answer None (nothing created)."""
     g.admin_ids = []
     g.site = site
     calls = []
+    documents = stored_as_documents
+    documents.clear()
 
     def record(activity_json, address, server):
         calls.append((activity_json['id'], address, server))
+        documents.append(activity_json)
         return None
 
     for module in ('app.user.utils', 'app.community.util', 'app.feed.util'):
@@ -425,3 +544,38 @@ def test_host_meta_json_is_the_jrd_twin_of_the_xml(app, db_session):
 def test_host_meta_json_is_cached_like_the_xml_route():
     """The suite runs NullCache, so the decorator is checked where flask-caching records it."""
     assert activitypub_routes.host_meta_json.cache_timeout == activitypub_routes.host_meta.cache_timeout == 600
+
+
+@pytest.mark.parametrize('search, address, actor_id, name, kind', [
+    (search_for_user, 'alice@alias.example', ALICE, 'alice', 'Person'),
+    (search_for_community, '!memes@alias.example', GROUP, 'memes', 'Group'),
+    (search_for_feed, '~news@alias.example', FEED, 'news', 'Feed'),
+])
+def test_each_search_stores_the_origin_document_not_the_alias_copy(stored_as, http_mock, search, address,
+                                                                     actor_id, name, kind):
+    alias_copy, origin, _ = impersonation(http_mock, actor_id=actor_id, name=name, type=kind)
+    alias_copy['type'] = kind
+    http_mock.get(ALIAS_COPY).respond(200, json=alias_copy)
+
+    search(address)
+
+    assert stored_as == [(actor_id, name, 'social.example')]
+    assert stored_as_documents == [origin]
+    assert stored_as_documents[0]['publicKey']['publicKeyPem'] == PEER_ACTOR_PUBLIC_KEY_PEM
+
+
+@pytest.mark.parametrize('search, address, actor_id, kind', [
+    (search_for_user, 'alice@alias.example', ALICE, 'Person'),
+    (search_for_community, '!memes@alias.example', GROUP, 'Group'),
+    (search_for_feed, '~news@alias.example', FEED, 'Feed'),
+])
+def test_each_search_stores_nothing_when_the_origin_refetch_fails(stored_as, http_mock, search, address, actor_id,
+                                                                    kind):
+    name = address.lstrip('!~').split('@')[0]
+    serve_webfinger(http_mock, 'alias.example', ALIAS_COPY)
+    http_mock.get(ALIAS_COPY).respond(200, json=actor_document(actor_id, name, type=kind))
+    serve_webfinger(http_mock, 'social.example', actor_id)
+    http_mock.get(actor_id).respond(404)
+
+    assert search(address) is None
+    assert stored_as == []

@@ -177,7 +177,8 @@ def search_for_user(address: str, allow_fetch: bool = True):
                     handle = canonical_handle(object, name, server)   # interop C1 item 9 (Amendment A)
                     if handle is None:
                         return None
-                    user = actor_json_to_model(object, *handle)
+                    name, server, object = handle   # the origin's document, never an alias's copy
+                    user = actor_json_to_model(object, name, server)
                     return user
 
     return None

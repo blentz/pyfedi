@@ -1602,8 +1602,8 @@ def _federates_with(host: str) -> bool:
     return not instance_banned(host)
 
 
-def canonical_handle(actor_json, address: str, server: str, prefix: str = '') -> tuple[str, str] | None:
-    """The (address, server) to store a WebFinger-resolved actor under, or None to refuse it (C1 item 9).
+def canonical_handle(actor_json, address: str, server: str, prefix: str = '') -> tuple[str, str, dict] | None:
+    """The (address, server, actor document) to store a WebFinger-resolved actor as, or None to refuse it (C1 item 9).
 
     The one check every WebFinger resolver makes (spec Amendment A): create_actor_from_remote, search_for_user,
     search_for_community and search_for_feed. The document names its own handle: preferredUsername @ the host of
@@ -1619,30 +1619,52 @@ def canonical_handle(actor_json, address: str, server: str, prefix: str = '') ->
     passes the same instance gate before it is asked anything, so an alias cannot carry in a banned instance's
     actor.
 
+    The reverse check proves the canonical handle names the id. It proves nothing about the document the looked-up
+    server served: evil.example may serve `id: https://mastodon.social/users/victim` with its own publicKey, and
+    mastodon.social's WebFinger will truthfully confirm victim. So when the canonical host is not the looked-up
+    host, the actor is refetched from its id (fetch_object_capped: capped, signed on a 401, no retry), and only that
+    document is handed back -- nothing from the copy the alias served. A failed refetch, or one answering another
+    id (stripped and lowercased, as names_actor compares) or another type, is refused. A same-host alias keeps the
+    document it was given, as before. Callers store the document this returns, never their own.
+
     A document without a string preferredUsername and id is passed through untouched: actor_json_to_model already
     refuses it (D1372), and there is nothing to compare."""
     actor_id = actor_json.get('id') if isinstance(actor_json, dict) else None
     name = actor_json.get('preferredUsername') if isinstance(actor_json, dict) else None
     if not (isinstance(name, str) and name and isinstance(actor_id, str) and actor_id):
-        return address, server
+        return address, server, actor_json
     name = name.strip()   # stripped as actor_name_from_ap stores it
     id_host = host_of(actor_id)
     if not id_host or not WEBFINGER_NAME_RE.fullmatch(name) or len(f'{prefix}{name}@{id_host}') > HANDLE_MAX:
         current_app.logger.warning(f'WebFinger reverse check refused {address}@{server}: '
                                    f'preferredUsername {name!r} or id {actor_id!r} is unusable')
         return None
-    if name.lower() == address.lower() and id_host == host_of(f'//{server}'):
-        return address, server
+    same_host = id_host == host_of(f'//{server}')
+    if same_host and name.lower() == address.lower():
+        return address, server, actor_json
     if not _federates_with(id_host):
         current_app.logger.warning(f'WebFinger reverse check refused {address}@{server}: '
                                    f'{id_host} is not an instance this one federates with')
         return None
     href = webfinger_self_href(f'{prefix}{name}', id_host)
-    if href is not None and href.lower() == actor_id.lower():
-        return name.lower(), id_host
-    current_app.logger.warning(f'WebFinger reverse check refused {address}@{server}: '
-                               f'{prefix}{name}@{id_host} does not resolve to {actor_id!r}')
-    return None
+    if href is None or href.lower() != actor_id.lower():
+        current_app.logger.warning(f'WebFinger reverse check refused {address}@{server}: '
+                                   f'{prefix}{name}@{id_host} does not resolve to {actor_id!r}')
+        return None
+    if same_host:
+        return name.lower(), id_host, actor_json
+    origin, reason = fetch_object_capped(actor_id)
+    if origin is None:
+        current_app.logger.warning(f'WebFinger reverse check refused {address}@{server}: '
+                                   f'refetching {actor_id!r} from its own host failed: {reason}')
+        return None
+    origin_id = origin.get('id')
+    if not isinstance(origin_id, str) or origin_id.strip().lower() != actor_id.strip().lower() \
+            or origin.get('type') != actor_json.get('type'):
+        current_app.logger.warning(f'WebFinger reverse check refused {address}@{server}: '
+                                   f'{actor_id!r} answered as {origin_id!r} of type {origin.get("type")!r}')
+        return None
+    return name.lower(), id_host, origin
 
 
 def actor_json_to_model(activity_json, address, server):

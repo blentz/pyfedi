@@ -113,7 +113,7 @@ def search_for_community(address: str, allow_fetch: bool = True) -> Community | 
                             handle = canonical_handle(community_json, name, server)   # interop C1 item 9
                             if handle is None:
                                 return None
-                            name, server = handle
+                            name, server, community_json = handle   # the origin's document, never an alias's copy
                             community = actor_json_to_model(community_json, name, server)
                             if community:
                                 if current_app.debug:
