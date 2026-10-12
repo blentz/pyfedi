@@ -9,6 +9,7 @@ The Group Update path gains the same rule: the document must describe the commun
 remote Group's document is taken only from the Group. The three refresh tasks also take the actor's inbox from
 the document, keeping the stored one when the document has none.
 """
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -18,8 +19,8 @@ from app.activitypub import routes as activitypub_routes
 from app.activitypub import util as activitypub_util
 from app.activitypub.util import (INBOX_URL_MAX, delivery_inbox_of, names_actor,
                                   refresh_community_profile_task, refresh_feed_profile_task)
-from app.models import ActivityPubLog, Community, Feed, User, utcnow
-from tests.factories import (inbox_activity, make_community, make_community_member, make_site, make_user,
+from app.models import ActivityPubLog, Community, Feed, File, User, utcnow
+from tests.factories import (inbox_activity, make_community, make_community_member, make_file, make_site, make_user,
                              seed_community_owner)
 from tests.test_ap_refresh_profiles import (PEER, _feed_document, _group_document, _person_document,
                                             _remote_community, _remote_feed, _remote_user)
@@ -491,3 +492,142 @@ def test_a_local_communitys_nsfw_and_nsfl_obey_the_site_settings(app, db_session
     community = db.session.get(Community, community_id)
     assert community.nsfw is enabled
     assert community.nsfl is enabled
+
+
+# --- a local community's own uploaded icon and banner are not a pushed document's to replace ---
+
+def _local_community_with_uploads(app, tmp_path):
+    """A local community whose icon and banner are uploads held on disk: File rows with a file_path and no
+    source_url, as app/community/util.py makes them."""
+    seed_community_owner(PEER)
+    community = make_community(host=app.config['SERVER_NAME'])
+    community.ap_followers_url = None
+    for column in ('icon', 'image'):
+        path = tmp_path / f'{column}.png'
+        path.write_bytes(b'png')
+        setattr(community, column, make_file(file_path=str(path)))
+    db.session.commit()
+    return community
+
+
+def _lemmy_group_update_document(community, icon_url, image_url):
+    """The whole Group document Lemmy echoes in every Update{Group}, a moderator's new description included."""
+    return {'type': 'Group', 'id': community.ap_profile_id, 'preferredUsername': community.name,
+            'name': community.title, 'summary': '<p>a moderator edited this</p>',
+            'icon': {'type': 'Image', 'url': icon_url}, 'image': {'type': 'Image', 'url': image_url}}
+
+
+def _record_image_work(monkeypatch):
+    calls = []
+    monkeypatch.setattr(activitypub_util, 'make_image_sizes', lambda *args, **kwargs: calls.append(args))
+    monkeypatch.setattr(File, 'delete_from_disk', lambda self, *args, **kwargs: calls.append(('delete', self.id)))
+    return calls
+
+
+def test_a_moderators_update_echoing_a_local_communitys_own_icon_keeps_the_upload(app, db_session, monkeypatch,
+                                                                                    tmp_path):
+    """Final review I2. A Lemmy moderator's edit of a local community echoes our own served icon and banner URLs.
+    Compared only with source_url (None for an upload), they read as new: the upload was deleted from disk and the
+    URL of the file just deleted was fetched in its place."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    community = _local_community_with_uploads(app, tmp_path)
+    community_id, icon_id, image_id = community.id, community.icon_id, community.image_id
+    icon_path, image_path = community.icon.file_path, community.image.file_path
+    document = _lemmy_group_update_document(
+        community, f"{app.config['SERVER_URL']}{community.icon_image()}",
+        f"{app.config['SERVER_URL']}{community.header_image()}")
+    moderator = make_user(db.session.get(Community, community_id).instance, 'lemmymod')
+    moderator.ap_fetched_at = utcnow()
+    make_community_member(moderator, community, is_moderator=True)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: community)
+    monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
+    record_moderation(monkeypatch, 'announce_activity_to_followers')
+    fetched = _record_fetches(monkeypatch)
+    calls = []
+    monkeypatch.setattr(activitypub_util, 'make_image_sizes', lambda *args, **kwargs: calls.append(args))
+
+    dispatch(create_activity(moderator, document, activity_type='Update'))
+
+    db.session.expire_all()
+    community = db.session.get(Community, community_id)
+    assert 'a moderator edited this' in community.description_html
+    assert (community.icon_id, community.image_id) == (icon_id, image_id)
+    assert (community.icon.file_path, community.icon.source_url) == (icon_path, None)
+    assert (community.image.file_path, community.image.source_url) == (image_path, None)
+    assert os.path.isfile(icon_path) and os.path.isfile(image_path)
+    assert calls == [] and fetched == []
+    assert ActivityPubLog.query.one().result == 'success'
+
+
+def test_any_image_on_our_own_host_leaves_a_local_communitys_upload_alone(app, db_session, monkeypatch, tmp_path):
+    community = _local_community_with_uploads(app, tmp_path)
+    community_id, icon_id, image_id = community.id, community.icon_id, community.image_id
+    own = f"https://{app.config['SERVER_NAME'].upper()}/static/media/communities/elsewhere.png"
+    calls = _record_image_work(monkeypatch)
+
+    refresh_community_profile_task(community_id, _lemmy_group_update_document(community, own, own))
+
+    db.session.expire_all()
+    community = db.session.get(Community, community_id)
+    assert (community.icon_id, community.image_id) == (icon_id, image_id)
+    assert calls == []
+
+
+def test_a_new_remote_icon_for_a_local_community_is_applied_without_deleting_the_upload(app, db_session,
+                                                                                         monkeypatch, tmp_path):
+    """A moderator's real new remote URL is still applied, as before; the upload it replaces stays on disk."""
+    community = _local_community_with_uploads(app, tmp_path)
+    community_id, icon_id, image_id = community.id, community.icon_id, community.image_id
+    calls = _record_image_work(monkeypatch)
+    new_icon, new_image = f'https://{PEER}/pictrs/image/new-icon.png', f'https://{PEER}/pictrs/image/new-banner.png'
+
+    refresh_community_profile_task(community_id, _lemmy_group_update_document(community, new_icon, new_image))
+
+    db.session.expire_all()
+    community = db.session.get(Community, community_id)
+    assert (community.icon.source_url, community.image.source_url) == (new_icon, new_image)
+    assert community.icon_id != icon_id and community.image_id != image_id
+    assert [call for call in calls if call[0] == 'delete'] == []
+    assert len(calls) == 2   # both new images are sized
+
+
+def test_a_local_communitys_fetched_icon_is_still_replaced_and_deleted(app, db_session, monkeypatch):
+    """An icon a moderator set from a remote URL earlier is a fetched copy, not an upload: a newer remote URL
+    replaces it and deletes the copy, as before."""
+    seed_community_owner(PEER)
+    community = make_community(host=app.config['SERVER_NAME'])
+    community.ap_followers_url = None
+    community.icon = make_file(source_url=f'https://{PEER}/pictrs/image/old-icon.png')
+    community.image = make_file(source_url=f'https://{PEER}/pictrs/image/old-banner.png')
+    db.session.commit()
+    community_id, icon_id, image_id = community.id, community.icon_id, community.image_id
+    calls = _record_image_work(monkeypatch)
+
+    refresh_community_profile_task(community_id, _lemmy_group_update_document(
+        community, f'https://{PEER}/pictrs/image/new-icon.png', f'https://{PEER}/pictrs/image/new-banner.png'))
+
+    db.session.expire_all()
+    community = db.session.get(Community, community_id)
+    assert community.icon.source_url == f'https://{PEER}/pictrs/image/new-icon.png'
+    assert ('delete', icon_id) in calls and ('delete', image_id) in calls
+
+
+def test_an_upload_served_from_our_object_store_is_ours_too(app, db_session, monkeypatch):
+    """With S3 storage an upload's file_path is the object store's URL, on another host: echoed back it is still
+    our own file, not a new image."""
+    seed_community_owner(PEER)
+    community = make_community(host=app.config['SERVER_NAME'])
+    community.ap_followers_url = None
+    community.icon = make_file(file_path='https://media.example/communities/ab/cd/icon.png')
+    community.image = make_file(file_path='https://media.example/communities/ab/cd/banner.png')
+    db.session.commit()
+    community_id, icon_id, image_id = community.id, community.icon_id, community.image_id
+    calls = _record_image_work(monkeypatch)
+
+    refresh_community_profile_task(community_id, _lemmy_group_update_document(
+        community, community.icon_image(), community.header_image()))
+
+    db.session.expire_all()
+    community = db.session.get(Community, community_id)
+    assert (community.icon_id, community.image_id) == (icon_id, image_id)
+    assert calls == []
