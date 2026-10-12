@@ -97,7 +97,7 @@ TOO_LONG = f'https://{PEER}/' + 'x' * INBOX_URL_MAX
     ({}, None),
 ], ids=['shared', 'own', 'shared-too-long', 'own-too-long', 'empty', 'non-string', 'none'])
 def test_delivery_inbox_of(document, expected):
-    assert delivery_inbox_of(document) == expected
+    assert delivery_inbox_of(document, f'https://{PEER}/u/wakko') == expected
 
 
 # --- the actor Update ---

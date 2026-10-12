@@ -785,10 +785,23 @@ def shared_inbox_of(actor_json: dict) -> str | None:
 
     The spec lets `endpoints` omit sharedInbox or be a URI string naming a document to fetch. Neither is an
     error: the caller falls back to the actor's own inbox. A string `endpoints` is fetched only on the actor's own
-    host, and its sharedInbox is used only on that host too (interop C1 item 4)."""
+    host, and its sharedInbox is used only on that host too (interop C1 item 4). An inline sharedInbox is held to
+    the same host: a peer cannot have us deliver an actor's mail to a host the actor does not speak for (owner
+    ruling, 2026-10-11). The actor's host is the host of its `id`; an id with no host matches nothing."""
+    actor_host = _actor_host(actor_json.get('id'))
+    shared_inbox = _declared_shared_inbox(actor_json, actor_host)
+    return shared_inbox if shared_inbox is not None and host_of(shared_inbox) == actor_host else None
+
+
+def _actor_host(actor_id) -> str:
+    return host_of(actor_id) if isinstance(actor_id, str) else ''
+
+
+def _declared_shared_inbox(actor_json: dict, actor_host: str) -> str | None:
+    """The sharedInbox `endpoints` names, inline or in the endpoints document, before its host is checked."""
     endpoints = actor_json.get('endpoints')
     if isinstance(endpoints, str):
-        return _shared_inbox_from_endpoints_document(endpoints, actor_json.get('id'))
+        return _shared_inbox_from_endpoints_document(endpoints, actor_host)
     if not isinstance(endpoints, dict):
         return None
     return _usable_shared_inbox(endpoints)
@@ -799,21 +812,26 @@ def _usable_shared_inbox(endpoints: dict) -> str | None:
     return shared_inbox if isinstance(shared_inbox, str) and shared_inbox else None
 
 
-def _shared_inbox_from_endpoints_document(endpoints_url: str, actor_id) -> str | None:
+def _shared_inbox_from_endpoints_document(endpoints_url: str, actor_host: str) -> str | None:
     """The sharedInbox of the endpoints document at `endpoints_url`, fetched once with fetch_object_capped (capped,
-    no retry, no sleep). The URL and the sharedInbox it names must both be on the actor's own host, so a peer
-    cannot make us fetch from, or deliver to, a host it does not speak for. An actor id with no host matches
+    no retry, no sleep). The URL must be on the actor's own host, so a peer cannot make us fetch from a host it
+    does not speak for; the callers hold the sharedInbox it names to that host too. An actor with no host matches
     nothing, rather than '' matching ''."""
-    actor_host = host_of(actor_id) if isinstance(actor_id, str) else ''
     if not actor_host or host_of(endpoints_url) != actor_host:
         return None
     document, _reason = fetch_object_capped(endpoints_url)
     if document is None:
         return None
-    shared_inbox = _usable_shared_inbox(document)
-    if shared_inbox is None or host_of(shared_inbox) != actor_host:
-        return None
-    return shared_inbox
+    return _usable_shared_inbox(document)
+
+
+def off_host_inbox(actor_json: dict) -> str | None:
+    """The actor's `inbox` when it is a non-empty string on a host other than that of the actor's `id`, else None.
+    actor_json_to_model refuses such an actor (owner ruling, 2026-10-11): it has no inbox this instance may use."""
+    inbox = actor_json.get('inbox')
+    if isinstance(inbox, str) and inbox and host_of(inbox) != _actor_host(actor_json.get('id')):
+        return inbox
+    return None
 
 
 # The width of ap_inbox_url on User, Community and Feed. A longer URL from a peer is not stored: it would be a
@@ -821,11 +839,25 @@ def _shared_inbox_from_endpoints_document(endpoints_url: str, actor_id) -> str |
 INBOX_URL_MAX = 255
 
 
-def delivery_inbox_of(actor_json: dict) -> str | None:
+def delivery_inbox_of(actor_json: dict, actor_id: str) -> str | None:
     """The inbox to deliver to, as a refresh stores it: the shared inbox when `endpoints` carries a usable one, else
     the actor's own `inbox`. Each must be a non-empty string that fits the column. None when neither is usable, and
-    the refresh then keeps the inbox it already holds (interop C1 item 2)."""
-    for candidate in (shared_inbox_of(actor_json), actor_json.get('inbox')):
+    the refresh then keeps the inbox it already holds (interop C1 item 2).
+
+    Both are trusted only on the host of `actor_id`, the STORED actor's ap_profile_id, never the document's own
+    `id`. A document naming either on another host keeps the stored inbox, and that is logged (owner ruling,
+    2026-10-11): falling back from an off-host sharedInbox to the inbox would still let the peer change where the
+    actor's mail goes."""
+    actor_host = _actor_host(actor_id)
+    shared_inbox = _declared_shared_inbox(actor_json, actor_host)
+    inbox = actor_json.get('inbox')
+    off_host = [url for url in (shared_inbox, inbox)
+                if isinstance(url, str) and url and host_of(url) != actor_host]
+    if off_host:
+        current_app.logger.warning(f'Refresh of {actor_id} kept the stored inbox: {off_host} '
+                                   f'is not on the actor\'s own host')
+        return None
+    for candidate in (shared_inbox, inbox):
         if isinstance(candidate, str) and candidate and len(candidate) <= INBOX_URL_MAX:
             return candidate
     return None
@@ -1034,7 +1066,7 @@ def refresh_user_profile_task(user_id, activity_json=None):
                     refreshed_pem = public_key_pem(activity_json)
                     if refreshed_pem:
                         user.public_key = refreshed_pem
-                    refreshed_inbox = delivery_inbox_of(activity_json)   # interop C1 item 2: absent keeps the old one
+                    refreshed_inbox = delivery_inbox_of(activity_json, user.ap_profile_id)   # interop C1 item 2: absent keeps the old one
                     if refreshed_inbox:
                         user.ap_inbox_url = refreshed_inbox
                     user.accept_private_messages = activity_json['acceptPrivateMessages'] if 'acceptPrivateMessages' in activity_json else 3
@@ -1207,7 +1239,7 @@ def refresh_community_profile_task(community_id, activity_json=None):
                         refreshed_pem = public_key_pem(activity_json)
                         if refreshed_pem:
                             community.public_key = refreshed_pem
-                        refreshed_inbox = delivery_inbox_of(activity_json)   # interop C1 item 2: absent keeps the old one
+                        refreshed_inbox = delivery_inbox_of(activity_json, community.ap_profile_id)   # interop C1 item 2: absent keeps the old one
                         if refreshed_inbox:
                             community.ap_inbox_url = refreshed_inbox
 
@@ -1451,7 +1483,7 @@ def refresh_feed_profile_task(feed_id, activity_json=None):
                     refreshed_pem = public_key_pem(activity_json)  # D1355
                     if refreshed_pem:
                         feed.public_key = refreshed_pem
-                    refreshed_inbox = delivery_inbox_of(activity_json)   # interop C1 item 2: absent keeps the old one
+                    refreshed_inbox = delivery_inbox_of(activity_json, feed.ap_profile_id)   # interop C1 item 2: absent keeps the old one
                     if refreshed_inbox:
                         feed.ap_inbox_url = refreshed_inbox
 
@@ -1754,6 +1786,12 @@ def actor_json_to_model(activity_json, address, server):
             current_app.logger.error(
                 f'No usable publicKey for {address}@{server} in ' + str(activity_json))
             return None
+        # The inbox is trusted only on the actor's own host (owner ruling, 2026-10-11). An off-host sharedInbox
+        # falls back to the inbox in shared_inbox_of; an off-host inbox leaves nothing this instance may deliver to.
+        if off_host_inbox(activity_json):
+            current_app.logger.error(
+                f'An inbox on another host for {address}@{server} in ' + str(activity_json))
+            return None
         user = User(user_name=actor_name,
                     title=actor_name_from_ap(activity_json, 'name', limit=256),
                     email=f"{address}@{server}",
@@ -1877,6 +1915,11 @@ def actor_json_to_model(activity_json, address, server):
         if not actor_pem:
             current_app.logger.error(
                 f'No usable publicKey for {address}@{server} in ' + str(activity_json))
+            return None
+        # As for the Person branch above: the inbox is trusted only on the actor's own host.
+        if off_host_inbox(activity_json):
+            current_app.logger.error(
+                f'An inbox on another host for {address}@{server} in ' + str(activity_json))
             return None
         try:
             community = Community(name=actor_name,
@@ -2150,6 +2193,11 @@ def actor_json_to_model(activity_json, address, server):
         if not actor_pem:
             current_app.logger.error(
                 f'No usable publicKey for {address}@{server} in ' + str(activity_json))
+            return None
+        # As for the Person branch above: the inbox is trusted only on the actor's own host.
+        if off_host_inbox(activity_json):
+            current_app.logger.error(
+                f'An inbox on another host for {address}@{server} in ' + str(activity_json))
             return None
         try:
             feed = Feed(name=actor_name,
