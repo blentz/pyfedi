@@ -85,7 +85,8 @@ def quote_target(item):
 def _shows_card(item, q, user) -> bool:
     viewer_id = user.get_id() if user is not None else None
     uid = int(viewer_id) if viewer_id else 0
-    if q.deleted:
+    post = q if isinstance(q, Post) else q.post
+    if q.deleted or post.deleted:
         return False
     community = db.session.get(Community, q.community_id)
     if community is None or community.is_gone() or community.banned or community.id in blocked_communities(uid) \
@@ -93,14 +94,13 @@ def _shows_card(item, q, user) -> bool:
         return False
     if community.private and community.id not in community_membership_private(uid):  # show_post: 403 otherwise
         return False
-    if not can_view(q, int(viewer_id) if viewer_id else None):
+    if not can_view(q, uid or None) or not can_view(post, uid or None):  # a comment is only as visible as its post
         return False
     if q.user_id in blocked_users(uid) or q.instance_id in blocked_or_banned_instances(uid):
         return False
     instance = db.session.get(Instance, q.instance_id) if q.instance_id else None
     if instance is not None and db.session.query(BannedInstances.id).filter_by(domain=instance.domain).first():
         return False
-    post = q if isinstance(q, Post) else q.post
     if post.status < POST_STATUS_PUBLISHED and uid != post.user_id:  # refuse_unpublished_post: the author's alone
         return False
     for flag in ('nsfw', 'nsfl'):  # R4: only a signed-in viewer set to Show sees a sensitive card
