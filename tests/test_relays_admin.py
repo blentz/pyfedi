@@ -292,3 +292,21 @@ def test_cli_unknown_url_exits_1(run, command):
     result = run(command, 'https://nowhere.example/inbox')
 
     assert result.exit_code == 1 and 'no such relay' in result.output
+
+
+def test_cli_refresh_reports_each_relay_and_exits_0(run, monkeypatch):
+    make_relay()
+    monkeypatch.setattr(relay_cli.relay_subscribe, 'refresh_relays', lambda: [])
+
+    result = run('refresh')
+
+    assert result.exit_code == 0 and 'refreshed 1 accepted relay' in result.output
+
+
+def test_cli_refresh_exits_1_naming_a_relay_it_could_not_send_to(run, monkeypatch):
+    relay = make_relay()
+    monkeypatch.setattr(relay_cli.relay_subscribe, 'refresh_relays', lambda: [(relay, OSError('queue down'))])
+
+    result = run('refresh')
+
+    assert result.exit_code == 1 and 'https://relay.example/inbox: queue down' in result.output

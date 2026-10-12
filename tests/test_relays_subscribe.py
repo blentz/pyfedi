@@ -210,6 +210,52 @@ class TestRetryFindsUsAmongTheFollowers:
         assert Relay.query.count() == 0
 
 
+
+class TestRefresh:
+    """After this instance restarts, AodeRelay has stopped delivering for a day: ten failed deliveries open its
+    breaker, and only a signed request from this host closes it again (relay src/middleware/verifier.rs)."""
+
+    def _relay(self, url, state):
+        relay = Relay(url=url, style=STYLE_MASTODON, inbox_url=url, actor_id=url.replace('/inbox', '/actor'),
+                      state=state, follow_activity_id=f'{url}#old-follow')
+        db.session.add(relay)
+        db.session.commit()
+        return relay
+
+    def test_each_accepted_relay_gets_a_follow_with_a_new_id_and_stays_accepted(self, app, net):
+        with app.test_request_context():
+            a = self._relay('https://a.example/inbox', RELAY_ACCEPTED)
+            b = self._relay('https://b.example/inbox', RELAY_ACCEPTED)
+            failed = subscribe.refresh_relays()
+        assert failed == []
+        assert [uri for uri, _, _ in net['post']] == ['https://a.example/inbox', 'https://b.example/inbox']
+        for relay, (_, body, _) in zip((a, b), net['post']):
+            # a new id: a relay that remembers activity ids would drop a repeat before answering it
+            assert relay.state == RELAY_ACCEPTED and relay.follow_activity_id != f'{relay.url}#old-follow'
+            assert body['type'] == 'Follow' and body['id'] == relay.follow_activity_id
+
+    @pytest.mark.parametrize('state', [RELAY_PENDING, RELAY_REFUSED, RELAY_FAILED])
+    def test_a_relay_that_has_not_accepted_is_left_alone(self, app, net, state):
+        with app.test_request_context():
+            relay = self._relay('https://a.example/inbox', state)
+            assert subscribe.refresh_relays() == []
+        assert net['post'] == [] and relay.follow_activity_id == 'https://a.example/inbox#old-follow'
+
+    def test_a_relay_that_cannot_be_sent_to_is_reported_and_the_rest_are_still_sent(self, app, net, monkeypatch):
+        with app.test_request_context():
+            self._relay('https://a.example/inbox', RELAY_ACCEPTED)
+            self._relay('https://b.example/inbox', RELAY_ACCEPTED)
+            sent = []
+
+            def flaky(uri, body, private_key, key_id, **kwargs):
+                if uri.startswith('https://a.'):
+                    raise OSError('queue down')
+                sent.append(uri)
+            monkeypatch.setattr(subscribe, 'send_post_request', flaky)
+            failed = subscribe.refresh_relays()
+        assert [(relay.url, str(error)) for relay, error in failed] == [('https://a.example/inbox', 'queue down')]
+        assert sent == ['https://b.example/inbox']
+
 class TestRefusal:
 
     @pytest.mark.parametrize('status, expected', [(403, RELAY_FAILED), (500, RELAY_PENDING)])

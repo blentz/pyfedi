@@ -265,8 +265,14 @@ federation admin page.
 - It has a form to add a URL, Retry and Remove buttons (POST, CSRF-protected), and a
   `relay_retention_days` field.
 
-**CLI.** `flask relays add <url>`, `flask relays remove <url>`, `flask relays list` and
-`flask relays retry <url>`, following `app/discovery/cli.py`.
+**CLI.** `flask relays add <url>`, `flask relays remove <url>`, `flask relays list`,
+`flask relays retry <url>` and `flask relays refresh`, following `app/discovery/cli.py`.
+
+`flask relays refresh` sends every accepted relay a Follow under a new id, and the row stays
+accepted. Run it after every restart of the instance. AodeRelay stops all requests to a host
+for 24 hours after ten failed deliveries, and the few seconds a restart takes are enough to
+cause that. Only a signed request from the host closes the breaker again
+(`src/middleware/verifier.rs`). The command exits 1, naming each relay it could not send to.
 
 ## Live
 
