@@ -76,12 +76,14 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
                    'locked': not post.comments_enabled,
                    'nsfw': post.nsfw if post.nsfw is not None else False,
                    'ai_generated': post.ai_generated if post.ai_generated is not None else False,
-                   'quote_ap_id': post.quote_ap_id})
+                   'quote_ap_id': post.quote_ap_id,
+                   'language_variants': post.language_variants})
         if post.body:
             v1['body'] = post.body
         if post.deleted and (user_id is None or user_id not in g.admin_ids):
             v1['body'] = ''
             v1['quote_ap_id'] = None
+            v1['language_variants'] = None
         if post.edited_at:
             v1['edited_at'] = post.edited_at.isoformat(timespec="microseconds") + 'Z'
         if post.deleted == True:
@@ -793,7 +795,8 @@ def reply_view(reply: PostReply | int, variant: int, user_id=None,
                    'distinguished': reply.distinguished if reply.distinguished else False,
                    'locked': not reply.replies_enabled if reply.replies_enabled is not None else False,
                    'removed': False,
-                   'quote_ap_id': reply.quote_ap_id})
+                   'quote_ap_id': reply.quote_ap_id,
+                   'language_variants': reply.language_variants})
         v1['repliesEnabled'] = not v1['locked']
 
         if not reply.path:
@@ -806,6 +809,7 @@ def reply_view(reply: PostReply | int, variant: int, user_id=None,
         if reply.deleted == True:
             v1['body'] = ''
             v1['quote_ap_id'] = None
+            v1['language_variants'] = None
             if reply.deleted_by and reply.user_id != reply.deleted_by:
                 v1['removed'] = True
                 v1['deleted'] = False
