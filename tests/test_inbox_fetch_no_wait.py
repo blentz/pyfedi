@@ -3,6 +3,10 @@
 C1 residual R1 fix round 1. remote_object_to_json retries a transport error after sleeping 3 s, which its
 housekeeping callers keep. The inbox-processing callers -- resolve_remote_post (an Announce of a URL; nodebb
 replies), process_microblog_announce and the relays' process_relayed_announce -- pass retry_delay=0.
+
+Relay detection (detect_relay, _lists_us_as_follower) is reached from the admin relay page and the relay CLI
+(add_relay, retry_relay) and from inbox signature verification (_relay_key). No housekeeping task calls it, so it
+never retries.
 """
 from unittest.mock import Mock
 
@@ -12,8 +16,8 @@ import pytest
 from app import db
 from app.activitypub.util import process_microblog_announce, resolve_remote_post
 from app.models import Relay
-from app.relays import RELAY_ACCEPTED, STYLE_MASTODON
-from app.relays import inbound
+from app.relays import RELAY_ACCEPTED, RELAY_PENDING, STYLE_MASTODON
+from app.relays import inbound, subscribe
 from tests.factories import make_community, make_follow, make_instance, make_user, seed_community_owner
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -79,3 +83,46 @@ def test_process_relayed_announce_fetches_once(app, db_session, redis_double, ht
     assert route.call_count == 1
     sleeps.assert_not_called()
 
+
+# --- relay detection -----------------------------------------------------------
+
+
+def test_adding_a_relay_fetches_its_actor_once(app, db_session, http_mock, sleeps, monkeypatch):
+    """add_relay: the admin relay page (and the relay CLI)."""
+    route = http_mock.get(RELAY_ACTOR).mock(side_effect=refused())
+    monkeypatch.setattr(subscribe, 'send_relay_follow', lambda relay: None)
+
+    with app.test_request_context():
+        relay = subscribe.add_relay(RELAY_INBOX)
+
+    assert relay.actor_id is None
+    assert route.call_count == 1
+    sleeps.assert_not_called()
+
+
+def test_retrying_a_relay_asks_each_url_once(app, db_session, http_mock, sleeps, monkeypatch):
+    """retry_relay: the admin relay page (and the relay CLI). detect_relay, then _lists_us_as_follower."""
+    relay = make_relay()
+    relay.state = RELAY_PENDING
+    db.session.commit()
+    route = http_mock.get(RELAY_ACTOR).mock(side_effect=refused())
+    monkeypatch.setattr(subscribe, 'send_relay_follow', lambda relay: None)
+
+    with app.test_request_context():
+        subscribe.retry_relay(relay)
+
+    assert route.call_count == 2   # once for detect_relay, once for _lists_us_as_follower
+    assert relay.actor_id == RELAY_ACTOR   # a failed fetch does not erase what is known
+    sleeps.assert_not_called()
+
+
+def test_an_inbox_key_refetch_fetches_the_relay_actor_once(app, db_session, http_mock, sleeps):
+    """_relay_key: signature verification on the relay inbox."""
+    relay = make_relay()
+    route = http_mock.get(RELAY_ACTOR).mock(side_effect=refused())
+
+    with app.test_request_context():
+        assert inbound._relay_key(relay) is None
+
+    assert route.call_count == 1
+    sleeps.assert_not_called()
