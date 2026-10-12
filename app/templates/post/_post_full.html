@@ -561,7 +561,7 @@
         {% if can_translate and current_user.is_authenticated and current_user.language_id and post.language_id and (current_user.language_id != post.language_id or post.community.always_translate) -%}
             <div class="post_translate_icon">
                 <a rel="nofollow noindex" title="{{ _('Translate') }}" href="#"
-                        hx-post="{{ url_for('post.post_translate', post_id=post.id) }}"
+                        hx-post="{{ url_for('post.post_translate', post_id=post.id) }}{{ '?lang=' ~ v.code if v.others }}"
                         hx-trigger="click throttle:1s" hx-target="previous .post_body" hx-swap="outerHTML">
                     <span class="fe fe-translate"></span>
                 </a>

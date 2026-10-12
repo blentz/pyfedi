@@ -55,6 +55,7 @@ from app.shared.site import block_remote_instance
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
 from app.shared.tasks import task_selector
+import app.variants as variants
 from app.utils import clean_ap_url, can_moderate, render_template, markdown_to_html, validation_required, \
     shorten_string, markdown_to_text, gibberish, ap_datetime, return_304, \
     request_etag_matches, ip_address, instance_banned, \
@@ -1519,10 +1520,11 @@ def post_teaser_translate(post_id: int):
     refuse_private_community(post)  # D1124
     if current_app.config['TRANSLATE_ENDPOINT']:
         recipient_language = get_recipient_language(current_user.id)
-        source = post.language.code if post.language_id and post.language.code != 'und' else 'auto'
+        v = variants.shown(post)
+        source = v.code if v.code != 'und' else 'auto'
         if source == site_language_code():
             source = 'auto'
-        result_title = libretranslate_string(post.title,
+        result_title = libretranslate_string(v.title,
                                              source=source,
                                              target=recipient_language)
         post_url = post.slug if post.slug else f"/post/{post.id}"
@@ -1553,13 +1555,14 @@ def post_translate(post_id: int):
 
     if current_app.config['TRANSLATE_ENDPOINT']:
         recipient_language = get_recipient_language(current_user.id)
-        source = post.language.code if post.language_id and post.language.code != 'und' else 'auto'
+        v = variants.shown(post)
+        source = v.code if v.code != 'und' else 'auto'
         if source == site_language_code():  # If the source is the same as the default then there's a chance the author didn't specify a language, so just use 'auto'
             source = 'auto'
-        result = libretranslate_string(post.body_html,
+        result = libretranslate_string(v.body_html,
                                        source=source,
                                        target=recipient_language)
-        result_title = libretranslate_string(post.title,
+        result_title = libretranslate_string(v.title,
                                              source=source,
                                              target=recipient_language)
         # D1381, as above. The body is meant to be HTML -- it is the translation
@@ -1585,10 +1588,11 @@ def post_reply_translate(post_reply_id: int):
     refuse_private_community(post_reply.post)  # D1124
     if current_app.config['TRANSLATE_ENDPOINT']:
         recipient_language = get_recipient_language(current_user.id)
-        source = post_reply.language.code if post_reply.language_id and post_reply.language.code != 'und' else 'auto'
+        v = variants.shown(post_reply)
+        source = v.code if v.code != 'und' else 'auto'
         if source == site_language_code():
             source = 'auto'
-        result = libretranslate_string(post_reply.body_html,
+        result = libretranslate_string(v.body_html,
                                        source=source,
                                        target=recipient_language)
         return f'<div class="col-12 pr-0" lang="{recipient_language}">' + result + "</div>"

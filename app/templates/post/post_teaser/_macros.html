@@ -103,6 +103,7 @@
 {%- endmacro %}
 
 {% macro render_utilities_bar(post, sort=None, embed=False, low_bandwidth=False, current_user=None, joined_communities=None, can_upvote_here=None, can_downvote_here=None, disable_voting=False, recently_upvoted=None, recently_downvoted=None, communities_banned_from_list=None, upvoted_class='', downvoted_class='', reported_posts=None, moderated_community_ids=None) -%}
+{% set v = shown(post) %}
 {% set POST_TYPE_LINK = 1 -%}
 {% set POST_TYPE_ARTICLE = 2 -%}
 {% set POST_TYPE_IMAGE = 3 -%}
@@ -188,7 +189,7 @@
             {% if current_user.is_authenticated and current_user.language_id and post.language_id and (current_user.language_id != post.language_id or post.community.always_translate) -%}
                 <div class="post_translate_icon">
                     <a rel="nofollow noindex" title="{{ _('Translate') }}" href="#" aria-label="{{ _('Translate') }}"
-                            hx-post="{{ '/post_teaser/' + post.id|string + '/translate' }}"
+                            hx-post="{{ '/post_teaser/' + post.id|string + '/translate' + ('?lang=' ~ v.code if v.others else '') }}"
                             hx-trigger="click throttle:1s" hx-target="previous h3" hx-swap="outerHTML">
                         <span class="fe fe-translate"></span>
                     </a>
