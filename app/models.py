@@ -4140,10 +4140,9 @@ class PostReply(db.Model):
             reply.edited_at = utcnow()
         reply_texts = [reply.body] if reply.body else []
         reply_texts += [html_to_text(v['body_html']) for v in (reply.language_variants or {}).values()]  # S1
-        if reply_texts:
-            for blocked_phrase in blocked_phrases():
-                if any(blocked_phrase in text for text in reply_texts):
-                    raise PostReplyValidationError(_('Blocked phrase in comment'))
+        for blocked_phrase in blocked_phrases():
+            if any(blocked_phrase in text for text in reply_texts):
+                raise PostReplyValidationError(_('Blocked phrase in comment'))
         if request_json and 'searchableBy' in request_json['object'] and request_json['object']['searchableBy'] != 'https://www.w3.org/ns/activitystreams#Public':
             reply.indexable = False
         if post.community.private:
