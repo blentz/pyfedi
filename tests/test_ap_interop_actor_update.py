@@ -17,7 +17,7 @@ import pytest
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.activitypub import util as activitypub_util
-from app.activitypub.util import (INBOX_URL_MAX, delivery_inbox_of, names_actor,
+from app.activitypub.util import (INBOX_URL_MAX, LD_ACTOR_UPDATE_REFUSED, delivery_inbox_of, names_actor,
                                   refresh_community_profile_task, refresh_feed_profile_task)
 from app.models import ActivityPubLog, Community, Feed, File, User, utcnow
 from tests.factories import (inbox_activity, make_community, make_community_member, make_file, make_site, make_user,
@@ -631,3 +631,24 @@ def test_an_upload_served_from_our_object_store_is_ours_too(app, db_session, mon
     community = db.session.get(Community, community_id)
     assert (community.icon_id, community.image_id) == (icon_id, image_id)
     assert calls == []
+
+
+def test_an_ld_signed_actor_update_is_refused_and_logged_without_a_fetch(app, db_session, monkeypatch):
+    """Final review M8. An LD-signed Update{Person} had its object refetched from its origin
+    (verify_ld_accepted_activity), and an actor document is attributed to nobody, so it could never pass: one wasted
+    fetch, then a refusal blaming the document. It is now refused before any fetch, with its own reason."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    user = _known_remote_user()
+    document = _person_document(fields={'name': 'Renamed over LD'})
+    fetched = []
+    monkeypatch.setattr(activitypub_util, 'fetch_object_capped', lambda uri, *a, **kw: fetched.append(uri) or
+                        (document, None))
+
+    activitypub_routes.process_inbox_request(create_activity(user, document, activity_type='Update'), True,
+                                             ld_signed=True)
+
+    db.session.expire_all()
+    assert db.session.get(User, user.id).title != 'Renamed over LD'
+    assert fetched == []
+    log = ActivityPubLog.query.one()
+    assert (log.result, log.exception_message) == ('failure', f'LD-signed activity dropped: {LD_ACTOR_UPDATE_REFUSED}')
