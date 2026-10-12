@@ -3671,7 +3671,9 @@ class Post(db.Model):
             return False
 
         # tokenize title into words (lowercase)
-        tokens = re.findall(r"\w+", self.title.lower())
+        # S2: a viewer may be shown a language variant, so its title is filtered too
+        texts = [self.title] + [v['title'] for v in (self.language_variants or {}).values() if v['title']]
+        tokens = re.findall(r"\w+", ' '.join(texts).lower())
 
         for name, keywords in (content_filters or {}).items():
             for keyword in keywords:
@@ -4469,7 +4471,10 @@ class PostReply(db.Model):
             return False
 
         # tokenize body into words (lowercase), as Post does with its title
-        tokens = re.findall(r"\w+", (self.body or '').lower())
+        # S2: a viewer may be shown a language variant, so its text is filtered too
+        from app.utils import html_to_text  # cycle: app.utils imports from this module
+        texts = [self.body or ''] + [html_to_text(v['body_html']) for v in (self.language_variants or {}).values()]
+        tokens = re.findall(r"\w+", ' '.join(texts).lower())
 
         for name, keywords in (content_filters or {}).items():
             for keyword in keywords:
