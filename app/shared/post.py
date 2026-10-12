@@ -325,11 +325,11 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None):
 
 # 'from_scratch == True' means that it's not really a user edit, we're just re-using code for make_post()
 def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=None, from_scratch=False, hash=None):
+    if src == SRC_API and not user:   # authenticated first: the gone check must not answer an unauthorised caller
+        user = authorise_api_user(auth, return_type='model', id_match=post.user_id)
     if not from_scratch and post.community.is_gone():   # interop C1 item 10: a Group deleted on its home server is read-only
         raise Exception('This community was deleted on its home server')
     if src == SRC_API:
-        if not user:
-           user = authorise_api_user(auth, return_type='model', id_match=post.user_id)
         title = input['title'].strip()
         body = input['body']
         url = input['url']

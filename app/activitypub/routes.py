@@ -1071,8 +1071,12 @@ def replay_inbox_request(request_json):
         account_deletion = True
         actor = db.session.query(User).filter_by(ap_profile_id=request_json['actor'].lower()).first()
         if not actor:
-            log_incoming_ap(id, APLOG_DELETE, APLOG_IGNORED, request_json, 'REPLAY: Does not exist here')
-            return
+            # as shared_inbox: a known Group deleting itself goes to the dispatcher, which verifies it at the origin
+            actor = db.session.query(Community).filter_by(ap_profile_id=request_json['actor'].lower()).first()
+            account_deletion = False
+            if not actor:
+                log_incoming_ap(id, APLOG_DELETE, APLOG_IGNORED, request_json, 'REPLAY: Does not exist here')
+                return
     else:
         actor = find_actor_or_create_cached(request_json['actor'])
 

@@ -24,7 +24,7 @@ from PIL import Image, ImageOps
 from flask import current_app, request, g, url_for, json
 from flask_babel import _, force_locale, gettext
 from furl import furl
-from sqlalchemy import text, Integer, update
+from sqlalchemy import func, text, Integer, update
 from sqlalchemy.exc import IntegrityError
 
 from app import db, cache, celery, plugins
@@ -6369,7 +6369,12 @@ def mark_community_gone(community: Community) -> None:
     db.session.query(CommunityJoinRequest).filter(CommunityJoinRequest.community_id == community.id,
                                                   CommunityJoinRequest.user_id.in_(local_ids)).delete(
         synchronize_session=False)
-    community.subscriptions_count = max(0, (community.subscriptions_count or 0) - len(local_ids))
+    # Task 8 review: recounted as app/shared/tasks/maintenance.py counts it (no bots, no banned members), not
+    # decremented by every local member removed, which subtracted bots and banned members it never counted
+    community.subscriptions_count = db.session.query(func.count(CommunityMember.user_id)).join(
+        User, User.id == CommunityMember.user_id).filter(CommunityMember.community_id == community.id,
+                                                         CommunityMember.is_banned == False,
+                                                         User.bot == False).scalar()
     db.session.commit()
     for member in local_members:
         cache.delete_memoized(community_membership, member, community)
