@@ -17,6 +17,7 @@ import pytest
 
 from app import db
 from app.activitypub.routes import may_moderate
+from app.activitypub.util import GROUP_DELETED_MESSAGE
 from app.models import ActivityPubLog, CommunityMember, FeedItem, Post, utcnow
 from tests.factories import inbox_activity, make_community, make_feed, make_feed_item, make_instance, make_post, \
     make_user, make_community_member
@@ -367,3 +368,36 @@ def test_a_feeds_add_or_remove_whose_object_is_not_a_dict_is_refused_and_logged(
     assert FeedItem.query.filter_by(feed_id=feed.id).count() == 1
     assert feed.num_communities == 3
     assert only_log() == (log_type, 'failure', f'{log_type}: cannot find community or feed')
+
+
+# --- a gone community's moderator state is read-only ------------------------------------
+
+@pytest.mark.parametrize('shape, sticky_before, log_type', [
+    ('Add', False, 'Add'),
+    ('Remove', True, 'Remove'),
+    ('Undo Add', True, 'Remove'),
+    ('Undo Remove', False, 'Add'),
+])
+def test_a_direct_add_or_remove_in_a_gone_community_is_refused(modcomm, shape, sticky_before, log_type):
+    """Final review M4 (spec item 10, Task 8 ruling: read-only includes edits). A stored moderator's direct,
+    non-announced Add or Remove, or an Undo of one, no longer stickies, unstickies or edits the moderator list of a
+    community whose home server deleted it."""
+    instance, community, moderator, admin, post = modcomm
+    post.sticky = sticky_before
+    community.ap_deleted_at = utcnow()
+    db.session.commit()
+    inner_type = shape.split()[-1]
+    inner = {'id': f'{moderator.ap_profile_id}/activities/{inner_type.lower()}-9', 'type': inner_type,
+             'actor': moderator.ap_profile_id, 'object': post.ap_id, 'target': community.ap_profile_id + '/featured',
+             'audience': community.ap_profile_id}
+    if shape.startswith('Undo'):
+        activity = inbox_activity(moderator, activity_type='Undo', object=inner, audience=community.ap_profile_id)
+    else:
+        activity = inbox_activity(moderator, activity_type=inner_type, object=post.ap_id,
+                                  target=inner['target'], audience=community.ap_profile_id)
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    assert db.session.get(Post, post.id).sticky is sticky_before
+    assert only_log() == (log_type, 'ignored', GROUP_DELETED_MESSAGE)

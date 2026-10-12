@@ -3210,6 +3210,9 @@ def process_add(core_activity, user, community, feed, announced, id, saved_json,
         else:
             log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json, 'Cannot find community to add to feed')
     elif community:
+        if community.is_gone():   # interop C1 item 10: read-only, moderator changes included
+            log_incoming_ap(id, APLOG_ADD, APLOG_IGNORED, saved_json, GROUP_DELETED_MESSAGE)
+            return
         if not may_moderate(community, user):
             log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json, 'Does not have permission')
             return
@@ -3337,6 +3340,9 @@ def process_remove(core_activity, user, community, feed, announced, id, saved_js
         else:
             log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json, 'Cannot find community to remove from feed')
     elif community:
+        if community.is_gone():   # interop C1 item 10: read-only, moderator changes included
+            log_incoming_ap(id, APLOG_REMOVE, APLOG_IGNORED, saved_json, GROUP_DELETED_MESSAGE)
+            return
         if not may_moderate(community, user):
             log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json, 'Does not have permission')
             return
