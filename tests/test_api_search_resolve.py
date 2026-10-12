@@ -1175,7 +1175,7 @@ def test_a_reply_whose_parent_is_itself_fetched(app, env):
 
     user, author, community, post, reply, baseline = env
 
-    def fetched(query):
+    def fetched(query, retry_delay=3):
         if query == 'https://remote.example/x':
             return {'id': query, 'type': 'Note',
                     'inReplyTo': 'https://remote.example/parent'}
@@ -1305,7 +1305,7 @@ def test_a_reply_whose_parent_cannot_be_resolved_either(app, env):
 
     user, author, community, post, reply, baseline = env
 
-    def fetched(query):
+    def fetched(query, retry_delay=3):
         if query == 'https://remote.example/x':
             return {'id': query, 'type': 'Note',
                     'inReplyTo': 'https://remote.example/parent'}
@@ -1462,7 +1462,7 @@ def resolve_document(user, document, *, community=None, **patches):
     app.api.alpha.utils.misc can be replaced through `patches`."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    patches.setdefault('remote_object_to_json', lambda query: document)
+    patches.setdefault('remote_object_to_json', lambda query, retry_delay=3: document)
     patches.setdefault('find_community', lambda *a, **k: community)
     with patch.multiple('app.api.alpha.utils.misc', **patches):
         return get_resolve_object(token(user), {'q': REMOTE_X})

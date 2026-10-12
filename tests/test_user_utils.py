@@ -298,13 +298,14 @@ class TestHowOftenTheRemoteIsAsked:
 
     def test_a_connection_error_is_retried(self, env, http_mock):
         """`get_request`'s own retry is what recovers here, so the loop in
-        `search_for_user` never reaches its second pass."""
+        `search_for_user` never reaches its second pass. Only a Celery caller
+        asks for retries (D738; tests/test_search_request_path_no_wait.py)."""
         http_mock.get(WEBFINGER).mock(
             return_value=httpx.Response(200, json=self_link()))
         actor = http_mock.get(ACTOR).mock(side_effect=[
             httpx.ConnectError('no route'),
             httpx.Response(200, json=PERSON)])
-        assert search_for_user('@someone@remote.test') is not None
+        assert search_for_user('@someone@remote.test', retry=True) is not None
         assert actor.call_count == 2
 
     def test_an_actor_that_never_answers_is_given_up_on(self, env, http_mock):
@@ -316,7 +317,7 @@ class TestHowOftenTheRemoteIsAsked:
             return_value=httpx.Response(200, json=self_link()))
         actor = http_mock.get(ACTOR).mock(
             side_effect=httpx.ConnectError('no route'))
-        assert search_for_user('@someone@remote.test') is None
+        assert search_for_user('@someone@remote.test', retry=True) is None
         assert actor.call_count == 4
 
 
@@ -338,7 +339,7 @@ class TestAnActorBehindAuthorizedFetch:
         with patch('app.user.utils.signed_get_request',
                    side_effect=[httpx.ConnectError('no route'),
                                 httpx.Response(200, json=PERSON)]) as signed:
-            user = search_for_user('@someone@remote.test')
+            user = search_for_user('@someone@remote.test', retry=True)
         assert signed.call_count == 2
         assert user is not None
 

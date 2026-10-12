@@ -196,7 +196,7 @@ def fetch_remote_actor_data(url: str, retry=False, retry_count=1):
     for attempt in range(retry_count + 1):
         response = None
         try:
-            response = get_request(url, headers={'Accept': AP_FETCH_ACCEPT})
+            response = get_request(url, headers={'Accept': AP_FETCH_ACCEPT}, retry=retry)
             if response.status_code == 200:
                 try:
                     return response.json()
@@ -253,7 +253,7 @@ def fetch_actor_from_webfinger(address: str, server: str, retry=False):
     """Fetch actor data using webfinger protocol. Sleeps and retries only when retry is passed (D775)."""
     try:
         webfinger_data = get_request(f"https://{server}/.well-known/webfinger",
-                                     params={'resource': f"acct:{address}@{server}"})
+                                     params={'resource': f"acct:{address}@{server}"}, retry=retry)
     except httpx.HTTPError:
         if not retry:
             return None
@@ -278,7 +278,7 @@ def fetch_actor_from_webfinger(address: str, server: str, retry=False):
                     return None
                 type_header = link.get('type', AP_FETCH_ACCEPT)
                 try:
-                    actor_data = get_request(link['href'], headers={'Accept': type_header})
+                    actor_data = get_request(link['href'], headers={'Accept': type_header}, retry=retry)
                 except httpx.HTTPError:
                     if not retry:
                         return None

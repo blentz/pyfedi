@@ -106,13 +106,13 @@ def mentioned_users(post, allow_fetch=True) -> list:
                 user_name = match.group(1)
                 if user_name != user.user_name:
                     try:
-                        recipient = search_for_user(user_name, allow_fetch=allow_fetch)
+                        recipient = search_for_user(user_name, allow_fetch=allow_fetch, retry=True)
                     except:
                         pass
             else:
                 ap_id = f"{match.group(1)}@{match.group(2)}"
                 try:
-                    recipient = search_for_user(ap_id, allow_fetch=allow_fetch)
+                    recipient = search_for_user(ap_id, allow_fetch=allow_fetch, retry=True)
                 except:
                     pass
             if recipient:
