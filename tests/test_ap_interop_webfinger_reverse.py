@@ -38,7 +38,7 @@ from flask import g
 from app import cache, db
 from app.activitypub import routes as activitypub_routes
 from app.activitypub.actor import create_actor_from_remote
-from app.activitypub.util import canonical_handle, webfinger_self_href
+from app.activitypub.util import authority_of, canonical_handle, webfinger_self_href
 from app.community.util import search_for_community
 from app.feed.util import search_for_feed
 from app.models import User
@@ -258,6 +258,43 @@ def test_a_looked_up_server_with_a_port_matches_the_id_host(app, db_session, htt
 
     assert canonical_handle(document, 'alice', 'social.example:8443') == ('alice', 'social.example:8443', document)
     assert len(http_mock.calls) == 0
+
+
+PORTED = 'https://social.example:8443/users/alice'
+
+
+def test_the_reverse_lookup_keeps_the_id_port(app, db_session, http_mock):
+    """The port names the server as much as the host does: the reverse lookup asks the id's own authority, and the
+    handle keeps the port, as a ported server's handle does everywhere else (ap_domain, find_instance_id)."""
+    reverse = serve_webfinger(http_mock, 'social.example:8443', PORTED)   # no port-443 route: a call to it fails
+    origin = actor_document(PORTED, 'alice')
+    serve_actor(http_mock, origin)
+
+    assert canonical_handle(actor_document(PORTED, 'alice'), 'alice', 'alias.example') == ('alice',
+                                                                                           'social.example:8443',
+                                                                                           origin)
+    assert reverse.calls.last.request.url.params['resource'] == 'acct:alice@social.example:8443'
+
+
+def test_a_same_host_alias_keeps_the_id_port(app, db_session, http_mock):
+    reverse = serve_webfinger(http_mock, 'social.example:8443', PORTED)
+    document = actor_document(PORTED, 'alice')
+
+    assert canonical_handle(document, 'nick', 'social.example:8443') == ('alice', 'social.example:8443', document)
+    assert reverse.call_count == 1
+
+
+@pytest.mark.parametrize('url, authority', [
+    ('https://Social.Example:8443/users/alice', 'social.example:8443'),
+    ('https://user:secret@social.example:8443/users/alice', 'social.example:8443'),
+    ('https://user@social.example/users/alice', 'social.example'),
+    ('https://[2001:DB8::1]:8443/users/alice', '[2001:db8::1]:8443'),
+    ('https://social.example:99999/users/alice', ''),
+    ('https://[::1/users/alice', ''),
+    ('not a url', ''),
+])
+def test_authority_of_is_the_host_and_port_without_userinfo(url, authority):
+    assert authority_of(url) == authority
 
 
 # --- an actor found through an alias is taken from its own host ------------

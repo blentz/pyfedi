@@ -780,6 +780,25 @@ def host_of(url_string: str) -> str:
         return ''
 
 
+def authority_of(url_string: str) -> str:
+    """host_of's twin that keeps the port: the lowercased `host[:port]` of a URL, userinfo dropped, or '' when it has
+    no host or urlparse refuses it (a port out of range included). An IPv6 host is bracketed again.
+
+    A server reached on a port other than the default is a different server, and a handle names it with the port
+    (`name@host:port`): ap_domain, find_instance_id and extract_domain_and_actor all keep it. host_of's host-only
+    answer is right for comparing who owns an id (D21/D32), not for asking a server or naming it."""
+    try:
+        parsed = urlparse(url_string)
+        host, port = parsed.hostname, parsed.port
+    except ValueError:
+        return ''
+    if not host:
+        return ''
+    if ':' in host:
+        host = f'[{host}]'
+    return f'{host}:{port}' if port is not None else host
+
+
 def shared_inbox_of(actor_json: dict) -> str | None:
     """The actor's shared inbox, or None when `endpoints` does not carry a usable one.
 
@@ -1667,6 +1686,11 @@ def canonical_handle(actor_json, address: str, server: str, prefix: str = '') ->
     refused and logged. `prefix` goes on the name in the reverse lookup only: '~' for a feed, whose WebFinger
     resource is acct:~name@host.
 
+    Whether the canonical host is the looked-up one is a host comparison, port ignored, as actor_json_to_model's
+    D32 gate compares. But the reverse lookup asks the id's authority (authority_of: host and port, userinfo
+    dropped), and an actor that came through an alias is stored under that authority, so `https://host:8443/...`
+    is confirmed by, and stored as, `name@host:8443`, as a ported server's handle is everywhere else.
+
     Both preferredUsername and the id are the peer's choice. The name must be a plain name (WEBFINGER_NAME_RE) and
     the handle must fit ap_id before either goes into a URL or is stored. The reverse lookup only ever asks the
     id's own host, which must exist; and because the caller gated the LOOKED-UP host, a different canonical host
@@ -1690,7 +1714,8 @@ def canonical_handle(actor_json, address: str, server: str, prefix: str = '') ->
         return address, server, actor_json
     name = name.strip()   # stripped as actor_name_from_ap stores it
     id_host = host_of(actor_id)
-    if not id_host or not WEBFINGER_NAME_RE.fullmatch(name) or len(f'{prefix}{name}@{id_host}') > HANDLE_MAX:
+    id_server = authority_of(actor_id)   # the id's server, port kept: asked and stored, never only compared
+    if not id_host or not WEBFINGER_NAME_RE.fullmatch(name) or len(f'{prefix}{name}@{id_server}') > HANDLE_MAX:
         current_app.logger.warning(f'WebFinger reverse check refused {address}@{server}: '
                                    f'preferredUsername {name!r} or id {actor_id!r} is unusable')
         return None
@@ -1701,13 +1726,13 @@ def canonical_handle(actor_json, address: str, server: str, prefix: str = '') ->
         current_app.logger.warning(f'WebFinger reverse check refused {address}@{server}: '
                                    f'{id_host} is not an instance this one federates with')
         return None
-    href = webfinger_self_href(f'{prefix}{name}', id_host)
+    href = webfinger_self_href(f'{prefix}{name}', id_server)
     if href is None or not _same_actor_id(href, actor_id):
         current_app.logger.warning(f'WebFinger reverse check refused {address}@{server}: '
-                                   f'{prefix}{name}@{id_host} does not resolve to {actor_id!r}')
+                                   f'{prefix}{name}@{id_server} does not resolve to {actor_id!r}')
         return None
     if same_host:
-        return name.lower(), id_host, actor_json
+        return name.lower(), id_server, actor_json
     origin, reason = fetch_object_capped(actor_id)
     if origin is None:
         current_app.logger.warning(f'WebFinger reverse check refused {address}@{server}: '
@@ -1726,7 +1751,7 @@ def canonical_handle(actor_json, address: str, server: str, prefix: str = '') ->
         current_app.logger.warning(f'WebFinger reverse check refused {address}@{server}: '
                                    f'{actor_id!r} names itself {origin.get("preferredUsername")!r}, not {name!r}')
         return None
-    return origin_name.lower(), id_host, origin
+    return origin_name.lower(), id_server, origin
 
 
 def actor_json_to_model(activity_json, address, server):
