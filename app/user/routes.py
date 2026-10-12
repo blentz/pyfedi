@@ -52,6 +52,7 @@ from app.utils import user_banned_from_community, back, render_template, markdow
 from app.rss_extras import RSSFeed
 import app.api.alpha.views as alpha_views
 from app.utils import user_filters_languages
+from app.utils import ap_alternate_url
 import app as app_pkg
 
 # D1042. A settings export is a few kilobytes; this is two orders of magnitude
@@ -203,7 +204,8 @@ def show_profile(user):
     else:
         vote_quota_used = 0
 
-    return render_template('user/show_profile.html', user=user, posts=posts, post_replies=post_replies,
+    ap_alternate = ap_alternate_url(user)
+    response = make_response(render_template('user/show_profile.html', user=user, posts=posts, post_replies=post_replies,
                            moderates=moderates, canonical=canonical, title=_('Posts by %(user_name)s',
                                                                              user_name=user.user_name),
                            description=description, subscribed=subscribed, disable_voting=True,
@@ -223,7 +225,13 @@ def show_profile(user):
                            overview_prev_url=overview_prev_url, same_ip_address=same_ip_address,
                            archived_post_replies=archived_post_replies,
                            followers=followers, following=following,
-                           bot_challenge=bot_challenge, vote_quota_used=vote_quota_used)
+                           bot_challenge=bot_challenge, vote_quota_used=vote_quota_used,
+                           ap_alternate=ap_alternate))
+    # C1 item 1: the profile advertises its ActivityPub id as the post page does (D1086). `add`, not `set`: the
+    # preload Link render_template wrote must survive.
+    response.headers.add('Link', f'<{ap_alternate}>; rel="alternate"; type="application/activity+json"')
+    response.vary.add('Accept')
+    return response
 
 
 @bp.route('/u/<actor>/upvotes')

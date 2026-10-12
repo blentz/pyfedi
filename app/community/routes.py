@@ -77,7 +77,7 @@ from app.shared.tasks import task_selector
 # The module, not the names: app.shared.feed reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.feed)
 import app.shared.feed as shared_feed
-from app.utils import get_recipient_language, subscribed_feeds, feed_membership, is_local_microblogs
+from app.utils import get_recipient_language, subscribed_feeds, feed_membership, is_local_microblogs, ap_alternate_url
 from app.rss_extras import RSSFeed
 from datetime import timezone, timedelta
 from flask import render_template as flask_render_template
@@ -760,6 +760,7 @@ def show_community(community: Community, from_instance=None):
     else:
         is_dead = False
 
+    ap_alternate = ap_alternate_url(community)
     resp = make_response(render_template('community/community.html', community=community, title=view_actor or community.title,
                                          breadcrumbs=breadcrumbs, is_dead=is_dead,
                                          is_moderator=is_moderator, is_owner=is_owner, is_admin=is_admin, mods=mod_list, posts=posts,
@@ -780,7 +781,8 @@ def show_community(community: Community, from_instance=None):
                                          live_button=live_available(community, current_user, content_type, 1),
                                          live_cursor=max((post.id for post in posts.items), default=0) if live else 0,
                                          user_pronouns=user_pronouns(), hide_community_actions=community.name == 'microblogs',
-                                         canonical=community.profile_id(), can_upvote_here=can_upvote(user, community),
+                                         canonical=community.profile_id(), ap_alternate=ap_alternate,
+                                         can_upvote_here=can_upvote(user, community),
                                          can_downvote_here=can_downvote(user, community),
                                          rss_feed=None if view_actor else f"{current_app.config['SERVER_URL']}/community/{community.link()}/feed",
                                          rss_feed_name=f"{community.title} on {g.site.name}",
@@ -797,6 +799,8 @@ def show_community(community: Community, from_instance=None):
                                          post_layout=post_layout, content_type=content_type, current_app=current_app,
                                          user_has_feeds=user_has_feeds, current_feed_id=current_feed_id,
                                          current_feed_title=current_feed_title, user_flair=user_flair, sticky_posts=sticky_posts))
+    # C1 item 1: as the post page (D1086). Both Vary values set below already name Accept.
+    resp.headers.add('Link', f'<{ap_alternate}>; rel="alternate"; type="application/activity+json"')
     if current_user.is_anonymous:
         resp.headers.set('ETag', current_etag)
         resp.headers.set('Vary', 'Accept, Accept-Language')

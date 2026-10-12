@@ -40,6 +40,7 @@ from app.utils import back, show_ban_message, piefed_markdown_to_lemmy_markdown,
     blocked_or_banned_instances, blocked_communities, block_honey_pot, user_pronouns, mimetype_from_url, feed_entry_body, \
     community_membership_private, check_anoobis, feed_readable_by, \
     refuse_if_private_instance
+from app.utils import ap_alternate_url
 import app.community.routes as community_routes
 
 
@@ -591,7 +592,7 @@ def show_feed(feed):
             content_filters = {}
 
         resp = make_response(render_template('feed/show_feed.html', title=_(current_feed.name), posts=posts, feed=current_feed,
-                                             sort=sort, owner=owner,
+                                             sort=sort, owner=owner, ap_alternate=ap_alternate_url(current_feed),
                                              page=page, post_layout=post_layout, next_url=next_url, prev_url=prev_url,
                                              feed_communities=feed_communities, content_filters=user_filters_posts(current_user.id) if current_user.is_authenticated else {},
                                              tags=hashtags_used_in_communities(feed_community_ids, content_filters),

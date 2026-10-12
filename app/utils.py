@@ -111,6 +111,13 @@ def render_template(template_name: str, skip_protocol_replacement: bool = False,
     return resp
 
 
+def ap_alternate_url(actor) -> str:
+    """The ActivityPub id an HTML page about `actor` (a User, Community or Feed) advertises as its alternate (C1
+    item 1). A local actor's is public_url(), the id its actor document serves. A remote actor's is its own id,
+    ap_profile_id -- not ap_public_url, which a peer may point at its HTML page (Mastodon's /@name)."""
+    return actor.public_url() if actor.is_local() else actor.ap_profile_id
+
+
 def request_etag_matches(etag):
     if 'If-None-Match' in request.headers:
         old_etag = request.headers['If-None-Match']
