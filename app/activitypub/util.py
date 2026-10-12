@@ -1669,6 +1669,21 @@ def _federates_with(host: str) -> bool:
     return not instance_banned(host)
 
 
+def webfinger_self_link_allowed(href, address: str, server: str) -> bool:
+    """Whether a resolver may fetch the self link `address@server`'s WebFinger answered with (C1 residual R1 item 2).
+
+    The caller gated `server`, the LOOKED-UP host, and nothing else; the self link may point anywhere. A link on
+    `server`'s own host is fetched as before. A link elsewhere is fetched only when its host passes the same
+    instance gate (_federates_with) -- the ban list, or the allowlist -- so an alias cannot make this instance ask
+    a banned one for anything, even the actor canonical_handle would then refuse. No host, no fetch."""
+    host = host_of(href) if isinstance(href, str) else ''
+    if host and (host == host_of(f'//{server}') or _federates_with(host)):
+        return True
+    current_app.logger.warning(f'WebFinger self link {href!r} of {address}@{server} refused: '
+                               f'{host or "no host"} is not an instance this one federates with')
+    return False
+
+
 def _same_actor_id(one: str, other: str) -> bool:
     """canonical_handle's one id comparison, for both the reverse lookup's href and the refetched origin's id:
     stripped and lowercased, as names_actor compares and as ap_profile_id is stored."""

@@ -25,7 +25,7 @@ from app import db, cache, celery
 from app.activitypub.signature import post_request, default_context, send_post_request
 from app.activitypub.util import find_actor_or_create, actor_json_to_model, \
     find_hashtag_or_create, create_post, remote_object_to_json, find_flair, activitypub_visibility, host_of, \
-    canonical_handle
+    canonical_handle, webfinger_self_link_allowed
 from app.community.forms import CreateLinkForm
 from app.constants import SRC_WEB, POST_TYPE_LINK, AP_FETCH_ACCEPT
 from app.models import Community, File, PostReply, Post, utcnow, CommunityMember, Site, _as_dict, parse_ap_published, \
@@ -98,6 +98,8 @@ def search_for_community(address: str, allow_fetch: bool = True) -> Community | 
                 if 'rel' in links and links['rel'] == 'self':  # this contains the URL of the activitypub profile
                     if 'href' not in links:  # as search_for_feed:80 already does
                         continue
+                    if not webfinger_self_link_allowed(links['href'], name, server):
+                        return None
                     type = links['type'] if 'type' in links else AP_FETCH_ACCEPT
                     # retrieve the activitypub profile
                     community_data = get_request(links['href'], headers={'Accept': type})

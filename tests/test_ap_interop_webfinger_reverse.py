@@ -37,7 +37,7 @@ from flask import g
 
 from app import cache, db
 from app.activitypub import routes as activitypub_routes
-from app.activitypub.actor import create_actor_from_remote
+from app.activitypub.actor import create_actor_from_remote, fetch_actor_from_webfinger
 from app.activitypub.util import authority_of, canonical_handle, webfinger_self_href
 from app.community.util import search_for_community
 from app.feed.util import search_for_feed
@@ -216,19 +216,53 @@ def test_the_reverse_lookup_goes_to_the_id_host_not_one_the_document_names(app, 
 
 
 def test_an_alias_cannot_carry_in_an_actor_of_a_banned_instance(app, db_session, http_mock, caplog):
-    """validate_remote_actor checked alias.example. banned.example is checked here, before any request to it."""
+    """validate_remote_actor checked alias.example. Its self link points at banned.example, which is gated before
+    the actor is fetched from it: nothing at all is asked of a banned instance (C1 residual R1 item 2)."""
     make_banned_instance('banned.example')
     actor_id = 'https://banned.example/users/alice'
-    serve_webfinger(http_mock, 'alias.example', actor_id)
-    serve_actor(http_mock, actor_document(actor_id, 'alice'))   # no banned.example WebFinger route: a call fails
+    serve_webfinger(http_mock, 'alias.example', actor_id)   # no banned.example route: any call to it fails
 
     with caplog.at_level('WARNING', logger=app.logger.name):
         assert create_actor_from_remote('alice@alias.example') is None
 
-    assert [call.request.url.host for call in http_mock.calls] == ['alias.example', 'banned.example']   # the actor
-    assert http_mock.calls.last.request.url.path == '/users/alice'
+    assert [call.request.url.host for call in http_mock.calls] == ['alias.example']
+    assert db.session.query(User).count() == 0
+    assert f"WebFinger self link {actor_id!r} of alice@alias.example refused" in caplog.text
+
+
+def test_an_alias_copy_naming_an_actor_of_a_banned_instance_asks_that_instance_nothing(app, db_session, http_mock,
+                                                                                         caplog):
+    """The self link stays on alias.example, but the copy it serves claims a banned.example id: canonical_handle
+    gates the id's host before the reverse lookup or the refetch."""
+    make_banned_instance('banned.example')
+    actor_id = 'https://banned.example/users/alice'
+    serve_webfinger(http_mock, 'alias.example', ALIAS_COPY)
+    http_mock.get(ALIAS_COPY).respond(200, json=actor_document(actor_id, 'alice'))
+
+    with caplog.at_level('WARNING', logger=app.logger.name):
+        assert create_actor_from_remote('alice@alias.example') is None
+
+    assert [call.request.url.host for call in http_mock.calls] == ['alias.example', 'alias.example']
     assert db.session.query(User).count() == 0
     assert 'WebFinger reverse check refused alice@alias.example' in caplog.text
+
+
+def test_under_an_allowlist_a_self_link_to_an_unlisted_instance_is_not_fetched(app, db_session, http_mock,
+                                                                                monkeypatch):
+    monkeypatch.setattr('app.activitypub.util.get_setting',
+                        lambda name, default=None: True if name == 'use_allowlist' else default)
+    monkeypatch.setattr('app.activitypub.util.instance_allowed', lambda host: host == 'alias.example')
+    serve_webfinger(http_mock, 'alias.example', ALICE)
+
+    assert fetch_actor_from_webfinger('alice', 'alias.example') is None
+    assert [call.request.url.host for call in http_mock.calls] == ['alias.example']
+
+
+def test_a_self_link_without_a_host_is_not_fetched(app, db_session, http_mock):
+    serve_webfinger(http_mock, 'alias.example', 'not a url')
+
+    assert create_actor_from_remote('alice@alias.example') is None
+    assert [call.request.url.host for call in http_mock.calls] == ['alias.example']
 
 
 def test_under_an_allowlist_an_alias_cannot_carry_in_an_actor_of_an_unlisted_instance(app, db_session, http_mock,
@@ -645,4 +679,19 @@ def test_each_search_stores_nothing_when_the_origin_refetch_fails(stored_as, htt
     http_mock.get(actor_id).respond(404)
 
     assert search(address) is None
+    assert stored_as == []
+
+
+@pytest.mark.parametrize('search, address, actor_id, kind', [
+    (search_for_user, 'alice@alias.example', 'https://banned.example/users/alice', 'Person'),
+    (search_for_community, '!memes@alias.example', 'https://banned.example/c/memes', 'Group'),
+    (search_for_feed, '~news@alias.example', 'https://banned.example/f/news', 'Feed'),
+])
+def test_no_search_fetches_a_self_link_on_a_banned_instance(stored_as, http_mock, search, address, actor_id, kind):
+    """C1 residual R1 item 2: the self link's host is gated before the fetch, not only the id's host after it."""
+    make_banned_instance('banned.example')
+    serve_webfinger(http_mock, 'alias.example', actor_id)   # no banned.example route: any call to it fails
+
+    assert search(address) is None
+    assert [call.request.url.host for call in http_mock.calls] == ['alias.example']
     assert stored_as == []

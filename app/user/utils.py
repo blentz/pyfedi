@@ -7,7 +7,7 @@ from sqlalchemy import text, desc, exists, or_
 
 from app import celery, db
 from app.activitypub.signature import signed_get_request, send_post_request
-from app.activitypub.util import actor_json_to_model, canonical_handle
+from app.activitypub.util import actor_json_to_model, canonical_handle, webfinger_self_link_allowed
 from app.constants import AP_FETCH_ACCEPT, POST_STATUS_REVIEWING
 from app.models import User, CommunityMember, Community, Site, BannedInstances, Post, \
     PostVote, ArchivedPostReply, PostReply, UserNote
@@ -139,6 +139,8 @@ def search_for_user(address: str, allow_fetch: bool = True):
             if not isinstance(links, dict):
                 continue
             if 'rel' in links and links['rel'] == 'self' and 'href' in links:  # this contains the URL of the activitypub profile
+                if not webfinger_self_link_allowed(links['href'], name, server):
+                    return None
                 type = links['type'] if 'type' in links else AP_FETCH_ACCEPT
                 # retrieve the activitypub profile
                 object_request = None
