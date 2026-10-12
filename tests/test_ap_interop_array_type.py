@@ -17,7 +17,8 @@ from app.activitypub.util import NO_STRING_TYPE_MESSAGE, normalise_activity_type
 from app.models import ActivityPubLog
 from app.utils import utcnow
 from tests.conftest import ld_signed_body, unsigned_but_precheck_clean_headers
-from tests.factories import inbox_activity, make_community, make_instance, make_site, make_user, seed_community_owner
+from tests.factories import inbox_activity, make_community, make_community_member, make_instance, make_site, make_user, \
+    seed_community_owner
 from tests.test_inbox_dispatch_create_update import create_activity
 from tests.test_inbox_dispatch_lock_delete import record_moderation
 from tests.test_inbox_dispatch_preamble import dispatch
@@ -447,6 +448,36 @@ def test_an_ld_signed_create_is_processed_and_forwarded_with_the_origins_copy(ap
     args, _kwargs = calls['process_new_content'][0]
     assert args[3]['object']['content'] == 'what the origin serves'
     assert args[3]['object']['type'] == 'Note'
+
+
+def test_a_forward_from_inside_the_dispatcher_gets_the_verified_normalised_document(app, db_session, monkeypatch):
+    """A moderator's Update of a local community is forwarded by process_inbox_request itself. What it forwards is the
+    document the LD check returned, with one string type each -- never the array or the content sent with it."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = seed_community_owner('peer.example')
+    local_community = make_community(host=app.config['SERVER_NAME'])
+    editor = make_user(instance, 'editor')
+    make_community_member(editor, local_community, is_moderator=True)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: local_community)
+    monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
+    checked = []
+
+    def verified_copy(activity):
+        checked.append(activity)
+        return {**activity, 'object': {**activity['object'], 'summary': 'what the origin serves'}}, None
+
+    monkeypatch.setattr(activitypub_routes, 'verify_ld_accepted_activity', verified_copy)
+    calls = record_moderation(monkeypatch, 'refresh_community_profile', 'announce_activity_to_followers')
+    activity = create_activity(editor, {'type': ['Group'], 'id': local_community.ap_profile_id, 'summary': 'spoofed'},
+                               activity_type=['Update'])
+
+    activitypub_routes.process_inbox_request(activity, True, ld_signed=True)
+
+    assert checked[0]['type'] == 'Update' and checked[0]['object']['type'] == 'Group'
+    args, _kwargs = calls['announce_activity_to_followers'][0]
+    assert args[2]['type'] == 'Update' and args[2]['object']['type'] == 'Group'
+    assert args[2]['object']['summary'] == 'what the origin serves'
+    assert activity['type'] == ['Update'] and activity['object']['summary'] == 'spoofed'
 
 
 def test_an_object_fetched_by_uri_with_an_array_type_is_dispatched(app, db_session, monkeypatch):
