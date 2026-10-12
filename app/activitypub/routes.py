@@ -284,6 +284,17 @@ def host_meta():
     return resp
 
 
+@bp.route('/.well-known/host-meta.json')
+@cache.cached(timeout=600)
+def host_meta_json():
+    """The JRD form of host-meta (RFC 6415 section 3), the same lrdd template as the XML route above (C1 item 9)."""
+    resp = jsonify({'links': [{'rel': 'lrdd',
+                               'template': 'https://' + current_app.config["SERVER_NAME"] +
+                                           '/.well-known/webfinger?resource={uri}'}]})
+    resp.content_type = 'application/jrd+json'
+    return resp
+
+
 @bp.route('/nodeinfo/2.0')
 @bp.route('/nodeinfo/2.0.json')
 @cache.cached(timeout=600)

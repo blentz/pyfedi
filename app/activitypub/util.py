@@ -50,7 +50,7 @@ from app.utils import FETCH_MAX_BYTES, get_request, get_request_capped, allowlis
     patch_db_session, to_srgb, communities_banned_from_all_users, blocked_communities, blocked_or_banned_instances, \
     instance_community_ids, banned_instances, communities_run_by_inactive_mods, inspect_image_c2pa, \
     url_is_storable, can_create_post, can_create_post_reply, retrieve_image_hash, hash_matches_blocked_image, \
-    is_activitypub_request
+    is_activitypub_request, instance_allowed, instance_banned
 import app.activitypub.actor as activitypub_actor
 import app.discovery.credits as discovery_credits   # the module: app.discovery.credits imports this one
 import urllib.parse
@@ -1559,6 +1559,90 @@ def refresh_feed_profile_task(feed_id, activity_json=None):
         raise
     finally:
         session.close()
+
+
+# A handle's name part as a peer may publish it in preferredUsername: letters and digits of any script, '_', '.'
+# and '-' (PeerTube and Friendica use the last two, Lemmy allows non-Latin letters). Nothing that is URL or handle
+# syntax -- '@', '/', '?', '#', '%', ':' -- and no whitespace or control character, because the name goes into the
+# reverse WebFinger lookup's URL, a log line and the stored handle (C1 item 9).
+WEBFINGER_NAME_RE = re.compile(r'[\w.\-]+')
+# The width of ap_id on User, Community and Feed, which stores name@host.
+HANDLE_MAX = 255
+
+
+def webfinger_self_href(address: str, server: str) -> str | None:
+    """The href of the first `self` link `acct:address@server` resolves to, or None (C1 item 9).
+
+    ONE GET through get_request_capped: at most FETCH_MAX_BYTES, a wall-clock deadline, no redirects -- and, unlike
+    get_request, no sleep-and-retry on a transport error. It runs on request and inbox paths (D738/D775)."""
+    resource = urllib.parse.quote(f'acct:{address}@{server}', safe=':@')
+    try:
+        status, body = get_request_capped(f'https://{server}/.well-known/webfinger?resource={resource}',
+                                          FETCH_MAX_BYTES)
+    except httpx.HTTPError:
+        return None
+    if status != 200 or body is None:
+        return None
+    try:
+        document = json.loads(body)
+    except ValueError:
+        return None
+    links = document.get('links') if isinstance(document, dict) else None
+    for link in links if isinstance(links, list) else ():
+        if isinstance(link, dict) and link.get('rel') == 'self' and isinstance(link.get('href'), str):
+            return link['href']
+    return None
+
+
+def _federates_with(host: str) -> bool:
+    """validate_remote_actor's instance gate, for a host that gate never saw: the allowlist when it is on, else the
+    ban list."""
+    if get_setting('use_allowlist', False):
+        return instance_allowed(host)
+    return not instance_banned(host)
+
+
+def canonical_handle(actor_json, address: str, server: str, prefix: str = '') -> tuple[str, str] | None:
+    """The (address, server) to store a WebFinger-resolved actor under, or None to refuse it (C1 item 9).
+
+    The one check every WebFinger resolver makes (spec Amendment A): create_actor_from_remote, search_for_user,
+    search_for_community and search_for_feed. The document names its own handle: preferredUsername @ the host of
+    its id. When that is the handle we looked up (case-insensitively), nothing changes. Otherwise one
+    webfinger_self_href lookup of the canonical handle must resolve to the same actor id, and the actor is stored
+    under the canonical handle -- never under an alias some other server chose to answer for. A mismatch is
+    refused and logged. `prefix` goes on the name in the reverse lookup only: '~' for a feed, whose WebFinger
+    resource is acct:~name@host.
+
+    Both preferredUsername and the id are the peer's choice. The name must be a plain name (WEBFINGER_NAME_RE) and
+    the handle must fit ap_id before either goes into a URL or is stored. The reverse lookup only ever asks the
+    id's own host, which must exist; and because the caller gated the LOOKED-UP host, a different canonical host
+    passes the same instance gate before it is asked anything, so an alias cannot carry in a banned instance's
+    actor.
+
+    A document without a string preferredUsername and id is passed through untouched: actor_json_to_model already
+    refuses it (D1372), and there is nothing to compare."""
+    actor_id = actor_json.get('id') if isinstance(actor_json, dict) else None
+    name = actor_json.get('preferredUsername') if isinstance(actor_json, dict) else None
+    if not (isinstance(name, str) and name and isinstance(actor_id, str) and actor_id):
+        return address, server
+    name = name.strip()   # stripped as actor_name_from_ap stores it
+    id_host = host_of(actor_id)
+    if not id_host or not WEBFINGER_NAME_RE.fullmatch(name) or len(f'{prefix}{name}@{id_host}') > HANDLE_MAX:
+        current_app.logger.warning(f'WebFinger reverse check refused {address}@{server}: '
+                                   f'preferredUsername {name!r} or id {actor_id!r} is unusable')
+        return None
+    if name.lower() == address.lower() and id_host == host_of(f'//{server}'):
+        return address, server
+    if not _federates_with(id_host):
+        current_app.logger.warning(f'WebFinger reverse check refused {address}@{server}: '
+                                   f'{id_host} is not an instance this one federates with')
+        return None
+    href = webfinger_self_href(f'{prefix}{name}', id_host)
+    if href is not None and href.lower() == actor_id.lower():
+        return name.lower(), id_host
+    current_app.logger.warning(f'WebFinger reverse check refused {address}@{server}: '
+                               f'{prefix}{name}@{id_host} does not resolve to {actor_id!r}')
+    return None
 
 
 def actor_json_to_model(activity_json, address, server):

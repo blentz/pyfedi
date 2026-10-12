@@ -24,7 +24,8 @@ from flask_babel import _, lazy_gettext as _l
 from app import db, cache, celery
 from app.activitypub.signature import post_request, default_context, send_post_request
 from app.activitypub.util import find_actor_or_create, actor_json_to_model, \
-    find_hashtag_or_create, create_post, remote_object_to_json, find_flair, activitypub_visibility, host_of
+    find_hashtag_or_create, create_post, remote_object_to_json, find_flair, activitypub_visibility, host_of, \
+    canonical_handle
 from app.community.forms import CreateLinkForm
 from app.constants import SRC_WEB, POST_TYPE_LINK, AP_FETCH_ACCEPT
 from app.models import Community, File, PostReply, Post, utcnow, CommunityMember, Site, _as_dict, parse_ap_published, \
@@ -109,6 +110,10 @@ def search_for_community(address: str, allow_fetch: bool = True) -> Community | 
                             community_data.close()
                             return None
                         if community_json['type'] == 'Group':
+                            handle = canonical_handle(community_json, name, server)   # interop C1 item 9
+                            if handle is None:
+                                return None
+                            name, server = handle
                             community = actor_json_to_model(community_json, name, server)
                             if community:
                                 if current_app.debug:
