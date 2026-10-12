@@ -102,9 +102,10 @@ def test_the_post_page_links_its_activitypub_id(app, env):
     assert AP_LINK.format(ap_id) in html
 
 
-def test_the_dillo_theme_links_the_activitypub_id_too(app, env):
+def test_the_dillo_theme_links_the_activitypub_id_too(app, env, monkeypatch):
     """The dillo base template had none of the discovery links (spec item 1)."""
     viewer, author, community, post = env
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # dillo's post page renders form.csrf_token()
     viewer.theme = 'dillo'
     db.session.commit()
     post_id, ap_id = post.id, post.profile_id()
@@ -242,3 +243,50 @@ def test_the_feed_page_passes_its_activitypub_id(app, env):
 
     assert response.status_code == 200
     assert render.call_args.kwargs['ap_alternate'] == 'https://test.piefed.local/f/news'
+
+
+# --- an id a remote server chose is advertised only when it is a clean URL --
+
+
+UNCLEAN_IDS = [
+    'https://peer.example/u/x>; rel="x"',
+    'https://peer.example/u/x,<https://evil.example/>',
+    'https://peer.example/u/x\r\nSet-Cookie: a=b',
+    'https://peer.example/u/x y',
+    'https://peer.example/u/x"y',
+    'ftp://peer.example/u/x',
+    'https:///u/x',
+]
+
+
+def assert_no_alternate(response):
+    assert response.status_code == 200
+    assert ap_link_headers(response) == []
+    assert '<link rel="alternate" type="application/activity+json"' not in response.get_data(as_text=True)
+
+
+@pytest.mark.parametrize('bad_id', UNCLEAN_IDS)
+def test_a_remote_profile_with_an_unclean_id_advertises_nothing(app, env, bad_id):
+    viewer, author, community, post = env
+    remote = make_user(make_instance('peer.example'), 'wakko')
+    remote.ap_profile_id = bad_id
+    db.session.commit()
+
+    assert_no_alternate(as_user(app, viewer).get('/u/wakko@peer.example'))
+
+
+@pytest.mark.parametrize('bad_id', UNCLEAN_IDS)
+def test_a_remote_community_with_an_unclean_id_advertises_nothing(app, env, bad_id):
+    viewer, author, community, post = env
+    other = make_instance('other.example', software='lemmy')
+    remote = make_community('remote', host='other.example')
+    remote.ap_id = 'remote@other.example'
+    remote.instance_id = other.id
+    remote.ap_profile_id = bad_id
+    db.session.commit()
+
+    client = as_user(app, viewer)
+    response, context = show_community(client, '/c/remote@other.example')
+    assert response.status_code == 200
+    assert context['ap_alternate'] is None
+    assert ap_link_headers(response) == []

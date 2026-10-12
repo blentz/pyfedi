@@ -111,11 +111,20 @@ def render_template(template_name: str, skip_protocol_replacement: bool = False,
     return resp
 
 
-def ap_alternate_url(actor) -> str:
+_AP_ALTERNATE_FORBIDDEN = re.compile(r'[\s\x00-\x1f\x7f<>"\',;\\`]')
+
+
+def ap_alternate_url(actor) -> str | None:
     """The ActivityPub id an HTML page about `actor` (a User, Community or Feed) advertises as its alternate (C1
     item 1). A local actor's is public_url(), the id its actor document serves. A remote actor's is its own id,
-    ap_profile_id -- not ap_public_url, which a peer may point at its HTML page (Mastodon's /@name)."""
-    return actor.public_url() if actor.is_local() else actor.ap_profile_id
+    ap_profile_id -- not ap_public_url, which a peer may point at its HTML page (Mastodon's /@name).
+    A remote server chose that id and it goes into a Link header, so it is returned only when it is a clean
+    http(s) URL with a host and none of the characters that could add Link values or parameters; else None."""
+    url = actor.public_url() if actor.is_local() else actor.ap_profile_id
+    if not url or _AP_ALTERNATE_FORBIDDEN.search(url):
+        return None
+    parts = urlparse(url)
+    return url if parts.scheme in ('http', 'https') and parts.netloc else None
 
 
 def request_etag_matches(etag):
