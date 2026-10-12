@@ -554,7 +554,7 @@ def test_a_peertube_video_edit_by_another_user_is_denied(app, db_session, monkey
     assert log.exception_message == 'Edit attempt denied'
 
 
-def test_a_peertube_video_edit_for_an_unknown_post_is_refused(app, db_session, monkeypatch):
+def test_a_peertube_video_update_for_an_unknown_post_is_ignored(app, db_session, monkeypatch):
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, owner, post = _seed_video_post()
     monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: community)
@@ -564,7 +564,7 @@ def test_a_peertube_video_edit_for_an_unknown_post_is_refused(app, db_session, m
                              activity_type='Update'))
 
     log = ActivityPubLog.query.one()
-    assert log.exception_message == 'PeerTube post not found'
+    assert log.exception_message == 'Update of unknown media object'
 
 
 def test_a_group_update_from_a_non_moderator_of_a_LOCAL_community_is_refused(app, db_session, monkeypatch):

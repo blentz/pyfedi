@@ -21,7 +21,7 @@ from app.activitypub.actor import find_actor_by_url
 from app.activitypub.entitlement import PRIVATE_HEADERS, actor_document, addressees_of, audience_entitles, signed_requester_actor
 from app.activitypub.signature import POST_REQUIRED, HttpSignature, VerificationError, VerificationFormatError, default_context, LDSignature, \
     send_post_request, verify_with_key_refresh, request_key_id
-from app.activitypub.util import activity_dedupe_key, community_actor_data, refresh_community_profile_task, claim_activity, release_activity, host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
+from app.activitypub.util import MEDIA_OBJECT_TYPES, MEDIA_URL_KIND, media_url_from, activity_dedupe_key, community_actor_data, refresh_community_profile_task, claim_activity, release_activity, host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
     post_to_activity, find_actor_or_create_cached, find_liked_object, \
     lemmy_site_data, is_activitypub_request, delete_post_or_comment, community_members, \
     create_post, create_post_reply, update_post_reply_from_activity, \
@@ -1632,26 +1632,10 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                 return
 
                         object_type = core_activity['object']['type']
-                        new_content_types = ['Page', 'Article', 'Link', 'Note', 'Question', 'Event']
+                        new_content_types = ['Page', 'Article', 'Link', 'Note', 'Question', 'Event', *MEDIA_OBJECT_TYPES]  # C4
                         if object_type in new_content_types:  # create or update a post
                             process_new_content(user, community, store_ap_json, request_json, announced)
                             return
-                        elif object_type == 'Video':  # PeerTube: editing a video (mostly used to update post score)
-                            post = Post.get_by_ap_id(core_activity['object']['id'])
-                            if post:
-                                if post.community.is_gone():   # interop C1 item 10: read-only, edits included
-                                    log_incoming_ap(id, APLOG_UPDATE, APLOG_IGNORED, saved_json, GROUP_DELETED_MESSAGE)
-                                    return
-                                if user.id == post.user_id:
-                                    update_post_from_activity(post, request_json)
-                                    log_incoming_ap(id, APLOG_UPDATE, APLOG_SUCCESS, saved_json)
-                                    return
-                                else:
-                                    log_incoming_ap(id, APLOG_UPDATE, APLOG_FAILURE, saved_json, 'Edit attempt denied')
-                                    return
-                            else:
-                                log_incoming_ap(id, APLOG_UPDATE, APLOG_FAILURE, saved_json, 'PeerTube post not found')
-                                return
                         elif object_type == 'Group' and core_activity['type'] == 'Update':  # update community/category info
                             # Interop C1 item 2: the document must describe the community this activity is for, and a
                             # remote Group's document comes only from the Group (it announced this, or sent it itself)
@@ -2917,6 +2901,15 @@ def process_new_content(user, community, store_ap_json, request_json, announced)
                 log_incoming_ap(id, APLOG_UPDATE, APLOG_FAILURE, saved_json, 'Edit attempt denied')
                 return
         else:
+            object_type = activity_json['object'].get('type')
+            if object_type in MEDIA_OBJECT_TYPES:  # C4
+                if activity_json['type'] == 'Update':  # PeerTube Updates videos often (views); only a Create creates
+                    log_incoming_ap(id, APLOG_UPDATE, APLOG_IGNORED, saved_json, 'Update of unknown media object')
+                    return
+                if object_type in MEDIA_URL_KIND and media_url_from(activity_json['object'],
+                                                                     MEDIA_URL_KIND[object_type]) is None:
+                    log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, 'Unacceptable media object')
+                    return
             if can_create_post(user, community):
                 try:
                     post = create_post(store_ap_json, community, activity_json, user, announce_id=announce_id)

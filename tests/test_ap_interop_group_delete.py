@@ -915,7 +915,7 @@ def test_a_web_reply_edit_is_refused_with_a_flash(app, db_session):
 
 
 def test_an_inbox_video_update_is_ignored(app, db_session, monkeypatch):
-    """PeerTube's Video Update edits a post with no can_* predicate in the way, so it asks is_gone() itself."""
+    """C4: a Video Update goes through process_new_content, where can_create_post (is_gone) refuses the edit."""
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     w = _world()
     _gone(w)
@@ -929,7 +929,7 @@ def test_an_inbox_video_update_is_ignored(app, db_session, monkeypatch):
         dispatch(update)
 
     assert updated.call_args is None
-    assert _inbound_logs() == [('Update', 'ignored', GROUP_DELETED_MESSAGE)]
+    assert _inbound_logs() == [('Update', 'failure', 'User cannot create post in Community')]
 
 
 # --- nothing is delivered to it: moderation actions and reports too ---
