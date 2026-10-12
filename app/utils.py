@@ -2361,13 +2361,32 @@ def mimetype_from_url(url):
     return mime_type
 
 
+def _split_outside_quotes(text: str, separator: str) -> list:
+    """text split at each separator that is not inside a double-quoted string (a backslash escapes in one)."""
+    pieces, current, quoted, escaped = [], [], False, False
+    for char in text:
+        if escaped:
+            escaped = False
+        elif quoted and char == '\\':
+            escaped = True
+        elif char == '"':
+            quoted = not quoted
+        elif char == separator and not quoted:
+            pieces.append(''.join(current))
+            current = []
+            continue
+        current.append(char)
+    pieces.append(''.join(current))
+    return pieces
+
+
 def accepted_media_ranges(accept_header: str) -> list:
     """(media type, parameters, q) for each media range of an Accept header, in order. The media type and the
     parameter names are lowercased and quotes are stripped from values; an absent or unreadable q is 1, and q is
     clamped to 0..1 (RFC 9110 section 12.4.2)."""
     ranges = []
-    for part in accept_header.split(','):
-        pieces = [piece.strip() for piece in part.split(';')]
+    for part in _split_outside_quotes(accept_header, ','):
+        pieces = [piece.strip() for piece in _split_outside_quotes(part, ';')]
         media_type = pieces[0].lower()
         if not media_type:
             continue

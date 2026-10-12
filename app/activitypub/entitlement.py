@@ -16,6 +16,7 @@ from app import db
 from app.activitypub.actor import find_actor_by_url
 from app.activitypub.signature import GET_REQUIRED, HttpSignature, VerificationError, is_rfc9421, request_key_id
 from app.activitypub.util import AS_PUBLIC, host_of
+from app.constants import AP_MEDIA_TYPES
 from app.models import Community, CommunityMember, User, UserFollower
 from app.utils import is_activitypub_request
 
@@ -170,8 +171,6 @@ SIGNED_FETCH_EXEMPT_PREFIXES = ('/actor', '/.well-known/', '/nodeinfo/')
 # on purpose: it answers only 'Ok' or an error for an activity id the asking peer sent itself, which is no content.
 SIGNED_FETCH_AP_ONLY_PREFIXES = ('/activities/', '/quote_boost_auth')
 
-_AP_MIMETYPES = ('application/activity+json', 'application/ld+json')
-
 # R-SECUREACTORS: actor documents secure mode answers in minimal form instead of refusing. A peer that signs its key
 # fetches with an instance actor this instance has never stored could otherwise never learn a key at all. Matched on
 # the routed endpoint, so an actor's collections (/u/<name>/outbox, /c/<name>/followers...) stay refused.
@@ -248,7 +247,7 @@ def secure_mode_cache_headers(response):
     A minimal actor document (actor_document) is the same for every unsigned requester and holds only public key
     material, so it keeps the route's public cache policy: varying on the signature keeps it from ever answering a
     signed request, and the signer's full document is private."""
-    if response.cache_control.no_store or not _secure_mode_covers(response.mimetype in _AP_MIMETYPES):
+    if response.cache_control.no_store or not _secure_mode_covers(response.mimetype in AP_MEDIA_TYPES):
         return response
     if request.environ.get(_MINIMAL_ACTOR_FLAG):
         response.vary.add('Signature')

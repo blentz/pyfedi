@@ -11,7 +11,8 @@ import re
 import pytest
 from flask import Response, g
 
-from app import db
+from app import constants, db
+from app.activitypub import entitlement
 from app.activitypub.actor import fetch_remote_actor_data
 from app.activitypub.entitlement import secure_mode_cache_headers
 from app.activitypub.routes import ap_media_type
@@ -37,6 +38,21 @@ def test_accepted_media_ranges_reads_types_parameters_and_q_values():
         ('text/html', {}, 1.0),
         ('a/b', {}, 1.0),   # an unreadable q counts as 1; one above 1 is clamped to 1
     ]
+
+
+def test_accepted_media_ranges_keeps_a_quoted_comma_or_semicolon_inside_its_parameter():
+    assert accepted_media_ranges('application/ld+json; profile="a,b;c"; q=0.4, text/html;q=0') == [
+        ('application/ld+json', {'profile': 'a,b;c'}, 0.4),
+        ('text/html', {}, 0.0),
+    ]
+
+
+def test_accepted_media_ranges_reads_an_escaped_quote_as_part_of_the_value():
+    assert accepted_media_ranges(r'a/b; x="p\"q,r", c/d') == [('a/b', {'x': r'p\"q,r'}, 1.0), ('c/d', {}, 1.0)]
+
+
+def test_secure_mode_and_the_vary_hook_recognise_the_same_answer_types():
+    assert entitlement.AP_MEDIA_TYPES is constants.AP_MEDIA_TYPES
 
 
 @pytest.mark.parametrize('accept, expected', [
