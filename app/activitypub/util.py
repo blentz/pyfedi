@@ -2920,6 +2920,12 @@ def new_instance_profile_task(instance_id: int):
                     instance_json = {}
                 if 'type' in instance_json and instance_json['type'] == 'Application':
                     instance.inbox = instance_json['inbox'] if 'inbox' in instance_json else f"{protocol}://{instance.domain}/inbox"
+                    # An inbox on another host is not the instance's to name (owner ruling, 2026-10-11, interop C1):
+                    # its announces are delivered here. Its /inbox is assumed instead, as for a document naming none.
+                    if isinstance(instance.inbox, str) and host_of(instance.inbox) != host_of(f'//{instance.domain}'):
+                        current_app.logger.warning(f'Instance {instance.domain} named an inbox on another host: '
+                                                   f'{instance.inbox!r}')
+                        instance.inbox = f"{protocol}://{instance.domain}/inbox"
                     # `'outbox' in instance_json`, as the line above already
                     # does for the inbox: this is another instance's actor
                     # document, and one without an outbox was a KeyError that
