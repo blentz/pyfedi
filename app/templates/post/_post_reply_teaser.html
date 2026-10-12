@@ -1,3 +1,4 @@
+{% from 'post/_language_switch.html' import render_language_switch %}
 {% from 'post/_quote_card.html' import render_quote %}
 {# Options:
   teaser: Renders just a teaser
@@ -73,7 +74,8 @@
     </div>
 
     <div class="row comment_body hidable{% if post_reply.has_been_reported() %} reported{% endif %}">
-        <div class="col-12 pr-0" lang="{{ post_reply.language_code() }}">
+        {% set v = shown(post_reply) -%}
+        <div class="col-12 pr-0" lang="{{ v.code }}">
             {% if post_reply.deleted and not show_deleted -%}
                 {% if post_reply.deleted_by is none or post_reply.deleted_by != post_reply.user_id -%}
                     <p>{{ _('Deleted by moderator') }}</p>
@@ -81,10 +83,11 @@
                     <p>{{ _('Deleted by author') }}</p>
                 {% endif -%}
             {% else -%}
-                {% if post_reply.content_warning -%}<details class="content_warning"><summary>{{ post_reply.content_warning }}</summary>{% endif -%}
-                {{ post_reply.body_html | community_links | feed_links | person_links | safe }}
+                {% if v.cw -%}<details class="content_warning"><summary>{{ v.cw }}</summary>{% endif -%}
+                {{ v.body_html | community_links | feed_links | person_links | safe }}
                 {{ render_quote(post_reply, locale=locale) }}
-                {% if post_reply.content_warning -%}</details>{% endif -%}
+                {% if v.cw -%}</details>{% endif -%}
+                {{ render_language_switch(v, '#comment_' ~ post_reply.id) }}
             {% endif -%}
         </div>
     </div>
