@@ -30,10 +30,10 @@ def test_the_lemmyverse_list_is_fetched_under_its_own_bigger_cap(commands):
     assert result.exception is None, result.exception
     assert fetch.call_args_list[0].args == ('https://data.lemmyverse.net/data/community.full.json',)
     assert fetch.call_args_list[0].kwargs == {'max_bytes': LEMMYVERSE_MAX_BYTES,
-                                              'max_seconds': LEMMYVERSE_MAX_SECONDS}
+                                              'max_seconds': LEMMYVERSE_MAX_SECONDS, 'retry': True}
     # The disposable-email domains.txt was 1,504,489 bytes on 2026-10-11.
     assert fetch.call_args_list[1].kwargs == {'max_bytes': DOMAIN_LIST_MAX_BYTES,
-                                              'max_seconds': DOMAIN_LIST_MAX_SECONDS}
+                                              'max_seconds': DOMAIN_LIST_MAX_SECONDS, 'retry': True}
 
 
 def test_a_feed_and_its_redirect_are_fetched_under_the_media_cap(commands):
@@ -53,6 +53,6 @@ def test_a_feed_and_its_redirect_are_fetched_under_the_media_cap(commands):
     assert result.exception is None, result.exception
     assert [call.args for call in fetch.call_args_list] == [('https://feeds.example/rss',),
                                                             ('https://feeds.example/moved',)]
-    assert all(call.kwargs == {'max_bytes': MEDIA_MAX_BYTES, 'max_seconds': MEDIA_MAX_SECONDS}
+    assert all(call.kwargs == {'max_bytes': MEDIA_MAX_BYTES, 'max_seconds': MEDIA_MAX_SECONDS, 'retry': True}
                for call in fetch.call_args_list)
     assert (MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS) == (10 * 1024 * 1024, 30)

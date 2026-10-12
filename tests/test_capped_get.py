@@ -163,10 +163,10 @@ class TestNoRetry:
         sleeps.assert_not_called()
 
     @pytest.mark.parametrize('error', [httpx.ReadError('boom'), httpx.ReadTimeout('slow')])
-    def test_a_transport_error_is_still_retried_once(self, app, http_mock, sleeps, error):
+    def test_a_transport_error_is_retried_once_when_a_housekeeping_task_asks(self, app, http_mock, sleeps, error):
         route = http_mock.get(URI).mock(side_effect=[error, httpx.Response(200, json={'ok': 1})])
 
-        assert get_request(URI).json() == {'ok': 1}
+        assert get_request(URI, retry=True).json() == {'ok': 1}
         assert route.call_count == 2
         assert sleeps.call_count == 1
 

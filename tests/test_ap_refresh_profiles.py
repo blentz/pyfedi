@@ -1807,7 +1807,7 @@ def test_a_worker_shutdown_during_a_user_fetch_propagates(
     user = _remote_user()
     calls = []
 
-    def stopping_get_request(uri, params=None, headers=None):
+    def stopping_get_request(uri, params=None, headers=None, **kwargs):
         raise SystemExit(1)
 
     def fake_signed_get(uri, private_key, key_id, **kwargs):

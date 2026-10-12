@@ -74,7 +74,7 @@ def search_for_feed(address: str, allow_fetch: bool = True, retry: bool = False)
             sleep(randint(3, 10))
             try:
                 webfinger_data = get_request(f"https://{server}/.well-known/webfinger",
-                                             params={'resource': f"acct:{address}"})
+                                             params={'resource': f"acct:{address}"}, retry=True)
             except httpx.HTTPError:
                 return None
 

@@ -266,7 +266,8 @@ class TestPeertubeErrorSwallowing:
 
     def test_a_transport_failure_is_swallowed(self, app, db_session, http_mock):
         """httpx.ConnectError reaches get_request's `except httpx.HTTPError`
-        retry arm; the retry fails too, and it re-raises httpx.HTTPError."""
+        arm, which re-raises it at once: fixup_url runs on a request, so
+        get_request does not retry (D738)."""
         make_instance('peertube.example', software='peertube')
         url = 'https://peertube.example/w/aaaaaaaaaaaaaaaaaaaaaa'
         http_mock.get(url).mock(side_effect=httpx.ConnectError('boom'))
@@ -274,7 +275,7 @@ class TestPeertubeErrorSwallowing:
             with no_backoff() as waited:
                 thumbnail, embed = fixup_url(url)
         assert (thumbnail, embed) == (url, url)
-        assert waited.call_count == 1
+        assert waited.call_count == 0
 
     def test_a_read_failure_on_both_attempts_is_swallowed(self, app, db_session, http_mock):
         """The one get_request path that did NOT normalise to httpx.HTTPError.
@@ -286,7 +287,8 @@ class TestPeertubeErrorSwallowing:
         here hid it; a handler narrowed to httpx.HTTPError does not, so this
         test fails with AttributeError unless get_request raises httpx.ReadError
         as intended. It is the load-bearing proof that narrowing the outer
-        handler introduced no crash.
+        handler introduced no crash. Since D738 fixup_url's get_request makes
+        one attempt, so the ReadError itself arrives, with no wait.
         """
         make_instance('peertube.example', software='peertube')
         url = 'https://peertube.example/w/aaaaaaaaaaaaaaaaaaaaaa'
@@ -295,7 +297,7 @@ class TestPeertubeErrorSwallowing:
             with no_backoff() as waited:
                 thumbnail, embed = fixup_url(url)
         assert (thumbnail, embed) == (url, url)
-        assert waited.call_count == 1
+        assert waited.call_count == 0
 
 
 class TestGetRequestNormalisesTransportFailure:
@@ -313,5 +315,5 @@ class TestGetRequestNormalisesTransportFailure:
         with app.test_request_context('/'):
             with no_backoff() as waited:
                 with pytest.raises(httpx.HTTPError):
-                    get_request(url)
+                    get_request(url, retry=True)   # the retry arm only a housekeeping task reaches
         assert waited.call_count == 1

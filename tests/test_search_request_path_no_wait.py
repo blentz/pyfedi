@@ -80,11 +80,10 @@ def test_get_request_without_retry_makes_one_attempt_and_does_not_sleep(app, htt
     sleeps.assert_not_called()
 
 
-def test_get_request_retries_by_default(app, http_mock, sleeps):
-    """The Celery callers' path, unchanged."""
+def test_get_request_retries_when_a_housekeeping_task_asks(app, http_mock, sleeps):
     route = http_mock.get(OBJECT).mock(side_effect=[refused(), httpx.Response(200, json={})])
 
-    assert get_request(OBJECT).status_code == 200
+    assert get_request(OBJECT, retry=True).status_code == 200
     assert route.call_count == 2
     sleeps.assert_called_once()
 
@@ -252,3 +251,31 @@ def test_mentioned_users_asks_for_the_retry(env):
     with patch('app.shared.tasks.pages.search_for_user', return_value=None) as search:
         assert mentioned_users(post) == []
     search.assert_called_once_with(f'someone@{SERVER}', allow_fetch=True, retry=True)
+
+
+# --- fix round 2: a GET retries only when a housekeeping task asks --------------
+
+
+FEED_OWNERS = f'{ACTOR}/owners'
+
+
+def test_a_feed_search_asks_for_its_owners_once(env, http_mock, sleeps):
+    """actor_json_to_model's Feed branch fetches the owners collection on the search request (review I1)."""
+    http_mock.get(WEBFINGER).respond(200, json=self_link())
+    http_mock.get(ACTOR).respond(200, json={'id': ACTOR, 'type': 'Feed', 'preferredUsername': 'news',
+                                            'attributedTo': FEED_OWNERS, 'following': f'{ACTOR}/following'})
+    owners = http_mock.get(FEED_OWNERS).mock(side_effect=refused())
+
+    with pytest.raises(httpx.HTTPError):
+        search_for_feed(f'~news@{SERVER}')
+    assert owners.call_count == 1
+    sleeps.assert_not_called()
+
+
+def test_get_request_does_not_retry_unless_asked(app, http_mock, sleeps):
+    route = http_mock.get(OBJECT).mock(side_effect=refused())
+
+    with pytest.raises(httpx.HTTPError):
+        get_request(OBJECT)
+    assert route.call_count == 1
+    sleeps.assert_not_called()
