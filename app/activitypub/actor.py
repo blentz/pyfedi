@@ -260,7 +260,7 @@ def fetch_actor_from_webfinger(address: str, server: str, retry=False):
         time.sleep(randint(3, 10))
         try:
             webfinger_data = get_request(f"https://{server}/.well-known/webfinger",
-                                         params={'resource': f"acct:{address}@{server}"})
+                                         params={'resource': f"acct:{address}@{server}"}, retry=True)
         except Exception:
             return None
 
@@ -284,7 +284,7 @@ def fetch_actor_from_webfinger(address: str, server: str, retry=False):
                         return None
                     time.sleep(randint(3, 10))
                     try:
-                        actor_data = get_request(link['href'], headers={'Accept': type_header})
+                        actor_data = get_request(link['href'], headers={'Accept': type_header}, retry=True)
                     except Exception:
                         return None
 

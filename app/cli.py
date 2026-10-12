@@ -1247,7 +1247,7 @@ def register(app):
         for feed in feeds:
             try:
                 # Fetch the RSS feed
-                response = get_request(feed.url, max_bytes=MEDIA_MAX_BYTES, max_seconds=MEDIA_MAX_SECONDS)
+                response = get_request(feed.url, max_bytes=MEDIA_MAX_BYTES, max_seconds=MEDIA_MAX_SECONDS, retry=True)
 
                 if response.status_code >= 400:
                     feed.last_error = utcnow()
@@ -1265,7 +1265,7 @@ def register(app):
 
                 if response.status_code == 302:  # Follow redirections once only
                     response = get_request(response.headers['Location'], max_bytes=MEDIA_MAX_BYTES,
-                                           max_seconds=MEDIA_MAX_SECONDS)
+                                           max_seconds=MEDIA_MAX_SECONDS, retry=True)
                     if response.status_code >= 400:
                         feed.last_error = utcnow()
                         feed.error_count += 1
@@ -1815,7 +1815,7 @@ def register(app):
             # pull down the community.full.json
             print('Pulling in the lemmyverse data ...')
             resp = get_request('https://data.lemmyverse.net/data/community.full.json', max_bytes=LEMMYVERSE_MAX_BYTES,
-                               max_seconds=LEMMYVERSE_MAX_SECONDS)
+                               max_seconds=LEMMYVERSE_MAX_SECONDS, retry=True)
             community_json = resp.json()
             resp.close()
 
@@ -1871,7 +1871,7 @@ def register(app):
             print('Getting disposable email domain list...')
             resp = get_request(
                 'https://raw.githubusercontent.com/disposable/disposable-email-domains/master/domains.txt',
-                max_bytes=DOMAIN_LIST_MAX_BYTES, max_seconds=DOMAIN_LIST_MAX_SECONDS)
+                max_bytes=DOMAIN_LIST_MAX_BYTES, max_seconds=DOMAIN_LIST_MAX_SECONDS, retry=True)
             if resp.status_code == 200:
                 with open('app/static/tmp/disposable_domains.txt', 'w') as f:
                     f.write(resp.content.decode('utf-8'))

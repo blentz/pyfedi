@@ -354,10 +354,11 @@ def _capped_get(uri, params=None, headers=None, timeout=10, max_bytes: int = FET
 
 
 # do a GET request to a uri, return the result. At most max_bytes of body within max_seconds (_capped_get), or
-# ResponseTooLarge, which is not retried. A transport error sleeps 3-10 s and tries once more -- unless retry is
-# False, which a request path passes: one attempt, no sleep (D738/D775); a Celery caller keeps the default.
+# ResponseTooLarge, which is not retried. A transport error is not retried either: one attempt, no sleep, so no
+# request or inbox path can wait (D738/D775). Only a housekeeping Celery task passes retry=True, which sleeps 3-10 s
+# and tries once more with a doubled timeout.
 def get_request(uri, params=None, headers=None, *, max_bytes: int = FETCH_MAX_BYTES,
-                max_seconds: float = FETCH_MAX_SECONDS, retry: bool = True) -> httpx.Response:
+                max_seconds: float = FETCH_MAX_SECONDS, retry: bool = False) -> httpx.Response:
     if is_invalid_get_request_uri(uri):
         current_app.logger.info(f"invalid get request {uri}")
         raise httpx.HTTPError("HTTPError: invalid uri") from None
@@ -452,10 +453,10 @@ def get_request_capped(uri, max_bytes: int, headers=None, max_seconds: float = 1
         raise httpx.HTTPError(f"HTTPError: {str(error)}") from None
 
 
-# Same as get_request except updates instance on failure and does not raise any exceptions
-def get_request_instance(uri, instance: Instance, params=None, headers=None) -> httpx.Response:
+# Same as get_request except updates instance on failure and does not raise any exceptions. retry as get_request's.
+def get_request_instance(uri, instance: Instance, params=None, headers=None, retry: bool = False) -> httpx.Response:
     try:
-        return get_request(uri, params, headers)
+        return get_request(uri, params, headers, retry=retry)
     except:
         instance.failures += 1
         instance.update_dormant_gone()
@@ -4612,7 +4613,7 @@ def retrieve_defederation_list(domain: str) -> Optional[List[str]]:
     if software == 'lemmy' or software == 'piefed' or software == 'pylova':
         try:
             response = get_request(f'https://{domain}/api/v3/federated_instances', max_bytes=DOMAIN_LIST_MAX_BYTES,
-                                   max_seconds=DOMAIN_LIST_MAX_SECONDS)
+                                   max_seconds=DOMAIN_LIST_MAX_SECONDS, retry=True)
         except:
             response = None
         if not response or response.status_code != 200:
@@ -4634,7 +4635,7 @@ def retrieve_defederation_list(domain: str) -> Optional[List[str]]:
                 result.append(row['domain'])
     else:  # Assume mastodon-compatible API
         try:
-            response = get_request(f'https://{domain}/api/v1/instance/domain_blocks')
+            response = get_request(f'https://{domain}/api/v1/instance/domain_blocks', retry=True)
         except:
             response = None
         if not response or response.status_code != 200:

@@ -14,7 +14,7 @@ import httpx
 import pytest
 
 from app import db
-from app.activitypub.util import process_microblog_announce, resolve_remote_post
+from app.activitypub.util import find_actor_or_create, process_microblog_announce, resolve_remote_post
 from app.models import Relay
 from app.relays import RELAY_ACCEPTED, RELAY_PENDING, STYLE_MASTODON
 from app.relays import inbound, subscribe
@@ -125,4 +125,23 @@ def test_an_inbox_key_refetch_fetches_the_relay_actor_once(app, db_session, http
         assert inbound._relay_key(relay) is None
 
     assert route.call_count == 1
+    sleeps.assert_not_called()
+
+
+FEED = 'https://remote.test/f/news'
+
+
+def test_an_inbox_feed_actor_asks_for_its_owners_once(app, db_session, http_mock, sleeps):
+    """find_actor_or_create meeting a Feed on the inbox reaches actor_json_to_model's owners fetch (review I1)."""
+    make_instance('remote.test')
+    http_mock.get(FEED).respond(200, json={'id': FEED, 'type': 'Feed', 'preferredUsername': 'news',
+                                           'inbox': f'{FEED}/inbox', 'attributedTo': f'{FEED}/owners',
+                                           'following': f'{FEED}/following'})
+    owners = http_mock.get(f'{FEED}/owners').mock(side_effect=refused())
+
+    try:
+        find_actor_or_create(FEED)
+    except httpx.HTTPError:
+        pass   # actor_json_to_model does not catch it; what matters is the one request and no sleep
+    assert owners.call_count == 1
     sleeps.assert_not_called()

@@ -370,11 +370,8 @@ class TestVideoVoteCollectionRetry:
     import and needs `app.utils.sleep` patched separately. That second one is
     load-bearing here -- see the call-count arithmetic below.
 
-    `get_request` retries once ITSELF: a transport failure lands in its
-    `except httpx.HTTPError as read_timeout` arm (`app/utils.py:173-180`), which
-    sleeps and re-issues the request before giving up and raising
-    `httpx.HTTPError`. So one failing `get_request` call costs TWO route calls,
-    and the counts asserted below are read with that in mind.
+    `get_request` itself no longer retries (D738/D775: only a housekeeping task
+    asks it to), so each failing `get_request` call costs ONE route call.
     """
 
     @pytest.mark.usefixtures('no_real_sleeping')
@@ -385,20 +382,19 @@ class TestVideoVoteCollectionRetry:
 
         The outcome alone cannot tell a retry from a first-attempt success --
         both end with the collection counted -- so the assertion is on the
-        respx route's own call count. Three: two from the first `get_request`'s
-        internal retry, then one from the block's own second call.
+        respx route's own call count. Two: the first `get_request`, then the
+        block's own second call.
         """
         post = _seed_post()
         _seed_vote_baseline(post)
         route = http_mock.get(LIKES_URL).mock(side_effect=[
-            httpx.ConnectError('boom'),
             httpx.ConnectError('boom'),
             httpx.Response(200, json={'totalItems': 9}),
         ])
 
         update_post_from_activity(post, _update(type='Video', name='a post', likes=LIKES_URL))
 
-        assert route.call_count == 3
+        assert route.call_count == 2
         assert post.up_votes == 10
         assert post.down_votes == 0
         assert post.score == 10
@@ -409,8 +405,7 @@ class TestVideoVoteCollectionRetry:
         """Both `get_request` calls raise, so `object_request = None` and the
         `if object_request and ...` guard short-circuits on it.
 
-        Four route calls: each of the block's two `get_request` calls spends its
-        own internal retry before raising.
+        Two route calls: one for each of the block's two `get_request` calls.
         """
         post = _seed_post()
         _seed_vote_baseline(post)
@@ -418,7 +413,7 @@ class TestVideoVoteCollectionRetry:
 
         update_post_from_activity(post, _update(type='Video', name='a post', likes=LIKES_URL))
 
-        assert route.call_count == 4
+        assert route.call_count == 2
         assert post.up_votes == 1
         assert post.down_votes == 0
         assert post.score == 1

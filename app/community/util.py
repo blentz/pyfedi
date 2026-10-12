@@ -85,7 +85,7 @@ def search_for_community(address: str, allow_fetch: bool = True, retry: bool = F
             sleep(randint(3, 10))
             try:
                 webfinger_data = get_request(f"https://{server}/.well-known/webfinger",
-                                            params={'resource': f"acct:{address[1:]}"})
+                                            params={'resource': f"acct:{address[1:]}"}, retry=True)
             except httpx.HTTPError:
                 return None
 

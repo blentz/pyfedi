@@ -1006,7 +1006,7 @@ def refresh_user_profile_task(user_id, activity_json=None):
             if user and user.instance_id and user.instance.online():
                 if not activity_json:
                     try:
-                        actor_data = get_request(user.ap_public_url, headers={'Accept': AP_FETCH_ACCEPT})
+                        actor_data = get_request(user.ap_public_url, headers={'Accept': AP_FETCH_ACCEPT}, retry=True)
                     except httpx.HTTPError:  # get_request has already retried once (D224)
                         return
                     except Exception:  # not bare: a worker shutdown must propagate (D220)
@@ -1180,7 +1180,7 @@ def refresh_community_profile_task(community_id, activity_json=None):
             if community and community.instance_id and community.instance.online():
                 if not activity_json:
                     try:
-                        actor_data = get_request(community.ap_public_url, headers={'Accept': AP_FETCH_ACCEPT})
+                        actor_data = get_request(community.ap_public_url, headers={'Accept': AP_FETCH_ACCEPT}, retry=True)
                     except httpx.HTTPError:  # get_request has already retried once (D224)
                         return
                     except Exception:  # a peer that requires signed fetches, as for users (D221)
@@ -1374,7 +1374,7 @@ def refresh_community_profile_task(community_id, activity_json=None):
 
                     if remote and community.ap_moderators_url:
                         mods_request = get_request(community.ap_moderators_url,
-                                                   headers={'Accept': AP_FETCH_ACCEPT})
+                                                   headers={'Accept': AP_FETCH_ACCEPT}, retry=True)
                         if mods_request.status_code == 200:
                             mods_data = mods_request.json()
                             mods_request.close()
@@ -1414,7 +1414,7 @@ def refresh_community_profile_task(community_id, activity_json=None):
                                         session.commit()
 
                     if remote and community.ap_followers_url:
-                        followers_request = get_request(community.ap_followers_url, headers={'Accept': AP_FETCH_ACCEPT})
+                        followers_request = get_request(community.ap_followers_url, headers={'Accept': AP_FETCH_ACCEPT}, retry=True)
                         if followers_request.status_code == 200:
                             followers_data = followers_request.json()
                             followers_request.close()
@@ -1423,7 +1423,7 @@ def refresh_community_profile_task(community_id, activity_json=None):
                                 session.commit()
 
                     if remote and community.ap_featured_url:
-                        featured_request = get_request(community.ap_featured_url, headers={'Accept': AP_FETCH_ACCEPT})
+                        featured_request = get_request(community.ap_featured_url, headers={'Accept': AP_FETCH_ACCEPT}, retry=True)
                         if featured_request.status_code == 200:
                             featured_data = featured_request.json()
                             featured_request.close()
@@ -1466,7 +1466,7 @@ def refresh_feed_profile_task(feed_id, activity_json=None):
             if feed and feed.instance_id and feed.instance.online() and not feed.is_local():
                 if not activity_json:
                     try:
-                        actor_data = get_request(feed.ap_public_url, headers={'Accept': AP_FETCH_ACCEPT})
+                        actor_data = get_request(feed.ap_public_url, headers={'Accept': AP_FETCH_ACCEPT}, retry=True)
                     except httpx.HTTPError:  # get_request has already retried once (D224)
                         return
                     except Exception:  # a peer that requires signed fetches, as for users (D221)
@@ -1560,7 +1560,7 @@ def refresh_feed_profile_task(feed_id, activity_json=None):
 
                     if feed.ap_moderators_url:
                         owners_request = get_request(feed.ap_moderators_url,
-                                                     headers={'Accept': AP_FETCH_ACCEPT})
+                                                     headers={'Accept': AP_FETCH_ACCEPT}, retry=True)
                         if owners_request.status_code == 200:
                             owners_data = owners_request.json()
                             owners_request.close()
@@ -1604,7 +1604,7 @@ def refresh_feed_profile_task(feed_id, activity_json=None):
                     # also make sure we have all the feeditems from the /following collection
                     if feed.ap_following_url:
                         res = get_request(feed.ap_following_url,
-                                          headers={'Accept': AP_FETCH_ACCEPT})
+                                          headers={'Accept': AP_FETCH_ACCEPT}, retry=True)
                         if res.status_code == 200:
                             try:
                                 following_collection = res.json()
@@ -2953,11 +2953,11 @@ def new_instance_profile_task(instance_id: int):
             try:
                 # the root is often an HTML homepage, so it gets a page's cap, not an AP document's
                 instance_data = get_request(f"{protocol}://{instance.domain}", headers={'Accept': AP_FETCH_ACCEPT},
-                                            max_bytes=PAGE_MAX_BYTES)
+                                            max_bytes=PAGE_MAX_BYTES, retry=True)
             except:
                 try:
                     instance_data = get_request(f"http://{instance.domain}", headers={'Accept': AP_FETCH_ACCEPT},
-                                                max_bytes=PAGE_MAX_BYTES)
+                                                max_bytes=PAGE_MAX_BYTES, retry=True)
                     protocol = 'http'
                 except:
                     return
@@ -2989,7 +2989,7 @@ def new_instance_profile_task(instance_id: int):
 
                 # retrieve list of Admins from /api/v3/site, update InstanceRole
                 try:
-                    response = get_request(f'{protocol}://{instance.domain}/api/v3/site')
+                    response = get_request(f'{protocol}://{instance.domain}/api/v3/site', retry=True)
                 except:
                     response = None
 
@@ -3032,7 +3032,7 @@ def new_instance_profile_task(instance_id: int):
 
             headers = {'Accept': 'application/activity+json'}
             try:
-                nodeinfo = get_request(f"{protocol}://{instance.domain}/.well-known/nodeinfo", headers=headers)
+                nodeinfo = get_request(f"{protocol}://{instance.domain}/.well-known/nodeinfo", headers=headers, retry=True)
                 if nodeinfo.status_code == 200:
                     nodeinfo_json = nodeinfo.json()
                     for links in nodeinfo_json['links']:
@@ -3042,7 +3042,7 @@ def new_instance_profile_task(instance_id: int):
                                 links['rel'] == 'http://nodeinfo.diaspora.software/ns/schema/2.1'):  # Lemmy v0.19.4+ (no 2.0 back-compat provided here)
                             try:
                                 time.sleep(0.1)
-                                node = get_request(links['href'], headers=headers)
+                                node = get_request(links['href'], headers=headers, retry=True)
                                 if node.status_code == 200:
                                     node_json = node.json()
                                     if 'software' in node_json:

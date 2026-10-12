@@ -465,7 +465,7 @@ def check_instance_health():
                 try:
                     # Try the nodeinfo endpoint first
                     if instance.nodeinfo_href:
-                        node = get_request_instance(instance.nodeinfo_href, headers=HEADERS, instance=instance)
+                        node = get_request_instance(instance.nodeinfo_href, headers=HEADERS, instance=instance, retry=True)
                         if node.status_code == 200:
                             try:
                                 node_json = node.json()
@@ -482,7 +482,7 @@ def check_instance_health():
                         nodeinfo = get_request_instance(
                             f"https://{instance.domain}/.well-known/nodeinfo",
                             headers=HEADERS,
-                            instance=instance
+                            instance=instance, retry=True
                         )
                         if nodeinfo.status_code == 200:
                             try:
@@ -568,7 +568,7 @@ def monitor_healthy_instances():
                     nodeinfo = get_request_instance(
                         f"https://{instance.domain}/.well-known/nodeinfo",
                         headers=HEADERS,
-                        instance=instance
+                        instance=instance, retry=True
                     )
 
                     if nodeinfo.status_code == 200:
@@ -602,7 +602,7 @@ def monitor_healthy_instances():
             if instance.nodeinfo_href:
                 node = None
                 try:
-                    node = get_request_instance(instance.nodeinfo_href, headers=HEADERS, instance=instance)
+                    node = get_request_instance(instance.nodeinfo_href, headers=HEADERS, instance=instance, retry=True)
                     if node.status_code == 200:
                         node_json = node.json()
                         if 'software' in node_json:
@@ -648,7 +648,7 @@ def monitor_healthy_instances():
             if instance.online() and (instance.software == 'lemmy' or instance.software == 'piefed' or instance.software == 'pylova'):
                 response = None
                 try:
-                    response = get_request(f'https://{instance.domain}/api/v3/site')
+                    response = get_request(f'https://{instance.domain}/api/v3/site', retry=True)
                     if response and response.status_code == 200:
                         instance_data = response.json()
                         admin_profile_ids = []
@@ -715,7 +715,7 @@ def monitor_healthy_instances():
             if instance.online() and instance.software == 'mbin':
                 response = None
                 try:
-                    response = get_request(f'https://{instance.domain}/api/users/admins')
+                    response = get_request(f'https://{instance.domain}/api/users/admins', retry=True)
                     if response and response.status_code == 200:
                         instance_data = response.json()
                         admin_user_ids = []
@@ -1077,7 +1077,7 @@ def refresh_instance_chooser():
                     try:
                         # Request instance_chooser API endpoint
                         try:
-                            chooser_response = get_request(f'https://{domain}/api/alpha/site/instance_chooser')
+                            chooser_response = get_request(f'https://{domain}/api/alpha/site/instance_chooser', retry=True)
                         except Exception as e:
                             current_app.logger.warning(f"Failed to connect to {domain}: {str(e)}")
                             # Remove existing record if API call failed
@@ -1146,7 +1146,7 @@ def add_remote_communities():
             'community_name': 'newcommunities@lemmy.world',
             'sort': 'New',
             'limit': '50'
-        })
+        }, retry=True)
     except httpx.HTTPError:
         return
 
