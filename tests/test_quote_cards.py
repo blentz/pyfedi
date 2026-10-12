@@ -523,3 +523,16 @@ def test_the_card_style_outranks_the_body_blockquote_style_and_precedes_the_sour
     assert '.quote_card, blockquote.quote_card {' in css and 'blockquote.quote_card .quote_card_meta' in css
     assert 'blockquote.quote_card {' in (static / 'styles.scss').read_text()
     assert css.rstrip().endswith('/*# sourceMappingURL=styles.css.map */')
+
+
+def test_a_blurred_card_or_line_is_blurred_by_a_style_rule():
+    """The teaser adds `blur` to the card inside an NSFW item the viewer blurs; without a rule a SFW card showed plain."""
+    import re
+    from pathlib import Path
+    static = Path(__file__).resolve().parent.parent / 'app' / 'static'
+    for name in ('styles.scss', 'styles.css'):
+        text = (static / name).read_text()
+        rule = re.search(r'\.quote_card\.blur,\s*\.quote_line\.blur\s*\{([^}]*)\}', text)
+        assert rule, name
+        assert 'filter: blur(var(--spacing-4));' in rule.group(1) and 'user-select: none;' in rule.group(1), name
+    assert (static / 'styles.css').read_text().rstrip().endswith('/*# sourceMappingURL=styles.css.map */')
