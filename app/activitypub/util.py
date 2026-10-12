@@ -5406,10 +5406,13 @@ def withdraw_flag(user: User, flag: dict, session) -> tuple:
 QUOTE_KEYS = ('quote', 'quoteUrl', 'quoteUri', '_misskey_quote')  # FEP-044f first, then Fedibird/Misskey legacy
 
 
+_URL_FORBIDDEN = frozenset('"<>\\^`{|}')  # RFC 3986: never unencoded in a URI
+
+
 def _valid_quote_id(value) -> bool:
     if not isinstance(value, str) or not value or len(value) > 255 or not value.isascii():
         return False
-    if any(c.isspace() or ord(c) < 0x20 or ord(c) == 0x7f for c in value):
+    if any(c.isspace() or ord(c) < 0x20 or ord(c) == 0x7f or c in _URL_FORBIDDEN for c in value):
         return False
     try:
         parts = urlsplit(value)
