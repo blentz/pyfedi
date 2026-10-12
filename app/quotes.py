@@ -125,8 +125,9 @@ def quote_state(item, user=None) -> dict | None:
         return {'kind': 'line', 'url': item.quote_ap_id, 'target': None, 'href': None, 'author': None,
                 'community': None, 'text': None, 'posted_at': None}
     is_post = isinstance(q, Post)
+    # A content warning hides the body on the object's own page, so the card shows the warning in its place.
     return {'kind': 'card', 'url': item.quote_ap_id, 'target': q,
             'href': f'/post/{q.id}' if is_post else f'/post/{q.post_id}#comment_{q.id}',
             'author': q.author, 'community': db.session.get(Community, q.community_id),
-            'text': (q.title if is_post and q.title else shorten_string(q.body or '', 200)),
+            'text': (q.title if is_post and q.title else shorten_string(q.content_warning or q.body or '', 200)),
             'posted_at': q.posted_at}

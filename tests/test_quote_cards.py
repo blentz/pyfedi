@@ -395,3 +395,21 @@ def test_dillo_event_teaser_shows_the_quote_of_a_post_with_no_body(world, app):
     with app.test_request_context('/'):
         html = render_template_string(DILLO_EVENT, post=world['quoting'])
     assert 'quote_card' in html and 'post_teaser_article_preview' not in html
+
+
+def test_a_quoted_comment_with_a_content_warning_shows_the_warning_not_the_body(world):
+    reply = make_post_reply(world['target'], world['quoted_author'], body='the hidden words')
+    reply.ap_id = f'https://{PEER}/comment/6'
+    reply.content_warning = 'spoilers ' * 40
+    world['quoting'].quote_ap_id = reply.ap_id
+    db.session.commit()
+    state = quote_state(world['quoting'], world['viewer'])
+    assert state['kind'] == 'card' and 'hidden' not in state['text']
+    assert state['text'].startswith('spoilers') and len(state['text']) <= 200
+
+
+def test_a_titleless_quoted_post_with_a_content_warning_shows_the_warning(world):
+    world['target'].title = ''
+    world['target'].content_warning = 'gore'
+    state = quote_state(world['quoting'], world['viewer'])
+    assert state['text'] == 'gore'
