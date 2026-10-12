@@ -1,4 +1,6 @@
+{% from 'post/_language_switch.html' import render_language_switch %}
 {% from 'post/_quote_card.html' import render_quote %}
+{% set v = shown(post) -%}
 {# D1085: moderators and admins see a deleted post's original; anyone else sees a placeholder where its author deleted it #}
 {% set sees_deleted_original = not post.deleted or post.community.is_moderator() or post.community.is_owner() or current_user.get_id() in admin_ids -%}
 {% set deleted_by_author_placeholder = post.deleted and post.deleted_by == post.user_id and not sees_deleted_original -%}
@@ -40,8 +42,8 @@
                 {% endif -%}
             </div>
         {%- else -%}
-            <h1 class="post_title" lang="{{ post.language_code() }}">
-                {% if deleted_by_author_placeholder %}{{ _('deleted by author') }}{% else %}{{ post.title if post.title != '(content in post body)' else '' }}{% endif %}
+            <h1 class="post_title" lang="{{ v.code }}">
+                {% if deleted_by_author_placeholder %}{{ _('deleted by author') }}{% else %}{{ v.title if v.title != '(content in post body)' else '' }}{% endif %}
                 {% if post.nsfw -%}
                     <span class="warning_badge nsfw" title="{{ _('Not safe for work') }}">
                         {{ _('nsfw') }}
@@ -58,6 +60,7 @@
                     </span>
                 {% endif -%}
             </h1>
+            {{ render_language_switch(v) }}
 
             <div class="mb-2">
                 {% if post.has_been_reported() -%}
@@ -82,7 +85,7 @@
             </div>
         {%- endif -%}
         {% set blur_images = post.blur_images(current_user) -%}
-        {% if post.content_warning and sees_deleted_original -%}<details class="content_warning"><summary>{{ post.content_warning }}</summary>{% endif -%}
+        {% if v.cw and sees_deleted_original -%}<details class="content_warning"><summary>{{ v.cw }}</summary>{% endif -%}
         {% if post.type == POST_TYPE_IMAGE and not post.deleted -%}
             <div class="post_image">
                 {% if post.image_id -%}
@@ -275,7 +278,7 @@
             {% endif -%}
         {% endif -%}
         <div class="post_body" lang="{{ post.language_code() }}">
-            {{ post.body_html | community_links | feed_links| person_links | safe if post.body_html and sees_deleted_original else '' }}
+            {{ v.body_html | community_links | feed_links| person_links | safe if post.body_html and sees_deleted_original else '' }}
             {% if archive_link -%}
                 <p>
                     <a href="{{ archive_link }}" rel="nofollow ucg noindex" target="_blank">
@@ -290,9 +293,9 @@
             {% endif -%}
             {% if sees_deleted_original %}{{ render_quote(post, locale=locale) }}{% endif %}
         </div>
-        {% if post.content_warning and sees_deleted_original -%}</details>{% endif -%}
+        {% if v.cw and sees_deleted_original -%}</details>{% endif -%}
         {% if post.type == POST_TYPE_POLL and not post.deleted -%}
-            {% if post.content_warning and sees_deleted_original -%}<details class="content_warning"><summary>{{ post.content_warning }}</summary>{% endif -%}
+            {% if v.cw and sees_deleted_original -%}<details class="content_warning"><summary>{{ v.cw }}</summary>{% endif -%}
             <div class="post_poll" lang="{{ post.language_code() }}">
                 {% if poll_finished and poll_total_votes == 0 -%}
                     <p>
@@ -422,7 +425,7 @@
                     </form>
                 {% endif -%}
             </div>
-            {% if post.content_warning and sees_deleted_original -%}</details>{% endif -%}
+            {% if v.cw and sees_deleted_original -%}</details>{% endif -%}
         {% endif -%}
         {% if post.type == POST_TYPE_EVENT -%}
             <a class="btn btn-sm btn-outline-secondary" style="float: right;" href="{{ url_for('post.show_post_ical', post_id=post.id) }}">
