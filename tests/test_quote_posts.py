@@ -7,7 +7,7 @@ from app import db
 from app.activitypub.util import (create_post_reply, quote_id_from, update_post_from_activity,
                                   update_post_reply_from_activity)
 from app.models import Post, PostReply
-from app.utils import utcnow
+from app.utils import microblog_content_to_link, strip_quote_fallback, utcnow
 from tests.factories import make_community, make_community_member, make_instance, make_post, make_site, make_user
 
 OWN = 'https://remote.test/notes/1'
@@ -153,3 +153,196 @@ def test_a_local_reply_without_request_json_stores_no_quote(world, redis_lock_on
     reply = PostReply.new(author, parent, None, body='hi', body_html='<p>hi</p>', notify_author=True,
                           language_id=None, distinguished=False, answer=False)
     assert reply.quote_ap_id is None
+
+
+def test_quote_inline_element_is_removed():
+    html = f'<p>my take</p><p class="quote-inline">RE: <a href="{QUOTED}">{QUOTED}</a></p>'
+    assert strip_quote_fallback(html, QUOTED) == '<p>my take</p>'
+
+
+def test_trailing_re_paragraph_is_removed():
+    html = f'<p>my take</p><p>RE: <a href="{QUOTED}">other.test/notes/9</a></p>'
+    assert strip_quote_fallback(html, QUOTED) == '<p>my take</p>'
+
+
+def test_misskey_fallback_keeps_the_text_before_it():
+    html = f'<p><span>my take<br><br>RE: <a href="{QUOTED}">{QUOTED}</a></span></p>'
+    assert strip_quote_fallback(html, QUOTED) == '<p><span>my take</span></p>'
+
+
+def test_misskey_fallback_in_a_bare_paragraph_and_whitespace_between_breaks():
+    html = f'<p>my take<br> <br>RE: <a href="{QUOTED}">{QUOTED}</a></p>'
+    assert strip_quote_fallback(html, QUOTED) == '<p>my take</p>'
+
+
+def test_a_different_link_is_kept():
+    html = '<p>my take</p><p>RE: <a href="https://elsewhere.test/1">x</a></p>'
+    assert strip_quote_fallback(html, QUOTED) == html
+
+
+def test_text_beside_the_link_keeps_the_paragraph():
+    html = f'<p>my take</p><p>RE: <a href="{QUOTED}">this</a> is wrong</p>'
+    assert strip_quote_fallback(html, QUOTED) == html
+
+
+def test_not_the_last_paragraph_is_kept():
+    html = f'<p>RE: <a href="{QUOTED}">x</a></p><p>my take</p>'
+    assert strip_quote_fallback(html, QUOTED) == html
+
+
+def test_words_before_re_in_the_same_text_node_are_kept():
+    html = f'<p>see RE: <a href="{QUOTED}">x</a></p>'
+    assert strip_quote_fallback(html, QUOTED) == html
+
+
+def test_a_last_paragraph_without_links_is_kept():
+    html = '<p>my take</p><p>no links here</p>'
+    assert strip_quote_fallback(html, QUOTED) == html
+
+
+def test_a_link_whose_previous_sibling_is_a_tag_is_kept():
+    html = f'<p><b>RE:</b><a href="{QUOTED}">x</a></p>'
+    assert strip_quote_fallback(html, QUOTED) == html
+
+
+def test_a_link_with_no_previous_sibling_is_kept():
+    html = f'<p><a href="{QUOTED}">x</a></p>'
+    assert strip_quote_fallback(html, QUOTED) == html
+
+
+def test_a_paragraph_left_with_an_image_is_kept():
+    html = f'<p><img src="https://remote.test/a.png">RE: <a href="{QUOTED}">x</a></p>'
+    assert strip_quote_fallback(html, QUOTED) == '<p><img src="https://remote.test/a.png"/></p>'
+
+
+def test_html_without_a_paragraph_is_kept():
+    html = f'<div>RE: <a href="{QUOTED}">x</a></div>'
+    assert strip_quote_fallback(html, QUOTED) == html
+
+
+@pytest.mark.parametrize('quote_id', [None, ''])
+def test_no_quote_changes_nothing(quote_id):
+    html = f'<p class="quote-inline">RE: <a href="{QUOTED}">x</a></p>'
+    assert strip_quote_fallback(html, quote_id) == html
+
+
+def test_empty_html_is_returned():
+    assert strip_quote_fallback('', QUOTED) == ''
+
+
+def test_link_scan_skips_the_quoted_id():
+    html = f'<p><a href="{QUOTED}">q</a> and <a href="https://news.test/a">n</a></p>'
+    assert microblog_content_to_link(html, exclude='remote.test', skip=QUOTED) == 'https://news.test/a'
+
+
+def test_link_scan_with_only_the_quoted_id_is_none():
+    assert microblog_content_to_link(f'<p><a href="{QUOTED}">q</a></p>', exclude='remote.test', skip=QUOTED) is None
+
+
+FALLBACK = f'<p>my take on this</p><p class="quote-inline">RE: <a href="{QUOTED}">{QUOTED}</a></p>'
+
+
+@pytest.mark.parametrize('media', ['text/html', None])
+def test_ingested_microblog_post_has_no_fallback_and_no_quote_url(world, media):
+    community, author, _ = world
+    extra = {'mediaType': media} if media else {}
+    post = Post.new(author, community, _create(_note(7, quote=QUOTED, content=FALLBACK, **extra)))
+    assert 'RE:' not in post.body_html and 'RE:' not in post.body
+    assert post.url != QUOTED
+
+
+def test_author_link_to_the_quoted_post_is_not_the_url(world):
+    community, author, _ = world
+    content = f'<p>my take on <a href="{QUOTED}">this</a></p>'
+    post = Post.new(author, community, _create(_note(8, quote=QUOTED, content=content)))
+    assert post.url != QUOTED
+
+
+def test_markdown_source_is_untouched(world):
+    community, author, _ = world
+    md = f'my take\n\nRE: {QUOTED}'
+    post = Post.new(author, community, _create(_note(9, quote=QUOTED, content='<p>x</p>',
+                                                     source={'content': md, 'mediaType': 'text/markdown'})))
+    assert post.body == md
+
+
+@pytest.mark.parametrize('media', ['text/html', None])
+def test_reply_fallback_is_stripped(world, redis_lock_only_double, media):
+    content = '<p>agreed</p>' + FALLBACK.split('</p>', 1)[1]
+    reply = _new_reply(world, 10, quote=QUOTED, content=content, **({'mediaType': media} if media else {}))
+    assert 'RE:' not in reply.body_html and 'RE:' not in reply.body
+
+
+@pytest.mark.parametrize('media', ['text/html', None])
+def test_post_update_strips_the_fallback(world, redis_lock_only_double, media):
+    community, author, _ = world
+    post = Post.new(author, community, _create(_note(11)))
+    extra = {'mediaType': media} if media else {}
+    update_post_from_activity(post, {'id': 'u', 'type': 'Update',
+                                     'object': _note(11, quote=QUOTED, content=FALLBACK, **extra)})
+    assert 'RE:' not in post.body_html
+    assert post.url != QUOTED
+
+
+@pytest.mark.parametrize('media', ['text/html', None])
+def test_reply_update_strips_the_fallback(world, redis_lock_only_double, media):
+    _, _, parent = world
+    reply = _new_reply(world, 12)
+    extra = {'mediaType': media} if media else {}
+    update_post_reply_from_activity(reply, {'id': 'u', 'type': 'Update',
+                                            'object': _note(12, inReplyTo=parent.ap_id, quote=QUOTED,
+                                                            content=FALLBACK, **extra)})
+    assert 'RE:' not in reply.body_html
+
+
+def test_post_update_with_an_author_link_to_the_quote_does_not_make_it_the_url(world, redis_lock_only_double):
+    community, author, _ = world
+    post = Post.new(author, community, _create(_note(13)))
+    content = f'<p>my take on <a href="{QUOTED}">this</a></p>'
+    update_post_from_activity(post, {'id': 'u', 'type': 'Update', 'object': _note(13, quote=QUOTED, content=content)})
+    assert post.url != QUOTED
+
+
+NEWS = 'https://news.test/a'
+
+
+@pytest.fixture
+def no_url_probes(monkeypatch):
+    """A link post's url is probed for an image or a video; these tests are about which link is chosen."""
+    monkeypatch.setattr('app.utils.is_image_url', lambda url: False)
+    monkeypatch.setattr('app.utils.is_video_url', lambda url: False)
+
+
+def _h1(href):
+    return f'<h1><a href="{href}">A headline</a></h1><p>my take <a href="{NEWS}">n</a></p>'
+
+
+def test_new_microblog_post_takes_its_headline_link_as_the_url(world, no_url_probes):
+    community, author, _ = world
+    post = Post.new(author, community, _create(_note(14, quote=QUOTED, content=_h1(NEWS), mediaType='text/html')))
+    # the attachment pass of the Update then settles post.url (none here); only the headline branch is exercised
+    assert NEWS in post.body_html
+
+
+def test_new_microblog_post_whose_headline_links_the_quote_takes_another_link(world, no_url_probes):
+    community, author, _ = world
+    post = Post.new(author, community, _create(_note(15, quote=QUOTED, content=_h1(QUOTED), mediaType='text/html')))
+    # the attachment pass of the Update then settles post.url (none here); only the headline branch is exercised
+    assert NEWS in post.body_html
+
+
+def test_post_update_with_an_unrelated_headline_link_is_processed(world, redis_lock_only_double):
+    community, author, _ = world
+    post = Post.new(author, community, _create(_note(16)))
+    update_post_from_activity(post, {'id': 'u', 'type': 'Update',
+                                     'object': _note(16, quote=QUOTED, content=_h1(NEWS), mediaType='text/html')})
+    # the attachment pass of the Update then settles post.url (none here); only the headline branch is exercised
+    assert NEWS in post.body_html
+
+
+def test_post_update_whose_headline_links_the_quote_does_not_take_it(world, redis_lock_only_double):
+    community, author, _ = world
+    post = Post.new(author, community, _create(_note(17)))
+    update_post_from_activity(post, {'id': 'u', 'type': 'Update',
+                                     'object': _note(17, quote=QUOTED, content=_h1(QUOTED), mediaType='text/html')})
+    assert post.url != QUOTED

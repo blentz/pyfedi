@@ -56,9 +56,13 @@ quote counts, notifications to the quoted author. The outbound FEP-044f QuoteReq
 Only when `quote_ap_id` is set, and only on HTML content (the `source` Markdown path is untouched — PieFed and
 other Markdown senders do not add the fallback):
 
-- Remove every element whose `class` contains `quote-inline` (Mastodon), before `allowlist_html` drops classes.
-- Remove the last top-level `<p>` when its text, trimmed, is `RE: ` followed by exactly one link and that link's
-  `href` equals `quote_ap_id` (Misskey, older Mastodon). Text other than the link means the paragraph stays.
+- Remove every element whose `class` contains `quote-inline` (Mastodon). `allowlist_html` keeps `class`, so this runs
+  on its output.
+- Ruling R1 (Misskey fallback form). The rule "last `<p>` whose text is `RE: <link>`" misses Misskey, which puts
+  `RE: <a>` at the end of the same paragraph after `<br><br>`. The rule implemented: in the last top-level `<p>`, when
+  its last link's `href` equals `quote_ap_id`, that link ends the paragraph's text, and the text node just before it is
+  exactly `RE:` (stripped), remove the link, that text node and the `<br>`s right before it; drop the paragraph if
+  nothing visible is left. The author's text is never touched.
 - `body` is derived from the stripped `body_html` as today.
 
 ### Microblog url
