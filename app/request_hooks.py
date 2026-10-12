@@ -10,7 +10,7 @@ from app import db
 from app.activitypub.entitlement import secure_mode_cache_headers, signed_fetch_refusal
 from app.community.live import post_community_link
 import pendulum
-from flask import session, g, json, request, current_app
+from flask import before_render_template, session, g, json, request, current_app
 from sqlalchemy import text
 from app.constants import POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_ARTICLE, POST_TYPE_VIDEO, POST_TYPE_POLL, \
     SUBSCRIPTION_MODERATOR, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, SUBSCRIPTION_PENDING, ROLE_ADMIN_NAME, VERSION, \
@@ -22,6 +22,7 @@ from app.utils import getmtime, gibberish, shorten_string, shorten_url, digits, 
     notif_id_to_string, feed_link_to_href, get_setting, set_setting, show_explore, human_filesize, can_upload_video, \
     debug_checkpoint, compaction_level, humanize_number, round_invisible_digits, get_site_as_dict, localize_datetime, \
     display_back_button, favorite_communities, get_event_start, reply_filter_keyword, user_banned_from_community
+from app.quotes import prime_quotes, quote_state
 from app.visibility import can_view
 
 
@@ -80,6 +81,8 @@ def register_request_hooks(app):
     app.jinja_env.globals['reply_filter_keyword'] = reply_filter_keyword
     app.jinja_env.globals['user_banned_from_community'] = user_banned_from_community  # D995
     app.jinja_env.globals['viewer_can_view'] = viewer_can_view
+    app.jinja_env.globals['quote_state'] = quote_state
+    before_render_template.connect(prime_quotes, app)  # C2: one lookup per table per rendered page
     app.jinja_env.globals['post_community_link'] = post_community_link
     app.jinja_env.filters['community_links'] = community_link_to_href
     app.jinja_env.filters['feed_links'] = feed_link_to_href
