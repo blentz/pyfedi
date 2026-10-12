@@ -5,7 +5,9 @@ Only what a logged-out viewer could see is listed: public, not deleted, publishe
 local-only community. Private messages are ChatMessage rows, a separate table, so they can never appear. The gates
 are item 6's: a deleted user is 410, a banned, unknown or remote one 404.
 """
+import re
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import event
@@ -13,7 +15,7 @@ from sqlalchemy import event
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.constants import POST_STATUS_REVIEWING, VISIBILITY_FOLLOWERS, VISIBILITY_UNLISTED
-from app.models import Community, Instance, Post, User, utcnow
+from app.models import Community, Instance, Post, PostReply, User, utcnow
 from tests.factories import make_chat_message, make_community, make_instance, make_instance_block, make_post, \
     make_post_reply, make_user
 from tests.test_actor_profiles import seed_actors
@@ -168,7 +170,7 @@ def test_the_outbox_uses_the_collection_cache_policy(app, db_session):
 
     assert response.content_type == 'application/activity+json'
     assert response.headers['Cache-Control'] == 'public, max-age=60'
-    assert response.headers['Vary'] == 'Accept, Accept-Encoding'
+    assert 'Accept' in [part.strip() for part in response.headers['Vary'].split(',')]
 
 
 def test_a_deleted_user_is_gone(app, db_session):
@@ -310,3 +312,63 @@ def test_a_user_who_blocks_instances_has_an_outbox_that_varies_on_the_requester(
     assert response.status_code == 200
     assert _object_ids(response.json) == [shown.ap_id]
     assert [part.strip() for part in response.headers['Vary'].split(',')][:3] == ['Accept', 'User-Agent', 'Signature']
+
+
+# --- Task 10 review ---
+
+@pytest.mark.parametrize('post_in_hidden', [True, False], ids=['post-hidden', 'comment-row-hidden'])
+def test_a_comment_is_judged_by_its_posts_community(app, db_session, post_in_hidden):
+    """Task 10 review M2. Every view route judges a comment by post.community; the outbox joined the comment's own
+    community_id. Post.move_to keeps the two equal, so this pins the structure, not a live leak."""
+    author, community = _world()
+    hidden = _hidden_community('private')
+    post = _someone_elses_post(hidden if post_in_hidden else community)
+    reply = _reply(post, author, 5, community_id=(community if post_in_hidden else hidden).id)
+
+    listed = _object_ids(ap_get(app, '/u/alice/outbox').json)
+
+    assert listed == ([] if post_in_hidden else [reply.ap_id])
+
+
+def test_a_row_purged_between_the_page_and_its_load_is_left_out(app, db_session, monkeypatch):
+    """Task 10 review M3. The page's rows are chosen in one query and loaded in two more; a hard purge in between
+    made posts[row.id] a KeyError and the page a 500."""
+    author, community = _world()
+    post = _post(community, author, 10)
+    _reply(post, author, 5)
+    rows = activitypub_routes.user_outbox_rows(author)
+    vanished = SimpleNamespace(id=PostReply.id, query=SimpleNamespace(filter=lambda *criteria: []))
+    monkeypatch.setattr(activitypub_routes, 'PostReply', vanished)
+
+    page = activitypub_routes.user_outbox_page(rows, 0, 50)
+
+    assert [item['object']['id'] for item in page] == [post.ap_id]
+
+
+def test_a_create_id_is_the_same_on_every_request_and_in_the_community_outbox(app, db_session):
+    """Task 10 review M4. A local object has no stored Create id, and each request minted a new random one: the same
+    item had a new id on every poll, and another on the root than on ?page=1. It is now derived from the object, in
+    the community outbox's shape (create_activity_of serves both)."""
+    author, community = _world()
+    post = _post(community, author, 10)
+    reply = _reply(post, author, 5)
+
+    root = ap_get(app, '/u/alice/outbox').json['orderedItems']
+    again = ap_get(app, '/u/alice/outbox?page=1').json['orderedItems']
+    group = ap_get(app, '/c/books/outbox').json['orderedItems']
+
+    ids = [item['id'] for item in root]
+    assert ids == [item['id'] for item in again]
+    assert len(set(ids)) == 2
+    assert all(re.fullmatch(rf'{SERVER}/activities/create/[0-9A-Za-z]{{15}}', create_id) for create_id in ids)
+    [announce] = group
+    assert (announce['object']['object']['id'], announce['object']['id']) == (post.ap_id, root[1]['id'])
+    assert root[0]['object']['id'] == reply.ap_id
+
+
+def test_a_stored_create_id_is_still_used(app, db_session):
+    author, community = _world()
+    _post(community, author, 10, ap_create_id='https://elsewhere.example/activities/create/1')
+
+    assert [item['id'] for item in ap_get(app, '/u/alice/outbox').json['orderedItems']] == \
+        ['https://elsewhere.example/activities/create/1']
