@@ -1650,6 +1650,12 @@ def _federates_with(host: str) -> bool:
     return not instance_banned(host)
 
 
+def _same_actor_id(one: str, other: str) -> bool:
+    """canonical_handle's one id comparison, for both the reverse lookup's href and the refetched origin's id:
+    stripped and lowercased, as names_actor compares and as ap_profile_id is stored."""
+    return one.strip().lower() == other.strip().lower()
+
+
 def canonical_handle(actor_json, address: str, server: str, prefix: str = '') -> tuple[str, str, dict] | None:
     """The (address, server, actor document) to store a WebFinger-resolved actor as, or None to refuse it (C1 item 9).
 
@@ -1672,7 +1678,7 @@ def canonical_handle(actor_json, address: str, server: str, prefix: str = '') ->
     mastodon.social's WebFinger will truthfully confirm victim. So when the canonical host is not the looked-up
     host, the actor is refetched from its id (fetch_object_capped: capped, signed on a 401, no retry), and only that
     document is handed back -- nothing from the copy the alias served, the handle included. A failed refetch, or one
-    answering another id (stripped and lowercased, as names_actor compares), another type or another
+    answering another id (_same_actor_id, the comparison the reverse lookup's href gets too), another type or another
     preferredUsername, is refused. A same-host alias keeps the
     document it was given, as before. Callers store the document this returns, never their own.
 
@@ -1696,7 +1702,7 @@ def canonical_handle(actor_json, address: str, server: str, prefix: str = '') ->
                                    f'{id_host} is not an instance this one federates with')
         return None
     href = webfinger_self_href(f'{prefix}{name}', id_host)
-    if href is None or href.lower() != actor_id.lower():
+    if href is None or not _same_actor_id(href, actor_id):
         current_app.logger.warning(f'WebFinger reverse check refused {address}@{server}: '
                                    f'{prefix}{name}@{id_host} does not resolve to {actor_id!r}')
         return None
@@ -1708,7 +1714,7 @@ def canonical_handle(actor_json, address: str, server: str, prefix: str = '') ->
                                    f'refetching {actor_id!r} from its own host failed: {reason}')
         return None
     origin_id = origin.get('id')
-    if not isinstance(origin_id, str) or origin_id.strip().lower() != actor_id.strip().lower() \
+    if not isinstance(origin_id, str) or not _same_actor_id(origin_id, actor_id) \
             or origin.get('type') != actor_json.get('type'):
         current_app.logger.warning(f'WebFinger reverse check refused {address}@{server}: '
                                    f'{actor_id!r} answered as {origin_id!r} of type {origin.get("type")!r}')
