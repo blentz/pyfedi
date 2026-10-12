@@ -86,7 +86,7 @@ def test_post_new_without_maps_uses_the_site_language(world):
 
 
 def test_reply_stores_variants_and_the_matching_language(world, redis_lock_only_double):
-    reply = _new_reply(world, 6, **{k: v for k, v in MAPS.items() if k != 'nameMap'})  # a comment has no name
+    reply = _new_reply(world, 6, **MAPS)
     assert reply.language.code == 'en' and set(reply.language_variants) == {'fr'}
     assert reply.language_variants['fr']['title'] is None
 

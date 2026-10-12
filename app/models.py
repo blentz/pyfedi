@@ -2671,8 +2671,7 @@ class Post(db.Model):
     @classmethod
     def new(cls, user: User, community: Community, request_json: dict, announce_id=None, backfill=False):
         # cycle: app.activitypub.util imports from this module
-        from app.activitypub.util import find_language_or_create, find_language, \
-            find_hashtag_or_create, \
+        from app.activitypub.util import find_hashtag_or_create, \
             find_licence_or_create, make_image_sizes, notify_about_post, find_flair_or_create, host_of, \
             activitypub_visibility, set_post_gallery, content_warning_from, gallery_attachments, \
             gallery_image_is_blocked, castopod_episode_url, fetch_castopod_episode_audio, can_view, \
@@ -4116,7 +4115,8 @@ class PostReply(db.Model):
                           ap_id=request_json['object']['id'] if request_json else None,
                           quote_ap_id=quote_id_from(request_json['object']) if request_json else None,
                           language_variants=language_variants_from(request_json['object'],
-                                                                   quote_id_from(request_json['object']))[1]
+                                                                   quote_id_from(request_json['object']),
+                                                                   titles=False)[1]
                           if request_json else None,
                           ap_create_id=request_json['id'] if request_json else None,
                           ap_announce_id=announce_id)

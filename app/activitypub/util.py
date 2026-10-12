@@ -234,7 +234,7 @@ def _language_map(obj: dict, key: str) -> dict:
     return result
 
 
-def language_variants_from(obj: dict, quote_ap_id: str | None = None) -> tuple[str | None, dict | None]:
+def language_variants_from(obj: dict, quote_ap_id: str | None = None, titles: bool = True) -> tuple[str | None, dict | None]:
     """C3. The default language code of `obj` and its other languages as {code: {title, body_html, cw}}.
 
     The default is the `contentMap` key whose text is `content`, else the `language` property's code, else the
@@ -259,7 +259,7 @@ def language_variants_from(obj: dict, quote_ap_id: str | None = None) -> tuple[s
         body_html = strip_quote_fallback(allowlist_html(source), quote_ap_id)
         if not html_to_text(body_html).strip():
             continue
-        title = html.unescape(names[code].strip()) if names.get(code, '').strip() else None
+        title = html.unescape(names[code].strip()) if titles and names.get(code, '').strip() else None
         cw = content_warning_from({**obj, 'summary': summaries[code]}) if code in summaries else None
         variants[code] = {'title': shorten_string(title, 255) if title else None, 'body_html': body_html, 'cw': cw}
     return default, variants or None
@@ -3782,7 +3782,7 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
         # Language - Lemmy uses 'language' while Mastodon uses 'contentMap'
         # Language: C3 takes contentMap's default (the key whose text is `content`) as well as Lemmy's 'language'
         language_id = None
-        map_code = language_variants_from(request_json['object'])[0]
+        map_code = language_variants_from(request_json['object'], titles=False)[0]
         language = object_language(request_json['object'], map_code)
         if language is not None:
             if language.id is None:
@@ -4368,7 +4368,7 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
         reply.content_warning = content_warning_from(request_json['object'])
         # Language
         old_language_id = reply.language_id
-        map_code, reply.language_variants = language_variants_from(request_json['object'], reply.quote_ap_id)  # C3
+        map_code, reply.language_variants = language_variants_from(request_json['object'], reply.quote_ap_id, titles=False)  # C3
         new_language = object_language(request_json['object'], map_code)
         # find_language_or_create() can return a row it has only add()ed, whose id is
         # still None (the app factory sets autoflush=False). Assign the relationship
