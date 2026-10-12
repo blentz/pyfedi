@@ -12,7 +12,7 @@ from app import cache, db
 from app.constants import AP_FETCH_ACCEPT
 from app.activitypub.util import get_request, signed_get_request, actor_json_to_model, refresh_user_profile, \
     refresh_community_profile, refresh_feed_profile, extract_domain_and_actor, normalise_actor_string, \
-    canonical_handle
+    canonical_handle, webfinger_self_link_allowed
 from app.discovery.podcast import podcast_community_for
 from app.models import User, Community, Feed, Site
 from app.utils import utcnow, get_setting, actor_contains_blocked_words, actor_profile_contains_blocked_words, \
@@ -274,6 +274,8 @@ def fetch_actor_from_webfinger(address: str, server: str, retry=False):
             if link.get('rel') == 'self':
                 if 'href' not in link:  # a peer may advertise several, so keep walking
                     continue
+                if not webfinger_self_link_allowed(link['href'], address, server):
+                    return None
                 type_header = link.get('type', AP_FETCH_ACCEPT)
                 try:
                     actor_data = get_request(link['href'], headers={'Accept': type_header})

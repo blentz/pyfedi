@@ -8,7 +8,7 @@ from flask_babel import _
 from sqlalchemy import func, text
 
 from app import db
-from app.activitypub.util import actor_json_to_model, canonical_handle
+from app.activitypub.util import actor_json_to_model, canonical_handle, webfinger_self_link_allowed
 from app.community.util import search_for_community, retrieve_mods_and_backfill
 from app.constants import AP_FETCH_ACCEPT
 from app.models import BannedInstances, Feed, FeedItem, Community, _as_dict
@@ -87,6 +87,8 @@ def search_for_feed(address: str, allow_fetch: bool = True, retry: bool = False)
                 if 'rel' in links and links['rel'] == 'self':  # this contains the URL of the activitypub profile
                     if 'href' not in links:  # a peer may advertise several, so keep walking
                         continue
+                    if not webfinger_self_link_allowed(links['href'], f'~{name}', server):
+                        return None
                     type = links['type'] if 'type' in links else AP_FETCH_ACCEPT
                     # retrieve the activitypub profile
                     feed_data = get_request(links['href'], headers={'Accept': type})
