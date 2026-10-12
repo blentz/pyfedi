@@ -119,3 +119,20 @@ def test_teaser_warning_hides_the_variant_body(page_world, app, theme):
         html = render_template_string(source, post=page_world['post'])
     assert 'spoilers' in html and 'bonjour' not in html
 
+
+
+def test_microblog_post_with_a_variant_has_the_switch(page_world, app):
+    page_world['post'].microblog = True
+    page_world['community'].name = 'microblogs'  # Post.is_microblog needs both
+    db.session.commit()
+    soup = page(app, page_world, f"/post/{page_world['post'].id}")
+    assert soup.select_one('p.language_switch a')['href'] == '?lang=fr'
+
+
+def test_author_deleted_post_has_no_switch(page_world, app):
+    post = page_world['post']
+    post.deleted, post.deleted_by = True, post.user_id
+    page_world['reply'].language_variants = None  # the comment's own switch is not under test
+    db.session.commit()
+    assert page(app, page_world, f'/post/{post.id}').select('p.language_switch') == []
+
