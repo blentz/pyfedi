@@ -3272,7 +3272,8 @@ def process_remove(core_activity, user, community, feed, announced, id, saved_js
     """A Remove: demote a moderator, unsticky a post, or take a community out of a feed.
 
     `undo` is set when this runs for an Undo of an Add (interop C1 item 3). A target that is already in the
-    removed state is then a logged no-op, and a feed's auto-unsubscribe loop does not run for it."""
+    removed state is then a logged no-op. A feed's Remove (Undo or not) of a community it does not list is a
+    logged no-op too: its auto-unsubscribe loop does not run for it."""
     if not announced and not feed:
         community = find_community(core_activity)
     if feed and isinstance(core_activity.get('object'), dict) and 'id' in core_activity['object']:
@@ -3287,9 +3288,9 @@ def process_remove(core_activity, user, community, feed, announced, id, saved_js
                 session.commit()
                 log_incoming_ap(id, APLOG_REMOVE, APLOG_SUCCESS, saved_json)
             else:
+                # A community the feed never listed was never joined through this removal: undo no join for it
                 log_incoming_ap(id, APLOG_REMOVE, APLOG_IGNORED, saved_json, 'Community is not in feed')
-                if undo:
-                    return
+                return
             # also auto-unsubscribe any feedmembers from the community
             # who have feed_auto_leave enabled
             feed_members = session.query(FeedMember).filter_by(feed_id=feed.id).all()
