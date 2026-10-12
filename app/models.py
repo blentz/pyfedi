@@ -23,7 +23,7 @@ from flask_sqlalchemy.query import Query
 from furl import furl
 from slugify import slugify
 from sqlalchemy import or_, text, desc, Index, func, and_
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.dialects.postgresql import BIT
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.mutable import MutableList
@@ -2558,6 +2558,7 @@ class Post(db.Model):
 
     ap_id = db.Column(db.String(255), index=True, unique=True)
     quote_ap_id = db.Column(db.String(255))  # C2: the id this inbound object quotes (FEP-044f quote or a legacy key)
+    language_variants = db.Column(JSONB)  # C3: {code: {title, body_html, cw}} for each non-default language a peer sent
     ap_create_id = db.Column(db.String(255))
     ap_announce_id = db.Column(db.String(255))
     ap_updated = db.Column(db.DateTime)  # When the remote instance edited the Post. Useful when local instance has been offline and a flurry of potentially out of order updates are coming in.
@@ -4028,6 +4029,7 @@ class PostReply(db.Model):
 
     ap_id = db.Column(db.String(255), index=True, unique=True)
     quote_ap_id = db.Column(db.String(255))  # C2: the id this inbound object quotes (FEP-044f quote or a legacy key)
+    language_variants = db.Column(JSONB)  # C3: {code: {title, body_html, cw}} for each non-default language a peer sent
     ap_create_id = db.Column(db.String(255))
     ap_announce_id = db.Column(db.String(255))
     ap_updated = db.Column(db.DateTime)  # When the remote instance edited the PostReply. Useful when local instance has been offline and a flurry of potentially out of order updates are coming in.

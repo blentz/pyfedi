@@ -210,6 +210,72 @@ def content_warning_from(obj: dict):
     return shorten_string(html_to_text(summary).strip(), CONTENT_WARNING_MAX_LENGTH) or None
 
 
+LANGUAGE_TAG = re.compile(r'[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*')
+MAX_LANGUAGE_VARIANTS = 10
+MAX_VARIANT_SOURCE = 100_000  # characters of a variant's source HTML (C3 ruling R2)
+
+
+def primary_subtag(code) -> str | None:
+    """`pt-BR` -> `pt`: the lowercase primary subtag of a BCP 47 tag, or None for anything that is not one."""
+    if not isinstance(code, str) or not LANGUAGE_TAG.fullmatch(code):
+        return None
+    return code.split('-')[0].lower()
+
+
+def _language_map(obj: dict, key: str) -> dict:
+    """A peer's `contentMap`/`nameMap`/`summaryMap` as {primary subtag: str}; unusable entries are skipped."""
+    value = obj.get(key)
+    result = {}
+    if isinstance(value, dict):
+        for tag, text in value.items():
+            code = primary_subtag(tag)
+            if code is not None and isinstance(text, str):
+                result.setdefault(code, text)
+    return result
+
+
+def language_variants_from(obj: dict, quote_ap_id: str | None = None) -> tuple[str | None, dict | None]:
+    """C3. The default language code of `obj` and its other languages as {code: {title, body_html, cw}}.
+
+    The default is the `contentMap` key whose text is `content`, else the `language` property's code, else the
+    first usable key; (None, None) without a usable `contentMap`. Variant HTML is sanitised and loses the C2 quote
+    fallback exactly as `content` does."""
+    contents = _language_map(obj, 'contentMap')
+    if not contents:
+        return None, None
+    ap_language = language_from_ap(obj.get('language'))
+    default = (next((code for code, text in contents.items() if text == obj.get('content')), None)
+               or (primary_subtag(ap_language[0]) if ap_language else None)
+               or next(iter(contents)))
+    names, summaries = _language_map(obj, 'nameMap'), _language_map(obj, 'summaryMap')
+    variants = {}
+    for code, source in contents.items():
+        if code == default or len(source) > MAX_VARIANT_SOURCE:
+            continue
+        if len(variants) == MAX_LANGUAGE_VARIANTS:
+            break
+        if not (source.startswith('<p>') or source.startswith('<blockquote>')):
+            source = '<p>' + source + '</p>'
+        body_html = strip_quote_fallback(allowlist_html(source), quote_ap_id)
+        if not html_to_text(body_html).strip():
+            continue
+        title = html.unescape(names[code].strip()) if names.get(code, '').strip() else None
+        cw = content_warning_from({**obj, 'summary': summaries[code]}) if code in summaries else None
+        variants[code] = {'title': shorten_string(title, 255) if title else None, 'body_html': body_html, 'cw': cw}
+    return default, variants or None
+
+
+def object_language(obj: dict, map_code: str | None):
+    """C3. The Language of an inbound object: its `language` property when no map names another default, else the
+    map's default code if this instance knows it. None means "leave it to the caller" (the four sites differ)."""
+    ap_language = language_from_ap(obj.get('language'))
+    if ap_language is not None and map_code in (None, primary_subtag(ap_language[0])):
+        return find_language_or_create(*ap_language)
+    if map_code is not None:
+        return find_language(map_code)
+    return None
+
+
 def post_to_page(post: Post):
     activity_data = {
         "type": "Page",
