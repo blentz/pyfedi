@@ -5401,6 +5401,33 @@ def withdraw_flag(user: User, flag: dict, session) -> tuple:
     return APLOG_SUCCESS, None
 
 
+QUOTE_KEYS = ('quote', 'quoteUrl', 'quoteUri', '_misskey_quote')  # FEP-044f first, then Fedibird/Misskey legacy
+
+
+def _valid_quote_id(value) -> bool:
+    if not isinstance(value, str) or not value or len(value) > 255 or not value.isascii():
+        return False
+    if any(c.isspace() or ord(c) < 0x20 or ord(c) == 0x7f for c in value):
+        return False
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return False
+    return parts.scheme in ('http', 'https') and bool(parts.hostname)
+
+
+def quote_id_from(obj: dict) -> str | None:
+    """The id `obj` quotes (C2): the first valid value of QUOTE_KEYS, as a string or an object's `id`; None for
+    none, or for a self-quote. An invalid value is skipped, so a later key still counts."""
+    for key in QUOTE_KEYS:
+        value = obj.get(key)
+        if isinstance(value, dict):
+            value = value.get('id')
+        if _valid_quote_id(value):
+            return None if value == obj.get('id') else value
+    return None
+
+
 def process_quote_boost(core_activity: dict, post_ap: str, their_post_ap: str):
     post = Post.get_by_ap_id(post_ap)
     if post is None:

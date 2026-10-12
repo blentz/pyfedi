@@ -2557,6 +2557,7 @@ class Post(db.Model):
                             backref=db.backref('posts', lazy='dynamic'))
 
     ap_id = db.Column(db.String(255), index=True, unique=True)
+    quote_ap_id = db.Column(db.String(255))  # C2: the id this inbound object quotes (FEP-044f quote or a legacy key)
     ap_create_id = db.Column(db.String(255))
     ap_announce_id = db.Column(db.String(255))
     ap_updated = db.Column(db.DateTime)  # When the remote instance edited the Post. Useful when local instance has been offline and a flurry of potentially out of order updates are coming in.
@@ -4024,6 +4025,7 @@ class PostReply(db.Model):
     collapsible = db.Column(db.Boolean, default=True)
 
     ap_id = db.Column(db.String(255), index=True, unique=True)
+    quote_ap_id = db.Column(db.String(255))  # C2: the id this inbound object quotes (FEP-044f quote or a legacy key)
     ap_create_id = db.Column(db.String(255))
     ap_announce_id = db.Column(db.String(255))
     ap_updated = db.Column(db.DateTime)  # When the remote instance edited the PostReply. Useful when local instance has been offline and a flurry of potentially out of order updates are coming in.
