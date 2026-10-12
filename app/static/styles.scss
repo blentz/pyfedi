@@ -3358,3 +3358,10 @@ blockquote.quote_card {
     text-decoration: none;
   }
 }
+
+// the teaser marks the card blur inside an NSFW item the viewer blurs; a SFW quoted card must not show through
+.quote_card.blur,
+.quote_line.blur {
+  filter: blur(var(--spacing-4));
+  user-select: none;
+}

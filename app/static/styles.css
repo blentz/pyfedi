@@ -4294,4 +4294,9 @@ body.compact-max .post_teaser .post_utilities_bar .voting_buttons_new .upvote_bu
   text-decoration: none;
 }
 
+.quote_card.blur, .quote_line.blur {
+  filter: blur(var(--spacing-4));
+  user-select: none;
+}
+
 /*# sourceMappingURL=styles.css.map */
