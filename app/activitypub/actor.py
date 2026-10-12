@@ -174,7 +174,10 @@ def find_remote_actor(actor_url):
 
 
 def schedule_actor_refresh(actor, override=False):
-    """Schedule an async refresh of actor data if needed."""
+    """Schedule an async refresh of actor data if needed. A gone Group is never refetched (final review M3): its
+    origin answers 410, which stamps no ap_fetched_at, so every lookup would schedule one more wasted fetch."""
+    if isinstance(actor, Community) and actor.is_gone():
+        return
     if not actor.is_local() and (
         actor.ap_fetched_at is None or actor.ap_fetched_at < utcnow() - timedelta(days=1) or override):
         refresh_in_progress = cache.get(f'refreshing_{actor.id}')

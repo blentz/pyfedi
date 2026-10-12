@@ -1209,7 +1209,8 @@ def refresh_community_profile_task(community_id, activity_json=None):
     try:
         with patch_db_session(session):
             community: Community = session.get(Community, community_id)
-            if community and community.instance_id and community.instance.online():
+            # final review M3: a gone Group answers 410, and a pushed document from it is ignored upstream anyway
+            if community and community.instance_id and community.instance.online() and not community.is_gone():
                 if not activity_json:
                     try:
                         actor_data = get_request(community.ap_public_url, headers={'Accept': AP_FETCH_ACCEPT}, retry=True)

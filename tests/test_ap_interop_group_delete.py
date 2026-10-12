@@ -10,6 +10,7 @@ undelete: anything later from a gone Group is ignored and logged.
 """
 import json
 import uuid
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -17,10 +18,13 @@ import httpx
 import pytest
 from flask import g
 
+import app.activitypub.actor as activitypub_actor
 import app.activitypub.util as activitypub_util
-from app import db
+from app import cache, db
+from app.activitypub.actor import schedule_actor_refresh
 from app.activitypub.routes import process_inbox_request, process_new_content, process_upvote
-from app.activitypub.util import GROUP_DELETED_MESSAGE, delete_remote_group, mark_community_gone, may_delete_group
+from app.activitypub.util import (GROUP_DELETED_MESSAGE, delete_remote_group, mark_community_gone, may_delete_group,
+                                  refresh_community_profile_task)
 from app.community.routes import do_subscribe
 from app.constants import POST_TYPE_ARTICLE, SRC_API, SRC_WEB
 from app.models import (ActivityPubLog, Community, CommunityJoinRequest, CommunityMember, InstanceRole, Language,
@@ -918,3 +922,37 @@ def test_moderation_and_report_tasks_deliver_only_to_a_live_group(app, db_sessio
     TASKS[task](w)
 
     assert (sent == []) is gone
+
+
+# --- final review M3: a gone Group is never refetched ---
+
+@pytest.mark.parametrize('gone', [False, True], ids=['live', 'gone'])
+def test_a_lookup_of_a_stale_group_schedules_a_refresh_only_while_it_is_live(app, db_session, monkeypatch, gone):
+    """The origin answers 410 for a gone Group and the refresh never stamps ap_fetched_at, so every lookup
+    scheduled one more wasted fetch (deduped only for 300 s)."""
+    w = _world()
+    w.community.ap_fetched_at = utcnow() - timedelta(days=2)
+    db.session.commit()
+    if gone:
+        _gone(w)
+    scheduled = []
+    monkeypatch.setattr(activitypub_actor, 'refresh_community_profile', scheduled.append)
+    cache.delete(f'refreshing_{w.community.id}')
+
+    schedule_actor_refresh(w.community)
+
+    assert scheduled == ([] if gone else [w.community.id])
+
+
+def test_the_refresh_task_does_not_fetch_a_gone_group(app, db_session, monkeypatch):
+    w = _world()
+    _gone(w)
+    fetched = []
+    monkeypatch.setattr(activitypub_util, 'get_request', lambda url, *args, **kwargs: fetched.append(url))
+    monkeypatch.setattr(activitypub_util, 'signed_get_request', lambda url, *args, **kwargs: fetched.append(url))
+
+    refresh_community_profile_task(w.community.id)
+    refresh_community_profile_task(w.community.id, {'type': 'Group', 'id': GROUP, 'name': 'renamed'})
+
+    assert fetched == []
+    assert db.session.get(Community, w.community.id).title != 'renamed'
