@@ -119,3 +119,29 @@ def test_reply_update_sets_and_clears(world, redis_lock_only_double):
     assert set(reply.language_variants) == {'fr'} and reply.language.code == 'en'
     update_post_reply_from_activity(reply, {'id': 'u2', 'type': 'Update', 'object': _note(10, inReplyTo=parent.ap_id)})
     assert reply.language_variants is None
+
+
+@pytest.fixture
+def blocked(monkeypatch):
+    monkeypatch.setattr('app.utils.blocked_phrases', lambda: ['forbidden'])
+
+
+def test_post_with_a_blocked_phrase_only_in_a_variant_body_is_discarded(world, blocked):
+    community, author, _ = world
+    maps = dict(MAPS, contentMap={'fr': '<p>this is forbidden</p>', 'en': '<p>hello there</p>'})
+    assert Post.new(author, community, _create(_note(20, **maps))) is None
+
+
+def test_post_with_a_blocked_phrase_only_in_a_variant_title_is_discarded(world, blocked):
+    community, author, _ = world
+    assert Post.new(author, community, _create(_note(21, **dict(MAPS, nameMap={'fr': 'forbidden'})))) is None
+
+
+def test_post_with_clean_variants_is_kept_under_a_blocklist(world, blocked):
+    community, author, _ = world
+    assert Post.new(author, community, _create(_note(22, **MAPS))) is not None
+
+
+def test_reply_with_a_blocked_phrase_only_in_a_variant_body_is_rejected(world, blocked, redis_lock_only_double):
+    maps = dict(MAPS, contentMap={'fr': '<p>this is forbidden</p>', 'en': '<p>hello there</p>'})
+    assert _new_reply(world, 23, **maps) is None  # create_post_reply turns PostReplyValidationError into None
