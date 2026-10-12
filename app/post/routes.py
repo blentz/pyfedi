@@ -55,7 +55,7 @@ from app.shared.site import block_remote_instance
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
 from app.shared.tasks import task_selector
-from app.utils import can_moderate, render_template, markdown_to_html, validation_required, \
+from app.utils import clean_ap_url, can_moderate, render_template, markdown_to_html, validation_required, \
     shorten_string, markdown_to_text, gibberish, ap_datetime, return_304, \
     request_etag_matches, ip_address, instance_banned, \
     blocked_or_banned_instances, blocked_domains, community_moderators, show_ban_message, recently_upvoted_posts, \
@@ -414,13 +414,14 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
         else:
             is_dead = False
 
+        ap_alternate = clean_ap_url(post.profile_id())
         response = render_template('post/post.html', title=page_title, post=post, is_moderator=is_moderator,
                                    is_owner=community.is_owner(), is_dead=is_dead,
                                    community=post.community, community_flair=shared_community.get_comm_flair_list(community),
                                    breadcrumbs=breadcrumbs, related_communities=related_communities, mods=mod_list,
                                    has_voted=has_voted, poll_results=poll_results, poll_data=poll_data,
                                    poll_choices=poll_choices, poll_total_votes=poll_total_votes,
-                                   event=event, creator=creator, ap_alternate=post.profile_id(),
+                                   event=event, creator=creator, ap_alternate=ap_alternate,
                                    canonical=post.ap_id, form=form, replies=replies, more_replies=more_replies,
                                    user_flair=user_flair, lazy_load_replies=lazy_load_replies,
                                    THREAD_CUTOFF_DEPTH=constants.THREAD_CUTOFF_DEPTH,
@@ -455,8 +456,9 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
         # discovering the object from the HTML had nothing to follow.
         # Measured: `PROBE ah1 Link headers:` one oembed link and the site's
         # rsl licence, which survives only because `after_request` uses `add`.
-        response.headers.add('Link',
-                             f'<https://{current_app.config["SERVER_NAME"]}/post/{post.id}>; rel="alternate"; type="application/activity+json"')
+        if ap_alternate:
+            response.headers.add('Link',
+                                 f'<https://{current_app.config["SERVER_NAME"]}/post/{post.id}>; rel="alternate"; type="application/activity+json"')
         oembed_url = url_for('post.post_oembed', post_id=post.id, _external=True)
         response.headers.add('Link', f'<{oembed_url}>; rel="alternate"; type="application/json+oembed"')
         if current_user.is_anonymous:
