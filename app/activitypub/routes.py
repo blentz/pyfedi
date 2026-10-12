@@ -651,7 +651,7 @@ def user_outbox_rows(user: User):
     replies = (select(literal_column("'reply'").label('kind'), PostReply.id.label('id'),
                       PostReply.posted_at.label('posted_at'))
                .join(Post, Post.id == PostReply.post_id)
-               .join(Community, Community.id == PostReply.community_id)
+               .join(Community, Community.id == Post.community_id)   # as the view routes judge it: post.community
                .where(PostReply.user_id == user.id, PostReply.deleted == False, Post.deleted == False,
                       Post.status > POST_STATUS_REVIEWING, visible_to_clause(Post, None),
                       visible_to_clause(PostReply, None), listable_clause(PostReply),
@@ -668,7 +668,9 @@ def user_outbox_page(rows, offset: int, limit: int) -> list[dict]:
     posts = {post.id: post for post in Post.query.filter(Post.id.in_([row.id for row in page if row.kind == 'post']))}
     replies = {reply.id: reply for reply in
                PostReply.query.filter(PostReply.id.in_([row.id for row in page if row.kind == 'reply']))}
-    return [create_activity_of(posts[row.id] if row.kind == 'post' else replies[row.id]) for row in page]
+    # Task 10 review M3: a row hard-purged between the two queries is left out, not a KeyError
+    loaded = [(posts if row.kind == 'post' else replies).get(row.id) for row in page]
+    return [create_activity_of(obj) for obj in loaded if obj is not None]
 
 
 @bp.route('/u/<actor>/outbox', methods=['GET'])

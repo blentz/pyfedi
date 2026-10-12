@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import html
 import os
 from contextvars import ContextVar
@@ -55,7 +56,7 @@ from app.utils import FETCH_MAX_BYTES, get_request, get_request_capped, allowlis
 import app.activitypub.actor as activitypub_actor
 import app.discovery.credits as discovery_credits   # the module: app.discovery.credits imports this one
 import urllib.parse
-from app.utils import site_language_id
+from app.utils import random_chars, site_language_id
 from app.visibility import OPEN_VISIBILITIES, can_view, is_open, post_title_for
 from app.discovery.podcast import ensure_podcast_community, podcast_twin_named_by_other
 from app.interop.workarounds import is_castopod_podcast
@@ -137,19 +138,33 @@ def local_communities():
     return db.session.execute(text('SELECT COUNT(*) as c FROM "community" WHERE instance_id = 1')).scalar()
 
 
+def stable_create_token(object_id: str) -> str:
+    """15 characters of gibberish()'s alphabet, always the same for `object_id`: the last part of an outbox Create id
+    for an object with no stored one (Task 10 review M4)."""
+    number = int.from_bytes(hashlib.sha256(f'create {object_id}'.encode()).digest(), 'big')
+    token = ''
+    for _ in range(15):
+        number, digit = divmod(number, len(random_chars))
+        token += random_chars[digit]
+    return token
+
+
 def create_activity_of(obj: Post | PostReply) -> dict:
     """The Create a post or comment is wrapped in where an outbox lists it: inside the community outbox's Announce
     (post_to_activity) and in its author's outbox (interop C1 item 7). A local object has no stored Create id, so
-    one is made up, as the community outbox always has."""
+    one is derived from the object's id, in the shape the community outbox always used: a random one made the same
+    item a new activity on every poll, and on the root and ?page=1 (Task 10 review M4)."""
     community = obj.community
-    create_id = obj.ap_create_id if obj.ap_create_id else f"{current_app.config['SERVER_URL']}/activities/create/{gibberish(15)}"
+    as_object = post_to_page(obj) if isinstance(obj, Post) else comment_model_to_json(obj)
+    create_id = obj.ap_create_id if obj.ap_create_id else \
+        f"{current_app.config['SERVER_URL']}/activities/create/{stable_create_token(as_object['id'])}"
     return {
         "id": create_id,
         "actor": obj.author.public_url(),
         "to": [
             "https://www.w3.org/ns/activitystreams#Public"
         ],
-        "object": post_to_page(obj) if isinstance(obj, Post) else comment_model_to_json(obj),
+        "object": as_object,
         "cc": [
             community.public_url()
         ],
