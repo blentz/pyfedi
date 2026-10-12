@@ -13,6 +13,7 @@ from app import db
 from app.constants import POST_STATUS_PUBLISHED
 from app.models import BannedInstances, Community, Instance, Post, PostReply, QuoteAuthorization
 from app.utils import blocked_communities, blocked_or_banned_instances, blocked_users, communities_banned_from, \
+    community_membership_private, \
     shorten_string
 from app.visibility import can_view, is_open
 
@@ -89,6 +90,8 @@ def _shows_card(item, q, user) -> bool:
     community = db.session.get(Community, q.community_id)
     if community is None or community.is_gone() or community.id in blocked_communities(uid) \
             or community.id in communities_banned_from(uid):
+        return False
+    if community.private and community.id not in community_membership_private(uid):  # show_post: 403 otherwise
         return False
     if not can_view(q, int(viewer_id) if viewer_id else None):
         return False

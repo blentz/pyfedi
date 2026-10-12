@@ -257,3 +257,13 @@ def test_unpublished_target_is_a_line_unless_the_viewer_is_its_author(world, sta
     world['target'].status = status
     assert quote_state(world['quoting'], world['viewer'])['kind'] == 'line'
     assert quote_state(world['quoting'], world['quoted_author'])['kind'] == 'card'
+
+
+def test_private_community_target_is_a_card_only_for_a_member(world):
+    from flask_login import AnonymousUserMixin
+    world['community'].private = True
+    db.session.commit()
+    assert quote_state(world['quoting'], AnonymousUserMixin())['kind'] == 'line'
+    assert quote_state(world['quoting'], world['viewer'])['kind'] == 'line'
+    make_community_member(world['viewer'], world['community'])
+    assert quote_state(world['quoting'], world['viewer'])['kind'] == 'card'
