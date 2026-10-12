@@ -6,6 +6,7 @@ import pytest
 from app import db
 from app.activitypub.util import (create_post_reply, quote_id_from, update_post_from_activity,
                                   update_post_reply_from_activity)
+from app.constants import POST_TYPE_EVENT
 from app.models import Post, PostReply
 from app.utils import microblog_content_to_link, strip_quote_fallback, utcnow
 from tests.factories import make_community, make_community_member, make_instance, make_post, make_site, make_user
@@ -215,6 +216,28 @@ def test_a_paragraph_left_with_an_image_is_kept():
     assert strip_quote_fallback(html, QUOTED) == '<p><img src="https://remote.test/a.png"/></p>'
 
 
+@pytest.mark.parametrize('html', [
+    f'<p>RE: <a href="{QUOTED}">post</a> is a great post</p>',
+    f'<p>RE: <a href="{QUOTED}"></a> my whole comment here</p>',
+    f'<p>my take</p><p>RE: <a href="{QUOTED}">x</a><span>more author text x</span></p>',
+])
+def test_text_after_the_link_is_never_removed(html):
+    assert strip_quote_fallback(html, QUOTED) == html
+
+
+def test_whitespace_and_breaks_after_the_link_are_dropped_with_it():
+    html = f'<p>my take</p><p><span>RE: <a href="{QUOTED}">x</a></span> <br></p>'
+    assert strip_quote_fallback(html, QUOTED) == '<p>my take</p>'
+
+
+@pytest.mark.parametrize('media', ['<video src="https://remote.test/v.mp4"></video>',
+                                   '<audio src="https://remote.test/a.mp3"></audio>',
+                                   '<iframe src="https://remote.test/e"></iframe>'])
+def test_a_paragraph_left_with_media_is_kept(media):
+    html = f'<p>{media}RE: <a href="{QUOTED}">x</a></p>'
+    assert strip_quote_fallback(html, QUOTED) == f'<p>{media}</p>'
+
+
 def test_html_without_a_paragraph_is_kept():
     html = f'<div>RE: <a href="{QUOTED}">x</a></div>'
     assert strip_quote_fallback(html, QUOTED) == html
@@ -320,29 +343,33 @@ def _h1(href):
 def test_new_microblog_post_takes_its_headline_link_as_the_url(world, no_url_probes):
     community, author, _ = world
     post = Post.new(author, community, _create(_note(14, quote=QUOTED, content=_h1(NEWS), mediaType='text/html')))
-    # the attachment pass of the Update then settles post.url (none here); only the headline branch is exercised
-    assert NEWS in post.body_html
+    assert post.url == NEWS
 
 
 def test_new_microblog_post_whose_headline_links_the_quote_takes_another_link(world, no_url_probes):
     community, author, _ = world
     post = Post.new(author, community, _create(_note(15, quote=QUOTED, content=_h1(QUOTED), mediaType='text/html')))
-    # the attachment pass of the Update then settles post.url (none here); only the headline branch is exercised
-    assert NEWS in post.body_html
+    assert post.url == NEWS
 
 
-def test_post_update_with_an_unrelated_headline_link_is_processed(world, redis_lock_only_double):
+def _event_post(world, n):
+    """An event with no url: the Update's attachment pass keeps whatever url the microblog branch left on it."""
     community, author, _ = world
-    post = Post.new(author, community, _create(_note(16)))
+    post = Post.new(author, community, _create(_note(n)))
+    post.type = POST_TYPE_EVENT
+    db.session.commit()
+    return post
+
+
+def test_post_update_takes_its_headline_link_as_the_url(world, redis_lock_only_double):
+    post = _event_post(world, 16)
     update_post_from_activity(post, {'id': 'u', 'type': 'Update',
                                      'object': _note(16, quote=QUOTED, content=_h1(NEWS), mediaType='text/html')})
-    # the attachment pass of the Update then settles post.url (none here); only the headline branch is exercised
-    assert NEWS in post.body_html
+    assert post.url == NEWS
 
 
 def test_post_update_whose_headline_links_the_quote_does_not_take_it(world, redis_lock_only_double):
-    community, author, _ = world
-    post = Post.new(author, community, _create(_note(17)))
+    post = _event_post(world, 17)
     update_post_from_activity(post, {'id': 'u', 'type': 'Update',
                                      'object': _note(17, quote=QUOTED, content=_h1(QUOTED), mediaType='text/html')})
     assert post.url != QUOTED

@@ -1716,6 +1716,24 @@ def microblog_content_to_title(html: str) -> Tuple[str, str]:
     return title.strip(), link
 
 
+def _nothing_follows(node, ancestor) -> bool:
+    """Whether, from `node` up to `ancestor`, only whitespace text and <br> come after it: `node` ends the text."""
+    while node is not ancestor:
+        for sibling in node.next_siblings:
+            if getattr(sibling, 'name', None) != 'br' and not (isinstance(sibling, NavigableString) and not sibling.strip()):
+                return False
+        node = node.parent
+    return True
+
+
+_VISIBLE_WITHOUT_TEXT = frozenset(('img', 'video', 'audio', 'iframe', 'picture', 'embed', 'object', 'svg', 'canvas', 'hr', 'input'))
+
+
+def _is_visible_element(tag) -> bool:
+    """An element that shows something with no text of its own: media or a rule, not a <br> or an empty wrapper."""
+    return tag.name in _VISIBLE_WITHOUT_TEXT
+
+
 def strip_quote_fallback(html: str, quote_id: str | None) -> str:
     """`html` without the "RE: <link>" a quote's sender adds for software that cannot show quotes (C2): Mastodon's
     `quote-inline` element, and a final `RE: <a href=quote_id>` -- its own paragraph, or the tail of the last one after
@@ -1734,7 +1752,7 @@ def strip_quote_fallback(html: str, quote_id: str | None) -> str:
         link = links[-1] if links else None
         before = link.previous_sibling if link is not None else None
         if (link is not None and link.get('href') == quote_id
-                and last.get_text().rstrip().endswith(link.get_text().strip())
+                and _nothing_follows(link, last)
                 and isinstance(before, NavigableString) and before.strip() == 'RE:'):
             previous = before.previous_sibling
             link.decompose()
@@ -1744,7 +1762,7 @@ def strip_quote_fallback(html: str, quote_id: str | None) -> str:
                 earlier = previous.previous_sibling
                 previous.extract()
                 previous = earlier
-            if not last.get_text().strip() and last.find('img') is None:
+            if not last.get_text().strip() and last.find(_is_visible_element) is None:
                 last.decompose()
             changed = True
     return str(soup) if changed else html
