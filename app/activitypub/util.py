@@ -1179,7 +1179,7 @@ def refresh_user_profile_task(user_id, activity_json=None):
                     refreshed_pem = public_key_pem(activity_json)
                     if refreshed_pem:
                         user.public_key = refreshed_pem
-                    refreshed_inbox = delivery_inbox_of(activity_json, user.ap_profile_id)   # interop C1 item 2: absent keeps the old one
+                    refreshed_inbox = delivery_inbox_of(activity_json, user.ap_profile_id)   # interop C1 item 2: absent or off-host keeps the old one
                     if refreshed_inbox:
                         user.ap_inbox_url = refreshed_inbox
                     user.accept_private_messages = activity_json['acceptPrivateMessages'] if 'acceptPrivateMessages' in activity_json else 3
@@ -1353,7 +1353,7 @@ def refresh_community_profile_task(community_id, activity_json=None):
                         refreshed_pem = public_key_pem(activity_json)
                         if refreshed_pem:
                             community.public_key = refreshed_pem
-                        refreshed_inbox = delivery_inbox_of(activity_json, community.ap_profile_id)   # interop C1 item 2: absent keeps the old one
+                        refreshed_inbox = delivery_inbox_of(activity_json, community.ap_profile_id)   # interop C1 item 2: absent or off-host keeps the old one
                         if refreshed_inbox:
                             community.ap_inbox_url = refreshed_inbox
 
@@ -1611,7 +1611,7 @@ def refresh_feed_profile_task(feed_id, activity_json=None):
                     refreshed_pem = public_key_pem(activity_json)  # D1355
                     if refreshed_pem:
                         feed.public_key = refreshed_pem
-                    refreshed_inbox = delivery_inbox_of(activity_json, feed.ap_profile_id)   # interop C1 item 2: absent keeps the old one
+                    refreshed_inbox = delivery_inbox_of(activity_json, feed.ap_profile_id)   # interop C1 item 2: absent or off-host keeps the old one
                     if refreshed_inbox:
                         feed.ap_inbox_url = refreshed_inbox
 
