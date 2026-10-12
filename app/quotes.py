@@ -14,7 +14,7 @@ from app.constants import POST_STATUS_PUBLISHED
 from app.models import BannedInstances, Community, Instance, Post, PostReply, QuoteAuthorization
 from app.utils import blocked_communities, blocked_or_banned_instances, blocked_users, communities_banned_from, \
     community_membership_private, \
-    shorten_string
+    shorten_string, user_in_restricted_country
 from app.visibility import can_view, is_open
 
 _LOCAL_PATH = re.compile(r'/(post|comment)/(\d+)$')
@@ -104,7 +104,7 @@ def _shows_card(item, q, user) -> bool:
     if post.status < POST_STATUS_PUBLISHED and uid != post.user_id:  # refuse_unpublished_post: the author's alone
         return False
     for flag in ('nsfw', 'nsfl'):  # R4: only a signed-in viewer set to Show sees a sensitive card
-        if getattr(post, flag) and (not uid or getattr(user, 'hide_' + flag) != 0):
+        if getattr(post, flag) and (not uid or getattr(user, 'hide_' + flag) != 0 or user_in_restricted_country(user)):
             return False
     if q.author.is_local() and not is_open(q):  # spec ruling 2: our own object needs our approval
         column = {'post_id': q.id} if isinstance(q, Post) else {'post_reply_id': q.id}

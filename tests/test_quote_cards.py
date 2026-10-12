@@ -1,4 +1,6 @@
 """C2 quote cards: resolution and the card-or-line decision."""
+from unittest.mock import patch
+
 import pytest
 from flask import g, render_template_string
 from sqlalchemy import event
@@ -284,3 +286,11 @@ def test_a_quoted_comment_is_a_line_when_its_post_is_not_viewable(world, change)
     for name, value in change.items():
         setattr(world['target'], name, value)
     assert quote_state(world['quoting'], world['viewer'])['kind'] == 'line'
+
+
+def test_sensitive_target_is_a_line_in_a_restricted_country(world):
+    world['target'].nsfw = True
+    world['viewer'].hide_nsfw = 0
+    assert quote_state(world['quoting'], world['viewer'])['kind'] == 'card'
+    with patch('app.quotes.user_in_restricted_country', return_value=True):
+        assert quote_state(world['quoting'], world['viewer'])['kind'] == 'line'
