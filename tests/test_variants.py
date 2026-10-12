@@ -7,7 +7,7 @@ from sqlalchemy import event
 
 from app import db
 from app.models import Language
-from app.variants import chosen_variant, language_names, shown
+from app.variants import chosen_variant, language_names, shown, switch_url
 from tests.factories import make_community, make_instance, make_post, make_post_reply, make_user
 
 FR = {'title': 'Bonjour', 'body_html': '<p>bonjour</p>', 'cw': None}
@@ -104,3 +104,7 @@ def test_language_names_is_one_query_per_request(item, app):
 
 def test_language_names_outside_a_request_is_not_cached_in_g(item):
     assert language_names()['de'] == 'Deutsch'
+
+
+def test_switch_url_outside_a_request_is_the_bare_parameter():
+    assert switch_url('fr', '#comment_4') == '?lang=fr#comment_4'

@@ -179,7 +179,7 @@
         {% endif -%}
         <div id="post_replies">
         {% if lazy_load_replies -%}
-            <div id="lazy_load_replies" hx-get="{{ url_for('post.post_lazy_replies', post_id=post.id, nonce=nonce, sort=sort) }}"
+            <div id="lazy_load_replies" hx-get="{{ url_for('post.post_lazy_replies', post_id=post.id, nonce=nonce, sort=sort, lang=request.args.get('lang')) }}"
                                         hx-trigger="intersect once" hx-target="this" hx-swap="outerHTML"
                                         hx-indicator="#comment-loading-spinner">
                 <div id="comment-loading-spinner" class="htmx-indicator text-center py-4">

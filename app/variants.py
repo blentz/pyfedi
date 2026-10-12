@@ -1,6 +1,7 @@
 """C3: the language variant of a post or comment a viewer sees (docs/superpowers/specs/2026-10-12-ap-interop-c3-
 multi-language-design.md). Variants are stored at ingest in `language_variants`; nothing here queries per item."""
 from collections import namedtuple
+from urllib.parse import urlencode
 
 from flask import g, has_request_context, request
 
@@ -48,3 +49,19 @@ def shown(item) -> Shown:
         return Shown(default, title, item.body_html, item.content_warning, others)
     return Shown(code, variant.get('title') or title, variant['body_html'], variant.get('cw') or item.content_warning,
                  others)
+
+
+AJAX_ENDPOINTS = ('post.post_lazy_replies', 'post.continue_discussion_ajax')
+
+
+def switch_url(code: str, anchor: str = '') -> str:
+    """The link to the current page in language `code`: every other query parameter stays. A comment fetched on its
+    own (lazy load, continue thread) links to the post page, because the fetched URL is not a page."""
+    if not has_request_context():
+        return f'?lang={code}{anchor}'
+    args = {**request.args.to_dict(), 'lang': code}
+    base = ''
+    if request.endpoint in AJAX_ENDPOINTS:
+        base = f"/post/{request.view_args['post_id']}"
+        args = {k: v for k, v in args.items() if k in ('sort', 'lang')}
+    return f'{base}?{urlencode(args)}{anchor}'

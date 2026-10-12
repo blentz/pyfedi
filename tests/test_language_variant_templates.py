@@ -140,3 +140,48 @@ def test_author_deleted_post_has_no_switch(page_world, app):
 def test_post_body_lang_follows_the_shown_variant(page_world, app):
     soup = page(app, page_world, f"/post/{page_world['post'].id}?lang=fr")
     assert soup.select_one('.post_body')['lang'] == 'fr'
+
+
+def test_switch_keeps_the_pages_other_parameters(page_world, app):
+    reply = page_world['reply']
+    soup = page(app, page_world, f"/post/{page_world['post'].id}?sort=new&lang=fr")
+    assert [a['href'] for a in soup.select_one('p.language_switch').select('a')] == ['?sort=new&lang=en']
+    comment = soup.select_one(f'#comment_{reply.id}')
+    assert [a['href'] for a in comment.select('p.language_switch a')] == [f'?sort=new&lang=en#comment_{reply.id}']
+
+
+def test_comment_switch_keeps_page_on_a_listing(page_world, app):
+    reply = page_world['reply']
+    source = ("{% from 'post/_language_switch.html' import render_language_switch %}"
+              "{{ render_language_switch(shown(reply), '#comment_' ~ reply.id) }}")
+    with app.test_request_context('/u/polyglot?page=3'):
+        soup = BeautifulSoup(render_template_string(source, reply=reply), 'html.parser')
+    assert [a['href'] for a in soup.select('a')] == [f'?page=3&lang=fr#comment_{reply.id}']
+
+
+def test_lazy_replies_show_the_requested_variant_and_link_to_the_post(page_world, app):
+    post, reply = page_world['post'], page_world['reply']
+    soup = page(app, page_world, f"/post/{post.id}/lazy_replies/abc?sort=new&lang=fr")
+    comment = soup.select_one(f'#comment_{reply.id}')
+    assert 'salut' in comment.get_text()
+    assert [a['href'] for a in comment.select('p.language_switch a')] == \
+        [f'/post/{post.id}?sort=new&lang=en#comment_{reply.id}']
+
+
+def test_the_lazy_load_trigger_carries_lang(page_world, app, monkeypatch):
+    monkeypatch.setattr('app.post.routes.total_comments_on_post_and_cross_posts', lambda *a, **k: 101)
+    post = page_world['post']
+    trigger = page(app, page_world, f'/post/{post.id}?lang=fr').select_one('#lazy_load_replies')
+    assert 'lang=fr' in trigger['hx-get']
+    trigger = page(app, page_world, f'/post/{post.id}').select_one('#lazy_load_replies')
+    assert 'lang' not in trigger['hx-get']
+
+
+def test_continue_discussion_ajax_shows_the_requested_variant(page_world, app):
+    post, reply = page_world['post'], page_world['reply']
+    client = logged_in_client(app, page_world['viewer'])
+    client.get(f'/post/{post.id}')  # a csrf token is not required for the test client's POST here
+    response = client.post(f'/post/{post.id}/comment/{reply.id}/ajax/abc?lang=fr', data={'csrf_token': 'x'})
+    assert response.status_code == 200 and 'salut' in response.get_data(as_text=True)
+
+

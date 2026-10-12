@@ -2,6 +2,6 @@
 {% macro render_language_switch(v, anchor='') -%}
 {% if v.others -%}
 <p class="language_switch small text-muted">{{ _('Also in:') }}
-{%- for code, name in v.others %} <a href="?lang={{ code }}{{ anchor }}" lang="{{ code }}">{{ name }}</a>{{ ' ·' if not loop.last }}{% endfor %}</p>
+{%- for code, name in v.others %} <a href="{{ switch_url(code, anchor) }}" lang="{{ code }}">{{ name }}</a>{{ ' ·' if not loop.last }}{% endfor %}</p>
 {%- endif %}
 {%- endmacro %}

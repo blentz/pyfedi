@@ -23,7 +23,7 @@ from app.utils import getmtime, gibberish, shorten_string, shorten_url, digits, 
     debug_checkpoint, compaction_level, humanize_number, round_invisible_digits, get_site_as_dict, localize_datetime, \
     display_back_button, favorite_communities, get_event_start, reply_filter_keyword, user_banned_from_community
 from app.quotes import prime_quotes, quote_state
-from app.variants import shown
+from app.variants import shown, switch_url
 from app.visibility import can_view
 
 
@@ -84,6 +84,7 @@ def register_request_hooks(app):
     app.jinja_env.globals['viewer_can_view'] = viewer_can_view
     app.jinja_env.globals['quote_state'] = quote_state
     app.jinja_env.globals['shown'] = shown
+    app.jinja_env.globals['switch_url'] = switch_url
     before_render_template.connect(prime_quotes, app)  # C2: one lookup per table per rendered page
     app.jinja_env.globals['post_community_link'] = post_community_link
     app.jinja_env.filters['community_links'] = community_link_to_href
