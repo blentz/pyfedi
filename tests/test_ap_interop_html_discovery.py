@@ -290,3 +290,25 @@ def test_a_remote_community_with_an_unclean_id_advertises_nothing(app, env, bad_
     assert response.status_code == 200
     assert context['ap_alternate'] is None
     assert ap_link_headers(response) == []
+
+
+def test_a_remote_post_with_an_unclean_id_advertises_nothing(app, env):
+    viewer, author, community, post = env
+    remote = make_user(make_instance('peer.example'), 'faraway')
+    remote_post = make_post(community, remote, 'https://peer.example/post/9>; rel="x"')
+    db.session.commit()
+
+    assert_no_alternate(app.test_client().get(f'/post/{remote_post.id}'))
+
+
+def test_a_remote_actors_ap_public_url_is_never_advertised(app, env):
+    viewer, author, community, post = env
+    remote = make_user(make_instance('peer.example'), 'wakko')
+    remote.ap_public_url = 'https://peer.example/@wakko>; rel="x"'
+    db.session.commit()
+
+    response = as_user(app, viewer).get('/u/wakko@peer.example')
+
+    assert response.status_code == 200
+    assert ap_link_headers(response) == [AP_HEADER.format(remote.ap_profile_id)]
+    assert 'rel="x"' not in str(response.headers)
