@@ -11,7 +11,8 @@ from sqlalchemy import or_, func
 from app import cache, db
 from app.constants import AP_FETCH_ACCEPT
 from app.activitypub.util import get_request, signed_get_request, actor_json_to_model, refresh_user_profile, \
-    refresh_community_profile, refresh_feed_profile, extract_domain_and_actor, normalise_actor_string
+    refresh_community_profile, refresh_feed_profile, extract_domain_and_actor, normalise_actor_string, \
+    canonical_handle
 from app.discovery.podcast import podcast_community_for
 from app.models import User, Community, Feed, Site
 from app.utils import utcnow, get_setting, actor_contains_blocked_words, actor_profile_contains_blocked_words, \
@@ -310,6 +311,11 @@ def create_actor_from_remote(actor_address: str, community_only=False,
         if not address:
             return None
         actor_json = fetch_actor_from_webfinger(address, server, retry=retry)
+        if actor_json:
+            handle = canonical_handle(actor_json, address, server)   # interop C1 item 9
+            if handle is None:
+                return None
+            address, server = handle
 
     if actor_json:
         actor_model = actor_json_to_model(actor_json, address, server)

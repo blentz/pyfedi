@@ -8,7 +8,7 @@ from flask_babel import _
 from sqlalchemy import func, text
 
 from app import db
-from app.activitypub.util import actor_json_to_model
+from app.activitypub.util import actor_json_to_model, canonical_handle
 from app.community.util import search_for_community, retrieve_mods_and_backfill
 from app.constants import AP_FETCH_ACCEPT
 from app.models import BannedInstances, Feed, FeedItem, Community, _as_dict
@@ -94,7 +94,10 @@ def search_for_feed(address: str, allow_fetch: bool = True, retry: bool = False)
                         feed_json = feed_data.json()
                         feed_data.close()
                         if feed_json['type'] == 'Feed':
-                            feed = actor_json_to_model(feed_json, name, server)
+                            handle = canonical_handle(feed_json, name, server, prefix='~')   # interop C1 item 9
+                            if handle is None:
+                                return None
+                            feed = actor_json_to_model(feed_json, *handle)
                             if feed:
                                 initialise_new_communities(feed)
                                 return feed
