@@ -2514,8 +2514,9 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
                     if file.source_url.endswith('.gif'):    # don't resize gifs, it breaks their animation
                         return
                     try:
+                        # a Celery task, off the request and inbox paths: a lost thumbnail is permanent, so retry
                         source_image_response = get_request(file.source_url, max_bytes=MEDIA_MAX_BYTES,
-                                                            max_seconds=MEDIA_MAX_SECONDS)
+                                                            max_seconds=MEDIA_MAX_SECONDS, retry=True)
                     except:
                         pass
                     else:
@@ -2528,7 +2529,7 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
                             if 'url' in query_params:
                                 url_value = query_params['url'][0]
                                 source_image_response = get_request(url_value, max_bytes=MEDIA_MAX_BYTES,
-                                                                    max_seconds=MEDIA_MAX_SECONDS)
+                                                                    max_seconds=MEDIA_MAX_SECONDS, retry=True)
                             else:
                                 source_image_response = None
                         if source_image_response and source_image_response.status_code == 200:

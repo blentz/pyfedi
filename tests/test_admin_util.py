@@ -656,7 +656,7 @@ class TestMovingAPostOntoThisInstance:
                 headers={'content-type': 'image/png'})) as download:
             move_community_images_to_here(env.community.id)
         assert download.call_args.kwargs == {'max_bytes': MEDIA_MAX_BYTES,
-                                             'max_seconds': MEDIA_MAX_SECONDS}
+                                             'max_seconds': MEDIA_MAX_SECONDS, 'retry': True}
         db.session.expire_all()
         post = db.session.get(Post, image_post.id)
         try:
@@ -811,7 +811,7 @@ class TestMovingThemIntoS3:
                 headers={'content-type': 'image/png'})) as download:
             move_community_images_to_here(env.community.id)
         assert download.call_args.kwargs == {'max_bytes': MEDIA_MAX_BYTES,
-                                             'max_seconds': MEDIA_MAX_SECONDS}
+                                             'max_seconds': MEDIA_MAX_SECONDS, 'retry': True}
         db.session.expire_all()
         post = db.session.get(Post, image_post.id)
         assert post.image.source_url.startswith('https://cdn.probeland.test/')
@@ -1154,3 +1154,17 @@ class TestPostsThatAreSkippedMidLoop:
         finally:
             for path in written_files() - before:
                 os.unlink(path)
+
+
+def test_moving_a_remote_image_retries_a_transport_error_once(env, image_post, http_mock, monkeypatch):
+    """move_community_images_to_here is a Celery task off the request and inbox paths, so it keeps get_request's
+    retry (R1 fix round 3)."""
+    slept = []
+    monkeypatch.setattr('app.utils.sleep', slept.append)
+    route = http_mock.get('https://remote.test/media/photo.png').mock(
+        side_effect=[httpx.ConnectError('no route'), httpx.Response(404)])
+
+    move_community_images_to_here(env.community.id)
+
+    assert route.call_count == 2
+    assert len(slept) == 1
