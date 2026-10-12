@@ -29,7 +29,7 @@ def redis_lock_only_double(monkeypatch):
 @pytest.fixture
 def world(app, db_session):
     make_site()
-    for code, name in (('en', 'English'), ('fr', 'Français')):
+    for code, name in (('en', 'English'), ('fr', 'Français'), ('de', 'Deutsch')):
         if not Language.query.filter_by(code=code).first():
             db.session.add(Language(code=code, name=name))
     instance = make_instance(PEER)
@@ -66,6 +66,16 @@ def test_post_new_stores_variants_and_the_matching_language(world):
     post = Post.new(author, community, _create(_note(2, **MAPS)))
     assert post.language.code == 'en'
     assert post.language_variants == {'fr': {'title': 'Bonjour', 'body_html': '<p>bonjour</p>', 'cw': None}}
+
+
+def test_post_new_with_bare_text_content_matches_its_map_key_and_leaves_the_callers_dict(world):
+    community, author, _ = world
+    activity = _create(_note(30, content='Hello', contentMap={'de': 'Hallo', 'en': 'Hello'}))
+    post = Post.new(author, community, activity)
+    assert post.language.code == 'en'
+    assert post.language_variants == {'de': {'title': None, 'body_html': '<p>Hallo</p>', 'cw': None}}
+    assert post.body_html == '<p>Hello</p>'
+    assert activity['object']['content'] == 'Hello'
 
 
 def test_mastodon_single_key_map_is_unchanged(world):
