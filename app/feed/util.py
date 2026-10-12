@@ -97,7 +97,8 @@ def search_for_feed(address: str, allow_fetch: bool = True, retry: bool = False)
                             handle = canonical_handle(feed_json, name, server, prefix='~')   # interop C1 item 9
                             if handle is None:
                                 return None
-                            feed = actor_json_to_model(feed_json, *handle)
+                            name, server, feed_json = handle   # the origin's document, never an alias's copy
+                            feed = actor_json_to_model(feed_json, name, server)
                             if feed:
                                 initialise_new_communities(feed)
                                 return feed
