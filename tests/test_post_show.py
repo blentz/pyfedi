@@ -966,12 +966,14 @@ def test_an_event_arrives_with_the_post(app, env):
     (POST_TYPE_LINK, True),
     (POST_TYPE_POLL, True),
     (POST_TYPE_EVENT, True),
-    (POST_TYPE_IMAGE, False),
+    (POST_TYPE_IMAGE, True),
 ])
 def test_the_creator_tag_is_offered_for_written_posts(app, env, post_type,
                                                       expected):
-    """fep-2345's `fediverse:creator` names the author to an aggregator. An
-    image post carries no text to attribute, so it is left out."""
+    """fep-2345's `fediverse:creator` names the author to an aggregator.
+    C1 item 1, spec Amendment A: every post type by a local author gets the
+    tag, image posts included (they federate as a plain Page). A remote
+    author's image post is not (tests/test_ap_interop_html_discovery.py)."""
     anon, community, post, mod, author, outsider = env
     post.type = post_type
     db.session.commit()

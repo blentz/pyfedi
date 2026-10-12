@@ -26,6 +26,9 @@
         {% if rss_feed -%}
             <link rel="alternate" type="application/rss+xml" title="{{ rss_feed_name }}" href="{{ rss_feed }}" />
         {% endif -%}
+        {% if ap_alternate -%}
+            <link rel="alternate" type="application/activity+json" href="{{ ap_alternate }}" />
+        {% endif -%}
         {% if noindex -%}
             <meta name="robots" content="noindex">
         {% endif -%}

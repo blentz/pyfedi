@@ -38,6 +38,7 @@ from app.utils import back, show_ban_message, piefed_markdown_to_lemmy_markdown,
     communities_banned_from, reported_posts, user_notes, login_required, moderating_communities_ids, approval_required, \
     blocked_or_banned_instances, blocked_communities, block_honey_pot, user_pronouns, \
     community_membership_private, check_anoobis, calculate_rss_cache_timeout, feed_readable_by, refuse_if_private_instance, feed_entry_body
+from app.utils import ap_alternate_url
 from app.rss_extras import RSSFeed
 import app.community.routes as community_routes
 
@@ -590,7 +591,7 @@ def show_feed(feed):
             content_filters = {}
 
         resp = make_response(render_template('feed/show_feed.html', title=_(current_feed.name), posts=posts, feed=current_feed,
-                                             sort=sort, owner=owner,
+                                             sort=sort, owner=owner, ap_alternate=ap_alternate_url(current_feed),
                                              page=page, post_layout=post_layout, next_url=next_url, prev_url=prev_url,
                                              feed_communities=feed_communities, content_filters=user_filters_posts(current_user.id) if current_user.is_authenticated else {},
                                              tags=hashtags_used_in_communities(feed_community_ids, content_filters),
