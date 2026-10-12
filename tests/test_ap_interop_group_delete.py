@@ -22,7 +22,8 @@ import app.activitypub.actor as activitypub_actor
 import app.activitypub.util as activitypub_util
 from app import cache, db
 from app.activitypub.actor import schedule_actor_refresh
-from app.activitypub.routes import process_inbox_request, process_new_content, process_upvote
+import app.activitypub.routes as activitypub_routes
+from app.activitypub.routes import process_inbox_request, process_new_content, process_upvote, replay_inbox_request
 from app.activitypub.util import (GROUP_DELETED_MESSAGE, delete_remote_group, mark_community_gone, may_delete_group,
                                   refresh_community_profile_task)
 from app.community.routes import do_subscribe
@@ -124,7 +125,7 @@ def test_a_verified_self_delete_marks_the_group_and_unsubscribes_only_local_memb
     db.session.expire_all()
     community = db.session.get(Community, community_id)
     assert community.ap_deleted_at is not None
-    assert community.subscriptions_count == 0
+    assert community.subscriptions_count == 1   # the canonical count (maintenance.py): the remote moderator's row
     assert db.session.query(CommunityMember).filter_by(community_id=community_id, user_id=member_id).count() == 0
     assert db.session.query(CommunityMember).filter_by(community_id=community_id, user_id=mod_id).count() == 1
     assert db.session.query(CommunityJoinRequest).filter_by(community_id=community_id).count() == 0
@@ -998,3 +999,69 @@ def test_the_refresh_task_does_not_fetch_a_gone_group(app, db_session, monkeypat
 
     assert fetched == []
     assert db.session.get(Community, w.community.id).title != 'renamed'
+
+
+# --- Task 8 review: the count, the replay and the API edit ---
+
+def test_marking_a_group_gone_leaves_the_canonical_subscriber_count(app, db_session):
+    """Task 8 review minor 6. The count dropped by every local member, bots and banned members included, though the
+    canonical count (app/shared/tasks/maintenance.py) counts neither: it now IS that count of the rows left."""
+    w = _world()
+    local = w.member.instance
+    bot = make_user(local, 'bot', local=True)
+    bot.bot = True
+    banned = make_user(local, 'banned', local=True)
+    make_community_member(bot, w.community)
+    make_community_member(banned, w.community).is_banned = True
+    remote_mod = make_user(w.peer, 'remotemod')
+    remote_bot = make_user(w.peer, 'remotebot')
+    remote_bot.bot = True
+    make_community_member(remote_mod, w.community, is_moderator=True)
+    make_community_member(remote_bot, w.community)
+    w.community.subscriptions_count = 2   # the member and the remote moderator; neither bot, nor the banned member
+    db.session.commit()
+
+    mark_community_gone(w.community)
+
+    assert db.session.get(Community, w.community.id).subscriptions_count == 1   # the remote moderator
+
+
+def test_a_replayed_self_delete_of_a_known_group_reaches_the_dispatcher(app, db_session, monkeypatch):
+    """Task 8 review minor 7. The admin replay looked a Group's self-Delete's actor up as a User only and dropped
+    it as 'Does not exist here'; shared_inbox sends it to the dispatcher, which verifies it at the origin."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    w = _world()
+    processed = []
+    monkeypatch.setattr(activitypub_routes, 'process_inbox_request', lambda *a, **kw: processed.append(a))
+    monkeypatch.setattr(activitypub_routes, 'process_delete_request', lambda *a, **kw: processed.append(('account',)))
+    activity = _self_delete(w)
+
+    replay_inbox_request(activity)
+
+    assert processed == [(activity, True)]
+    assert ActivityPubLog.query.count() == 0
+
+
+def test_a_replayed_self_delete_of_an_unknown_actor_is_still_ignored(app, db_session, monkeypatch):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    _world()
+    processed = []
+    monkeypatch.setattr(activitypub_routes, 'process_inbox_request', lambda *a, **kw: processed.append(a))
+    stranger = f'https://{PEER}/c/nobody'
+
+    replay_inbox_request({'id': f'{stranger}/delete', 'type': 'Delete', 'actor': stranger, 'object': stranger})
+
+    assert processed == []
+    assert ActivityPubLog.query.one().exception_message == 'REPLAY: Does not exist here'
+
+
+def test_an_api_post_edit_by_someone_else_is_refused_as_unauthorised_not_as_gone(app, db_session):
+    """Task 8 review. The gone check ran before the API caller was authenticated, so anyone, with any token or none,
+    learnt that the post's community was gone: authentication comes first, as for a live community."""
+    w = _world()
+    post = _own_post(w)
+    other = make_user(w.member.instance, 'other', local=True, with_keys=True)
+    _gone(w)
+
+    with pytest.raises(Exception, match='incorrect_login'):
+        edit_post(_api_input(title='changed'), post, POST_TYPE_ARTICLE, SRC_API, auth=bearer(other))
