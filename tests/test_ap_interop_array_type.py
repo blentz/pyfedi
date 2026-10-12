@@ -476,7 +476,8 @@ def test_a_forward_from_inside_the_dispatcher_gets_the_verified_normalised_docum
     assert checked[0]['type'] == 'Update' and checked[0]['object']['type'] == 'Group'
     args, _kwargs = calls['announce_activity_to_followers'][0]
     assert args[2]['type'] == 'Update' and args[2]['object']['type'] == 'Group'
-    assert args[2]['object']['summary'] == 'what the origin serves'
+    # the relay is our own actor document after the verified edit was applied (final review M1)
+    assert 'what the origin serves' in args[2]['object']['summary'] and 'spoofed' not in args[2]['object']['summary']
     assert activity['type'] == ['Update'] and activity['object']['summary'] == 'spoofed'
 
 
