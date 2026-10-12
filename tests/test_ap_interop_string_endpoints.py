@@ -93,6 +93,39 @@ def test_a_transport_error_is_not_retried(app, http_mock):
     assert route.call_count == 1
 
 
+@pytest.mark.parametrize('status', [301, 302, 307, 308])
+def test_a_redirect_is_not_followed(app, http_mock, status):
+    """fetch_object_capped never follows a redirect, so the document cannot come from the host it points at. No
+    route serves elsewhere.example: following the redirect would fail the test."""
+    route = http_mock.get(ENDPOINTS).respond(status, headers={'Location': 'https://elsewhere.example/endpoints'})
+
+    assert shared_inbox_of(_actor()) is None
+    assert route.call_count == 1
+    assert [call.request.url.host for call in http_mock.calls] == [PEER]
+
+
+def test_userinfo_naming_the_actors_host_does_not_make_another_host_the_actors(app):
+    """`peer.example@` is userinfo: the URL's host is elsewhere.example, and nothing is fetched."""
+    assert shared_inbox_of(_actor(f'https://{PEER}@elsewhere.example/endpoints')) is None
+    assert shared_inbox_of(_actor(f'https://{PEER}:443@elsewhere.example/endpoints')) is None
+
+
+def test_userinfo_on_the_actors_own_host_is_still_that_host(app, http_mock):
+    route = http_mock.get(f'https://{PEER}/endpoints').respond(200, json={'sharedInbox': SHARED})
+
+    assert shared_inbox_of(_actor(f'https://someone@{PEER}/endpoints')) == SHARED
+    assert route.call_count == 1
+
+
+def test_a_port_on_the_actors_own_host_is_that_host(app, http_mock):
+    """Hosts are compared, not authorities (D21): a port and a capital do not make another host. The fetch goes to
+    the port named."""
+    route = http_mock.get(f'https://{PEER}:8443/endpoints').respond(200, json={'sharedInbox': SHARED})
+
+    assert shared_inbox_of(_actor('https://PEER.example:8443/endpoints')) == SHARED
+    assert route.call_count == 1
+
+
 def test_a_person_with_string_endpoints_is_created_with_the_fetched_shared_inbox(app, db_session, http_mock):
     peer_instance(PEER)
     http_mock.get(ENDPOINTS).respond(200, json={'sharedInbox': SHARED})
