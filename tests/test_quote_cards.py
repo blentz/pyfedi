@@ -347,11 +347,9 @@ def test_card_does_not_nest(world, app):
 
 
 @pytest.fixture
-def csrf_on(app):
+def csrf_on(app, monkeypatch):
     """The post page renders a reply form whose csrf_token only exists when CSRF is on."""
-    app.config['WTF_CSRF_ENABLED'] = True
-    yield
-    app.config['WTF_CSRF_ENABLED'] = False
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)
 
 
 @pytest.mark.usefixtures('site', 'csrf_on')
