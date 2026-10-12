@@ -34,7 +34,8 @@ from app.shared.tasks.flags import report_object
 from app.shared.tasks.locks import lock_object
 from app.shared.tasks.removes import remove_object
 from app.utils import (can_create_post, can_create_post_reply, can_downvote, can_upvote, community_membership,
-                       joined_communities, moderating_communities)
+                       community_moderators, joined_communities, moderating_communities, moderating_communities_ids,
+                       moderating_communities_ids_all_users)
 from tests.conftest import unsigned_but_precheck_clean_headers
 from tests.factories import (a_keypair, bearer, inbox_activity, make_community, make_community_member,
                              make_instance, make_post, make_post_reply, make_site, make_user,
@@ -463,6 +464,21 @@ def test_marking_a_group_gone_clears_each_local_members_memoized_membership(app,
     assert (joined_communities, (w.member.id,)) in cleared
     assert (moderating_communities, (w.member.id,)) in cleared
 
+
+
+def test_marking_a_group_gone_clears_the_communitys_memoized_moderators(app, db_session, monkeypatch):
+    """Final review M2 (spec item 10): a local moderator's row goes with the other local members, so the
+    community page must not keep listing them from the memoized moderator lists."""
+    w = _world()
+    cleared = []
+    monkeypatch.setattr(activitypub_util.cache, 'delete_memoized', lambda fn, *args: cleared.append((fn, args)))
+
+    mark_community_gone(w.community)
+
+    assert (community_moderators, (w.community.id,)) in cleared
+    assert (Community.moderators, (w.community,)) in cleared
+    assert (moderating_communities_ids, (w.member.id,)) in cleared
+    assert (moderating_communities_ids_all_users, ()) in cleared
 
 # --- no undelete: a gone Group is not heard from again ---
 
