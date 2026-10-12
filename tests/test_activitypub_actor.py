@@ -1077,8 +1077,8 @@ def test_a_webfinger_lookup_returns_the_actor_it_points_at(app, db_session):
 
 
 def test_a_link_advertising_its_own_type_is_asked_for_that_type(app, db_session):
-    """`link.get('type', 'application/activity+json')` -- the default is
-    covered by the row above, so this one supplies a type to make the lookup
+    """`link.get('type', AP_FETCH_ACCEPT)` -- the default is covered by
+    the row above, so this one supplies a type to make the lookup
     load-bearing.
     """
     _seed()

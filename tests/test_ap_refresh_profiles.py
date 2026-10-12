@@ -2116,7 +2116,7 @@ def test_a_null_following_collection_is_skipped(app, db_session, http_mock):
     assert db.session.query(FeedItem).count() == 0
 
 
-def test_the_following_collection_fetch_asks_for_activity_json(app, db_session, http_mock):
+def test_the_following_collection_fetch_asks_for_ap_fetch_accept(app, db_session, http_mock):
     """The `Accept` header on the following-collection fetch -- D232.
 
     `get_request` (`app/utils.py:131-139`) builds a headers dict holding only
