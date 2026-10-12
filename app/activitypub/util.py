@@ -5691,10 +5691,10 @@ def fetch_object_capped(uri: str, retry_delay: float = 0) -> Tuple[Union[dict, N
     return object, None
 
 
-def remote_object_to_json(uri):
+def remote_object_to_json(uri, retry_delay: float = 3):
     """The ActivityPub object at `uri` as a dict, or None (fetch_object_capped; a transport error is retried once
-    after 3 seconds)."""
-    return fetch_object_capped(uri, retry_delay=3)[0]
+    after retry_delay seconds). A request path passes retry_delay=0: one attempt, no sleep (D738/D775)."""
+    return fetch_object_capped(uri, retry_delay=retry_delay)[0]
 
 
 # called from incoming activitypub, when the object in an Announce is just a URL
@@ -5881,7 +5881,8 @@ def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
     actor_domain = None
     actor = None
 
-    post_data = remote_object_to_json(uri)
+    # Reached from the search page, the discovery view and an inbox Move: no sleep, no retry (D738/D775)
+    post_data = remote_object_to_json(uri, retry_delay=0)
     if not post_data:
         return None
 
@@ -5893,7 +5894,7 @@ def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
     total_items = None
     if ('type' in post_data and post_data['type'] == 'Conversation' and
             'posts' in post_data and isinstance(post_data['posts'], str)):
-        post_data = remote_object_to_json(post_data['posts'])
+        post_data = remote_object_to_json(post_data['posts'], retry_delay=0)
         if not post_data:
             return None
         topic_post_data = post_data
@@ -5913,7 +5914,7 @@ def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
         total_items = post_data['totalItems']
         uri = ordered_items[0]
         uri_domain = host_of(uri)
-        post_data = remote_object_to_json(uri)
+        post_data = remote_object_to_json(uri, retry_delay=0)
         if not post_data:
             return None
 

@@ -384,7 +384,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
                                  **(feed_dict or feed_view_arguments(user_id)))
 
     # no more hints from query
-    ap_json = remote_object_to_json(query)
+    ap_json = remote_object_to_json(query, retry_delay=0)   # a request path: no sleep, no retry (D738)
     if not ap_json:
         raise Exception('No object found.')
     if not 'id' in ap_json:

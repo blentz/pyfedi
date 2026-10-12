@@ -65,7 +65,8 @@ def search_for_feed(address: str, allow_fetch: bool = True, retry: bool = False)
         # Look up the profile address of the Feed using WebFinger
         try:
             webfinger_data = get_request(f"https://{server}/.well-known/webfinger",
-                                         params={'resource': f"acct:{address}"})  # include the ~ on the start to indicate we're searching for a feed
+                                         params={'resource': f"acct:{address}"},  # include the ~ on the start to indicate we're searching for a feed
+                                         retry=retry)
         except httpx.HTTPError:
             # only a Celery caller passes retry; the request thread must not sleep
             if not retry:
@@ -91,7 +92,7 @@ def search_for_feed(address: str, allow_fetch: bool = True, retry: bool = False)
                         return None
                     type = links['type'] if 'type' in links else AP_FETCH_ACCEPT
                     # retrieve the activitypub profile
-                    feed_data = get_request(links['href'], headers={'Accept': type})
+                    feed_data = get_request(links['href'], headers={'Accept': type}, retry=retry)
                     if feed_data.status_code == 200:
                         feed_json = feed_data.json()
                         feed_data.close()

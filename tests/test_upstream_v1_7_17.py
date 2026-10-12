@@ -189,7 +189,7 @@ class TestAddingImportedCommunitiesToATopic:
         # search_for_community runs inside patch_db_session, so the row it
         # answers belongs to the task's session -- which is the one committed.
         with patch('app.admin.util.search_for_community',
-                   side_effect=lambda link: db.session.get(Community, community.id)), \
+                   side_effect=lambda link, retry=False: db.session.get(Community, community.id)), \
                 patch('app.admin.util.do_subscribe') as subscribe:
             process_topic_communities({'communities': ['jazz@elsewhere.example']}, topic.id)
 

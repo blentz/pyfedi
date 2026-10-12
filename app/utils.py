@@ -354,9 +354,10 @@ def _capped_get(uri, params=None, headers=None, timeout=10, max_bytes: int = FET
 
 
 # do a GET request to a uri, return the result. At most max_bytes of body within max_seconds (_capped_get), or
-# ResponseTooLarge, which is not retried.
+# ResponseTooLarge, which is not retried. A transport error sleeps 3-10 s and tries once more -- unless retry is
+# False, which a request path passes: one attempt, no sleep (D738/D775); a Celery caller keeps the default.
 def get_request(uri, params=None, headers=None, *, max_bytes: int = FETCH_MAX_BYTES,
-                max_seconds: float = FETCH_MAX_SECONDS) -> httpx.Response:
+                max_seconds: float = FETCH_MAX_SECONDS, retry: bool = True) -> httpx.Response:
     if is_invalid_get_request_uri(uri):
         current_app.logger.info(f"invalid get request {uri}")
         raise httpx.HTTPError("HTTPError: invalid uri") from None
@@ -384,6 +385,8 @@ def get_request(uri, params=None, headers=None, *, max_bytes: int = FETCH_MAX_BY
         # short-circuits to False, and 'http://[v1.x]/y' passes its checks even with DEBUG off.
         raise
     except httpx.ReadError as connection_error:
+        if not retry:
+            raise
         try:  # retry, this time with a longer timeout
             sleep(random.randint(3, 10))
             response = fetch(timeout * 2)
@@ -398,6 +401,8 @@ def get_request(uri, params=None, headers=None, *, max_bytes: int = FETCH_MAX_BY
             # except below, which would otherwise let the AttributeError escape.
             raise httpx.ReadError(f"HTTPReadError: {str(e)}") from connection_error
     except httpx.HTTPError as read_timeout:
+        if not retry:
+            raise
         try:  # retry, this time with a longer timeout
             sleep(random.randint(3, 10))
             response = fetch(timeout * 2)

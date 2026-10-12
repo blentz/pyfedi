@@ -87,7 +87,9 @@ def unsubscribe_from_community(community, user):
     send_post_request(community.ap_inbox_url, undo, user.private_key, user.public_url() + '#main-key')
 
 
-def search_for_user(address: str, allow_fetch: bool = True):
+def search_for_user(address: str, allow_fetch: bool = True, retry: bool = False):
+    """The user `address` names, fetched through WebFinger when it is not known yet. Only a Celery caller passes
+    retry: a request path makes one attempt at each URL and never sleeps (D738/D775)."""
     if address.startswith('@'):
         address = address[1:]
     if '@' in address:
@@ -124,7 +126,7 @@ def search_for_user(address: str, allow_fetch: bool = True):
     # Look up the profile address of the user using WebFinger
     # todo: try, except block around every get_request
     webfinger_data = get_request(f"https://{server}/.well-known/webfinger",
-                                 params={'resource': f"acct:{address}"})
+                                 params={'resource': f"acct:{address}"}, retry=retry)
     if webfinger_data.status_code == 200:
         try:
             webfinger_json = webfinger_data.json()
@@ -146,9 +148,11 @@ def search_for_user(address: str, allow_fetch: bool = True):
                 object_request = None
                 for attempt in [1,2]:
                     try:
-                        object_request = get_request(links['href'], headers={'Accept': type})
+                        object_request = get_request(links['href'], headers={'Accept': type}, retry=retry)
                         break           # without this, a request that SUCCEEDED was made a second time
                     except httpx.HTTPError:
+                        if not retry:
+                            break
                         if attempt == 1:
                             time.sleep(3 + random.randrange(3))
                 if object_request is None:
@@ -161,6 +165,8 @@ def search_for_user(address: str, allow_fetch: bool = True):
                             object_request = signed_get_request(links['href'], site.private_key, f"{current_app.config['SERVER_URL']}/actor#main-key")
                             break
                         except httpx.HTTPError:
+                            if not retry:
+                                break
                             if attempt == 1:
                                 time.sleep(3)
                     if object_request is None:

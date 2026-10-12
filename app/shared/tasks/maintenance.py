@@ -1183,7 +1183,7 @@ def add_remote_community_from_post(post_data):
         for cl in set(community_lookup):
             if f"@{current_app.config['SERVER_NAME']}" not in cl:
                 try:
-                    search_for_community(cl)
+                    search_for_community(cl, retry=True)   # a Celery task: it may wait (D738)
                 except Exception:
                     pass
 

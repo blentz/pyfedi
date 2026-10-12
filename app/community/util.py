@@ -45,7 +45,9 @@ from app.activitypub.util import find_language_or_create
 allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.mpo', '.avif', '.svg']
 
 
-def search_for_community(address: str, allow_fetch: bool = True) -> Community | None:
+def search_for_community(address: str, allow_fetch: bool = True, retry: bool = False) -> Community | None:
+    """The community `address` names, fetched through WebFinger when it is not known yet. Only a Celery caller
+    passes retry: a request path makes one attempt at each URL and never sleeps (D738/D775)."""
     if address.startswith('!'):
         # Exactly one '@', with something on each side of it. `split('@')`
         # alone raised `ValueError: not enough values to unpack` for `!name`
@@ -76,8 +78,10 @@ def search_for_community(address: str, allow_fetch: bool = True) -> Community | 
         # Look up the profile address of the community using WebFinger
         try:
             webfinger_data = get_request(f"https://{server}/.well-known/webfinger",
-                                         params={'resource': f"acct:{address[1:]}"})
+                                         params={'resource': f"acct:{address[1:]}"}, retry=retry)
         except httpx.HTTPError:
+            if not retry:   # a request path: one attempt, no sleep
+                return None
             sleep(randint(3, 10))
             try:
                 webfinger_data = get_request(f"https://{server}/.well-known/webfinger",
@@ -102,7 +106,7 @@ def search_for_community(address: str, allow_fetch: bool = True) -> Community | 
                         return None
                     type = links['type'] if 'type' in links else AP_FETCH_ACCEPT
                     # retrieve the activitypub profile
-                    community_data = get_request(links['href'], headers={'Accept': type})
+                    community_data = get_request(links['href'], headers={'Accept': type}, retry=retry)
                     # to see the structure of the json contained in community_data, do a GET to https://lemmy.world/c/technology with header Accept: application/activity+json
                     if community_data.status_code == 200:
                         try:

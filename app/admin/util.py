@@ -461,7 +461,7 @@ def process_topic_communities(topic_data, topic_id):
 
                 for community_link in communities_links:
                     try:
-                        community = search_for_community(community_link)
+                        community = search_for_community(community_link, retry=True)   # a Celery task (D738)
                     except Exception:
                         community = None
 

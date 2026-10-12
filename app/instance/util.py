@@ -23,7 +23,7 @@ def bulk_follow(user_id, to_follow):
                 following_user = session.get(User, user_id)
                 auth_token = f"Bearer {following_user.encode_jwt_token()}"
                 for tf in to_follow:
-                    user = search_for_user(tf)
+                    user = search_for_user(tf, retry=True)   # a Celery task: it may wait (D738)
                     if user and following_user.is_following(user) == 'no':
                         shared_user.follow_user(user.id, src=SRC_API, auth=auth_token)
         except Exception:
