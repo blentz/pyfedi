@@ -3394,8 +3394,10 @@ def process_remove(core_activity, user, community, feed, announced, id, saved_js
                                     else 'Undo: not a moderator')
                     return
                 # The web keeps a community's last owner (remove_mod_from_community) and a Remove never changes
-                # ownership; nor may it leave an ownerless community with nobody to moderate it
-                if existing_membership and existing_membership.is_moderator and not existing_membership.is_owner \
+                # ownership; nor may it leave an ownerless local community with nobody to moderate it. A remote
+                # community's moderator list mirrors its origin, so it is not guarded here
+                if community.is_local() and existing_membership and existing_membership.is_moderator \
+                        and not existing_membership.is_owner \
                         and session.query(CommunityMember.user_id).filter(
                             CommunityMember.community_id == community.id, CommunityMember.user_id != old_mod.id,
                             or_(CommunityMember.is_owner == True, CommunityMember.is_moderator == True),

@@ -214,8 +214,10 @@ LAST_MODERATOR_REFUSED = 'Remove refused: it would leave the community with no m
 @pytest.mark.parametrize('shape', ['Remove', 'Undo Add'])
 def test_removing_the_last_moderator_is_refused(modcomm, monkeypatch, shape):
     """A local owner can never remove the last owner (remove_mod_from_community), and a federated Remove never
-    touches ownership; it may not leave an ownerless community with no moderator at all either."""
+    touches ownership; it may not leave an ownerless LOCAL community with no moderator at all either. (modcomm's
+    community has no ap_id, so it is local whatever its host.)"""
     instance, community, moderator, admin, post = modcomm
+    assert community.is_local()
     calls = record_moderation(monkeypatch, 'add_to_modlog')
 
     if shape == 'Remove':
@@ -230,8 +232,31 @@ def test_removing_the_last_moderator_is_refused(modcomm, monkeypatch, shape):
     assert only_log() == ('Remove', 'failure', LAST_MODERATOR_REFUSED)
 
 
-def test_a_banned_moderator_does_not_count_as_the_one_left(modcomm, monkeypatch):
+@pytest.mark.parametrize('shape', ['Remove', 'Undo Add'])
+def test_a_remote_communitys_last_moderator_may_be_removed(modcomm, monkeypatch, shape):
+    """A remote community's moderator list mirrors its origin, so the last-moderator rule does not apply there."""
     instance, community, moderator, admin, post = modcomm
+    community.ap_id = community.ap_profile_id
+    db.session.commit()
+    assert not community.is_local()
+    calls = record_moderation(monkeypatch, 'add_to_modlog')
+
+    if shape == 'Remove':
+        dispatch(add_or_remove_from_community(community, admin, 'Remove', moderator.ap_profile_id,
+                                              community.ap_moderators_url))
+    else:
+        dispatch(undo_from_community(community, admin, 'Add', moderator.ap_profile_id, community.ap_moderators_url))
+
+    membership = CommunityMember.query.filter_by(community_id=community.id, user_id=moderator.id).one()
+    assert membership.is_moderator is False
+    assert [args[0] for args, kwargs in calls['add_to_modlog']] == ['remove_mod']
+    assert only_log() == ('Remove', 'success', None)
+
+
+def test_a_banned_moderator_does_not_count_as_the_one_left(modcomm, monkeypatch):
+    """Of a local community."""
+    instance, community, moderator, admin, post = modcomm
+    assert community.is_local()
     banned = make_user(instance, 'bannedmod')
     make_community_member(banned, community, is_moderator=True).is_banned = True
     db.session.commit()

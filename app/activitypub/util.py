@@ -6467,6 +6467,7 @@ LD_SIGNED_LOG_PREFIX = 'LD-signed'
 current_ld_signed: ContextVar = ContextVar('current_ld_signed', default=False)
 # Interop C1 item 8: (dispatched copy, document as sent) while process_inbox_request handles a delivery whose type was
 # an array. Handlers log the copy they were handed; log_incoming_ap stores what was sent in its place. Logging only.
+# Matched by identity: it works only when a handler logs the exact object it was handed, not a copy or a part of it.
 current_as_sent: ContextVar = ContextVar('current_as_sent', default=None)
 
 
