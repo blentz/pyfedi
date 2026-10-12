@@ -10,7 +10,7 @@ listed as their followers.
 import pytest
 
 from app import db
-from app.models import Site, UserBlock
+from app.models import Site, UserBlock, utcnow
 from tests.factories import make_community, make_community_member, make_follow, make_instance, make_user
 from tests.test_actor_profiles import seed_actors
 from tests.test_ap_content_objects import ap_get
@@ -97,6 +97,24 @@ def test_following_counts_users_followed_and_communities_joined(app, db_session)
     assert response.json['orderedItems'] == []
     body = response.get_data(as_text=True)
     assert bob.ap_public_url not in body and '/c/books' not in body
+
+
+def test_following_skips_a_banned_community_and_one_deleted_on_its_home_server(app, db_session):
+    """Task 9 review. A membership of a banned community never counted, untested; one of a community its home
+    server deleted (ap_deleted_at, interop C1 item 10) counted until the row went."""
+    alice = _alice()
+    make_community_member(alice, make_community(name='books'))
+    banned = make_community(name='films')
+    banned.banned = True
+    gone = make_community(name='memes', host='remote.example')
+    gone.ap_deleted_at = utcnow()
+    make_community_member(alice, banned)
+    make_community_member(alice, gone)
+    db.session.commit()
+
+    response = ap_get(app, '/u/alice/following')
+
+    assert response.json['totalItems'] == 1     # books
 
 
 @pytest.mark.parametrize('suffix', SUFFIXES)
