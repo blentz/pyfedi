@@ -6228,6 +6228,12 @@ def _with_object_addressing(activity: dict) -> dict:
     return addressed
 
 
+# Interop C1 item 2: an Update of one of these refreshes the signer from the pushed document. 'Podcast' is
+# Castopod's custom actor type, which actor_json_to_model already treats as a user (G1).
+ACTOR_UPDATE_TYPES = ('Person', 'Service', 'Application', 'Podcast')
+LD_ACTOR_UPDATE_REFUSED = 'an actor Update is taken only HTTP-signed by the actor itself'
+
+
 def verify_ld_accepted_activity(activity: dict) -> Tuple[Union[dict, None], Union[str, None]]:
     """An activity the inbox accepted on an LD signature (ruling R-LDDOWNGRADE): returns `(activity, None)` to
     process -- its object possibly replaced -- or `(None, reason)` to drop.
@@ -6242,10 +6248,15 @@ def verify_ld_accepted_activity(activity: dict) -> Tuple[Union[dict, None], Unio
       object, 410 or a Tombstone), as for a cross-origin Announced Delete (Task 17);
     - an Announce keeps the verified document here; the dispatcher's verify_announced_inner, told ld_signed,
       refetches every inner Create, Update or Delete (ruling R-LDANNOUNCE);
+    - an Update of an actor (ACTOR_UPDATE_TYPES) is refused without a fetch: the origin's actor document is
+      attributed to nobody, so it could never pass the Create/Update check (final review M8);
     - anything else keeps the verified, stripped document."""
     activity_type = activity.get('type')
     if not isinstance(activity_type, str):   # an array type would skip the checks below; callers normalise first
         return None, 'LD-signed activity type is not a string'
+    if activity_type == 'Update' and isinstance(activity.get('object'), dict) and \
+            activity['object'].get('type') in ACTOR_UPDATE_TYPES:
+        return None, LD_ACTOR_UPDATE_REFUSED
     if activity_type in ('Create', 'Update') and isinstance(activity.get('object'), dict):
         verified, reason = _verify_announced_content(activity, host_of(_id_of(activity.get('actor'))))
         return (_with_object_addressing(verified), None) if verified is not None else (None, reason)

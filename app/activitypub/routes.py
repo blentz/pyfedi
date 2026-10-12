@@ -29,7 +29,7 @@ from app.activitypub.util import activity_dedupe_key, claim_activity, release_ac
     process_report, ensure_domains_match, refresh_community_profile, \
     comment_model_to_json, restore_post_or_comment, ban_user, unban_user, \
     log_incoming_ap, find_community, site_ban_remove_data, community_ban_remove_data, verify_object_from_source, \
-    verify_announced_inner, verify_ld_accepted_activity, ANNOUNCED_DELETE_DEFERRED, cross_origin_delete_delay, _id_of, \
+    verify_announced_inner, verify_ld_accepted_activity, ACTOR_UPDATE_TYPES, ANNOUNCED_DELETE_DEFERRED, cross_origin_delete_delay, _id_of, \
     post_replies_for_ap, is_vote, known_instance_id, resolve_remote_post_from_search, proactively_delete_content, \
     process_quote_boost, object_has_missing_fields, find_microblogging_community, process_announce_of_uri, \
     announce_target_uri, undo_boost, withdraw_flag, LD_SIGNED_LOG_PREFIX, current_ld_signed, normalise_activity_types, \
@@ -86,11 +86,6 @@ AP_CACHE_MISS = 'no-store'
 
 # D173 (owner ruling): an outbox is an OrderedCollection naming its pages, each ?page=N an OrderedCollectionPage
 OUTBOX_PAGE_SIZE = 50
-
-# Interop C1 item 2: an Update of one of these refreshes the signer from the pushed document. 'Podcast' is
-# Castopod's custom actor type, which actor_json_to_model already treats as a user (G1).
-ACTOR_UPDATE_TYPES = ('Person', 'Service', 'Application', 'Podcast')
-
 
 def paged_outbox(outbox_id: str, total: int, items_from) -> dict:
     """The outbox document a request asks for. `items_from(offset, limit)` lists one page's items. The collection
