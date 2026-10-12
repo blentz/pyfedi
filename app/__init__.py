@@ -4,7 +4,7 @@
 import logging
 from logging.handlers import SMTPHandler, RotatingFileHandler
 import os
-from flask import Flask, request, current_app, session
+from flask import Flask, request, current_app, session, g, has_app_context
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_login import LoginManager, current_user
@@ -18,6 +18,7 @@ from flask_smorest import Api
 from flask_bcrypt import Bcrypt
 from werkzeug.middleware.proxy_fix import ProxyFix
 from celery import Celery
+from celery.signals import task_prerun
 from sqlalchemy_searchable import make_searchable
 import httpx
 from authlib.integrations.flask_client import OAuth
@@ -101,6 +102,21 @@ cache = Cache()
 compress = Compress()
 limiter = Limiter(get_ip_address, storage_uri='redis+'+Config.CACHE_REDIS_URL if Config.CACHE_REDIS_URL.startswith("unix://") else Config.CACHE_REDIS_URL)
 celery = Celery(__name__, broker=Config.CELERY_BROKER_URL)
+
+
+@task_prerun.connect
+def _forget_the_previous_tasks_site(**kwargs):
+    # A worker pushes one app context for its whole life (celery_worker_docker.py), so g outlives each task. A Site a
+    # task set in g came from that task's own session, now committed and closed: expired and detached, so the next
+    # task's first read of it raised DetachedInstanceError. Each task loads its own. An eager task (tests, apply())
+    # runs inside its caller's context, whose g.site is live and still needed afterwards, so it is left alone.
+    task = kwargs.get('task')
+    if task is not None and task.request.is_eager:
+        return
+    if has_app_context():
+        g.pop('site', None)
+
+
 httpx_client = httpx.Client(http2=True, transport=pinned_transport(http2=True))  # R162
 oauth = OAuth()
 redis_client = None  # Will be initialized in create_app()
