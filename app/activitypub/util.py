@@ -87,12 +87,14 @@ def user_followers_count(user_id: int) -> int:
 def user_following_count(user_id: int) -> int:
     """How many accounts local user `user_id` follows (interop C1 item 6): accepted follows of users, plus
     communities joined -- a join is a Follow of a Group actor, so peers count it too. A followed account that is
-    banned or deleted, a membership the user is banned from, and a banned community do not count."""
+    banned or deleted, a membership the user is banned from, a banned community and one deleted on its home server
+    (ap_deleted_at, interop C1 item 10) do not count."""
     sql = ('SELECT (SELECT COUNT(*) FROM user_follower uf JOIN "user" u ON u.id = uf.remote_user_id '
            'WHERE uf.local_user_id = :user_id AND uf.is_inward IS FALSE AND uf.is_accepted IS TRUE '
            'AND u.banned IS FALSE AND u.deleted IS FALSE) + '
            '(SELECT COUNT(*) FROM community_member cm JOIN community c ON c.id = cm.community_id '
-           'WHERE cm.user_id = :user_id AND cm.is_banned IS FALSE AND c.banned IS NOT TRUE)')
+           'WHERE cm.user_id = :user_id AND cm.is_banned IS FALSE AND c.banned IS NOT TRUE '
+           'AND c.ap_deleted_at IS NULL)')
     return db.session.execute(text(sql), {'user_id': user_id}).scalar()
 
 
