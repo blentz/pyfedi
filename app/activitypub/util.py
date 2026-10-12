@@ -1639,8 +1639,9 @@ def canonical_handle(actor_json, address: str, server: str, prefix: str = '') ->
     server served: evil.example may serve `id: https://mastodon.social/users/victim` with its own publicKey, and
     mastodon.social's WebFinger will truthfully confirm victim. So when the canonical host is not the looked-up
     host, the actor is refetched from its id (fetch_object_capped: capped, signed on a 401, no retry), and only that
-    document is handed back -- nothing from the copy the alias served. A failed refetch, or one answering another
-    id (stripped and lowercased, as names_actor compares) or another type, is refused. A same-host alias keeps the
+    document is handed back -- nothing from the copy the alias served, the handle included. A failed refetch, or one
+    answering another id (stripped and lowercased, as names_actor compares), another type or another
+    preferredUsername, is refused. A same-host alias keeps the
     document it was given, as before. Callers store the document this returns, never their own.
 
     A document without a string preferredUsername and id is passed through untouched: actor_json_to_model already
@@ -1680,7 +1681,14 @@ def canonical_handle(actor_json, address: str, server: str, prefix: str = '') ->
         current_app.logger.warning(f'WebFinger reverse check refused {address}@{server}: '
                                    f'{actor_id!r} answered as {origin_id!r} of type {origin.get("type")!r}')
         return None
-    return name.lower(), id_host, origin
+    # The handle stored is the one the stored document states: read from the origin, never from the alias copy
+    origin_name = origin.get('preferredUsername')
+    origin_name = origin_name.strip() if isinstance(origin_name, str) else ''
+    if origin_name.lower() != name.lower():
+        current_app.logger.warning(f'WebFinger reverse check refused {address}@{server}: '
+                                   f'{actor_id!r} names itself {origin.get("preferredUsername")!r}, not {name!r}')
+        return None
+    return origin_name.lower(), id_host, origin
 
 
 def actor_json_to_model(activity_json, address, server):

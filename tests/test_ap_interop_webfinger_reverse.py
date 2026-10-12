@@ -357,6 +357,26 @@ def test_an_origin_document_of_another_type_stores_nothing(app, db_session, http
     assert canonical_handle(alias_copy, 'alice', 'alias.example') is None
 
 
+@pytest.mark.parametrize('origin_name', ['mallory', None, 42, ''])
+def test_an_origin_document_naming_another_user_stores_nothing(app, db_session, http_mock, caplog, origin_name):
+    """Final review M7. The handle is read from the origin's own document, never from the alias copy: an origin
+    whose preferredUsername differs (or is missing or unusable) does not state the handle that would be stored."""
+    alias_copy, _, _ = impersonation(http_mock, resolve_alias=False, preferredUsername=origin_name)
+
+    with caplog.at_level('WARNING', logger=app.logger.name):
+        assert canonical_handle(alias_copy, 'alice', 'alias.example') is None
+
+    assert 'WebFinger reverse check refused alice@alias.example' in caplog.text
+
+
+def test_the_stored_handle_is_the_origin_documents_own_name(app, db_session, http_mock):
+    """Compared stripped and case-insensitively, as the reverse lookup compares; the name returned is the
+    origin's."""
+    alias_copy, origin, _ = impersonation(http_mock, resolve_alias=False, preferredUsername=' ALICE ')
+
+    assert canonical_handle(alias_copy, 'alice', 'alias.example') == ('alice', 'social.example', origin)
+
+
 def test_a_same_host_alias_is_not_refetched(app, db_session, http_mock):
     """The document came from the looked-up host's own WebFinger answer: the path before C1, unchanged."""
     reverse = serve_webfinger(http_mock, 'social.example', ALICE)
