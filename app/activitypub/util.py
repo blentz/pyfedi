@@ -718,6 +718,19 @@ def release_activity(activity_id, actor_url) -> None:
     app_pkg.redis_client.delete(activity_dedupe_key(activity_id, actor_url))
 
 
+def served_by_us(url: str, file) -> bool:
+    """Whether `url` is an image this instance serves itself: any URL on our own host, or one of the URLs `file`
+    (the image a community holds now, or None) renders as.
+
+    Final review I2. Lemmy echoes a community's whole Group document in every Update{Group}, our own icon and
+    banner URLs included. Compared only with `source_url` -- None for an upload -- they read as new images, and a
+    remote moderator's edit of a LOCAL community deleted its uploads and fetched the URL of the file just deleted.
+    For a local community such a URL is no change."""
+    if host_of(url) == host_of(current_app.config['SERVER_URL']):
+        return True
+    return file is not None and url in (file.source_url, file.view_url(), file.medium_url(), file.thumbnail_url())
+
+
 def host_of(url_string: str) -> str:
     """The lowercased host of a URL, or '' when it has none.
 
@@ -1225,8 +1238,9 @@ def refresh_community_profile_task(community_id, activity_json=None):
                     icon_changed = cover_changed = False
                     if 'icon' in activity_json:
                         icon_entry = image_url_from(activity_json['icon'], prefer_last=True)
-                        if icon_entry:
-                            if community.icon_id and icon_entry != community.icon.source_url:
+                        if icon_entry and (remote or not served_by_us(icon_entry, community.icon)):
+                            if community.icon_id and icon_entry != community.icon.source_url and \
+                                    (remote or community.icon.source_url):   # an upload is never a pushed document's to delete
                                 community.icon.delete_from_disk()
                             if not community.icon_id or (community.icon_id and icon_entry != community.icon.source_url):
                                 icon = File(source_url=icon_entry)
@@ -1235,8 +1249,9 @@ def refresh_community_profile_task(community_id, activity_json=None):
                                 icon_changed = True
                     if 'image' in activity_json:
                         image_entry = image_url_from(activity_json['image'])
-                        if image_entry:
-                            if community.image_id and image_entry != community.image.source_url:
+                        if image_entry and (remote or not served_by_us(image_entry, community.image)):
+                            if community.image_id and image_entry != community.image.source_url and \
+                                    (remote or community.image.source_url):   # an upload is never a pushed document's to delete
                                 community.image.delete_from_disk()
                             if not community.image_id or (community.image_id and image_entry != community.image.source_url):
                                 image = File(source_url=image_entry)
