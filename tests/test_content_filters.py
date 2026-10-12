@@ -166,3 +166,24 @@ class TestTheTwoAgree:
     @pytest.mark.parametrize('filters', FILTERS)
     def test_the_same_verdict_for_the_same_words(self, env, content, filters):
         assert post_says(env, content, filters) == reply_says(env, content, filters)
+
+
+class TestLanguageVariants:
+    """S2: a keyword in any language version of the content filters it."""
+
+    def test_a_keyword_only_in_a_variant_title_filters_the_post(self, env):
+        env.post.language_variants = {'fr': {'title': 'un ass', 'body_html': '<p>x</p>', 'cw': None}}
+        assert post_says(env, 'harmless') == 'spoilers'
+
+    def test_a_variant_without_a_title_does_not_break_the_post_filter(self, env):
+        env.post.language_variants = {'fr': {'title': None, 'body_html': '<p>x</p>', 'cw': None}}
+        assert post_says(env, 'harmless') is False
+
+    def test_a_keyword_only_in_a_variant_body_filters_the_reply(self, env):
+        env.reply.language_variants = {'fr': {'title': None, 'body_html': '<p>un <b>ass</b></p>', 'cw': None}}
+        assert reply_says(env, 'harmless') == 'spoilers'
+
+    def test_clean_variants_leave_both_unfiltered(self, env):
+        env.post.language_variants = {'fr': {'title': 'bonjour', 'body_html': '<p>x</p>', 'cw': None}}
+        env.reply.language_variants = {'fr': {'title': None, 'body_html': '<p>salut</p>', 'cw': None}}
+        assert post_says(env, 'harmless') is False and reply_says(env, 'harmless') is False
