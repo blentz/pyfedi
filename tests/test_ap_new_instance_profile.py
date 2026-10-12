@@ -180,6 +180,13 @@ class TestWhatTheActorDocumentSays:
         new_instance_profile_task(env.instance.id)
         assert reload(env).inbox == f'https://{DOMAIN}/inbox'
 
+    @pytest.mark.parametrize('inbox', [['https://elsewhere.test/inbox'], {'id': 'x'}, 7, None, ''],
+                             ids=['list', 'dict', 'number', 'null', 'empty'])
+    def test_an_inbox_that_is_not_a_string_is_not_taken(self, env, inbox):
+        answer(env, actor=an_application(inbox=inbox))
+        new_instance_profile_task(env.instance.id)
+        assert reload(env).inbox == f'https://{DOMAIN}/inbox'
+
     def test_an_inbox_on_its_own_host_written_differently_is_taken(self, env):
         answer(env, actor=an_application(inbox=f'https://{DOMAIN.upper()}:8443/shared'))
         new_instance_profile_task(env.instance.id)
