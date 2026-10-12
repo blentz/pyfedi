@@ -350,6 +350,16 @@ def test_an_origin_id_that_differs_only_in_case_and_space_is_the_same_actor(app,
     assert canonical_handle(alias_copy, 'alice', 'alias.example') == ('alice', 'social.example', origin)
 
 
+def test_the_reverse_check_normalises_ids_as_the_refetch_check_does(app, db_session, http_mock):
+    """One normaliser for both comparisons: a self href differing from the id only in case and surrounding space
+    confirms it, just as an origin id differing that way is the same actor."""
+    serve_webfinger(http_mock, 'social.example', f' {ALICE.upper()} ')
+    serve_actor(http_mock, actor_document(ALICE, 'alice'))
+
+    assert canonical_handle(actor_document(ALICE, 'alice'), 'alice', 'alias.example')[:2] == ('alice',
+                                                                                              'social.example')
+
+
 def test_an_origin_document_of_another_type_stores_nothing(app, db_session, http_mock):
     """The resolver chose its branch by the alias copy's type; the origin must be the same kind of actor."""
     alias_copy, _, _ = impersonation(http_mock, resolve_alias=False, type='Group')
