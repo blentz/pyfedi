@@ -732,6 +732,38 @@ def served_by_us(url: str, file) -> bool:
     return file is not None and url in (file.source_url, file.view_url(), file.medium_url(), file.thumbnail_url())
 
 
+def applied_group_update(community: Community, document: dict) -> dict:
+    """The part of a moderator's pushed Group `document` that refresh_community_profile_task applies to the LOCAL
+    `community`, for its re-announce: the presentation fields only, under our own id.
+
+    Final review M1. The re-announce forwarded the moderator's document as sent, key, inbox and collection URLs
+    included, under the community's own signature: peers received fields this instance had refused as if the
+    community vouched for them. sensitive and postingRestrictedToMods are always stated, as the guard sets both
+    (absent is False); an image is forwarded only when it is a new one (served_by_us)."""
+    applied = {'type': 'Group', 'id': community.public_url()}
+    name = actor_name_from_ap(document, 'name', limit=256)
+    if name:
+        applied['name'] = name
+    if _as_text(document.get('summary')):
+        applied['summary'] = document['summary']
+    elif _as_text(document.get('content')):
+        applied['content'] = document['content']
+    if markdown_source(document) is not None:
+        applied['source'] = document['source']
+    site = db.session.get(Site, 1)
+    applied['sensitive'] = bool(document.get('sensitive')) and getattr(site, 'enable_nsfw', None) is not False
+    if document.get('nsfl') and getattr(site, 'enable_nsfl', None) is not False:
+        applied['nsfl'] = True
+    applied['postingRestrictedToMods'] = bool(document.get('postingRestrictedToMods'))
+    for key, held, prefer_last in (('icon', community.icon, True), ('image', community.image, False)):
+        entry = image_url_from(document.get(key), prefer_last=prefer_last)
+        if entry and not served_by_us(entry, held):
+            applied[key] = {'type': 'Image', 'url': entry}
+    if isinstance(document.get('language'), list):
+        applied['language'] = document['language']
+    return applied
+
+
 def host_of(url_string: str) -> str:
     """The lowercased host of a URL, or '' when it has none.
 

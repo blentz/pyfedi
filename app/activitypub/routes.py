@@ -21,7 +21,7 @@ from app.activitypub.actor import find_actor_by_url
 from app.activitypub.entitlement import PRIVATE_HEADERS, actor_document, addressees_of, audience_entitles, signed_requester_actor
 from app.activitypub.signature import POST_REQUIRED, HttpSignature, VerificationError, VerificationFormatError, default_context, LDSignature, \
     send_post_request, verify_with_key_refresh, request_key_id
-from app.activitypub.util import activity_dedupe_key, claim_activity, release_activity, host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
+from app.activitypub.util import activity_dedupe_key, applied_group_update, claim_activity, release_activity, host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
     post_to_activity, find_actor_or_create_cached, find_liked_object, \
     lemmy_site_data, is_activitypub_request, delete_post_or_comment, community_members, \
     create_post, create_post_reply, update_post_reply_from_activity, \
@@ -1726,8 +1726,10 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                             else:
                                 refresh_community_profile(community.id, core_activity['object'])
                                 log_incoming_ap(id, APLOG_UPDATE, APLOG_SUCCESS, saved_json)
-                                if community.is_local():
-                                    announce_activity_to_followers(community, user, request_json)
+                                if community.is_local():   # final review M1: only what the local guard applied
+                                    announce_activity_to_followers(community, user, {
+                                        **core_activity,
+                                        'object': applied_group_update(community, core_activity['object'])})
                         else:
                             log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, f'Unacceptable type (create): {object_type}')
                     return
