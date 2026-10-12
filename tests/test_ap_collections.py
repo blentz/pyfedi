@@ -1442,9 +1442,9 @@ def test_an_outbox_page_keeps_the_collection_cache_policy(app, db_session, monke
     assert response.headers['Vary'] == 'Accept, Accept-Encoding'
 
 
-# '²' is a digit to str.isdigit but not to int(); a page past int8 would overflow OFFSET; '9' * 5000 is past
-# int()'s digit limit; '3' is past the last page of an empty outbox
-@pytest.mark.parametrize('page', ['0', '-1', 'two', '', '²', '1²', '9' * 30, '9' * 5000, '3'])
+# '²' is a digit to str.isdigit but not to int(); past 15 digits a page is refused before int() sees it, so it can
+# neither overflow OFFSET nor reach int()'s digit limit ('9' * 5000)
+@pytest.mark.parametrize('page', ['0', '00', '-1', 'two', '', '²', '1²', '1' + '0' * 15, '9' * 30, '9' * 5000])
 def test_a_page_that_is_not_a_positive_number_is_a_400(app, db_session, page):
     seed_actors()
     seed_local_community('books')
@@ -1452,6 +1452,34 @@ def test_a_page_that_is_not_a_positive_number_is_a_400(app, db_session, page):
     response = collection_get(app, f'/c/books/outbox?page={page}')
 
     assert response.status_code == 400
+
+
+@pytest.mark.parametrize('page', ['3', '9' * 15])
+def test_a_page_past_the_end_is_an_empty_page_pointing_back_at_the_last(app, db_session, page):
+    """A peer that walks one page too far, or polls a page that has since emptied, gets an empty page rather than
+    an error. The last page of an empty outbox is page 1."""
+    seed_actors()
+    seed_local_community('books')
+
+    response = collection_get(app, f'/c/books/outbox?page={page}')
+
+    assert response.status_code == 200
+    assert response.json['type'] == 'OrderedCollectionPage'
+    assert (response.json['id'], response.json['partOf']) == (f'{OUTBOX}?page={page}', OUTBOX)
+    assert (response.json['totalItems'], response.json['orderedItems']) == (0, [])
+    assert response.json['prev'] == f'{OUTBOX}?page=1'
+    assert 'next' not in response.json
+
+
+def test_a_zero_padded_page_is_that_page(app, db_session):
+    seed_actors()
+    seed_local_community('books')
+
+    response = collection_get(app, '/c/books/outbox?page=01')
+
+    assert response.status_code == 200
+    assert response.json['id'] == f'{OUTBOX}?page=1'
+    assert 'prev' not in response.json
 
 
 def test_a_browser_asking_for_an_outbox_page_is_still_sent_to_the_community(app, db_session):
