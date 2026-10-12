@@ -1383,30 +1383,37 @@ def refresh_community_profile_task(community_id, activity_json=None):
                     if remote and 'theme' in activity_json and activity_json['theme']:
                         community.theme = activity_json['theme']
                     icon_changed = cover_changed = False
+                    pending_uploads = []
                     if 'icon' in activity_json:
                         icon_entry = image_url_from(activity_json['icon'], prefer_last=True)
                         if icon_entry and (remote or not served_by_us(icon_entry, community.icon)):
-                            # Residual R3 item 1: a local community's own upload goes too, as when replaced through the
-                            # web edit path; delete-orphan drops its row. An echo of our own URL never reaches here
-                            if community.icon_id and icon_entry != community.icon.source_url:
-                                community.icon.delete_from_disk()
-                            if not community.icon_id or (community.icon_id and icon_entry != community.icon.source_url):
-                                icon = File(source_url=icon_entry)
-                                community.icon = icon
-                                session.add(icon)
-                                icon_changed = True
+                            if not remote and community.icon_id and not community.icon.source_url:
+                                # Residual R3 item 1: our own upload is replaced too, but only once the new image is
+                                # fetched (replace_local_upload). An echo of our own URL never reaches here
+                                pending_uploads.append(('icon', icon_entry))
+                            else:
+                                if community.icon_id and icon_entry != community.icon.source_url:
+                                    community.icon.delete_from_disk()
+                                if not community.icon_id or (community.icon_id and icon_entry != community.icon.source_url):
+                                    icon = File(source_url=icon_entry)
+                                    community.icon = icon
+                                    session.add(icon)
+                                    icon_changed = True
                     if 'image' in activity_json:
                         image_entry = image_url_from(activity_json['image'])
                         if image_entry and (remote or not served_by_us(image_entry, community.image)):
-                            # Residual R3 item 1: a local community's own upload goes too, as when replaced through the
-                            # web edit path; delete-orphan drops its row. An echo of our own URL never reaches here
-                            if community.image_id and image_entry != community.image.source_url:
-                                community.image.delete_from_disk()
-                            if not community.image_id or (community.image_id and image_entry != community.image.source_url):
-                                image = File(source_url=image_entry)
-                                community.image = image
-                                session.add(image)
-                                cover_changed = True
+                            if not remote and community.image_id and not community.image.source_url:
+                                # Residual R3 item 1: our own upload is replaced too, but only once the new image is
+                                # fetched (replace_local_upload). An echo of our own URL never reaches here
+                                pending_uploads.append(('image', image_entry))
+                            else:
+                                if community.image_id and image_entry != community.image.source_url:
+                                    community.image.delete_from_disk()
+                                if not community.image_id or (community.image_id and image_entry != community.image.source_url):
+                                    image = File(source_url=image_entry)
+                                    community.image = image
+                                    session.add(image)
+                                    cover_changed = True
                     if 'language' in activity_json and isinstance(activity_json['language'], list) and not community.ignore_remote_language:
                         for ap_language in activity_json['language']:
                             # D1355. An entry this instance cannot read is skipped
@@ -1465,6 +1472,11 @@ def refresh_community_profile_task(community_id, activity_json=None):
                         make_image_sizes(community.icon_id, 60, 250, 'communities')
                     if community.image_id and cover_changed:
                         make_image_sizes(community.image_id, 700, 1600, 'communities')
+                    for column, url in pending_uploads:
+                        replacement = File(source_url=url)
+                        session.add(replacement)
+                        session.commit()
+                        replace_local_upload(community.id, column, replacement.id)
 
                     if remote and community.ap_moderators_url:
                         mods_request = get_request(community.ap_moderators_url,
@@ -2594,6 +2606,49 @@ def make_image_sizes(file_id, thumbnail_width=50, medium_width=120, directory='p
     else:
         make_image_sizes_async.apply_async(args=(file_id, thumbnail_width, medium_width, directory, toxic_community),
                                            countdown=randint(1, 10))  # Delay by up to 10 seconds so servers do not experience a stampede of requests all in the same second
+
+
+LOCAL_UPLOAD_SIZES = {'icon': (60, 250), 'image': (700, 1600)}   # as refresh_community_profile_task sizes them
+
+
+def replace_local_upload(community_id: int, column: str, file_id: int) -> None:
+    if current_app.debug:
+        replace_local_upload_task(community_id, column, file_id)
+    else:
+        replace_local_upload_task.apply_async(args=(community_id, column, file_id), countdown=randint(1, 10))
+
+
+@celery.task
+def replace_local_upload_task(community_id: int, column: str, file_id: int) -> None:
+    """Replace a LOCAL community's uploaded `column` ('icon' or 'image') with File `file_id`, the remote image a
+    moderator's pushed document named (residual R3 item 1), as replacing it through the web edit path does.
+
+    R3 fix 1: the upload is replaced only once the new image has been fetched, and deleted from disk only after the
+    swap is committed. A failed fetch leaves the upload on disk and referenced, and the new row is dropped."""
+    try:
+        make_image_sizes_async(file_id, *LOCAL_UPLOAD_SIZES[column], 'communities', False)
+    except Exception as error:   # an unreadable image is a failed fetch, not a task failure
+        current_app.logger.warning(f'replace_local_upload_task: fetching file {file_id} failed: {error!r}')
+    session = get_task_session()
+    try:
+        with patch_db_session(session):
+            community = session.get(Community, community_id)
+            replacement = session.get(File, file_id)
+            if replacement is None:
+                return
+            if community is None or not replacement.file_path:   # not fetched: the upload stays as it was
+                session.delete(replacement)
+                session.commit()
+                return
+            old = getattr(community, column)
+            # a detached copy: delete-orphan drops the old row at the commit, and its paths are needed after it
+            doomed = File(file_path=old.file_path, thumbnail_path=old.thumbnail_path) if old is not None else None
+            setattr(community, column, replacement)
+            session.commit()
+            if doomed is not None:
+                doomed.delete_from_disk()
+    finally:
+        session.close()   # rolls back anything uncommitted: an exception leaves the upload as it was
 
 
 @celery.task
