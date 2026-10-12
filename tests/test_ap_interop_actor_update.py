@@ -72,6 +72,8 @@ ACTOR = SimpleNamespace(ap_profile_id=f'https://{PEER}/u/wakko')
     (None, False),
     (['https://peer.example/u/wakko'], False),
     ('', False),
+    (f'https://{PEER}/u/wakko/', False),
+    (f'https://{PEER}/u/wakko#main-key', False),
 ])
 def test_names_actor(candidate, expected):
     assert names_actor(candidate, ACTOR) is expected
@@ -171,6 +173,71 @@ def test_an_update_from_an_unknown_actor_is_dropped_and_creates_nothing(app, db_
     log = ActivityPubLog.query.one()
     assert log.result == 'ignored'
     assert log.exception_message == 'Update of an unknown actor'
+
+
+@pytest.mark.parametrize('suffix', ['/', '#main-key'])
+def test_an_update_whose_id_differs_by_a_trailing_slash_or_fragment_is_refused(app, db_session, monkeypatch, suffix):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    user = _known_remote_user()
+    user_id = user.id
+    document = _person_document('wakko') | {'id': user.ap_profile_id + suffix, 'name': 'Not Wakko'}
+
+    dispatch(_actor_update(user, document))
+
+    assert db.session.get(User, user_id).title != 'Not Wakko'
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Update of another actor refused'
+
+
+def test_a_banned_actors_update_logs_that_it_is_banned(app, db_session, monkeypatch):
+    """The no-create lookup misses a banned actor as it misses an unknown one; the log says which it was."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    user = _known_remote_user()
+    user_id = user.id
+    user.banned = True
+    db.session.commit()
+
+    dispatch(_actor_update(user, _person_document('wakko') | {'name': 'Not Wakko'}))
+
+    assert db.session.get(User, user_id).title != 'Not Wakko'
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Update from a banned, deleted or blocked actor'
+
+
+def test_an_update_of_a_url_from_an_unknown_actor_creates_nothing(app, db_session, monkeypatch):
+    """The object is only a URL, so it may name an actor: the signer is looked up without being created, and
+    nothing is fetched (no route is registered)."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    seed_community_owner(PEER)
+    stranger = f'https://{PEER}/u/stranger'
+    users_before = User.query.count()
+
+    dispatch({'id': f'{stranger}/activities/1', 'type': 'Update', 'actor': stranger, 'object': stranger})
+
+    assert User.query.count() == users_before
+    log = ActivityPubLog.query.one()
+    assert log.result == 'ignored'
+    assert log.exception_message == 'Update from an unknown actor'
+
+
+def test_a_group_signed_update_of_a_person_is_refused(app, db_session, monkeypatch):
+    """Only the actor itself may push its document: a Group sending Update{Person} changes nobody."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    user = _known_remote_user()
+    user_id = user.id
+    group = _remote_group()
+    calls = record_moderation(monkeypatch, 'process_actor_update', 'refresh_user_profile_task')
+
+    dispatch(inbox_activity(group, activity_type='Update',
+                            object=_person_document('wakko') | {'name': 'Not Wakko'}))
+
+    assert calls['process_actor_update'] == [] and calls['refresh_user_profile_task'] == []
+    assert db.session.get(User, user_id).title != 'Not Wakko'
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Unexpected Update activity from Group'
 
 
 def test_an_update_from_a_local_actor_is_refused(app, db_session, monkeypatch):

@@ -1161,12 +1161,20 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                         log_incoming_ap(id, APLOG_NOTYPE, APLOG_IGNORED, saved_json, GROUP_DELETED_MESSAGE)
                         return
                 else:
-                    # Interop C1 item 2: an Update of an actor refreshes a known actor; it never creates one
-                    actor_update = (request_json['type'] == 'Update' and isinstance(request_json['object'], dict)
-                                    and request_json['object'].get('type') in ACTOR_UPDATE_TYPES)
+                    # Interop C1 item 2: an Update of an actor refreshes a known actor; it never creates one. An Update
+                    # of a bare URL may be one too (its object is fetched later), so its signer is not created either
+                    update_object = request_json['object'] if request_json['type'] == 'Update' else None
+                    actor_update = isinstance(update_object, str) or (isinstance(update_object, dict)
+                                                                      and update_object.get('type') in ACTOR_UPDATE_TYPES)
                     actor = find_actor_or_create_cached(actor_id, create_if_not_found=not actor_update)
                     if actor is None and actor_update:
-                        log_incoming_ap(id, APLOG_UPDATE, APLOG_IGNORED, saved_json, 'Update of an unknown actor')
+                        if find_actor_by_url(actor_id) is False:   # stored, but refused: banned, deleted or blocked
+                            log_incoming_ap(id, APLOG_UPDATE, APLOG_FAILURE, saved_json,
+                                            'Update from a banned, deleted or blocked actor')
+                        else:
+                            log_incoming_ap(id, APLOG_UPDATE, APLOG_IGNORED, saved_json,
+                                            'Update from an unknown actor' if isinstance(update_object, str)
+                                            else 'Update of an unknown actor')
                         return
                     if actor and isinstance(actor, User):
                         user = actor
@@ -3047,6 +3055,8 @@ def process_actor_update(user: User, actor_json: dict, id, saved_json):
     if not user.instance_id or not user.instance.online():   # the task's own guard: it would apply nothing
         log_incoming_ap(id, APLOG_UPDATE, APLOG_IGNORED, saved_json, 'Update of an actor on an offline instance')
         return
+    # The task writes the user row through its own session (get_task_session), nested inside the inbox's. No row
+    # lock is held here because nothing in dispatch writes the signer's row first; a change that did would deadlock
     refresh_user_profile_task(user.id, actor_json)
     log_incoming_ap(id, APLOG_UPDATE, APLOG_SUCCESS, saved_json)
 
