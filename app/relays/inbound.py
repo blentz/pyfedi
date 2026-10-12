@@ -234,7 +234,7 @@ def process_relayed_announce(relay_id, object_uri):
         with patch_db_session(session):
             if _exists(object_uri):   # an item already stored is never modified by a relay
                 return
-            post_data = remote_object_to_json(object_uri)
+            post_data = remote_object_to_json(object_uri, retry_delay=0)   # inbox processing (D775)
             if not post_data:
                 log_incoming_ap(object_uri, APLOG_ANNOUNCE, APLOG_FAILURE, None, 'Could not fetch relayed object')
                 return

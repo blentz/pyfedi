@@ -391,7 +391,7 @@ def note(uri=NOTE_URI, **fields):
 def fetch(monkeypatch):
     calls = []
 
-    def fake(uri):
+    def fake(uri, retry_delay=3):
         calls.append(uri)
         return fake.result
 
