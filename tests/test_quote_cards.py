@@ -513,3 +513,13 @@ def test_scan_descends_plain_dicts_but_not_dict_like_objects(world):
     config['ROW'] = quoting
     rows = _quoting_rows({'more_replies': more_replies, 'plain': {'key': quoting}, 'config': config})
     assert sorted(r.quote_ap_id for r in rows) == sorted([reply.quote_ap_id, quoting.quote_ap_id])
+
+
+def test_the_card_style_outranks_the_body_blockquote_style_and_precedes_the_source_map():
+    """`.post_body blockquote` is (0,1,1): a bare `.quote_card` (0,1,0) lost its margin and border to it."""
+    from pathlib import Path
+    static = Path(__file__).resolve().parent.parent / 'app' / 'static'
+    css = (static / 'styles.css').read_text()
+    assert '.quote_card, blockquote.quote_card {' in css and 'blockquote.quote_card .quote_card_meta' in css
+    assert 'blockquote.quote_card {' in (static / 'styles.scss').read_text()
+    assert css.rstrip().endswith('/*# sourceMappingURL=styles.css.map */')
