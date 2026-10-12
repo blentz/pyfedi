@@ -657,13 +657,15 @@ def test_a_group_update_from_a_LOCAL_communitys_moderator_refreshes_and_announce
     make_community_member(editor, local_community, is_moderator=True)
     monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json, author=None: local_community)
     monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
-    calls = record_moderation(monkeypatch, 'refresh_community_profile',
+    # a local community applies the edit at once, then relays its own actor document (final review M1)
+    calls = record_moderation(monkeypatch, 'refresh_community_profile', 'refresh_community_profile_task',
                               'announce_activity_to_followers')
 
     dispatch(create_activity(editor, {'type': 'Group', 'id': local_community.ap_profile_id},
                              activity_type='Update'))
 
-    assert len(calls['refresh_community_profile']) == 1
+    assert calls['refresh_community_profile'] == []
+    assert len(calls['refresh_community_profile_task']) == 1
     assert len(calls['announce_activity_to_followers']) == 1
     log = ActivityPubLog.query.one()
     assert log.result == 'success'

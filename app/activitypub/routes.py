@@ -21,7 +21,7 @@ from app.activitypub.actor import find_actor_by_url
 from app.activitypub.entitlement import PRIVATE_HEADERS, actor_document, addressees_of, audience_entitles, signed_requester_actor
 from app.activitypub.signature import POST_REQUIRED, HttpSignature, VerificationError, VerificationFormatError, default_context, LDSignature, \
     send_post_request, verify_with_key_refresh, request_key_id
-from app.activitypub.util import activity_dedupe_key, applied_group_update, claim_activity, release_activity, host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
+from app.activitypub.util import activity_dedupe_key, community_actor_data, refresh_community_profile_task, claim_activity, release_activity, host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
     post_to_activity, find_actor_or_create_cached, find_liked_object, \
     lemmy_site_data, is_activitypub_request, delete_post_or_comment, community_members, \
     create_post, create_post_reply, update_post_reply_from_activity, \
@@ -714,74 +714,7 @@ def community_profile(actor):
         if is_activitypub_request():
             if community.local_only or community.private:
                 abort(403)
-            server = current_app.config['SERVER_NAME']
-            actor_data = {"@context": default_context(),
-                          "type": "Group",
-                          "id": f"https://{server}/c/{actor}",
-                          "name": community.title,
-                          "postingWarning": community.posting_warning,
-                          "sensitive": True if community.nsfw or community.nsfl else False,
-                          "preferredUsername": actor,
-                          "inbox": f"https://{server}/c/{actor}/inbox",
-                          "outbox": f"https://{server}/c/{actor}/outbox",
-                          "followers": f"https://{server}/c/{actor}/followers",
-                          "moderators": f"https://{server}/c/{actor}/moderators",
-                          "featured": f"https://{server}/c/{actor}/featured",
-                          "attributedTo": f"https://{server}/c/{actor}/moderators",
-                          "postingRestrictedToMods": community.restricted_to_mods or community.local_only,
-                          "questionAnswer": community.question_answer,
-                          "defaultPostType": community.default_post_type,
-                          "newModsWanted": community.new_mods_wanted,
-                          "privateMods": community.private_mods,
-                          "genAI": community.ai_generated,
-                          "url": f"https://{server}/c/{actor}",
-                          "publicKey": {
-                              "id": f"https://{server}/c/{actor}#main-key",
-                              "owner": f"https://{server}/c/{actor}",
-                              "publicKeyPem": community.public_key
-                          },
-                          "endpoints": {
-                              "sharedInbox": f"{current_app.config['SERVER_URL']}/inbox"
-                          },
-                          "published": ap_datetime(community.created_at),
-                          "updated": ap_datetime(community.last_active),
-                          "lemmy:tagsForPosts": community.flair_for_ap(version=1),
-                          "tag": community.flair_for_ap(version=2),
-                          "postUrlType": community.post_url_type if community.post_url_type else "friendly",
-                          }
-            if community.description_html:
-                actor_data["summary"] = community.description_html
-                actor_data['source'] = {'content': community.description, 'mediaType': 'text/markdown'}
-            if community.theme:
-                actor_data["theme"] = community.theme
-            if community.icon_id is not None:
-                icon_image = community.icon_image()
-                if icon_image.startswith('http'):
-                    actor_data["icon"] = {
-                        "type": "Image",
-                        "url": community.icon_image()
-                    }
-                else:
-                    actor_data["icon"] = {
-                        "type": "Image",
-                        "url": f"{current_app.config['SERVER_URL']}{community.icon_image()}"
-                    }
-            if community.image_id is not None:
-                header_image = community.header_image()
-                if header_image.startswith('http'):
-                    actor_data["image"] = {
-                        "type": "Image",
-                        "url": community.header_image()
-                    }
-                else:
-                    actor_data["image"] = {
-                        "type": "Image",
-                        "url": f"{current_app.config['SERVER_URL']}{community.header_image()}"
-                    }
-            actor_data['language'] = []
-            for language in community.languages:
-                actor_data['language'].append({'identifier': language.code, 'name': language.name})
-            resp = jsonify(actor_document(actor_data))
+            resp = jsonify(actor_document(community_actor_data(community)))
             resp.content_type = ap_media_type()
             resp.headers.set('Cache-Control', AP_CACHE_ACTOR)
             resp.headers.set('Vary', 'Accept')
@@ -1729,13 +1662,17 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                             elif not community.is_local() and not announced and user is not None:
                                 log_incoming_ap(id, APLOG_UPDATE, APLOG_FAILURE, saved_json,
                                                 'Update of a remote Group not sent by the Group')
+                            elif community.is_local():
+                                # Final review M1: the relay carries our own actor document as the guard left it,
+                                # never the moderator's raw fields, so the update is applied first, here
+                                refresh_community_profile_task(community.id, core_activity['object'])
+                                community = db.session.get(Community, community.id, populate_existing=True)
+                                log_incoming_ap(id, APLOG_UPDATE, APLOG_SUCCESS, saved_json)
+                                announce_activity_to_followers(community, user, {
+                                    **core_activity, 'object': community_actor_data(community)})
                             else:
                                 refresh_community_profile(community.id, core_activity['object'])
                                 log_incoming_ap(id, APLOG_UPDATE, APLOG_SUCCESS, saved_json)
-                                if community.is_local():   # final review M1: only what the local guard applied
-                                    announce_activity_to_followers(community, user, {
-                                        **core_activity,
-                                        'object': applied_group_update(community, core_activity['object'])})
                         else:
                             log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, f'Unacceptable type (create): {object_type}')
                     return

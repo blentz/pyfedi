@@ -749,36 +749,78 @@ def served_by_us(url: str, file) -> bool:
     return file is not None and url in (file.source_url, file.view_url(), file.medium_url(), file.thumbnail_url())
 
 
-def applied_group_update(community: Community, document: dict) -> dict:
-    """The part of a moderator's pushed Group `document` that refresh_community_profile_task applies to the LOCAL
-    `community`, for its re-announce: the presentation fields only, under our own id.
-
-    Final review M1. The re-announce forwarded the moderator's document as sent, key, inbox and collection URLs
-    included, under the community's own signature: peers received fields this instance had refused as if the
-    community vouched for them. sensitive and postingRestrictedToMods are always stated, as the guard sets both
-    (absent is False); an image is forwarded only when it is a new one (served_by_us)."""
-    applied = {'type': 'Group', 'id': community.public_url()}
-    name = actor_name_from_ap(document, 'name', limit=256)
-    if name:
-        applied['name'] = name
-    if _as_text(document.get('summary')):
-        applied['summary'] = document['summary']
-    elif _as_text(document.get('content')):
-        applied['content'] = document['content']
-    if markdown_source(document) is not None:
-        applied['source'] = document['source']
-    site = db.session.get(Site, 1)
-    applied['sensitive'] = bool(document.get('sensitive')) and getattr(site, 'enable_nsfw', None) is not False
-    if document.get('nsfl') and getattr(site, 'enable_nsfl', None) is not False:
-        applied['nsfl'] = True
-    applied['postingRestrictedToMods'] = bool(document.get('postingRestrictedToMods'))
-    for key, held, prefer_last in (('icon', community.icon, True), ('image', community.image, False)):
-        entry = image_url_from(document.get(key), prefer_last=prefer_last)
-        if entry and not served_by_us(entry, held):
-            applied[key] = {'type': 'Image', 'url': entry}
-    if isinstance(document.get('language'), list):
-        applied['language'] = document['language']
-    return applied
+def community_actor_data(community: Community) -> dict:
+    """The ActivityPub actor document of LOCAL `community`, as community_profile serves it and as its re-announce of
+    a moderator's Group Update carries it (final review M1)."""
+    server = current_app.config['SERVER_NAME']
+    actor = community.ap_profile_id.rsplit('/', 1)[-1]   # the canonical name community_profile looked it up by
+    actor_data = {"@context": default_context(),
+                  "type": "Group",
+                  "id": f"https://{server}/c/{actor}",
+                  "name": community.title,
+                  "postingWarning": community.posting_warning,
+                  "sensitive": True if community.nsfw or community.nsfl else False,
+                  "preferredUsername": actor,
+                  "inbox": f"https://{server}/c/{actor}/inbox",
+                  "outbox": f"https://{server}/c/{actor}/outbox",
+                  "followers": f"https://{server}/c/{actor}/followers",
+                  "moderators": f"https://{server}/c/{actor}/moderators",
+                  "featured": f"https://{server}/c/{actor}/featured",
+                  "attributedTo": f"https://{server}/c/{actor}/moderators",
+                  "postingRestrictedToMods": community.restricted_to_mods or community.local_only,
+                  "questionAnswer": community.question_answer,
+                  "defaultPostType": community.default_post_type,
+                  "newModsWanted": community.new_mods_wanted,
+                  "privateMods": community.private_mods,
+                  "genAI": community.ai_generated,
+                  "url": f"https://{server}/c/{actor}",
+                  "publicKey": {
+                      "id": f"https://{server}/c/{actor}#main-key",
+                      "owner": f"https://{server}/c/{actor}",
+                      "publicKeyPem": community.public_key
+                  },
+                  "endpoints": {
+                      "sharedInbox": f"{current_app.config['SERVER_URL']}/inbox"
+                  },
+                  "published": ap_datetime(community.created_at),
+                  "updated": ap_datetime(community.last_active),
+                  "lemmy:tagsForPosts": community.flair_for_ap(version=1),
+                  "tag": community.flair_for_ap(version=2),
+                  "postUrlType": community.post_url_type if community.post_url_type else "friendly",
+                  }
+    if community.description_html:
+        actor_data["summary"] = community.description_html
+        actor_data['source'] = {'content': community.description, 'mediaType': 'text/markdown'}
+    if community.theme:
+        actor_data["theme"] = community.theme
+    if community.icon_id is not None:
+        icon_image = community.icon_image()
+        if icon_image.startswith('http'):
+            actor_data["icon"] = {
+                "type": "Image",
+                "url": community.icon_image()
+            }
+        else:
+            actor_data["icon"] = {
+                "type": "Image",
+                "url": f"{current_app.config['SERVER_URL']}{community.icon_image()}"
+            }
+    if community.image_id is not None:
+        header_image = community.header_image()
+        if header_image.startswith('http'):
+            actor_data["image"] = {
+                "type": "Image",
+                "url": community.header_image()
+            }
+        else:
+            actor_data["image"] = {
+                "type": "Image",
+                "url": f"{current_app.config['SERVER_URL']}{community.header_image()}"
+            }
+    actor_data['language'] = []
+    for language in community.languages:
+        actor_data['language'].append({'identifier': language.code, 'name': language.name})
+    return actor_data
 
 
 def host_of(url_string: str) -> str:
