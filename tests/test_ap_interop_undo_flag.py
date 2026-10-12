@@ -178,8 +178,8 @@ def test_only_the_reporter_may_withdraw_a_report(env):
 
     assert Report.query.count() == 1
     log = last_log()
-    assert log.result == 'ignored'
-    assert log.exception_message == 'Undo Flag: no matching report'
+    assert log.result == 'failure'
+    assert log.exception_message == 'Undo Flag: only the reporter may withdraw a report'
 
 
 def test_a_colliding_flag_id_from_another_reporter_cannot_block_a_withdrawal(env):
@@ -260,3 +260,43 @@ def test_an_undo_matching_no_report_is_ignored(env):
     log = last_log()
     assert log.result == 'ignored'
     assert log.exception_message == 'Undo Flag: no matching report'
+
+
+def _two_reports_by_the_reporter(env):
+    for name in ('first', 'second'):
+        process_report(env.reporter, env.post, {'id': f'https://{PEER}/activities/flag/{name}', 'summary': name},
+                       db.session)
+    assert Notification.query.filter_by(user_id=env.moderator.id).count() == 2
+
+
+def test_withdrawing_one_of_two_open_reports_keeps_the_notifications_the_other_needs(env):
+    """Notifications do not name the report that raised them, so while another open report by the same
+    reporter on the same target remains, the unread notifications stay; the counter drops by one each time."""
+    _two_reports_by_the_reporter(env)
+
+    dispatch(undo(env.reporter, dict(flag(env.reporter, env.post.ap_id), id=f'https://{PEER}/activities/flag/first')))
+
+    db.session.expire_all()
+    assert [report.reasons for report in Report.query.all()] == ['second']
+    assert db.session.get(Post, env.post.id).reports == 1
+    assert Notification.query.filter_by(user_id=env.moderator.id).count() == 2
+
+    dispatch(undo(env.reporter, dict(flag(env.reporter, env.post.ap_id), id=f'https://{PEER}/activities/flag/second')))
+
+    db.session.expire_all()
+    assert Report.query.count() == 0
+    assert db.session.get(Post, env.post.id).reports == 0
+    assert Notification.query.filter_by(user_id=env.moderator.id).count() == 0
+    assert db.session.get(User, env.moderator.id).unread_notifications == 0
+
+
+def test_a_second_report_moderators_acted_on_does_not_keep_the_notifications(env):
+    _two_reports_by_the_reporter(env)
+    Report.query.filter_by(ap_id=f'https://{PEER}/activities/flag/second').one().status = REPORT_STATE_RESOLVED
+    db.session.commit()
+
+    dispatch(undo(env.reporter, dict(flag(env.reporter, env.post.ap_id), id=f'https://{PEER}/activities/flag/first')))
+
+    db.session.expire_all()
+    assert [report.reasons for report in Report.query.all()] == ['second']
+    assert Notification.query.filter_by(user_id=env.moderator.id).count() == 0
