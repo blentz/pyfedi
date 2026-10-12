@@ -131,9 +131,11 @@ def test_an_actor_update_with_an_on_host_inbox_applies_it(app, db_session, monke
     ({'inbox': ELSEWHERE, 'endpoints': {'sharedInbox': ELSEWHERE}}, 'https://peer.example/c/memes/old-inbox'),
     ({'inbox': 'https://peer.example/c/memes/inbox', 'endpoints': {'sharedInbox': ELSEWHERE}},
      'https://peer.example/c/memes/old-inbox'),
+    ({'inbox': ELSEWHERE, 'endpoints': {'sharedInbox': 'https://peer.example/inbox'}},
+     'https://peer.example/c/memes/old-inbox'),
     ({'inbox': 'https://peer.example/c/memes/inbox', 'endpoints': {'sharedInbox': 'https://peer.example/inbox'}},
      'https://peer.example/inbox'),
-], ids=['off-host', 'off-host-shared-inbox', 'on-host'])
+], ids=['off-host', 'off-host-shared-inbox', 'off-host-inbox-on-host-shared-inbox', 'on-host'])
 def test_a_fetched_community_refresh_trusts_only_its_own_host(app, db_session, http_mock, fields, expected):
     community = _remote_community()
     community.ap_inbox_url = 'https://peer.example/c/memes/old-inbox'
@@ -146,6 +148,27 @@ def test_a_fetched_community_refresh_trusts_only_its_own_host(app, db_session, h
     db.session.expire_all()
     community = db.session.get(Community, community_id)
     assert community.ap_inbox_url == expected
+    assert community.title == 'Memes, refreshed'
+
+
+def test_a_community_refresh_keeps_its_inbox_when_the_fetched_endpoints_document_names_an_off_host_shared_inbox(
+        app, db_session, http_mock):
+    """The endpoints document is on the actor's host, so it is fetched; the sharedInbox it names is not, so the
+    refresh keeps the stored inbox rather than falling back to the document's own on-host `inbox`."""
+    community = _remote_community()
+    community.ap_inbox_url = 'https://peer.example/c/memes/old-inbox'
+    db.session.commit()
+    community_id = community.id
+    endpoints_url = 'https://peer.example/c/memes/endpoints'
+    http_mock.get(community.ap_public_url).respond(200, json=_group_document(
+        fields={'inbox': 'https://peer.example/c/memes/inbox', 'endpoints': endpoints_url}))
+    http_mock.get(endpoints_url).respond(200, json={'sharedInbox': ELSEWHERE})
+
+    refresh_community_profile_task(community_id)
+
+    db.session.expire_all()
+    community = db.session.get(Community, community_id)
+    assert community.ap_inbox_url == 'https://peer.example/c/memes/old-inbox'
     assert community.title == 'Memes, refreshed'
 
 
