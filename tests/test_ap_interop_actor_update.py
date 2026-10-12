@@ -541,7 +541,7 @@ def test_the_re_announce_of_a_moderators_update_carries_our_own_actor_document(a
 
     [(args, kwargs)] = calls['announce_activity_to_followers']
     forwarded = args[2]
-    assert forwarded['type'] == 'Update' and forwarded['id'] == update['id']
+    assert forwarded['type'] == 'Update'
     assert forwarded['object'] == _served_document(app, db.session.get(Community, community.id))
     group = forwarded['object']
     assert (group['id'], group['inbox'], group['publicKey']['publicKeyPem']) == \
@@ -562,6 +562,31 @@ def test_the_re_announce_reflects_no_injected_key_or_html(app, db_session, monke
     for injected in (ATTACKER_KEY, ATTACKER_INBOX, ATTACKER_FOLLOWERS, ATTACKER_FEATURED, ATTACKER_MODERATORS,
                      '<script', 'javascript:', 'onclick', 'attacker warning'):
         assert injected not in relayed
+
+
+def test_the_re_announce_wraps_our_document_in_our_own_update(app, db_session, monkeypatch):
+    """R3 fix 2. The relay swapped our document into the moderator's Update, so its id, actor, addressing and any LD
+    `signature` were still the moderator's -- a signature that no longer matched. It is now our own Update."""
+    community, moderator, calls = _local_community_moderated_from(app, monkeypatch)
+    update = create_activity(moderator, _hostile_group_document(community.ap_profile_id), activity_type='Update')
+    update['signature'] = {'type': 'RsaSignature2017', 'creator': f'{moderator.ap_profile_id}#main-key',
+                           'signatureValue': 'c2lnbmVk'}
+    update['to'] = ['https://peer.example/attacker/list']
+    update['cc'] = []
+    update['bto'] = ['https://peer.example/attacker/secret']
+    update['published'] = '2020-01-01T00:00:00Z'
+
+    dispatch(update)
+
+    [(args, kwargs)] = calls['announce_activity_to_followers']
+    relayed = args[2]
+    assert set(relayed) == {'id', 'type', 'actor', 'object', 'to', 'cc', 'audience'}
+    assert relayed['id'].startswith(f"{app.config['SERVER_URL']}/activities/update/") and relayed['id'] != update['id']
+    assert (relayed['type'], relayed['actor']) == ('Update', community.public_url())
+    assert relayed['to'] == ['https://www.w3.org/ns/activitystreams#Public']
+    assert relayed['cc'] == [f'{community.public_url()}/followers']
+    assert relayed['audience'] == community.public_url()
+    assert relayed['object'] == _served_document(app, db.session.get(Community, community.id))
 
 
 def test_the_same_document_for_a_remote_community_still_replaces_its_key(app, db_session, monkeypatch):
