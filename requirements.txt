@@ -5,6 +5,8 @@ python-dotenv==1.2.4
 flask-wtf==1.3.0
 flask-sqlalchemy==3.1.1
 flask-migrate~=4.1.0
+# create_index(if_not_exists=...) in migration f4b8d2a6c1e7 needs Alembic 1.12 or later
+alembic>=1.12
 flask-login==0.6.3
 Flask-Limiter[redis]
 email-validator==2.3.0

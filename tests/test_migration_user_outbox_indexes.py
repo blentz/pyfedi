@@ -4,9 +4,11 @@ import importlib.util
 import io
 from pathlib import Path
 
+import alembic
 import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
+from packaging.version import Version
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 
@@ -156,3 +158,11 @@ def test_the_upgrade_reruns_when_only_the_first_index_was_built(app, db_session)
                 assert valid(connection, name) is True
         finally:
             _rebuild_on_failure(connection, migration)
+
+
+def test_the_alembic_the_upgrade_needs_is_required():
+    """create_index(if_not_exists=...) arrived in Alembic 1.12. flask-migrate~=4.1 asks only for 1.9, so without a
+    pin of its own a fresh install could pick an Alembic the upgrade's rerun fails on."""
+    requirements = (Path(__file__).resolve().parent.parent / 'requirements.txt').read_text().splitlines()
+    assert 'alembic>=1.12' in [line.split('#', 1)[0].strip() for line in requirements]
+    assert Version(alembic.__version__) >= Version('1.12')
