@@ -456,6 +456,7 @@ class Post(DefaultSchema):
     poll = fields.Nested(PostPoll)
     gallery = fields.List(fields.String(metadata={"format": "url"}))
     extensions = fields.Nested(PostExtensions)
+    quote_ap_id = fields.String(allow_none=True)  # C2: the id this post quotes, when it came in as a quote
     visibility = fields.String(validate=validate.OneOf(['public', 'unlisted', 'followers', 'direct']),
                                metadata={"description": "Present only on a neutral stub of a post (one the viewer may "
                                                         "not see, or inside a removal acknowledgement)."})
@@ -607,6 +608,7 @@ class Comment(Schema):
     answer = fields.Boolean()
     emoji_reactions = fields.List(fields.Nested(Reactions), allow_none=True)
     extensions = fields.Nested(CommentExtensions)
+    quote_ap_id = fields.String(allow_none=True)  # C2: the id this comment quotes, when it came in as a quote
 
     class Meta:
         unknown = INCLUDE # let the not-consistent-with-anything 'repliesEnabled' through for Boost

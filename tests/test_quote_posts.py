@@ -373,3 +373,43 @@ def test_post_update_whose_headline_links_the_quote_does_not_take_it(world, redi
     update_post_from_activity(post, {'id': 'u', 'type': 'Update',
                                      'object': _note(17, quote=QUOTED, content=_h1(QUOTED), mediaType='text/html')})
     assert post.url != QUOTED
+
+
+def test_post_view_exposes_the_quote(world):
+    from app.api.alpha.views import post_view
+    _, _, parent = world
+    parent.quote_ap_id = QUOTED
+    db.session.commit()
+    assert post_view(parent, variant=1)['quote_ap_id'] == QUOTED
+
+
+def test_post_view_quote_is_none_by_default(world):
+    from app.api.alpha.views import post_view
+    _, _, parent = world
+    assert post_view(parent, variant=1)['quote_ap_id'] is None
+
+
+def test_a_stub_of_a_hidden_post_does_not_carry_the_quote(world):
+    from app.api.alpha.views import post_view
+    _, _, parent = world
+    parent.quote_ap_id = QUOTED
+    parent.visibility = 'followers'
+    db.session.commit()
+    assert 'quote_ap_id' not in post_view(parent, variant=1, user_id=None)
+
+
+def test_reply_view_exposes_the_quote(world):
+    from app.api.alpha.views import reply_view
+    from tests.factories import make_post_reply
+    _, author, parent = world
+    reply = make_post_reply(parent, author)
+    reply.quote_ap_id = QUOTED
+    db.session.commit()
+    assert reply_view(reply, variant=1)['quote_ap_id'] == QUOTED
+
+
+def test_reply_view_quote_is_none_by_default(world):
+    from app.api.alpha.views import reply_view
+    from tests.factories import make_post_reply
+    _, author, parent = world
+    assert reply_view(make_post_reply(parent, author), variant=1)['quote_ap_id'] is None
