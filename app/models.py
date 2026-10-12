@@ -4471,8 +4471,8 @@ class PostReply(db.Model):
 
         # tokenize body into words (lowercase), as Post does with its title
         # S2: a viewer may be shown a language variant, so its text is filtered too
-        from app.utils import html_to_text  # cycle: app.utils imports from this module
-        texts = [self.body or ''] + [html_to_text(v['body_html']) for v in (self.language_variants or {}).values()]
+        # app.utils imports this module, so it is reached through the package, not imported
+        texts = [self.body or ''] + [app_pkg.utils.html_to_text(v['body_html']) for v in (self.language_variants or {}).values()]
         tokens = re.findall(r"\w+", ' '.join(texts).lower())
 
         for name, keywords in (content_filters or {}).items():
