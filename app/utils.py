@@ -1716,11 +1716,45 @@ def microblog_content_to_title(html: str) -> Tuple[str, str]:
     return title.strip(), link
 
 
-def microblog_content_to_link(html: str, exclude: str):
+def strip_quote_fallback(html: str, quote_id: str | None) -> str:
+    """`html` without the "RE: <link>" a quote's sender adds for software that cannot show quotes (C2): Mastodon's
+    `quote-inline` element, and a final `RE: <a href=quote_id>` -- its own paragraph, or the tail of the last one after
+    line breaks (Misskey). Text the author wrote is never removed."""
+    if not quote_id or not html:
+        return html
+    soup = BeautifulSoup(html, 'html.parser')
+    changed = False
+    for element in soup.select('.quote-inline'):
+        element.decompose()
+        changed = True
+    paragraphs = soup.find_all('p', recursive=False)
+    if paragraphs:
+        last = paragraphs[-1]
+        links = last.find_all('a')
+        link = links[-1] if links else None
+        before = link.previous_sibling if link is not None else None
+        if (link is not None and link.get('href') == quote_id
+                and last.get_text().rstrip().endswith(link.get_text().strip())
+                and isinstance(before, NavigableString) and before.strip() == 'RE:'):
+            previous = before.previous_sibling
+            link.decompose()
+            before.extract()
+            while previous is not None and (getattr(previous, 'name', None) == 'br' or
+                                            (isinstance(previous, NavigableString) and not previous.strip())):
+                earlier = previous.previous_sibling
+                previous.extract()
+                previous = earlier
+            if not last.get_text().strip() and last.find('img') is None:
+                last.decompose()
+            changed = True
+    return str(soup) if changed else html
+
+
+def microblog_content_to_link(html: str, exclude: str, skip: str | None = None):
     soup = BeautifulSoup(html, "html.parser")
 
     for link in soup.find_all("a"):
-        if furl(link.get("href")).host != exclude:
+        if link.get("href") != skip and furl(link.get("href")).host != exclude:  # C2: skip is the quoted id
             return link.get("href")
     return None
 
