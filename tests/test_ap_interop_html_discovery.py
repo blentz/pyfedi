@@ -329,11 +329,11 @@ def test_a_remote_feed_with_an_unclean_id_advertises_nothing(app, env):
     db.session.add(feed)
     db.session.commit()
 
-    with patch('app.feed.routes.render_template', return_value='rendered') as render:
-        response = as_user(app, viewer).get('/f/news@peer.example')
+    response = as_user(app, viewer).get('/f/news@peer.example')
 
-    assert response.status_code == 200
-    assert render.call_args.kwargs['ap_alternate'] is None
+    # the rendered page itself, not the template's arguments (Task 11 review): no tag, and no header either
+    assert 'news' in response.get_data(as_text=True)
+    assert_no_alternate(response)
 
 
 def test_a_remote_actor_without_an_id_advertises_nothing():
