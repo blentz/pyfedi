@@ -250,3 +250,10 @@ def test_default_viewer_is_the_request_user_and_titleless_text_is_the_body(world
     with app.test_request_context('/'):
         state = quote_state(world['quoting'])
     assert state['kind'] == 'card' and state['text'] == 'the quoted words'
+
+
+@pytest.mark.parametrize('status', [-2, -1, 0])
+def test_unpublished_target_is_a_line_unless_the_viewer_is_its_author(world, status):
+    world['target'].status = status
+    assert quote_state(world['quoting'], world['viewer'])['kind'] == 'line'
+    assert quote_state(world['quoting'], world['quoted_author'])['kind'] == 'card'
