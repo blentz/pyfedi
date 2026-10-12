@@ -800,7 +800,8 @@ def show_community(community: Community, from_instance=None):
                                          user_has_feeds=user_has_feeds, current_feed_id=current_feed_id,
                                          current_feed_title=current_feed_title, user_flair=user_flair, sticky_posts=sticky_posts))
     # C1 item 1: as the post page (D1086). Both Vary values set below already name Accept.
-    resp.headers.add('Link', f'<{ap_alternate}>; rel="alternate"; type="application/activity+json"')
+    if ap_alternate:
+        resp.headers.add('Link', f'<{ap_alternate}>; rel="alternate"; type="application/activity+json"')
     if current_user.is_anonymous:
         resp.headers.set('ETag', current_etag)
         resp.headers.set('Vary', 'Accept, Accept-Language')

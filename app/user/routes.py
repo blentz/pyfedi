@@ -229,7 +229,8 @@ def show_profile(user):
                            ap_alternate=ap_alternate))
     # C1 item 1: the profile advertises its ActivityPub id as the post page does (D1086). `add`, not `set`: the
     # preload Link render_template wrote must survive.
-    response.headers.add('Link', f'<{ap_alternate}>; rel="alternate"; type="application/activity+json"')
+    if ap_alternate:
+        response.headers.add('Link', f'<{ap_alternate}>; rel="alternate"; type="application/activity+json"')
     response.vary.add('Accept')
     return response
 
