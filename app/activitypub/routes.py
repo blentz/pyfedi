@@ -1668,8 +1668,16 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                 refresh_community_profile_task(community.id, core_activity['object'])
                                 community = db.session.get(Community, community.id, populate_existing=True)
                                 log_incoming_ap(id, APLOG_UPDATE, APLOG_SUCCESS, saved_json)
+                                # R3 fix 2: our own Update, so none of the moderator's top-level fields (id, addressing,
+                                # an LD signature over a document we no longer send) go out under our signature
                                 announce_activity_to_followers(community, user, {
-                                    **core_activity, 'object': community_actor_data(community)})
+                                    'id': f"{current_app.config['SERVER_URL']}/activities/update/{gibberish(15)}",
+                                    'type': 'Update',
+                                    'actor': community.public_url(),
+                                    'object': community_actor_data(community),
+                                    'to': ['https://www.w3.org/ns/activitystreams#Public'],
+                                    'cc': [f'{community.public_url()}/followers'],
+                                    'audience': community.public_url()})
                             else:
                                 refresh_community_profile(community.id, core_activity['object'])
                                 log_incoming_ap(id, APLOG_UPDATE, APLOG_SUCCESS, saved_json)
