@@ -4438,14 +4438,10 @@ def update_post_from_activity(post: Post, request_json: dict):
             endpoints = ['likes', 'dislikes']
             for endpoint in endpoints:
                 if endpoint in request_json['object']:
-                    try:
+                    try:   # the inbox: one attempt, no sleep (D775)
                         object_request = get_request(request_json['object'][endpoint], headers={'Accept': AP_FETCH_ACCEPT})
                     except httpx.HTTPError:
-                        time.sleep(3)
-                        try:
-                            object_request = get_request(request_json['object'][endpoint], headers={'Accept': AP_FETCH_ACCEPT})
-                        except httpx.HTTPError:
-                            object_request = None
+                        object_request = None
                     if object_request and object_request.status_code == 200:
                         try:
                             object = object_request.json()
