@@ -6,7 +6,7 @@ cache for every quoting row in a template's context with one query per table, so
 look each one up."""
 import re
 
-from flask import current_app, g
+from flask import current_app, g, has_request_context
 from flask_login import current_user
 
 from app import db
@@ -17,7 +17,7 @@ from app.utils import blocked_communities, blocked_or_banned_instances, blocked_
     shorten_string, user_in_restricted_country
 from app.visibility import can_view, is_open
 
-_LOCAL_PATH = re.compile(r'/(post|comment)/(\d+)$')
+_LOCAL_PATH = re.compile(r'/(post|comment)/(\d+)')
 
 
 def resolve_quotes(ids: set[str]) -> dict:
@@ -31,7 +31,7 @@ def resolve_quotes(ids: set[str]) -> dict:
         found.update({r.ap_id: r for r in db.session.query(PostReply).filter(PostReply.ap_id.in_(rest))})
     prefix = current_app.config['SERVER_URL']
     for quoted_id in ids - found.keys():
-        match = _LOCAL_PATH.match(quoted_id[len(prefix):]) if quoted_id.startswith(prefix) else None
+        match = _LOCAL_PATH.fullmatch(quoted_id[len(prefix):]) if quoted_id.startswith(prefix) else None
         if match:
             row = db.session.get(Post if match.group(1) == 'post' else PostReply, int(match.group(2)))
             if row is not None:
@@ -40,6 +40,9 @@ def resolve_quotes(ids: set[str]) -> dict:
 
 
 def _cache() -> dict:
+    # Celery workers and CLI loops keep one app context for life, so only a request gets a cache (g dies with it).
+    if not has_request_context():
+        return {}
     if 'quote_targets' not in g:
         g.quote_targets = {}
     return g.quote_targets
@@ -83,8 +86,7 @@ def quote_target(item):
 
 
 def _shows_card(item, q, user) -> bool:
-    viewer_id = user.get_id() if user is not None else None
-    uid = int(viewer_id) if viewer_id else 0
+    uid = int(user.get_id() or 0)
     post = q if isinstance(q, Post) else q.post
     if q.deleted or post.deleted:
         return False

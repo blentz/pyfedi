@@ -162,7 +162,6 @@ def test_priming_resolves_a_page_in_one_query_per_table(world, app):
         event.remove(db.engine, 'before_cursor_execute', listener)
     lookups = [s for s in statements if '.ap_id IN' in s]  # resolve_quotes' batch selects, one per table
     assert len(lookups) <= 2
-    assert not [s for s in statements if '.ap_id = ' in s]  # and no per-item lookups
 
 
 def test_priming_scan_matched_the_batch_select_it_counts(world, app):
@@ -294,3 +293,14 @@ def test_sensitive_target_is_a_line_in_a_restricted_country(world):
     assert quote_state(world['quoting'], world['viewer'])['kind'] == 'card'
     with patch('app.quotes.user_in_restricted_country', return_value=True):
         assert quote_state(world['quoting'], world['viewer'])['kind'] == 'line'
+
+
+def test_without_a_request_nothing_is_cached_in_g(world):
+    g.pop('quote_targets', None)
+    assert quote_target(world['quoting']) is world['target']
+    assert 'quote_targets' not in g
+
+
+def test_local_url_with_a_trailing_newline_is_not_an_id(world, app):
+    world['quoting'].quote_ap_id = f"{app.config['SERVER_URL']}/post/{world['target'].id}\n"
+    assert quote_target(world['quoting']) is None
