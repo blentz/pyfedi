@@ -5,6 +5,7 @@ import click
 
 from app import db
 from app.models import Relay
+from app.relays import RELAY_ACCEPTED
 from app.relays import subscribe as relay_subscribe
 
 
@@ -46,6 +47,17 @@ def register_relay_commands(app) -> None:
             click.echo(str(error))
             sys.exit(1)
         click.echo(f'{relay.url}: {relay.state}')
+
+    @relays.command('refresh')
+    def refresh():
+        """Follow every accepted relay again, so a relay that gave up during a restart delivers again."""
+        accepted = db.session.query(Relay).filter_by(state=RELAY_ACCEPTED).count()
+        failed = relay_subscribe.refresh_relays()
+        for relay, error in failed:
+            click.echo(f'{relay.url}: {error}')
+        click.echo(f'refreshed {accepted - len(failed)} accepted relay(s)')
+        if failed:
+            sys.exit(1)
 
     @relays.command('list')
     def list_relays():

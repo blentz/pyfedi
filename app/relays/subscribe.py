@@ -141,6 +141,24 @@ def retry_relay(relay) -> None:
     send_relay_follow(relay)
 
 
+def refresh_relays() -> list:
+    """Send each accepted relay a Follow under a new id; returns (relay, error) for each that could not be sent.
+
+    Run after this instance restarts: AodeRelay stops all requests to a host for a day after ten failed
+    deliveries, and closes that breaker only on a signed request from the host. The state stays accepted, as
+    a pending row would let the relay's Announces through the ordinary follow gate (inbound.relay_actor_gate).
+    The id is new because a relay that remembers activity ids would drop a repeated one unanswered."""
+    failed = []
+    for relay in db.session.query(Relay).filter_by(state=RELAY_ACCEPTED).order_by(Relay.id).all():
+        relay.follow_activity_id = _new_follow_id()
+        db.session.commit()
+        try:
+            send_relay_follow(relay)
+        except Exception as error:   # one relay that cannot be sent to must not stop the others
+            failed.append((relay, error))
+    return failed
+
+
 def remove_relay(relay) -> None:
     try:
         undo = {'type': 'Undo', 'actor': instance_actor_url(), 'object': relay_follow_activity(relay),
