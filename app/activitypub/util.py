@@ -4503,6 +4503,11 @@ def update_post_from_activity(post: Post, request_json: dict):
                 # outbound attachment on `post.url is not None`, so '' would
                 # federate {"href": ""} back out.
                 post.url = link if url_is_storable(link) else None
+            elif post.type == POST_TYPE_EVENT and post.url is not None and post.url == post.quote_ap_id:
+                # C2: a row ingested before quotes were read took the quote's fallback link as its url. The link arm
+                # below clears that url on other posts, turning them into discussions; an event keeps the url it
+                # holds there, so it is cleared here, before that arm reads it, and the event keeps its banner.
+                post.url = None
             post.microblog = True
             if warning := content_warning_from(request_json['object']):
                 new_title = shorten_string(warning, 255)  # a warning hides the body, so the body must not become the title
