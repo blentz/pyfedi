@@ -3322,7 +3322,6 @@ def process_remove(core_activity, user, community, feed, announced, id, saved_js
                     cm = session.query(CommunityMember).filter_by(user_id=fm_user.id,
                                                          community_id=community_to_remove.id).first()
                     if subscription != SUBSCRIPTION_OWNER and cm and cm.joined_via_feed:
-                        proceed = True
                         # Undo the Follow
                         if not community_to_remove.is_local():  # this is a remote community, so activitypub is needed
                             if not community_to_remove.instance.gone_forever:
@@ -3344,15 +3343,14 @@ def process_remove(core_activity, user, community, feed, announced, id, saved_js
                                                   fm_user.private_key, fm_user.public_url() + '#main-key',
                                                   timeout=10)
 
-                        if proceed:  # pragma: no branch -- proceed is set True just above
-                            session.query(CommunityMember).filter_by(user_id=fm_user.id,
-                                                                        community_id=community_to_remove.id).delete()
-                            session.query(CommunityJoinRequest).filter_by(user_id=fm_user.id,
-                                                                             community_id=community_to_remove.id).delete()
-                            community_to_remove.subscriptions_count -= 1
-                            session.commit()
-                            log_incoming_ap(id, APLOG_REMOVE, APLOG_SUCCESS, saved_json,
-                                            f'{fm_user.user_name} auto-unfollowed {community_to_remove.ap_public_url} during a feed/remove')
+                        session.query(CommunityMember).filter_by(user_id=fm_user.id,
+                                                                 community_id=community_to_remove.id).delete()
+                        session.query(CommunityJoinRequest).filter_by(user_id=fm_user.id,
+                                                                      community_id=community_to_remove.id).delete()
+                        community_to_remove.subscriptions_count -= 1
+                        session.commit()
+                        log_incoming_ap(id, APLOG_REMOVE, APLOG_SUCCESS, saved_json,
+                                        f'{fm_user.user_name} auto-unfollowed {community_to_remove.ap_public_url} during a feed/remove')
         else:
             log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json, 'Cannot find community to remove from feed')
     elif community:
@@ -3390,7 +3388,20 @@ def process_remove(core_activity, user, community, feed, announced, id, saved_js
                 existing_membership = session.query(CommunityMember).filter_by(community_id=community.id,
                                                                       user_id=old_mod.id).first()
                 if undo and not (existing_membership and existing_membership.is_moderator):
-                    log_incoming_ap(id, APLOG_REMOVE, APLOG_IGNORED, saved_json, 'Undo: not a moderator')
+                    log_incoming_ap(id, APLOG_REMOVE, APLOG_IGNORED, saved_json,
+                                    'Undo: an owner, not a moderator; Remove does not change ownership'
+                                    if existing_membership and existing_membership.is_owner
+                                    else 'Undo: not a moderator')
+                    return
+                # The web keeps a community's last owner (remove_mod_from_community) and a Remove never changes
+                # ownership; nor may it leave an ownerless community with nobody to moderate it
+                if existing_membership and existing_membership.is_moderator and not existing_membership.is_owner \
+                        and session.query(CommunityMember.user_id).filter(
+                            CommunityMember.community_id == community.id, CommunityMember.user_id != old_mod.id,
+                            or_(CommunityMember.is_owner == True, CommunityMember.is_moderator == True),
+                            CommunityMember.is_banned == False).first() is None:
+                    log_incoming_ap(id, APLOG_REMOVE, APLOG_FAILURE, saved_json,
+                                    'Remove refused: it would leave the community with no moderators')
                     return
                 if existing_membership:
                     existing_membership.is_moderator = False
