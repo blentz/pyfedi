@@ -81,6 +81,7 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
             v1['body'] = post.body
         if post.deleted and (user_id is None or user_id not in g.admin_ids):
             v1['body'] = ''
+            v1['quote_ap_id'] = None
         if post.edited_at:
             v1['edited_at'] = post.edited_at.isoformat(timespec="microseconds") + 'Z'
         if post.deleted == True:
@@ -804,6 +805,7 @@ def reply_view(reply: PostReply | int, variant: int, user_id=None,
             v1['extensions'] = {'content_warning': reply.content_warning}  # fork extension, as on a post
         if reply.deleted == True:
             v1['body'] = ''
+            v1['quote_ap_id'] = None
             if reply.deleted_by and reply.user_id != reply.deleted_by:
                 v1['removed'] = True
                 v1['deleted'] = False

@@ -413,3 +413,25 @@ def test_reply_view_quote_is_none_by_default(world):
     from tests.factories import make_post_reply
     _, author, parent = world
     assert reply_view(make_post_reply(parent, author), variant=1)['quote_ap_id'] is None
+
+
+def test_a_deleted_posts_view_does_not_carry_the_quote(world):
+    from app.api.alpha.views import post_view
+    _, _, parent = world
+    parent.quote_ap_id = QUOTED
+    parent.deleted = True
+    db.session.commit()
+    view = post_view(parent, variant=1)
+    assert view['body'] == '' and view['quote_ap_id'] is None
+
+
+def test_a_deleted_replys_view_does_not_carry_the_quote(world):
+    from app.api.alpha.views import reply_view
+    from tests.factories import make_post_reply
+    _, author, parent = world
+    reply = make_post_reply(parent, author)
+    reply.quote_ap_id = QUOTED
+    reply.deleted = True
+    db.session.commit()
+    view = reply_view(reply, variant=1)
+    assert view['body'] == '' and view['quote_ap_id'] is None
