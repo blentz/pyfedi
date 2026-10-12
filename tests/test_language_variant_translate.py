@@ -136,3 +136,9 @@ def test_teaser_button_carries_the_shown_language(world, app, theme, lang, suffi
         login_user(world['viewer'])
         html = render_template_string(source, post=world['post'])
     assert f"/post_teaser/{world['post'].id}/translate{suffix}\"" in html
+
+
+def test_reply_translation_is_sanitised(world, client):
+    with patch('app.post.routes.libretranslate_string', return_value='<p>ok</p><script>x()</script>'):
+        html = client.post(f"/post_reply/{world['reply'].id}/translate").get_data(as_text=True)
+    assert 'ok' in html and '<script' not in html
