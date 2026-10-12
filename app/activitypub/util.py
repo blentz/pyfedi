@@ -276,6 +276,35 @@ def object_language(obj: dict, map_code: str | None):
     return None
 
 
+MEDIA_OBJECT_TYPES = ('Audio', 'Document', 'Image', 'Video')  # C4: media objects a peer may Create as posts
+MEDIA_URL_KIND = {'Image': 'image', 'Audio': 'audio', 'Document': None}  # Video keeps its object id as the url
+MAX_MEDIA_URL_ENTRIES = 20
+
+
+def media_url_from(obj: dict, kind: str | None) -> str | None:
+    """C4. The media URL of an Image/Audio/Document object: from `url` (a string, a Link dict's `href`, a dict's
+    `url`, or a list of those), the first entry whose `mediaType` is `kind/*`; else the first entry without a
+    `mediaType` (any entry when `kind` is None). Only http(s) URLs that url_is_storable accepts count."""
+    value = obj.get('url')
+    entries = value[:MAX_MEDIA_URL_ENTRIES] if isinstance(value, list) else [value]
+    fallback = None
+    for entry in entries:
+        media_type = None
+        if isinstance(entry, dict):
+            media_type = entry.get('mediaType') if isinstance(entry.get('mediaType'), str) else None
+            entry = entry.get('href') or entry.get('url')
+        if not isinstance(entry, str) or not entry.lower().startswith(('http://', 'https://')) \
+                or not url_is_storable(entry):
+            continue
+        if kind and media_type:
+            if media_type.lower().startswith(kind + '/'):
+                return entry
+            continue  # an entry of another kind, e.g. Funkwhale's text/html page beside the audio
+        if fallback is None:
+            fallback = entry
+    return fallback
+
+
 def post_to_page(post: Post):
     activity_data = {
         "type": "Page",
@@ -1059,8 +1088,8 @@ def names_actor(candidate, actor) -> bool:
 DISPATCHED_AP_TYPES = frozenset({
     'Accept', 'Add', 'Announce', 'Block', 'ChooseAnswer', 'Create', 'Delete', 'Dislike', 'EmojiReact', 'Flag',
     'Follow', 'Like', 'Lock', 'Move', 'PollVote', 'QuoteRequest', 'Reject', 'Remove', 'Undo', 'Update',
-    'Application', 'Article', 'ChatMessage', 'Event', 'Feed', 'Group', 'Link', 'Note', 'OrderedCollection', 'Page',
-    'Person', 'Podcast', 'Question', 'Service', 'Tombstone', 'Video',
+    'Application', 'Article', 'Audio', 'ChatMessage', 'Document', 'Event', 'Feed', 'Group', 'Image', 'Link', 'Note',
+    'OrderedCollection', 'Page', 'Person', 'Podcast', 'Question', 'Service', 'Tombstone', 'Video',
 })
 
 NO_STRING_TYPE_MESSAGE = 'Activity type has no single string value'
