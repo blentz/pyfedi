@@ -29,7 +29,7 @@ SHAPES = [
 
 @pytest.mark.parametrize('label,endpoints,expected', SHAPES, ids=[s[0] for s in SHAPES])
 def test_shared_inbox_of(label, endpoints, expected):
-    assert shared_inbox_of({'endpoints': endpoints}) == expected
+    assert shared_inbox_of({'id': f'https://{PEER}/u/a', 'endpoints': endpoints}) == expected
 
 
 def test_shared_inbox_of_without_endpoints_is_none():
