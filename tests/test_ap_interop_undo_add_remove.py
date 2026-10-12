@@ -208,6 +208,68 @@ def test_an_undo_of_a_remove_mod_for_a_moderator_is_a_logged_no_op(modcomm, monk
     assert only_log() == ('Add', 'ignored', 'Undo: already a moderator')
 
 
+LAST_MODERATOR_REFUSED = 'Remove refused: it would leave the community with no moderators'
+
+
+@pytest.mark.parametrize('shape', ['Remove', 'Undo Add'])
+def test_removing_the_last_moderator_is_refused(modcomm, monkeypatch, shape):
+    """A local owner can never remove the last owner (remove_mod_from_community), and a federated Remove never
+    touches ownership; it may not leave an ownerless community with no moderator at all either."""
+    instance, community, moderator, admin, post = modcomm
+    calls = record_moderation(monkeypatch, 'add_to_modlog')
+
+    if shape == 'Remove':
+        dispatch(add_or_remove_from_community(community, admin, 'Remove', moderator.ap_profile_id,
+                                              community.ap_moderators_url))
+    else:
+        dispatch(undo_from_community(community, admin, 'Add', moderator.ap_profile_id, community.ap_moderators_url))
+
+    membership = CommunityMember.query.filter_by(community_id=community.id, user_id=moderator.id).one()
+    assert membership.is_moderator is True
+    assert calls['add_to_modlog'] == []
+    assert only_log() == ('Remove', 'failure', LAST_MODERATOR_REFUSED)
+
+
+def test_a_banned_moderator_does_not_count_as_the_one_left(modcomm, monkeypatch):
+    instance, community, moderator, admin, post = modcomm
+    banned = make_user(instance, 'bannedmod')
+    make_community_member(banned, community, is_moderator=True).is_banned = True
+    db.session.commit()
+
+    dispatch(add_or_remove_from_community(community, admin, 'Remove', moderator.ap_profile_id,
+                                          community.ap_moderators_url))
+
+    assert only_log() == ('Remove', 'failure', LAST_MODERATOR_REFUSED)
+
+
+def test_an_owner_keeps_the_community_moderated_so_the_last_flagged_moderator_may_go(modcomm, monkeypatch):
+    instance, community, moderator, admin, post = modcomm
+    owner = make_user(instance, 'owner')
+    make_community_member(owner, community).is_owner = True
+    db.session.commit()
+
+    dispatch(add_or_remove_from_community(community, admin, 'Remove', moderator.ap_profile_id,
+                                          community.ap_moderators_url))
+
+    membership = CommunityMember.query.filter_by(community_id=community.id, user_id=moderator.id).one()
+    assert membership.is_moderator is False
+    assert only_log() == ('Remove', 'success', None)
+
+
+def test_an_undo_of_an_add_mod_for_an_owner_who_is_not_a_moderator_says_so(modcomm, monkeypatch):
+    instance, community, moderator, admin, post = modcomm
+    calls = record_moderation(monkeypatch, 'add_to_modlog')
+    owner = make_user(instance, 'owner')
+    owner.ap_fetched_at = utcnow()
+    make_community_member(owner, community).is_owner = True
+    db.session.commit()
+
+    dispatch(undo_from_community(community, moderator, 'Add', owner.ap_profile_id, community.ap_moderators_url))
+
+    assert calls['add_to_modlog'] == []
+    assert only_log() == ('Remove', 'ignored', 'Undo: an owner, not a moderator; Remove does not change ownership')
+
+
 # --- feeds ----------------------------------------------------------------------------
 
 def test_a_feeds_undo_of_an_add_takes_the_community_out_of_the_feed(feedcomm):
