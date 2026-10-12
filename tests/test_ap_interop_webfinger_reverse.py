@@ -38,7 +38,7 @@ from flask import g
 from app import cache, db
 from app.activitypub import routes as activitypub_routes
 from app.activitypub.actor import create_actor_from_remote, fetch_actor_from_webfinger
-from app.activitypub.util import authority_of, canonical_handle, webfinger_self_href
+from app.activitypub.util import authority_of, canonical_handle, host_of, webfinger_self_href
 from app.community.util import search_for_community
 from app.feed.util import search_for_feed
 from app.models import User
@@ -343,24 +343,20 @@ ATTACKER_PEM = '-----BEGIN PUBLIC KEY-----\nattacker-key\n-----END PUBLIC KEY---
 
 
 def impersonation(http_mock, actor_id=ALICE, name='alice', alias='alias.example', resolve_alias=True,
-                  **origin_fields):
+                  alias_type='Person', **origin_fields):
     """alias.example's WebFinger points at its own copy of actor_id, carrying the attacker's key and name; the
     origin serves the real document. Returns (the alias copy, the origin document, the origin route).
-    resolve_alias=False leaves the alias's routes out, for a test that hands the copy to canonical_handle itself."""
-    alias_copy = actor_document(actor_id, name, publicKey={'id': f'{actor_id}#main-key', 'owner': actor_id,
+    alias_type is the type the alias copy claims. resolve_alias=False leaves the alias's routes out, for a test that hands the copy to canonical_handle itself."""
+    alias_copy = actor_document(actor_id, name, type=alias_type, publicKey={'id': f'{actor_id}#main-key', 'owner': actor_id,
                                                            'publicKeyPem': ATTACKER_PEM})
     alias_copy['name'] = 'Impostor'   # the display name; actor_document's own parameter is `name`
     if resolve_alias:
         serve_webfinger(http_mock, alias, ALIAS_COPY)
         http_mock.get(ALIAS_COPY).respond(200, json=alias_copy)
-    serve_webfinger(http_mock, host_of_url(actor_id), actor_id)
+    serve_webfinger(http_mock, host_of(actor_id), actor_id)
     origin = actor_document(actor_id, name, **origin_fields)
     origin['name'] = 'Alice Origin'
     return alias_copy, origin, http_mock.get(actor_id).respond(200, json=origin)
-
-
-def host_of_url(url):
-    return url.split('/')[2]
 
 
 def test_the_helper_hands_back_the_origin_document_not_the_alias_copy(app, db_session, http_mock):
@@ -477,7 +473,12 @@ GROUP = 'https://social.example/c/memes'
 FEED = 'https://social.example/f/news'
 
 
-stored_as_documents = []   # the documents stored_as saw, in order
+class Stored(list):
+    """The (id, address, server) of each actor_json_to_model call; `documents` holds the documents themselves."""
+
+    def __init__(self):
+        super().__init__()
+        self.documents = []
 
 
 @pytest.fixture
@@ -485,13 +486,11 @@ def stored_as(app, db_session, site, monkeypatch):
     """Record every actor_json_to_model call of the three resolver modules; answer None (nothing created)."""
     g.admin_ids = []
     g.site = site
-    calls = []
-    documents = stored_as_documents
-    documents.clear()
+    calls = Stored()
 
     def record(activity_json, address, server):
         calls.append((activity_json['id'], address, server))
-        documents.append(activity_json)
+        calls.documents.append(activity_json)
         return None
 
     for module in ('app.user.utils', 'app.community.util', 'app.feed.util'):
@@ -654,15 +653,13 @@ def test_host_meta_json_is_cached_like_the_xml_route():
 ])
 def test_each_search_stores_the_origin_document_not_the_alias_copy(stored_as, http_mock, search, address,
                                                                      actor_id, name, kind):
-    alias_copy, origin, _ = impersonation(http_mock, actor_id=actor_id, name=name, type=kind)
-    alias_copy['type'] = kind
-    http_mock.get(ALIAS_COPY).respond(200, json=alias_copy)
+    origin = impersonation(http_mock, actor_id=actor_id, name=name, alias_type=kind, type=kind)[1]
 
     search(address)
 
     assert stored_as == [(actor_id, name, 'social.example')]
-    assert stored_as_documents == [origin]
-    assert stored_as_documents[0]['publicKey']['publicKeyPem'] == PEER_ACTOR_PUBLIC_KEY_PEM
+    assert stored_as.documents == [origin]
+    assert stored_as.documents[0]['publicKey']['publicKeyPem'] == PEER_ACTOR_PUBLIC_KEY_PEM
 
 
 @pytest.mark.parametrize('search, address, actor_id, kind', [
