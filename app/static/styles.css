@@ -2656,18 +2656,6 @@ a.unread:before, div.unread:before {
 .post_body blockquote p:last-child, .comment_body blockquote p:last-child, #preview blockquote p:last-child, .reply_preview blockquote p:last-child, .accordion-body blockquote p:last-child, .post_col blockquote p:last-child, #about_community .card-body blockquote p:last-child {
   margin-bottom: 0px;
 }
-.post_body .quote_card, .comment_body .quote_card, #preview .quote_card, .reply_preview .quote_card, .accordion-body .quote_card, .post_col .quote_card, #about_community .card-body .quote_card {
-  padding: var(--spacing-4) var(--spacing-8);
-  margin: var(--spacing-8) 0;
-  font-size: 0.9em;
-}
-.post_body .quote_card .quote_card_meta, .comment_body .quote_card .quote_card_meta, #preview .quote_card .quote_card_meta, .reply_preview .quote_card .quote_card_meta, .accordion-body .quote_card .quote_card_meta, .post_col .quote_card .quote_card_meta, #about_community .card-body .quote_card .quote_card_meta {
-  opacity: 0.8;
-}
-.post_body .quote_card .quote_card_text, .comment_body .quote_card .quote_card_text, #preview .quote_card .quote_card_text, .reply_preview .quote_card .quote_card_text, .accordion-body .quote_card .quote_card_text, .post_col .quote_card .quote_card_text, #about_community .card-body .quote_card .quote_card_text {
-  display: block;
-  text-decoration: none;
-}
 .post_body pre, .comment_body pre, #preview pre, .reply_preview pre, .accordion-body pre, .post_col pre, #about_community .card-body pre {
   background: var(--bs-secondary-bg);
   font-family: monospace;
@@ -4292,3 +4280,17 @@ body.compact-max .post_teaser .post_utilities_bar .voting_buttons_new .upvote_bu
 }
 
 /*# sourceMappingURL=styles.css.map */
+.quote_card {
+  border-left: 3px solid var(--bs-border-color, #ccc);
+  background-color: var(--bs-secondary-bg-subtle);
+  padding: var(--spacing-4) var(--spacing-8);
+  margin: var(--spacing-8) 0;
+  font-size: 0.9em;
+}
+.quote_card .quote_card_meta {
+  opacity: 0.8;
+}
+.quote_card .quote_card_text {
+  display: block;
+  text-decoration: none;
+}

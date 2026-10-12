@@ -2,6 +2,7 @@
 from unittest.mock import patch
 
 import pytest
+from bs4 import BeautifulSoup
 from flask import g, render_template_string
 from sqlalchemy import event
 
@@ -345,7 +346,6 @@ def test_card_does_not_nest(world, app):
 
 
 
-
 @pytest.fixture
 def csrf_on(app):
     """The post page renders a reply form whose csrf_token only exists when CSRF is on."""
@@ -366,7 +366,9 @@ def test_post_page_shows_the_card_on_a_comment(world, app):
     reply.quote_ap_id = world['target'].ap_id
     db.session.commit()
     response = logged_in_client(app, world['viewer']).get(f"/post/{world['target'].id}")
-    assert response.status_code == 200 and b'quote_card' in response.data
+    assert response.status_code == 200
+    comment = BeautifulSoup(response.data, 'html.parser').select_one(f'#comment_{reply.id}')
+    assert comment is not None and comment.select_one('.comment_body .quote_card') is not None
 
 
 @pytest.mark.usefixtures('site')
@@ -383,3 +385,15 @@ def test_a_quote_with_no_body_still_shows_in_the_listing(world, app):
     db.session.commit()
     response = logged_in_client(app, world['viewer']).get(f"/c/{world['community'].name}")
     assert b'quote_card' in response.data
+
+
+DILLO_EVENT = ("{% from 'themes/dillo/post/post_teaser/_macros.html' import render_event %}"
+               "{{ render_event(post, current_user=current_user, locale='en', request=request, user_pronouns={}, reported_posts=[], admin_ids=[], user_flair={}, user_notes={}, moderated_community_ids=[], joined_communities=[], communities_banned_from_list=[]) }}")
+
+
+def test_dillo_event_teaser_shows_the_quote_of_a_post_with_no_body(world, app):
+    world['quoting'].body_html = ''
+    db.session.commit()
+    with app.test_request_context('/'):
+        html = render_template_string(DILLO_EVENT, post=world['quoting'])
+    assert 'quote_card' in html and 'post_teaser_article_preview' not in html

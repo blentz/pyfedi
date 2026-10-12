@@ -1,3 +1,4 @@
+{% from 'post/_quote_card.html' import render_quote %}
 {# This file is similar to _post_reply_teaser.html except it includes the render_username macro and removes
    a few things that aren't needed on brand new comments.
    We need to include that macro because this template is used as part of a full page (it's an ajax response) so
@@ -76,6 +77,7 @@
         <div class="row comment_body hidable{% if post_reply.has_been_reported() %} reported{% endif %}">
             <div class="col-12 pr-0">
                 {{ post_reply.body_html | community_links | feed_links | person_links | safe }}
+                {{ render_quote(post_reply, locale=locale) }}
             </div>
         </div>
         <div class="comment_actions hidable">
