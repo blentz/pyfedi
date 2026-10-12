@@ -1294,8 +1294,9 @@ def refresh_community_profile_task(community_id, activity_json=None):
                     if 'icon' in activity_json:
                         icon_entry = image_url_from(activity_json['icon'], prefer_last=True)
                         if icon_entry and (remote or not served_by_us(icon_entry, community.icon)):
-                            if community.icon_id and icon_entry != community.icon.source_url and \
-                                    (remote or community.icon.source_url):   # an upload is never a pushed document's to delete
+                            # Residual R3 item 1: a local community's own upload goes too, as when replaced through the
+                            # web edit path; delete-orphan drops its row. An echo of our own URL never reaches here
+                            if community.icon_id and icon_entry != community.icon.source_url:
                                 community.icon.delete_from_disk()
                             if not community.icon_id or (community.icon_id and icon_entry != community.icon.source_url):
                                 icon = File(source_url=icon_entry)
@@ -1305,8 +1306,9 @@ def refresh_community_profile_task(community_id, activity_json=None):
                     if 'image' in activity_json:
                         image_entry = image_url_from(activity_json['image'])
                         if image_entry and (remote or not served_by_us(image_entry, community.image)):
-                            if community.image_id and image_entry != community.image.source_url and \
-                                    (remote or community.image.source_url):   # an upload is never a pushed document's to delete
+                            # Residual R3 item 1: a local community's own upload goes too, as when replaced through the
+                            # web edit path; delete-orphan drops its row. An echo of our own URL never reaches here
+                            if community.image_id and image_entry != community.image.source_url:
                                 community.image.delete_from_disk()
                             if not community.image_id or (community.image_id and image_entry != community.image.source_url):
                                 image = File(source_url=image_entry)

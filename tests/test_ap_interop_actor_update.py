@@ -640,12 +640,15 @@ def test_any_image_on_our_own_host_leaves_a_local_communitys_upload_alone(app, d
     assert calls == []
 
 
-def test_a_new_remote_icon_for_a_local_community_is_applied_without_deleting_the_upload(app, db_session,
-                                                                                         monkeypatch, tmp_path):
-    """A moderator's real new remote URL is still applied, as before; the upload it replaces stays on disk."""
+def test_a_new_remote_icon_for_a_local_community_replaces_and_deletes_the_upload(app, db_session, monkeypatch,
+                                                                                 tmp_path):
+    """Residual R3 item 1. A moderator's real new remote URL is applied, and the upload it replaces is deleted with
+    its File row, as replacing it through the web edit path does. Kept, it was an orphan on disk and in the table."""
     community = _local_community_with_uploads(app, tmp_path)
     community_id, icon_id, image_id = community.id, community.icon_id, community.image_id
-    calls = _record_image_work(monkeypatch)
+    icon_path, image_path = community.icon.file_path, community.image.file_path
+    sized = []
+    monkeypatch.setattr(activitypub_util, 'make_image_sizes', lambda *args, **kwargs: sized.append(args))
     new_icon, new_image = f'https://{PEER}/pictrs/image/new-icon.png', f'https://{PEER}/pictrs/image/new-banner.png'
 
     refresh_community_profile_task(community_id, _lemmy_group_update_document(community, new_icon, new_image))
@@ -654,8 +657,9 @@ def test_a_new_remote_icon_for_a_local_community_is_applied_without_deleting_the
     community = db.session.get(Community, community_id)
     assert (community.icon.source_url, community.image.source_url) == (new_icon, new_image)
     assert community.icon_id != icon_id and community.image_id != image_id
-    assert [call for call in calls if call[0] == 'delete'] == []
-    assert len(calls) == 2   # both new images are sized
+    assert db.session.get(File, icon_id) is None and db.session.get(File, image_id) is None
+    assert not os.path.exists(icon_path) and not os.path.exists(image_path)
+    assert len(sized) == 2   # both new images are sized
 
 
 def test_a_local_communitys_fetched_icon_is_still_replaced_and_deleted(app, db_session, monkeypatch):
