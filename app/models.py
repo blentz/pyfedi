@@ -2777,6 +2777,11 @@ class Post(db.Model):
             for blocked_phrase in blocked_phrases_list:
                 if blocked_phrase in post.body:
                     return None
+        # S1: a phrase placed only in a language variant is rendered to viewers of that language
+        for variant in (language_variants_from(request_json['object'], post.quote_ap_id)[1] or {}).values():
+            variant_text = ' '.join(t for t in (variant['title'], html_to_text(variant['body_html'])) if t)
+            if any(blocked_phrase in variant_text for blocked_phrase in blocked_phrases_list):
+                return None
 
         file_path = None
         alt_text = None
@@ -4073,7 +4078,7 @@ class PostReply(db.Model):
             request_json: dict = None, announce_id=None, session=None):
         # cycle: app.utils imports from this module
         from app.utils import shorten_string, blocked_phrases, recently_upvoted_post_replies, reply_already_exists, \
-            reply_is_just_link_to_gif_reaction, reply_is_low_effort, wilson_confidence_lower_bound, get_setting
+            reply_is_just_link_to_gif_reaction, reply_is_low_effort, wilson_confidence_lower_bound, get_setting, html_to_text
         # cycle: app.activitypub.util imports from this module
         from app.activitypub.util import notify_about_post_reply, activitypub_visibility, content_warning_from, \
             quote_id_from, language_variants_from
@@ -4131,9 +4136,11 @@ class PostReply(db.Model):
         # Registered as D35.
         if request_json and 'type' in request_json and request_json['type'] == 'Update':
             reply.edited_at = utcnow()
-        if reply.body:
+        reply_texts = [reply.body] if reply.body else []
+        reply_texts += [html_to_text(v['body_html']) for v in (reply.language_variants or {}).values()]  # S1
+        if reply_texts:
             for blocked_phrase in blocked_phrases():
-                if blocked_phrase in reply.body:
+                if any(blocked_phrase in text for text in reply_texts):
                     raise PostReplyValidationError(_('Blocked phrase in comment'))
         if request_json and 'searchableBy' in request_json['object'] and request_json['object']['searchableBy'] != 'https://www.w3.org/ns/activitystreams#Public':
             reply.indexable = False
