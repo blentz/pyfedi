@@ -3,15 +3,17 @@ post or comment quotes, and whether the viewer sees it as a card or as a plain l
 
 Lookups are cached per request in `g.quote_targets`. `prime_quotes`, a before_render_template receiver, fills the
 cache for every quoting row in a template's context with one query per table, so a feed of quoting posts does not
-look each one up."""
+look each one up. What `_shows_card` needs of the viewer and of the site's bans is cached per request too
+(`g.quote_viewer`, `g.quote_banned_instances`), so a page of cards does not repeat those lookups per card."""
 import re
 
 from flask import current_app, g, has_request_context
 from flask_login import current_user
+from sqlalchemy.orm import selectinload
 
 from app import db
 from app.constants import POST_STATUS_PUBLISHED
-from app.models import BannedInstances, Community, Instance, Post, PostReply, QuoteAuthorization
+from app.models import BannedInstances, Instance, Post, PostReply, QuoteAuthorization
 from app.utils import blocked_communities, blocked_or_banned_instances, blocked_users, communities_banned_from, \
     community_membership_private, \
     shorten_string, user_in_restricted_country
@@ -28,7 +30,8 @@ def resolve_quotes(ids: set[str]) -> dict:
     found = {p.ap_id: p for p in db.session.query(Post).filter(Post.ap_id.in_(ids))}
     rest = ids - found.keys()
     if rest:
-        found.update({r.ap_id: r for r in db.session.query(PostReply).filter(PostReply.ap_id.in_(rest))})
+        found.update({r.ap_id: r for r in db.session.query(PostReply).options(selectinload(PostReply.post))
+                      .filter(PostReply.ap_id.in_(rest))})
     prefix = current_app.config['SERVER_URL']
     for quoted_id in ids - found.keys():
         match = _LOCAL_PATH.fullmatch(quoted_id[len(prefix):]) if quoted_id.startswith(prefix) else None
@@ -46,6 +49,31 @@ def _cache() -> dict:
     if 'quote_targets' not in g:
         g.quote_targets = {}
     return g.quote_targets
+
+
+def _per_request(name: str, key, compute):
+    """compute(), kept in g[name][key] for the rest of the request; outside a request it is computed every time."""
+    if not has_request_context():
+        return compute()
+    if name not in g:
+        setattr(g, name, {})
+    store = getattr(g, name)
+    if key not in store:
+        store[key] = compute()
+    return store[key]
+
+
+def _viewer(uid: int) -> dict:
+    """The viewer's blocks and bans, as sets."""
+    return _per_request('quote_viewer', uid, lambda: {
+        'blocked_communities': set(blocked_communities(uid)), 'banned_from': set(communities_banned_from(uid)),
+        'blocked_users': set(blocked_users(uid)), 'blocked_instances': set(blocked_or_banned_instances(uid))})
+
+
+def _site_banned_instances() -> set:
+    """Ids of the instances whose domain the site has banned, in one query."""
+    return _per_request('quote_banned_instances', None, lambda: set(db.session.scalars(
+        db.select(Instance.id).join(BannedInstances, BannedInstances.domain == Instance.domain))))
 
 
 def _quoting_rows(context: dict) -> list:
@@ -90,18 +118,19 @@ def _shows_card(item, q, user) -> bool:
     post = q if isinstance(q, Post) else q.post
     if q.deleted or post.deleted:
         return False
-    community = db.session.get(Community, q.community_id)
-    if community is None or community.is_gone() or community.banned or community.id in blocked_communities(uid) \
-            or community.id in communities_banned_from(uid):
+    viewer = _viewer(uid)
+    community = q.community
+    if community is None or community.is_gone() or community.banned or community.id in viewer['blocked_communities'] \
+            or community.id in viewer['banned_from']:
         return False
-    if community.private and community.id not in community_membership_private(uid):  # show_post: 403 otherwise
+    if community.private and community.id not in _per_request(  # show_post: 403 otherwise
+            'quote_private_member', uid, lambda: set(community_membership_private(uid))):
         return False
     if not can_view(q, uid or None) or not can_view(post, uid or None):  # a comment is only as visible as its post
         return False
-    if q.user_id in blocked_users(uid) or q.instance_id in blocked_or_banned_instances(uid):
+    if q.user_id in viewer['blocked_users'] or q.instance_id in viewer['blocked_instances']:
         return False
-    instance = db.session.get(Instance, q.instance_id) if q.instance_id else None
-    if instance is not None and db.session.query(BannedInstances.id).filter_by(domain=instance.domain).first():
+    if q.instance_id in _site_banned_instances():
         return False
     if post.status < POST_STATUS_PUBLISHED and uid != post.user_id:  # refuse_unpublished_post: the author's alone
         return False
@@ -128,6 +157,6 @@ def quote_state(item, user=None) -> dict | None:
     # A content warning hides the body on the object's own page, so the card shows the warning in its place.
     return {'kind': 'card', 'url': item.quote_ap_id, 'target': q,
             'href': f'/post/{q.id}' if is_post else f'/post/{q.post_id}#comment_{q.id}',
-            'author': q.author, 'community': db.session.get(Community, q.community_id),
+            'author': q.author, 'community': q.community,
             'text': (q.title if is_post and q.title else shorten_string(q.content_warning or q.body or '', 200)),
             'posted_at': q.posted_at}
