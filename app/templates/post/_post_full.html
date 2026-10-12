@@ -60,7 +60,6 @@
                     </span>
                 {% endif -%}
             </h1>
-            {{ render_language_switch(v) }}
 
             <div class="mb-2">
                 {% if post.has_been_reported() -%}
@@ -84,6 +83,7 @@
                 {% endif -%}
             </div>
         {%- endif -%}
+        {% if not deleted_by_author_placeholder %}{{ render_language_switch(v) }}{% endif %}
         {% set blur_images = post.blur_images(current_user) -%}
         {% if v.cw and sees_deleted_original -%}<details class="content_warning"><summary>{{ v.cw }}</summary>{% endif -%}
         {% if post.type == POST_TYPE_IMAGE and not post.deleted -%}
