@@ -32,7 +32,7 @@ from app.activitypub.util import activity_dedupe_key, claim_activity, release_ac
     verify_announced_inner, verify_ld_accepted_activity, ACTOR_UPDATE_TYPES, ANNOUNCED_DELETE_DEFERRED, cross_origin_delete_delay, _id_of, \
     post_replies_for_ap, is_vote, known_instance_id, resolve_remote_post_from_search, proactively_delete_content, \
     process_quote_boost, object_has_missing_fields, find_microblogging_community, process_announce_of_uri, \
-    announce_target_uri, undo_boost, withdraw_flag, LD_SIGNED_LOG_PREFIX, current_ld_signed, normalise_activity_types, \
+    announce_target_uri, undo_boost, withdraw_flag, LD_SIGNED_LOG_PREFIX, current_ld_signed, current_as_sent, normalise_activity_types, \
     NO_STRING_TYPE_MESSAGE, names_actor, refresh_user_profile_task, delete_remote_group, GROUP_DELETED_MESSAGE, \
     may_delete_group, ANNOUNCED_GROUP_DELETE_REFUSED, user_followers_count, user_following_count, create_activity_of
 # The module, not the name: app.community.routes reaches this file through
@@ -1101,6 +1101,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
         session = get_task_session()
         token = current_relay_id.set(relay_id)   # Post.new records it as post.relay_id; reset in the finally
         ld_token = current_ld_signed.set(ld_signed)   # log_incoming_ap marks this delivery's rows unreplayable
+        as_sent_token = current_as_sent.set(None)   # set below once the dispatched copy is final
         try:
             # patch_db_session makes all db.session.whatever() use the session created with get_task_session, to guarantee proper connection clean-up at the end of the task.
             # although process_inbox_request uses session instead of db.session, many of the functions it calls, like find_actor_or_create_cached, do not which makes this necessary.
@@ -1136,6 +1137,8 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                 # An LD-accepted activity keeps logging the verified document, as before, unless a type was an array:
                 # then the document as sent, which is what the LD signature covers (replay refuses LD-signed rows)
                 saved_json = (request_json if ld_signed and not had_array_type else raw_json) if store_ap_json else None
+                if had_array_type:   # rows handlers write from request_json store the document as sent too
+                    current_as_sent.set((request_json, raw_json))
                 id = request_json['id']
                 actor_id = request_json['actor']
                 if isinstance(actor_id, dict):  # Discourse does this
@@ -2287,6 +2290,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
         finally:
             current_relay_id.reset(token)   # before close(): a raising close must not leak relay_id into the next task
             current_ld_signed.reset(ld_token)
+            current_as_sent.reset(as_sent_token)
             session.close()
 
 

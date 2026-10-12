@@ -271,6 +271,35 @@ def test_an_ld_signed_array_type_is_stored_as_sent(app, db_session, monkeypatch)
     assert json.loads(log.activity_json)['object']['type'] == ['Foo', 'Bar']
 
 
+def test_a_handler_written_row_stores_an_array_delivery_as_sent(app, db_session, monkeypatch):
+    """process_upvote writes this row itself, from the normalised copy it was handed; the row keeps what was sent."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    make_site()
+    actor = make_user(make_instance('peer.example'), 'alice')
+    actor.ap_fetched_at = utcnow()
+    db.session.commit()
+    activity = inbox_activity(actor, activity_type=['Like', 'litepub:EmojiReact'],
+                              object_uri='https://peer.example/objects/missing')
+
+    dispatch(activity)
+
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Unfound object https://peer.example/objects/missing'
+    assert json.loads(log.activity_json)['type'] == ['Like', 'litepub:EmojiReact']
+
+
+def test_a_handler_written_row_of_an_all_string_delivery_is_unchanged(app, db_session, monkeypatch):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    make_site()
+    actor = make_user(make_instance('peer.example'), 'alice')
+    actor.ap_fetched_at = utcnow()
+    db.session.commit()
+
+    dispatch(inbox_activity(actor, activity_type='Like', object_uri='https://peer.example/objects/missing'))
+
+    assert json.loads(ActivityPubLog.query.one().activity_json)['type'] == 'Like'
+
+
 def test_a_relayed_array_announce_is_refused_and_stored_as_sent(app, db_session, monkeypatch):
     """The relay filter reads the normalised type, so `['Announce']` is a boost; the log keeps what was sent."""
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)

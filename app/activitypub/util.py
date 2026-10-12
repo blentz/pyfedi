@@ -6433,12 +6433,18 @@ def verify_announced_inner(announce: dict, community=None,
 # replay refuses them -- replay re-runs the stored JSON without the origin refetch the LD path depends on.
 LD_SIGNED_LOG_PREFIX = 'LD-signed'
 current_ld_signed: ContextVar = ContextVar('current_ld_signed', default=False)
+# Interop C1 item 8: (dispatched copy, document as sent) while process_inbox_request handles a delivery whose type was
+# an array. Handlers log the copy they were handed; log_incoming_ap stores what was sent in its place. Logging only.
+current_as_sent: ContextVar = ContextVar('current_as_sent', default=None)
 
 
 def log_incoming_ap(id, aplog_type, aplog_result, saved_json, message=None, session=None):
     aplog_in = APLOG_IN
     if current_ld_signed.get() and not (message or '').startswith(LD_SIGNED_LOG_PREFIX):
         message = f'{LD_SIGNED_LOG_PREFIX}: {message}' if message else LD_SIGNED_LOG_PREFIX
+    as_sent = current_as_sent.get()
+    if as_sent is not None and saved_json is as_sent[0]:
+        saved_json = as_sent[1]
 
     if aplog_in and aplog_type[0] and aplog_result[0]:
         if current_app.config['LOG_ACTIVITYPUB_TO_DB']:
