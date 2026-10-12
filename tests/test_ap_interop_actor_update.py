@@ -706,15 +706,31 @@ def test_any_image_on_our_own_host_leaves_a_local_communitys_upload_alone(app, d
     assert calls == []
 
 
+def _fetch_succeeds(monkeypatch, tmp_path):
+    """make_image_sizes_async doubled as a fetch that worked: the new File gets a file on disk."""
+    fetched = []
+
+    def _fetched(file_id, *args):
+        file = db.session.get(File, file_id)
+        path = tmp_path / f'fetched-{file_id}.png'
+        path.write_bytes(b'png')
+        file.file_path = str(path)
+        db.session.commit()
+        fetched.append(file.source_url)
+
+    monkeypatch.setattr(activitypub_util, 'make_image_sizes_async', _fetched)
+    return fetched
+
+
 def test_a_new_remote_icon_for_a_local_community_replaces_and_deletes_the_upload(app, db_session, monkeypatch,
                                                                                  tmp_path):
     """Residual R3 item 1. A moderator's real new remote URL is applied, and the upload it replaces is deleted with
-    its File row, as replacing it through the web edit path does. Kept, it was an orphan on disk and in the table."""
+    its File row, as replacing it through the web edit path does. Kept, it was an orphan on disk and in the table.
+    R3 fix 1: only once the new image has been fetched and the swap committed."""
     community = _local_community_with_uploads(app, tmp_path)
     community_id, icon_id, image_id = community.id, community.icon_id, community.image_id
     icon_path, image_path = community.icon.file_path, community.image.file_path
-    sized = []
-    monkeypatch.setattr(activitypub_util, 'make_image_sizes', lambda *args, **kwargs: sized.append(args))
+    fetched = _fetch_succeeds(monkeypatch, tmp_path)
     new_icon, new_image = f'https://{PEER}/pictrs/image/new-icon.png', f'https://{PEER}/pictrs/image/new-banner.png'
 
     refresh_community_profile_task(community_id, _lemmy_group_update_document(community, new_icon, new_image))
@@ -722,10 +738,115 @@ def test_a_new_remote_icon_for_a_local_community_replaces_and_deletes_the_upload
     db.session.expire_all()
     community = db.session.get(Community, community_id)
     assert (community.icon.source_url, community.image.source_url) == (new_icon, new_image)
-    assert community.icon_id != icon_id and community.image_id != image_id
+    assert community.icon.file_path and community.image.file_path
     assert db.session.get(File, icon_id) is None and db.session.get(File, image_id) is None
     assert not os.path.exists(icon_path) and not os.path.exists(image_path)
-    assert len(sized) == 2   # both new images are sized
+    assert sorted(fetched) == sorted([new_icon, new_image])
+
+
+def test_a_new_remote_icon_whose_fetch_fails_leaves_the_upload_in_place(app, db_session, monkeypatch, tmp_path,
+                                                                       http_mock):
+    """R3 fix 1. The upload was deleted before the new image was fetched: an unreachable moderator URL lost it for
+    good. Now a failed fetch changes nothing -- the upload stays on disk and referenced, and the new row goes."""
+    community = _local_community_with_uploads(app, tmp_path)
+    community_id, icon_id, image_id = community.id, community.icon_id, community.image_id
+    icon_path = community.icon.file_path
+    new_icon = f'https://{PEER}/pictrs/image/new-icon.png'
+    http_mock.get(new_icon).respond(404)
+    files_before = db.session.query(File).count()
+
+    refresh_community_profile_task(community_id, _lemmy_group_update_document(
+        community, new_icon, f"{app.config['SERVER_URL']}{community.header_image()}"))
+
+    db.session.expire_all()
+    community = db.session.get(Community, community_id)
+    assert (community.icon_id, community.image_id) == (icon_id, image_id)
+    assert (community.icon.file_path, community.icon.source_url) == (icon_path, None)
+    assert os.path.isfile(icon_path)
+    assert db.session.query(File).count() == files_before
+    assert 'a moderator edited this' in community.description_html   # the rest of the edit still applies
+
+
+def test_a_fetch_that_raises_also_leaves_the_upload_in_place(app, db_session, monkeypatch, tmp_path):
+    community = _local_community_with_uploads(app, tmp_path)
+    community_id, icon_id = community.id, community.icon_id
+
+    def _broken(*args):
+        raise OSError('cannot identify image file')
+
+    monkeypatch.setattr(activitypub_util, 'make_image_sizes_async', _broken)
+
+    refresh_community_profile_task(community_id, _lemmy_group_update_document(
+        community, f'https://{PEER}/pictrs/image/new-icon.png', f"{app.config['SERVER_URL']}{community.header_image()}"))
+
+    db.session.expire_all()
+    assert db.session.get(Community, community_id).icon_id == icon_id
+    assert os.path.isfile(db.session.get(File, icon_id).file_path)
+
+
+def test_the_replacement_task_tolerates_what_changed_while_it_was_queued(app, db_session, monkeypatch, tmp_path):
+    """The swap is queued: by the time it runs the new row may be gone, or the upload already removed by a moderator
+    in the web UI. A missing row is nothing to do; a removed upload just takes the new image."""
+    community = _local_community_with_uploads(app, tmp_path)
+    community_id = community.id
+    _fetch_succeeds(monkeypatch, tmp_path)
+
+    activitypub_util.replace_local_upload_task(community_id, 'icon', 999999)   # no such File
+
+    community.icon = None
+    replacement = make_file(source_url=f'https://{PEER}/pictrs/image/new-icon.png')
+    db.session.commit()
+    replacement_id = replacement.id
+
+    activitypub_util.replace_local_upload_task(community_id, 'icon', replacement_id)
+
+    db.session.expire_all()
+    assert db.session.get(Community, community_id).icon_id == replacement_id
+
+
+def test_the_replacement_task_drops_the_new_row_when_the_community_is_gone(app, db_session, monkeypatch, tmp_path):
+    seed_community_owner(PEER)
+    _fetch_succeeds(monkeypatch, tmp_path)
+    replacement = make_file(source_url=f'https://{PEER}/pictrs/image/new-icon.png')
+    db.session.commit()
+    replacement_id = replacement.id
+
+    activitypub_util.replace_local_upload_task(999999, 'icon', replacement_id)
+
+    db.session.expire_all()
+    assert db.session.get(File, replacement_id) is None
+
+
+def test_in_debug_mode_the_replacement_runs_inline(app, db_session, monkeypatch, tmp_path):
+    community = _local_community_with_uploads(app, tmp_path)
+    community_id, icon_id = community.id, community.icon_id
+    fetched = _fetch_succeeds(monkeypatch, tmp_path)
+    monkeypatch.setattr(app, 'debug', True)
+    new_icon = f'https://{PEER}/pictrs/image/new-icon.png'
+
+    activitypub_util.replace_local_upload(community_id, 'icon', make_file(source_url=new_icon).id)
+
+    db.session.expire_all()
+    assert fetched == [new_icon] and db.session.get(Community, community_id).icon_id != icon_id
+
+
+def test_a_repeated_remote_icon_changes_nothing(app, db_session, monkeypatch):
+    """The icon and banner a remote community already holds, pushed again, are no change: no new row, no delete."""
+    community = _remote_community()
+    community.icon = make_file(source_url=f'https://{PEER}/pictrs/image/icon.png')
+    community.image = make_file(source_url=f'https://{PEER}/pictrs/image/banner.png')
+    db.session.commit()
+    community_id, icon_id, image_id = community.id, community.icon_id, community.image_id
+    calls = _record_image_work(monkeypatch)
+    _record_fetches(monkeypatch)
+
+    refresh_community_profile_task(community_id, _lemmy_group_update_document(
+        community, f'https://{PEER}/pictrs/image/icon.png', f'https://{PEER}/pictrs/image/banner.png'))
+
+    db.session.expire_all()
+    assert (db.session.get(Community, community_id).icon_id, db.session.get(Community, community_id).image_id) == \
+        (icon_id, image_id)
+    assert calls == []
 
 
 def test_a_local_communitys_fetched_icon_is_still_replaced_and_deleted(app, db_session, monkeypatch):
