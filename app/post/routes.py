@@ -1595,7 +1595,7 @@ def post_reply_translate(post_reply_id: int):
         result = libretranslate_string(v.body_html,
                                        source=source,
                                        target=recipient_language)
-        return f'<div class="col-12 pr-0" lang="{recipient_language}">' + result + "</div>"
+        return f'<div class="col-12 pr-0" lang="{escape(recipient_language)}">' + allowlist_html(result) + "</div>"
     return _('Translation is not configured on this instance.')  # D1126
 
 
