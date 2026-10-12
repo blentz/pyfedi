@@ -145,3 +145,7 @@ def test_post_with_clean_variants_is_kept_under_a_blocklist(world, blocked):
 def test_reply_with_a_blocked_phrase_only_in_a_variant_body_is_rejected(world, blocked, redis_lock_only_double):
     maps = dict(MAPS, contentMap={'fr': '<p>this is forbidden</p>', 'en': '<p>hello there</p>'})
     assert _new_reply(world, 23, **maps) is None  # create_post_reply turns PostReplyValidationError into None
+
+
+def test_reply_with_clean_variants_is_kept_under_a_blocklist(world, blocked, redis_lock_only_double):
+    assert _new_reply(world, 24, **MAPS) is not None
