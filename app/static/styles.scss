@@ -2018,21 +2018,6 @@ a.unread, div.unread {
     }
   }
 
-  .quote_card {
-    padding: var(--spacing-4) var(--spacing-8);
-    margin: var(--spacing-8) 0;
-    font-size: 0.9em;
-
-    .quote_card_meta {
-      opacity: 0.8;
-    }
-
-    .quote_card_text {
-      display: block;
-      text-decoration: none;
-    }
-  }
-
   pre {
     background: var(--bs-secondary-bg);
     font-family: monospace;
@@ -3417,3 +3402,20 @@ div:has(> input.hide_field) {
 
 @import "scss/compact";
 @import "scss/print";
+
+.quote_card {
+  border-left: 3px solid var(--bs-border-color, #ccc);
+  background-color: var(--bs-secondary-bg-subtle);
+  padding: var(--spacing-4) var(--spacing-8);
+  margin: var(--spacing-8) 0;
+  font-size: 0.9em;
+
+  .quote_card_meta {
+    opacity: 0.8;
+  }
+
+  .quote_card_text {
+    display: block;
+    text-decoration: none;
+  }
+}

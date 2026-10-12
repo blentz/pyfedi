@@ -229,8 +229,8 @@
             {% if post.event and post.event.start %}<time class="convert_to_local">{{ post.event.start.strftime('%Y-%m-%dT%H:%M:%SZ') }}</time>{% endif %}
             {% if post.content_warning -%}<p>{{ post.content_warning }}</p>{% else -%}{{ first_paragraph(post.body_html) | safe }}{% endif -%}
         </div>
-    {{ render_quote(post, locale=locale) }}
     {% endif -%}
+    {{ render_quote(post, locale=locale) }}
     {{ render_utilities_bar(post, sort=sort, current_user=current_user, joined_communities=joined_communities, can_upvote_here=can_upvote_here, can_downvote_here=can_downvote_here, disable_voting=disable_voting, recently_upvoted=recently_upvoted, recently_downvoted=recently_downvoted, communities_banned_from_list=communities_banned_from_list, upvoted_class=upvoted_class, downvoted_class=downvoted_class, reported_posts=reported_posts, moderated_community_ids=moderated_community_ids) }}
 </div>
 {%- endmacro %}
