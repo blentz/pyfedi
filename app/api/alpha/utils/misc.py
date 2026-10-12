@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 from flask import current_app, g
 from sqlalchemy import desc
 
-from app.activitypub.util import find_actor_or_create, remote_object_to_json, actor_json_to_model, \
+from app.activitypub.util import find_actor_or_create, remote_object_to_json, actor_json_to_model, is_user_actor, \
     find_community, create_resolved_object, normalise_actor_string, host_of
 from app.api.alpha.utils.community import get_community_list
 from app.api.alpha.utils.post import get_post_list
@@ -405,7 +405,7 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
     # document of any other type carrying no `preferredUsername` was
     # `KeyError: 'preferredUsername'`, measured as PROBE bk1. D1190's shape,
     # second instance in this file.
-    if (ap_json['type'] in ('Person', 'Service', 'Podcast', 'Group', 'Feed')
+    if ((is_user_actor(ap_json) or ap_json['type'] in ('Group', 'Feed'))
             and 'preferredUsername' in ap_json):
         name = ap_json['preferredUsername'].lower()
         object = actor_json_to_model(ap_json, name, server)

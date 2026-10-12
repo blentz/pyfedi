@@ -105,7 +105,7 @@ def test_delivery_inbox_of(document, expected):
 
 # --- the actor Update ---
 
-@pytest.mark.parametrize('actor_type,bot', [('Person', False), ('Service', True), ('Application', False)])
+@pytest.mark.parametrize('actor_type,bot', [('Person', False), ('Service', True), ('Application', True)])
 def test_an_actor_update_refreshes_the_name_summary_and_key(app, db_session, monkeypatch, actor_type, bot):
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     user = _known_remote_user()

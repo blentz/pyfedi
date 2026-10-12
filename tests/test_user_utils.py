@@ -254,6 +254,22 @@ class TestWhatTheActorSays:
             200, json=dict(PERSON, type='Service')))
         assert search_for_user('@someone@remote.test') is not None
 
+    def test_an_application_bot_is_created_as_a_bot(self, env, http_mock):
+        """Owner ruling 2026-10-12: an Application that is not an instance actor is a bot account."""
+        http_mock.get(WEBFINGER).mock(
+            return_value=httpx.Response(200, json=self_link()))
+        http_mock.get(ACTOR).mock(return_value=httpx.Response(
+            200, json=dict(PERSON, type='Application')))
+        user = search_for_user('@someone@remote.test')
+        assert user is not None and user.bot is True
+
+    def test_an_instance_actor_is_not_created(self, env, http_mock):
+        http_mock.get(WEBFINGER).mock(
+            return_value=httpx.Response(200, json=self_link()))
+        http_mock.get(ACTOR).mock(return_value=httpx.Response(
+            200, json=dict(PERSON, type='Application', preferredUsername='remote.test')))
+        assert search_for_user('@someone@remote.test') is None
+
     def test_an_actor_with_no_type(self, env, http_mock):
         """D1269. This was `KeyError: 'type'`."""
         http_mock.get(WEBFINGER).mock(

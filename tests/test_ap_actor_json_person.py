@@ -108,10 +108,13 @@ how.
 """
 from datetime import datetime
 
+import pytest
+
 from app import db
 from app.activitypub import util as activitypub_util
 from app.activitypub.util import actor_json_to_model
-from app.models import Community, File, User, UserExtraField, utcnow
+from app.models import Community, File, Relay, User, UserExtraField, utcnow
+from app.relays import RELAY_ACCEPTED, STYLE_MASTODON
 from app.utils import set_setting
 from tests.factories import make_user, peer_actor_json, peer_instance
 
@@ -452,6 +455,48 @@ class TestPersonAndService:
         assert result.id == existing.id
         assert db.session.query(User).count() == 1
 
+
+
+class TestApplication:
+    """An `Application` actor is a bot account (owner ruling, 2026-10-12): robot.villas publishes its RSS bots so,
+    and relays deliver their posts. Instance actors and relays are Applications too, and stay non-users: the actor
+    at the domain root (Lemmy's site), one whose preferredUsername is its own domain (Mastodon's and PieFed's
+    /actor), and a relay this instance subscribes to (relay spec: never a User row)."""
+
+    def test_an_application_bot_creates_a_bot_user(self, app, db_session):
+        peer_instance(PEER)
+        user = actor_json_to_model(peer_actor_json('Application', name='bbc_news'), 'bbc_news', PEER)
+        assert isinstance(user, User)
+        assert user.user_name == 'bbc_news' and user.bot is True
+
+    @pytest.mark.parametrize('fields', [
+        {'id': f'https://{PEER}/actor', 'preferredUsername': PEER},
+        {'id': f'https://{PEER}/actor', 'preferredUsername': PEER.upper()},
+        {'id': f'https://{PEER}/', 'preferredUsername': 'lemmy'},
+        {'id': f'https://{PEER}', 'preferredUsername': 'lemmy'},
+    ], ids=['domain-name', 'domain-name-upper', 'root', 'root-no-slash'])
+    def test_an_instance_actor_is_not_a_user(self, app, db_session, fields):
+        peer_instance(PEER)
+        assert actor_json_to_model(peer_actor_json('Application', fields=fields), 'x', PEER) is None
+        assert db.session.query(User).count() == 0
+
+    def test_a_subscribed_relay_is_not_a_user(self, app, db_session):
+        peer_instance(PEER)
+        db.session.add(Relay(url=f'https://{PEER}/inbox', style=STYLE_MASTODON, inbox_url=f'https://{PEER}/inbox',
+                             actor_id=f'https://{PEER}/actor', state=RELAY_ACCEPTED,
+                             follow_activity_id='https://test.piefed.local/activities/relay-follow/x'))
+        db.session.commit()
+        document = peer_actor_json('Application', fields={'id': f'https://{PEER}/actor', 'preferredUsername': 'relay'})
+        assert actor_json_to_model(document, 'relay', PEER) is None
+        assert db.session.query(User).count() == 0
+
+    @pytest.mark.parametrize('document', [['Application'], 'Application', None])
+    def test_a_body_that_is_not_an_object_is_not_a_user_actor(self, app, db_session, document):
+        assert activitypub_util.is_user_actor(document) is False
+
+    def test_an_application_whose_id_is_not_a_string_is_not_taken_for_a_server(self, app, db_session):
+        document = {'type': 'Application', 'id': ['https://peer.example/'], 'preferredUsername': PEER}
+        assert activitypub_util.is_instance_or_relay_actor(document) is False
 
 class TestConcurrentInsert:
     """`except IntegrityError: db.session.rollback(); return ...one()`.
