@@ -752,7 +752,7 @@ def test_a_document_that_names_another_url_is_followed(app, env):
     assert answer['post']['post']['id'] == post.id
 
 
-@pytest.mark.parametrize('actor_type', ['Person', 'Service', 'Group'])
+@pytest.mark.parametrize('actor_type', ['Person', 'Service', 'Application', 'Group'])
 def test_an_actor_document_becomes_an_actor(app, env, actor_type):
     from app.api.alpha.utils.misc import get_resolve_object
 

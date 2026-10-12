@@ -35,7 +35,7 @@ from app.models import User, Post, Community, File, PostReply, Instance, utcnow,
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
     Licence, UserExtraField, Feed, FeedMember, FeedItem, CommunityFlair, UserFlair, Topic, Event, InstanceBan, Emoji, \
-    UserFollower, PostBoost, QuoteAuthorization, parse_ap_timestamp, parse_ap_published, image_url_from, markdown_source, \
+    UserFollower, PostBoost, QuoteAuthorization, Relay, parse_ap_timestamp, parse_ap_published, image_url_from, markdown_source, \
     _as_text, _as_int, _as_float, _as_dict, _as_url, property_value_fields, public_key_pem, \
     more_info_link, is_more_info_link, more_info_url_from, \
     language_from_ap, adjust_domain_post_count, actor_name_from_ap, PostReplyValidationError, post_file, GALLERY_BLOCKED_WEIGHT
@@ -1169,7 +1169,7 @@ def refresh_user_profile_task(user_id, activity_json=None):
                             for label, text in property_value_fields(
                                 activity_json['attachment'])]
                     if 'type' in activity_json:
-                        user.bot = True if activity_json['type'] == 'Service' else False
+                        user.bot = is_bot_actor(activity_json)
                     user.ap_fetched_at = utcnow()
                     # D1354. A document with no readable `publicKey` leaves the
                     # key this instance already holds: an actor that stops
@@ -1878,6 +1878,35 @@ def canonical_handle(actor_json, address: str, server: str, prefix: str = '') ->
     return origin_name.lower(), id_server, origin
 
 
+
+def is_instance_or_relay_actor(activity_json) -> bool:
+    """True for an actor that stands for a whole server: the actor at the domain root (Lemmy's site), one whose
+    preferredUsername is its own domain (Mastodon's and PieFed's /actor), or a relay this instance subscribes to."""
+    actor_id = activity_json.get('id')
+    if not isinstance(actor_id, str):
+        return False
+    if urlparse(actor_id).path in ('', '/'):
+        return True
+    name = activity_json.get('preferredUsername')
+    if isinstance(name, str) and name.lower() == host_of(actor_id):
+        return True
+    return db.session.query(Relay.id).filter(func.lower(Relay.actor_id) == actor_id.lower()).first() is not None
+
+
+def is_user_actor(activity_json) -> bool:
+    """An actor this instance keeps as a User. An Application is a bot account (owner ruling, 2026-10-12: RSS
+    bots such as robot.villas publish as Application) unless it stands for a whole server."""
+    if not isinstance(activity_json, dict):   # a peer's JSON body may be a list or a scalar
+        return False
+    actor_type = activity_json.get('type')
+    if actor_type in ('Person', 'Service', 'Podcast'):
+        return True
+    return actor_type == 'Application' and not is_instance_or_relay_actor(activity_json)
+
+
+def is_bot_actor(activity_json) -> bool:
+    return activity_json.get('type') in ('Service', 'Application')
+
 def actor_json_to_model(activity_json, address, server):
     if 'type' not in activity_json:  # some Akkoma instances return an empty actor?! e.g. https://donotsta.re/users/april
         return None
@@ -1914,7 +1943,7 @@ def actor_json_to_model(activity_json, address, server):
         return None
     # G1. Castopod's podcast actor has the custom type 'Podcast'; it authors Notes like a person. Castopod 1.13-1.15
     # publish it as a Person instead, which is_castopod_podcast recognises by the server's software (D12 workaround).
-    if activity_json['type'] in ('Person', 'Service', 'Podcast'):
+    if is_user_actor(activity_json):
         user = db.session.query(User).filter(User.ap_profile_id == activity_json['id'].lower()).first()
         if user:
             if is_castopod_podcast(activity_json, user.instance):
@@ -1969,7 +1998,7 @@ def actor_json_to_model(activity_json, address, server):
                     ap_fetched_at=utcnow(),
                     ap_domain=server.lower(),
                     public_key=actor_pem,
-                    bot=True if activity_json['type'] == 'Service' else False,
+                    bot=is_bot_actor(activity_json),
                     instance_id=find_instance_id(server),
                     accept_private_messages=activity_json['acceptPrivateMessages'] if 'acceptPrivateMessages' in activity_json else 3
                     # language=community_json['language'][0]['identifier'] # todo: language

@@ -901,7 +901,7 @@ PEER_ACTOR_PUBLIC_KEY_PEM = '-----BEGIN PUBLIC KEY-----\nnot-a-real-key\n-----EN
 
 # Where each actor type's id lives on a peer, following the Lemmy/PieFed URL
 # convention the rest of this suite uses (/u/, /c/, /f/).
-_PEER_ACTOR_PATH = {'Person': 'u', 'Service': 'u', 'Group': 'c', 'Feed': 'f'}
+_PEER_ACTOR_PATH = {'Person': 'u', 'Service': 'u', 'Application': 'u', 'Group': 'c', 'Feed': 'f'}
 
 
 def peer_actor_json(actor_type: str = 'Person', name: str = 'alice',

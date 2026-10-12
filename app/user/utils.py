@@ -7,7 +7,7 @@ from sqlalchemy import text, desc, exists, or_
 
 from app import celery, db
 from app.activitypub.signature import signed_get_request, send_post_request
-from app.activitypub.util import actor_json_to_model, canonical_handle, webfinger_self_link_allowed
+from app.activitypub.util import actor_json_to_model, canonical_handle, is_user_actor, webfinger_self_link_allowed
 from app.constants import AP_FETCH_ACCEPT, POST_STATUS_REVIEWING
 from app.models import User, CommunityMember, Community, Site, BannedInstances, Post, \
     PostVote, ArchivedPostReply, PostReply, UserNote
@@ -181,7 +181,7 @@ def search_for_user(address: str, allow_fetch: bool = True, retry: bool = False)
                 else:
                     return None
 
-                if 'type' in object and object['type'] in ('Person', 'Service', 'Podcast'):
+                if is_user_actor(object):
                     handle = canonical_handle(object, name, server)   # interop C1 item 9 (Amendment A)
                     if handle is None:
                         return None
