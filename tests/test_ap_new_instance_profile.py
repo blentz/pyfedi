@@ -167,6 +167,24 @@ class TestWhatTheActorDocumentSays:
         assert instance.outbox is None
         assert instance.software == 'lemmy'
 
+    @pytest.mark.parametrize('inbox', [
+        'https://elsewhere.test/inbox',
+        f'https://{DOMAIN}@elsewhere.test/inbox',
+        f'https://{DOMAIN}./inbox',
+    ], ids=['other-host', 'userinfo', 'trailing-dot'])
+    def test_an_inbox_on_another_host_is_not_taken(self, env, inbox):
+        """The owner ruling of 2026-10-11 (interop C1): a remote actor's inbox is trusted only on its own host. An
+        instance's announces are delivered to this inbox, so a peer naming another host's would have them posted
+        there; the instance's /inbox is assumed instead, as for a document that names none."""
+        answer(env, actor=an_application(inbox=inbox))
+        new_instance_profile_task(env.instance.id)
+        assert reload(env).inbox == f'https://{DOMAIN}/inbox'
+
+    def test_an_inbox_on_its_own_host_written_differently_is_taken(self, env):
+        answer(env, actor=an_application(inbox=f'https://{DOMAIN.upper()}:8443/shared'))
+        new_instance_profile_task(env.instance.id)
+        assert reload(env).inbox == f'https://{DOMAIN.upper()}:8443/shared'
+
     def test_something_that_is_not_an_application(self, env):
         """Most software answers with something else, and its inbox is at
         /inbox regardless."""
