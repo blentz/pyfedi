@@ -136,3 +136,7 @@ def test_author_deleted_post_has_no_switch(page_world, app):
     db.session.commit()
     assert page(app, page_world, f'/post/{post.id}').select('p.language_switch') == []
 
+
+def test_post_body_lang_follows_the_shown_variant(page_world, app):
+    soup = page(app, page_world, f"/post/{page_world['post'].id}?lang=fr")
+    assert soup.select_one('.post_body')['lang'] == 'fr'

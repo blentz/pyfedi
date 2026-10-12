@@ -277,7 +277,7 @@
                 </a>
             {% endif -%}
         {% endif -%}
-        <div class="post_body" lang="{{ post.language_code() }}">
+        <div class="post_body" lang="{{ v.code }}">
             {{ v.body_html | community_links | feed_links| person_links | safe if post.body_html and sees_deleted_original else '' }}
             {% if archive_link -%}
                 <p>
