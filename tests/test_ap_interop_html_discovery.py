@@ -18,12 +18,14 @@ and video, the types the old list left out -- when its author is local.
 
 Spec: docs/superpowers/specs/2026-10-11-ap-interop-c1-design.md, item 1.
 """
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
 from app import db
 from app.constants import POST_TYPE_IMAGE, POST_TYPE_VIDEO
+from app.utils import ap_alternate_url
 from app.models import Feed, Instance, Language, Site
 from tests.factories import (make_community, make_community_member, make_instance, make_post,
                              make_user)
@@ -256,6 +258,7 @@ UNCLEAN_IDS = [
     'https://peer.example/u/x"y',
     'ftp://peer.example/u/x',
     'https:///u/x',
+    'https://peer.example/users/日本',
 ]
 
 
@@ -298,7 +301,12 @@ def test_a_remote_post_with_an_unclean_id_advertises_nothing(app, env):
     remote_post = make_post(community, remote, 'https://peer.example/post/9>; rel="x"')
     db.session.commit()
 
-    assert_no_alternate(app.test_client().get(f'/post/{remote_post.id}'))
+    response = app.test_client().get(f'/post/{remote_post.id}')
+
+    assert response.status_code == 200
+    assert '<link rel="alternate" type="application/activity+json"' not in response.get_data(as_text=True)
+    # the header names our own /post/<id>, not the peer's id, so it stays (D1086)
+    assert ap_link_headers(response) == [AP_HEADER.format(f'https://test.piefed.local/post/{remote_post.id}')]
 
 
 def test_a_remote_actors_ap_public_url_is_never_advertised(app, env):
@@ -312,3 +320,23 @@ def test_a_remote_actors_ap_public_url_is_never_advertised(app, env):
     assert response.status_code == 200
     assert ap_link_headers(response) == [AP_HEADER.format(remote.ap_profile_id)]
     assert 'rel="x"' not in str(response.headers)
+
+
+def test_a_remote_feed_with_an_unclean_id_advertises_nothing(app, env):
+    viewer, author, community, post = env
+    feed = Feed(user_id=viewer.id, title='news', name='news', machine_name='news', instance_id=1, public=True,
+                ap_id='news@peer.example', ap_profile_id='https://peer.example/f/news>; rel="x"')
+    db.session.add(feed)
+    db.session.commit()
+
+    with patch('app.feed.routes.render_template', return_value='rendered') as render:
+        response = as_user(app, viewer).get('/f/news@peer.example')
+
+    assert response.status_code == 200
+    assert render.call_args.kwargs['ap_alternate'] is None
+
+
+def test_a_remote_actor_without_an_id_advertises_nothing():
+    actor = SimpleNamespace(is_local=lambda: False, ap_profile_id=None)
+
+    assert ap_alternate_url(actor) is None

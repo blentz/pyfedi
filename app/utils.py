@@ -125,7 +125,7 @@ def ap_alternate_url(actor) -> str | None:
 
 def clean_ap_url(url: str | None) -> str | None:
     """`url` if it is a clean http(s) URL with a host, else None (see ap_alternate_url)."""
-    if not url or _AP_ALTERNATE_FORBIDDEN.search(url):
+    if not url or not url.isascii() or _AP_ALTERNATE_FORBIDDEN.search(url):
         return None
     parts = urlparse(url)
     return url if parts.scheme in ('http', 'https') and parts.netloc else None

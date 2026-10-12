@@ -456,9 +456,8 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
         # discovering the object from the HTML had nothing to follow.
         # Measured: `PROBE ah1 Link headers:` one oembed link and the site's
         # rsl licence, which survives only because `after_request` uses `add`.
-        if ap_alternate:
-            response.headers.add('Link',
-                                 f'<https://{current_app.config["SERVER_NAME"]}/post/{post.id}>; rel="alternate"; type="application/activity+json"')
+        response.headers.add('Link',
+                             f'<https://{current_app.config["SERVER_NAME"]}/post/{post.id}>; rel="alternate"; type="application/activity+json"')
         oembed_url = url_for('post.post_oembed', post_id=post.id, _external=True)
         response.headers.add('Link', f'<{oembed_url}>; rel="alternate"; type="application/json+oembed"')
         if current_user.is_anonymous:
