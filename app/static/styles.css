@@ -4279,18 +4279,19 @@ body.compact-max .post_teaser .post_utilities_bar .voting_buttons_new .upvote_bu
   }
 }
 
-/*# sourceMappingURL=styles.css.map */
-.quote_card {
+.quote_card, blockquote.quote_card {
   border-left: 3px solid var(--bs-border-color, #ccc);
   background-color: var(--bs-secondary-bg-subtle);
   padding: var(--spacing-4) var(--spacing-8);
   margin: var(--spacing-8) 0;
   font-size: 0.9em;
 }
-.quote_card .quote_card_meta {
+.quote_card .quote_card_meta, blockquote.quote_card .quote_card_meta {
   opacity: 0.8;
 }
-.quote_card .quote_card_text {
+.quote_card .quote_card_text, blockquote.quote_card .quote_card_text {
   display: block;
   text-decoration: none;
 }
+
+/*# sourceMappingURL=styles.css.map */

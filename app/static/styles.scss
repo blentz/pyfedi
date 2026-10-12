@@ -3340,7 +3340,9 @@ div:has(> input.hide_field) {
 @import "scss/compact";
 @import "scss/print";
 
-.quote_card {
+// blockquote.quote_card is (0,1,1), as `.post_body blockquote` is, and comes later, so the card keeps its own style
+.quote_card,
+blockquote.quote_card {
   border-left: 3px solid var(--bs-border-color, #ccc);
   background-color: var(--bs-secondary-bg-subtle);
   padding: var(--spacing-4) var(--spacing-8);
