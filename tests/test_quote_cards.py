@@ -1,4 +1,6 @@
 """C2 quote cards: resolution and the card-or-line decision."""
+import re
+from collections import Counter
 from unittest.mock import patch
 
 import pytest
@@ -458,3 +460,41 @@ def test_a_comments_card_sits_inside_its_content_warning(world, app):
     response = logged_in_client(app, world['viewer']).get(f"/post/{world['target'].id}")
     comment = BeautifulSoup(response.data, 'html.parser').select_one(f'#comment_{reply.id}')
     assert comment.select_one('details.content_warning .quote_card') is not None
+
+
+def test_a_page_of_cards_costs_a_constant_number_of_queries(world, app):
+    from flask_login import login_user
+    posts = []
+    for n in range(20):
+        target = make_post(world['community'], world['quoted_author'], ap_id=f'https://{PEER}/post/t{n}')
+        reply = make_post_reply(target, world['quoted_author'], body=f'comment {n}')
+        reply.ap_id = f'https://{PEER}/comment/t{n}'
+        p = make_post(world['community'], world['quoter'], ap_id=f'https://{PEER}/post/q{n}')
+        p.quote_ap_id = target.ap_id if n % 2 else reply.ap_id
+        posts.append(p)
+    db.session.commit()
+    db.session.expire_all()
+    posts = [db.session.get(type(p), p.id) for p in posts]
+    statements = []
+    listener = lambda *args: statements.append(args[2])
+    with app.test_request_context('/'):
+        login_user(world['viewer'])
+        event.listen(db.engine, 'before_cursor_execute', listener)
+        try:
+            html = render_template_string("{% from 'post/_quote_card.html' import render_quote %}"
+                                          "{% for p in posts %}{{ render_quote(p) }}{% endfor %}", posts=posts)
+        finally:
+            event.remove(db.engine, 'before_cursor_execute', listener)
+    assert html.count('<blockquote class="quote_card"') == 20
+    tables = Counter(re.search(r'FROM\s+"?(\w+)', s).group(1) for s in statements)
+    assert len(statements) <= 10, f'{len(statements)} statements: {dict(tables)}'
+
+
+def test_a_requests_viewer_cache_is_kept_per_viewer(world, app):
+    world['community'].private = True
+    db.session.add(BannedInstances(domain='elsewhere.test'))
+    db.session.commit()
+    with app.test_request_context('/'):
+        assert quote_state(world['quoting'], world['viewer'])['kind'] == 'line'
+        assert quote_state(world['quoting'], world['quoter'])['kind'] == 'card'  # a member
+        assert quote_state(world['quoting'], world['viewer'])['kind'] == 'line'
