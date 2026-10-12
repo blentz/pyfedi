@@ -6,7 +6,7 @@ import pytest
 from app import db
 from app.activitypub.util import (create_post_reply, quote_id_from, update_post_from_activity,
                                   update_post_reply_from_activity)
-from app.models import Post
+from app.models import Post, PostReply
 from app.utils import utcnow
 from tests.factories import make_community, make_community_member, make_instance, make_post, make_site, make_user
 
@@ -146,3 +146,10 @@ def test_reply_update_sets_and_clears(world, redis_lock_only_double, before, aft
                                             'object': _note(6, inReplyTo=parent.ap_id,
                                                             **({'quote': after} if after else {}))})
     assert reply.quote_ap_id == after
+
+
+def test_a_local_reply_without_request_json_stores_no_quote(world, redis_lock_only_double):
+    _, author, parent = world
+    reply = PostReply.new(author, parent, None, body='hi', body_html='<p>hi</p>', notify_author=True,
+                          language_id=None, distinguished=False, answer=False)
+    assert reply.quote_ap_id is None
