@@ -297,7 +297,7 @@ def test_undo_like_calls_undo_vote_with_both_objects_none_and_announces_batchabl
     calls = record_moderation(monkeypatch, 'announce_activity_to_followers')
     seen_undo_vote_args = []
 
-    def fake_undo_vote(comment, post_, target_ap_id, user, emoji=None):
+    def fake_undo_vote(comment, post_, target_ap_id, user):
         seen_undo_vote_args.append((comment, post_))
         return post
 

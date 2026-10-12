@@ -4833,41 +4833,64 @@ def update_post_from_activity(post: Post, request_json: dict):
             set_post_gallery(post, request_json, post.community.low_quality)
 
 
-def undo_vote(comment, post, target_ap_id, user, emoji: str | None = None):
-    """Take back `user`'s vote on the post or comment at `target_ap_id`, and return that post or comment.
+def _users_vote(voted_on, user):
+    """`user`'s vote row on the Post or PostReply `voted_on`, or None."""
+    if isinstance(voted_on, Post):
+        return PostVote.query.filter_by(user_id=user.id, post_id=voted_on.id).first()
+    return PostReplyVote.query.filter_by(user_id=user.id, post_reply_id=voted_on.id).first()
 
-    Returns None when `target_ap_id` names neither. A target with no vote from this user still returns the
-    target: a repeated Undo is a successful no-op. `comment` and `post` are unused and kept for the callers.
 
-    `emoji` is set for an Undo of an EmojiReact. An EmojiReact is stored as the user's one vote row with the
-    emoji in its `emoji` column (process_upvote), so the row is taken back only while it still carries that
-    emoji: a user who has switched to another reaction since keeps the new one.
+def _take_back_vote(voted_on, existing_vote):
+    """Delete `existing_vote` from `voted_on`, moving the counters and the author's reputation back.
 
     A deleted vote that carried an emoji was counted in the target's `emoji_reactions` cache, so the cache is
     rebuilt (interop C1 item 3). It used to be left stale, which showed an undone reaction forever."""
-    voted_on = find_liked_object(target_ap_id)
-    if isinstance(voted_on, Post):
-        existing_vote = PostVote.query.filter_by(user_id=user.id, post_id=voted_on.id).first()
-    elif isinstance(voted_on, PostReply):
-        existing_vote = PostReplyVote.query.filter_by(user_id=user.id, post_reply_id=voted_on.id).first()
+    had_emoji = existing_vote.emoji is not None
+    with db.session.begin_nested():
+        db.session.execute(text('UPDATE "user" SET reputation = reputation - :effect WHERE id = :user_id'),
+                           {'effect': existing_vote.effect, 'user_id': voted_on.user_id})
+    if existing_vote.effect < 0:  # Lemmy sends 'like' for upvote and 'dislike' for down votes. Cool! When it undoes an upvote it sends an 'Undo Like'. Fine. When it undoes a downvote it sends an 'Undo Like' - not 'Undo Dislike'?!
+        voted_on.down_votes -= 1
     else:
-        return None
-    if existing_vote and (emoji is None or existing_vote.emoji == emoji):
-        had_emoji = existing_vote.emoji is not None
-        with db.session.begin_nested():
-            db.session.execute(text('UPDATE "user" SET reputation = reputation - :effect WHERE id = :user_id'),
-                               {'effect': existing_vote.effect, 'user_id': voted_on.user_id})
-        if existing_vote.effect < 0:  # Lemmy sends 'like' for upvote and 'dislike' for down votes. Cool! When it undoes an upvote it sends an 'Undo Like'. Fine. When it undoes a downvote it sends an 'Undo Like' - not 'Undo Dislike'?!
-            voted_on.down_votes -= 1
-        else:
-            voted_on.up_votes -= 1
-        voted_on.score -= existing_vote.effect
-        db.session.delete(existing_vote)
+        voted_on.up_votes -= 1
+    voted_on.score -= existing_vote.effect
+    db.session.delete(existing_vote)
+    db.session.commit()
+    if had_emoji:
+        voted_on.update_reaction_cache()
         db.session.commit()
-        if had_emoji:
-            voted_on.update_reaction_cache()
-            db.session.commit()
+
+
+def undo_vote(comment, post, target_ap_id, user):
+    """Take back `user`'s vote on the post or comment at `target_ap_id`, and return that post or comment.
+
+    Returns None when `target_ap_id` names neither. A target with no vote from this user still returns the
+    target: a repeated Undo is a successful no-op. `comment` and `post` are unused and kept for the callers."""
+    voted_on = find_liked_object(target_ap_id)
+    if not isinstance(voted_on, (Post, PostReply)):
+        return None
+    existing_vote = _users_vote(voted_on, user)
+    if existing_vote:
+        _take_back_vote(voted_on, existing_vote)
     return voted_on
+
+
+def undo_reaction(target_ap_id, user, emoji) -> tuple[Post | PostReply | None, bool]:
+    """Take back `user`'s EmojiReact on the post or comment at `target_ap_id`: (that post or comment, whether a
+    reaction was taken back). The target is None when `target_ap_id` names neither.
+
+    An EmojiReact is stored as the user's one vote row with the emoji in its `emoji` column (process_upvote), so
+    only a vote carrying an emoji is a reaction; a plain vote is never taken back. When the Undo names an emoji
+    (`emoji` set), the vote must still carry that one: a user who has switched to another reaction since keeps
+    the new one. With no emoji named, any reaction of the user on the target is the one undone (interop C1 item 3)."""
+    voted_on = find_liked_object(target_ap_id)
+    if not isinstance(voted_on, (Post, PostReply)):
+        return None, False
+    existing_vote = _users_vote(voted_on, user)
+    if existing_vote is None or existing_vote.emoji is None or (emoji is not None and existing_vote.emoji != emoji):
+        return voted_on, False
+    _take_back_vote(voted_on, existing_vote)
+    return voted_on, True
 
 
 def undo_boost(target_ap_id: str, user: User) -> Union[Post, None]:

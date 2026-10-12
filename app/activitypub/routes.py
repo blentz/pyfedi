@@ -32,7 +32,7 @@ from app.activitypub.util import activity_dedupe_key, claim_activity, release_ac
     verify_announced_inner, verify_ld_accepted_activity, ACTOR_UPDATE_TYPES, ANNOUNCED_DELETE_DEFERRED, cross_origin_delete_delay, _id_of, \
     post_replies_for_ap, is_vote, known_instance_id, resolve_remote_post_from_search, proactively_delete_content, \
     process_quote_boost, object_has_missing_fields, find_microblogging_community, process_announce_of_uri, \
-    announce_target_uri, undo_boost, withdraw_flag, LD_SIGNED_LOG_PREFIX, current_ld_signed, current_as_sent, normalise_activity_types, \
+    announce_target_uri, undo_boost, undo_reaction, withdraw_flag, LD_SIGNED_LOG_PREFIX, current_ld_signed, current_as_sent, normalise_activity_types, \
     NO_STRING_TYPE_MESSAGE, names_actor, refresh_user_profile_task, delete_remote_group, GROUP_DELETED_MESSAGE, \
     may_delete_group, ANNOUNCED_GROUP_DELETE_REFUSED, user_followers_count, user_following_count, create_activity_of
 # The module, not the name: app.community.routes reaches this file through
@@ -2131,10 +2131,17 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                     if core_activity['object']['type'] in ('Like', 'Dislike', 'EmojiReact'):  # Undoing an upvote, downvote or reaction
                         post = comment = None
                         target_ap_id = core_activity['object']['object']
-                        # An EmojiReact is stored as the user's vote carrying its emoji (process_upvote); its Undo
-                        # takes the vote back only while it still carries that emoji (interop C1 item 3)
-                        emoji = core_activity['object'].get('content') if core_activity['object']['type'] == 'EmojiReact' else None
-                        post_or_comment = undo_vote(comment, post, target_ap_id, user, emoji=emoji)
+                        if core_activity['object']['type'] == 'EmojiReact':
+                            # An EmojiReact is stored as the user's vote carrying its emoji (process_upvote); its Undo
+                            # takes back only such a vote, and only while it carries the emoji named (interop C1 item 3)
+                            post_or_comment, undone = undo_reaction(target_ap_id, user,
+                                                                    core_activity['object'].get('content'))
+                            if post_or_comment and not undone:
+                                log_incoming_ap(id, APLOG_UNDO_VOTE, APLOG_IGNORED, saved_json,
+                                                'Undo EmojiReact: no reaction to take back')
+                                return
+                        else:
+                            post_or_comment = undo_vote(comment, post, target_ap_id, user)
                         if post_or_comment:
                             log_incoming_ap(id, APLOG_UNDO_VOTE, APLOG_SUCCESS, saved_json)
                             if not announced and post_or_comment.visibility in OPEN_VISIBILITIES:
