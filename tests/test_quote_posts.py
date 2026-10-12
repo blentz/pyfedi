@@ -38,6 +38,8 @@ def test_dict_form_uses_its_id():
     None, '', 42, [QUOTED], {'id': 7}, {}, 'ftp://other.test/1', 'https:///nohost', 'javascript:alert(1)',
     'https://other.test/' + 'a' * 240, 'https://ötherr.test/1', 'https://other.test/a b',
     'https://other.test/\x00', 'https://[::1/', 'other.test/1',
+    'https://x.test/"><script>', 'https://x.test/<b>', 'https://x.test/a\\b', 'https://x.test/a^b',
+    'https://x.test/a`b', 'https://x.test/{a}', 'https://x.test/a|b', 'https://x.test/a"b',
 ])
 def test_hostile_values_are_refused(value):
     assert quote_id_from({'id': OWN, 'quote': value}) is None
