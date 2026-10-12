@@ -171,12 +171,54 @@ def test_a_tombstone_for_another_id_is_not_proof(app, db_session, http_mock, mon
     assert (log.result, log.exception_message) == ('failure', 'Group Delete of an object that still exists')
 
 
-def test_a_tombstone_naming_the_group_in_another_case_is_proof(app, db_session, http_mock, monkeypatch):
-    """Group ids are stored lowercased here, so the Tombstone's id is compared without case."""
+GROUP_AS_SERVED = f'https://{PEER}/c/Memes'
+
+
+@pytest.mark.parametrize('answer', [{'status_code': 410},
+                                    {'status_code': 200, 'json': {'id': GROUP_AS_SERVED, 'type': 'Tombstone'}},
+                                    {'status_code': 200,
+                                     'json': {'id': GROUP_AS_SERVED.replace(PEER, PEER.upper()), 'type': 'Tombstone'}}],
+                         ids=['410', 'tombstone', 'tombstone-host-in-another-case'])
+def test_a_group_on_a_case_sensitive_host_is_verified_at_its_own_url(app, db_session, http_mock, monkeypatch,
+                                                                    answer):
+    """Final review M6. The Group's id is stored lowercased, and an origin with case-sensitive paths answers 404 for
+    the lowercased URL: its Delete could never be verified. The origin is asked at the id as it served it
+    (ap_public_url), and a Tombstone's id is compared with that: scheme and host without case, the path exactly."""
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     w = _world()
+    w.community.ap_public_url = GROUP_AS_SERVED
+    db.session.commit()
     community_id = w.community.id
-    http_mock.get(GROUP).respond(200, json={'id': GROUP.replace('memes', 'Memes'), 'type': 'Tombstone'})
+    http_mock.get(GROUP_AS_SERVED).respond(**answer)   # the lowercased URL is not mocked: asking it fails the test
+
+    dispatch(_self_delete(w))
+
+    db.session.expire_all()
+    assert db.session.get(Community, community_id).ap_deleted_at is not None
+
+
+@pytest.mark.parametrize('tombstone_id', [GROUP, 'https:///c/Memes', 'http://[::1/c/Memes'],
+                         ids=['path-in-another-case', 'no-host', 'unparseable'])
+def test_a_tombstone_whose_path_differs_in_case_is_not_proof(app, db_session, http_mock, monkeypatch, tombstone_id):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    w = _world()
+    w.community.ap_public_url = GROUP_AS_SERVED
+    db.session.commit()
+    community_id = w.community.id
+    http_mock.get(GROUP_AS_SERVED).respond(200, json={'id': tombstone_id, 'type': 'Tombstone'})
+
+    dispatch(_self_delete(w))
+
+    db.session.expire_all()
+    assert db.session.get(Community, community_id).ap_deleted_at is None
+
+
+def test_a_group_with_no_stored_public_url_is_asked_at_its_id(app, db_session, http_mock, monkeypatch):
+    w = _world()
+    w.community.ap_public_url = None
+    db.session.commit()
+    community_id = w.community.id
+    http_mock.get(GROUP).respond(410)
 
     dispatch(_self_delete(w))
 
