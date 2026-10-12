@@ -67,6 +67,7 @@ this file touches goes through technique (1). No third technique is introduced.
 """
 import contextlib
 from datetime import datetime
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -360,31 +361,19 @@ class TestVideoVoteCollections:
 
 
 class TestVideoVoteCollectionRetry:
-    """The `except httpx.HTTPError:` / `time.sleep(3)` / second `get_request`
-    pair at `app/activitypub/util.py:3282-3287`.
+    """A Video Update's `likes`/`dislikes` collections are fetched ONCE each.
 
-    `no_real_sleeping` (tests/conftest.py:503-518) neutralises both sleep sites,
-    not just the one in this block: `app/activitypub/util.py` does a
-    module-level `import time` and calls `time.sleep(3)`, which a patch to
-    `time.sleep` covers, while `app/utils.py` binds `from time import sleep` at
-    import and needs `app.utils.sleep` patched separately. That second one is
-    load-bearing here -- see the call-count arithmetic below.
-
-    `get_request` itself no longer retries (D738/D775: only a housekeeping task
-    asks it to), so each failing `get_request` call costs ONE route call.
+    update_post_from_activity runs on the inbox, and D775 makes all inbox
+    processing no-retry. It used to catch httpx.HTTPError, `time.sleep(3)`
+    and ask again (review I2). Now a failed fetch leaves that collection
+    uncounted, with no sleep and no second request.
     """
 
-    @pytest.mark.usefixtures('no_real_sleeping')
-    def test_a_failed_fetch_is_retried_and_the_second_attempt_counts(self, app, db_session,
-                                                                     http_mock,
-                                                                     redis_lock_only_double):
-        """First `get_request` raises, the second succeeds.
-
-        The outcome alone cannot tell a retry from a first-attempt success --
-        both end with the collection counted -- so the assertion is on the
-        respx route's own call count. Two: the first `get_request`, then the
-        block's own second call.
-        """
+    def test_a_failed_fetch_is_not_retried(self, app, db_session, http_mock, redis_lock_only_double,
+                                           monkeypatch):
+        slept = Mock()
+        monkeypatch.setattr('app.activitypub.util.time.sleep', slept)
+        monkeypatch.setattr('app.utils.sleep', slept)
         post = _seed_post()
         _seed_vote_baseline(post)
         route = http_mock.get(LIKES_URL).mock(side_effect=[
@@ -394,26 +383,8 @@ class TestVideoVoteCollectionRetry:
 
         update_post_from_activity(post, _update(type='Video', name='a post', likes=LIKES_URL))
 
-        assert route.call_count == 2
-        assert post.up_votes == 10
-        assert post.down_votes == 0
-        assert post.score == 10
-
-    @pytest.mark.usefixtures('no_real_sleeping')
-    def test_a_failed_retry_leaves_the_request_none(self, app, db_session, http_mock,
-                                                    redis_lock_only_double):
-        """Both `get_request` calls raise, so `object_request = None` and the
-        `if object_request and ...` guard short-circuits on it.
-
-        Two route calls: one for each of the block's two `get_request` calls.
-        """
-        post = _seed_post()
-        _seed_vote_baseline(post)
-        route = http_mock.get(LIKES_URL).mock(side_effect=httpx.ConnectError('boom'))
-
-        update_post_from_activity(post, _update(type='Video', name='a post', likes=LIKES_URL))
-
-        assert route.call_count == 2
+        assert route.call_count == 1
+        slept.assert_not_called()
         assert post.up_votes == 1
         assert post.down_votes == 0
         assert post.score == 1
