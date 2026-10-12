@@ -267,3 +267,8 @@ def test_private_community_target_is_a_card_only_for_a_member(world):
     assert quote_state(world['quoting'], world['viewer'])['kind'] == 'line'
     make_community_member(world['viewer'], world['community'])
     assert quote_state(world['quoting'], world['viewer'])['kind'] == 'card'
+
+
+def test_banned_community_target_is_a_line(world):
+    world['community'].banned = True
+    assert quote_state(world['quoting'], world['viewer'])['kind'] == 'line'

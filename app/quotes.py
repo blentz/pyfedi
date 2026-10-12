@@ -88,7 +88,7 @@ def _shows_card(item, q, user) -> bool:
     if q.deleted:
         return False
     community = db.session.get(Community, q.community_id)
-    if community is None or community.is_gone() or community.id in blocked_communities(uid) \
+    if community is None or community.is_gone() or community.banned or community.id in blocked_communities(uid) \
             or community.id in communities_banned_from(uid):
         return False
     if community.private and community.id not in community_membership_private(uid):  # show_post: 403 otherwise
