@@ -205,7 +205,7 @@
             {% if post.content_warning -%}<p>{{ post.content_warning }}</p>{% else -%}{{ first_paragraph(post.body_html) | safe }}{% endif -%}
         </div>
     {% endif -%}
-    {{ render_quote(post, locale=locale) }}
+    {% if not post.content_warning %}{{ render_quote(post, locale=locale, blur=blur_content) }}{% endif %}{# the post page shows it inside the warning #}
     {{ render_utilities_bar(post, sort=sort, current_user=current_user, joined_communities=joined_communities, can_upvote_here=can_upvote_here, can_downvote_here=can_downvote_here, disable_voting=disable_voting, recently_upvoted=recently_upvoted, recently_downvoted=recently_downvoted, communities_banned_from_list=communities_banned_from_list, upvoted_class=upvoted_class, downvoted_class=downvoted_class, reported_posts=reported_posts, moderated_community_ids=moderated_community_ids) }}
 </div>
 {%- endmacro %}
@@ -230,7 +230,7 @@
             {% if post.content_warning -%}<p>{{ post.content_warning }}</p>{% else -%}{{ first_paragraph(post.body_html) | safe }}{% endif -%}
         </div>
     {% endif -%}
-    {{ render_quote(post, locale=locale) }}
+    {% if not post.content_warning %}{{ render_quote(post, locale=locale, blur=blur_content) }}{% endif %}{# the post page shows it inside the warning #}
     {{ render_utilities_bar(post, sort=sort, current_user=current_user, joined_communities=joined_communities, can_upvote_here=can_upvote_here, can_downvote_here=can_downvote_here, disable_voting=disable_voting, recently_upvoted=recently_upvoted, recently_downvoted=recently_downvoted, communities_banned_from_list=communities_banned_from_list, upvoted_class=upvoted_class, downvoted_class=downvoted_class, reported_posts=reported_posts, moderated_community_ids=moderated_community_ids) }}
 </div>
 {%- endmacro %}
@@ -257,7 +257,7 @@
             {% if post.content_warning -%}<p>{{ post.content_warning }}</p>{% else -%}{{ first_paragraph(post.body_html) | safe }}{% endif -%}
         </div>
     {% endif -%}
-    {{ render_quote(post, locale=locale) }}
+    {% if not post.content_warning %}{{ render_quote(post, locale=locale, blur=blur_content) }}{% endif %}{# the post page shows it inside the warning #}
     {{ render_utilities_bar(post, sort=sort, current_user=current_user, joined_communities=joined_communities, can_upvote_here=can_upvote_here, can_downvote_here=can_downvote_here, disable_voting=disable_voting, recently_upvoted=recently_upvoted, recently_downvoted=recently_downvoted, communities_banned_from_list=communities_banned_from_list, upvoted_class=upvoted_class, downvoted_class=downvoted_class, reported_posts=reported_posts, moderated_community_ids=moderated_community_ids) }}
 </div>
 {%- endmacro %}
@@ -284,7 +284,7 @@
             {% if post.content_warning -%}<p>{{ post.content_warning }}</p>{% else -%}{{ first_paragraph(post.body_html) | safe }}{% endif -%}
         </div>
     {% endif -%}
-    {{ render_quote(post, locale=locale) }}
+    {% if not post.content_warning %}{{ render_quote(post, locale=locale, blur=blur_content) }}{% endif %}{# the post page shows it inside the warning #}
     {{ render_utilities_bar(post, sort=sort, current_user=current_user, joined_communities=joined_communities, can_upvote_here=can_upvote_here, can_downvote_here=can_downvote_here, disable_voting=disable_voting, recently_upvoted=recently_upvoted, recently_downvoted=recently_downvoted, communities_banned_from_list=communities_banned_from_list, upvoted_class=upvoted_class, downvoted_class=downvoted_class, reported_posts=reported_posts, moderated_community_ids=moderated_community_ids) }}
 </div>
 {%- endmacro %}
@@ -309,7 +309,7 @@
             {% if post.content_warning -%}<p>{{ post.content_warning }}</p>{% else -%}{{ first_paragraph(post.body_html) | safe }}{% endif -%}
         </div>
     {% endif -%}
-    {{ render_quote(post, locale=locale) }}
+    {% if not post.content_warning %}{{ render_quote(post, locale=locale, blur=blur_content) }}{% endif %}{# the post page shows it inside the warning #}
     <div id="post_reactions_{{ post.id }}" class="outermost_reaction_container">
         {%- if post.emoji_reactions -%}
         <div class="message_reactions" id="p_reactions_{{ post.id }}">
