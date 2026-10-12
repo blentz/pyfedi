@@ -1512,6 +1512,16 @@ def post_purge(post_id: int):
     return redirect(url_for('user.show_profile_by_id', user_id=post.user_id))
 
 
+def _translate_source(item, v) -> str:
+    """The translator's source language for what `v` shows of `item`. A variant's language may not be loaded in
+    LibreTranslate (LT_LOAD_ONLY), which fails the call, so a variant is translated from auto-detection ('auto'). For the default, a source
+    equal to the site language might just mean the author did not specify one, so that is 'auto' too."""
+    default = item.language.code if item.language_id else 'und'
+    if v.code != default or v.code == 'und' or v.code == site_language_code():
+        return 'auto'
+    return v.code
+
+
 @bp.route('/post_teaser/<int:post_id>/translate', methods=['POST'])
 @login_required
 def post_teaser_translate(post_id: int):
@@ -1521,9 +1531,7 @@ def post_teaser_translate(post_id: int):
     if current_app.config['TRANSLATE_ENDPOINT']:
         recipient_language = get_recipient_language(current_user.id)
         v = variants.shown(post)
-        source = v.code if v.code != 'und' else 'auto'
-        if source == site_language_code():
-            source = 'auto'
+        source = _translate_source(post, v)
         result_title = libretranslate_string(v.title,
                                              source=source,
                                              target=recipient_language)
@@ -1556,9 +1564,7 @@ def post_translate(post_id: int):
     if current_app.config['TRANSLATE_ENDPOINT']:
         recipient_language = get_recipient_language(current_user.id)
         v = variants.shown(post)
-        source = v.code if v.code != 'und' else 'auto'
-        if source == site_language_code():  # If the source is the same as the default then there's a chance the author didn't specify a language, so just use 'auto'
-            source = 'auto'
+        source = _translate_source(post, v)
         result = libretranslate_string(v.body_html,
                                        source=source,
                                        target=recipient_language)
@@ -1589,9 +1595,7 @@ def post_reply_translate(post_reply_id: int):
     if current_app.config['TRANSLATE_ENDPOINT']:
         recipient_language = get_recipient_language(current_user.id)
         v = variants.shown(post_reply)
-        source = v.code if v.code != 'und' else 'auto'
-        if source == site_language_code():
-            source = 'auto'
+        source = _translate_source(post_reply, v)
         result = libretranslate_string(v.body_html,
                                        source=source,
                                        target=recipient_language)
