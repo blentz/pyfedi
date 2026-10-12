@@ -91,11 +91,19 @@ def test_is_activitypub_request_ignores_a_q_value_of_zero(app, accept, expected)
 
 # ---- served ------------------------------------------------------------------------------------------------------
 
+HARD_CODED_CONTENT_TYPE = re.compile(r"""(content_type\s*=|\[\s*['"]Content-Type['"]\s*\]\s*=)\s*['"]application/activity\+json['"]""")
+
+
+@pytest.mark.parametrize('line', ["content_type = 'application/activity+json'", 'content_type = "application/activity+json"',
+                                  "headers['Content-Type'] = 'application/activity+json'",
+                                  'headers["Content-Type"] = "application/activity+json"'])
+def test_the_hard_coded_content_type_pattern_catches_either_quote(line):
+    assert HARD_CODED_CONTENT_TYPE.search(line)
+
+
 @pytest.mark.parametrize('module', ['activitypub/routes.py', 'main/routes.py'])
 def test_no_activitypub_route_hard_codes_its_content_type(module):
-    source = (APP / module).read_text()
-    assert "content_type = 'application/activity+json'" not in source
-    assert "headers['Content-Type'] = 'application/activity+json'" not in source
+    assert not HARD_CODED_CONTENT_TYPE.search((APP / module).read_text())
 
 
 def test_a_user_document_asked_for_as_json_ld_is_served_as_json_ld(app, db_session, monkeypatch):
