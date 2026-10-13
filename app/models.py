@@ -4767,6 +4767,15 @@ class CommunityMember(db.Model):
     )
 
 
+# A user who joined a server view (/c/microblogs@<host>): that server's public microblogs reach their
+# Subscribed feed. Local only; nothing federates (spec 2026-10-13-server-view-join-design.md).
+class ServerViewMember(db.Model):
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), primary_key=True)
+    instance_id = db.Column(db.Integer, db.ForeignKey('instance.id', ondelete='CASCADE'), primary_key=True,
+                            index=True)
+    created_at = db.Column(db.DateTime, default=utcnow)
+
+
 class CommunityFavorite(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), primary_key=True)
     community_id = db.Column(db.Integer, db.ForeignKey('community.id'), primary_key=True)

@@ -28,7 +28,7 @@ from app.community.forms import SearchRemoteCommunity, CreateDiscussionForm, Cre
     InviteCommunityForm, MoveCommunityForm, EditCommunityFlairForm, SetMyFlairForm, FindAndBanUserCommunityForm, \
     CreateEventForm, InviteAcceptForm, EditCommunityMembership, CommunityRssFeedEdit, DeleteCommunityRssFeedForm
 from app.community.live import LIVE_COMMUNITY, is_live_community, is_local_microblogs, live_available, live_posts, \
-    microblog_server_view, busiest_microblog_servers
+    microblog_server_view, busiest_microblog_servers, join_server_view, leave_server_view
 from app.community.util import search_for_community, actor_to_community, \
     save_icon_file, save_banner_file, \
     delete_post_from_community, delete_post_reply_from_community, \
@@ -77,7 +77,7 @@ from app.shared.tasks import task_selector
 # The module, not the names: app.shared.feed reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.feed)
 import app.shared.feed as shared_feed
-from app.utils import get_recipient_language, subscribed_feeds, feed_membership, is_local_microblogs, ap_alternate_url
+from app.utils import get_recipient_language, subscribed_feeds, feed_membership, is_local_microblogs, ap_alternate_url, joined_server_views
 from app.rss_extras import RSSFeed
 from datetime import timezone, timedelta
 from flask import render_template as flask_render_template
@@ -789,6 +789,8 @@ def show_community(community: Community, from_instance=None):
                                          content_filters=content_filters, sort=sort, flair=flair, show_post_community=False,
                                          tags=[] if view_actor else hashtags_used_in_community(community.id, content_filters),
                                          view_actor=view_actor,
+                                         view_joined=from_instance is not None and current_user.is_authenticated
+                                         and from_instance.id in joined_server_views(current_user.id),
                                          microblog_servers=busiest_microblog_servers(community.id)
                                          if is_local_microblogs(community) and not view_actor else None,
                                          live_sse_feed=f'instance:{from_instance.id}' if from_instance is not None else f'community:{community.id}',
@@ -977,6 +979,9 @@ def subscribe(actor):
     # POST only, so login_required checks the CSRF token (D994 sibling). htmx swaps in
     # the leave button; without JS the button is a plain form, answered with a redirect.
     htmx = bool(request.headers.get('HX-Request'))
+    if actor_to_community(actor) is None and (instance := microblog_server_view(actor)) is not None:
+        join_server_view(current_user.id, instance)     # a server view: local only (spec 2026-10-13)
+        return server_view_button_response(actor, joined=True, htmx=htmx)
     do_subscribe(actor, current_user.id, admin_preload=htmx)
     if htmx:
         community = actor_to_community(actor)
@@ -984,6 +989,14 @@ def subscribe(actor):
     else:
         # send them back where they came from
         return back('/c/' + actor)
+
+
+def server_view_button_response(actor: str, joined: bool, htmx: bool):
+    """After joining or leaving a server view: the swapped button for htmx, else back to the page."""
+    if htmx:
+        return render_template('community/_server_view_button.html', view_actor=actor.strip().lower(),
+                               view_joined=joined)
+    return back('/c/' + actor)
 
 
 # this is separated out from the subscribe route so it can be used by the 
@@ -1089,6 +1102,8 @@ def unsubscribe(actor):
     # POST only, so login_required checks the CSRF token (D994). htmx swaps in the
     # join button; without JS the button is a plain form, answered with a redirect.
     community = actor_to_community(actor)
+    if community is None and leave_server_view(current_user.id, actor):     # spec 2026-10-13
+        return server_view_button_response(actor, joined=False, htmx=bool(request.headers.get('HX-Request')))
 
     if community is not None:
         subscription = community_membership(current_user, community)

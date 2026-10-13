@@ -237,6 +237,8 @@
                     </ul>
                 </div>
             </div>
+            {% elif current_user.is_authenticated -%}
+                {% with button_class='w-100' -%}{% include 'community/_server_view_button.html' -%}{% endwith %}
             {% endif -%}
         </div>
     </div>

@@ -16,7 +16,7 @@ from app.constants import POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_ARTICLE, PO
     SUBSCRIPTION_MODERATOR, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, SUBSCRIPTION_PENDING, ROLE_ADMIN_NAME, VERSION, \
     POST_TYPE_EVENT, AP_MEDIA_TYPES
 from app.models import Site, utcnow
-from app.utils import getmtime, gibberish, shorten_string, shorten_url, digits, user_access, community_membership, \
+from app.utils import getmtime, gibberish, shorten_string, shorten_url, digits, user_access, community_membership, joined_server_views, \
     can_upvote, can_downvote, shorten_number, ap_datetime, current_theme, community_link_to_href, \
     in_sorted_list, role_access, first_paragraph, person_link_to_href, feed_membership, html_to_text, remove_images, \
     notif_id_to_string, feed_link_to_href, get_setting, set_setting, show_explore, human_filesize, can_upload_video, \
@@ -87,6 +87,7 @@ def register_request_hooks(app):
     app.jinja_env.globals['switch_url'] = switch_url
     before_render_template.connect(prime_quotes, app)  # C2: one lookup per table per rendered page
     app.jinja_env.globals['post_community_link'] = post_community_link
+    app.jinja_env.globals['joined_server_views'] = joined_server_views
     app.jinja_env.filters['community_links'] = community_link_to_href
     app.jinja_env.filters['feed_links'] = feed_link_to_href
     app.jinja_env.filters['person_links'] = person_link_to_href

@@ -19,6 +19,8 @@
                         </div>
                     {% endif -%}
                 </div>
+                {% elif current_user.is_authenticated -%}
+                {% with button_class='w-100' -%}{% include 'community/_server_view_button.html' -%}{% endwith %}
                 {% endif -%}
                 <form method="get" action="/search">
                     <input type="search" id="search_community" name="q" class="form-control mt-2" placeholder="{{ _('Search this community') }}" />

@@ -286,15 +286,16 @@ class TestTheList:
 
         assert VIEW_LINK in client.get('/communities').get_data(as_text=True)
 
-    def test_a_view_row_has_no_join_control(self, client, live):
+    def test_a_view_row_joins_the_server_view(self, client, live):
+        # It joins the server view, never the microblogs community (spec 2026-10-13, which
+        # reverses this spec's non-goal); tests/test_server_view_join.py covers Leave.
         live.toot()
         login(client, live.viewer)
 
         html = client.get('/communities?search=microblogs').get_data(as_text=True)
 
         assert VIEW_LINK in html
-        assert '/community/microblogs@mastodon.example/subscribe' not in html
-        assert '/community/microblogs@mastodon.example/unsubscribe' not in html
+        assert '/community/microblogs@mastodon.example/subscribe' in html
 
     @pytest.mark.parametrize('query', ['home_select=local', 'subscribe_select=subscribed', 'topic_id=1',
                                        'language_id=1', 'feed_id=1', 'platform=peertube', 'nsfw=yes'])

@@ -72,7 +72,8 @@ from app.models import CronJobLog, Settings, Domain, Instance, BannedInstances, 
     Site, Post, utcnow, Filter, CommunityMember, InstanceBlock, CommunityBan, Topic, UserBlock, Language, \
     File, ModLog, CommunityBlock, Feed, FeedMember, CommunityFlair, CommunityJoinRequest, Notification, UserNote, \
     PostReply, PostReplyBookmark, AllowedInstances, InstanceBan, Tag, Emoji, UserExtraField, ArchivedPostReply, \
-    RevokedToken, CommunityFavorite, UserFollower, CommunityFlairBlock, s3_key_from_url, Role, RolePermission
+    RevokedToken, CommunityFavorite, UserFollower, CommunityFlairBlock, s3_key_from_url, Role, RolePermission, \
+    ServerViewMember
 from collections import Counter
 from flask import has_request_context
 import app as app_pkg
@@ -3603,6 +3604,15 @@ def moderating_communities_ids_all_users() -> dict[int, List[int]]:
 
 
 @cache.memoize(timeout=300)
+def joined_server_views(user_id) -> set:
+    """The instance ids of the server views (/c/microblogs@<host>) a user joined. Deleted from the
+    cache on join and leave (spec 2026-10-13-server-view-join-design.md)."""
+    if not user_id:
+        return set()
+    return set(db.session.scalars(select(ServerViewMember.instance_id).where(ServerViewMember.user_id == user_id)))
+
+
+@cache.memoize(timeout=300)
 def joined_communities(user_id) -> List[Community]:
     if user_id is None or user_id == 0:
         return []
@@ -5104,10 +5114,22 @@ FOLLOWED_BOOSTER_SQL = """(EXISTS (SELECT 1 FROM post_boost pb
 # carries it.
 MICROBLOG_GATE = 'p.private is false'
 
+# A joined server view (spec 2026-10-13-server-view-join-design.md): that server's microblogs in
+# the microblogs community, public only, as its /public/local timeline would list them. Like the
+# two follow sources it is exempt from MICROBLOG_GATE: joining a server is following its authors.
+# `c` is the post's community; its test is find_microblogging_community()'s. Binds :local_user_id.
+JOINED_SERVER_SQL = """(EXISTS (SELECT 1 FROM server_view_member svm
+                                WHERE svm.user_id = :local_user_id
+                                AND svm.instance_id = p.instance_id)
+                                AND c.instance_id = 1 AND c.user_id = 1 AND c.name = 'microblogs' AND """ + listable_sql('p') + ')'
+
 
 def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, hashtag: str = '', include_following=False, community_sql: str = None, newer_than=None) -> List[int]:
+    joined_servers = include_following and current_user.is_authenticated and joined_server_views(current_user.id)
     if not community_sql and (community_ids is None or len(community_ids) == 0):
-        return []
+        if not joined_servers:
+            return []
+        community_ids = [0]     # no community matches id 0: the joined server views are the only source
     # result_id is client-controlled (every web caller reads it from ?result_id= and
     # echoes it back into its pagination links), while the cached value is a list of
     # post ids filtered for ONE viewer's authorisation that nothing downstream
@@ -5141,8 +5163,11 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
         sources.append(FOLLOWED_BOOSTER_SQL)
         params['local_user_id'] = current_user.id
         params['visibility_viewer_id'] = current_user.id
+    if joined_servers:
+        sources.append(JOINED_SERVER_SQL)
+        params['local_user_id'] = current_user.id
 
-    post_id_where = ["(" + " OR ".join(sources) + ")", 'c.banned is false']
+    post_id_where =["(" + " OR ".join(sources) + ")", 'c.banned is false']
     if current_user.is_authenticated and current_user.hide_low_quality and community_ids[0] == -1:
         post_id_where.append('c.low_quality is false')
 
