@@ -22,7 +22,7 @@ from app.activitypub.entitlement import PRIVATE_HEADERS, actor_document, address
 from app.activitypub.signature import POST_REQUIRED, HttpSignature, VerificationError, VerificationFormatError, default_context, LDSignature, \
     send_post_request, verify_with_key_refresh, request_key_id
 from app.activitypub.util import MEDIA_OBJECT_TYPES, MEDIA_URL_KIND, media_url_from, activity_dedupe_key, community_actor_data, refresh_community_profile_task, claim_activity, release_activity, host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
-    post_to_activity, post_count_collections, find_actor_or_create_cached, find_liked_object, \
+    post_to_activity, post_count_collections, comment_count_collections, find_actor_or_create_cached, find_liked_object, \
     lemmy_site_data, is_activitypub_request, delete_post_or_comment, community_members, \
     create_post, create_post_reply, update_post_reply_from_activity, \
     update_post_from_activity, undo_vote, post_to_page, find_reported_object, \
@@ -2570,21 +2570,30 @@ def user_liked(actor):
     return count_only_collection(f"{user.public_url()}/liked", user_liked_count(user))
 
 
+def comment_ap_refusal(reply: PostReply):
+    """The response that refuses an ActivityPub fetch of local `reply` (or of its count collections), or None to
+    serve it. comment_ap's checks, in their order, held here so the comment and its collections cannot diverge."""
+    if reply.community.local_only or reply.community.private:
+        abort(403)
+    if reply.visibility not in OPEN_VISIBILITIES and not followers_entitled(reply):
+        abort(404)
+    if reply.deleted:
+        return tombstone_response(reply.ap_id, 'Note', private=not is_open(reply))
+    requesting_domain = signed_requestor_domain()
+    if reply.author.has_blocked_instance(known_instance_id(requesting_domain)):
+        return make_response(f'Author has blocked {requesting_domain}'), 401
+    return None
+
+
 @bp.route('/comment/<int:comment_id>', methods=['GET', 'HEAD'])
 def comment_ap(comment_id):
     reply = db.session.get(PostReply, comment_id) or abort(404)
     if is_activitypub_request():
         if not reply.is_local():
             return redirect(reply.ap_id, code=301)
-        if reply.community.local_only or reply.community.private:
-            abort(403)
-        if reply.visibility not in OPEN_VISIBILITIES and not followers_entitled(reply):
-            abort(404)
-        if reply.deleted:
-            return tombstone_response(reply.ap_id, 'Note', private=not is_open(reply))
-        requesting_domain = signed_requestor_domain()
-        if reply.author.has_blocked_instance(known_instance_id(requesting_domain)):
-            return make_response(f'Author has blocked {requesting_domain}'), 401
+        refusal = comment_ap_refusal(reply)
+        if refusal is not None:
+            return refusal
         reply_data = comment_model_to_json(reply) if request.method == 'GET' else []
         if request.method == 'GET' and not is_open(reply):   # S6: who it is for, as send_reply pushed it
             addressed_as_pushed(reply_data, reply)
@@ -2596,6 +2605,20 @@ def comment_ap(comment_id):
         return resp
     else:
         return post_routes.continue_discussion(reply.post.id, comment_id)
+
+
+@bp.route('/comment/<int:comment_id>/<any(likes, dislikes):collection>', methods=['GET'])
+def comment_count_collection_ap(comment_id, collection):
+    # GET only (D192). Only a local comment advertises these ids, as post_count_collection_ap.
+    if not is_activitypub_request():
+        return redirect(url_for('activitypub.comment_ap', comment_id=comment_id))
+    reply = db.session.get(PostReply, comment_id) or abort(404)
+    if not reply.is_local():
+        abort(404)
+    refusal = comment_ap_refusal(reply)
+    if refusal is not None:
+        return refusal
+    return count_collection_response(comment_count_collections(reply)[collection], reply)
 
 
 def former_type_of_post(post: Post) -> str:
