@@ -8,12 +8,12 @@ from app.activitypub.signature import (POST_REQUIRED, HttpSignature, Verificatio
                                       verify_refreshing_key)
 from app.activitypub.util import (claim_activity, release_activity, create_resolved_object, find_microblogging_community, host_of,
                                   log_incoming_ap, remote_object_to_json)
-from app.constants import APLOG_ANNOUNCE, APLOG_DUPLICATE, APLOG_FAILURE, APLOG_FOLLOW, APLOG_IGNORED, APLOG_NOTYPE, APLOG_SUCCESS
+from app.constants import APLOG_ANNOUNCE, APLOG_CREATE, APLOG_DUPLICATE, APLOG_FAILURE, APLOG_FOLLOW, APLOG_IGNORED, APLOG_NOTYPE, APLOG_SUCCESS
 from app.discovery.instance_answers import instance_actor_url
 from app.models import Community, Post, PostReply, Relay, utcnow
 from app.relays import RELAY_ACCEPTED, RELAY_PENDING, RELAY_REFUSED, relay_context
 from app.relays import subscribe as relay_subscribe
-from app.utils import get_task_session, patch_db_session
+from app.utils import get_task_session, instance_banned, patch_db_session
 
 
 def _verified(request, relay) -> bool:
@@ -151,6 +151,50 @@ def relay_actor_gate(request, request_json):
     return '', 200
 
 
+def accept_unsigned_forward(relay, request_json, saved_json):
+    """A forward that accepted `relay` HTTP-signed but whose body has no verifiable LD signature (spec 2026-10-13).
+    The relay's copy is never used: a Create's object is fetched from its origin in the background, where
+    process_relayed_announce re-checks the relay rules. Always answered 200, so the relay keeps delivering."""
+    activity_id = request_json.get('id') or ''
+    actor = request_json.get('actor')
+    if not claim_activity(activity_id, actor):
+        log_incoming_ap(activity_id, APLOG_DUPLICATE, APLOG_IGNORED, saved_json, 'Already aware of this activity')
+        return '', 200
+    activity_type = request_json.get('type')
+    if activity_type != 'Create':
+        log_incoming_ap(activity_id, APLOG_NOTYPE, APLOG_IGNORED, saved_json,
+                        f'relayed {activity_type} without a verifiable signature')
+        return '', 200
+    obj = request_json.get('object')
+    uri = obj.get('id') if isinstance(obj, dict) else obj
+    if not isinstance(uri, str) or not uri:
+        log_incoming_ap(activity_id, APLOG_CREATE, APLOG_IGNORED, saved_json, 'relayed object has no id')
+        return '', 200
+    if isinstance(obj, dict):   # the unverified copy can only make us skip a fetch, never accept content
+        allowed, reason = relayed_activity_allowed(request_json)
+        if not allowed:
+            log_incoming_ap(activity_id, APLOG_CREATE, APLOG_IGNORED, saved_json, reason)
+            return '', 200
+    host = host_of(uri)
+    if not host or not isinstance(actor, str) or host != host_of(actor):
+        log_incoming_ap(activity_id, APLOG_CREATE, APLOG_IGNORED, saved_json, 'relayed object host does not match actor')
+        return '', 200
+    if instance_banned(host):
+        log_incoming_ap(activity_id, APLOG_CREATE, APLOG_IGNORED, saved_json, 'relayed object from a banned instance')
+        return '', 200
+    try:
+        if current_app.debug:
+            process_relayed_announce(relay.id, uri)
+        else:
+            process_relayed_announce.apply_async(args=(relay.id, uri), queue='background')
+    except Exception:
+        release_activity(activity_id, actor)   # R-DEDUPEUNDO: the relay's retry must be processed
+        raise
+    log_incoming_ap(activity_id, APLOG_CREATE, APLOG_SUCCESS, saved_json,
+                    'relayed object queued for fetch from its origin')
+    return '', 200
+
+
 def _exists(ap_id) -> bool:
     return isinstance(ap_id, str) and bool(Post.get_by_ap_id(ap_id) or PostReply.get_by_ap_id(ap_id))
 
@@ -229,6 +273,8 @@ def send_relay_follow_accept(relay_id, follow):
 
 @celery.task
 def process_relayed_announce(relay_id, object_uri):
+    """Fetch a relayed object from its origin and store it (an Announce-style relay's Announce, or a Mastodon-style
+    forward with no verifiable LD signature)."""
     session = get_task_session()
     try:
         with patch_db_session(session):
