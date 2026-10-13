@@ -610,6 +610,8 @@ class HttpSignature:
             raise VerificationError(
                 f"Missing item from details (have: {key_names}, error: {e})"
             )
+        except ValueError:   # binascii.Error for bad padding, a plain ValueError for non-ASCII
+            raise VerificationFormatError("Signature is not valid base64")
         return signature_details
 
     @classmethod

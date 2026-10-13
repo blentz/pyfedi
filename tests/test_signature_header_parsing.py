@@ -16,7 +16,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from flask import request
 
-from app.activitypub.signature import HttpSignature, VerificationError, signature_part
+from app.activitypub.signature import HttpSignature, VerificationError, VerificationFormatError, signature_part
 from tests.factories import a_keypair
 
 SIG = base64.b64encode(b'not a real signature, only bytes to round-trip').decode('ascii')
@@ -68,6 +68,14 @@ def test_the_pseudo_header_values_are_read_bare():
 
     assert (signature_part(header, 'created'), signature_part(header, 'expires')) == ('1758240000', '1758243600')
     assert signature_part(SAMPLES['mastodon'][0], 'created') == ''
+
+
+@pytest.mark.parametrize('signature', ['abc', 'ab\u00e9cd==='])
+def test_a_signature_that_is_not_base64_is_a_format_error(signature):
+    """Badly padded base64 raised binascii.Error, and a non-ASCII value ValueError, out of parse_signature.
+    Found by the signature_header fuzz target."""
+    with pytest.raises(VerificationFormatError, match='not valid base64'):
+        HttpSignature.parse_signature(f'keyId="k",algorithm="rsa-sha256",headers="host",signature="{signature}"')
 
 
 def test_a_header_missing_its_signature_is_refused():
