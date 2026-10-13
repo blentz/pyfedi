@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app.discovery.credits import MAX_CREDITS, MAX_FEED_BYTES, parse_feed_credits
+from app.discovery.credits import MAX_CREDITS, MAX_FEED_BYTES, _document_urls, _normal_url, _urls_in, parse_feed_credits
 
 FIXTURE = Path(__file__).resolve().parent.parent / 'app' / 'discovery' / 'fixtures' / 'castopod_feed.xml'
 EP1 = 'https://pod.example/@mypodcast/episodes/ep-1'
@@ -141,3 +141,12 @@ HOSTILE_FEEDS = {
 @pytest.mark.parametrize('body', HOSTILE_FEEDS.values(), ids=HOSTILE_FEEDS.keys())
 def test_hostile_feed_bytes_never_raise(app, body):
     assert isinstance(parse_feed_credits(body, EP1), list)
+
+
+def test_a_url_urlsplit_refuses_is_no_url():
+    """urlsplit raises ValueError on an unbalanced IPv6 bracket, and _urls_in's own pattern lets 'https://[x'
+    through, so one such string in a peer's actor document (url, alsoKnownAs or a profile field) raised out of
+    matching a credited person (fuzz: credit_urls/unbalanced_ipv6, mixed_text, url_list). It is no URL."""
+    assert _normal_url('https://[x') is None
+    assert _urls_in('see https://[x and https://A.example/b/') == {'https://a.example/b'}
+    assert _document_urls({'url': [{'href': 'https://[x'}, 'https://a.example/']}) == {'https://a.example'}
