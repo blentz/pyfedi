@@ -588,6 +588,25 @@ def test_a_disallowed_actor_is_refused_under_strong_allowlist(app, signing_peer,
     assert ActivityPubLog.query.count() == 0
 
 
+@pytest.mark.parametrize('actor', ['https://[peer.example/u/alice', 'https://peer.example:99999/u/alice'])
+def test_an_unparseable_actor_is_refused_under_strong_allowlist(app, signing_peer, monkeypatch, actor):
+    """furl raises ValueError on an actor URL it cannot read -- an unbalanced IPv6 bracket, a port out of
+    range -- and the strong-allowlist gate called it unguarded, so such an actor was a 500. An actor whose host
+    cannot be read is not on the allowlist: 403, nothing logged, as for a disallowed host."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    site = db.session.get(Site, 1)
+    site.allowlist_mode = ALLOWLIST_STRONG
+    db.session.commit()
+    activity = inbox_activity(signing_peer)
+    activity['actor'] = actor
+
+    with app.test_client() as client:
+        response = client.post('/inbox', json=activity)
+
+    assert response.status_code == 403
+    assert ActivityPubLog.query.count() == 0
+
+
 def test_a_dict_shaped_actor_is_refused_under_strong_allowlist(app, signing_peer, monkeypatch):
     """REGRESSION test for D47, a live allowlist bypass that is now closed.
 

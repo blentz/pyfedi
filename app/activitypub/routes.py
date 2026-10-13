@@ -816,7 +816,11 @@ def shared_inbox():
         id = object['id']
 
     if g.site.allowlist_mode >= ALLOWLIST_STRONG and 'actor' in request_json:
-        if not instance_allowed(furl(request_json['actor']).host):
+        try:
+            actor_host = furl(request_json['actor']).host
+        except ValueError:   # an unbalanced IPv6 bracket, a port out of range: no host to allow
+            actor_host = None
+        if not instance_allowed(actor_host):
             return '', 403
 
     if app_pkg.redis_client.exists(activity_dedupe_key(id, request_json['actor'])):  # Something is sending same activity multiple times
