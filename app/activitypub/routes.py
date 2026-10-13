@@ -22,7 +22,7 @@ from app.activitypub.entitlement import PRIVATE_HEADERS, actor_document, address
 from app.activitypub.signature import POST_REQUIRED, HttpSignature, VerificationError, VerificationFormatError, default_context, LDSignature, \
     send_post_request, verify_with_key_refresh, request_key_id
 from app.activitypub.util import MEDIA_OBJECT_TYPES, MEDIA_URL_KIND, media_url_from, activity_dedupe_key, community_actor_data, refresh_community_profile_task, claim_activity, release_activity, host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
-    post_to_activity, find_actor_or_create_cached, find_liked_object, \
+    post_to_activity, post_count_collections, find_actor_or_create_cached, find_liked_object, \
     lemmy_site_data, is_activitypub_request, delete_post_or_comment, community_members, \
     create_post, create_post_reply, update_post_reply_from_activity, \
     update_post_from_activity, undo_vote, post_to_page, find_reported_object, \
@@ -2801,6 +2801,29 @@ def post_replies_ap(post_id):
         return resp
     else:
         abort(400)
+
+
+def count_collection_response(collection: dict, obj):
+    """Serve the count-only collection an object embeds (interop C5), with the object's own cache headers."""
+    resp = jsonify({'@context': default_context(), **collection})
+    resp.content_type = ap_media_type()
+    ap_content_headers(resp, obj)
+    return resp
+
+
+@bp.route('/post/<int:post_id>/<any(likes, dislikes, shares):collection>', methods=['GET'])
+def post_count_collection_ap(post_id, collection):
+    # GET only: Flask answers a HEAD itself (D192). Only a local post advertises these ids; a remote post's counts
+    # live on its own server, and ours would be partial.
+    if not is_activitypub_request():
+        return redirect(url_for('activitypub.post_ap', post_id=post_id))
+    post = db.session.get(Post, post_id) or abort(404)
+    if not post.is_local():
+        abort(404)
+    refusal = post_ap_refusal(post)
+    if refusal is not None:
+        return refusal
+    return count_collection_response(post_count_collections(post)[collection], post)
 
 
 @bp.route('/post/<int:post_id>/context', methods=['GET'])
