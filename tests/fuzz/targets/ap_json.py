@@ -374,8 +374,8 @@ def check_inboxes(data: bytes) -> None:
         assert stored_host and host_of(delivery) == stored_host, (
             f'delivery inbox {delivery!r} is not on the stored actor\'s host {stored_host!r}')
     candidates = [url for url in (declared, inbox) if url is not None]
-    if any(host_of(url) != stored_host for url in candidates):
-        assert delivery is None, 'a delivery inbox was chosen beside an off-host one'
+    if not stored_host or any(host_of(url) != stored_host for url in candidates):
+        assert delivery is None, 'a delivery inbox was chosen beside an off-host one, or for a hostless id'
     else:
         usable = [url for url in candidates if len(url) <= INBOX_URL_MAX]
         assert delivery == (usable[0] if usable else None)
