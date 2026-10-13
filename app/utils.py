@@ -2513,9 +2513,11 @@ def accepted_media_ranges(accept_header: str) -> list:
             name, value = name.strip().lower(), value.strip().strip('"')
             if name == 'q':
                 try:
-                    quality = min(max(float(value), 0.0), 1.0)
+                    quality = float(value)
                 except ValueError:
                     quality = 1.0
+                # NaN is unreadable too: it compares false with everything, so clamping would leave it NaN
+                quality = 1.0 if quality != quality else min(max(quality, 0.0), 1.0)
             else:
                 params[name] = value
         ranges.append((media_type, params, quality))

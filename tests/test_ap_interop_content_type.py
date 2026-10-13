@@ -40,6 +40,12 @@ def test_accepted_media_ranges_reads_types_parameters_and_q_values():
     ]
 
 
+def test_accepted_media_ranges_reads_a_q_of_nan_as_unreadable():
+    """float() reads 'nan', and clamping NaN with min/max leaves it NaN: q came out outside 0..1. Like any
+    other unreadable q it counts as 1. Found by the accept_header fuzz target."""
+    assert accepted_media_ranges('a/b;q=nan, c/d;q=-NaN') == [('a/b', {}, 1.0), ('c/d', {}, 1.0)]
+
+
 def test_accepted_media_ranges_keeps_a_quoted_comma_or_semicolon_inside_its_parameter():
     assert accepted_media_ranges('application/ld+json; profile="a,b;c"; q=0.4, text/html;q=0') == [
         ('application/ld+json', {'profile': 'a,b;c'}, 0.4),
