@@ -877,6 +877,25 @@ class HttpSignatureDetails(TypedDict):
 
 LD_SIGNATURE_EXPIRY_SKEW = timedelta(minutes=5)   # clock difference allowed past a signature's `expires`
 SEC_EXPIRATION = "https://w3id.org/security#expiration"
+# The deepest nesting of lists and objects LDSignature.verify_signature will expand or normalize, in the document and
+# in its signature section. URDNA2015 over nested blank nodes costs roughly the cube of the depth, and it runs before
+# the signature is checked: a 300-deep signature section took 13 s and a 200-deep "object" chain 4 s. Real
+# activities nest about 5 levels (an Announce of a Create of a Note with a tag list of objects), so 32 leaves room
+# for any genuine one while capping the work an unsigned sender can cause at milliseconds.
+LD_MAX_NESTING_DEPTH = 32
+
+
+def json_nesting_depth(node) -> int:
+    """How deeply `node` nests lists and objects: 0 for a scalar, 1 for a flat list or object. Iterative, as JSON
+    can nest deeper than the interpreter's recursion limit."""
+    deepest, pending = 0, [(node, 1)]
+    while pending:
+        node, level = pending.pop()
+        children = node.values() if isinstance(node, dict) else node if isinstance(node, list) else None
+        if children is not None:
+            deepest = max(deepest, level)
+            pending.extend((child, level + 1) for child in children)
+    return deepest
 
 
 class LDSignature:
@@ -896,6 +915,9 @@ class LDSignature:
         """
         # Strip out the signature from the incoming document
         signature = document.pop("signature", None)
+        # Before any JSON-LD work, whose cost grows with the cube of the depth: too deep is treated as unsigned
+        if max(json_nesting_depth(document), json_nesting_depth(signature)) > LD_MAX_NESTING_DEPTH:
+            raise VerificationError(f"Nested deeper than {LD_MAX_NESTING_DEPTH} levels")
         if not isinstance(signature, dict) or not all(
                 isinstance(signature.get(key), str) for key in ("type", "creator", "created", "signatureValue")):
             raise VerificationFormatError("Invalid signature section")
@@ -909,8 +931,9 @@ class LDSignature:
         # Read from the expanded options, not the `expires` key: every alias (`expiration`, ...) hashes the same
         try:
             expanded = jsonld.expand(options)
-        # RecursionError: nested past the interpreter's limit. ValueError: pyld's own, for a relative context IRI
-        except (jsonld.JsonLdError, RecursionError, ValueError):
+        # ValueError: pyld's own, for a relative context IRI. No RecursionError: the section is at most
+        # LD_MAX_NESTING_DEPTH deep
+        except (jsonld.JsonLdError, ValueError):
             raise VerificationFormatError("Invalid signature section")
         for node in expanded:
             for value in node.get(SEC_EXPIRATION, []):

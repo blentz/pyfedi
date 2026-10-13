@@ -7,12 +7,14 @@ every key of the signature section except type, id and signatureValue, so its `e
 """
 import copy
 import json
+import time
 from datetime import datetime
 
 import pytest
 
 from app.activitypub.ld_contexts import MASTODON_CONTEXT_TERMS, check_ld_coverage
-from app.activitypub.signature import LDSignature, VerificationError, VerificationFormatError
+from app.activitypub.signature import LD_MAX_NESTING_DEPTH, LDSignature, VerificationError, VerificationFormatError, \
+    json_nesting_depth
 from tests.factories import a_keypair
 
 MASTODON_PUBLIC_KEY = """-----BEGIN PUBLIC KEY-----
@@ -107,14 +109,92 @@ def test_an_expiry_at_the_edge_of_the_datetime_range_is_a_format_error(app, monk
         LDSignature.verify_signature(document, MASTODON_PUBLIC_KEY)
 
 
-def test_a_signature_section_nested_past_the_recursion_limit_is_a_format_error(app, monkeypatch):
+def test_a_signature_section_nested_past_the_recursion_limit_is_refused_before_expanding(app, monkeypatch):
     """pyld's expand recurses once per level, so a deep enough signature section raised RecursionError out of
-    verification, before the signature was checked. Found by the ld_signature_verify fuzz target."""
+    verification, before the signature was checked. Found by the ld_signature_verify fuzz target. The nesting
+    limit now refuses it before expand runs."""
     at(monkeypatch, '2026-10-11T03:00:00')
     document = copy.deepcopy(MASTODON_SIGNED_DELETE)
     document['signature']['sec:nonce'] = json.loads('[' * 5000 + ']' * 5000)
-    with pytest.raises(VerificationFormatError, match='Invalid signature section'):
+    with pytest.raises(VerificationError, match='Nested deeper than 32 levels'):
         LDSignature.verify_signature(document, MASTODON_PUBLIC_KEY)
+
+
+def object_chain(levels: int, ids: bool = True) -> dict:
+    """An activity whose JSON nests `levels` deep: a chain of objects under "object", each with an id or, if not
+    `ids`, each a blank node (the costly shape for URDNA2015)."""
+    node = {'type': 'Note', 'content': 'x'}
+    for level in range(1, levels):
+        node = {'id': f'https://a.example/n/{level}', 'type': 'Note', 'object': node} if ids else \
+            {'type': 'Note', 'object': node}
+    return {'@context': 'https://www.w3.org/ns/activitystreams', 'id': 'https://a.example/n/0', **node}
+
+
+def test_a_document_nested_past_the_limit_is_refused_quickly_as_unsigned(app):
+    """URDNA2015 costs about the cube of the depth and ran before the signature check: a 200-deep "object" chain
+    took 4 s. Past LD_MAX_NESTING_DEPTH it is a plain VerificationError, the activity treated as unsigned."""
+    document = object_chain(200, ids=False)
+    document['signature'] = {'type': 'RsaSignature2017', 'creator': 'https://a.example/u#main-key',
+                             'created': '2026-10-13T00:00:00Z', 'signatureValue': 'AAAA'}
+    started = time.perf_counter()
+    with pytest.raises(VerificationError, match='Nested deeper than 32 levels') as refused:
+        LDSignature.verify_signature(document, MASTODON_PUBLIC_KEY)
+    assert time.perf_counter() - started < 0.5
+    assert not isinstance(refused.value, VerificationFormatError)
+
+
+def test_a_signature_section_nested_past_the_limit_is_refused_quickly(app, monkeypatch):
+    """A 300-deep chain of objects in the signature section took 13 s to expand and normalize."""
+    at(monkeypatch, '2026-10-11T03:00:00')
+    document = copy.deepcopy(MASTODON_SIGNED_DELETE)
+    nested = {}
+    for _ in range(299):
+        nested = {'sec:nonce': nested}
+    document['signature']['sec:nonce'] = nested
+    started = time.perf_counter()
+    with pytest.raises(VerificationError, match='Nested deeper than 32 levels'):
+        LDSignature.verify_signature(document, MASTODON_PUBLIC_KEY)
+    assert time.perf_counter() - started < 0.5
+
+
+def test_a_genuine_signature_over_a_document_at_the_nesting_limit_verifies(app):
+    private_key, public_key = a_keypair()
+    document = object_chain(32)
+    assert json_nesting_depth(document) == LD_MAX_NESTING_DEPTH
+    document['signature'] = LDSignature.create_signature(document, private_key, 'https://a.example/u#main-key')
+
+    LDSignature.verify_signature(document, public_key)
+
+
+def test_a_document_one_past_the_nesting_limit_is_refused(app):
+    private_key, public_key = a_keypair()
+    document = object_chain(33)
+    document['signature'] = LDSignature.create_signature(document, private_key, 'https://a.example/u#main-key')
+
+    with pytest.raises(VerificationError, match='Nested deeper than 32 levels'):
+        LDSignature.verify_signature(document, public_key)
+
+
+def test_a_signature_section_one_past_the_nesting_limit_is_refused(app, monkeypatch):
+    at(monkeypatch, '2026-10-11T03:00:00')
+    document = copy.deepcopy(MASTODON_SIGNED_DELETE)
+    nested = 'x'
+    for _ in range(LD_MAX_NESTING_DEPTH):
+        nested = [nested]
+    document['signature']['sec:nonce'] = nested   # the section itself is one more level
+    with pytest.raises(VerificationError, match='Nested deeper than 32 levels'):
+        LDSignature.verify_signature(document, MASTODON_PUBLIC_KEY)
+
+
+@pytest.mark.parametrize('node, depth', [
+    ('x', 0), (None, 0), ([], 1), ({}, 1), ({'a': [1, {'b': 2}]}, 3), ([[], [[[]]]], 4),
+])
+def test_json_nesting_depth(node, depth):
+    assert json_nesting_depth(node) == depth
+
+
+def test_json_nesting_depth_reads_past_the_recursion_limit():
+    assert json_nesting_depth(json.loads('[' * 5000 + ']' * 5000)) == 5000
 
 
 def test_a_signature_section_with_a_relative_context_is_a_format_error(app, monkeypatch):
