@@ -899,7 +899,7 @@ class LDSignature:
         # Read from the expanded options, not the `expires` key: every alias (`expiration`, ...) hashes the same
         try:
             expanded = jsonld.expand(options)
-        except jsonld.JsonLdError:
+        except (jsonld.JsonLdError, RecursionError):   # RecursionError: nested past the interpreter's limit
             raise VerificationFormatError("Invalid signature section")
         for node in expanded:
             for value in node.get(SEC_EXPIRATION, []):
@@ -997,6 +997,9 @@ class LDSignature:
             while isinstance(cause.__cause__, jsonld.JsonLdError):
                 cause = cause.__cause__
             raise VerificationFormatError(f"Could not normalize document: {cause.args[0]}") from e
+        except RecursionError:
+            # pyld recurses once per level of nesting, and JSON can nest past the interpreter's limit
+            raise VerificationFormatError("Could not normalize document: nested too deeply") from None
         digest = hashes.Hash(hashes.SHA256())
         digest.update(norm_form.encode("utf8"))
         return digest.finalize().hex().encode("ascii")
