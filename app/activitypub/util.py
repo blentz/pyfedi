@@ -1031,7 +1031,8 @@ def host_of(url_string: str) -> str:
 
 def authority_of(url_string: str) -> str:
     """host_of's twin that keeps the port: the lowercased `host[:port]` of a URL, userinfo dropped, or '' when it has
-    no host or urlparse refuses it (a port out of range included). An IPv6 host is bracketed again.
+    no host or urlparse refuses it (a port out of range included). An IP-literal host (IPv6 or IPvFuture) is
+    bracketed again.
 
     A server reached on a port other than the default is a different server, and a handle names it with the port
     (`name@host:port`): ap_domain, find_instance_id and extract_domain_and_actor all keep it. host_of's host-only
@@ -1043,7 +1044,7 @@ def authority_of(url_string: str) -> str:
         return ''
     if not host:
         return ''
-    if ':' in host:
+    if '[' in parsed.netloc.rpartition('@')[2]:   # urlparse's own test; IPvFuture has no ':' to tell it by
         host = f'[{host}]'
     return f'{host}:{port}' if port is not None else host
 
