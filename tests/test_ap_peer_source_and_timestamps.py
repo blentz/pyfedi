@@ -203,6 +203,16 @@ class TestWhenAPeerSaysItWasCreated:
 
         assert value >= before
 
+    @pytest.mark.parametrize('published', ['0001-01-01T00:00+05:00', '9999-12-31T23:59-05:00'])
+    def test_a_published_whose_utc_instant_is_past_the_calendar_is_unreadable(self, app, published):
+        """fromisoformat reads both, but their UTC instants fall before year 1 and after year 9999, and the
+        conversion raised OverflowError outside the try -- losing the post. They are unreadable, as any other
+        date is. Found by the models_timestamps fuzz target."""
+        from app.models import parse_ap_published, parse_ap_timestamp
+
+        assert parse_ap_timestamp(published) is None
+        assert parse_ap_published(published) is None
+
     def test_the_column_refuses_the_raw_string_which_is_the_defect(self, app,
                                                                    db_session):
         """What the constructors used to pass. Asserted rather than described,
