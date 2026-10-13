@@ -95,6 +95,18 @@ def test_delivery_inbox_of_takes_an_on_host_inbox(app, url):
     assert delivery_inbox_of({'inbox': url}, f'https://{PEER}/u/wakko') == url
 
 
+@pytest.mark.parametrize('stored, url', [
+    ('urn:actor', 'urn:inbox'),
+    (f'https://[@{PEER}/u/wakko', 'https://[@elsewhere.example/inbox'),   # both refused by urlparse
+])
+def test_delivery_inbox_of_trusts_nothing_for_a_stored_actor_without_a_host(app, stored, url):
+    """'' == '' took an inbox with no host as on the host of a stored id with none, the second pair one httpx
+    delivers to elsewhere.example. A stored id with no host keeps its stored inbox. Found by the ap_inboxes fuzz
+    target."""
+    assert delivery_inbox_of({'inbox': url}, stored) is None
+    assert delivery_inbox_of({'endpoints': {'sharedInbox': url}}, stored) is None
+
+
 def test_delivery_inbox_of_measures_the_stored_actor_not_the_document(app):
     """The document's own `id` is the peer's word; the stored actor is not."""
     document = {'id': 'https://elsewhere.example/u/wakko', 'inbox': ELSEWHERE}
