@@ -62,3 +62,17 @@ def test_a_media_reply_still_goes_down_the_reply_path(peer, monkeypatch):
                                       'url': 'https://peer.example/files/1.png', 'inReplyTo': parent.ap_id,
                                       'content': '<p>reply</p>'}))
     assert calls['create_post'] == []
+
+
+@pytest.mark.parametrize('kind, announced', [('Video', 0), ('Page', 1), ('Note', 1), ('Audio', 1)])
+def test_an_update_of_a_stored_video_is_not_re_announced(peer, monkeypatch, kind, announced):
+    """PeerTube sends an Update for every view-count change; the old Video arm never announced them."""
+    _, community, author = peer
+    post = make_post(community, author, f'https://peer.example/m/{kind}-stored')
+    db.session.commit()
+    calls = record_moderation(monkeypatch, 'update_post_from_activity', 'announce_activity_to_followers')
+    dispatch(create_activity(author, {'type': kind, 'id': post.ap_id, 'name': 'renamed',
+                                      'url': 'https://peer.example/files/1', 'content': '<p>x</p>'},
+                             activity_type='Update'))
+    assert len(calls['update_post_from_activity']) == 1
+    assert len(calls['announce_activity_to_followers']) == announced
