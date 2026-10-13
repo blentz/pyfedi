@@ -93,6 +93,19 @@ def test_an_unreadable_expiry_is_a_format_error(app, monkeypatch):
         LDSignature.verify_signature(document, MASTODON_PUBLIC_KEY)
 
 
+@pytest.mark.parametrize('expires', ['9999-12-31T23:58:00Z', '9999-12-31T24:00:00Z', '0001-01-01T00:00:00+05:00',
+                                     '9999-12-31T23:59:00-05:00'])
+def test_an_expiry_at_the_edge_of_the_datetime_range_is_a_format_error(app, monkeypatch, expires):
+    """Reading these overflowed (the skew added to year 9999, hour 24 rolling past it, or the UTC conversion
+    of year 1 or 9999) and the OverflowError escaped verification. Found by the ld_signature_verify fuzz
+    target."""
+    at(monkeypatch, '2026-10-11T03:00:00')
+    document = copy.deepcopy(MASTODON_SIGNED_DELETE)
+    document['signature']['expires'] = expires
+    with pytest.raises(VerificationFormatError, match='Invalid signature expiry'):
+        LDSignature.verify_signature(document, MASTODON_PUBLIC_KEY)
+
+
 def test_an_expiry_without_a_timezone_is_read_as_utc(app, monkeypatch):
     """A naive `expires` is taken as UTC, as `created` is, so one that has passed is still refused."""
     at(monkeypatch, '2026-10-13T02:30:00')
