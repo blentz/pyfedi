@@ -1054,3 +1054,14 @@ class TestTheOutboxBackfill:
             'orderedItems': [{'object': 'https://peer.test/object/1'}]})
 
         assert Post.query.count() == 0
+
+
+@pytest.mark.parametrize('value', [float('inf'), float('-inf'), float('nan')])
+def test_a_number_that_is_not_finite_is_no_integer(value):
+    """Python's json module, and so Flask's get_json, reads NaN and Infinity as floats; int() of those raised
+    OverflowError or ValueError, out of gallery_attachments' width and height among others, and the post was lost.
+    Found by the models_coercers fuzz target."""
+    from app.models import _as_int
+
+    assert _as_int(value, None) is None
+    assert _as_int(value, 7) == 7
