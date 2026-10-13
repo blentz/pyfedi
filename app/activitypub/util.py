@@ -279,12 +279,15 @@ def object_language(obj: dict, map_code: str | None):
 MEDIA_OBJECT_TYPES = ('Audio', 'Document', 'Image', 'Video')  # C4: media objects a peer may Create as posts
 MEDIA_URL_KIND = {'Image': 'image', 'Audio': 'audio', 'Document': None}  # Video keeps its object id as the url
 MAX_MEDIA_URL_ENTRIES = 20
+MAX_POST_URL_LENGTH = 2048  # Post.url
+MAX_IMAGE_SOURCE_URL_LENGTH = 1024  # File.source_url
 
 
 def media_url_from(obj: dict, kind: str | None) -> str | None:
     """C4. The media URL of an Image/Audio/Document object: from `url` (a string, a Link dict's `href`, a dict's
     `url`, or a list of those), the first entry whose `mediaType` is `kind/*`; else the first entry without a
-    `mediaType` (any entry when `kind` is None). Only http(s) URLs that url_is_storable accepts count."""
+    `mediaType` (any entry when `kind` is None). Only http(s) URLs that url_is_storable accepts, and that fit
+    their column, count."""
     value = obj.get('url')
     entries = value[:MAX_MEDIA_URL_ENTRIES] if isinstance(value, list) else [value]
     fallback = None
@@ -294,7 +297,8 @@ def media_url_from(obj: dict, kind: str | None) -> str | None:
             media_type = entry.get('mediaType') if isinstance(entry.get('mediaType'), str) else None
             entry = entry.get('href') or entry.get('url')
         if not isinstance(entry, str) or not entry.lower().startswith(('http://', 'https://')) \
-                or not url_is_storable(entry):
+                or not url_is_storable(entry) or len(entry) > MAX_POST_URL_LENGTH \
+                or (kind == 'image' and len(entry) > MAX_IMAGE_SOURCE_URL_LENGTH):  # longer than its column: a DataError
             continue
         if kind and media_type:
             if media_type.lower().startswith(kind + '/'):
