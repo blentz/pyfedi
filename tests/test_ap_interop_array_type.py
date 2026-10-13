@@ -85,6 +85,14 @@ def test_an_array_with_no_string_is_refused(holder):
     assert normalise_activity_types(announce) is None
 
 
+@pytest.mark.parametrize('document', [['id', 'type', 'actor', 'object'], 'id type actor object', None, 5])
+def test_a_document_that_is_not_an_object_is_refused(document):
+    """shared_inbox's minimum-fields gate is `'id' in request_json`, which a list or a string passes; this read
+    `.get` off it and raised AttributeError. Something that is not an object has no type. Found by the
+    ap_activity_types fuzz target."""
+    assert normalise_activity_types(document) is None
+
+
 # ---- the dispatcher ----------------------------------------------------------------------------------------------
 
 def _create_setup(app, monkeypatch):

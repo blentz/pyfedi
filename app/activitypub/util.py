@@ -1187,7 +1187,10 @@ def normalise_activity_types(activity: dict) -> dict | None:
 
     JSON-LD lets `type` be an array; the dispatcher compares it as a string. Returns `activity` itself when no type
     it covers is an array, else a deep copy with each array replaced by `_single_type`'s choice, so the original --
-    what is stored, logged and LD-verified -- is never changed. Returns None when an array holds no string or names more than one dispatched type."""
+    what is stored, logged and LD-verified -- is never changed. Returns None when an array holds no string or names more than one dispatched type,
+    and for a document that is not an object at all."""
+    if not isinstance(activity, dict):
+        return None
     if not any(isinstance(holder.get('type'), list) for holder in _type_holders(activity)):
         return activity
     normalised = copy.deepcopy(activity)
