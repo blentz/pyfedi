@@ -1851,7 +1851,11 @@ def microblog_content_to_link(html: str, exclude: str, skip: str | None = None):
     soup = BeautifulSoup(html, "html.parser")
 
     for link in soup.find_all("a"):
-        if link.get("href") != skip and furl(link.get("href")).host != exclude:  # C2: skip is the quoted id
+        try:
+            host = furl(link.get("href")).host
+        except ValueError:  # an href furl cannot parse (an unbalanced IPv6 bracket) names no page to link to
+            continue
+        if link.get("href") != skip and host != exclude:  # C2: skip is the quoted id
             return link.get("href")
     return None
 
