@@ -8930,7 +8930,7 @@ msgstr ""
 #: app/templates/post/post_reply_options.html:122
 #, python-format
 msgid "Ban @%(author_name)s from %(community_name)s"
-msgstr "I-ban ang \"%(user_name)s\" gikan sa %(community_name)s"
+msgstr "I-ban ang @%(author_name)s gikan sa %(community_name)s"
 
 #: app/templates/post/post_reply_options.html:129
 #: app/templates/post/post_reply_options.html:133
