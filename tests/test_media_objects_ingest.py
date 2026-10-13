@@ -3,6 +3,7 @@ import contextlib
 
 import pytest
 from bs4 import BeautifulSoup
+from flask import render_template_string
 
 from app import db
 from app.activitypub.util import update_post_from_activity
@@ -234,3 +235,17 @@ def test_a_long_media_name_is_shortened_to_the_title_width_in_update(world, redi
     post = _stored(world, 45, 'Audio', name='Song', url=AUDIO)
     _update(post, 45, 'Audio', name='n' * 300, url=AUDIO)
     assert len(post.title) <= 255 and post.title.endswith('…')
+
+
+TITLE = ("{{% from '{theme}post/post_teaser/_macros.html' import render_title %}}"
+         "{{{{ render_title(post, current_user=current_user, request=request, locale='en', "
+         "user_pronouns={{}}, reported_posts=[], admin_ids=[], user_flair={{}}, user_notes={{}}) }}}}")
+
+
+@pytest.mark.parametrize('theme', ['', 'themes/dillo/'])
+@pytest.mark.parametrize('kind, url, icon', [('Audio', AUDIO, True), ('Document', 'https://docs.example/1.pdf', False)])
+def test_a_listing_shows_the_audio_icon_for_an_audio_post_without_an_audio_extension(world, app, theme, kind, url, icon):
+    post = _stored(world, 50, kind, name='Thing', url=url)
+    with app.test_request_context('/'):
+        soup = BeautifulSoup(render_template_string(TITLE.format(theme=theme), post=post), 'html.parser')
+    assert (soup.select_one('.fe-audio') is not None) is icon

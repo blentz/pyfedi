@@ -24,7 +24,7 @@
         <span class="fe fe-event" aria-hidden="true"> </span>
     {% endif -%}
     {% if post.domain_id and post.url -%}
-        {% if post.url.endswith('.mp3') -%}
+        {% if post.url.endswith('.mp3') or (post.extensions or {}).get('media_type') == 'audio' -%}
             <span class="fe fe-audio" aria-hidden="true"></span>
         {% endif -%}
         {% if post.type == POST_TYPE_VIDEO -%}
