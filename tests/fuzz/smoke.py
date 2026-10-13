@@ -27,7 +27,7 @@ replay; a smoke run is a check, and leaving SHA-named crash files in the
 committed tree for someone to notice in `git status` is the wrong way to report
 one. So each target gets -artifact_prefix=tests/fuzz/.work/smoke/<target>/
 (gitignored, emptied before every run so a stale artifact cannot fail a clean
-run), which run_campaign.campaign_argv lets override its own default. The
+run), which tests.fuzz.campaign.campaign_argv lets override its default. The
 coverage corpus still goes to tests/fuzz/.work/<target>/, shared with
 run_campaign, so a smoke run also extends the next campaign's starting point.
 The libFuzzer output of each run is kept beside its artifacts as campaign.log.
