@@ -3408,7 +3408,7 @@ msgstr "No puedes unirte a esta comunidad"
 #, fuzzy, python-format
 msgid "Invited %(num)d person"
 msgid_plural "Invited %(num)d people"
-msgstr[0] "Ver %(name)s"
+msgstr[0] ""
 msgstr[1] ""
 
 #: app/community/routes.py:2678
@@ -3758,12 +3758,12 @@ msgstr "Publicaciones de %(instance)s"
 #: app/instance/routes.py:331
 #, fuzzy, python-format
 msgid "Content from %(instance_domain)s will be hidden."
-msgstr "El contenido de %(name)s se ocultará."
+msgstr ""
 
 #: app/instance/routes.py:348
 #, fuzzy, python-format
 msgid "%(instance_domain)s has been unblocked."
-msgstr "%(name)s ha sido bloqueado."
+msgstr ""
 
 #: app/main/forms.py:9
 msgid "Community to post this link to"
@@ -4300,9 +4300,9 @@ msgid "Moderator removed"
 msgstr "Moderador retirado"
 
 #: app/shared/feed.py:95
-#, fuzzy, python-format
+#, python-format
 msgid "You subscribed to %(feed_title)s"
-msgstr "Ver quién está suscrito a %(community)s"
+msgstr ""
 
 #: app/shared/feed.py:142
 #, python-format
@@ -4402,8 +4402,6 @@ msgstr ""
 #, fuzzy, python-format
 msgid "%(actor)s has been banned, deleted and all their content deleted."
 msgstr ""
-"%(name)s bloqueado para todos los usuarios y todo el contenido ha sido "
-"eliminado."
 
 #: app/shared/user.py:186
 msgid "Banned user was a remote instance admin."
@@ -4417,7 +4415,7 @@ msgstr "Permisos de rol"
 #: app/shared/user.py:190
 #, fuzzy, python-format
 msgid "%(actor)s has been banned."
-msgstr "%(name)s ha sido bloqueado."
+msgstr ""
 
 #: app/shared/user.py:248
 msgid "Someone wants to follow you"
@@ -8386,7 +8384,7 @@ msgstr "No hay reportes todavía"
 #: app/templates/community/community_moderate_comments.html:24
 #, fuzzy, python-format
 msgid "Review comments in %(community)s"
-msgstr "Nuevas publicaciones en %(community_name)s"
+msgstr ""
 
 #: app/templates/community/community_moderate_comments.html:34
 #: app/templates/user/show_profile.html:296
@@ -8879,9 +8877,9 @@ msgid "Format example: news@lemmy.world. One per line."
 msgstr "Ejemplo de formato: news@lemmy.world. Una por línea."
 
 #: app/templates/feed/feed_create_post.html:13
-#, fuzzy, python-format
+#, python-format
 msgid "Which community within %(feed)s to post in?"
-msgstr "¿En qué comunidad dentro de %(topic)s publicar?"
+msgstr ""
 
 #: app/templates/feed/feed_create_post.html:23
 #: app/templates/feed/feed_create_post.html:38
@@ -9139,9 +9137,9 @@ msgstr "Botón de voto positivo."
 #: app/templates/themes/dillo/post/post_teaser/_macros.html:95
 #: app/templates/themes/dillo/post/reply/_macros.html:13
 #: app/templates/themes/dillo/post/reply/_macros.html:24
-#, fuzzy, python-format
+#, python-format
 msgid "Score: %(score)s"
-msgstr "Nota de usuario: %(note)s"
+msgstr ""
 
 #: app/templates/post/_comment_voting_buttons.html:11
 #: app/templates/post/post_teaser/_macros.html:127
@@ -9942,9 +9940,9 @@ msgid "Undistinguish"
 msgstr ""
 
 #: app/templates/post/post_reply_options.html:122
-#, fuzzy, python-format
+#, python-format
 msgid "Ban @%(author_name)s from %(community_name)s"
-msgstr "Bloquear a \"%(user_name)s\" en %(community_name)s"
+msgstr ""
 
 #: app/templates/post/post_reply_options.html:129
 #: app/templates/post/post_reply_options.html:133
@@ -11778,7 +11776,7 @@ msgstr "Lista separada por comas de comunidades sugeridas"
 #: app/topic/routes.py:303
 #, fuzzy, python-format
 msgid "New topic suggestion from %(site_name)s"
-msgstr "Bloquear a todos los de %(instance_name)s"
+msgstr ""
 
 #: app/topic/routes.py:308
 msgid ""
@@ -12349,17 +12347,17 @@ msgstr "No puedes desbloquearte a ti mismo."
 #: app/user/routes.py:905
 #, fuzzy, python-format
 msgid "%(actor)s has been unbanned."
-msgstr "%(name)s ha sido desbloqueado."
+msgstr ""
 
 #: app/user/routes.py:940
 #, fuzzy, python-format
 msgid "%(actor)s has been blocked."
-msgstr "%(name)s ha sido bloqueado."
+msgstr ""
 
 #: app/user/routes.py:1011
 #, fuzzy, python-format
 msgid "%(actor)s has been unblocked."
-msgstr "%(name)s ha sido bloqueado."
+msgstr ""
 
 #: app/user/routes.py:1037
 msgid ""
@@ -12404,7 +12402,7 @@ msgstr "Este usuario ha sido eliminado."
 #: app/user/routes.py:1144
 #, fuzzy, python-format
 msgid "%(community_name)s has been unblocked."
-msgstr "%(name)s ha sido bloqueado."
+msgstr ""
 
 #: app/user/routes.py:1169
 #, fuzzy, python-format
@@ -12434,7 +12432,7 @@ msgstr "Filtro eliminado."
 #: app/user/routes.py:1671
 #, fuzzy, python-format
 msgid "User not found: %(username)s"
-msgstr "Editar nota para \"%(user_name)s\""
+msgstr ""
 
 #: app/user/routes.py:1681 app/user/routes.py:1726 app/user/routes.py:1760
 #, fuzzy, python-format

@@ -3193,7 +3193,7 @@ msgstr ""
 #: app/community/routes.py:1216
 #, fuzzy, python-format
 msgid "This community prefers posts in %(language_names)s"
-msgstr "Ustaw właściciela społeczności na %(user_name)s"
+msgstr ""
 
 #: app/community/routes.py:1218
 msgid "Add post to community"
@@ -3407,7 +3407,7 @@ msgstr "Nie możesz dołączyć do tej społeczności"
 #, fuzzy, python-format
 msgid "Invited %(num)d person"
 msgid_plural "Invited %(num)d people"
-msgstr[0] "Zaproś do %(name)s"
+msgstr[0] ""
 msgstr[1] ""
 msgstr[2] ""
 
@@ -3501,10 +3501,10 @@ msgid "JSON"
 msgstr "Dołącz"
 
 #: app/dev/routes.py:149
-#, fuzzy, python-format
+#, python-format
 msgid "%(num)d dev community deleted"
 msgid_plural "%(num)d dev communities deleted"
-msgstr[0] "%(num_communities)d społeczności devowych usuniętych"
+msgstr[0] ""
 msgstr[1] ""
 msgstr[2] ""
 
@@ -9053,9 +9053,9 @@ msgstr "Przycisk 'Wgóręgłos'"
 #: app/templates/themes/dillo/post/post_teaser/_macros.html:95
 #: app/templates/themes/dillo/post/reply/_macros.html:13
 #: app/templates/themes/dillo/post/reply/_macros.html:24
-#, fuzzy, python-format
+#, python-format
 msgid "Score: %(score)s"
-msgstr "Notka o użytkowniku: %(note)s"
+msgstr ""
 
 #: app/templates/post/_comment_voting_buttons.html:11
 #: app/templates/post/post_teaser/_macros.html:127
@@ -11655,7 +11655,7 @@ msgstr "Lista sugestii społeczności rozdzielonych przecinkami"
 #: app/topic/routes.py:303
 #, fuzzy, python-format
 msgid "New topic suggestion from %(site_name)s"
-msgstr "Zablokuj wszystkich z %(instance_name)s"
+msgstr ""
 
 #: app/topic/routes.py:308
 msgid ""
@@ -12299,7 +12299,7 @@ msgstr "Filtr usunięty"
 #: app/user/routes.py:1671
 #, fuzzy, python-format
 msgid "User not found: %(username)s"
-msgstr "Edytuj notatkę dla \"%(user_name)s\""
+msgstr ""
 
 #: app/user/routes.py:1681 app/user/routes.py:1726 app/user/routes.py:1760
 #, fuzzy, python-format

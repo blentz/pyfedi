@@ -3371,7 +3371,7 @@ msgstr "Ezin zara komunitate honetan sartu"
 #, fuzzy, python-format
 msgid "Invited %(num)d person"
 msgid_plural "Invited %(num)d people"
-msgstr[0] "Gonbidatu %(name)s-ra"
+msgstr[0] ""
 msgstr[1] ""
 
 #: app/community/routes.py:2678
@@ -3465,10 +3465,10 @@ msgid "JSON"
 msgstr "Batu"
 
 #: app/dev/routes.py:149
-#, fuzzy, python-format
+#, python-format
 msgid "%(num)d dev community deleted"
 msgid_plural "%(num)d dev communities deleted"
-msgstr[0] "%(num_communities)d garatzaile komunitate ezabatu dira"
+msgstr[0] ""
 msgstr[1] ""
 
 #: app/dev/routes.py:208
@@ -9021,9 +9021,9 @@ msgstr "Aldezko botoa emateko botoia."
 #: app/templates/themes/dillo/post/post_teaser/_macros.html:95
 #: app/templates/themes/dillo/post/reply/_macros.html:13
 #: app/templates/themes/dillo/post/reply/_macros.html:24
-#, fuzzy, python-format
+#, python-format
 msgid "Score: %(score)s"
-msgstr "Erabiltzailearen oharra: %(note)s"
+msgstr ""
 
 #: app/templates/post/_comment_voting_buttons.html:11
 #: app/templates/post/post_teaser/_macros.html:127
@@ -11616,7 +11616,7 @@ msgstr "Komunitatearen iradokizunen komaz bereizitako zerrenda"
 #: app/topic/routes.py:303
 #, fuzzy, python-format
 msgid "New topic suggestion from %(site_name)s"
-msgstr "Blokeatu guztiak %(instance_name)s-tik"
+msgstr ""
 
 #: app/topic/routes.py:308
 msgid ""

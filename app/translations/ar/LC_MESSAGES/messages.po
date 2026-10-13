@@ -27,12 +27,12 @@ msgstr "الرجاء تسجيل الدخول للوصول لهذه الصفحة.
 #: app/cli.py:1153
 #, fuzzy, python-format
 msgid "Reminder: %(title)s"
-msgstr "رد على %(post_title)s"
+msgstr ""
 
 #: app/cli.py:1158
 #, fuzzy, python-format
 msgid "Reminder: comment on %(title)s"
-msgstr "ردود على تعليقي على %(post_title)s"
+msgstr ""
 
 #: app/cli.py:1590 app/main/routes.py:816
 msgid "[PieFed] You have unread notifications"
@@ -3384,7 +3384,7 @@ msgstr ""
 #: app/community/routes.py:2719
 #, fuzzy, python-format
 msgid "Accept invitation to %(community_name)s"
-msgstr "ردود على تعليقي حول %(post_title)s"
+msgstr ""
 
 #: app/community/routes.py:2757
 msgid "Search result for remote community"
@@ -5800,9 +5800,9 @@ msgid "Un-register protocol handler"
 msgstr ""
 
 #: app/templates/share.html:16
-#, fuzzy, python-format
+#, python-format
 msgid "Share %(title)s"
-msgstr "رد على %(post_title)s"
+msgstr ""
 
 #: app/templates/share.html:18
 msgid "This link has already been shared in these communities:"
@@ -8144,7 +8144,7 @@ msgstr ""
 #: app/templates/community/community_moderate_comments.html:24
 #, fuzzy, python-format
 msgid "Review comments in %(community)s"
-msgstr "ردود على تعليقي حول %(post_title)s"
+msgstr ""
 
 #: app/templates/community/community_moderate_comments.html:34
 #: app/templates/user/show_profile.html:296
@@ -8213,7 +8213,7 @@ msgstr ""
 #: app/templates/community/community_moderate_subscribers.html:161
 #, fuzzy, python-format
 msgid "Create a ban from %(community)s"
-msgstr "ردود على تعليقي حول %(post_title)s"
+msgstr ""
 
 #: app/templates/community/community_modlog.html:22
 #, python-format
@@ -9920,9 +9920,9 @@ msgstr ""
 
 #: app/templates/tag/tag_cloud.html:14 app/templates/tag/tag_cloud.html:16
 #: app/templates/tag/tag_cloud.html:18
-#, fuzzy, python-format
+#, python-format
 msgid "Tags in %(community)s"
-msgstr "ردود على تعليقي حول %(post_title)s"
+msgstr ""
 
 #: app/templates/tag/tag_cloud.html:27
 msgid "Tag Cloud"
