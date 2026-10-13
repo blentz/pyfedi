@@ -750,6 +750,15 @@ def community_profile_subscribe(actor):
     return redirect(url_for('activitypub.community_profile', actor=actor))
 
 
+def _unsigned_relay_forward(request, request_json, saved_json):
+    """The answer to a forward an accepted relay HTTP-signed whose body carries no verifiable LD signature, or None
+    when no accepted relay signed it (spec 2026-10-13)."""
+    relay = relay_inbound.relay_for_forwarded(request)
+    if relay is None:
+        return None
+    return relay_inbound.accept_unsigned_forward(relay, request_json, saved_json)
+
+
 @bp.route('/inbox', methods=['POST'])
 def shared_inbox():
     try:
@@ -864,6 +873,9 @@ def shared_inbox():
             try:
                 LDSignature.verify_signature(request_json, actor.public_key)
             except VerificationError as e:
+                forwarded = _unsigned_relay_forward(request, request_json, saved_json)
+                if forwarded is not None:
+                    return forwarded
                 log_incoming_ap(id, APLOG_NOTYPE, APLOG_FAILURE, saved_json, 'Could not verify LD signature: ' + str(e))
                 return '', 400
             ld_signed = True
@@ -874,6 +886,9 @@ def shared_inbox():
         #            request_json['object']['id'], str)):
         #    request_json['object'] = request_json['object']['id']
         else:
+            forwarded = _unsigned_relay_forward(request, request_json, saved_json)
+            if forwarded is not None:
+                return forwarded
             log_incoming_ap(id, APLOG_NOTYPE, APLOG_FAILURE, saved_json, 'Could not verify HTTP signature: ' + str(e))
             return '', 400
 

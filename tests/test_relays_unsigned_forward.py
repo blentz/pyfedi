@@ -4,10 +4,13 @@ import uuid
 import pytest
 
 from app import db
-from app.models import BannedInstances
-from app.relays import RELAY_ACCEPTED
+from app.activitypub import routes
+from app.activitypub.signature import LDSignature, VerificationError
+from app.models import BannedInstances, utcnow
+from app.relays import RELAY_ACCEPTED, RELAY_PENDING
 from app.relays import inbound
-from tests.test_relays_inbound import NOTE_URI, make_relay, note
+from tests.factories import a_keypair, make_instance, make_user, signed_inbox_post
+from tests.test_relays_inbound import ACTOR, NOTE_URI, make_relay, note
 
 pytestmark = pytest.mark.usefixtures('site', 'redis_double')
 
@@ -193,3 +196,104 @@ class TestHostGate:
 
         assert queued == []
         assert logged[-1][4] == 'relayed object host does not match actor'
+
+
+@pytest.fixture
+def author(app, monkeypatch):
+    monkeypatch.setitem(app.config, 'DEBUG', True)
+    instance = make_instance('other.example')
+    alice = make_user(instance, 'alice', with_keys=True)
+    alice.ap_fetched_at = utcnow()
+    db.session.commit()
+    return alice
+
+
+def deliver(app, author, relay_private_key, monkeypatch, ld=None):
+    """POST a Create by `author` to /inbox, HTTP-signed by the relay. `ld`: None = no LD signature; else the body
+    carries one and LDSignature.verify_signature does `ld` (True or an exception)."""
+    processed = []
+    monkeypatch.setattr(routes, 'process_inbox_request', lambda *a, **k: processed.append((a, k)))
+    activity = {'id': f'{author.ap_profile_id}/a/{uuid.uuid4().hex}', 'type': 'Create',
+                'actor': author.ap_profile_id, 'object': note(attributedTo=author.ap_profile_id,
+                                                              uri=f'{author.ap_profile_id}/notes/1')}
+    if ld is not None:
+        activity['signature'] = {'type': 'RsaSignature2017'}
+
+        def verify(*args, **kwargs):
+            if ld is True:
+                return True
+            raise ld
+        monkeypatch.setattr(LDSignature, 'verify_signature', verify)
+    signer = type('Sender', (), {'private_key': relay_private_key, 'ap_profile_id': ACTOR})()
+    with app.test_client() as client:
+        return signed_inbox_post(client, activity, signer), processed, activity
+
+
+class TestSharedInboxUnsignedForward:
+
+    def test_an_accepted_relays_forward_with_no_ld_signature_is_queued_not_refused(self, app, author, queued,
+                                                                                    monkeypatch):
+        keys = a_keypair()
+        relay = make_relay(state=RELAY_ACCEPTED, public_key=keys[1])
+
+        response, processed, activity = deliver(app, author, keys[0], monkeypatch)
+
+        assert response.status_code == 200
+        assert queued == [(relay.id, activity['object']['id'])]
+        assert processed == []   # nothing is created from the relay's copy
+
+    def test_an_ld_signature_that_does_not_verify_is_queued_too(self, app, author, queued, monkeypatch):
+        keys = a_keypair()
+        relay = make_relay(state=RELAY_ACCEPTED, public_key=keys[1])
+
+        response, processed, activity = deliver(app, author, keys[0], monkeypatch,
+                                                ld=VerificationError('does not cover the document'))
+
+        assert response.status_code == 200
+        assert queued == [(relay.id, activity['object']['id'])]
+        assert processed == []
+
+    def test_an_ld_signed_forward_keeps_its_path(self, app, author, queued, monkeypatch):
+        keys = a_keypair()
+        relay = make_relay(state=RELAY_ACCEPTED, public_key=keys[1])
+
+        response, processed, _activity = deliver(app, author, keys[0], monkeypatch, ld=True)
+
+        assert response.status_code == 200
+        assert queued == []
+        assert len(processed) == 1 and processed[0][1] == {'relay_id': relay.id, 'ld_signed': True}
+
+    @pytest.mark.parametrize('ld', [None, VerificationError('bad')])
+    def test_a_pending_relay_still_gets_400(self, app, author, queued, monkeypatch, ld):
+        keys = a_keypair()
+        make_relay(state=RELAY_PENDING, public_key=keys[1])
+
+        response, processed, _activity = deliver(app, author, keys[0], monkeypatch, ld=ld)
+
+        assert response.status_code == 400
+        assert queued == [] and processed == []
+
+    @pytest.mark.parametrize('ld', [None, VerificationError('bad')])
+    def test_a_key_that_is_no_relays_still_gets_400(self, app, author, queued, monkeypatch, ld):
+        keys = a_keypair()
+        other = next(pair[1] for pair in (a_keypair() for _ in range(10)) if pair[1] != keys[1])
+        make_relay(state=RELAY_ACCEPTED, public_key=other)
+
+        response, processed, _activity = deliver(app, author, keys[0], monkeypatch, ld=ld)
+
+        assert response.status_code == 400
+        assert queued == [] and processed == []
+
+    def test_a_relay_signature_refused_for_an_unsigned_required_header_still_gets_400(self, app, author, queued,
+                                                                                       monkeypatch):
+        keys = a_keypair()
+        make_relay(state=RELAY_ACCEPTED, public_key=keys[1])
+
+        def refuse(*args, **kwargs):
+            raise VerificationError('unsigned required header: digest')
+        monkeypatch.setattr(inbound.HttpSignature, 'verify_request', refuse)
+
+        response, processed, _activity = deliver(app, author, keys[0], monkeypatch)
+
+        assert response.status_code == 400
+        assert queued == [] and processed == []
