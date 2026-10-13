@@ -4,8 +4,10 @@ import pytest
 
 from app import db
 from app.activitypub.util import comment_model_to_json, post_to_page
+from app.constants import POST_STATUS_REVIEWING
 from app.models import PostBoost, PostReplyVote, PostVote
-from tests.factories import make_community, make_instance, make_post, make_post_reply, make_user
+from tests.factories import (make_community, make_instance, make_instance_block, make_post, make_post_reply,
+                             make_user)
 from tests.test_ap_content_objects import ap_get, seed_local_post
 
 SERVER = 'https://test.piefed.local'
@@ -196,3 +198,68 @@ def test_liked_answers_as_the_other_person_collections_for_gone_unknown_and_brow
     alice.deleted = True
     db.session.commit()
     assert ap_get(app, '/u/alice/liked').status_code == 410
+
+
+POST_COLLECTIONS = ['likes', 'dislikes', 'shares']
+
+
+@pytest.mark.parametrize('name', POST_COLLECTIONS)
+def test_a_post_collection_serves_its_inline_object(app, db_session, name):
+    community, author, post = seed_local_post()
+    post.up_votes, post.down_votes = 4, 1
+    db.session.commit()
+
+    response = ap_get(app, f'/post/{post.id}/{name}')
+
+    assert response.status_code == 200
+    assert response.content_type == 'application/activity+json'
+    body = dict(response.json)
+    assert body.pop('@context')
+    assert body == post_to_page(post)[name]
+
+
+def _post_local_only(community, post): community.local_only = True
+def _post_private(community, post): community.private = True
+def _post_unpublished(community, post): post.status = POST_STATUS_REVIEWING
+def _post_followers_only(community, post): post.visibility = 'followers'
+def _post_deleted(community, post): post.deleted = True
+
+
+@pytest.mark.parametrize('refuse', [_post_local_only, _post_private, _post_unpublished, _post_followers_only,
+                                    _post_deleted])
+@pytest.mark.parametrize('name', POST_COLLECTIONS)
+def test_a_post_collection_is_refused_exactly_as_its_post(app, db_session, refuse, name):
+    community, author, post = seed_local_post()
+    refuse(community, post)
+    db.session.commit()
+
+    assert ap_get(app, f'/post/{post.id}/{name}').status_code == ap_get(app, f'/post/{post.id}').status_code
+
+
+@pytest.mark.parametrize('name', POST_COLLECTIONS)
+def test_a_post_collection_is_401_when_the_author_blocked_the_requester(app, db_session, name):
+    community, author, post = seed_local_post()
+    make_instance_block(author, make_instance('blocked.example'))
+
+    response = ap_get(app, f'/post/{post.id}/{name}', user_agent='Test (+https://blocked.example)')
+
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize('name', POST_COLLECTIONS)
+def test_an_unknown_or_remote_posts_collection_is_404(app, db_session, name):
+    community, author, post = seed_local_post()
+    remote = make_post(community, make_user(make_instance('remote.example'), 'far'),
+                       'https://remote.example/p/1')
+
+    assert ap_get(app, f'/post/999999/{name}').status_code == 404
+    assert ap_get(app, f'/post/{remote.id}/{name}').status_code == 404
+
+
+@pytest.mark.parametrize('name', POST_COLLECTIONS)
+def test_a_browser_asking_for_a_post_collection_is_sent_to_the_post(app, db_session, name):
+    community, author, post = seed_local_post()
+    with app.test_client() as client:
+        response = client.get(f'/post/{post.id}/{name}', headers={'Accept': 'text/html'})
+
+    assert (response.status_code, response.headers['Location']) == (302, f'/post/{post.id}')
