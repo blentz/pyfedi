@@ -113,6 +113,13 @@ class TestMicroblogContentToLink(unittest.TestCase):
         link = microblog_content_to_link('<p><a href="/relative/path">rel</a></p>', 'example.com')
         self.assertEqual(link, '/relative/path')
 
+    def test_an_href_furl_cannot_parse_is_passed_over(self):
+        """furl raises ValueError on an unbalanced IPv6 bracket, and that escaped from creating a post out of a
+        peer's Note (fuzz: microblog_html/unparseable_link_host). Such an href names no page; the next one is used."""
+        link = microblog_content_to_link(
+            '<p><a href="https://[x">a</a> <a href="https://other.org/b">b</a></p>', 'example.com')
+        self.assertEqual(link, 'https://other.org/b')
+
     def test_real_content(self):
         """Use some real html from Mastodon"""
         html = """<p>So wonderful to dance in celebration of renaming <a href=\"https://mastodon.social/tags/Yellowknife\" class=\"mention hashtag\" rel=\"tag\">#<span>Yellowknife</span></a>&#39;s main street from Franklin Ave to Wiiliideh Ave, from the name of a white guy who spent a day or two here in 1820 to the name of this area that has been occupied by the now Yellowknives Dene First Nation for at least 8000 years. <a href=\"https://www.cbc.ca/news/canada/north/wiiliideh-avenue-9.7243325\" target=\"_blank\" rel=\"nofollow noopener\" translate=\"no\"><span class=\"invisible\">https://www.</span><span class=\"ellipsis\">cbc.ca/news/canada/north/wiili</span><span class=\"invisible\">ideh-avenue-9.7243325</span></a></p><p><a href=\"https://mastodon.social/tags/NationalIndigenousPeoplesDay\" class=\"mention hashtag\" rel=\"tag\">#<span>NationalIndigenousPeoplesDay</span></a> <a href=\"https://mastodon.social/tags/Canada\" class=\"mention hashtag\" rel=\"tag\">#<span>Canada</span></a> <a href=\"https://mastodon.social/tags/reconciliation\" class=\"mention hashtag\" rel=\"tag\">#<span>reconciliation</span></a> <a href=\"https://mastodon.social/tags/history\" class=\"mention hashtag\" rel=\"tag\">#<span>history</span></a></p>"""
