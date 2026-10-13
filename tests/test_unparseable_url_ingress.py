@@ -581,6 +581,7 @@ class TestTheFederatedCreatePathRefusesAnUnparseableUrl:
                            create_activity({'attachment': [{'type': 'Link', 'href': CRAFTED}]}),
                            author)
         assert post is not None
+        assert post.url is None
 
     def test_the_post_is_stored_with_no_url(self, app, db_session, federated_create):
         author, community = federated_create
@@ -623,18 +624,11 @@ class TestADomainThatCannotBeResolvedIsNotDereferenced:
 
     def test_a_hostless_attachment_href_does_not_crash_the_create_path(
             self, app, db_session, http_mock, federated_create):
-        """httpx does build a request for a hostless url -- respx sees
-        `HEAD /x`, no host -- so is_image_url's probe has to be answered. It is
-        answered with a CONNECT ERROR, which is what production gets when it
-        tries to connect to no host; mime_type_using_head catches
-        httpx.HTTPError and returns '', is_image_url is False, and the call
-        reaches app/models.py's dereference the same way production does.
-        Answering with a 200 instead would be answering with something
-        production cannot produce, and httpx's cookie handling then raises
-        ValueError('unknown url type') on the hostless request URL.
+        """`url_is_storable` refuses a hostless http(s) url, so it never reaches
+        the domain lookup, no HEAD is issued for it, and the post arrives with no
+        url rather than crashing.
         """
         author, community = federated_create
-        http_mock.route(method='HEAD', path='/x').mock(side_effect=httpx.ConnectError)
         post = create_post(False, community,
                            create_activity({'attachment': [{'type': 'Link', 'href': HOSTLESS}]},
                                            seq=4),
@@ -643,8 +637,7 @@ class TestADomainThatCannotBeResolvedIsNotDereferenced:
 
     def test_a_hostless_attachment_href_does_not_crash_the_update_path(
             self, app, db_session, http_mock, federated_post):
-        # A connect error, not a 200: see the sibling test above for why.
-        http_mock.route(method='HEAD', path='/x').mock(side_effect=httpx.ConnectError)
+        url_before = federated_post.url
         update_post_from_activity(federated_post, {
             'id': 'https://ingress.example/activities/update/9',
             'object': {
@@ -659,6 +652,7 @@ class TestADomainThatCannotBeResolvedIsNotDereferenced:
         stored = db.session.query(Post).filter_by(
             ap_id='https://ingress.example/notes/1').one()
         assert stored.title == 'a post'
+        assert stored.url == url_before
 
 
 class TestFederatedEventUrlsAreCheckedToo:
