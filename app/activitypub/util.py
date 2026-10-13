@@ -3635,6 +3635,8 @@ def parse_ban_expiry(core_activity):
             expires = pendulum.parse(raw)
         except Exception:
             return None
+        if not isinstance(expires, datetime):   # a Duration ('P1D') or an Interval ('a/b') is no moment
+            return None
     if expires.tzinfo is None:
         expires = expires.replace(tzinfo=timezone.utc)
     return expires if expires > datetime.now(timezone.utc) else None
