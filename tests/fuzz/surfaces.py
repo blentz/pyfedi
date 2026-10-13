@@ -110,4 +110,58 @@ SURFACES: dict[str, list[str]] = {
         'app.models.markdown_source',
         'app.models.is_local_url',
     ],
+    # Markdown rendering and HTML text helpers (T3): every body a peer or a user writes, from markdown to the
+    # rendered page -- the preprocessors, the code/link stashes, the actor-link jinja filters, the microblog title
+    # and link readers, the |safe posting warning and first paragraph, and the enhanced-images extra. The
+    # module-level regexes they run (LINK_PATTERN, PERSON/COMMUNITY/FEED_PATTERN, visibility.MENTION_PATTERN) are
+    # not callables, so they are fuzzed through these functions and the redos_* targets rather than listed.
+    'markdown': [
+        'app.utils.markdown_to_html',
+        'app.utils.escape_non_html_angle_brackets',
+        'app.utils.handle_bold_em',
+        'app.utils.escape_img',
+        'app.utils.handle_lemmy_autocomplete',
+        'app.utils.handle_lemmy_spoilers',
+        'app.utils.handle_naked_spoilers',
+        'app.utils.handle_spoiler_spacing',
+        'app.utils.handle_video_embeds',
+        'app.utils.make_quotes_straight',
+        'app.utils.handle_reddit_spoilers',
+        'app.utils.handle_blockquotes',
+        'app.utils.links_with_parens',
+        'app.utils.fix_www_links',
+        'app.utils.handle_better_lists',
+        'app.utils.piefed_markdown_to_lemmy_markdown',
+        'app.utils.stash_code_html',
+        'app.utils.stash_code_md',
+        'app.utils.stash_link_html',
+        'app.utils.pop_code',
+        'app.utils.pop_link',
+        'app.utils.community_link_to_href',
+        'app.utils.feed_link_to_href',
+        'app.utils.person_link_to_href',
+        'app.utils.html_to_text',
+        'app.utils.markdown_to_text',
+        'app.utils.shorten_string',
+        'app.utils.shorten_url',
+        'app.utils.remove_images',
+        'app.utils.mastodon_extra_field_link',
+        'app.utils.microblog_content_to_title',
+        'app.utils.microblog_content_to_link',
+        'app.utils.strip_quote_fallback',
+        'app.utils.first_paragraph',
+        'app.utils.sanitise_posting_warning',
+        'app.markdown_extras.EnhancedImages.run',
+        'app.markdown_extras.apply_enhanced_image_attributes',
+    ],
+    # Regex-driven readers of short peer- or user-supplied strings (T3's ReDoS tier): host names in discovery
+    # directories, e-mail addresses and fediverse handles, and the URLs a podcast credit is matched by.
+    'text_patterns': [
+        'app.discovery.sources.is_hostname',
+        'app.utils.validate_email',
+        'app.instance.util.is_fedi_handle',
+        'app.discovery.credits._normal_url',
+        'app.discovery.credits._urls_in',
+        'app.discovery.credits._document_urls',
+    ],
 }
