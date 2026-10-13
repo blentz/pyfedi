@@ -785,7 +785,8 @@ def shared_inbox():
     # a copy: LDSignature.verify_signature pops `signature` from request_json, which the log must keep
     saved_json = copy.deepcopy(request_json) if store_ap_json else None
 
-    if not 'id' in request_json or not 'type' in request_json or not 'actor' in request_json or not 'object' in request_json:
+    if not isinstance(request_json, dict) or not 'id' in request_json or not 'type' in request_json or \
+            not 'actor' in request_json or not 'object' in request_json:   # a list or str passes `in`
         log_incoming_ap('', APLOG_NOTYPE, APLOG_FAILURE, saved_json, 'Missing minimum expected fields in JSON')
         return '', 200
 
