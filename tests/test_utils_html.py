@@ -106,6 +106,13 @@ class TestLinksWithParens:
         result = links_with_parens(html)
         assert 'href="https://example.com/x"' in result
 
+    def test_an_anchor_without_an_href_is_left_alone(self):
+        """An <a name=...> has no URL to balance. links_with_parens read href.count on None, so one such anchor in a
+        post's markdown raised AttributeError out of markdown_to_html (fuzz: markdown_preprocessors/
+        links_with_parens_no_href, markdown_to_html/anchor_without_href)."""
+        html = '<a name="x">y)</a>)'
+        assert links_with_parens(html) == html
+
     def test_balanced_link_is_untouched(self):
         html = '<a href="https://example.com/(x)">(x)</a>'
         assert links_with_parens(html) == html

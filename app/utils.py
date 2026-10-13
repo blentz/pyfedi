@@ -1500,6 +1500,8 @@ def links_with_parens(text: str) -> str:
 
     for link in soup.find_all("a"):
         target_url = link.get("href")
+        if target_url is None:
+            continue  # an <a name=...> has no URL whose parens could need balancing
         contents = link.text
         following_text = link.next_sibling
 
