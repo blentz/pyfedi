@@ -3026,12 +3026,11 @@ SUSPICIOUS_URL = f'https://{SUSPICIOUS_DOMAIN}/changed/article'
 # only shape that reaches `:3510` with `new_domain` None, because
 # `domain_from_url` returns a row only under `if parsed_url and
 # parsed_url.hostname:` (app/utils.py:1583-1594) and None otherwise (`:1596`).
-# It is exactly the shape `:3463-3467`'s comment names as the case its own
-# parse guard does not cover -- "'https:///x' parses, .hostname is None" -- with
-# a path on it. HOSTLESS_PATH is what respx has to match on; see
-# `_hostless_head_fails`.
-HOSTLESS_URL = 'https:///changed/hostless'
-HOSTLESS_PATH = '/changed/hostless'
+# It used to be 'https:///changed/hostless', the shape `:3463-3467`'s comment
+# names; `url_is_storable` now refuses a hostless http(s) url (a browser visits
+# the first path segment as the host, past any domain ban), so the shape that
+# still reaches `:3510` is a scheme with no host at all.
+HOSTLESS_URL = 'magnet:?xt=urn:btih:0123456789abcdef'
 
 # `targets_data['orig_post_body']` (`:3516`). Seeded because `make_post` sets no
 # body at all, so without it that key would assert None against None. The head
@@ -3168,41 +3167,6 @@ def _make_moderator(post, name, local=True):
     moderator = make_user(None if local else post.author.instance, name, local=local)
     make_community_member(moderator, post.community, is_moderator=True)
     return moderator
-
-
-def _hostless_head_fails(http_mock):
-    """Fail the HEAD `:3480` issues for HOSTLESS_URL the way a real transport
-    fails a url with no host.
-
-    Registering it is not optional and neither is failing it, and both halves
-    were measured against this harness:
-
-      - unrouted, respx raises `AllMockedAssertionError`, an `AssertionError`
-        that escapes `mime_type_using_head`'s
-        `except (httpx.HTTPError, httpx.InvalidURL)` (app/utils.py:345) and
-        kills the test on the escape rather than on its own assertion;
-      - answered with a RESPONSE, httpx's cookie handling then calls
-        `urllib.request.Request(str(response.request.url))`
-        (httpx/_models.py:1106, 1250) -- and httpx normalises a hostless url
-        down to its bare path, so that is
-        `urllib.request.Request('/changed/hostless')`, which raises
-        `ValueError: unknown url type`. Not an `httpx.HTTPError` and not an
-        `httpx.InvalidURL`, so the same handler misses it.
-
-    A transport-level failure is the third option and the faithful one.
-    Unmocked, httpx refuses a hostless url before any response exists -- also
-    measured: `httpx.Client().head('https:///changed/hostless')` raises
-    `httpx.UnsupportedProtocol`, and both it and the `httpx.ConnectError` used
-    here descend TransportError -> RequestError -> HTTPError, so
-    `mime_type_using_head` handles them identically. app/utils.py:345 catches
-    it, returns '', and `is_image_url` falls to extension sniffing
-    (app/utils.py:275-284), which answers False for this path.
-
-    The route matches on `path` alone because respx resolves a url pattern
-    against scheme, host and path together and there is no host to resolve.
-    """
-    http_mock.route(method='HEAD', path=HOSTLESS_PATH).mock(
-        side_effect=httpx.ConnectError('no host to connect to'))
 
 
 def _seed_cross_post(post, name, url, cross_posts=None):
@@ -3695,7 +3659,7 @@ class TestSuspiciousDomainReassignment:
         assert post.domain_id is None
 
     def test_a_hostless_new_url_leaves_the_block_out(
-            self, app, db_session, http_mock, redis_lock_only_double):
+            self, app, db_session, http_mock, redis_lock_only_double, monkeypatch):
         """`:3510`'s leading `new_domain`, False -- the conjunct that stops
         `:3519` dereferencing None.
 
@@ -3706,16 +3670,15 @@ class TestSuspiciousDomainReassignment:
         reaches `new_domain.notify_mods` at `:3519` and raises AttributeError,
         which is a crash-kill and not an assertion-kill.
 
-        ONE ROUTE, and it fails rather than answers -- `_hostless_head_fails`
-        gives the two measurements behind that. Its '' sends `is_image_url` to
-        extension sniffing, which answers False for this path, so the arm takes
-        `:3486`'s `else`. `:3491`'s `opengraph_parse` then reaches
-        `get_request`, which refuses a hostless uri at app/utils.py:132-134 by
-        raising `httpx.HTTPError` BEFORE issuing anything, and
-        `opengraph_parse`'s `except Exception` (app/utils.py:3004-3007) turns
-        that into None -- so `:3492` is False, no `File` is built, `:3504` is
-        never reached, and no GET route is registered under
-        `assert_all_called=True`.
+        NO ROUTE. `mime_type_using_head` is stubbed to '', its answer for any
+        HEAD that fails, which sends `is_image_url` to extension sniffing; that
+        answers False for this url, so the arm takes `:3486`'s `else`.
+        `:3491`'s `opengraph_parse` then reaches `get_request`, which refuses a
+        hostless uri at app/utils.py:132-134 by raising `httpx.HTTPError`
+        BEFORE issuing anything, and `opengraph_parse`'s `except Exception`
+        (app/utils.py:3004-3007) turns that into None -- so `:3492` is False,
+        no `File` is built, `:3504` is never reached, and no GET route is
+        registered under `assert_all_called=True`.
 
         `post.type` cannot be the witness that the arm really ran: `:3499`
         writes POST_TYPE_LINK, which is what `_seed_suspicious_post` already
@@ -3728,7 +3691,7 @@ class TestSuspiciousDomainReassignment:
         domain.notify_admins = True
         domain.post_count = SEEDED_POST_COUNT
         db.session.commit()
-        _hostless_head_fails(http_mock)
+        monkeypatch.setattr('app.utils.mime_type_using_head', lambda url: '')
 
         update_post_from_activity(post, _linked_update(HOSTLESS_URL))
 

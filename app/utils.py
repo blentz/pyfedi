@@ -17,6 +17,7 @@ import zlib
 from collections import defaultdict, OrderedDict
 from contextlib import contextmanager
 from datetime import datetime, timedelta, date
+from encodings.idna import nameprep
 from functools import wraps, lru_cache
 from json import JSONDecodeError
 from time import sleep
@@ -841,7 +842,43 @@ def url_is_storable(url) -> bool:
     None into a `.banned` dereference at three of the four call sites, and the scheme
     test is about a different failure.
     """
-    return url_is_parseable(url) and not has_unsafe_url_scheme(url)
+    return url_is_parseable(url) and not has_unsafe_url_scheme(url) and _host_reads_alike(url)
+
+
+# The WHATWG "special" schemes whose host a browser reads by its own rules -- backslash
+# as slash, slashes skipped, host percent-decoded and IDNA-mapped. 'file' is special
+# too, but a file: url's host is not one a domain ban applies to.
+_HOSTED_URL_SCHEMES = frozenset({'http', 'https', 'ws', 'wss', 'ftp'})
+
+
+def _host_reads_alike(url: str) -> bool:
+    """Whether a browser visits the host `domain_from_url` reads from `url`.
+
+    The ban check in `Post.new` bans by `urlparse(url.lower()).hostname`, and for the
+    special schemes a browser reads a different host from some urls that string can
+    hold: 'https:///banned.example' (urlparse: no host), 'https://banned.example\\@good.example'
+    (urlparse: good.example), 'https://banned%2Eexample', a fullwidth letter, a trailing
+    dot. Each of those got a link to a banned domain stored and linked from the post page.
+
+    Refuses the shapes, not a guess at the host the browser picks: no host, a backslash
+    in the authority, a '%' in the host, an empty label, or a label IDNA would map to
+    something else. Other schemes are answered True -- they have no such host.
+    """
+    if url_scheme(url) not in _HOSTED_URL_SCHEMES:
+        return True
+    parsed = urlparse(url.lower())
+    host = parsed.hostname
+    if not host or '\\' in parsed.netloc or '%' in host:
+        return False
+    for label in host.split('.'):
+        if not label:
+            return False
+        try:
+            if nameprep(label) != label:
+                return False
+        except UnicodeError:
+            return False
+    return True
 
 
 def url_host(url: str) -> Optional[str]:
