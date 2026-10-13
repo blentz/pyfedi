@@ -32,7 +32,7 @@ from flask import g
 
 from app import db
 from app.models import Post, Site
-from app.utils import url_is_storable
+from app.utils import MAX_URL_HOST_LENGTH, url_is_storable
 from tests.factories import make_community, make_domain, make_instance, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -93,6 +93,29 @@ class TestTheRule:
     @pytest.mark.parametrize('url', STILL_STORABLE)
     def test_urls_whose_host_both_read_alike_are_still_storable(self, url):
         assert url_is_storable(url) is True
+
+
+# 253 characters, each label within DNS's 63: the longest host a DNS name can be
+LONGEST_HOST = '.'.join(['a' * 63, 'b' * 63, 'c' * 63, 'd' * 61])
+
+
+class TestTheHostLengthCap:
+    """IDNA's nameprep costs about 10 microseconds a host character, and gallery_attachments asks for every
+    attachment of a peer's object. No DNS name is longer than 253 characters, so a longer host is refused
+    before any IDNA work, whatever the scheme."""
+
+    def test_a_host_at_the_dns_limit_is_storable(self):
+        assert len(LONGEST_HOST) == MAX_URL_HOST_LENGTH == 253
+        assert url_is_storable(f'https://{LONGEST_HOST}/x') is True
+
+    @pytest.mark.parametrize('url', [f'https://e{LONGEST_HOST}/x', f'gemini://e{LONGEST_HOST}/x',
+                                     'https://' + 'a' * 100_000 + '/x'])
+    def test_a_longer_host_is_refused_before_idna_reads_it(self, url, monkeypatch):
+        def no_idna(label):
+            raise AssertionError('nameprep read a host past the DNS length limit')
+        monkeypatch.setattr('app.utils.nameprep', no_idna)
+
+        assert url_is_storable(url) is False
 
 
 @pytest.fixture(autouse=True)
