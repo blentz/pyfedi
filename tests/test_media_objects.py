@@ -78,3 +78,21 @@ def test_only_the_first_20_entries_are_read():
 
 def test_a_non_string_media_type_counts_as_none():
     assert media_url_from({'url': [{'href': AUDIO, 'mediaType': 7}]}, 'audio') == AUDIO
+
+
+def _url_of_length(n):
+    base = 'https://pics.example/'
+    return base + 'a' * (n - len(base))
+
+
+def test_a_url_over_the_post_url_width_is_skipped_for_a_later_shorter_entry():
+    assert media_url_from({'url': _url_of_length(2048)}, 'audio') == _url_of_length(2048)
+    assert media_url_from({'url': _url_of_length(2049)}, 'audio') is None
+    assert media_url_from({'url': [_url_of_length(2049), AUDIO]}, 'audio') == AUDIO
+
+
+def test_an_image_url_over_the_file_source_url_width_is_skipped_for_a_later_shorter_entry():
+    assert media_url_from({'url': _url_of_length(1024)}, 'image') == _url_of_length(1024)
+    assert media_url_from({'url': _url_of_length(1025)}, 'image') is None
+    assert media_url_from({'url': [_url_of_length(1025), IMAGE]}, 'image') == IMAGE
+    assert media_url_from({'url': _url_of_length(1025)}, None) == _url_of_length(1025)  # a Document is no File row
