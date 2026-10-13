@@ -323,6 +323,9 @@ def test_a_same_host_alias_keeps_the_id_port(app, db_session, http_mock):
     ('https://user:secret@social.example:8443/users/alice', 'social.example:8443'),
     ('https://user@social.example/users/alice', 'social.example'),
     ('https://[2001:DB8::1]:8443/users/alice', '[2001:db8::1]:8443'),
+    # An IPvFuture literal has no ':' to say it was bracketed; unbracketed it named the reg-name host
+    # v1.social.example instead. Found by the ap_hosts fuzz target.
+    ('https://[v1.social.example]/users/alice', '[v1.social.example]'),
     ('https://social.example:99999/users/alice', ''),
     ('https://[::1/users/alice', ''),
     ('not a url', ''),
