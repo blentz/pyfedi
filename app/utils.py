@@ -852,6 +852,11 @@ def url_is_storable(url) -> bool:
 # too, but a file: url's host is not one a domain ban applies to.
 _HOSTED_URL_SCHEMES = frozenset({'http', 'https', 'ws', 'wss', 'ftp'})
 
+# The longest a DNS name can be written (RFC 1035: 255 octets on the wire, 253 characters as text). A url whose
+# host is longer names no reachable host, and refusing it before the IDNA checks below bounds their cost, about
+# 10 microseconds a character.
+MAX_URL_HOST_LENGTH = 253
+
 
 def _host_reads_alike(url: str) -> bool:
     """Whether a browser visits the host `domain_from_url` reads from `url`.
@@ -864,12 +869,15 @@ def _host_reads_alike(url: str) -> bool:
 
     Refuses the shapes, not a guess at the host the browser picks: no host, a backslash
     in the authority, a '%' in the host, an empty label, or a label IDNA would map to
-    something else. Other schemes are answered True -- they have no such host.
+    something else. Other schemes are answered True -- they have no such host -- unless
+    their host, like any, is longer than MAX_URL_HOST_LENGTH.
     """
-    if url_scheme(url) not in _HOSTED_URL_SCHEMES:
-        return True
     parsed = urlparse(url.lower())
     host = parsed.hostname
+    if host and len(host) > MAX_URL_HOST_LENGTH:
+        return False
+    if url_scheme(url) not in _HOSTED_URL_SCHEMES:
+        return True
     if not host or '\\' in parsed.netloc or '%' in host:
         return False
     for label in host.split('.'):
