@@ -121,13 +121,13 @@ def _voter():
     return community, author, post, alice
 
 
-def _vote(user, post=None, reply=None, effect=1.0, federated=True):
+def _vote(user, post=None, reply=None, effect=1.0, federated_like=True):
     if post is not None:
         db.session.add(PostVote(user_id=user.id, author_id=post.user_id, post_id=post.id, effect=effect,
-                              federated=federated))
+                              federated_like=federated_like))
     else:
         db.session.add(PostReplyVote(user_id=user.id, author_id=reply.user_id, post_reply_id=reply.id,
-                                     effect=effect, federated=federated))
+                                     effect=effect, federated_like=federated_like))
     db.session.commit()
 
 
@@ -269,11 +269,21 @@ def test_a_browser_asking_for_a_post_collection_is_sent_to_the_post(app, db_sess
 def test_liked_counts_only_votes_marked_federated(app, db_session):
     community, author, post, alice = _voter()
     _vote(alice, post=post)
-    _vote(alice, post=make_post(community, author, None, title='a'), federated=None)
-    _vote(alice, post=make_post(community, author, None, title='b'), federated=False)
+    _vote(alice, post=make_post(community, author, None, title='a'), federated_like=None)
+    _vote(alice, post=make_post(community, author, None, title='b'), federated_like=False)
     reply = make_post_reply(post, author)
     _vote(alice, reply=reply)
-    _vote(alice, reply=make_post_reply(post, author), federated=None)
-    _vote(alice, reply=make_post_reply(post, author), federated=False)
+    _vote(alice, reply=make_post_reply(post, author), federated_like=None)
+    _vote(alice, reply=make_post_reply(post, author), federated_like=False)
 
     assert ap_get(app, '/u/alice/liked').json['totalItems'] == 2
+
+
+def test_a_downvote_flipped_privately_to_an_upvote_is_not_liked(app, db_session):
+    community, author, post, alice = _voter()
+    _vote(alice, post=post, effect=-1.0, federated_like=False)  # its Dislike was sent
+    row = PostVote.query.filter_by(user_id=alice.id, post_id=post.id).one()
+    row.effect = 1.0  # flipped to an upvote with no send_vote (private)
+    db.session.commit()
+
+    assert ap_get(app, '/u/alice/liked').json['totalItems'] == 0
