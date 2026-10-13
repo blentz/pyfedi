@@ -894,6 +894,7 @@ def community_actor_data(community: Community) -> dict:
                   "inbox": f"https://{server}/c/{actor}/inbox",
                   "outbox": f"https://{server}/c/{actor}/outbox",
                   "followers": f"https://{server}/c/{actor}/followers",
+                  "following": f"https://{server}/c/{actor}/following",
                   "moderators": f"https://{server}/c/{actor}/moderators",
                   "featured": f"https://{server}/c/{actor}/featured",
                   "attributedTo": f"https://{server}/c/{actor}/moderators",

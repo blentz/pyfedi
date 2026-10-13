@@ -2526,6 +2526,19 @@ def community_followers(actor):
         abort(404)
 
 
+@bp.route('/c/<actor>/following', methods=['GET'])
+def community_following(actor):
+    """Interop C5: a community follows nothing, so its following collection is always empty, count-only as the
+    rest. Looked up and refused exactly as community_followers."""
+    actor = actor.strip()
+    if not is_activitypub_request():
+        return redirect(url_for('activitypub.community_profile', actor=actor))
+    community = Community.query.filter_by(name=actor, banned=False, ap_id=None).first() or abort(404)
+    if community.local_only or community.private:
+        abort(403)
+    return count_only_collection(f'{current_app.config["SERVER_URL"]}/c/{actor}/following', 0)
+
+
 @bp.route('/u/<actor>/followers', methods=['GET'])
 def user_followers(actor):
     actor = actor.strip()
