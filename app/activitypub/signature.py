@@ -88,7 +88,10 @@ def parse_http_date(http_date_str):
 def parse_ld_date(value: str | None) -> datetime | None:
     if value is None:
         return None
-    return parser.isoparse(value).replace(microsecond=0)
+    try:
+        return parser.isoparse(value).replace(microsecond=0)
+    except OverflowError:   # hour 24 of 9999-12-31 rolls past the last representable day
+        raise ValueError(f'LD date out of range: {value!r}') from None
 
 
 def send_post_request(uri: str, body: dict | None, private_key: str, key_id: str,
