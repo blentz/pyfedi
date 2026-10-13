@@ -25,14 +25,14 @@ msgid "Please log in to access this page."
 msgstr "कृपया इस पृष्ठ पर प्रवेश करने के लिए लॉग इन करें।"
 
 #: app/cli.py:681
-#, fuzzy, python-format
+#, python-format
 msgid "Reminder: %(title)s"
-msgstr "रिपोर्ट \"%(post_title)s\""
+msgstr ""
 
 #: app/cli.py:686
-#, fuzzy, python-format
+#, python-format
 msgid "Reminder: comment on %(title)s"
-msgstr "मेरी %(post_title)s पर तिप्पणी के जवाब"
+msgstr ""
 
 #: app/cli.py:891 app/main/routes.py:786
 msgid "[PieFed] You have unread notifications"
@@ -3091,9 +3091,9 @@ msgid "Report ignored."
 msgstr ""
 
 #: app/community/routes.py:2362
-#, fuzzy, python-format
+#, python-format
 msgid "Set your flair in %(community_name)s"
-msgstr "@%(author_name)s को %(community_name)s से प्रतिबंधित करें"
+msgstr ""
 
 #: app/community/routes.py:2379 app/templates/community/community_flair.html:23
 #, fuzzy, python-format
@@ -3110,14 +3110,14 @@ msgid "Flair updated."
 msgstr "हटाए गए को फ़िल्टर करें।"
 
 #: app/community/routes.py:2427
-#, fuzzy, python-format
+#, python-format
 msgid "Edit %(flair_name)s in %(community_name)s"
-msgstr "@%(author_name)s को %(community_name)s से प्रतिबंधित करें"
+msgstr ""
 
 #: app/community/routes.py:2428
-#, fuzzy, python-format
+#, python-format
 msgid "Add flair in %(community_name)s"
-msgstr "@%(author_name)s को %(community_name)s से प्रतिबंधित करें"
+msgstr ""
 
 #: app/community/routes.py:2446
 #, fuzzy
@@ -3181,9 +3181,9 @@ msgid "You are already a member."
 msgstr ""
 
 #: app/community/routes.py:2566
-#, fuzzy, python-format
+#, python-format
 msgid "Accept invitation to %(community_name)s"
-msgstr "@%(author_name)s को %(community_name)s से प्रतिबंधित करें"
+msgstr ""
 
 #: app/community/routes.py:2604
 msgid "Search result for remote community"
@@ -3759,24 +3759,24 @@ msgid "%(name)s has been un-stickied."
 msgstr ""
 
 #: app/post/routes.py:1515
-#, fuzzy, python-format
+#, python-format
 msgid "%(name)s has been stickied to the instance."
-msgstr "%(actor)s को प्रतिबंधित कर दिया गया है।"
+msgstr ""
 
 #: app/post/routes.py:1518
-#, fuzzy, python-format
+#, python-format
 msgid "%(name)s has been un-stickied from the instance."
-msgstr "%(community_name)s को अनब्लॉक कर दिया गया है।"
+msgstr ""
 
 #: app/post/routes.py:1536
-#, fuzzy, python-format
+#, python-format
 msgid "%(name)s has been hidden."
-msgstr "%(actor)s को प्रतिबंधित कर दिया गया है।"
+msgstr ""
 
 #: app/post/routes.py:1538
-#, fuzzy, python-format
+#, python-format
 msgid "%(name)s has been un-hidden."
-msgstr "%(community_name)s को अनब्लॉक कर दिया गया है।"
+msgstr ""
 
 #: app/post/routes.py:1613
 #, fuzzy, python-format
@@ -3958,9 +3958,9 @@ msgid "%(name)s has been unlocked."
 msgstr ""
 
 #: app/shared/post.py:957
-#, fuzzy, python-format
+#, python-format
 msgid "%(name)s has been moved."
-msgstr "%(actor)s को प्रतिबंधित कर दिया गया है।"
+msgstr ""
 
 #: app/shared/reply.py:189
 msgid "Your comment has been added."
@@ -5463,9 +5463,9 @@ msgid "Un-register protocol handler"
 msgstr ""
 
 #: app/templates/share.html:16
-#, fuzzy, python-format
+#, python-format
 msgid "Share %(title)s"
-msgstr "रिपोर्ट \"%(post_title)s\""
+msgstr ""
 
 #: app/templates/share.html:18
 msgid "This link has already been shared in these communities:"
@@ -5977,9 +5977,9 @@ msgid "Add Offline Instance"
 msgstr ""
 
 #: app/templates/admin/edit_blocked_image.html:13
-#, fuzzy, python-format
+#, python-format
 msgid "Edit %(image_file_name)s"
-msgstr "%(topic_name)s को संपादित करें"
+msgstr ""
 
 #: app/templates/admin/edit_community.html:17
 #, python-format
@@ -7544,9 +7544,9 @@ msgid "No reports yet"
 msgstr ""
 
 #: app/templates/community/community_moderate_comments.html:30
-#, fuzzy, python-format
+#, python-format
 msgid "Review comments in %(community)s"
-msgstr "मेरी %(post_title)s पर तिप्पणी के जवाब"
+msgstr ""
 
 #: app/templates/community/community_moderate_comments.html:40
 #: app/templates/user/show_profile.html:285
@@ -7620,9 +7620,9 @@ msgid "Ban a user"
 msgstr ""
 
 #: app/templates/community/community_moderate_subscribers.html:168
-#, fuzzy, python-format
+#, python-format
 msgid "Create a ban from %(community)s"
-msgstr "मेरी %(post_title)s पर तिप्पणी के जवाब"
+msgstr ""
 
 #: app/templates/community/community_modlog.html:24
 #, python-format
@@ -9673,9 +9673,9 @@ msgid "Stop applying this filter after this date. Optional."
 msgstr ""
 
 #: app/templates/user/edit_note.html:13
-#, fuzzy, python-format
+#, python-format
 msgid "Edit private note for \"%(user_name)s\""
-msgstr "%(name)s का प्रोफ़ाइल संपादित करें"
+msgstr ""
 
 #: app/templates/user/edit_note.html:15
 msgid "Use an emoji for the note"
@@ -10274,9 +10274,9 @@ msgid "Continue"
 msgstr ""
 
 #: app/templates/user/user_ban.html:9 app/user/routes.py:738
-#, fuzzy, python-format
+#, python-format
 msgid "Ban %(name)s"
-msgstr "%(user_name)s को अवरुद्ध करें"
+msgstr ""
 
 #: app/templates/user/user_feeds.html:13
 msgid "New Feed"
@@ -11146,14 +11146,14 @@ msgid "Filter deleted."
 msgstr "हटाए गए को फ़िल्टर करें।"
 
 #: app/user/routes.py:1492
-#, fuzzy, python-format
+#, python-format
 msgid "User not found: %(username)s"
-msgstr "रिपोर्ट \"%(user_name)s\""
+msgstr ""
 
 #: app/user/routes.py:1502 app/user/routes.py:1547 app/user/routes.py:1581
-#, fuzzy, python-format
+#, python-format
 msgid "%(name)s is already blocked."
-msgstr "%(community_name)s को अनब्लॉक कर दिया गया है।"
+msgstr ""
 
 #: app/user/routes.py:1541
 #, python-format

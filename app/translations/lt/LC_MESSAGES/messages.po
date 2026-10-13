@@ -21,14 +21,14 @@ msgid "Please log in to access this page."
 msgstr "Kad patekti į šį puslapį, turite užsiregistruoti."
 
 #: app/cli.py:681
-#, fuzzy, python-format
+#, python-format
 msgid "Reminder: %(title)s"
-msgstr "Atsakė į %(post_title)s"
+msgstr ""
 
 #: app/cli.py:686
-#, fuzzy, python-format
+#, python-format
 msgid "Reminder: comment on %(title)s"
-msgstr "Atsakė į %(post_title)s"
+msgstr ""
 
 #: app/cli.py:891 app/main/routes.py:786
 msgid "[PieFed] You have unread notifications"
@@ -5456,9 +5456,9 @@ msgid "Un-register protocol handler"
 msgstr ""
 
 #: app/templates/share.html:16
-#, fuzzy, python-format
+#, python-format
 msgid "Share %(title)s"
-msgstr "Atsakė į %(post_title)s"
+msgstr ""
 
 #: app/templates/share.html:18
 msgid "This link has already been shared in these communities:"
@@ -7526,9 +7526,9 @@ msgid "No reports yet"
 msgstr "Pranešimai"
 
 #: app/templates/community/community_moderate_comments.html:30
-#, fuzzy, python-format
+#, python-format
 msgid "Review comments in %(community)s"
-msgstr "Atsakė į %(post_title)s"
+msgstr ""
 
 #: app/templates/community/community_moderate_comments.html:40
 #: app/templates/user/show_profile.html:285
@@ -7601,9 +7601,9 @@ msgid "Ban a user"
 msgstr ""
 
 #: app/templates/community/community_moderate_subscribers.html:168
-#, fuzzy, python-format
+#, python-format
 msgid "Create a ban from %(community)s"
-msgstr "Atsakė į %(post_title)s"
+msgstr ""
 
 #: app/templates/community/community_modlog.html:24
 #, python-format
@@ -7753,9 +7753,9 @@ msgid "There are no wiki pages in this community."
 msgstr ""
 
 #: app/templates/community/community_wiki_revisions.html:24
-#, fuzzy, python-format
+#, python-format
 msgid "Revisions of %(title)s"
-msgstr "Atsakė į %(post_title)s"
+msgstr ""
 
 #: app/templates/community/community_wiki_revisions.html:31
 #: app/templates/post/add_reply_inline_result.html:10

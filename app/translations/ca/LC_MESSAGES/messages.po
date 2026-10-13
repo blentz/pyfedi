@@ -3111,10 +3111,10 @@ msgid "Sorry, you cannot invite people to this community."
 msgstr "No podeu unir-vos a aquesta comunitat."
 
 #: app/community/routes.py:2524
-#, fuzzy, python-format
+#, python-format
 msgid "Invited %(num)d person"
 msgid_plural "Invited %(num)d people"
-msgstr[0] "Convida a %(name)s"
+msgstr[0] ""
 msgstr[1] ""
 
 #: app/community/routes.py:2525
@@ -3203,10 +3203,10 @@ msgid "JSON"
 msgstr "Uneix-te"
 
 #: app/dev/routes.py:149
-#, fuzzy, python-format
+#, python-format
 msgid "%(num)d dev community deleted"
 msgid_plural "%(num)d dev communities deleted"
-msgstr[0] "%(num_communities)d comunitats de desenvolupament suprimides"
+msgstr[0] ""
 msgstr[1] ""
 
 #: app/dev/routes.py:207
@@ -10651,9 +10651,9 @@ msgid "Comma seperated list of community suggestions"
 msgstr "Llista de suggeriments de la comunitat separats per comes"
 
 #: app/topic/routes.py:315
-#, fuzzy, python-format
+#, python-format
 msgid "New topic suggestion from %(site_name)s"
-msgstr "Bloqueja tothom de %(instance_name)s"
+msgstr ""
 
 #: app/topic/routes.py:320
 msgid ""

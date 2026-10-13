@@ -25,14 +25,14 @@ msgid "Please log in to access this page."
 msgstr "الرجاء تسجيل الدخول للوصول لهذه الصفحة."
 
 #: app/cli.py:681
-#, fuzzy, python-format
+#, python-format
 msgid "Reminder: %(title)s"
-msgstr "رد على %(post_title)s"
+msgstr ""
 
 #: app/cli.py:686
-#, fuzzy, python-format
+#, python-format
 msgid "Reminder: comment on %(title)s"
-msgstr "ردود على تعليقي على %(post_title)s"
+msgstr ""
 
 #: app/cli.py:891 app/main/routes.py:786
 msgid "[PieFed] You have unread notifications"
@@ -3116,9 +3116,9 @@ msgid "You are already a member."
 msgstr ""
 
 #: app/community/routes.py:2566
-#, fuzzy, python-format
+#, python-format
 msgid "Accept invitation to %(community_name)s"
-msgstr "ردود على تعليقي حول %(post_title)s"
+msgstr ""
 
 #: app/community/routes.py:2604
 msgid "Search result for remote community"
@@ -5425,9 +5425,9 @@ msgid "Un-register protocol handler"
 msgstr ""
 
 #: app/templates/share.html:16
-#, fuzzy, python-format
+#, python-format
 msgid "Share %(title)s"
-msgstr "رد على %(post_title)s"
+msgstr ""
 
 #: app/templates/share.html:18
 msgid "This link has already been shared in these communities:"
@@ -7450,9 +7450,9 @@ msgid "No reports yet"
 msgstr ""
 
 #: app/templates/community/community_moderate_comments.html:30
-#, fuzzy, python-format
+#, python-format
 msgid "Review comments in %(community)s"
-msgstr "ردود على تعليقي حول %(post_title)s"
+msgstr ""
 
 #: app/templates/community/community_moderate_comments.html:40
 #: app/templates/user/show_profile.html:285
@@ -7525,9 +7525,9 @@ msgid "Ban a user"
 msgstr ""
 
 #: app/templates/community/community_moderate_subscribers.html:168
-#, fuzzy, python-format
+#, python-format
 msgid "Create a ban from %(community)s"
-msgstr "ردود على تعليقي حول %(post_title)s"
+msgstr ""
 
 #: app/templates/community/community_modlog.html:24
 #, python-format
@@ -9166,9 +9166,9 @@ msgstr ""
 
 #: app/templates/tag/tag_cloud.html:14 app/templates/tag/tag_cloud.html:16
 #: app/templates/tag/tag_cloud.html:18
-#, fuzzy, python-format
+#, python-format
 msgid "Tags in %(community)s"
-msgstr "ردود على تعليقي حول %(post_title)s"
+msgstr ""
 
 #: app/templates/tag/tag_cloud.html:27
 msgid "Tag Cloud"
