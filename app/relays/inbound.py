@@ -157,9 +157,6 @@ def accept_unsigned_forward(relay, request_json, saved_json):
     process_relayed_announce re-checks the relay rules. Always answered 200, so the relay keeps delivering."""
     activity_id = request_json.get('id') or ''
     actor = request_json.get('actor')
-    if not claim_activity(activity_id, actor):
-        log_incoming_ap(activity_id, APLOG_DUPLICATE, APLOG_IGNORED, saved_json, 'Already aware of this activity')
-        return '', 200
     activity_type = request_json.get('type')
     if activity_type != 'Create':
         log_incoming_ap(activity_id, APLOG_NOTYPE, APLOG_IGNORED, saved_json,
@@ -182,13 +179,17 @@ def accept_unsigned_forward(relay, request_json, saved_json):
     if instance_banned(host):
         log_incoming_ap(activity_id, APLOG_CREATE, APLOG_IGNORED, saved_json, 'relayed object from a banned instance')
         return '', 200
+    # claimed in the relay's namespace, last: the relay's unverified copy must not claim the author's activity id
+    if not claim_activity(activity_id, relay.actor_id):
+        log_incoming_ap(activity_id, APLOG_DUPLICATE, APLOG_IGNORED, saved_json, 'Already aware of this activity')
+        return '', 200
     try:
         if current_app.debug:
             process_relayed_announce(relay.id, uri)
         else:
             process_relayed_announce.apply_async(args=(relay.id, uri), queue='background')
     except Exception:
-        release_activity(activity_id, actor)   # R-DEDUPEUNDO: the relay's retry must be processed
+        release_activity(activity_id, relay.actor_id)   # R-DEDUPEUNDO: the relay's retry must be processed
         raise
     log_incoming_ap(activity_id, APLOG_CREATE, APLOG_SUCCESS, saved_json,
                     'relayed object queued for fetch from its origin')

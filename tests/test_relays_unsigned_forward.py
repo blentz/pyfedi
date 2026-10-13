@@ -135,3 +135,61 @@ class TestAcceptUnsignedForward:
         inbound.accept_unsigned_forward(relay, forward(), None)
 
         assert sent == [((relay.id, NOTE_URI), 'background')]
+
+
+class TestTheClaimBelongsToTheRelay:
+
+    def test_a_relay_forward_does_not_claim_the_authors_activity_id(self, app, queued, logged):
+        relay = make_relay(state=RELAY_ACCEPTED)
+        activity = forward()
+
+        inbound.accept_unsigned_forward(relay, activity, None)
+
+        assert inbound.claim_activity(activity['id'], AUTHOR) is True
+
+    @pytest.mark.parametrize('kwargs', [{'activity_type': 'Update'},
+                                        {'obj': note(uri='https://elsewhere.example/notes/1')}])
+    def test_a_refused_forward_holds_no_claim(self, app, queued, logged, kwargs):
+        relay = make_relay(state=RELAY_ACCEPTED)
+        activity = forward(**kwargs)
+
+        inbound.accept_unsigned_forward(relay, activity, None)
+
+        assert inbound.claim_activity(activity['id'], relay.actor_id) is True
+
+    def test_a_failing_pre_filter_strands_no_claim(self, app, queued, logged, monkeypatch):
+        relay = make_relay(state=RELAY_ACCEPTED)
+        activity = forward()
+        working = inbound.relayed_activity_allowed
+
+        def boom(*args):
+            raise RuntimeError('db down')
+
+        monkeypatch.setattr(inbound, 'relayed_activity_allowed', boom)
+        with pytest.raises(RuntimeError):
+            inbound.accept_unsigned_forward(relay, activity, None)
+        monkeypatch.setattr(inbound, 'relayed_activity_allowed', working)
+
+        assert inbound.accept_unsigned_forward(relay, activity, None) == ('', 200)
+        assert queued == [(relay.id, NOTE_URI)]
+
+
+class TestHostGate:
+
+    def test_the_host_comparison_ignores_case(self, app, queued, logged):
+        relay = make_relay(state=RELAY_ACCEPTED)
+        obj = note(uri='https://OTHER.example/notes/1')
+
+        inbound.accept_unsigned_forward(relay, forward(obj=obj), None)
+
+        assert queued == [(relay.id, 'https://OTHER.example/notes/1')]
+
+    @pytest.mark.parametrize('uri, actor', [('https:///notes/1', AUTHOR),
+                                            (NOTE_URI, {'id': AUTHOR})])
+    def test_an_empty_host_or_a_non_string_actor_is_refused(self, app, queued, logged, uri, actor):
+        relay = make_relay(state=RELAY_ACCEPTED)
+
+        inbound.accept_unsigned_forward(relay, forward(obj=uri, actor=actor), None)
+
+        assert queued == []
+        assert logged[-1][4] == 'relayed object host does not match actor'
