@@ -1626,6 +1626,10 @@ def markdown_to_html(markdown_text, anchors_new_tab=True, allow_img=True, a_targ
             raw_html = md.convert(markdown_text)
             # Apply enhanced image attributes after markdown processing
             raw_html = apply_enhanced_image_attributes(raw_html, md)
+        except RecursionError:
+            # markdown2 recurses once per nesting level (a blockquote level costs it several frames), so a few
+            # hundred nested '>' -- a few hundred bytes -- exhaust the stack. Such a body is refused: nothing renders.
+            raw_html = ''
         except TypeError:
             # weird markdown, like https://mander.xyz/u/tty1 and https://feddit.uk/comment/16076443,
             # causes "markdown2.Markdown._color_with_pygments() argument after ** must be a mapping, not bool" error, so try again without fenced-code-blocks extra

@@ -525,5 +525,18 @@ And if you want to add your score to the database to help your fellow Bookworms 
         self.assertEqual(target_html, result)
 
 
+    def test_quotes_nested_past_markdown2s_recursion_render_nothing(self):
+        """markdown2 recurses once per blockquote level, so 200 nested '>' (402 bytes) raised RecursionError out of
+        markdown_to_html, for a peer's post on ingest and for a notification page on render (fuzz:
+        markdown_to_html/blockquote_200_levels). Such a body is refused: it renders as nothing."""
+        markdown = ('>' * 200 + 'a\n') * 2
+        self.assertEqual(markdown_to_html(markdown, test_env={'fn_string': 'fn-test'}), '')
+
+    def test_quotes_nested_well_inside_the_limit_still_render(self):
+        markdown = ('>' * 20 + 'a\n') * 2
+        result = markdown_to_html(markdown, test_env={'fn_string': 'fn-test'})
+        self.assertGreaterEqual(result.count('<blockquote>'), 20)
+        self.assertIn('<p>a</p>', result)
+
 if __name__ == '__main__':
     unittest.main()
