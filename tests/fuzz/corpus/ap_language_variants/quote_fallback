@@ -1,0 +1,1 @@
+{"id": "https://a.example/n/1", "quote": "https://b.example/n/2", "contentMap": {"en": "x", "de": "<p>y</p><p>RE: <a href=\"https://b.example/n/2\">https://b.example/n/2</a></p>"}, "content": "x"}

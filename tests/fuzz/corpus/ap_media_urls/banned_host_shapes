@@ -1,0 +1,1 @@
+{"attachment": [{"type": "Image", "url": "https:///b.example/x"}, {"type": "Image", "url": "https://b.example\\@good.example/x"}, {"type": "Image", "url": "https://b%2Eexample/x"}, {"type": "Image", "url": "https://b.example./x"}]}

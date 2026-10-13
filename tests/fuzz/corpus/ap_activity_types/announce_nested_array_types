@@ -1,0 +1,1 @@
+{"type": ["Announce"], "actor": "a", "id": "i", "object": {"type": ["Create"], "object": {"type": ["Page", "Extra"]}}}
