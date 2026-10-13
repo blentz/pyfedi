@@ -979,6 +979,26 @@ def url_host(url: str) -> Optional[str]:
         return None
 
 
+def sub_skipping(pattern: re.Pattern, replacement: str, text: str) -> str:
+    """pattern.sub(replacement, text) for a pattern whose LAST alternative has no groups: a match of that
+    alternative is put back unchanged rather than replaced.
+
+    That alternative is how a lazy pattern is kept linear. Python's re retries a pattern at every position, and a
+    pattern like \\{(.+?)\\|(.+?)\\} scans to the end of the line from each one before it fails, so a line of
+    unclosed openers costs the square of its length. Where a failure at one start means failure at every later
+    start up to some point (for that pattern, the end of the line), a last alternative that consumes up to that
+    point skips the doomed starts and leaves the text as it was."""
+    return pattern.sub(lambda match: match.group(0) if match.lastindex is None else match.expand(replacement), text)
+
+
+# {base|ruby}, the ruby markup allowlist_html renders, as \{(.+?)\|(.+?)\} matched it. Each lazy group ends at
+# the first delimiter after its first character, and if no '}' follows the first '|' none follows a later one, so
+# the possessive classes give the same matches. When a start fails, every later start on the line fails as well
+# (the '|' and the '}' it needs come later still), so the last alternative skips the rest of the line: a line of
+# '{|' took 31 s per 4 KiB, cubic.
+_RUBY_RE = re.compile(r'\{(.[^|\n]*+)\|(.[^}\n]*+)\}|\{[^\n]*')
+
+
 # sanitise HTML using an allow list
 def allowlist_html(html: str, a_target='_blank', test_env=False) -> str:
     # RUN THE TESTS in tests/test_allowlist_html.py whenever you alter this function, it's fragile and bugs are hard to spot.
@@ -1043,8 +1063,7 @@ def allowlist_html(html: str, a_target='_blank', test_env=False) -> str:
                                        clean_html)
 
     # replace ruby markdown like {漢字|かんじ}
-    re_ruby = re.compile(r'\{(.+?)\|(.+?)\}')
-    clean_html = re_ruby.sub(r'<ruby>\1<rp>(</rp><rt>\2</rt><rp>)</rp></ruby>', clean_html)
+    clean_html = sub_skipping(_RUBY_RE, r'<ruby>\1<rp>(</rp><rt>\2</rt><rp>)</rp></ruby>', clean_html)
 
     # replace :emoji: with images
     emoji_replacements = get_emoji_replacements() if test_env is False else None

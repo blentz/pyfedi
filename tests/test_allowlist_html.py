@@ -1,11 +1,15 @@
 import html as html_module
+import re
+import time
 import unittest
 
 import pytest
 from bs4 import BeautifulSoup
 
+from app import utils
 from app.utils import (allowlist_html, community_link_to_href, feed_link_to_href, markdown_to_html,
-                       person_link_to_href, url_host)
+                       person_link_to_href, sub_skipping, url_host)
+from tests.test_markdown_to_html import corpus_texts, random_texts
 
 
 class TestAllowlistHtml(unittest.TestCase):
@@ -826,6 +830,46 @@ class TestUrlHost:
         refusal too."""
         assert url_host(url) is None
 
+
+
+def assert_linear(test, texts, function, seconds=1.0):
+    """Each text, 64 KiB of a pump shape, goes through `function` inside `seconds`: hours on the regexes these
+    tests replaced."""
+    for text in texts:
+        started = time.perf_counter()
+        function(text)
+        elapsed = time.perf_counter() - started
+        assert elapsed < seconds, f'{elapsed:.2f} s on {text[:40]!r}...'
+
+
+def pump(unit: str, size: int = 64 * 1024, suffix: str = '') -> str:
+    return (unit * (size // len(unit) + 1))[:size - len(suffix)] + suffix
+
+
+class TestAllowlistRegexesAreLinear:
+    """Each lazy regex allowlist_html runs over every remote body, rewritten so a line or a document of unclosed
+    openers is read once, and held by a differential test to the matches the old regex made."""
+
+    @staticmethod
+    def assert_same_subs(old, new_sub, fragments, target='redos_allowlist_html', count=4000, longest=16):
+        for text in random_texts(fragments, count, longest, seed=3) + corpus_texts(target, 300):
+            assert new_sub(text) == old(text), text
+
+    def test_ruby_matches_what_it_matched(self):
+        old = re.compile(r'\{(.+?)\|(.+?)\}')
+        template = r'<ruby>\1<rp>(</rp><rt>\2</rt><rp>)</rp></ruby>'
+        self.assert_same_subs(lambda text: old.sub(template, text),
+                              lambda text: sub_skipping(utils._RUBY_RE, template, text),
+                              ['{', '|', '}', 'a', '\n', ' ', '{|', '}|{'])
+
+    def test_unclosed_ruby_is_read_in_linear_time(self):
+        """fuzz: redos_allowlist_html/ruby_pump, ruby_open_pump, ruby_letter_pump."""
+        assert_linear(self, [pump('{|'), pump('{', suffix='|'), pump('{a|')],
+                      lambda text: allowlist_html(text, test_env={'fn_string': 'fn-test'}))
+
+    def test_ruby_still_renders(self):
+        result = allowlist_html('<p>{漢字|かんじ}</p>', test_env={'fn_string': 'fn-test'})
+        assert result == '<p><ruby>漢字<rp>(</rp><rt>かんじ</rt><rp>)</rp></ruby></p>'
 
 if __name__ == '__main__':
     unittest.main()
