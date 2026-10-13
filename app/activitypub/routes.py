@@ -2892,7 +2892,9 @@ def process_new_content(user, community, store_ap_json, request_json, announced)
                     update_post_from_activity(post, activity_json)
                     log_incoming_ap(id, APLOG_UPDATE, APLOG_SUCCESS, saved_json)
                     # a followers-only body is never relayed to the community's followers, and relayed content is never re-broadcast
-                    if not announced and post.visibility in OPEN_VISIBILITIES and current_relay_id.get() is None:
+                    # C4: PeerTube Updates a Video for every view-count change; the old Video arm never announced them
+                    if not announced and post.visibility in OPEN_VISIBILITIES and current_relay_id.get() is None \
+                            and activity_json['object'].get('type') != 'Video':
                         announce_activity_to_followers(post.community, post.author, request_json)
                 else:
                     log_incoming_ap(id, APLOG_UPDATE, APLOG_FAILURE, saved_json, 'User cannot create post in Community')
