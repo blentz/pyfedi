@@ -237,18 +237,24 @@ def check_activity_types(data: bytes) -> None:
 # Hosts and actor strings
 # ---------------------------------------------------------------------------
 
+def _cased(host: str) -> str:
+    return host.partition('%')[0]
+
+
 def _check_host_of(url: str) -> str:
     host = host_of(url)
     assert isinstance(host, str)
-    assert host == host.lower(), f'host_of({url!r}) = {host!r} is not lowercase'
+    # Lowercase up to a '%': urllib keeps what follows one in its case, as an IPv6 zone id is case-sensitive, and
+    # for a reg-name that only makes two spellings of an odd host compare unequal -- it fails closed.
+    assert _cased(host) == _cased(host).lower(), f'host_of({url!r}) = {host!r} is not lowercase'
     assert '@' not in host, f'host_of({url!r}) = {host!r} kept userinfo'
     reading = rfc3986_authority(url)
     if reading is not None:
         expected_host = reading[0]
-        assert host == expected_host, f'host_of({url!r}) = {host!r}, RFC 3986 reads {expected_host!r}'
+        assert host.lower() == expected_host, f'host_of({url!r}) = {host!r}, RFC 3986 reads {expected_host!r}'
 
     authority = authority_of(url)
-    assert isinstance(authority, str) and authority == authority.lower() and '@' not in authority
+    assert isinstance(authority, str) and _cased(authority) == _cased(authority).lower() and '@' not in authority
     if authority:
         # An IP-literal comes back bracketed: IPv6, which has a ':', and IPvFuture, which need not.
         bracketed = f'[{host}]' if authority.startswith('[') else host
@@ -263,7 +269,7 @@ def _check_host_of(url: str) -> str:
             expected = ''
         else:
             expected = f'{name}:{int(port)}' if port else name
-        assert authority == expected, f'authority_of({url!r}) = {authority!r}, RFC 3986 reads {expected!r}'
+        assert authority.lower() == expected, f'authority_of({url!r}) = {authority!r}, RFC 3986 reads {expected!r}'
     return host
 
 
