@@ -905,11 +905,14 @@ class LDSignature:
             for value in node.get(SEC_EXPIRATION, []):
                 try:
                     expires = parser.isoparse(value["@value"])
-                except (KeyError, TypeError, ValueError):
+                    if expires.tzinfo is not None:
+                        expires = expires.astimezone(timezone.utc).replace(tzinfo=None)
+                    expired = expires + LD_SIGNATURE_EXPIRY_SKEW < utcnow()
+                except (KeyError, TypeError, ValueError, OverflowError):
+                    # OverflowError: a time at the edge of the datetime range (hour 24 of 9999-12-31, year 1
+                    # or 9999 moved to UTC, the skew added past 9999)
                     raise VerificationFormatError("Invalid signature expiry")
-                if expires.tzinfo is not None:
-                    expires = expires.astimezone(timezone.utc).replace(tzinfo=None)
-                if expires + LD_SIGNATURE_EXPIRY_SKEW < utcnow():
+                if expired:
                     raise VerificationError("Signature expired")
         try:
             check_ld_coverage(document)
