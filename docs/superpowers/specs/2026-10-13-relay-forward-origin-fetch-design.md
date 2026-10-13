@@ -43,24 +43,25 @@ two places that today `return '', 400` (no `signature` in the body; LD signature
 before answering 400, ask `relay_for_forwarded(request)`. If it returns an accepted relay (its keyId owner is
 `Relay.actor_id`, state accepted, and the request verifies against `Relay.public_key` with `POST_REQUIRED` — the
 existing function), hand the request to a new `relay_inbound.accept_unsigned_forward(relay, request_json,
-saved_json)` and return its response. If it returns None, the 400 and its log line are unchanged.
+saved_json, activity_type)` and return its response. If it returns None, the 400 and its log line are unchanged.
 
-### `accept_unsigned_forward(relay, request_json, saved_json)` (new, `app/relays/inbound.py`)
+### `accept_unsigned_forward(relay, request_json, saved_json, activity_type)` (new, `app/relays/inbound.py`)
 
 Returns a response tuple; always 2xx.
 
-1. **Dedupe.** `claim_activity(request_json['id'], relay.actor_id)`; already claimed → log
-   `APLOG_DUPLICATE`/ignored `Already aware of this activity`, return `('', 200)`.
-2. **Type.** Only `Create` is acted on. Any other type (Update, Delete, Like, Announce, …) → log ignored
+1. **Type.** Only `Create` is acted on. Any other type (Update, Delete, Like, Announce, …) → log ignored
    `relayed {type} without a verifiable signature`, return `('', 200)`.
-3. **Object URI.** `object` is a dict with a string `id`, or a string. Anything else → log ignored
+2. **Object URI.** `object` is a dict with a string `id`, or a string. Anything else → log ignored
    `relayed object has no id`, return `('', 200)`.
-4. **Cheap pre-filter** on the forwarded (unverified) body: `relayed_activity_allowed(request_json)`. Refused →
+3. **Cheap pre-filter** on the forwarded (unverified) body: `relayed_activity_allowed(request_json)`. Refused →
    log ignored with its reason, return `('', 200)`. The unverified body can only make us skip a fetch, never accept
    content, so trusting it here is safe; the same check runs again on the fetched object.
-5. **Origin gate.** The object URI's host must equal the activity actor's host (`host_of`), and that host must not
+4. **Origin gate.** The object URI's host must equal the activity actor's host (`host_of`), and that host must not
    be banned (`instance_banned(host)`, `app/utils.py`); else log ignored `relayed object host does not match
    actor` / `relayed object from a banned instance`, return `('', 200)`.
+5. **Dedupe.** `claim_activity(request_json['id'], relay.actor_id)`: the claim is taken last and under the relay's own
+   namespace (`relay.actor_id`), so a relay copy can never claim an author's activity id and a refused forward holds
+   no claim. Already claimed → log `APLOG_DUPLICATE`/ignored `Already aware of this activity`, return `('', 200)`.
 6. **Queue.** `process_relayed_announce.apply_async(args=(relay.id, uri), queue='background')` (direct call when
    `current_app.debug`, as `relay_actor_gate` does). On an exception while queueing, `release_activity(...)` and
    re-raise (R-DEDUPEUNDO), so the relay's retry is processed.
