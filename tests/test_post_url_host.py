@@ -59,6 +59,14 @@ HOST_MISMATCH = [
     'https://banned..example/x',
     'https://ban\u200bned.example/x',
     'https://\u05d0a.example/x',
+    # Characters newer than the Unicode 3.2 tables IDNA2003's nameprep uses. A browser
+    # maps them by UTS46 on current Unicode: a squared A is 'a'; the shorthand format
+    # control and a supplementary variation selector are dropped as default-ignorable.
+    'https://b\U0001F130nned.example/x',
+    'https://ban\U0001BCA0ned.example/x',
+    'https://ban\U000E0100ned.example/x',
+    # Unassigned in this Python's tables: a browser on newer Unicode may map it.
+    'https://ban\u0378ned.example/x',
 ]
 
 STILL_STORABLE = [
