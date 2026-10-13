@@ -1065,3 +1065,12 @@ def test_a_number_that_is_not_finite_is_no_integer(value):
 
     assert _as_int(value, None) is None
     assert _as_int(value, 7) == 7
+
+
+def test_an_integer_too_large_for_a_float_is_no_float():
+    """JSON integers have no size limit short of Python's 4300 digits, and float() of one past about 1e308 raised
+    OverflowError. Found by the models_coercers fuzz target."""
+    from app.models import _as_float
+
+    assert _as_float(10 ** 400, None) is None
+    assert _as_float(10 ** 300, None) == 1e300

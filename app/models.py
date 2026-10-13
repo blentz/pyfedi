@@ -162,7 +162,10 @@ def _as_int(value, default):
 def _as_float(value, default):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return default
-    return float(value)
+    try:
+        return float(value)
+    except OverflowError:   # a JSON integer past about 1e308
+        return default
 
 
 def _as_text(value, limit=None):
