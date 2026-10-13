@@ -168,6 +168,17 @@ class TestTheClaimBelongsToTheRelay:
 
         assert inbound.claim_activity(activity['id'], relay.actor_id) is True
 
+    def test_a_forward_refused_by_the_ban_gate_holds_no_claim(self, app, queued, logged):
+        relay = make_relay(state=RELAY_ACCEPTED)
+        db.session.add(BannedInstances(domain='other.example'))
+        db.session.commit()
+        activity = forward()
+
+        inbound.accept_unsigned_forward(relay, activity, None, 'Create')
+
+        assert logged[-1][4] == 'relayed object from a banned instance'
+        assert inbound.claim_activity(activity['id'], relay.actor_id) is True
+
     def test_a_failing_pre_filter_strands_no_claim(self, app, queued, logged, monkeypatch):
         relay = make_relay(state=RELAY_ACCEPTED)
         activity = forward()
