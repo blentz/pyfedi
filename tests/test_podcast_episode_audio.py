@@ -188,6 +188,16 @@ def test_a_link_to_another_host_is_not_an_episode():
     assert castopod_episode_url({**note, 'content': ANNOUNCEMENT, 'inReplyTo': 'x'}, f'https://{PEER}/@mypodcast') is None
 
 
+def test_a_link_urlparse_refuses_is_not_an_episode():
+    """An unbalanced IPv6 bracket in the link made urlparse raise ValueError out of castopod_episode_url, and
+    the Note was lost with it. A link that does not parse names no episode. Found by the ap_media_urls fuzz
+    target."""
+    from app.activitypub.util import castopod_episode_url
+    note = {'type': 'Note', 'content': f'<a href="https://[{PEER}/@mypodcast/episodes/ep-1">Episode</a>'}
+
+    assert castopod_episode_url(note, f'https://{PEER}/@mypodcast') is None
+
+
 def test_an_ordinary_note_is_never_fetched(db_session, http_mock):
     post = _ingest(f'<p>see <a href="https://{PEER}/about">about</a></p>')
 

@@ -4100,7 +4100,10 @@ def castopod_episode_url(note: dict, actor_ap_id: str):
     href = _as_url(html.unescape(match.group(1)), 1024)
     if not href:
         return None
-    parsed = urlparse(href)
+    try:
+        parsed = urlparse(href)
+    except ValueError:   # an unbalanced IPv6 bracket, a host failing NFKC: no episode
+        return None
     if not _CASTOPOD_EPISODE_PATH.fullmatch(parsed.path or '') or parsed.query or not actor_ap_id:
         return None
     if not parsed.hostname or parsed.hostname != host_of(actor_ap_id):
