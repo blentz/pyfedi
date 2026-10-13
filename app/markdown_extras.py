@@ -131,7 +131,8 @@ class EnhancedImages(Extra):
         title_attr = f' title="{title_match.group(1)}"' if title_match else ''
 
         # Get the URL (first part before any title)
-        url = url_and_title.split('"')[0].strip() if '"' in url_and_title else url_and_title.split()[0]
+        # A blank url (only spaces, or nothing before the comma) has no first word: src="", as for a bare title.
+        url = url_and_title.split('"')[0].strip() if '"' in url_and_title else (url_and_title.split() or [''])[0]
 
         # Create the HTML and hash it to protect from smarty-pants and other processing
         # Use double quotes since the HTML is protected by hashing
