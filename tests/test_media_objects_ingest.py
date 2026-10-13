@@ -222,3 +222,15 @@ def test_a_blank_name_on_a_media_object_is_no_name_in_update(world, redis_lock_o
     bare = _stored(world, 43, 'Audio', name='Song', url=AUDIO)
     _update(bare, 43, 'Audio', name=blank, url=AUDIO)
     assert bare.title == 'Audio'
+
+
+def test_a_long_media_name_is_shortened_to_the_title_width_in_create(world):
+    community, author = world
+    post = Post.new(author, community, _create(_media(44, 'Image', name='n' * 300, url='https://pics.example/1.png')))
+    assert len(post.title) <= 255 and post.title.endswith('…')
+
+
+def test_a_long_media_name_is_shortened_to_the_title_width_in_update(world, redis_lock_only_double):
+    post = _stored(world, 45, 'Audio', name='Song', url=AUDIO)
+    _update(post, 45, 'Audio', name='n' * 300, url=AUDIO)
+    assert len(post.title) <= 255 and post.title.endswith('…')

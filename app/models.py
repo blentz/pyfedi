@@ -2676,7 +2676,7 @@ class Post(db.Model):
             activitypub_visibility, set_post_gallery, content_warning_from, gallery_attachments, \
             gallery_image_is_blocked, castopod_episode_url, fetch_castopod_episode_audio, can_view, \
             podcast_episode_title, quote_id_from, language_variants_from, object_language, \
-            MEDIA_URL_KIND, media_url_from
+            MEDIA_URL_KIND, MEDIA_OBJECT_TYPES, media_url_from
         # cycle: app.utils imports from this module
         from app.utils import allowlist_html, markdown_to_html, html_to_text, microblog_content_to_title, \
             microblog_content_to_link, strip_quote_fallback, blocked_phrases, get_setting, \
@@ -2706,6 +2706,8 @@ class Post(db.Model):
                     private = False
         else:
             title = request_json['object']['name'].strip()
+            if object_type in MEDIA_OBJECT_TYPES:  # C4: Post.title holds 255 characters
+                title = shorten_string(title, 255)
         visibility = activitypub_visibility(request_json['object'])
         nsfl_in_title = '[NSFL]' in title.upper() or '(NSFL)' in title.upper() or '[COMBAT]' in title.upper()
         post = Post(user_id=user.id, community_id=community.id,
