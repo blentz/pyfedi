@@ -530,6 +530,15 @@ def test_an_ld_date_is_parsed_without_microseconds_and_none_stays_none(app):
     assert format_ld_date(parsed).endswith('Z')
 
 
+def test_an_ld_date_past_year_9999_is_a_value_error():
+    """isoparse rolls hour 24 of 9999-12-31 into year 10000 and raised OverflowError. Unreadable dates are a
+    ValueError, as any other is. Found by the http_ld_dates fuzz target."""
+    from app.activitypub.signature import parse_ld_date
+
+    with pytest.raises(ValueError):
+        parse_ld_date('9999-12-31T24:00:00')
+
+
 def test_a_delivery_goes_through_celery_unless_debug_or_told_otherwise(app):
     """send_post_request's whole body is the choice between .delay and a direct
     call (signature.py:85-91), so both arms are rows -- and the direct one
