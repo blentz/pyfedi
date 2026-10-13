@@ -5,7 +5,7 @@ import pytest
 from app import db
 from app.activitypub.util import comment_model_to_json, post_to_page
 from app.models import PostBoost
-from tests.factories import make_instance, make_post_reply, make_user
+from tests.factories import make_community, make_instance, make_post_reply, make_user
 from tests.test_ap_content_objects import ap_get, seed_local_post
 
 SERVER = 'https://test.piefed.local'
@@ -66,3 +66,48 @@ def post_count_collections_of(post):
 def comment_count_collections_of(reply):
     note = comment_model_to_json(reply)
     return [note['likes'], note['dislikes']]
+
+
+def test_the_group_document_names_its_following_collection(app, db_session):
+    seed_local_post()   # seeds the site, instance and the local community 'books'
+
+    assert ap_get(app, '/c/books').json['following'] == f'{SERVER}/c/books/following'
+
+
+def test_a_group_follows_nothing(app, db_session):
+    seed_local_post()
+
+    response = ap_get(app, '/c/books/following')
+
+    assert response.status_code == 200
+    assert response.json['type'] == 'OrderedCollection'
+    assert response.json['id'] == f'{SERVER}/c/books/following'
+    assert response.json['totalItems'] == 0
+    assert response.json['orderedItems'] == []
+
+
+@pytest.mark.parametrize('flag', ['local_only', 'private'])
+def test_a_local_only_or_private_groups_following_is_403(app, db_session, flag):
+    community, author, post = seed_local_post()
+    setattr(community, flag, True)
+    db.session.commit()
+
+    assert ap_get(app, '/c/books/following').status_code == 403
+
+
+def test_an_unknown_or_remote_groups_following_is_404(app, db_session):
+    seed_local_post()
+    remote = make_community(name='films', host='remote.example')
+    remote.ap_id = 'https://remote.example/c/films'
+    db.session.commit()
+
+    assert ap_get(app, '/c/nosuch/following').status_code == 404
+    assert ap_get(app, '/c/films/following').status_code == 404
+
+
+def test_a_browser_asking_for_a_groups_following_is_sent_to_the_group(app, db_session):
+    seed_local_post()
+    with app.test_client() as client:
+        response = client.get('/c/books/following', headers={'Accept': 'text/html'})
+
+    assert (response.status_code, response.headers['Location']) == (302, '/c/books')
