@@ -1010,6 +1010,12 @@ def _embedded_media_re(extension: str) -> re.Pattern:
     fails too."""
     return re.compile(r'<img (?>.*?src="(?=https://))(https://(?>.*?\.' + extension + r'(?=")))".*?/>|<img [^\n]*')
 
+
+# An image hotlinked from fandom's static host. The lazy alt text ends at the first point the rest matches, and a
+# start that fails (nothing on the line matches the rest) leaves nothing for a later start on the line, so the skip
+# alternative ends the line: a line of '<img alt="' took 2.4 s per 64 KiB.
+_FANDOM_HOTLINK_RE = re.compile(r'<img alt="(.*?)" loading="lazy" src="https://static.wikia.nocookie.net|<img alt="[^\n]*')
+
 # sanitise HTML using an allow list
 def allowlist_html(html: str, a_target='_blank', test_env=False) -> str:
     # RUN THE TESTS in tests/test_allowlist_html.py whenever you alter this function, it's fragile and bugs are hard to spot.
@@ -1069,9 +1075,8 @@ def allowlist_html(html: str, a_target='_blank', test_env=False) -> str:
                               r'<audio controls><source src="\1" type="audio/mp3"></audio>', clean_html)
 
     # replace the 'static' for images hotlinked to fandom sites with 'vignette'
-    re_fandom_hotlink = re.compile(r'<img alt="(.*?)" loading="lazy" src="https://static.wikia.nocookie.net')
-    clean_html = re_fandom_hotlink.sub(r'<img alt="\1" loading="lazy" src="https://vignette.wikia.nocookie.net',
-                                       clean_html)
+    clean_html = sub_skipping(_FANDOM_HOTLINK_RE,
+                              r'<img alt="\1" loading="lazy" src="https://vignette.wikia.nocookie.net', clean_html)
 
     # replace ruby markdown like {漢字|かんじ}
     clean_html = sub_skipping(_RUBY_RE, r'<ruby>\1<rp>(</rp><rt>\2</rt><rp>)</rp></ruby>', clean_html)
