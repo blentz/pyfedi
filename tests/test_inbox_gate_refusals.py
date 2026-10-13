@@ -473,6 +473,21 @@ def test_a_missing_minimum_field_is_refused(app, signing_peer, monkeypatch, miss
     assert ActivityPubLog.query.one().exception_message == 'Missing minimum expected fields in JSON'
 
 
+@pytest.mark.parametrize('body', [['id', 'type', 'actor', 'object'], 'id type actor object'])
+def test_a_body_that_is_not_an_object_is_refused(app, site, monkeypatch, body):
+    """The minimum-fields guard is `'id' in request_json`, which a list holding the four names, or a string
+    containing them, passes as well as an object does; the type check after it then read request_json['id'] off
+    the list or string and raised, a 500. A body that is not an object is refused by that guard, with its log
+    message. Found by the ap_activity_types fuzz target."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+
+    with app.test_client() as client:
+        response = client.post('/inbox', json=body)
+
+    assert response.status_code == 200
+    assert ActivityPubLog.query.one().exception_message == 'Missing minimum expected fields in JSON'
+
+
 @pytest.mark.parametrize('object_type, expected_message', [
     ('Page', 'Intended for Mastodon'),
     ('Note', 'Intended for Mastodon'),
