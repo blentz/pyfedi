@@ -163,3 +163,18 @@ def test_a_media_update_fetches_nothing(world, redis_lock_only_double, monkeypat
     monkeypatch.setattr('app.activitypub.util.opengraph_parse', lambda *a, **k: calls.append(a))
     _update(post, 24, 'Document', name='d', url='https://docs.example/2.pdf')
     assert calls == [] and post.url == 'https://docs.example/2.pdf'
+
+
+def test_a_nameless_media_update_with_a_body_link_and_no_usable_url_keeps_the_media_url(world, redis_lock_only_double):
+    post = _stored(world, 25, 'Audio', name='Song', url=AUDIO)
+    _update(post, 25, 'Audio', url='javascript:alert(1)', content='<h1><a href="https://elsewhere.example/x">see this one</a></h1>')
+    assert post.url == AUDIO
+
+
+def test_an_image_update_with_the_same_url_keeps_the_image_row_and_a_new_url_replaces_it(world, redis_lock_only_double):
+    post = _stored(world, 26, 'Image', name='One', url='https://pics.example/media/1')
+    first = post.image_id
+    _update(post, 26, 'Image', name='Two', url='https://pics.example/media/1')
+    assert post.image_id == first
+    _update(post, 26, 'Image', name='Two', url='https://pics.example/media/2')
+    assert post.image_id != first and post.image.source_url == 'https://pics.example/media/2'
