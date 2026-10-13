@@ -1059,7 +1059,7 @@ def test_a_sent_like_marks_the_post_vote_federated(db_session, http_mock):
     vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
 
     db.session.refresh(row)
-    assert row.federated is True
+    assert row.federated_like is True
 
 
 def test_a_sent_like_marks_the_reply_vote_federated(db_session, http_mock):
@@ -1071,7 +1071,7 @@ def test_a_sent_like_marks_the_reply_vote_federated(db_session, http_mock):
     vote_for_reply(None, s.user.id, s.reply.id, None, 'upvote')
 
     db.session.refresh(row)
-    assert row.federated is True
+    assert row.federated_like is True
 
 
 def test_a_sent_undo_marks_the_vote_unfederated(db_session, http_mock):
@@ -1079,13 +1079,13 @@ def test_a_sent_undo_marks_the_vote_unfederated(db_session, http_mock):
     _make_deliverable(s)
     _follower(s, http_mock)
     row = _stored_vote(s)
-    row.federated = True
+    row.federated_like = True
     db.session.commit()
 
     vote_for_post(None, s.user.id, s.post.id, 'Like', 'upvote')
 
     db.session.refresh(row)
-    assert row.federated is False
+    assert row.federated_like is False
 
 
 def test_an_early_return_leaves_the_vote_unmarked(db_session, http_mock):
@@ -1098,7 +1098,7 @@ def test_an_early_return_leaves_the_vote_unmarked(db_session, http_mock):
     vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
 
     db.session.refresh(row)
-    assert row.federated is None
+    assert row.federated_like is None
 
 
 def test_a_vote_with_no_row_sends_without_crashing(db_session, http_mock):
@@ -1110,3 +1110,21 @@ def test_a_vote_with_no_row_sends_without_crashing(db_session, http_mock):
 
     assert route.called
     assert db.session.query(PostVote).count() == 0
+
+
+@pytest.mark.parametrize('reply', [False, True])
+def test_a_sent_dislike_marks_the_vote_not_a_federated_like(db_session, http_mock, reply):
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    _follower(s, http_mock)
+    row = _stored_vote(s, reply=reply, effect=-1.0)
+    row.federated_like = True
+    db.session.commit()
+
+    if reply:
+        vote_for_reply(None, s.user.id, s.reply.id, None, 'downvote')
+    else:
+        vote_for_post(None, s.user.id, s.post.id, None, 'downvote')
+
+    db.session.refresh(row)
+    assert row.federated_like is False

@@ -13,10 +13,10 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column('post_vote', sa.Column('federated', sa.Boolean(), nullable=True))
-    op.add_column('post_reply_vote', sa.Column('federated', sa.Boolean(), nullable=True))
+    op.add_column('post_vote', sa.Column('federated_like', sa.Boolean(), nullable=True))
+    op.add_column('post_reply_vote', sa.Column('federated_like', sa.Boolean(), nullable=True))
 
 
 def downgrade():
-    op.drop_column('post_reply_vote', 'federated')
-    op.drop_column('post_vote', 'federated')
+    op.drop_column('post_reply_vote', 'federated_like')
+    op.drop_column('post_vote', 'federated_like')

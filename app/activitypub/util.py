@@ -100,15 +100,15 @@ def user_following_count(user_id: int) -> int:
 
 
 def user_liked_count(user: User) -> int:
-    """How many Likes local `user` has federated (interop C5, count-only): upvotes whose Like send_vote recorded
-    as sent (`federated`), on posts and comments that are not deleted, are open and sit outside local-only and
-    private communities. 0 for a user who votes privately (owner ruling)."""
+    """How many Likes local `user` has federated (interop C5, count-only): upvotes whose last federated
+    activity send_vote recorded as a Like (`federated_like`), on posts and comments that are not deleted, are open and sit outside
+    local-only and private communities. 0 for a user who votes privately (owner ruling)."""
     if user.vote_privately:
         return 0
     posts = (db.session.query(func.count(PostVote.id))
              .join(Post, Post.id == PostVote.post_id)
              .join(Community, Community.id == Post.community_id)
-             .filter(PostVote.user_id == user.id, PostVote.federated.is_(True), PostVote.effect > 0,
+             .filter(PostVote.user_id == user.id, PostVote.federated_like.is_(True), PostVote.effect > 0,
                      Post.deleted.isnot(True),
                      Post.visibility.in_(OPEN_VISIBILITIES),
                      Community.local_only.isnot(True), Community.private.isnot(True))
@@ -116,7 +116,7 @@ def user_liked_count(user: User) -> int:
     replies = (db.session.query(func.count(PostReplyVote.id))
                .join(PostReply, PostReply.id == PostReplyVote.post_reply_id)
                .join(Community, Community.id == PostReply.community_id)
-               .filter(PostReplyVote.user_id == user.id, PostReplyVote.federated.is_(True),
+               .filter(PostReplyVote.user_id == user.id, PostReplyVote.federated_like.is_(True),
                        PostReplyVote.effect > 0, PostReply.deleted.isnot(True),
                        PostReply.visibility.in_(OPEN_VISIBILITIES),
                        Community.local_only.isnot(True), Community.private.isnot(True))

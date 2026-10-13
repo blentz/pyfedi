@@ -74,14 +74,15 @@ def send_vote(user_id, object, vote_to_undo, vote_direction, emoji):
         if not is_open(object) and (community.is_local() or object.author.is_local()):
             return
 
-        # Every check has passed: a Like/Dislike or an Undo is now sent or queued. Record it on the vote row, so
-        # `liked` (interop C5) counts only votes a peer was told about. An Undo means the peer holds none now.
+        # Every check has passed: a Like/Dislike or an Undo is now sent or queued. Record on the vote row
+        # whether peers now hold a Like from this user, so `liked` (interop C5) counts only Likes a peer was told
+        # about. A Dislike or an Undo means they hold none.
         if isinstance(object, Post):
             vote_row = session.query(PostVote).filter_by(user_id=user_id, post_id=object.id).first()
         else:
             vote_row = session.query(PostReplyVote).filter_by(user_id=user_id, post_reply_id=object.id).first()
         if vote_row:
-            vote_row.federated = not vote_to_undo
+            vote_row.federated_like = not vote_to_undo and vote_direction == 'upvote'
             session.commit()
 
         if vote_to_undo:
