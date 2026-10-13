@@ -1,0 +1,1 @@
+{"content": "a", "contentMap": {"en": "a", "fr": "<script>alert(1)</script><img src=x onerror=alert(1)>b", "es": "<a href=\"javascript:alert(1)\">x</a>"}}

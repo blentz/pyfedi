@@ -1,0 +1,1 @@
+{"id": "https://a.example/1", "type": "Create", "actor": "https://a.example/u/x", "object": {"id": "https://a.example/n/1", "type": "Note"}}

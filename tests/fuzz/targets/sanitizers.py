@@ -216,7 +216,14 @@ def check_allowlist_html(data: bytes) -> None:
     is the minimised case pinning it.
     """
     text = data.decode('utf-8', errors='replace')
-    result = allowlist_html(text, test_env={'fn_string': 'fn-test'})
+    assert_allowlisted(allowlist_html(text, test_env={'fn_string': 'fn-test'}))
+
+
+def assert_allowlisted(result) -> None:
+    """The allowlist property check_allowlist_html asserts, for any HTML that came out of allowlist_html.
+
+    Its own function so the other surfaces whose output is allowlist_html's (AP language variants, a peer's
+    posting warning) assert the same property, read the same way, rather than a second spelling of it."""
     assert isinstance(result, str), f'returned {type(result).__name__}, not str'
 
     soup = BeautifulSoup(result, 'html.parser')
