@@ -15,10 +15,10 @@ Nothing here imports atheris, for the same reason the checks do not: the corpus
 replay runs in the ordinary suite, under coverage, without the fuzzer.
 """
 
-from tests.fuzz.targets import sanitizers
+from tests.fuzz.targets import sanitizers, signatures
 from tests.fuzz.targets._target import Target
 
-SURFACE_MODULES = [sanitizers]
+SURFACE_MODULES = [sanitizers, signatures]
 
 
 def collect(modules) -> dict[str, Target]:

@@ -24,4 +24,28 @@ SURFACES: dict[str, list[str]] = {
         'app.utils.is_valid_xml_utf8',
         'app.utils.sanitize_svg_bytes',
     ],
+    # Signatures and transport (T1): every header and body an inbound request is verified by, before its sender
+    # is known, plus the capped reader under every outbound GET and the Accept header.
+    'signatures': [
+        'app.activitypub.signature.parse_signature_header',
+        'app.activitypub.signature.signature_part',
+        'app.activitypub.signature.HttpSignature.parse_signature',
+        'app.activitypub.signature.HttpSignature.verify_signature',
+        'app.activitypub.signature.parse_http_date',
+        'app.activitypub.signature.parse_ld_date',
+        'app.activitypub.signature.LDSignature.verify_signature',
+        'app.activitypub.signature.LDSignature.normalized_hash',
+        'app.activitypub.signature_rfc9421.parse_dictionary',
+        'app.activitypub.signature_rfc9421.parse_key_id',
+        'app.activitypub.signature_rfc9421.check_content_digest',
+        'app.activitypub.signature_rfc9421.signature_base',
+        'app.activitypub.signature_rfc9421.normalise_covered',
+        'app.activitypub.signature_rfc9421.verify',
+        'app.activitypub.ld_contexts.check_ld_coverage',
+        'app.activitypub.ld_contexts.strip_empty_values',
+        'app.activitypub.ld_contexts.ld_document_loader',
+        'app.utils._read_capped_body',
+        'app.utils._Inflater',
+        'app.utils.accepted_media_ranges',
+    ],
 }
