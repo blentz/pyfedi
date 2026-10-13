@@ -171,6 +171,16 @@ Some text here.
         # Should NOT have anchor tag
         self.assertNotIn('<a href=', result)
 
+    def test_blank_url_gives_an_empty_src(self):
+        """A url of only spaces, or only a full-size url after the comma, was url_and_title.split()[0] on an empty
+        list: IndexError out of markdown_to_html for a post or a peer's markdown (fuzz: enhanced_images/blank_url,
+        enhanced_images/only_full_url, markdown_to_html/enhanced_image_blank_url). It now gives src="", as a url of
+        only a quoted title already did."""
+        self.assertIn('src=""', markdown_with_enhanced_images('![a :: b](   )'))
+        result = markdown_with_enhanced_images('![a :: b](, full.jpg)')
+        self.assertIn('src=""', result)
+        self.assertIn('href="full.jpg"', result)
+
     def test_integration_with_markdown_to_html(self):
         """Test integration with markdown_to_html function (full extras suite)"""
         from app.utils import markdown_to_html
