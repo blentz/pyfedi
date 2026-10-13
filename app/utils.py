@@ -690,19 +690,49 @@ allowed_tags = ['p', 'strong', 'a', 'ul', 'ol', 'li', 'em', 'blockquote', 'cite'
                 's', 'tg-spoiler', 'ruby', 'rt', 'rp']
 
 
-LINK_PATTERN = re.compile(
-    r"""
+# The host used to be its own group, \w[\w_\-]*(?:\.\w[\w_\-]*)*, followed by the rest of the url, [^<>\s\"']*.
+# Every host character is also a rest-of-url character, so a link with nowhere to end could be split between the
+# two in as many ways as it has characters, and each split was retried: 'https://' and 4 KiB of letters ending
+# in a quote took 0.8 s, 'www.' repeated over 4 KiB took 163 s. A word character followed by rest-of-url
+# characters is exactly the same set of strings, and greedy backtracking over it still finds the longest end the
+# two lookarounds allow, so _LINK_RE matches what the old pattern matched, in time linear in the run.
+_LINK_HEAD = r"""
         \b
+        (?:https?://|(?<!//)www\.)    # prefix - https:// or www.
+        \w[^<>\s\"']*                 # host and rest of url: a word character, then anything a url may hold
+"""
+_LINK_RE = re.compile(
+    r"""
         (
-            (?:https?://|(?<!//)www\.)    # prefix - https:// or www.
-            \w[\w_\-]*(?:\.\w[\w_\-]*)*   # host
-            [^<>\s\"']*                   # rest of url
+            """ + _LINK_HEAD + r"""
             (?<![?!.,:*_~;])(?<!\)\))     # exclude trailing punctuation
             (?=[?!.,:*_~);]?(?:[<\s]|$))  # make sure that we're not followed by " or ', i.e. we're outside of href="...".
         )
     """,
     re.X
 )
+# Where _LINK_RE fails at a start, it fails at every later start in the same run of url characters: they all end
+# where it does, at the first space, quote or angle bracket, and the lookarounds depend only on that end. So the
+# scan consumes the rest of the run (the second alternative, which has no group) instead of retrying each later
+# position, which was quadratic in the run's length when 'www.' or 'https://' repeated.
+_LINK_SCAN_RE = re.compile(_LINK_RE.pattern + r"|" + _LINK_HEAD, re.X)
+
+
+class _LinkPattern:
+    """LINK_PATTERN: the auto-link pattern, as markdown2's link-patterns extra and escape_non_html_angle_brackets
+    use it. Not a re.Pattern: .match is _LINK_RE's, and .finditer gives _LINK_RE's matches, scanning linearly."""
+    pattern = _LINK_RE.pattern
+
+    @staticmethod
+    def match(text: str):
+        return _LINK_RE.match(text)
+
+    @staticmethod
+    def finditer(text: str):
+        return (match for match in _LINK_SCAN_RE.finditer(text) if match.group(1) is not None)
+
+
+LINK_PATTERN = _LinkPattern()
 
 PERSON_PATTERN = re.compile(r"(?<![\/])@([a-zA-Z0-9_.-]*)@([a-zA-Z0-9_.-]*)\b")
 COMMUNITY_PATTERN = re.compile(r"(?<![\/])!([a-zA-Z0-9_.-]*)@([a-zA-Z0-9_.-]*)\b")
@@ -1204,7 +1234,7 @@ def escape_non_html_angle_brackets(text: str) -> str:
                      '|:‑)', # santa claus *<|:‑)
                      ':‑|' # dumb, dunce-like
                      ]
-        if tag_name in allowed_tags or re.match(LINK_PATTERN, tag_content) or tag_content in emoticons:
+        if tag_name in allowed_tags or LINK_PATTERN.match(tag_content) or tag_content in emoticons:
             return match.group(0)
         else:
             return f"&lt;{match.group(1)}&gt;"

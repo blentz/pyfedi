@@ -1,6 +1,39 @@
+import pathlib
+import random
+import re
+import time
 import unittest
 
-from app.utils import markdown_to_html
+from app.utils import LINK_PATTERN, markdown_to_html
+
+CORPUS = pathlib.Path(__file__).parent / 'fuzz' / 'corpus'
+
+# LINK_PATTERN as it was before it was made linear, kept as the reference the rewrite must agree with.
+OLD_LINK_PATTERN = re.compile(
+    r"""
+        \b
+        (
+            (?:https?://|(?<!//)www\.)    # prefix - https:// or www.
+            \w[\w_\-]*(?:\.\w[\w_\-]*)*   # host
+            [^<>\s\"']*                   # rest of url
+            (?<![?!.,:*_~;])(?<!\)\))     # exclude trailing punctuation
+            (?=[?!.,:*_~);]?(?:[<\s]|$))  # make sure that we're not followed by " or ', i.e. we're outside of href="...".
+        )
+    """,
+    re.X
+)
+
+
+def random_texts(fragments, count, longest, seed):
+    """`count` strings of up to `longest` fragments each, drawn from `fragments` with a fixed seed."""
+    chooser = random.Random(seed)
+    return [''.join(chooser.choice(fragments) for _ in range(chooser.randint(0, longest))) for _ in range(count)]
+
+
+def corpus_texts(target, limit):
+    """Each committed seed of a fuzz target as text, cut to `limit` characters so an old, super-linear regex
+    still finishes on it."""
+    return [path.read_bytes().decode('utf-8', errors='replace')[:limit] for path in sorted((CORPUS / target).iterdir())]
 
 
 class TestMarkdownToHtml(unittest.TestCase):
@@ -537,6 +570,44 @@ And if you want to add your score to the database to help your fellow Bookworms 
         result = markdown_to_html(markdown, test_env={'fn_string': 'fn-test'})
         self.assertGreaterEqual(result.count('<blockquote>'), 20)
         self.assertIn('<p>a</p>', result)
+
+
+class TestLinkPattern(unittest.TestCase):
+    """LINK_PATTERN is matched over every rendered body (markdown2's link-patterns extra) and inside every <...>
+    (escape_non_html_angle_brackets). Its host and rest-of-url parts overlapped, so a run of url characters with
+    nowhere to end backtracked cubically (fuzz: redos_link_pattern/*_then_quote,
+    markdown_preprocessors/escape_brackets_link_pump)."""
+
+    FRAGMENTS = ['https://', 'http://', 'www.', 'w', 'a', '_', '-', '.', '/', '"', "'", ' ', '\n', '<', '>', '(',
+                 ')', '))', '?', '!', ',', ':', '*', '~', ';', 'é', '//']
+
+    def assert_same_links(self, text):
+        self.assertEqual([m.span(1) for m in LINK_PATTERN.finditer(text)],
+                         [m.span(1) for m in OLD_LINK_PATTERN.finditer(text)], text)
+        old, new = OLD_LINK_PATTERN.match(text), LINK_PATTERN.match(text)
+        self.assertEqual(new and new.span(1), old and old.span(1), text)
+
+    def test_finds_the_links_the_old_pattern_found(self):
+        for text in random_texts(self.FRAGMENTS, 4000, 24, seed=1):
+            self.assert_same_links(text)
+
+    def test_finds_the_links_the_old_pattern_found_in_the_fuzz_corpus(self):
+        for text in corpus_texts('redos_link_pattern', 400) + corpus_texts('markdown_to_html', 400):
+            self.assert_same_links(text)
+
+    def test_a_run_with_nowhere_to_end_is_read_in_linear_time(self):
+        size = 64 * 1024
+        for text in ('https://' + 'a' * size + '"', 'www.' * (size // 4) + '"', 'https://' + 'a.' * (size // 2) + '"',
+                     'https://' * (size // 8) + '"'):
+            started = time.perf_counter()
+            self.assertEqual(list(LINK_PATTERN.finditer(text)), [])
+            self.assertIsNone(LINK_PATTERN.match(text))
+            self.assertLess(time.perf_counter() - started, 1.0)
+
+    def test_markdown_still_autolinks(self):
+        result = markdown_to_html('see https://pizza.com. and www.x.example/a_(b) ok', test_env={'fn_string': 'fn-test'})
+        self.assertIn('<a href="https://pizza.com" rel="nofollow ugc" target="_blank">https://pizza.com</a>.', result)
+        self.assertIn('href="https://www.x.example/a_(b)"', result)
 
 if __name__ == '__main__':
     unittest.main()
