@@ -165,8 +165,8 @@ def test_a_language_the_site_does_not_offer_is_not_chosen(app, db_session):
     through to English rather than being honoured.
     """
     _seed()
-    assert 'ru' not in app.config['LANGUAGES']
-    with app.test_request_context('/', headers={'Accept-Language': 'ru'}):
+    assert 'sv' not in app.config['LANGUAGES']
+    with app.test_request_context('/', headers={'Accept-Language': 'sv'}):
 
         assert get_locale() == 'en'
 
