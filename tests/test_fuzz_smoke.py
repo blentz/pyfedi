@@ -44,9 +44,9 @@ def test_the_campaign_command_routes_artifacts_out_of_the_committed_corpus():
 def test_the_smoke_artifact_prefix_overrides_the_campaign_default():
     """The prefix only keeps findings out of tests/fuzz/corpus/ if run_campaign
     does not also pass its own; campaign_argv drops a default the caller set."""
-    from tests.fuzz import run_campaign
+    from tests.fuzz import campaign
     command = smoke.campaign_command('allowlist_html', 7)
-    argv = run_campaign.campaign_argv('prog', REGISTRY['allowlist_html'], command[4:])
+    argv = campaign.campaign_argv('prog', REGISTRY['allowlist_html'], command[4:])
     assert [a for a in argv if a.startswith('-artifact_prefix=')] == [
         '-artifact_prefix=tests/fuzz/.work/smoke/allowlist_html/']
 

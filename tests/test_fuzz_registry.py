@@ -9,14 +9,18 @@ targets nothing runs, a corpus directory whose target was renamed is replayed by
 nobody -- so this file ties them together.
 
 Also checked here, because the replay and the campaign are only as good as the
-registry they read: run_campaign.TARGETS IS the registry, and run_campaign's
-argv puts the defaults where an explicit flag can override them.
+registry they read: the campaign's TARGETS IS the registry, and its argv puts
+the defaults where an explicit flag can override them.
 
-Importing run_campaign imports atheris and enters atheris.instrument_imports(),
-which is harmless here only because tests.fuzz.targets is imported first: see
-the comment under that with block in run_campaign.py.
+run_campaign itself is never imported here or by any collected test: importing
+it means importing atheris and entering atheris.instrument_imports() inside the
+coverage run. Its plain-Python half is tests.fuzz.campaign, which is what these
+tests exercise; run_campaign.py is only read as source, and
+test_no_collected_test_imports_run_campaign_or_instruments keeps it that way
+for every other test module too.
 """
 
+import ast
 import importlib
 import pathlib
 import pkgutil
@@ -27,9 +31,11 @@ import pytest
 import tests.fuzz.targets as targets_package
 from tests.fuzz.surfaces import SURFACES
 from tests.fuzz.targets import REGISTRY, SURFACE_MODULES, Target, collect
-from tests.fuzz import run_campaign  # after tests.fuzz.targets: see the module docstring
+from tests.fuzz import campaign
 
-CORPUS_ROOT = pathlib.Path(__file__).parent / 'fuzz' / 'corpus'
+TESTS_ROOT = pathlib.Path(__file__).parent
+CORPUS_ROOT = TESTS_ROOT / 'fuzz' / 'corpus'
+RUN_CAMPAIGN = TESTS_ROOT / 'fuzz' / 'run_campaign.py'
 
 
 def resolve(dotted: str):
@@ -104,8 +110,108 @@ def test_every_surface_module_is_registered():
     assert on_disk == registered
 
 
-def test_run_campaign_targets_is_the_registry():
-    assert run_campaign.TARGETS is REGISTRY
+def test_the_campaign_targets_are_the_registry():
+    assert campaign.TARGETS is REGISTRY
+
+
+def _is_instrument_imports_block(node) -> bool:
+    return isinstance(node, ast.With) and any(
+        isinstance(item.context_expr, ast.Call)
+        and isinstance(item.context_expr.func, ast.Attribute)
+        and item.context_expr.func.attr == 'instrument_imports'
+        for item in node.items)
+
+
+def test_run_campaign_takes_its_targets_from_the_campaign_module():
+    """Read as source, not imported (see the module docstring). TARGETS must be
+    bound in exactly one place in run_campaign.py: imported from
+    tests.fuzz.campaign inside an atheris.instrument_imports() block. Inside,
+    because that import is what gets the checked functions instrumented; from
+    campaign, because that is the name test_the_campaign_targets_are_the_registry
+    proves is REGISTRY. A hand-maintained dict or a second binding fails."""
+    tree = ast.parse(RUN_CAMPAIGN.read_text())
+    bindings = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and any(
+                (alias.asname or alias.name) == 'TARGETS' for alias in node.names):
+            bindings.append(('import', node.module))
+        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any(isinstance(t, ast.Name) and t.id == 'TARGETS' for t in targets):
+                bindings.append(('assign', None))
+    assert bindings == [('import', 'tests.fuzz.campaign')]
+
+    instrumented = [stmt for block in tree.body if _is_instrument_imports_block(block)
+                    for stmt in block.body]
+    assert any(isinstance(stmt, ast.ImportFrom) and stmt.module == 'tests.fuzz.campaign'
+               and 'TARGETS' in {alias.name for alias in stmt.names}
+               for stmt in instrumented), (
+        'run_campaign.py must import TARGETS from tests.fuzz.campaign inside '
+        'atheris.instrument_imports()')
+
+
+# Calls that install atheris instrumentation or start libFuzzer. FuzzedDataProvider
+# is deliberately not here: tests/test_link_parsers_fuzz.py uses it as a plain
+# bytes decoder, which instruments nothing.
+INSTRUMENTING_CALLS = {'instrument_imports', 'instrument_all', 'Fuzz'}
+
+
+def instrumentation_violations(source: str) -> list[str]:
+    """What in `source` imports tests.fuzz.run_campaign or calls an
+    INSTRUMENTING_CALLS function. Parsed, so a docstring or a command line that
+    merely names run_campaign (tests/test_fuzz_smoke.py has both) is not one."""
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            found += [f'import {a.name}' for a in node.names
+                      if a.name == 'tests.fuzz.run_campaign']
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == 'tests.fuzz.run_campaign':
+                found.append(f'from {node.module} import ...')
+            elif node.module == 'tests.fuzz' and any(a.name == 'run_campaign' for a in node.names):
+                found.append('from tests.fuzz import run_campaign')
+        elif isinstance(node, ast.Call):
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, 'id', None)
+            if name in INSTRUMENTING_CALLS:
+                found.append(f'{name}() at line {node.lineno}')
+    return found
+
+
+COLLECTED_MODULES = sorted([*TESTS_ROOT.rglob('test_*.py'), *TESTS_ROOT.rglob('conftest.py')])
+
+
+def test_no_collected_test_imports_run_campaign_or_instruments():
+    """atheris instrumentation and coverage.py must never meet in the suite.
+    Nothing collected may import run_campaign (whose import enters
+    instrument_imports()) or call instrument_imports(), instrument_all() or
+    Fuzz() itself; the campaign's testable logic is in tests.fuzz.campaign."""
+    violations = {str(path.relative_to(TESTS_ROOT)): found
+                  for path in COLLECTED_MODULES
+                  if (found := instrumentation_violations(path.read_text()))}
+    assert violations == {}
+
+
+@pytest.mark.parametrize('source', [
+    'import tests.fuzz.run_campaign',
+    'from tests.fuzz import run_campaign',
+    'from tests.fuzz.run_campaign import main',
+    'import atheris\nwith atheris.instrument_imports():\n    pass',
+    'import atheris\natheris.instrument_all()',
+    'from atheris import Fuzz\nFuzz()',
+])
+def test_the_instrumentation_scan_catches(source):
+    assert instrumentation_violations(source)
+
+
+@pytest.mark.parametrize('source', [
+    '"""python -m tests.fuzz.run_campaign x"""',
+    "command = ['python', '-m', 'tests.fuzz.run_campaign']",
+    'import atheris\natheris.FuzzedDataProvider(b"")',
+    'from tests.fuzz import campaign',
+])
+def test_the_instrumentation_scan_ignores(source):
+    assert not instrumentation_violations(source)
 
 
 def test_a_duplicate_target_name_is_refused():
@@ -120,7 +226,7 @@ def test_a_duplicate_target_name_is_refused():
 
 
 class TestCampaignArgv:
-    """run_campaign.campaign_argv: the corpus layout, the -timeout default for
+    """campaign.campaign_argv: the corpus layout, the -timeout default for
     budgeted targets, and an explicit flag beating a default."""
 
     @staticmethod
@@ -128,35 +234,40 @@ class TestCampaignArgv:
         return Target('t', lambda data: None, 'sanitizers', budget_ms, False)
 
     def test_layout_is_work_corpus_first_then_committed_then_artifacts(self):
-        assert run_campaign.campaign_argv('prog', self._target(), ['-runs=5']) == [
+        assert campaign.campaign_argv('prog', self._target(), ['-runs=5']) == [
             'prog', 'tests/fuzz/.work/t', 'tests/fuzz/corpus/t',
             '-artifact_prefix=tests/fuzz/corpus/t/', '-runs=5']
 
     def test_an_untimed_target_gets_no_timeout(self):
-        argv = run_campaign.campaign_argv('prog', self._target(), [])
+        argv = campaign.campaign_argv('prog', self._target(), [])
         assert not any(a.startswith('-timeout=') for a in argv)
 
     @pytest.mark.parametrize('budget_ms,seconds', [(50, 1), (100, 1), (101, 2), (2000, 20)])
     def test_a_budgeted_target_gets_ten_times_its_budget_rounded_up(self, budget_ms, seconds):
-        argv = run_campaign.campaign_argv('prog', self._target(budget_ms), [])
+        argv = campaign.campaign_argv('prog', self._target(budget_ms), [])
         assert f'-timeout={seconds}' in argv
 
     def test_an_explicit_timeout_wins(self):
-        argv = run_campaign.campaign_argv('prog', self._target(50), ['-timeout=30'])
+        argv = campaign.campaign_argv('prog', self._target(50), ['-timeout=30'])
         assert [a for a in argv if a.startswith('-timeout=')] == ['-timeout=30']
 
     def test_an_explicit_artifact_prefix_wins(self):
-        argv = run_campaign.campaign_argv('prog', self._target(), ['-artifact_prefix=elsewhere/'])
+        argv = campaign.campaign_argv('prog', self._target(), ['-artifact_prefix=elsewhere/'])
         assert [a for a in argv if a.startswith('-artifact_prefix=')] == ['-artifact_prefix=elsewhere/']
 
-    def test_unknown_target_prints_usage(self, capsys):
-        assert run_campaign.main(['prog', 'no_such_target']) == 2
+    @pytest.mark.parametrize('argv', [['prog'], ['prog', 'no_such_target']])
+    def test_a_missing_or_unknown_target_prints_usage(self, argv, capsys):
+        assert campaign.select_target(argv) is None
         assert 'usage: prog <' in capsys.readouterr().out
+
+    def test_a_known_target_is_selected(self):
+        name = sorted(REGISTRY)[0]
+        assert campaign.select_target(['prog', name, '-runs=1']) is REGISTRY[name]
 
 
 def test_build_test_app_uses_the_test_config():
     """needs_app campaigns run inside this app; it must be the suite's TestConfig
     app (TESTING, the test SERVER_NAME), not a production-configured one."""
-    application = run_campaign.build_test_app()
+    application = campaign.build_test_app()
     assert application.config['TESTING'] is True
     assert application.config['SERVER_NAME'] == 'test.piefed.local'
