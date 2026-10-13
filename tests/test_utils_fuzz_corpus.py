@@ -4,32 +4,40 @@ The campaign itself is nondeterministic and runs on demand (see tests/README.md)
 This file is what keeps a finding fixed: an input that once broke a property is
 committed here and checked on every run, forever.
 
-Nothing here imports atheris. The property checks in tests/fuzz/harnesses.py are
+Nothing here imports atheris. The property checks in tests/fuzz/targets/ are
 plain functions, so the corpus replays inside the ordinary suite -- fast,
 deterministic, and without the fuzzer's tracing fighting coverage.py's.
 
-The production change that would make these tests fail: any edit to
-app.utils.allowlist_html, app.utils.is_valid_xml_utf8 or
-app.utils.sanitize_svg_bytes that lets script markup, an event-handler
-attribute, a javascript:/vbscript: URL in an anchor's href, or an entity
-declaration through, or that makes is_valid_xml_utf8's character table disagree
-with XML 1.0.
+Driven by tests.fuzz.targets.REGISTRY: every registered target's corpus is
+replayed, and a target registered without a corpus fails tests/test_fuzz_registry.py
+rather than silently replaying nothing here. Two Target fields change how a case
+runs:
+
+* needs_app -- the case runs inside the suite's own `app` fixture (an app built
+  from TestConfig with its context pushed). That fixture skips when
+  TEST_DATABASE_URL is unset, so those cases need ./run_tests.sh; the
+  sanitizer targets do not, and still replay from a bare checkout.
+* budget_ms -- the case also fails if one input takes longer than that, by
+  time.perf_counter. This is the ReDoS gate: a slow input is the finding, so it
+  has to fail the deterministic suite, not only a campaign.
+
+The production change that would make these tests fail: any edit to a function
+listed in tests/fuzz/surfaces.py that breaks the property its target asserts --
+for the sanitizer surface, letting script markup, an event-handler attribute, a
+javascript:/vbscript: URL in an anchor's href, or an entity declaration through
+app.utils.allowlist_html or app.utils.sanitize_svg_bytes, or making
+app.utils.is_valid_xml_utf8's character table disagree with XML 1.0 -- or that
+makes a budgeted target's input exceed its budget.
 """
 
 import pathlib
+import time
 
 import pytest
 
-from tests.fuzz.harnesses import (check_allowlist_html, check_is_valid_xml_utf8,
-                                  check_sanitize_svg_bytes)
+from tests.fuzz.targets import REGISTRY, Target
 
 CORPUS_ROOT = pathlib.Path(__file__).parent / 'fuzz' / 'corpus'
-
-CHECKS = {
-    'allowlist_html': check_allowlist_html,
-    'is_valid_xml_utf8': check_is_valid_xml_utf8,
-    'sanitize_svg_bytes': check_sanitize_svg_bytes,
-}
 
 # Inputs that break a property because the DEFECT IS REAL AND UNFIXED. A security
 # fix in deployed software is the project owner's decision, so these are reported
@@ -60,7 +68,7 @@ KNOWN_UNFIXED = {}
 def corpus_cases():
     """A list, not a generator: pytest 10 will stop accepting the latter."""
     cases = []
-    for name, check in CHECKS.items():
+    for name, target in REGISTRY.items():
         directory = CORPUS_ROOT / name
         for path in sorted(directory.glob('*')):
             if path.is_file():
@@ -68,22 +76,37 @@ def corpus_cases():
                 marks = []
                 if case_id in KNOWN_UNFIXED:
                     marks.append(pytest.mark.xfail(strict=True, reason=KNOWN_UNFIXED[case_id]))
-                cases.append(pytest.param(check, path, id=case_id, marks=marks))
+                cases.append(pytest.param(target, path, id=case_id, marks=marks))
     return cases
 
 
-@pytest.mark.parametrize('check,path', corpus_cases())
-def test_corpus_input_still_satisfies_its_property(check, path):
-    check(path.read_bytes())
+def run_case(target, data: bytes, clock=time.perf_counter) -> None:
+    """Push one input through its target's check, then hold it to the budget.
+
+    The check runs first and its AssertionError propagates untouched, so a
+    property break is reported as itself and not as a slow input. The budget is
+    wall-clock around the check alone: reading the file is outside it.
+
+    `clock` is a parameter only so the budget assertion can be tested without a
+    genuinely slow check.
+    """
+    started = clock()
+    target.check(data)
+    elapsed_ms = (clock() - started) * 1000
+    if target.budget_ms is not None:
+        assert elapsed_ms <= target.budget_ms, (
+            f'{target.name}: one input took {elapsed_ms:.0f} ms, over its '
+            f'{target.budget_ms} ms budget')
 
 
-@pytest.mark.parametrize('name', sorted(CHECKS))
-def test_every_target_has_a_seeded_corpus(name):
-    """A target whose corpus directory vanished would otherwise silently stop
-    being replayed, since parametrize over an empty glob collects nothing."""
-    directory = CORPUS_ROOT / name
-    assert directory.is_dir(), f'{directory} is missing'
-    assert any(p.is_file() for p in directory.iterdir()), f'{directory} is empty'
+@pytest.mark.parametrize('target,path', corpus_cases())
+def test_corpus_input_still_satisfies_its_property(target, path, request):
+    if target.needs_app:
+        # The session `app` fixture pushes its app context for the whole
+        # session, so requesting it is all a needs_app case has to do. It is
+        # requested only here, so the sanitizer cases do not need a database.
+        request.getfixturevalue('app')
+    run_case(target, path.read_bytes())
 
 
 @pytest.mark.parametrize('case_id', sorted(KNOWN_UNFIXED))
@@ -100,3 +123,56 @@ def test_every_known_unfixed_case_is_present(case_id):
     name, _, filename = case_id.partition('/')
     assert (CORPUS_ROOT / name / filename).is_file(), (
         f'{case_id} is named in KNOWN_UNFIXED but no longer exists')
+
+
+class TestRunCase:
+    """The budget and needs_app paths, which no target exercised when they were
+    written: the sanitizer targets are untimed and need no app. Without these, a
+    run_case that never compared against budget_ms would pass every corpus case
+    above and the ReDoS gate would be a gate in name only."""
+
+    @staticmethod
+    def _target(check, budget_ms=None, needs_app=False):
+        return Target(name='fake', check=check, surface='sanitizers',
+                      budget_ms=budget_ms, needs_app=needs_app)
+
+    @staticmethod
+    def _clock(*readings):
+        """A perf_counter stand-in returning `readings`, in seconds, in order."""
+        values = iter(readings)
+        return lambda: next(values)
+
+    def test_an_input_over_its_budget_fails(self):
+        target = self._target(lambda data: None, budget_ms=50)
+        with pytest.raises(AssertionError, match='took 51 ms, over its 50 ms budget'):
+            run_case(target, b'x', clock=self._clock(10.0, 10.051))
+
+    def test_an_input_exactly_at_its_budget_passes(self):
+        target = self._target(lambda data: None, budget_ms=50)
+        run_case(target, b'x', clock=self._clock(0.0, 0.05))
+
+    def test_an_untimed_target_is_never_held_to_a_budget(self):
+        target = self._target(lambda data: None, budget_ms=None)
+        run_case(target, b'x', clock=self._clock(0.0, 3600.0))
+
+    def test_a_property_break_is_reported_as_itself_not_as_slowness(self):
+        def breaks(data):
+            raise AssertionError('property broke')
+        target = self._target(breaks, budget_ms=1)
+        with pytest.raises(AssertionError, match='property broke'):
+            run_case(target, b'x', clock=self._clock(0.0, 99.0))
+
+    def test_the_check_receives_the_bytes_unchanged(self):
+        seen = []
+        run_case(self._target(seen.append), b'\x00\xff')
+        assert seen == [b'\x00\xff']
+
+    def test_a_needs_app_case_runs_inside_an_app_context(self, request, tmp_path):
+        from flask import has_app_context
+
+        contexts = []
+        target = self._target(lambda data: contexts.append(has_app_context()), needs_app=True)
+        path = tmp_path / 'seed'
+        path.write_bytes(b'x')
+        test_corpus_input_still_satisfies_its_property(target, path, request)
+        assert contexts == [True]
