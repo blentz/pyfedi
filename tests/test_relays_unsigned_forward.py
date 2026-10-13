@@ -43,7 +43,7 @@ class TestAcceptUnsignedForward:
     def test_a_create_is_queued_for_fetch_from_its_origin(self, app, queued, logged):
         relay = make_relay(state=RELAY_ACCEPTED)
 
-        assert inbound.accept_unsigned_forward(relay, forward(), None) == ('', 200)
+        assert inbound.accept_unsigned_forward(relay, forward(), None, 'Create') == ('', 200)
 
         assert queued == [(relay.id, NOTE_URI)]
         assert logged[-1][4] == 'relayed object queued for fetch from its origin'
@@ -51,7 +51,15 @@ class TestAcceptUnsignedForward:
     def test_a_bare_string_object_is_queued_without_the_pre_filter(self, app, queued, logged):
         relay = make_relay(state=RELAY_ACCEPTED)
 
-        assert inbound.accept_unsigned_forward(relay, forward(obj=NOTE_URI), None) == ('', 200)
+        assert inbound.accept_unsigned_forward(relay, forward(obj=NOTE_URI), None, 'Create') == ('', 200)
+
+        assert queued == [(relay.id, NOTE_URI)]
+
+    def test_a_create_whose_raw_type_is_an_array_is_queued(self, app, queued, logged):
+        relay = make_relay(state=RELAY_ACCEPTED)
+        activity = forward(activity_type=['Create', 'as:Create'])
+
+        assert inbound.accept_unsigned_forward(relay, activity, None, 'Create') == ('', 200)
 
         assert queued == [(relay.id, NOTE_URI)]
 
@@ -59,7 +67,7 @@ class TestAcceptUnsignedForward:
     def test_any_other_type_is_ignored(self, app, queued, logged, activity_type):
         relay = make_relay(state=RELAY_ACCEPTED)
 
-        assert inbound.accept_unsigned_forward(relay, forward(activity_type=activity_type), None) == ('', 200)
+        assert inbound.accept_unsigned_forward(relay, forward(activity_type=activity_type), None, activity_type) == ('', 200)
 
         assert queued == []
         assert logged[-1][4] == f'relayed {activity_type} without a verifiable signature'
@@ -68,7 +76,7 @@ class TestAcceptUnsignedForward:
     def test_an_object_without_an_id_is_ignored(self, app, queued, logged, obj):
         relay = make_relay(state=RELAY_ACCEPTED)
 
-        assert inbound.accept_unsigned_forward(relay, forward(obj=obj), None) == ('', 200)
+        assert inbound.accept_unsigned_forward(relay, forward(obj=obj), None, 'Create') == ('', 200)
 
         assert queued == []
         assert logged[-1][4] == 'relayed object has no id'
@@ -77,7 +85,7 @@ class TestAcceptUnsignedForward:
         relay = make_relay(state=RELAY_ACCEPTED)
         obj = note(inReplyTo='https://other.example/notes/unknown')
 
-        assert inbound.accept_unsigned_forward(relay, forward(obj=obj), None) == ('', 200)
+        assert inbound.accept_unsigned_forward(relay, forward(obj=obj), None, 'Create') == ('', 200)
 
         assert queued == []
         assert logged[-1][4] == 'relayed reply to a post this instance does not have'
@@ -86,7 +94,7 @@ class TestAcceptUnsignedForward:
         relay = make_relay(state=RELAY_ACCEPTED)
         obj = note(uri='https://elsewhere.example/notes/1')
 
-        assert inbound.accept_unsigned_forward(relay, forward(obj=obj), None) == ('', 200)
+        assert inbound.accept_unsigned_forward(relay, forward(obj=obj), None, 'Create') == ('', 200)
 
         assert queued == []
         assert logged[-1][4] == 'relayed object host does not match actor'
@@ -96,7 +104,7 @@ class TestAcceptUnsignedForward:
         db.session.add(BannedInstances(domain='other.example'))
         db.session.commit()
 
-        assert inbound.accept_unsigned_forward(relay, forward(), None) == ('', 200)
+        assert inbound.accept_unsigned_forward(relay, forward(), None, 'Create') == ('', 200)
 
         assert queued == []
         assert logged[-1][4] == 'relayed object from a banned instance'
@@ -105,8 +113,8 @@ class TestAcceptUnsignedForward:
         relay = make_relay(state=RELAY_ACCEPTED)
         activity = forward()
 
-        inbound.accept_unsigned_forward(relay, activity, None)
-        assert inbound.accept_unsigned_forward(relay, activity, None) == ('', 200)
+        inbound.accept_unsigned_forward(relay, activity, None, activity['type'])
+        assert inbound.accept_unsigned_forward(relay, activity, None, activity['type']) == ('', 200)
 
         assert len(queued) == 1
         assert logged[-1][4] == 'Already aware of this activity'
@@ -121,11 +129,11 @@ class TestAcceptUnsignedForward:
 
         monkeypatch.setattr(inbound, 'process_relayed_announce', boom)
         with pytest.raises(RuntimeError):
-            inbound.accept_unsigned_forward(relay, activity, None)
+            inbound.accept_unsigned_forward(relay, activity, None, activity['type'])
         done = []
         monkeypatch.setattr(inbound, 'process_relayed_announce', lambda *args: done.append(args))
 
-        assert inbound.accept_unsigned_forward(relay, activity, None) == ('', 200)
+        assert inbound.accept_unsigned_forward(relay, activity, None, activity['type']) == ('', 200)
         assert done == [(relay.id, NOTE_URI)]
 
     def test_outside_debug_the_task_goes_to_the_background_queue(self, app, logged, monkeypatch):
@@ -135,7 +143,7 @@ class TestAcceptUnsignedForward:
         monkeypatch.setattr(inbound.process_relayed_announce, 'apply_async',
                             lambda args, queue: sent.append((args, queue)))
 
-        inbound.accept_unsigned_forward(relay, forward(), None)
+        inbound.accept_unsigned_forward(relay, forward(), None, 'Create')
 
         assert sent == [((relay.id, NOTE_URI), 'background')]
 
@@ -146,7 +154,7 @@ class TestTheClaimBelongsToTheRelay:
         relay = make_relay(state=RELAY_ACCEPTED)
         activity = forward()
 
-        inbound.accept_unsigned_forward(relay, activity, None)
+        inbound.accept_unsigned_forward(relay, activity, None, activity['type'])
 
         assert inbound.claim_activity(activity['id'], AUTHOR) is True
 
@@ -156,7 +164,7 @@ class TestTheClaimBelongsToTheRelay:
         relay = make_relay(state=RELAY_ACCEPTED)
         activity = forward(**kwargs)
 
-        inbound.accept_unsigned_forward(relay, activity, None)
+        inbound.accept_unsigned_forward(relay, activity, None, activity['type'])
 
         assert inbound.claim_activity(activity['id'], relay.actor_id) is True
 
@@ -170,10 +178,10 @@ class TestTheClaimBelongsToTheRelay:
 
         monkeypatch.setattr(inbound, 'relayed_activity_allowed', boom)
         with pytest.raises(RuntimeError):
-            inbound.accept_unsigned_forward(relay, activity, None)
+            inbound.accept_unsigned_forward(relay, activity, None, activity['type'])
         monkeypatch.setattr(inbound, 'relayed_activity_allowed', working)
 
-        assert inbound.accept_unsigned_forward(relay, activity, None) == ('', 200)
+        assert inbound.accept_unsigned_forward(relay, activity, None, activity['type']) == ('', 200)
         assert queued == [(relay.id, NOTE_URI)]
 
 
@@ -183,7 +191,7 @@ class TestHostGate:
         relay = make_relay(state=RELAY_ACCEPTED)
         obj = note(uri='https://OTHER.example/notes/1')
 
-        inbound.accept_unsigned_forward(relay, forward(obj=obj), None)
+        inbound.accept_unsigned_forward(relay, forward(obj=obj), None, 'Create')
 
         assert queued == [(relay.id, 'https://OTHER.example/notes/1')]
 
@@ -192,7 +200,7 @@ class TestHostGate:
     def test_an_empty_host_or_a_non_string_actor_is_refused(self, app, queued, logged, uri, actor):
         relay = make_relay(state=RELAY_ACCEPTED)
 
-        inbound.accept_unsigned_forward(relay, forward(obj=uri, actor=actor), None)
+        inbound.accept_unsigned_forward(relay, forward(obj=uri, actor=actor), None, 'Create')
 
         assert queued == []
         assert logged[-1][4] == 'relayed object host does not match actor'
@@ -208,12 +216,12 @@ def author(app, monkeypatch):
     return alice
 
 
-def deliver(app, author, relay_private_key, monkeypatch, ld=None):
+def deliver(app, author, relay_private_key, monkeypatch, ld=None, activity_type='Create'):
     """POST a Create by `author` to /inbox, HTTP-signed by the relay. `ld`: None = no LD signature; else the body
     carries one and LDSignature.verify_signature does `ld` (True or an exception)."""
     processed = []
     monkeypatch.setattr(routes, 'process_inbox_request', lambda *a, **k: processed.append((a, k)))
-    activity = {'id': f'{author.ap_profile_id}/a/{uuid.uuid4().hex}', 'type': 'Create',
+    activity = {'id': f'{author.ap_profile_id}/a/{uuid.uuid4().hex}', 'type': activity_type,
                 'actor': author.ap_profile_id, 'object': note(attributedTo=author.ap_profile_id,
                                                               uri=f'{author.ap_profile_id}/notes/1')}
     if ld is not None:
@@ -241,6 +249,16 @@ class TestSharedInboxUnsignedForward:
         assert response.status_code == 200
         assert queued == [(relay.id, activity['object']['id'])]
         assert processed == []   # nothing is created from the relay's copy
+
+    def test_an_array_typed_create_with_no_ld_signature_is_queued(self, app, author, queued, monkeypatch):
+        keys = a_keypair()
+        relay = make_relay(state=RELAY_ACCEPTED, public_key=keys[1])
+
+        response, processed, activity = deliver(app, author, keys[0], monkeypatch, activity_type=['Create'])
+
+        assert response.status_code == 200
+        assert queued == [(relay.id, activity['object']['id'])]
+        assert processed == []
 
     def test_an_ld_signature_that_does_not_verify_is_queued_too(self, app, author, queued, monkeypatch):
         keys = a_keypair()

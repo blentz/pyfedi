@@ -151,13 +151,13 @@ def relay_actor_gate(request, request_json):
     return '', 200
 
 
-def accept_unsigned_forward(relay, request_json, saved_json):
+def accept_unsigned_forward(relay, request_json, saved_json, activity_type):
     """A forward that accepted `relay` HTTP-signed but whose body has no verifiable LD signature (spec 2026-10-13).
     The relay's copy is never used: a Create's object is fetched from its origin in the background, where
-    process_relayed_announce re-checks the relay rules. Always answered 200, so the relay keeps delivering."""
+    process_relayed_announce re-checks the relay rules. Always answered 200, so the relay keeps delivering.
+    `activity_type` is the normalised type string (an array-valued JSON-LD `type` reduced to one)."""
     activity_id = request_json.get('id') or ''
     actor = request_json.get('actor')
-    activity_type = request_json.get('type')
     if activity_type != 'Create':
         log_incoming_ap(activity_id, APLOG_NOTYPE, APLOG_IGNORED, saved_json,
                         f'relayed {activity_type} without a verifiable signature')
