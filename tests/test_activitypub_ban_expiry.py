@@ -151,3 +151,11 @@ def test_non_string_values_are_treated_as_no_expiry(raw):
     `fromisoformat` or `pendulum.parse`.
     """
     assert parse_ban_expiry({'expires': raw}) is None
+
+
+@pytest.mark.parametrize('raw', ['P1D', '2999-01-01/2999-02-01'])
+def test_a_duration_or_an_interval_is_treated_as_no_expiry(raw):
+    """pendulum.parse reads an ISO 8601 duration as a Duration and a start/end pair as an Interval, neither of
+    which has a tzinfo, so the fallback raised AttributeError -- which, per this module's docstring, lost the
+    ban. Only a moment in time is an expiry. Found by the ap_ban_expiry fuzz target."""
+    assert parse_ban_expiry({'expires': raw}) is None
