@@ -143,3 +143,52 @@ def test_reply_translation_is_sanitised(world, client):
     with patch('app.post.routes.libretranslate_string', return_value='<p>ok</p><script>x()</script>'):
         html = client.post(f"/post_reply/{world['reply'].id}/translate").get_data(as_text=True)
     assert 'ok' in html and '<script' not in html
+
+
+def test_teaser_translate_also_translates_the_shown_preview(world, client):
+    """The teaser shows the body's first paragraph under the title; translating only the title left it untranslated.
+    The preview comes back as an out-of-band swap into the teaser's preview element."""
+    with patch('app.post.routes.libretranslate_string', side_effect=lambda text, source, target: f'[{target}]{text}') as lt:
+        html = client.post(f"/post_teaser/{world['post'].id}/translate").get_data(as_text=True)
+    assert '<p>hello</p>' in [call.args[0] for call in lt.call_args_list]
+    assert f'<div id="post_preview_{world["post"].id}" hx-swap-oob="innerHTML">' in html
+    assert '[en]' in html.split('hx-swap-oob')[1]
+
+
+def test_teaser_translate_previews_the_content_warning_when_one_is_shown(world, client):
+    world['post'].content_warning = 'spoilers'
+    world['post'].language_variants = None
+    db.session.commit()
+    with patch('app.post.routes.libretranslate_string', side_effect=lambda text, source, target: f'<b>{text}</b>') as lt:
+        html = client.post(f"/post_teaser/{world['post'].id}/translate").get_data(as_text=True)
+    assert 'spoilers' in [call.args[0] for call in lt.call_args_list]
+    assert '<p>&lt;b&gt;spoilers&lt;/b&gt;</p>' in html  # a warning is text, so it is escaped
+
+
+def test_teaser_translated_preview_is_sanitised(world, client):
+    with patch('app.post.routes.libretranslate_string', return_value='<p>ok</p><script>x()</script>'):
+        html = client.post(f"/post_teaser/{world['post'].id}/translate").get_data(as_text=True)
+    assert 'ok' in html and '<script' not in html
+
+
+def test_teaser_translate_keeps_a_microblogs_title_hidden(world, client):
+    """A microblog teaser's title is visually hidden: its body is the content. The swapped-in title stays hidden."""
+    world['community'].name = 'microblogs'
+    world['post'].microblog = True
+    db.session.commit()
+    with patch('app.post.routes.libretranslate_string', return_value='x'):
+        html = client.post(f"/post_teaser/{world['post'].id}/translate").get_data(as_text=True)
+    assert html.startswith('<h3 class="visually-hidden">')
+
+
+@pytest.mark.parametrize('theme', ['', 'themes/dillo/'])
+@pytest.mark.parametrize('macro', ['render_article', 'render_link', 'render_poll', 'render_image'])
+def test_teaser_preview_is_addressable_for_the_translation(world, app, theme, macro):
+    make_site()
+    source = (f"{{% from '{theme}post/post_teaser/_macros.html' import {macro} %}}"
+              f"{{{{ {macro}(post, current_user=current_user, request=request, user_pronouns={{}}, joined_communities=[], "
+              "communities_banned_from_list=[], reported_posts=[], moderated_community_ids=[], recently_upvoted=[], recently_downvoted=[]) }}")
+    with app.test_request_context('/'):
+        login_user(world['viewer'])
+        html = render_template_string(source, post=world['post'])
+    assert f'id="post_preview_{world["post"].id}"' in html

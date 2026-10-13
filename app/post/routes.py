@@ -70,7 +70,7 @@ from app.utils import clean_ap_url, can_moderate, render_template, markdown_to_h
     site_language_code, block_honey_pot, joined_communities, moderating_communities, user_pronouns, \
     instance_sticky_posts, instance_sticky_post_ids, user_access, show_reason_why_no_federation, \
     community_membership_private, user_ip_banned, check_anoobis, safe_redirect_target, \
-    allowlist_html, roles_with
+    allowlist_html, roles_with, first_paragraph
 import dateparser
 import pendulum
 from sqlalchemy import or_
@@ -1532,6 +1532,16 @@ def post_teaser_translate(post_id: int):
         recipient_language = get_recipient_language(current_user.id)
         v = variants.shown(post)
         source = _translate_source(post, v)
+        # The teaser shows the content warning or the body's first paragraph under the title (a microblog's
+        # title is hidden, so that is all it shows); it is translated too and swapped into the teaser's
+        # `post_preview_<id>` element out of band. Translated before the title, so the title is the last call.
+        preview = ''
+        if post.body_html:
+            if v.cw:
+                preview = f'<p>{escape(libretranslate_string(v.cw, source=source, target=recipient_language))}</p>'
+            elif first_paragraph(v.body_html):
+                preview = allowlist_html(libretranslate_string(first_paragraph(v.body_html),
+                                                               source=source, target=recipient_language))
         result_title = libretranslate_string(v.title,
                                              source=source,
                                              target=recipient_language)
@@ -1543,8 +1553,10 @@ def post_teaser_translate(post_id: int):
         # from the peer's actor document and restricts no characters (fact 797).
         # A title is text, so it is escaped; the slug sits inside an attribute,
         # so it is escaped too.
-        return (f'<h3><a href="{escape(post_url)}" class="post_teaser_title_a">'
-                f'{escape(result_title)}</a></h3>')
+        hidden = ' class="visually-hidden"' if post.is_microblog() else ''
+        oob = f'<div id="post_preview_{post.id}" hx-swap-oob="innerHTML">{preview}</div>' if preview else ''
+        return (f'<h3{hidden}><a href="{escape(post_url)}" class="post_teaser_title_a">'
+                f'{escape(result_title)}</a></h3>{oob}')
     return _('Translation is not configured on this instance.')  # D1126
 
 
