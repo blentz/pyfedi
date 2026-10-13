@@ -1,0 +1,1 @@
+sig1=("@method" "@target-uri" "@authority" "content-digest");created=1760000000;keyid="https://fuzz.example/u/signer#main-key";alg="rsa-v1_5-sha256"
