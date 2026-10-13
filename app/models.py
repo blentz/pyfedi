@@ -322,10 +322,10 @@ def parse_ap_timestamp(value):
         return None
     try:
         parsed = datetime.fromisoformat(value)
-    except ValueError:
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    except (ValueError, OverflowError):   # OverflowError: a UTC instant before year 1 or after year 9999
         return None
-    if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
     return parsed
 
 
