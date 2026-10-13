@@ -999,6 +999,17 @@ def sub_skipping(pattern: re.Pattern, replacement: str, text: str) -> str:
 _RUBY_RE = re.compile(r'\{(.[^|\n]*+)\|(.[^}\n]*+)\}|\{[^\n]*')
 
 
+
+@lru_cache(maxsize=None)
+def _embedded_media_re(extension: str) -> re.Pattern:
+    """<img ... src="https://....EXT" ... /> as <img .*?src="(https://.*?\\.EXT)".*?/> matched it. That pattern took
+    the first src="https:// on the line, the first .EXT" after it and the first /> after that, and when no />
+    followed it retried every later .EXT" and every later src=" -- cubic: a line of '<img src="https://' took 21 s
+    per 16 KiB. Every retry fails where the first did (a later candidate has no /> after it either), so atomic
+    groups give the same matches, and the skip alternative ends a failed start's line, where every later start
+    fails too."""
+    return re.compile(r'<img (?>.*?src="(?=https://))(https://(?>.*?\.' + extension + r'(?=")))".*?/>|<img [^\n]*')
+
 # sanitise HTML using an allow list
 def allowlist_html(html: str, a_target='_blank', test_env=False) -> str:
     # RUN THE TESTS in tests/test_allowlist_html.py whenever you alter this function, it's fragile and bugs are hard to spot.
@@ -1042,20 +1053,20 @@ def allowlist_html(html: str, a_target='_blank', test_env=False) -> str:
     clean_html = re_superscript.sub(r'<sup>\1</sup>', clean_html)
 
     # replace <img src> for mp4 with <video> - treat them like a GIF (autoplay, but initially muted)
-    re_embedded_mp4 = re.compile(r'<img .*?src="(https://.*?\.mp4)".*?/>')
-    clean_html = re_embedded_mp4.sub(
+    clean_html = sub_skipping(
+        _embedded_media_re('mp4'),
         r'<video class="responsive-video" controls preload="auto" autoplay muted loop playsinline disablepictureinpicture><source src="\1" type="video/mp4"></video>',
         clean_html)
 
     # replace <img src> for webm with <video> - treat them like a GIF (autoplay, but initially muted)
-    re_embedded_webm = re.compile(r'<img .*?src="(https://.*?\.webm)".*?/>')
-    clean_html = re_embedded_webm.sub(
+    clean_html = sub_skipping(
+        _embedded_media_re('webm'),
         r'<video class="responsive-video" controls preload="auto" autoplay muted loop playsinline disablepictureinpicture><source src="\1" type="video/webm"></video>',
         clean_html)
 
     # replace <img src> for mp3 with <audio>
-    re_embedded_mp3 = re.compile(r'<img .*?src="(https://.*?\.mp3)".*?/>')
-    clean_html = re_embedded_mp3.sub(r'<audio controls><source src="\1" type="audio/mp3"></audio>', clean_html)
+    clean_html = sub_skipping(_embedded_media_re('mp3'),
+                              r'<audio controls><source src="\1" type="audio/mp3"></audio>', clean_html)
 
     # replace the 'static' for images hotlinked to fandom sites with 'vignette'
     re_fandom_hotlink = re.compile(r'<img alt="(.*?)" loading="lazy" src="https://static.wikia.nocookie.net')

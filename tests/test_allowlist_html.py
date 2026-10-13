@@ -867,6 +867,24 @@ class TestAllowlistRegexesAreLinear:
         assert_linear(self, [pump('{|'), pump('{', suffix='|'), pump('{a|')],
                       lambda text: allowlist_html(text, test_env={'fn_string': 'fn-test'}))
 
+    def test_embedded_media_match_what_they_matched(self):
+        fragments = ['<img src="https://a.mp4" />', '<img ', 'src="https://', '.mp4"', '.webm"', '.mp3"', '/>', ' ',
+                     '\n', 'a', '"']
+        for extension in ('mp4', 'webm', 'mp3'):
+            old = re.compile(r'<img .*?src="(https://.*?\.' + extension + r')".*?/>')
+            self.assert_same_subs(lambda text: old.sub(r'[\1]', text),
+                                  lambda text: sub_skipping(utils._embedded_media_re(extension), r'[\1]', text),
+                                  fragments, count=3000, longest=12)
+
+    def test_unclosed_embedded_media_are_read_in_linear_time(self):
+        """fuzz: redos_allowlist_html/embedded_mp4_pump, embedded_img_pump."""
+        assert_linear(self, [pump('<img src="https://'), pump('<img ')],
+                      lambda text: allowlist_html(text, test_env={'fn_string': 'fn-test'}))
+
+    def test_an_embedded_mp4_still_becomes_a_video(self):
+        result = allowlist_html('<p><img alt="x" src="https://x.example/a.mp4" /></p>', test_env={'fn_string': 'fn-test'})
+        assert '<source src="https://x.example/a.mp4" type="video/mp4"/>' in result
+
     def test_ruby_still_renders(self):
         result = allowlist_html('<p>{漢字|かんじ}</p>', test_env={'fn_string': 'fn-test'})
         assert result == '<p><ruby>漢字<rp>(</rp><rt>かんじ</rt><rp>)</rp></ruby></p>'
