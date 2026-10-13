@@ -250,7 +250,9 @@ def _check_host_of(url: str) -> str:
     authority = authority_of(url)
     assert isinstance(authority, str) and authority == authority.lower() and '@' not in authority
     if authority:
-        bracketed = f'[{host}]' if ':' in host else host
+        # An IP-literal comes back bracketed: IPv6, which has a ':', and IPvFuture, which need not.
+        bracketed = f'[{host}]' if authority.startswith('[') else host
+        assert ':' not in host or authority.startswith('['), f'authority_of({url!r}) = {authority!r}'
         assert host and (authority == bracketed or (
             authority.startswith(bracketed + ':') and authority[len(bracketed) + 1:].isdigit())), (
             f'authority_of({url!r}) = {authority!r} does not name host_of\'s {host!r}')
