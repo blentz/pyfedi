@@ -322,7 +322,11 @@ def check_ld_coverage(document: dict) -> None:
     never replayed (LD_SIGNED_LOG_PREFIX); and null values and empty lists are stripped after verification
     (strip_empty_values).
     """
-    _check_node(document, _process_context(None, None))
+    try:
+        _check_node(document, _process_context(None, None))
+    except RecursionError:
+        # The gate recurses once per level of nesting, and JSON can nest past the interpreter's recursion limit
+        raise LDCoverageError('the document is nested too deeply to check') from None
 
 
 def _is_empty(value) -> bool:
