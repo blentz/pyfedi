@@ -33,6 +33,10 @@ RUN --mount=type=cache,target=/root/.cache/pip,id=pip-py314-slim \
 # LAST stage, and that has to remain the production image.
 FROM builder AS test
 
+# git: deploy/autodeploy's tests drive real throwaway repositories.
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN --mount=type=cache,target=/root/.cache/pip,id=pip-py314-slim \
     --mount=source=requirements-test.txt,target=/tmp/requirements-test.txt \
     pip install -r /tmp/requirements-test.txt
