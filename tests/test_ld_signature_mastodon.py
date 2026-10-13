@@ -117,6 +117,22 @@ def test_a_signature_section_nested_past_the_recursion_limit_is_a_format_error(a
         LDSignature.verify_signature(document, MASTODON_PUBLIC_KEY)
 
 
+def test_a_signature_section_with_a_relative_context_is_a_format_error(app, monkeypatch):
+    """pyld raises a plain ValueError for a relative context IRI with no base, which escaped verification
+    before the signature was checked. Found by the ld_signature_verify fuzz target."""
+    at(monkeypatch, '2026-10-11T03:00:00')
+    document = copy.deepcopy(MASTODON_SIGNED_DELETE)
+    document['signature']['sec:nonce'] = {'@context': 'relative/ctx', 'x': 1}
+    with pytest.raises(VerificationFormatError, match='Invalid signature section'):
+        LDSignature.verify_signature(document, MASTODON_PUBLIC_KEY)
+
+
+def test_a_document_with_a_relative_context_does_not_normalize(app):
+    with pytest.raises(VerificationFormatError, match='Could not normalize document'):
+        LDSignature.normalized_hash({'@context': ['https://www.w3.org/ns/activitystreams', 'https8//w3id.org/x'],
+                                     'id': 'https://a.example/n/1'})
+
+
 def test_a_document_nested_past_the_recursion_limit_does_not_normalize(app):
     """normalized_hash runs pyld's normalize, which recurses once per level too."""
     nested = json.loads('{"content": "x", "object": ' * 5000 + '1' + '}' * 5000)
