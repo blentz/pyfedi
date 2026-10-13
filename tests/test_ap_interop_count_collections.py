@@ -52,6 +52,27 @@ def test_a_comment_embeds_likes_and_dislikes_but_no_shares(app, db_session):
     assert 'shares' not in note
 
 
+def test_a_remote_post_embeds_no_count_collections(app, db_session):
+    community, author, local_post = seed_local_post()
+    far = make_user(make_instance('remote.example'), 'far')
+    post = make_post(community, far, 'https://remote.example/p/1')
+
+    page = post_to_page(post)
+
+    assert not {'likes', 'dislikes', 'shares'} & set(page)
+
+
+def test_a_remote_comment_embeds_no_count_collections(app, db_session):
+    community, author, post = seed_local_post()
+    reply = make_post_reply(post, author)
+    reply.ap_id = 'https://remote.example/comment/1'
+    db.session.commit()
+
+    note = comment_model_to_json(reply)
+
+    assert not {'likes', 'dislikes'} & set(note)
+
+
 def test_no_inline_collection_carries_items(app, db_session):
     community, author, post = seed_local_post()
     reply = make_post_reply(post, author)

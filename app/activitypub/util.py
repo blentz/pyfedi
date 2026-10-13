@@ -397,7 +397,8 @@ def post_to_page(post: Post):
             }
         },
     }
-    activity_data.update(post_count_collections(post))
+    if post.is_local():
+        activity_data.update(post_count_collections(post))
     if post.language_id:
         activity_data['contentMap'] = {post.language_code(): activity_data['content']}
     if post.content_warning:
@@ -535,7 +536,8 @@ def comment_model_to_json(reply: PostReply) -> dict:
         },
         'tag': reply.tags_for_activitypub()
     }
-    reply_data.update(comment_count_collections(reply))
+    if reply.is_local():
+        reply_data.update(comment_count_collections(reply))
     if reply.content_warning:
         reply_data['summary'] = reply.content_warning
         reply_data['sensitive'] = True
