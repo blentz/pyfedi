@@ -390,6 +390,13 @@ def test_a_root_or_query_actor_id_names_its_owner(app, db_session, actor_id, key
     assert _requester_for(app, '/post/1', headers) == signer
 
 
+def test_a_keyid_with_no_scheme_names_no_owner():
+    """A network-path keyId ('//host/path') has a host but no scheme, and the candidates built from it began
+    '://host', which names no host at all, against the docstring's "all on the keyId's own host". A keyId that
+    is not an absolute URL names nobody. Found by the ap_entitlement fuzz target."""
+    assert _owner_candidates('//peer.example/users/alice#main-key') == []
+
+
 def test_owner_candidates_keep_the_root_slash_and_the_query():
     assert _owner_candidates('https://lemmy.example/#main-key') == ['https://lemmy.example/', 'https://lemmy.example']
     assert _owner_candidates('https://blog.example/?author=1#main-key')[0] == 'https://blog.example/?author=1'
