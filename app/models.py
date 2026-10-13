@@ -2675,7 +2675,8 @@ class Post(db.Model):
             find_licence_or_create, make_image_sizes, notify_about_post, find_flair_or_create, host_of, \
             activitypub_visibility, set_post_gallery, content_warning_from, gallery_attachments, \
             gallery_image_is_blocked, castopod_episode_url, fetch_castopod_episode_audio, can_view, \
-            podcast_episode_title, quote_id_from, language_variants_from, object_language
+            podcast_episode_title, quote_id_from, language_variants_from, object_language, \
+            MEDIA_URL_KIND, media_url_from
         # cycle: app.utils imports from this module
         from app.utils import allowlist_html, markdown_to_html, html_to_text, microblog_content_to_title, \
             microblog_content_to_link, strip_quote_fallback, blocked_phrases, get_setting, \
@@ -2683,6 +2684,7 @@ class Post(db.Model):
             is_video_hosting_site, communities_banned_from, recently_upvoted_posts, blocked_users, \
             url_is_storable
 
+        object_type = request_json['object'].get('type')
         microblog = False
         private = False
         if request_json['object'].get('name') is None:  # Microblog posts; a null name is no name (D258)
@@ -2690,6 +2692,8 @@ class Post(db.Model):
             if 'content' in request_json['object'] and request_json['object']['content'] is not None:
                 title = ""
                 microblog = True
+            elif object_type in MEDIA_URL_KIND:  # C4: a bare media object is titled by its type
+                title = object_type
             else:
                 return None
             if 'to' in request_json and len(request_json['to']) >= 1:
@@ -2764,6 +2768,8 @@ class Post(db.Model):
                 if '[NSFW]' in title.upper() or '(NSFW)' in title.upper():
                     post.nsfw = True
                 post.title = shorten_string(post.content_warning, 255) if post.content_warning else title  # a warning hides the body, so the body must not become the title
+                if object_type in MEDIA_URL_KIND and post.title in ('', '(content in post body)'):  # the microblog rule's empty and placeholder titles
+                    post.title = object_type  # C4: a media object whose body gives no title
                 if link != '' and link != post.quote_ap_id:  # C2: the quoted post is shown as a card, not as the url
                     post.url = link
                 else:
@@ -2856,13 +2862,24 @@ class Post(db.Model):
         # which would hand peers a way to make us drop content. None, not '',
         # because None is what Post.url holds for every post with no url and
         # what post_to_page tests for before federating an attachment out again.
+        if object_type in MEDIA_URL_KIND:  # C4: an Image/Audio/Document object carries its media in `url`
+            media_url = media_url_from(request_json['object'], MEDIA_URL_KIND[object_type])
+            if media_url is None:
+                return None
+            post.url = media_url  # wins over a link the microblog branch took from the content
+            if object_type == 'Image' and isinstance(request_json['object'].get('name'), str):
+                alt_text = request_json['object']['name']
+            if object_type == 'Audio':
+                post.extensions = {**(post.extensions or {}), 'media_type': 'audio'}
+
         if post.url and not url_is_storable(post.url):
             post.url = None
 
         if post.url:
             thumbnail_url, embed_url = fixup_url(post.url)
             post.url = embed_url
-            if is_image_url(post.url):
+            # C4: the object type decides a media object; is_image_url would HEAD an extensionless media URL
+            if object_type == 'Image' or (object_type not in ('Audio', 'Document') and is_image_url(post.url)):
                 post.type = constants.POST_TYPE_IMAGE
 
                 # PDQ hash of image
@@ -2884,6 +2901,8 @@ class Post(db.Model):
                     image.file_path = file_path
                 db.session.add(image)
                 post.image = image
+            elif object_type in ('Audio', 'Document'):
+                post.type = constants.POST_TYPE_LINK  # C4: a media file is a link post, whatever its URL looks like
             elif is_video_url(post.url) or is_video_hosting_site(post.url):
                 post.type = constants.POST_TYPE_VIDEO
             elif host_of(post.url) in {'pixelfed.social', 'pixelfed.uno'}:  # as edit_post's two (D478)
@@ -3016,7 +3035,7 @@ class Post(db.Model):
                 image = File(source_url=image_url)
                 db.session.add(image)
                 post.image = image
-            if post.image is None:  # This is a link post but the source instance has not provided a thumbnail image
+            if post.image is None and object_type not in ('Audio', 'Document'):  # This is a link post but the source instance has not provided a thumbnail image (C4 ruling R2: never fetch a media file on the inbox path)
                 # Let's see if we can do better than the source instance did!
                 opengraph = opengraph_parse(thumbnail_url)
                 if opengraph and (opengraph.get('og:image', '') != '' or opengraph.get('og:image:url', '') != ''):
