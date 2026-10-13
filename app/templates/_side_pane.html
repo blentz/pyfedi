@@ -61,6 +61,13 @@
             </div>
         </div>
         {% endif -%}
+        {% if view_actor and current_user.is_authenticated -%}
+        <div class="card" id="server_view_actions">
+            <div class="card-body">
+                {% with button_class='w-100' -%}{% include 'community/_server_view_button.html' -%}{% endwith %}
+            </div>
+        </div>
+        {% endif -%}
     {% endblock %}
     {% block about_community %}
         {% if upcoming_events and not (community.private and (current_user.is_anonymous or not community.is_member(current_user))) -%}
@@ -98,7 +105,7 @@
             </div>
         </div>
         {% endif -%}
-        <div class="card {% if not hide_community_actions or microblog_servers -%}mt-3{% endif %}" id="about_community">
+        <div class="card {% if not hide_community_actions or microblog_servers or (view_actor and current_user.is_authenticated) -%}mt-3{% endif %}" id="about_community">
             <div class="card-header">
                  <h2>{{ community.title }}</h2>
             </div>

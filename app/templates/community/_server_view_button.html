@@ -1,0 +1,12 @@
+{# Join or Leave a server view (/c/microblogs@<host>): local only, nothing federates (spec 2026-10-13).
+   Takes view_actor, view_joined, and optionally button_class. -#}
+{% set button_class = button_class or 'btn-sm' -%}
+{% if view_joined -%}
+<form method="post" action="/community/{{ view_actor }}/unsubscribe" class="d-inline"
+      hx-post="/community/{{ view_actor }}/unsubscribe" hx-trigger="submit throttle:1s" hx-swap="outerHTML"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-warning {{ button_class }}"
+   aria-label="{{ _('Leave %(name)s', name=view_actor) }}">{{ _('Leave') }} <span class="fe fe-leave"></span></button></form>
+{%- else -%}
+<form method="post" action="/community/{{ view_actor }}/subscribe" class="d-inline"
+      hx-post="/community/{{ view_actor }}/subscribe" hx-trigger="submit throttle:1s" hx-swap="outerHTML"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-primary {{ button_class }}"
+   aria-label="{{ _('Join %(name)s', name=view_actor) }}"><span class="fe fe-join"></span> {{ _('Join') }}</button></form>
+{%- endif %}

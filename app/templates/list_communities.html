@@ -313,6 +313,10 @@
                                         {% include "community/_join_button.html" %}
                                     {% endif %}
                                 {% endif -%}
+                                {% else -%}
+                                {% with view_actor=community.link(), view_joined=current_user.is_authenticated and community.instance.id in joined_server_views(current_user.id) -%}
+                                    {% include "community/_server_view_button.html" %}
+                                {% endwith -%}
                                 {% endif -%}</td>
                             {% if not low_bandwidth -%}
                                 <td width="46">

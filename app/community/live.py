@@ -10,7 +10,7 @@ from sqlalchemy import desc, func
 
 from app import cache, db
 from app.constants import POST_STATUS_REVIEWING, VISIBILITY_PUBLIC
-from app.models import Community, Instance, Post, post_stored_hooks
+from app.models import Community, Instance, Post, ServerViewMember, post_stored_hooks
 from app import utils
 from app.utils import instance_banned, utcnow
 
@@ -64,6 +64,30 @@ def microblog_server_view(actor: str):
     if not at or name != LIVE_COMMUNITY:
         return None
     return server_view_instance(host)
+
+
+def join_server_view(user_id: int, instance) -> None:
+    """Record that a user joined a server view; joining twice keeps one row (spec 2026-10-13)."""
+    if db.session.get(ServerViewMember, (user_id, instance.id)) is None:
+        db.session.add(ServerViewMember(user_id=user_id, instance_id=instance.id))
+        db.session.commit()
+    cache.delete_memoized(utils.joined_server_views, user_id)
+
+
+def leave_server_view(user_id: int, actor: str) -> bool:
+    """Forget a user's join of `microblogs@<host>`. The host is looked up by domain alone, not
+    through microblog_server_view, so a host banned since the join can still be left. False when
+    `actor` names no known instance."""
+    name, at, host = actor.strip().lower().rpartition('@')
+    if not at or name != LIVE_COMMUNITY:
+        return False
+    instance = db.session.query(Instance).filter(func.lower(Instance.domain) == host).first()
+    if instance is None:
+        return False
+    ServerViewMember.query.filter_by(user_id=user_id, instance_id=instance.id).delete()
+    db.session.commit()
+    cache.delete_memoized(utils.joined_server_views, user_id)
+    return True
 
 
 @cache.memoize(timeout=300)
