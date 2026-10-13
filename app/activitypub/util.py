@@ -100,22 +100,24 @@ def user_following_count(user_id: int) -> int:
 
 
 def user_liked_count(user: User) -> int:
-    """How many Likes local `user` has federated (interop C5, count-only): upvotes on posts and comments that
-    send_vote would have sent -- the object is not deleted, its visibility is open and its community is neither
-    local-only nor private. 0 for a user who votes privately, whose votes are never sent (owner ruling)."""
+    """How many Likes local `user` has federated (interop C5, count-only): upvotes whose Like send_vote recorded
+    as sent (`federated`), on posts and comments that are not deleted, are open and sit outside local-only and
+    private communities. 0 for a user who votes privately (owner ruling)."""
     if user.vote_privately:
         return 0
     posts = (db.session.query(func.count(PostVote.id))
              .join(Post, Post.id == PostVote.post_id)
              .join(Community, Community.id == Post.community_id)
-             .filter(PostVote.user_id == user.id, PostVote.effect > 0, Post.deleted.is_(False),
+             .filter(PostVote.user_id == user.id, PostVote.federated.is_(True), PostVote.effect > 0,
+                     Post.deleted.isnot(True),
                      Post.visibility.in_(OPEN_VISIBILITIES),
                      Community.local_only.isnot(True), Community.private.isnot(True))
              .scalar())
     replies = (db.session.query(func.count(PostReplyVote.id))
                .join(PostReply, PostReply.id == PostReplyVote.post_reply_id)
                .join(Community, Community.id == PostReply.community_id)
-               .filter(PostReplyVote.user_id == user.id, PostReplyVote.effect > 0, PostReply.deleted.is_(False),
+               .filter(PostReplyVote.user_id == user.id, PostReplyVote.federated.is_(True),
+                       PostReplyVote.effect > 0, PostReply.deleted.isnot(True),
                        PostReply.visibility.in_(OPEN_VISIBILITIES),
                        Community.local_only.isnot(True), Community.private.isnot(True))
                .scalar())

@@ -1,6 +1,6 @@
 from app import celery
 from app.activitypub.signature import default_context, send_post_request, HttpSignature
-from app.models import Post, PostReply, User, ActivityBatch, Community, PollChoiceVote, PollChoice, utcnow
+from app.models import Post, PostReply, User, ActivityBatch, Community, PollChoiceVote, PollChoice, PostVote, PostReplyVote, utcnow
 from app.shared.tasks import task_selector
 from app.utils import user_banned_from_community, gibberish, instance_banned, get_task_session, patch_db_session
 from app.visibility import is_open
@@ -73,6 +73,16 @@ def send_vote(user_id, object, vote_to_undo, vote_direction, emoji):
         # community holds a remote author's (R-a); a local author's went to their followers only (Task 29).
         if not is_open(object) and (community.is_local() or object.author.is_local()):
             return
+
+        # Every check has passed: a Like/Dislike or an Undo is now sent or queued. Record it on the vote row, so
+        # `liked` (interop C5) counts only votes a peer was told about. An Undo means the peer holds none now.
+        if isinstance(object, Post):
+            vote_row = session.query(PostVote).filter_by(user_id=user_id, post_id=object.id).first()
+        else:
+            vote_row = session.query(PostReplyVote).filter_by(user_id=user_id, post_reply_id=object.id).first()
+        if vote_row:
+            vote_row.federated = not vote_to_undo
+            session.commit()
 
         if vote_to_undo:
             type = vote_to_undo

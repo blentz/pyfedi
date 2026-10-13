@@ -4920,6 +4920,7 @@ class PostVote(db.Model):
     post_id = db.Column(db.Integer, db.ForeignKey('post.id', ondelete='CASCADE'), index=True)
     effect = db.Column(db.Float, index=True)
     emoji = db.Column(db.String(50))
+    federated = db.Column(db.Boolean, nullable=True)  # True once send_vote sent this vote's Like/Dislike; NULL = never federated
     created_at = db.Column(db.DateTime, default=utcnow)
 
     __table_args__ = (
@@ -4939,6 +4940,7 @@ class PostReplyVote(db.Model):
     post_reply_id = db.Column(db.Integer, db.ForeignKey('post_reply.id', ondelete='CASCADE'), index=True)
     effect = db.Column(db.Float)
     emoji = db.Column(db.String(50))
+    federated = db.Column(db.Boolean, nullable=True)  # True once send_vote sent this vote's Like/Dislike; NULL = never federated
     created_at = db.Column(db.DateTime, default=utcnow)
 
     __table_args__ = (
