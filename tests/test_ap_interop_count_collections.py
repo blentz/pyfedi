@@ -287,3 +287,78 @@ def test_a_downvote_flipped_privately_to_an_upvote_is_not_liked(app, db_session)
     db.session.commit()
 
     assert ap_get(app, '/u/alice/liked').json['totalItems'] == 0
+
+
+COMMENT_COLLECTIONS = ['likes', 'dislikes']
+
+
+@pytest.mark.parametrize('name', COMMENT_COLLECTIONS)
+def test_a_comment_collection_serves_its_inline_object(app, db_session, name):
+    community, author, post = seed_local_post()
+    reply = make_post_reply(post, author)
+    reply.up_votes, reply.down_votes = 2, 7
+    db.session.commit()
+
+    response = ap_get(app, f'/comment/{reply.id}/{name}')
+
+    assert response.status_code == 200
+    body = dict(response.json)
+    assert body.pop('@context')
+    assert body == comment_model_to_json(reply)[name]
+
+
+def test_a_comment_has_no_served_shares(app, db_session):
+    community, author, post = seed_local_post()
+    reply = make_post_reply(post, author)
+
+    assert ap_get(app, f'/comment/{reply.id}/shares').status_code == 404
+
+
+def _reply_local_only(community, reply): community.local_only = True
+def _reply_private(community, reply): community.private = True
+def _reply_followers_only(community, reply): reply.visibility = 'followers'
+def _reply_deleted(community, reply): reply.deleted = True
+
+
+@pytest.mark.parametrize('refuse', [_reply_local_only, _reply_private, _reply_followers_only, _reply_deleted])
+@pytest.mark.parametrize('name', COMMENT_COLLECTIONS)
+def test_a_comment_collection_is_refused_exactly_as_its_comment(app, db_session, refuse, name):
+    community, author, post = seed_local_post()
+    reply = make_post_reply(post, author)
+    refuse(community, reply)
+    db.session.commit()
+
+    assert (ap_get(app, f'/comment/{reply.id}/{name}').status_code
+            == ap_get(app, f'/comment/{reply.id}').status_code)
+
+
+@pytest.mark.parametrize('name', COMMENT_COLLECTIONS)
+def test_a_comment_collection_is_401_when_the_author_blocked_the_requester(app, db_session, name):
+    community, author, post = seed_local_post()
+    make_instance_block(author, make_instance('blocked.example'))
+    reply = make_post_reply(post, author)
+
+    response = ap_get(app, f'/comment/{reply.id}/{name}', user_agent='Test (+https://blocked.example)')
+
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize('name', COMMENT_COLLECTIONS)
+def test_an_unknown_or_remote_comments_collection_is_404(app, db_session, name):
+    community, author, post = seed_local_post()
+    remote = make_post_reply(post, make_user(make_instance('remote.example'), 'far'))
+    remote.ap_id = 'https://remote.example/comment/1'
+    db.session.commit()
+
+    assert ap_get(app, f'/comment/999999/{name}').status_code == 404
+    assert ap_get(app, f'/comment/{remote.id}/{name}').status_code == 404
+
+
+@pytest.mark.parametrize('name', COMMENT_COLLECTIONS)
+def test_a_browser_asking_for_a_comment_collection_is_sent_to_the_comment(app, db_session, name):
+    community, author, post = seed_local_post()
+    reply = make_post_reply(post, author)
+    with app.test_client() as client:
+        response = client.get(f'/comment/{reply.id}/{name}', headers={'Accept': 'text/html'})
+
+    assert (response.status_code, response.headers['Location']) == (302, f'/comment/{reply.id}')
