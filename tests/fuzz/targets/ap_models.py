@@ -54,6 +54,8 @@ def _check_scalars(value) -> None:
         real = _as_float(value, default)
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             assert real is default, f'_as_float({value!r}) = {real!r}, not the default'
+        elif isinstance(value, int) and abs(value) >= 2 ** 1024 - 2 ** 970:   # rounds past the largest float
+            assert real is default, f'_as_float of a {len(str(value))}-digit integer = {real!r}'
         else:
             assert type(real) is float
 
