@@ -254,6 +254,17 @@ def test_the_gate_accepts(app, document):
     check_ld_coverage(document)
 
 
+@pytest.mark.parametrize('nested', [
+    json.loads('[' * 5000 + ']' * 5000),
+    json.loads('{"content": "x", "object": ' * 5000 + '1' + '}' * 5000),
+])
+def test_the_gate_refuses_a_document_nested_past_the_recursion_limit(app, nested):
+    """json.loads reads any depth, and the gate recursed once per level: RecursionError escaped it, and with it
+    LDSignature.verify_signature. Found by the ld_contexts fuzz target."""
+    with pytest.raises(LDCoverageError, match='nested too deeply'):
+        check_ld_coverage(note(object=nested))
+
+
 def test_the_loader_still_refuses_an_unbundled_context_should_anything_reach_it(app):
     with pytest.raises(jsonld.JsonLdError, match='is not bundled'):
         ld_document_loader('https://evil.example/ctx')
