@@ -6,6 +6,7 @@ with Mastodon about what is hashed still passes them. The document below was rel
 every key of the signature section except type, id and signatureValue, so its `expires` is part of the signature.
 """
 import copy
+import json
 from datetime import datetime
 
 import pytest
@@ -104,6 +105,23 @@ def test_an_expiry_at_the_edge_of_the_datetime_range_is_a_format_error(app, monk
     document['signature']['expires'] = expires
     with pytest.raises(VerificationFormatError, match='Invalid signature expiry'):
         LDSignature.verify_signature(document, MASTODON_PUBLIC_KEY)
+
+
+def test_a_signature_section_nested_past_the_recursion_limit_is_a_format_error(app, monkeypatch):
+    """pyld's expand recurses once per level, so a deep enough signature section raised RecursionError out of
+    verification, before the signature was checked. Found by the ld_signature_verify fuzz target."""
+    at(monkeypatch, '2026-10-11T03:00:00')
+    document = copy.deepcopy(MASTODON_SIGNED_DELETE)
+    document['signature']['sec:nonce'] = json.loads('[' * 5000 + ']' * 5000)
+    with pytest.raises(VerificationFormatError, match='Invalid signature section'):
+        LDSignature.verify_signature(document, MASTODON_PUBLIC_KEY)
+
+
+def test_a_document_nested_past_the_recursion_limit_does_not_normalize(app):
+    """normalized_hash runs pyld's normalize, which recurses once per level too."""
+    nested = json.loads('{"content": "x", "object": ' * 5000 + '1' + '}' * 5000)
+    with pytest.raises(VerificationFormatError, match='nested too deeply'):
+        LDSignature.normalized_hash({'@context': 'https://www.w3.org/ns/activitystreams', 'object': nested})
 
 
 def test_an_expiry_without_a_timezone_is_read_as_utc(app, monkeypatch):
