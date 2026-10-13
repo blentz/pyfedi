@@ -2687,7 +2687,9 @@ class Post(db.Model):
         object_type = request_json['object'].get('type')
         microblog = False
         private = False
-        if request_json['object'].get('name') is None:  # Microblog posts; a null name is no name (D258)
+        name = request_json['object'].get('name')
+        # Microblog posts; a null name is no name (D258), and a blank one is none on a media object (C4)
+        if name is None or (object_type in MEDIA_URL_KIND and isinstance(name, str) and not name.strip()):
             private = True
             if 'content' in request_json['object'] and request_json['object']['content'] is not None:
                 title = ""

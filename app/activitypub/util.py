@@ -4564,7 +4564,8 @@ def update_post_from_activity(post: Post, request_json: dict):
         # title
         old_title = post.title
         # A null name means no title, like an absent one: None.upper() below would raise (D258)
-        if 'name' in request_json['object'] and request_json['object']['name'] is not None:
+        name = request_json['object'].get('name')
+        if name is not None and not (object_type in MEDIA_URL_KIND and isinstance(name, str) and not name.strip()):  # C4: a blank name is no name
             new_title = request_json['object']['name']
             post.microblog = False
         else:
