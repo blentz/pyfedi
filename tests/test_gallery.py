@@ -512,3 +512,35 @@ def test_a_link_post_gallery_is_shown_on_the_post_page_the_api_and_the_badge(app
     assert 'post_gallery_image' in page and SECOND in page and FIRST in page and LINK in page
     assert '2 images' in listing
     assert [i['alt_text'] for i in post_view(post=post, variant=1)['extensions']['gallery']] == ['a', 'b']
+
+
+def picture(n):
+    return image(f'https://pix.example/storage/{n}.jpg', f'picture {n}')
+
+
+def test_only_the_first_twenty_attachments_are_read():
+    """Each attachment costs a url_is_storable check, and a peer chooses how many it sends: like media_url_from,
+    gallery_attachments reads only the first MAX_MEDIA_URL_ENTRIES."""
+    from app.activitypub.util import MAX_MEDIA_URL_ENTRIES, gallery_attachments
+    assert MAX_MEDIA_URL_ENTRIES == 20
+    attachments = [{'type': 'Note'}] * 20 + [picture(n) for n in range(5)]
+
+    assert gallery_attachments({'object': {'attachment': attachments}}, [None]) == []
+
+
+def test_a_link_past_the_first_twenty_attachments_is_not_read():
+    from app.activitypub.util import gallery_attachments
+    attachments = [picture(0)] + [{'type': 'Note'}] * 19 + [{'type': 'Link', 'href': 'https://news.example/a'}]
+
+    assert [found['url'] for found in gallery_attachments({'object': {'attachment': attachments}}, [None])] == \
+        ['https://pix.example/storage/0.jpg']
+
+
+def test_twenty_images_of_more_are_kept_in_order():
+    from app.activitypub.util import MAX_GALLERY_IMAGES, gallery_attachments
+    attachments = [picture(n) for n in range(30)]
+
+    found = gallery_attachments({'object': {'attachment': attachments}}, [None])
+
+    assert [image['url'] for image in found] == [f'https://pix.example/storage/{n}.jpg' for n in range(20)]
+    assert len(found) == MAX_GALLERY_IMAGES
