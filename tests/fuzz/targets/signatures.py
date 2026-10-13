@@ -45,8 +45,8 @@ from pyld import jsonld
 from app.activitypub import signature_rfc9421 as rfc9421
 from app.activitypub.ld_contexts import (BUNDLED_LD_CONTEXTS, LDCoverageError, check_ld_coverage,
                                          ld_document_loader, strip_empty_values)
-from app.activitypub.signature import (HttpSignature, LDSignature, parse_http_date, parse_ld_date,
-                                       parse_signature_header, signature_part)
+from app.activitypub.signature import (LD_MAX_NESTING_DEPTH, HttpSignature, LDSignature, parse_http_date,
+                                       parse_ld_date, parse_signature_header, signature_part)
 from app.activitypub.signature_errors import KeyMismatchError, VerificationError, VerificationFormatError
 from app.utils import ResponseTooLarge, UnreadableEncoding, _read_capped_body, accepted_media_ranges
 from tests.fuzz.targets._target import Target
@@ -225,14 +225,10 @@ def check_http_ld_dates(data: bytes) -> None:
 # LD signatures and the JSON-LD context checks
 # ---------------------------------------------------------------------------
 
-# URDNA2015 over a chain of nested blank nodes takes time roughly cubic in the depth: measured, a 300-deep chain of
-# objects in an LD signature's section took 13 s and a 200-deep "object" chain in the document 4 s, all of it
-# before the signature is checked. Bounding that is a product decision (what nesting a signed activity may have)
-# and is reported, not decided, here. Until it is made, the LD verify check does not judge a document nested
-# between this depth and the recursion limit -- the band where production finishes, only slowly -- so a
-# campaign hunts for other faults instead of spending its budget there. Deeper than the recursion limit,
-# production fails fast, and those inputs are judged.
-_UNJUDGED_DEPTH = range(65, 1000)
+# LDSignature.verify_signature refuses, before any JSON-LD work, a document or signature section nested deeper
+# than LD_MAX_NESTING_DEPTH: URDNA2015 costs about the cube of the depth (a 300-deep signature section took 13 s).
+# The check holds it to refusing those well inside this many seconds.
+_DEEP_REFUSAL_SECONDS = 0.5
 
 
 def _depth(node) -> int:
@@ -283,6 +279,23 @@ def _ld_document(data: bytes):
     return document
 
 
+def _check_deep_ld_refused(document) -> None:
+    """Too deep is refused quickly, before normalizing, whatever the signature section holds."""
+    with _network_forbidden() as attempts:
+        started = time.perf_counter()
+        try:
+            LDSignature.verify_signature(_clone(document), PUBLIC_PEM)
+        except VerificationFormatError as refusal:
+            raise AssertionError(f'a too-deep document was read as malformed, not unsigned: {refusal!r}')
+        except VerificationError:
+            pass
+        else:
+            raise AssertionError('a document nested past LD_MAX_NESTING_DEPTH was accepted')
+        elapsed = time.perf_counter() - started
+    assert not attempts, f'LD verification reached for the network: {attempts!r}'
+    assert elapsed < _DEEP_REFUSAL_SECONDS, f'refusing a too-deep document took {elapsed:.2f} s'
+
+
 def check_ld_signature_verify(data: bytes) -> None:
     """LDSignature.verify_signature and normalized_hash, with the module's key and the bundled loader only.
 
@@ -292,10 +305,13 @@ def check_ld_signature_verify(data: bytes) -> None:
     VerificationError refuses; nothing touches the network; an unsigned document is never accepted; a
     genuinely signed one with no extra section keys is accepted exactly when check_ld_coverage accepts it;
     an accepted document has lost its signature section and every null and empty value; normalized_hash is
-    64 hex digits and deterministic. See _UNJUDGED_DEPTH for the documents it leaves alone."""
+    64 hex digits and deterministic. A document or signature section nested deeper than LD_MAX_NESTING_DEPTH is
+    refused, as a plain VerificationError (unsigned, not malformed), in under _DEEP_REFUSAL_SECONDS."""
     genuine = bool(data[:1] and data[0] & 1)
     document = _ld_document(data[1:])
-    if _depth(document) in _UNJUDGED_DEPTH:
+    unsigned_depth = _depth({key: value for key, value in document.items() if key != 'signature'})
+    if max(unsigned_depth, _depth(document.get('signature'))) > LD_MAX_NESTING_DEPTH:
+        _check_deep_ld_refused(document)
         return
     with _network_forbidden() as attempts:
         try:
@@ -614,7 +630,8 @@ def check_accept_header(data: bytes) -> None:
 
 # None needs an app context: every function here is plain parsing and crypto, and utcnow() reads the clock, not
 # the config. None is budgeted: no regex here has a backtracking shape (the RFC 8941 patterns are anchored
-# single classes), and URDNA2015's cost is bounded by check_ld_coverage refusing documents before normalizing.
+# single classes), and URDNA2015's cost is bounded by verify_signature refusing documents nested past
+# LD_MAX_NESTING_DEPTH before normalizing (_check_deep_ld_refused holds it to that).
 TARGETS = [
     Target(name='signature_header', check=check_signature_header, surface='signatures',
            budget_ms=None, needs_app=False),
