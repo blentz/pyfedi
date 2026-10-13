@@ -1121,6 +1121,8 @@ def delivery_inbox_of(actor_json: dict, actor_id: str) -> str | None:
     2026-10-11): falling back from an off-host sharedInbox to the inbox would still let the peer change where the
     actor's mail goes."""
     actor_host = _actor_host(actor_id)
+    if not actor_host:   # an id with no host matches nothing, rather than '' matching ''
+        return None
     shared_inbox = _declared_shared_inbox(actor_json, actor_host)
     inbox = actor_json.get('inbox')
     off_host = [url for url in (shared_inbox, inbox)
