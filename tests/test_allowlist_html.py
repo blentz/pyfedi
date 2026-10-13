@@ -885,6 +885,18 @@ class TestAllowlistRegexesAreLinear:
         result = allowlist_html('<p><img alt="x" src="https://x.example/a.mp4" /></p>', test_env={'fn_string': 'fn-test'})
         assert '<source src="https://x.example/a.mp4" type="video/mp4"/>' in result
 
+    def test_fandom_hotlinks_match_what_they_matched(self):
+        old = re.compile(r'<img alt="(.*?)" loading="lazy" src="https://static.wikia.nocookie.net')
+        self.assert_same_subs(lambda text: old.sub(r'[\1]', text),
+                              lambda text: sub_skipping(utils._FANDOM_HOTLINK_RE, r'[\1]', text),
+                              ['<img alt="x" loading="lazy" src="https://static.wikia.nocookie.net', '<img alt="',
+                               '" loading="lazy" src="https://static.wikia.nocookie.net', 'a', '"', ' ', '\n'],
+                              count=3000, longest=10)
+
+    def test_unclosed_fandom_hotlinks_are_read_in_linear_time(self):
+        """fuzz: redos_allowlist_html/fandom_pump."""
+        assert_linear(self, [pump('<img alt="')], lambda text: allowlist_html(text, test_env={'fn_string': 'fn-test'}))
+
     def test_ruby_still_renders(self):
         result = allowlist_html('<p>{漢字|かんじ}</p>', test_env={'fn_string': 'fn-test'})
         assert result == '<p><ruby>漢字<rp>(</rp><rt>かんじ</rt><rp>)</rp></ruby></p>'
