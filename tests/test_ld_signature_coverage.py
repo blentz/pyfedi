@@ -234,6 +234,10 @@ def note(**fields):
     (note(type='as:Note'), 'spells a defined type another way'),
     (note(type='https://www.w3.org/ns/activitystreams#Note'), 'spells a defined type another way'),
     (note(**{'@context': [AS, SEC, {'xid': '@id'}]}), "maps 'xid' outside the known namespaces"),
+    # A value shaped like a keyword that is none: pyld warns and defines nothing, and the gate raised KeyError
+    # looking the term up. Found by the ld_contexts fuzz target.
+    (note(**{'@context': [AS, {'realid': '@ad'}]}), "'realid' is ignored by JSON-LD"),
+    (note(**{'@context': [AS, {'realid': {'@id': '@ad'}}]}), "'realid' is ignored by JSON-LD"),
 ])
 def test_the_gate_refuses(app, document, reason):
     with pytest.raises(LDCoverageError, match=reason):

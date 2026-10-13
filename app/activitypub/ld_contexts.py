@@ -260,7 +260,10 @@ def _check_node(node, active_ctx) -> None:
             raise LDCoverageError(f'@context could not be processed: {e}') from e
         for term_map in inline:
             for term in term_map:
-                _check_inline_term(term, active_ctx['mappings'][term])
+                definition = active_ctx['mappings'].get(term)
+                if definition is None:   # pyld ignores a keyword-shaped value that is no keyword ('@ad')
+                    raise LDCoverageError(f'inline @context term {term!r} is ignored by JSON-LD')
+                _check_inline_term(term, definition)
     for key, value in node.items():
         if key == '@context':
             continue
