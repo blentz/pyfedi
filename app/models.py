@@ -153,8 +153,9 @@ def _as_int(value, default):
     sending a list where a number belongs is a DataError at commit -- which
     poisons the transaction and loses the post, not just the field.
     """
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return default
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or \
+            (isinstance(value, float) and not math.isfinite(value)):
+        return default   # json reads NaN and Infinity, and int() of either raises
     return int(value)
 
 
