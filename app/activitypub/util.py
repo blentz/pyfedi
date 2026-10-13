@@ -321,9 +321,11 @@ def media_url_from(obj: dict, kind: str | None) -> str | None:
         if isinstance(entry, dict):
             media_type = entry.get('mediaType') if isinstance(entry.get('mediaType'), str) else None
             entry = entry.get('href') or entry.get('url')
+        # Longer than its column is a DataError; tested before url_is_storable, whose IDNA check of the host costs
+        # time in proportion to its length.
         if not isinstance(entry, str) or not entry.lower().startswith(('http://', 'https://')) \
-                or not url_is_storable(entry) or len(entry) > MAX_POST_URL_LENGTH \
-                or (kind == 'image' and len(entry) > MAX_IMAGE_SOURCE_URL_LENGTH):  # longer than its column: a DataError
+                or len(entry) > MAX_POST_URL_LENGTH or (kind == 'image' and len(entry) > MAX_IMAGE_SOURCE_URL_LENGTH) \
+                or not url_is_storable(entry):
             continue
         if kind and media_type:
             if media_type.lower().startswith(kind + '/'):

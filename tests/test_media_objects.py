@@ -96,3 +96,19 @@ def test_an_image_url_over_the_file_source_url_width_is_skipped_for_a_later_shor
     assert media_url_from({'url': _url_of_length(1025)}, 'image') is None
     assert media_url_from({'url': [_url_of_length(1025), IMAGE]}, 'image') == IMAGE
     assert media_url_from({'url': _url_of_length(1025)}, None) == _url_of_length(1025)  # a Document is no File row
+
+
+@pytest.mark.parametrize('kind, length', [(None, 2049), ('audio', 2049), ('image', 1025)])
+def test_a_url_longer_than_its_column_is_refused_before_its_host_is_read(monkeypatch, kind, length):
+    """url_is_storable IDNA-maps the host, about 10 microseconds a character, and was asked before the length
+    cap, so a peer could make each of 20 entries a megabytes-long host (MAX_CONTENT_LENGTH is 100 MB) and hold a
+    worker for minutes per object. Measured: a 100,000-character host took one second. Found as the slowest unit
+    of the ap_media_urls fuzz target."""
+    from app.activitypub import util
+
+    asked = []
+    monkeypatch.setattr(util, 'url_is_storable', lambda url: asked.append(url) or True)
+    url = 'https://' + 'a' * (length - len('https://'))
+
+    assert media_url_from({'url': [url] * 3}, kind) is None
+    assert asked == []
