@@ -1,4 +1,4 @@
-"""post_vote and post_reply_vote federated (C5 liked counts only votes whose Like was sent)
+"""post_vote and post_reply_vote federated_like (C5 liked counts only votes whose Like was sent)
 
 Revision ID: c9f3a5b7d2e4
 Revises: b8e2d4f6a1c3
