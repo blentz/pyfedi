@@ -248,7 +248,7 @@ def _read_capped_body(response: httpx.Response, uri, max_bytes: int, deadline: f
     decoded, only gzip, deflate or identity, nothing after the end of a compressed stream, done by `deadline`
     (time.monotonic()). Raises ResponseTooLarge (UnreadableEncoding) or httpx.DecodingError otherwise."""
     declared = response.headers.get('Content-Length', '')
-    if declared.isdigit() and int(declared) > max_bytes:
+    if declared.isascii() and declared.isdigit() and int(declared) > max_bytes:   # '\u00b2'.isdigit() too
         raise ResponseTooLarge(f'{uri} declares a body of {declared} bytes, over the cap of {max_bytes}')
     encoding = response.headers.get('Content-Encoding', '').strip().lower()
     if encoding not in ('', 'identity', 'gzip', 'x-gzip', 'deflate'):
@@ -442,7 +442,7 @@ def get_request_capped(uri, max_bytes: int, headers=None, max_seconds: float = 1
             if response.headers.get('Content-Encoding', 'identity').strip().lower() not in ('', 'identity'):
                 return response.status_code, None
             declared = response.headers.get('Content-Length', '')
-            if declared.isdigit() and int(declared) > max_bytes:
+            if declared.isascii() and declared.isdigit() and int(declared) > max_bytes:   # '\u00b2'.isdigit() too
                 return response.status_code, None
             body = bytearray()
             for chunk in response.iter_raw():

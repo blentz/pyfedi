@@ -66,6 +66,16 @@ class TestTheDefaultCap:
             get_request(URI)
         assert route.call_count == 1
 
+    @pytest.mark.parametrize('declared', [b'\xb2', '\u00b2'.encode('utf-8')])
+    def test_a_content_length_of_non_ascii_digits_is_not_a_declared_length(self, app, http_mock, declared):
+        """httpx decodes a header value it cannot read as ASCII as UTF-8 or latin-1, so a peer's '\u00b2' arrives
+        as a str for which isdigit() is true and int() fails: ValueError escaped _capped_get. It declares no
+        length, and the body is read under the cap as any undeclared one is. Found by the capped_body fuzz
+        target."""
+        http_mock.get(URI).respond(200, content=iter([b'{}']), headers=[(b'Content-Length', declared)])
+
+        assert _capped_get(URI).content == b'{}'
+
     def test_an_undeclared_endless_body_is_cut_off_unbuffered(self, app, http_mock, sleeps):
         pulled = []
         http_mock.get(URI).respond(200, content=_endless(pulled))
