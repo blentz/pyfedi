@@ -2,6 +2,7 @@
 import contextlib
 
 import pytest
+from bs4 import BeautifulSoup
 
 from app import db
 from app.activitypub.util import update_post_from_activity
@@ -178,3 +179,26 @@ def test_an_image_update_with_the_same_url_keeps_the_image_row_and_a_new_url_rep
     assert post.image_id == first
     _update(post, 26, 'Image', name='Two', url='https://pics.example/media/2')
     assert post.image_id != first and post.image.source_url == 'https://pics.example/media/2'
+
+
+def _signed_in(app, monkeypatch):
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)  # the post page's reply form needs csrf_token
+    viewer = make_user(make_instance(app.config['SERVER_NAME'], software='piefed'), 'viewer', local=True)
+    client = app.test_client()
+    with client.session_transaction() as sess:
+        sess['_user_id'] = str(viewer.id)
+        sess['_fresh'] = True
+    return client
+
+
+def test_the_post_page_plays_an_audio_post_without_an_audio_extension(world, app, monkeypatch):
+    post = _stored(world, 30, 'Audio', name='Song', url=AUDIO)
+    html = _signed_in(app, monkeypatch).get(f'/post/{post.id}').get_data(as_text=True)
+    audio = BeautifulSoup(html, 'html.parser').select_one('audio')
+    assert audio is not None and audio['src'] == AUDIO
+
+
+def test_a_plain_link_without_an_audio_extension_has_no_player(world, app, monkeypatch):
+    post = _stored(world, 31, 'Document', name='Doc', url='https://docs.example/1.pdf')
+    html = _signed_in(app, monkeypatch).get(f'/post/{post.id}').get_data(as_text=True)
+    assert BeautifulSoup(html, 'html.parser').select_one('audio') is None
