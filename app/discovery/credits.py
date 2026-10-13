@@ -156,7 +156,10 @@ def _normal_url(value) -> str | None:
     """scheme and host lower-cased, trailing slash ignored; None for anything that is not an http(s) URL."""
     if not isinstance(value, str):
         return None
-    parts = urlsplit(value.strip())
+    try:
+        parts = urlsplit(value.strip())
+    except ValueError:   # an unbalanced IPv6 bracket ('https://[x'): not a URL
+        return None
     if parts.scheme.lower() not in ('http', 'https') or not parts.hostname:
         return None
     query = f'?{parts.query}' if parts.query else ''
