@@ -34,6 +34,17 @@ def test_get_request_capped_normalises_a_transport_level_oddity_to_http_error(ap
         get_request_capped('https://peer.example/feed.xml', 1000)
 
 
+@pytest.mark.parametrize('declared', [b'\xb2', '\u00b2'.encode('utf-8')])
+def test_get_request_capped_reads_a_content_length_of_non_ascii_digits_as_undeclared(app, http_mock, declared):
+    """get_request_capped repeats _read_capped_body's declared-length check, and had the same fault: httpx hands
+    over a superscript two whose isdigit() is true and which int() rejects, so the fetch failed as an
+    HTTPError. Fixed with _read_capped_body's (capped_body fuzz target)."""
+    http_mock.get('https://peer.example/feed.xml').respond(200, content=iter([b'ok']),
+                                                           headers=[(b'Content-Length', declared)])
+
+    assert get_request_capped('https://peer.example/feed.xml', 1000) == (200, b'ok')
+
+
 def test_a_markdown_link_that_only_looks_like_a_mention_is_left_alone():
     """`[@bob](https://x/u/bob)` has no `@name@host` inside the brackets, so it is an ordinary link the
     author wrote and must not be flattened to bare text."""
