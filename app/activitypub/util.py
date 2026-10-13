@@ -303,7 +303,7 @@ def object_language(obj: dict, map_code: str | None):
 
 MEDIA_OBJECT_TYPES = ('Audio', 'Document', 'Image', 'Video')  # C4: media objects a peer may Create as posts
 MEDIA_URL_KIND = {'Image': 'image', 'Audio': 'audio', 'Document': None}  # Video keeps its object id as the url
-MAX_MEDIA_URL_ENTRIES = 20
+MAX_MEDIA_URL_ENTRIES = 20  # url or attachment entries read per object: each costs a url_is_storable check
 MAX_POST_URL_LENGTH = 2048  # Post.url
 MAX_IMAGE_SOURCE_URL_LENGTH = 1024  # File.source_url
 
@@ -2692,6 +2692,7 @@ def gallery_attachments(request_json: dict, primary_urls) -> list:
         attachments = [attachments]
     if not isinstance(attachments, list):
         return []
+    attachments = attachments[:MAX_MEDIA_URL_ENTRIES]   # a peer chooses how many it sends
     has_link = any(_as_dict(attachment).get('type') == 'Link' for attachment in attachments)
     seen = {url for url in primary_urls if url}
     found = []
