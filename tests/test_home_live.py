@@ -212,6 +212,17 @@ class TestHomeLivePage:
     def test_no_live_entry_for_anonymous(self, home):
         assert '/home/live/' not in home.client.get('/home/new/all').get_data(as_text=True)
 
+    def test_the_button_groups_wrap_instead_of_overlapping(self, home):
+        # With Live and Moderating both shown, the two nowrap button groups are wider than half the
+        # pane each; at xl their columns size to content so the row wraps rather than overlapping.
+        login(home.client, home.reader)
+        html = home.client.get('/home/new/all').get_data(as_text=True)
+
+        sort_column = re.search(r'<div class="([^"]*)">\s*<div class="d-xl-none">\s*<select[^>]*name="sort_by"', html)
+        filter_column = re.search(r'<div class="([^"]*)">\s*<div class="d-xl-none">\s*<select[^>]*name="filter_by"', html)
+        assert 'col-xl-auto' in sort_column.group(1).split()
+        assert 'col-xl-auto' in filter_column.group(1).split()
+
     @pytest.mark.parametrize('view_filter, key, has_cursor', [
         ('subscribed', 'any', True), ('local', 'local', True), ('popular', 'popular', True),
         ('media', 'media', False), ('all', 'any', True)])
