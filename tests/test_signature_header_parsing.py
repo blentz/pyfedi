@@ -84,6 +84,19 @@ def test_a_header_missing_its_signature_is_refused():
                                       'algorithm="rsa-sha256",headers="(request-target) host date"')
 
 
+@pytest.mark.parametrize('genuine', [True, False])
+def test_signed_headers_that_are_not_ascii_are_a_format_error(genuine):
+    """Werkzeug reads header values as latin-1, so a peer can send a value no ASCII cleartext holds, and
+    verify_signature's encode("ascii") raised UnicodeEncodeError out of verify_request. Found by the
+    http_signature_verify fuzz target."""
+    private_key, public_key = a_keypair()
+    cleartext = 'host: pi\u00e9fed.example'
+    signature = serialization.load_pem_private_key(private_key.encode(), password=None).sign(
+        cleartext.encode('utf-8'), padding.PKCS1v15(), hashes.SHA256()) if genuine else b'\x00' * 256
+    with pytest.raises(VerificationFormatError, match='not ASCII'):
+        HttpSignature.verify_signature(signature, cleartext, public_key)
+
+
 def _signed_inbox_request(app, signature_header_for):
     private_key, public_key = a_keypair()
     body = b'{"type": "Create"}'

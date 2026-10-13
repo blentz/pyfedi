@@ -632,9 +632,14 @@ class HttpSignature:
     ):
         public_key_instance = cls._get_public_key_instance(public_key)
         try:
+            data = cleartext.encode("ascii")
+        except UnicodeEncodeError:
+            # Werkzeug reads header values as latin-1, so a peer can send one no ASCII cleartext holds
+            raise VerificationFormatError("Signed headers are not ASCII")
+        try:
             public_key_instance.verify(
                 signature,
-                cleartext.encode("ascii"),
+                data,
                 padding.PKCS1v15(),
                 hashes.SHA256(),
             )
