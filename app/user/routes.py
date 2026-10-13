@@ -594,9 +594,12 @@ def user_settings():
         ('fr', _l('French')),
         ('de', _l('German')),
         ('hi', _l('Hindi')),
+        ('it', _l('Italian')),
         ('ja', _l('Japanese')),
+        ('ko', _l('Korean')),
         ('es', _l('Spanish')),
         ('pl', _l('Polish')),
+        ('ru', _l('Russian')),
         ('uk', _l('Ukrainian')),
     ]
     form.read_languages.choices = read_language_choices()
