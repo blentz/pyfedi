@@ -208,7 +208,8 @@ class TestTheTranslationServicesAnswer:
     def test_a_teaser_title_is_escaped(self, app, post_env, answer):
         response = _translated(app, post_env, '/post_teaser/{id}/translate', answer)
 
-        title = response.data.split(b'post_teaser_title_a">')[1]
+        # Up to the title's own `</h3>`: the out-of-band preview after it is body HTML, sanitised rather than escaped.
+        title = response.data.split(b'post_teaser_title_a">')[1].split(b'</h3>')[0]
         self._no_live_markup(title)
         assert b'&lt;' in title or b'&quot;' in title or b'&#34;' in title
 
