@@ -202,3 +202,23 @@ def test_a_plain_link_without_an_audio_extension_has_no_player(world, app, monke
     post = _stored(world, 31, 'Document', name='Doc', url='https://docs.example/1.pdf')
     html = _signed_in(app, monkeypatch).get(f'/post/{post.id}').get_data(as_text=True)
     assert BeautifulSoup(html, 'html.parser').select_one('audio') is None
+
+
+@pytest.mark.parametrize('blank', ['', '   ', ' \n\t '])
+def test_a_blank_name_on_a_media_object_is_no_name_in_create(world, blank):
+    community, author = world
+    with_body = Post.new(author, community, _create(_media(40, 'Image', name=blank, url='https://pics.example/1.png',
+                                                           content='<p>Look at this. More text.</p>')))
+    assert with_body.title.startswith('Look at this')
+    bare = Post.new(author, community, _create(_media(41, 'Document', name=blank, url='https://docs.example/a.pdf')))
+    assert bare.title == 'Document'
+
+
+@pytest.mark.parametrize('blank', ['', '   '])
+def test_a_blank_name_on_a_media_object_is_no_name_in_update(world, redis_lock_only_double, blank):
+    post = _stored(world, 42, 'Audio', name='Song', url=AUDIO)
+    _update(post, 42, 'Audio', name=blank, url=AUDIO, content='<p>Look at this. More text.</p>')
+    assert 'Look at this' in post.title and post.title.strip() != ''
+    bare = _stored(world, 43, 'Audio', name='Song', url=AUDIO)
+    _update(bare, 43, 'Audio', name=blank, url=AUDIO)
+    assert bare.title == 'Audio'
