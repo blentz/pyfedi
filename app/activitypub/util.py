@@ -309,6 +309,35 @@ def media_url_from(obj: dict, kind: str | None) -> str | None:
     return fallback
 
 
+def count_collection(collection_id: str, total: int) -> dict:
+    """A count-only collection as embedded in an object (interop C5, owner ruling): its id and `totalItems`, no
+    items. Mastodon reads the inline `totalItems` of `likes` and `shares` without fetching; the route at `id` serves
+    the same dict plus @context."""
+    return {'id': collection_id, 'type': 'Collection', 'totalItems': total}
+
+
+def post_shares_count(post_id: int) -> int:
+    """How many boosts (Announces) `post_id` has received, from PostBoost."""
+    return db.session.query(func.count(PostBoost.id)).filter(PostBoost.post_id == post_id).scalar()
+
+
+def post_count_collections(post: Post) -> dict:
+    """`likes`, `dislikes` and `shares` of local `post`, as post_to_page embeds them and post_count_collection_ap
+    serves them. A NULL cached count is 0."""
+    base = f"{current_app.config['SERVER_URL']}/post/{post.id}"
+    return {'likes': count_collection(f'{base}/likes', post.up_votes or 0),
+            'dislikes': count_collection(f'{base}/dislikes', post.down_votes or 0),
+            'shares': count_collection(f'{base}/shares', post_shares_count(post.id))}
+
+
+def comment_count_collections(reply: PostReply) -> dict:
+    """`likes` and `dislikes` of local `reply`. No `shares`: comments have no boost records, and an inline 0 could
+    make a peer overwrite its own count with 0."""
+    base = f"{current_app.config['SERVER_URL']}/comment/{reply.id}"
+    return {'likes': count_collection(f'{base}/likes', reply.up_votes or 0),
+            'dislikes': count_collection(f'{base}/dislikes', reply.down_votes or 0)}
+
+
 def post_to_page(post: Post):
     activity_data = {
         "type": "Page",
@@ -343,6 +372,7 @@ def post_to_page(post: Post):
             }
         },
     }
+    activity_data.update(post_count_collections(post))
     if post.language_id:
         activity_data['contentMap'] = {post.language_code(): activity_data['content']}
     if post.content_warning:
@@ -480,6 +510,7 @@ def comment_model_to_json(reply: PostReply) -> dict:
         },
         'tag': reply.tags_for_activitypub()
     }
+    reply_data.update(comment_count_collections(reply))
     if reply.content_warning:
         reply_data['summary'] = reply.content_warning
         reply_data['sensitive'] = True
