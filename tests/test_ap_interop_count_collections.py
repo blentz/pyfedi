@@ -4,8 +4,8 @@ import pytest
 
 from app import db
 from app.activitypub.util import comment_model_to_json, post_to_page
-from app.models import PostBoost
-from tests.factories import make_community, make_instance, make_post_reply, make_user
+from app.models import PostBoost, PostReplyVote, PostVote
+from tests.factories import make_community, make_instance, make_post, make_post_reply, make_user
 from tests.test_ap_content_objects import ap_get, seed_local_post
 
 SERVER = 'https://test.piefed.local'
@@ -111,3 +111,88 @@ def test_a_browser_asking_for_a_groups_following_is_sent_to_the_group(app, db_se
         response = client.get('/c/books/following', headers={'Accept': 'text/html'})
 
     assert (response.status_code, response.headers['Location']) == (302, '/c/books')
+
+
+def _voter():
+    community, author, post = seed_local_post()
+    alice = make_user(None, 'alice', local=True)
+    return community, author, post, alice
+
+
+def _vote(user, post=None, reply=None, effect=1.0):
+    if post is not None:
+        db.session.add(PostVote(user_id=user.id, author_id=post.user_id, post_id=post.id, effect=effect))
+    else:
+        db.session.add(PostReplyVote(user_id=user.id, author_id=reply.user_id, post_reply_id=reply.id,
+                                     effect=effect))
+    db.session.commit()
+
+
+def test_the_person_document_names_its_liked_collection(app, db_session):
+    _voter()
+
+    assert ap_get(app, '/u/alice').json['liked'] == f'{SERVER}/u/alice/liked'
+
+
+def test_liked_counts_post_and_comment_upvotes_and_lists_none(app, db_session):
+    community, author, post, alice = _voter()
+    _vote(alice, post=post)
+    _vote(alice, reply=make_post_reply(post, author))
+
+    response = ap_get(app, '/u/alice/liked')
+
+    assert response.status_code == 200
+    assert response.json['type'] == 'OrderedCollection'
+    assert response.json['id'] == f'{SERVER}/u/alice/liked'
+    assert response.json['totalItems'] == 2
+    assert response.json['orderedItems'] == []
+
+
+def test_liked_skips_every_vote_that_was_not_federated(app, db_session):
+    community, author, post, alice = _voter()
+    _vote(alice, post=make_post(community, author, None, title='down'), effect=-1.0)
+    for flag in ('local_only', 'private'):
+        hidden = make_community(name=f'c_{flag}')
+        setattr(hidden, flag, True)
+        db.session.commit()
+        _vote(alice, post=make_post(hidden, author, None, title=flag))
+    followers_only = make_post(community, author, None, title='fo')
+    followers_only.visibility = 'followers'
+    deleted = make_post(community, author, None, title='gone')
+    deleted.deleted = True
+    db.session.commit()
+    _vote(alice, post=followers_only)
+    _vote(alice, post=deleted)
+    hidden_reply = make_post_reply(post, author)
+    hidden_reply.visibility = 'followers'
+    deleted_reply = make_post_reply(post, author)
+    deleted_reply.deleted = True
+    db.session.commit()
+    _vote(alice, reply=hidden_reply)
+    _vote(alice, reply=deleted_reply)
+    _vote(alice, reply=make_post_reply(post, author), effect=-1.0)
+
+    assert ap_get(app, '/u/alice/liked').json['totalItems'] == 0
+
+
+def test_a_user_who_votes_privately_has_liked_zero(app, db_session):
+    community, author, post, alice = _voter()
+    _vote(alice, post=post)
+    alice.vote_privately = True
+    db.session.commit()
+
+    response = ap_get(app, '/u/alice/liked')
+
+    assert response.json['totalItems'] == 0
+    assert ap_get(app, '/u/alice').json['liked'] == f'{SERVER}/u/alice/liked'
+
+
+def test_liked_answers_as_the_other_person_collections_for_gone_unknown_and_browser(app, db_session):
+    community, author, post, alice = _voter()
+    with app.test_client() as client:
+        browser = client.get('/u/alice/liked', headers={'Accept': 'text/html'})
+    assert (browser.status_code, browser.headers['Location']) == (302, '/u/alice')
+    assert ap_get(app, '/u/nosuch/liked').status_code == 404
+    alice.deleted = True
+    db.session.commit()
+    assert ap_get(app, '/u/alice/liked').status_code == 410

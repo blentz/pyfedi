@@ -34,7 +34,7 @@ from app.activitypub.util import MEDIA_OBJECT_TYPES, MEDIA_URL_KIND, media_url_f
     process_quote_boost, object_has_missing_fields, find_microblogging_community, process_announce_of_uri, \
     announce_target_uri, undo_boost, undo_reaction, withdraw_flag, LD_SIGNED_LOG_PREFIX, current_ld_signed, current_as_sent, normalise_activity_types, \
     NO_STRING_TYPE_MESSAGE, names_actor, refresh_user_profile_task, delete_remote_group, GROUP_DELETED_MESSAGE, \
-    may_delete_group, ANNOUNCED_GROUP_DELETE_REFUSED, user_followers_count, user_following_count, create_activity_of
+    may_delete_group, ANNOUNCED_GROUP_DELETE_REFUSED, user_followers_count, user_following_count, user_liked_count, create_activity_of
 # The module, not the name: app.community.routes reaches this file through
 # app.activitypub.signature before show_community is defined (U-circular-import)
 import app.chat.util as chat_util
@@ -514,6 +514,7 @@ def user_profile(actor):
                           "outbox": f"{user.public_url()}/outbox",
                           "followers": user.followers_url(),
                           "following": f"{user.public_url()}/following",
+                          "liked": f"{user.public_url()}/liked",
                           "discoverable": user.searchable,
                           "indexable": user.indexable,
                           "acceptPrivateMessages": user.accept_private_messages,
@@ -2557,6 +2558,16 @@ def user_following(actor):
         return redirect(url_for('activitypub.user_profile', actor=actor))
     user = local_actor_user(actor)
     return count_only_collection(f"{user.public_url()}/following", user_following_count(user.id))
+
+
+@bp.route('/u/<actor>/liked', methods=['GET'])
+def user_liked(actor):
+    actor = actor.strip()
+    # D177, as user_outbox above
+    if not is_activitypub_request():
+        return redirect(url_for('activitypub.user_profile', actor=actor))
+    user = local_actor_user(actor)
+    return count_only_collection(f"{user.public_url()}/liked", user_liked_count(user))
 
 
 @bp.route('/comment/<int:comment_id>', methods=['GET', 'HEAD'])

@@ -99,6 +99,29 @@ def user_following_count(user_id: int) -> int:
     return db.session.execute(text(sql), {'user_id': user_id}).scalar()
 
 
+def user_liked_count(user: User) -> int:
+    """How many Likes local `user` has federated (interop C5, count-only): upvotes on posts and comments that
+    send_vote would have sent -- the object is not deleted, its visibility is open and its community is neither
+    local-only nor private. 0 for a user who votes privately, whose votes are never sent (owner ruling)."""
+    if user.vote_privately:
+        return 0
+    posts = (db.session.query(func.count(PostVote.id))
+             .join(Post, Post.id == PostVote.post_id)
+             .join(Community, Community.id == Post.community_id)
+             .filter(PostVote.user_id == user.id, PostVote.effect > 0, Post.deleted.is_(False),
+                     Post.visibility.in_(OPEN_VISIBILITIES),
+                     Community.local_only.isnot(True), Community.private.isnot(True))
+             .scalar())
+    replies = (db.session.query(func.count(PostReplyVote.id))
+               .join(PostReply, PostReply.id == PostReplyVote.post_reply_id)
+               .join(Community, Community.id == PostReply.community_id)
+               .filter(PostReplyVote.user_id == user.id, PostReplyVote.effect > 0, PostReply.deleted.is_(False),
+                       PostReply.visibility.in_(OPEN_VISIBILITIES),
+                       Community.local_only.isnot(True), Community.private.isnot(True))
+               .scalar())
+    return posts + replies
+
+
 def users_total():
     return db.session.execute(text(
         'SELECT COUNT(*) as c FROM "user" WHERE ap_id is null AND verified is true AND banned is false AND deleted is false')).scalar()
