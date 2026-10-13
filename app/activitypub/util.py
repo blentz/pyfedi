@@ -6042,7 +6042,7 @@ def ensure_domains_match(activity: dict) -> bool:
                     note_actor = a
                     break
 
-    if note_id and note_actor:
+    if isinstance(note_id, str) and isinstance(note_actor, str) and note_id and note_actor:   # peer JSON: any type
         id_domain = host_of(note_id)
         actor_domain = host_of(note_actor)
 

@@ -191,3 +191,18 @@ class TestUnparseableHostsAreNeverTreatedAsMatching:
             'id': 'https://[unbalanced/activities/1',
             'actor': 'https://[also-unbalanced/u/alice',
         }) is False
+
+
+class TestIdsThatAreNotStringsNeverMatch:
+    """A peer's object id and actor are whatever JSON it sent. A number, an object or a list reached host_of,
+    whose urlparse raised AttributeError or TypeError on it, and the Create was lost to the exception rather than
+    refused. Only two strings on one non-empty host match. Found by the ap_ids fuzz target."""
+
+    @pytest.mark.parametrize('activity', [
+        {'id': 5, 'actor': 'https://peer.example/u/alice'},
+        {'id': 'https://peer.example/notes/1', 'actor': {'id': 'https://peer.example/u/alice'}},
+        {'id': ['https://peer.example/notes/1'], 'attributedTo': 'https://peer.example/u/alice'},
+        {'id': 'https://peer.example/notes/1', 'attributedTo': [{'type': 'Person', 'id': 7}]},
+    ])
+    def test_a_non_string_id_or_actor_is_refused(self, activity):
+        assert ensure_domains_match(activity) is False
