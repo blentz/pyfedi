@@ -4579,7 +4579,8 @@ def update_post_from_activity(post: Post, request_json: dict):
             if object_type in MEDIA_URL_KIND and \
                     new_title.replace('[Microblog]', '').strip() in ('', '(content in post body)'):
                 new_title = object_type  # C4: a bare media object is titled by its type
-            if link != '' and link != post.quote_ap_id:  # C2: the quoted post is shown as a card, not as the url
+            if object_type not in MEDIA_URL_KIND and link != '' and link != post.quote_ap_id:  # C4: a media object's url is its media url, never a body link
+                # C2: the quoted post is shown as a card, not as the url
                 # `link` is the href of an anchor in a REMOTE peer's content.
                 # It has already been through allowlist_html, which blanks an
                 # unsafe scheme, so the scheme half of url_is_storable is
