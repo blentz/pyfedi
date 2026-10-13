@@ -42,6 +42,8 @@ def _owner_candidates(key_id: str) -> list[str]:
     if not host:
         return []
     parsed = urlparse(owner)
+    if not parsed.scheme:   # '//host/path' would give '://host...', which names no host
+        return []
     try:
         port = parsed.port
     except ValueError:
