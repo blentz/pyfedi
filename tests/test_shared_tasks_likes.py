@@ -34,7 +34,7 @@ import pytest
 from flask import current_app
 
 from app import db
-from app.models import ActivityBatch, ActivityPubLog
+from app.models import ActivityBatch, ActivityPubLog, PostReplyVote, PostVote
 from app.shared.tasks.likes import vote_for_poll, vote_for_post, vote_for_reply
 from tests.factories import (
     make_banned_instance, make_community, make_community_ban,
@@ -1038,3 +1038,75 @@ def test_a_banned_follower_is_skipped_and_the_loop_continues(
     vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
 
     assert _delivered_inboxes(route) == {OTHER_INBOX}
+
+
+def _stored_vote(s, reply=False, effect=1.0):
+    if reply:
+        row = PostReplyVote(user_id=s.user.id, author_id=s.author.id, post_reply_id=s.reply.id, effect=effect)
+    else:
+        row = PostVote(user_id=s.user.id, author_id=s.author.id, post_id=s.post.id, effect=effect)
+    db.session.add(row)
+    db.session.commit()
+    return row
+
+
+def test_a_sent_like_marks_the_post_vote_federated(db_session, http_mock):
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    _follower(s, http_mock)
+    row = _stored_vote(s)
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    db.session.refresh(row)
+    assert row.federated is True
+
+
+def test_a_sent_like_marks_the_reply_vote_federated(db_session, http_mock):
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    _follower(s, http_mock)
+    row = _stored_vote(s, reply=True)
+
+    vote_for_reply(None, s.user.id, s.reply.id, None, 'upvote')
+
+    db.session.refresh(row)
+    assert row.federated is True
+
+
+def test_a_sent_undo_marks_the_vote_unfederated(db_session, http_mock):
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    _follower(s, http_mock)
+    row = _stored_vote(s)
+    row.federated = True
+    db.session.commit()
+
+    vote_for_post(None, s.user.id, s.post.id, 'Like', 'upvote')
+
+    db.session.refresh(row)
+    assert row.federated is False
+
+
+def test_an_early_return_leaves_the_vote_unmarked(db_session, http_mock):
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    s.community.local_only = True
+    db.session.commit()
+    row = _stored_vote(s)
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    db.session.refresh(row)
+    assert row.federated is None
+
+
+def test_a_vote_with_no_row_sends_without_crashing(db_session, http_mock):
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+
+    vote_for_post(None, s.user.id, s.post.id, 'Like', 'upvote')
+
+    assert route.called
+    assert db.session.query(PostVote).count() == 0

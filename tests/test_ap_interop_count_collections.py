@@ -121,12 +121,13 @@ def _voter():
     return community, author, post, alice
 
 
-def _vote(user, post=None, reply=None, effect=1.0):
+def _vote(user, post=None, reply=None, effect=1.0, federated=True):
     if post is not None:
-        db.session.add(PostVote(user_id=user.id, author_id=post.user_id, post_id=post.id, effect=effect))
+        db.session.add(PostVote(user_id=user.id, author_id=post.user_id, post_id=post.id, effect=effect,
+                              federated=federated))
     else:
         db.session.add(PostReplyVote(user_id=user.id, author_id=reply.user_id, post_reply_id=reply.id,
-                                     effect=effect))
+                                     effect=effect, federated=federated))
     db.session.commit()
 
 
@@ -263,3 +264,16 @@ def test_a_browser_asking_for_a_post_collection_is_sent_to_the_post(app, db_sess
         response = client.get(f'/post/{post.id}/{name}', headers={'Accept': 'text/html'})
 
     assert (response.status_code, response.headers['Location']) == (302, f'/post/{post.id}')
+
+
+def test_liked_counts_only_votes_marked_federated(app, db_session):
+    community, author, post, alice = _voter()
+    _vote(alice, post=post)
+    _vote(alice, post=make_post(community, author, None, title='a'), federated=None)
+    _vote(alice, post=make_post(community, author, None, title='b'), federated=False)
+    reply = make_post_reply(post, author)
+    _vote(alice, reply=reply)
+    _vote(alice, reply=make_post_reply(post, author), federated=None)
+    _vote(alice, reply=make_post_reply(post, author), federated=False)
+
+    assert ap_get(app, '/u/alice/liked').json['totalItems'] == 2

@@ -200,6 +200,13 @@ class TestVoting:
                            {'post_id': env.post.id, 'score': 1})
         assert task.call_args.kwargs['federate'] is False
 
+    def test_a_vote_sent_private_stays_marked_unfederated(self, env):
+        """`liked` counts only votes send_vote marked `federated`; a private vote never reaches send_vote."""
+        post_post_like(token(env.stranger),
+                       {'post_id': env.post.id, 'score': 1, 'private': True})
+        assert PostVote.query.filter_by(user_id=env.stranger.id,
+                                        post_id=env.post.id).one().federated is None
+
 
 class TestSaveAndSubscribe:
     def test_saving_and_unsaving(self, env):
