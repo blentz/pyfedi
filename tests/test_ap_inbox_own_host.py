@@ -68,6 +68,17 @@ def test_a_shared_inbox_of_an_actor_without_a_host_is_not_trusted():
     assert shared_inbox_of({'id': ['x'], 'endpoints': {'sharedInbox': f'https://{PEER}/inbox'}}) is None
 
 
+@pytest.mark.parametrize('actor_id, url', [
+    ('urn:actor', 'urn:inbox'),
+    (f'https://[@{PEER}/u/alice', 'https://[@elsewhere.example/inbox'),   # both refused by urlparse
+])
+def test_a_shared_inbox_without_a_host_is_not_trusted_for_an_actor_without_one(actor_id, url):
+    """Both hosts were '', and '' == '' took the shared inbox as the actor's own -- though the second pair is one
+    httpx delivers to elsewhere.example. An id with no host matches nothing. Found by the ap_inboxes fuzz
+    target."""
+    assert shared_inbox_of({'id': actor_id, 'endpoints': {'sharedInbox': url}}) is None
+
+
 @pytest.mark.parametrize('fields', [
     {'inbox': ELSEWHERE},
     {'inbox': OLD_INBOX, 'endpoints': {'sharedInbox': ELSEWHERE}},

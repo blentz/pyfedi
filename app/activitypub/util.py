@@ -1059,7 +1059,7 @@ def shared_inbox_of(actor_json: dict) -> str | None:
     ruling, 2026-10-11). The actor's host is the host of its `id`; an id with no host matches nothing."""
     actor_host = _actor_host(actor_json.get('id'))
     shared_inbox = _declared_shared_inbox(actor_json, actor_host)
-    return shared_inbox if shared_inbox is not None and host_of(shared_inbox) == actor_host else None
+    return shared_inbox if actor_host and shared_inbox is not None and host_of(shared_inbox) == actor_host else None
 
 
 def _actor_host(actor_id) -> str:
