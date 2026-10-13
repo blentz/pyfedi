@@ -11,6 +11,7 @@ import mimetypes
 import math
 import random
 import time
+import unicodedata
 import urllib
 import warnings
 import zlib
@@ -878,7 +879,33 @@ def _host_reads_alike(url: str) -> bool:
                 return False
         except UnicodeError:
             return False
+        # nameprep reads Unicode 3.2; a browser maps by UTS46 on current Unicode, so a
+        # newer compatibility character ('b\U0001F130nned' is 'banned') or a newer
+        # default-ignorable one passes nameprep unchanged and still reaches another host.
+        if unicodedata.normalize('NFKC', label).casefold() != label:
+            return False
+        if any(_is_ignorable_or_unassigned(char) for char in label):
+            return False
     return True
+
+
+# Unicode's Default_Ignorable_Code_Point ranges (DerivedCoreProperties.txt), which UTS46
+# drops from a host. Python's unicodedata does not expose the property.
+_DEFAULT_IGNORABLE_RANGES = (
+    (0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160),
+    (0x17B4, 0x17B5), (0x180B, 0x180F), (0x200B, 0x200F), (0x202A, 0x202E),
+    (0x2060, 0x206F), (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),
+)
+
+
+def _is_ignorable_or_unassigned(char: str) -> bool:
+    """A host character a browser may drop, or one this Python's tables cannot map."""
+    code = ord(char)
+    if any(low <= code <= high for low, high in _DEFAULT_IGNORABLE_RANGES):
+        return True
+    return unicodedata.category(char) in ('Cc', 'Cf', 'Cn', 'Co', 'Cs')
 
 
 def url_host(url: str) -> Optional[str]:
