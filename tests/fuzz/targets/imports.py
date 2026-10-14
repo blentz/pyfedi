@@ -13,7 +13,8 @@ Properties:
   SETTINGS_IMPORT_MAX_ENTRIES, each of the shape the task uses it as -- a string, or for user_notes an object with a
   string target and body -- in file order, taken from the first SETTINGS_IMPORT_MAX_ENTRIES the file lists.
 * mastodon_csv -- mastodon_csv_handles either raises csv.Error (which the view answers with a message) or returns
-  strings that each pass is_fedi_handle and appear, in order, in the file's text as decoded (UTF-8, else Latin-1).
+  at most one string per row, each passing is_fedi_handle and made of characters of the file's text as decoded
+  (UTF-8, else Latin-1).
 
 No database and no network: these are the parse steps only, before any lookup.
 """
@@ -74,12 +75,13 @@ def check_mastodon_csv(data: bytes) -> None:
         text = data.decode('utf-8')
     except UnicodeDecodeError:
         text = data.decode('latin-1')
-    position = 0
+    characters = set(text)
+    rows = text.count('\n') + text.count('\r') + 1
+    assert len(handles) <= rows, f'{len(handles)} handles out of at most {rows} rows'
     for handle in handles:
         assert isinstance(handle, str) and is_fedi_handle(handle), f'{handle!r} is not a fediverse handle'
-        found = text.find(handle, position)
-        assert found >= 0, f'{handle!r} is not in the file after offset {position}'
-        position = found + len(handle)
+        # A field's quoting is gone from the handle, so it need not appear in the text as one run; its characters must.
+        assert set(handle) <= characters, f'{handle!r} holds characters the file does not'
 
 
 TARGETS = [
