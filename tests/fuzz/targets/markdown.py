@@ -483,13 +483,14 @@ def check_enhanced_images(data: bytes) -> None:
     with only the attributes it sets, and after apply_enhanced_image_attributes every such image carries only
     those plus align/width/height/class, inside at most an <a> with only an href: a value taken from the
     markdown (alt text, title, URL, width, height, class) is escaped and cannot add an attribute or an element.
-    Budgeted: _md_img_with_attrs_re and apply's img regex are matched over the whole text."""
+    Budgeted: _md_img_with_attrs_re and apply's img regex are matched over the whole text, apply's on the text with
+    the built images put back, as markdown_to_html gives it the whole rendered body."""
     text = _input_text(data)
     md = markdown2.Markdown(extras={'enhanced-images': True})
     md.reset()   # convert() would; the extra is driven directly so no other stage touches the text
     extra = EnhancedImages(md, None)
-    if extra.test(text):
-        extra.run(text)
+    hashed = extra.run(text) if extra.test(text) else text
+    assert isinstance(apply_enhanced_image_attributes(md._unhash_html_spans(hashed), md), str)
     spans = list(md.html_spans.values())
     for span in spans:
         elements = BeautifulSoup(span, 'html.parser').find_all(True)
