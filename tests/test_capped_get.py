@@ -451,6 +451,16 @@ class TestCompressedBodies:
         assert route.call_count == 1
         sleeps.assert_not_called()
 
+    def test_another_encoding_is_unreadable_even_when_its_declared_length_is_over_the_cap(self, app, http_mock):
+        """The encoding is judged before the declared length, so a body in any other encoding is refused as
+        UnreadableEncoding whatever its Content-Length says. It was the plain ResponseTooLarge for a length over the
+        cap. Found by the capped_body fuzz target."""
+        http_mock.get(URI).respond(200, content=iter([b'whatever']),
+                                   headers={'Content-Encoding': 'br', 'Content-Length': str(FETCH_MAX_BYTES + 1)})
+
+        with pytest.raises(UnreadableEncoding):
+            _capped_get(URI)
+
     def test_a_corrupt_body_is_a_decoding_error(self, app, http_mock):
         """What httpx's own decoder raised for it."""
         http_mock.get(URI).respond(200, content=iter([b'\x1f\x8b' + b'not gzip at all']),
