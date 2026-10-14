@@ -906,9 +906,10 @@ class TestAllowlistRegexesAreLinear:
                               count=3000, longest=10)
 
     def test_unclosed_empty_anchors_are_read_in_linear_time(self):
-        """fuzz: redos_allowlist_html/empty_anchor_one_close_pump. Each '<a href="</a>' is a whole anchor to the
-        link stash, so only the empty-anchor regex sees an opener with no end."""
-        assert_linear(self, [pump('<a href="</a>')],
+        """fuzz: redos_allowlist_html/empty_anchor_one_close_pump. The one '</a>' at the end closes the whole line
+        for the link stash, so only the empty-anchor regex sees openers with no end, and BeautifulSoup builds one
+        element rather than thousands."""
+        assert_linear(self, [pump('<a href="', suffix='</a>')],
                       lambda text: allowlist_html(text, test_env={'fn_string': 'fn-test'}))
 
     def test_spoilers_match_what_they_matched(self):
