@@ -15,6 +15,10 @@ from tests.test_gallery import a_jpeg
 IMAGES = [{'type': 'Document', 'mediaType': 'image/jpeg', 'url': f'https://m.example/{n}.jpg', 'name': n}
           for n in 'ab']
 
+# Ingesting an album writes the primary image's sizes under the checkout's static
+# media tree by relative path; without this every test left two files behind.
+pytestmark = pytest.mark.usefixtures('private_static_tree')
+
 
 @pytest.fixture
 def author(db_session):

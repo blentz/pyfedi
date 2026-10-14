@@ -18,6 +18,11 @@ FIRST = 'https://pix.example/storage/one.jpg'
 SECOND = 'https://pix.example/storage/two.jpg'
 THIRD = 'https://pix.example/storage/three.png'
 
+# Ingesting an image post downloads the primary image and writes its sizes
+# under the checkout's static media tree, by relative path; the rows are rolled back but
+# the bytes were not, and every run left two files per test behind.
+pytestmark = pytest.mark.usefixtures('private_static_tree')
+
 
 def a_jpeg():
     buffer = io.BytesIO()
