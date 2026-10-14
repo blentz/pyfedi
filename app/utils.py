@@ -1016,6 +1016,12 @@ def _embedded_media_re(extension: str) -> re.Pattern:
 # alternative ends the line: a line of '<img alt="' took 2.4 s per 64 KiB.
 _FANDOM_HOTLINK_RE = re.compile(r'<img alt="(.*?)" loading="lazy" src="https://static.wikia.nocookie.net|<img alt="[^\n]*')
 
+
+# An anchor allowlist_html itself emitted with no text. The lazy href ends at the first point the rest matches, and
+# a start that fails leaves nothing for a later start on the line, so the skip alternative ends the line: a line
+# of '<a href="' took 2.7 s per 64 KiB.
+_EMPTY_ANCHOR_RE = re.compile(r'<a href="(.*?)" rel="nofollow ugc" target="_blank"><\/a>|<a href="[^\n]*')
+
 # sanitise HTML using an allow list
 def allowlist_html(html: str, a_target='_blank', test_env=False) -> str:
     # RUN THE TESTS in tests/test_allowlist_html.py whenever you alter this function, it's fragile and bugs are hard to spot.
@@ -1035,8 +1041,7 @@ def allowlist_html(html: str, a_target='_blank', test_env=False) -> str:
     code_snippets, clean_html = stash_code_html(html, code_placeholder)
 
     # avoid returning empty anchors
-    re_empty_anchor = re.compile(r'<a href="(.*?)" rel="nofollow ugc" target="_blank"><\/a>')
-    clean_html = re_empty_anchor.sub(r'<a href="\1" rel="nofollow ugc" target="_blank">\1</a>', clean_html)
+    clean_html = sub_skipping(_EMPTY_ANCHOR_RE, r'<a href="\1" rel="nofollow ugc" target="_blank">\1</a>', clean_html)
 
     # replace lemmy's spoiler markdown left in HTML
     clean_html = clean_html.replace('<h2>:::</h2>',
