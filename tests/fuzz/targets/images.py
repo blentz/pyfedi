@@ -101,11 +101,10 @@ MAX_DIMENSION = Config.MEDIA_IMAGE_MAX_DIMENSION
 FORMATS = ('', 'JPEG', 'WEBP', 'PNG', 'AVIF')
 
 # The extension an upload is saved under decides two things in these sequences: RGB or RGBA, and the save format
-# when no MEDIA_IMAGE_FORMAT is set. '.svg' and '.gif' never reach the still-image sequences. '.mpo' is left out
-# deliberately: an RGBA image cannot be saved as MPO ("cannot write mode RGBA as JPEG"), so with no format
-# configured every .mpo upload fails at the save in all four upload paths -- reported to the owner rather than
-# changed here, because the fix makes an input that is refused today succeed.
-UPLOAD_EXTENSIONS = tuple(ext for ext in allowed_extensions if ext not in ('.svg', '.gif', '.mpo'))
+# when no MEDIA_IMAGE_FORMAT is set. '.svg' and '.gif' never reach the still-image sequences. '.mpo' is saved by
+# Pillow's MPO writer, which writes JPEG, so the four upload paths convert it to RGB as they do '.jpg'.
+UPLOAD_EXTENSIONS = tuple(ext for ext in allowed_extensions if ext not in ('.svg', '.gif'))
+RGB_EXTENSIONS = ['.jpg', '.jpeg', '.mpo']
 THUMBNAIL_EXTENSIONS = tuple(ext for ext in allowed_thumbnail_extensions if ext != '.svg') + ('.img',)
 
 
@@ -176,7 +175,9 @@ def _format_of(ext: str) -> str:
 
 def _assert_saved(saved: bytes, fmt: str, size, label: str) -> None:
     reopened = Image.open(io.BytesIO(saved))
-    assert reopened.format == fmt, f'{label}: saved as {fmt}, reopened as {reopened.format}'
+    # One frame saved as MPO is a plain JPEG, and Pillow reads it as one.
+    expected = 'JPEG' if fmt == 'MPO' else fmt
+    assert reopened.format == expected, f'{label}: saved as {fmt}, reopened as {reopened.format}'
     assert reopened.size == size, f'{label}: saved at {size}, reopened at {reopened.size}'
 
 
@@ -216,7 +217,7 @@ def check_upload_decode(data: bytes) -> None:
         return
     assert img.format in ACCEPTED_FORMATS, f'the format check let {img.format} through'
     img = ImageOps.exif_transpose(img)
-    rgb = image_format == 'JPEG' or ext in ['.jpg', '.jpeg']
+    rgb = image_format == 'JPEG' or ext in RGB_EXTENSIONS
     if srgb and rgb:    # edit_post converts its JPEG arm with to_srgb; process_upload converts it plainly
         img = to_srgb(img)
     else:
@@ -269,7 +270,7 @@ def _icon_gif(image: bytes, img):
 def _two_sizes(img, ext, image_format, thumbnail_format, box, thumbnail_box, label):
     """The resize-and-thumbnail tail both functions share (util.py:862-888 and 993-1018)."""
     if img.width > box[0] or img.height > box[1] or image_format or thumbnail_format:
-        img = img.convert('RGB' if (image_format == 'JPEG' or ext in ['.jpg', '.jpeg']) else 'RGBA')
+        img = img.convert('RGB' if (image_format == 'JPEG' or ext in RGB_EXTENSIONS) else 'RGBA')
         img.thumbnail(box, resample=Image.LANCZOS)
         fmt = image_format.upper() if image_format else _format_of(ext)
         _assert_saved(_save(img, fmt, Config.MEDIA_IMAGE_QUALITY), fmt, img.size, label)

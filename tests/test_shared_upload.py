@@ -326,6 +326,25 @@ class TestAnImageOverThePixelCap:
                 _cleanup(before)
 
 
+class TestAnMpoUpload:
+    """'.mpo' (a phone camera's multi-picture JPEG) is in the extension list, and Pillow saves it as JPEG. It was
+    converted to RGBA like a PNG, so with no MEDIA_IMAGE_FORMAT every one failed at the save with 'cannot write
+    mode RGBA as JPEG'. It is converted to RGB, as '.jpg' is (and one frame saved as MPO reads back as a JPEG)."""
+
+    def test_is_stored_as_an_rgb_mpo(self, app):
+        buffer = io.BytesIO()
+        Image.new('RGB', (8, 8), (120, 120, 120)).save(buffer, format='MPO')
+        before = files_under(MEDIA_ROOT)
+        with app.app_context():
+            try:
+                url = process_upload(FileStorage(stream=io.BytesIO(buffer.getvalue()), filename='photo.mpo'))
+                assert url.endswith('.mpo')
+                with Image.open(_stored_path(url)) as img:
+                    assert (img.format, img.mode, img.size) == ('JPEG', 'RGB', (8, 8))
+            finally:
+                _cleanup(before)
+
+
 class TestImageFormatAndQualityKwargs:
     """`:75`/`:79` -- the `image_format`/`image_quality` kwargs. Both arms of
     each are DRIVEN; only the format half is OBSERVED.

@@ -343,6 +343,37 @@ class TestAnImageOverThePixelCap:
         assert set(glob.glob('app/static/media/communities/*/*/*')) == before
 
 
+def an_mpo(width, height, name):
+    buffer = io.BytesIO()
+    Image.new('RGB', (width, height), (10, 20, 30)).save(buffer, format='MPO')
+    return a_file(buffer.getvalue(), name)
+
+
+class TestAnMpo:
+    """'.mpo' is in the extension list and Pillow saves it as JPEG, but it was converted to RGBA like a PNG, so an
+    icon or banner large enough to be resized, on an instance with no MEDIA_IMAGE_FORMAT, failed at the save with
+    'cannot write mode RGBA as JPEG'. It is converted to RGB, as '.jpg' is (and one frame saved as MPO reads back
+    as a JPEG)."""
+
+    def test_an_icon(self, env):
+        file = save_icon_file(an_mpo(300, 300, 'icon.mpo'))
+        try:
+            assert file.file_path.endswith('.mpo')
+            with Image.open(file.file_path) as img:
+                assert (img.format, img.mode, img.size) == ('JPEG', 'RGB', (250, 250))
+        finally:
+            cleanup(file)
+
+    def test_a_banner(self, env):
+        file = save_banner_file(an_mpo(1700, 100, 'banner.mpo'))
+        try:
+            assert file.file_path.endswith('.mpo')
+            with Image.open(file.file_path) as img:
+                assert (img.format, img.mode, img.width) == ('JPEG', 'RGB', 1600)
+        finally:
+            cleanup(file)
+
+
 class TestAnAnimatedGif:
     def test_a_small_one(self, env):
         file = save_icon_file(an_animated_gif(60, 60))

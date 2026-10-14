@@ -91,7 +91,7 @@ def process_upload(image_file, destination='posts', user: User | None = None):
     if not final_place.endswith('.svg') and not final_place.endswith('.gif') and not is_video_url(final_place):
         img = open_uploaded_image(final_place, allowed_extensions)
         img = ImageOps.exif_transpose(img)
-        img = img.convert('RGB' if (image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg']) else 'RGBA')
+        img = img.convert('RGB' if (image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg', '.mpo']) else 'RGBA')
         img.thumbnail((image_max_dimension, image_max_dimension), resample=Image.LANCZOS)
 
         kwargs = {}

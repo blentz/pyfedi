@@ -865,7 +865,7 @@ def save_icon_file(icon_file, directory='communities') -> File:
             import pillow_avif  # NOQA  # lazy: registers Pillow's AVIF plugin only on the AVIF path
 
         if img.width > 250 or img.height > 250 or image_format or thumbnail_image_format:
-            img = img.convert('RGB' if (image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg']) else 'RGBA')
+            img = img.convert('RGB' if (image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg', '.mpo']) else 'RGBA')
             img.thumbnail((250, 250), resample=Image.LANCZOS)
 
             kwargs = {}
@@ -998,7 +998,7 @@ def save_banner_file(banner_file, directory='communities') -> File:
         import pillow_avif  # NOQA  # lazy: registers Pillow's AVIF plugin only on the AVIF path
 
     if img.width > 1600 or img.height > 600 or image_format or thumbnail_image_format:
-        img = img.convert('RGB' if (image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg']) else 'RGBA')
+        img = img.convert('RGB' if (image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg', '.mpo']) else 'RGBA')
         img.thumbnail((1600, 600), resample=Image.LANCZOS)
 
         kwargs = {}

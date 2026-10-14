@@ -609,7 +609,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         if not final_place.endswith('.svg') and not final_place.endswith('.gif') and not is_video_url(final_place):
             img = open_uploaded_image(final_place, allowed_extensions)
             img = ImageOps.exif_transpose(img)
-            if (image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg']):
+            if (image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg', '.mpo']):
                 img = to_srgb(img)
             else:
                 img = img.convert('RGBA')
