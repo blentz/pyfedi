@@ -482,6 +482,9 @@ class _Replies:
         elif code == '225':
             for line in lines:
                 assert re.fullmatch(r'[0-9]+(?: .*)?', line, re.S), f'{command!r} sent header line {line!r}'
+        elif code == '211':   # LISTGROUP
+            for line in lines:
+                assert re.fullmatch(r'[0-9]+', line), f'{command!r} sent {line!r}, not an article number'
         elif code == '230':
             for line in lines:
                 assert line in self.infos, f'{command!r} sent {line!r}, not a message-id'
@@ -522,10 +525,6 @@ def _check_conversation(config: bytes, stream: bytes, sent: bytes, groups, bodie
             assert code == '205', f'QUIT got {status!r}'
             break
         assert code != '205', f'{text!r} closed the connection'
-        if fold.startswith('listgroup') and code == '211' and replies.next_is('211'):
-            # Reported, not fixed: LISTGROUP naming a group not yet selected sends GROUP's one-line 211 before
-            # its own. The extra line is read past so a campaign keeps hunting.
-            status = replies.status(text)
         if code in _MULTILINE or (code == '211' and fold.startswith('listgroup')):
             replies.check_block(text, status, replies.block(text))
         if code == '340':

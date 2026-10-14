@@ -615,9 +615,10 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
             self.send_lines(["412 No newsgroups selected"])
             return
         group_name = tokens[0] if tokens else self.current_selected_newsgroup
-        if group_name != self.current_selected_newsgroup:
-            if not self.select_group(group_name):
-                return
+        # Selecting the group sends the 211 status line (or 411) the way GROUP does: the reply must not have two.
+        selecting = group_name != self.current_selected_newsgroup
+        if selecting and not self.select_group(group_name):
+            return
         group = self._selected_group()
         if group is None:
             self.send_lines(["412 No newsgroup selected"])
@@ -630,7 +631,7 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
             range_ = (group.low, group.high)
         if not range_[1]:
             range_ = (range_[0], group.high)
-        ret = [f"211 {group.number} {group.low} {group.high} {group.name}"]
+        ret = [] if selecting else [f"211 {group.number} {group.low} {group.high} {group.name}"]
         for i in numbers_in_group(range_[0], typing.cast(int, range_[1]), group.low, group.high):
             try:
                 _articleinfo = self.server.articles[i]
