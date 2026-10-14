@@ -149,6 +149,18 @@ class TestGetNewFrames:
         assert all(f.mode == 'RGBA' for f in frames)
 
 
+    def test_a_still_image_without_a_frame_count_is_one_frame(self, tmp_path):
+        """save_icon_file sends whatever is uploaded under a .gif name here, and Pillow gives a JPEG (or a TGA) no
+        n_frames at all: `gif.n_frames` raised AttributeError, a 500 for a JPEG icon called .gif. Found by the
+        scale_gif fuzz target."""
+        path = tmp_path / 'photo.gif'
+        Image.new('RGB', (64, 48), (10, 20, 30)).save(path, format='JPEG')
+        with Image.open(path) as still:
+            frames = get_new_frames(still, (16, 16))
+        assert len(frames) == 1
+        assert frames[0].size == (16, 12) and frames[0].mode == 'RGBA'
+
+
 class TestScaleGif:
     def test_scaling_in_place_shrinks_the_file(self, tmp_path):
         path = tmp_path / 'anim.gif'
