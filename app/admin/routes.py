@@ -1609,20 +1609,30 @@ def admin_community_edit(community_id):
         community.can_be_archived = form.can_be_archived.data
         community.downvote_accept_mode = form.downvote_accept_mode.data
 
+        # Both new images are stored before anything old is touched, and a banner save_banner_file refuses (its
+        # 400) deletes the icon just stored for it, so a refused upload leaves the community's images as they
+        # were. The old files are deleted only once the edit is committed, below.
+        new_icon = new_banner = None
         icon_file = request.files.get('icon_file')
         if icon_file and icon_file.filename != '':
-            if community.icon_id:
-                community.icon.delete_from_disk()
-            file = save_icon_file(icon_file)
-            if file:
-                community.icon = file
+            new_icon = save_icon_file(icon_file)
         banner_file = request.files.get('banner_file')
         if banner_file and banner_file.filename != '':
+            try:
+                new_banner = save_banner_file(banner_file)
+            except Exception:
+                if new_icon:
+                    new_icon.delete_from_disk(purge_cdn=False)
+                raise
+        replaced = []
+        if new_icon:
+            if community.icon_id:
+                replaced.append(community.icon)
+            community.icon = new_icon
+        if new_banner:
             if community.image_id:
-                community.image.delete_from_disk()
-            file = save_banner_file(banner_file)
-            if file:
-                community.image = file
+                replaced.append(community.image)
+            community.image = new_banner
 
         # Languages of the community
         db.session.execute(text('DELETE FROM "community_language" WHERE community_id = :community_id'),
@@ -1632,6 +1642,8 @@ def admin_community_edit(community_id):
         # Always include the undetermined language, so posts with no language will be accepted
         community.languages.append(Language.query.filter(Language.code == 'und').first())
         db.session.commit()
+        for old_file in replaced:
+            old_file.delete_from_disk()
 
         if community.topic_id != old_topic_id:
             if community.topic_id:

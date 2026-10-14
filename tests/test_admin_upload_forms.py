@@ -162,6 +162,125 @@ class TestEditingACommunityAsAnAdmin:
         assert 'permission_denied' in response.headers['Location']
 
 
+    @pytest.mark.parametrize('uploads', ['icon and banner', 'banner'])
+    @pytest.mark.parametrize('storage', ['local', 's3'])
+    def test_a_refused_banner_leaves_the_communitys_images_as_they_were(self, env, monkeypatch, request, storage,
+                                                                        uploads):
+        """The admin form deleted the old icon's files, stored the new icon, deleted the old banner's files and
+        only then had save_banner_file refuse the banner with its 400: the session rolled back, so the community
+        still named its old icon and banner, whose files were gone, and the new icon was left behind. Now both
+        new images are stored before anything old is touched, a refused banner deletes the new icon again, and
+        the old files go only once the edit is committed."""
+        old = _an_old_icon_and_banner(env, monkeypatch, request, storage)
+        an_admin(env, 'administer all communities')
+        names = iter(['storediconfile', 'refusedbanner0'] if uploads == 'icon and banner' else ['refusedbanner0'])
+        monkeypatch.setattr('app.community.util.gibberish', lambda length: next(names) + '0')
+        data = self.payload(env, csrf(env.app, env.client), title='Changed')
+        data['banner_file'] = (io.BytesIO(b'not an image at all'), 'banner.png')
+        if uploads == 'icon and banner':
+            data['icon_file'] = (a_png(), 'icon.png')
+
+        try:
+            response = env.client.post(f'/admin/community/{env.community.id}/edit', data=data,
+                                       content_type='multipart/form-data')
+
+            assert response.status_code == 400
+            db.session.expire_all()
+            community = db.session.get(Community, env.community.id)
+            assert (community.icon_id, community.image_id) == (old.icon_id, old.banner_id)
+            assert old.still_stored()
+            assert _stored_anywhere('storediconfile0') == _stored_anywhere('refusedbanner00') == []
+        finally:
+            old.remove()
+
+    @pytest.mark.parametrize('storage', ['local', 's3'])
+    def test_new_images_replace_the_old_ones_whose_files_go_after(self, env, monkeypatch, request, storage):
+        """Both accepted: the community points at the new pair, and the old pair's files are deleted."""
+        old = _an_old_icon_and_banner(env, monkeypatch, request, storage)
+        an_admin(env, 'administer all communities')
+        names = iter(['newiconfile000', 'newbannerfile0'])
+        monkeypatch.setattr('app.community.util.gibberish', lambda length: next(names) + '0')
+        data = self.payload(env, csrf(env.app, env.client))
+        data['icon_file'] = (a_png(), 'icon.png')
+        data['banner_file'] = (a_png(), 'banner.png')
+
+        try:
+            response = env.client.post(f'/admin/community/{env.community.id}/edit', data=data,
+                                       content_type='multipart/form-data')
+
+            assert response.status_code == 302
+            db.session.expire_all()
+            community = db.session.get(Community, env.community.id)
+            assert community.icon.file_name.startswith('newiconfile0000')
+            assert community.image.file_name.startswith('newbannerfile00')
+            assert old.stored() == []
+            community.icon.delete_from_disk(purge_cdn=False)
+            community.image.delete_from_disk(purge_cdn=False)
+        finally:
+            old.remove()
+
+
+def _stored_anywhere(name, directory='communities'):
+    """Every file save_icon_file/save_banner_file would have written for the gibberish `name`: in its media
+    directory, or left in app/static/tmp on the way to S3. Exact directories, as app/static/media is too big to
+    walk."""
+    import glob
+
+    return (glob.glob(f'app/static/media/{directory}/{name[0:2]}/{name[2:4]}/{name}*')
+            + glob.glob(f'app/static/tmp/{name}*'))
+
+
+def _an_old_icon_and_banner(env, monkeypatch, request, storage):
+    """The community's current icon and banner, every file of them really present: on disk, or as objects in the
+    moto bucket (with the S3 settings pointed at it)."""
+    from types import SimpleNamespace
+
+    import boto3
+
+    from app.models import File
+
+    keys = ['communities/ol/di/oldiconfile0.png', 'communities/ol/di/oldiconfile0_thumbnail.webp',
+            'communities/ol/db/oldbannerfil0.png', 'communities/ol/db/oldbannerfil0_thumbnail.webp']
+    if storage == 's3':
+        bucket = request.getfixturevalue('s3_bucket')
+        for key, value in (('S3_ACCESS_KEY', 'test-key'), ('S3_ACCESS_SECRET', 'test-secret'),
+                           ('S3_ENDPOINT', 'https://s3.amazonaws.com'), ('S3_REGION', 'us-east-1'),
+                           ('S3_BUCKET', bucket), ('S3_PUBLIC_URL', 'cdn.example.test')):
+            monkeypatch.setitem(env.app.config, key, value)
+        s3 = boto3.client('s3', region_name='us-east-1')
+        for key in keys:
+            s3.put_object(Bucket=bucket, Key=key, Body=b'old image')
+        paths = [f'https://cdn.example.test/{key}' for key in keys]
+
+        def stored():
+            return sorted(item['Key'] for item in s3.list_objects_v2(Bucket=bucket).get('Contents', [])
+                          if '/ol/' in item['Key'])
+    else:
+        paths = [f'app/static/media/{key}' for key in keys]
+        for path in paths:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'wb') as stored_file:
+                stored_file.write(b'old image')
+
+        def stored():
+            return sorted(path[len('app/static/media/'):] for path in paths if os.path.exists(path))
+
+    icon = File(file_path=paths[0], thumbnail_path=paths[1], file_name='oldiconfile0.png')
+    banner = File(file_path=paths[2], thumbnail_path=paths[3], file_name='oldbannerfil0.png')
+    db.session.add_all([icon, banner])
+    db.session.commit()
+    env.community.icon_id, env.community.image_id = icon.id, banner.id
+    db.session.commit()
+
+    def remove():
+        for path in paths:
+            if not path.startswith('https://') and os.path.exists(path):
+                os.unlink(path)
+
+    return SimpleNamespace(icon_id=icon.id, banner_id=banner.id, stored=stored,
+                           still_stored=lambda: stored() == sorted(keys), remove=remove)
+
+
 class TestEditingAnAccountAsAnAdmin:
     def payload(self, env, token, **overrides):
         data = {'about': '', 'matrix_user_id': '', 'hide_nsfw': '1',
