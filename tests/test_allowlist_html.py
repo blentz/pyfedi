@@ -911,6 +911,18 @@ class TestAllowlistRegexesAreLinear:
         assert_linear(self, [pump('<a href="</a>')],
                       lambda text: allowlist_html(text, test_env={'fn_string': 'fn-test'}))
 
+    def test_spoilers_match_what_they_matched(self):
+        old = re.compile(r':{3}\s*?spoiler\s+?(\S.+?)(?:\n|</p>)(.+?)(?:\n|<p>):{3}', re.S)
+        self.assert_same_subs(lambda text: old.sub(r'[\1|\2]', text),
+                              lambda text: sub_skipping(utils._SPOILER_RE, r'[\1|\2]', text),
+                              [':::', ' spoiler ', 'spoiler', ':::spoiler t\nb\n:::', 'x', '\n', '</p>', '<p>', ' '],
+                              count=4000, longest=10)
+
+    def test_unclosed_spoilers_are_read_in_linear_time(self):
+        """fuzz: redos_allowlist_html/spoiler_pump."""
+        assert_linear(self, [pump(':::spoiler x</p>'), pump(':::spoiler x ')],
+                      lambda text: allowlist_html(text, test_env={'fn_string': 'fn-test'}))
+
     def test_ruby_still_renders(self):
         result = allowlist_html('<p>{漢字|かんじ}</p>', test_env={'fn_string': 'fn-test'})
         assert result == '<p><ruby>漢字<rp>(</rp><rt>かんじ</rt><rp>)</rp></ruby></p>'
