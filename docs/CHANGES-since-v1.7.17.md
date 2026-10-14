@@ -433,9 +433,12 @@ limits on input that could cost seconds of CPU or crash a request:
   again for each GIF frame, ICO entry and TIFF tile, before a pixel is
   decoded. Pillow used to decode up to 179 MP, so a 6 KB PNG could cost seconds
   of CPU and hundreds of MB (`5ecefc65`).
-- **Link thumbnails from other servers are capped at 16 megapixels,**
-  counting every frame. A 29-byte GIF could declare a 37.7 MP screen. Larger
-  sources get no thumbnail. Local uploads keep the 50 MP cap (`97c29538`).
+- **Link thumbnails and federated images are capped at 16 megapixels,**
+  counting every frame. This covers link thumbnails and the background
+  resizing of images other servers send with posts, avatars, icons and
+  banners. A 29-byte GIF could declare a 37.7 MP screen. Larger sources get
+  no thumbnail or resized copies. Local uploads keep the 50 MP cap
+  (`97c29538`, `a1e63e87`).
 - **Stored images carry no EXIF or XMP.** With `MEDIA_IMAGE_FORMAT=AVIF`, the
   uploader's EXIF and XMP, including GPS position and camera make, were
   copied into the stored file. Every re-encoded image is now saved without
@@ -466,6 +469,9 @@ limits on input that could cost seconds of CPU or crash a request:
   defederation subscriptions and `flask init-db` all compare and store IPv6
   hosts canonically. Migration 26 rewrites existing rows (`283b7855`,
   `3419a94d`, `3c36e318`, `82f6e115`, `9d3510f9`).
+- **`flask init-db` adds no empty banned domain.** A blank line in the
+  No-QAnon or Peertube Isolation block list, such as the No-QAnon list's
+  trailing newline, used to add a banned Domain named `''` (`0d98d81e`).
 - **The admin ban-list upload** refuses a file that is not a ban list with a
   message (`10a21a6d`).
 - **NNTP clients.** An article body keeps its indentation and trailing
@@ -904,8 +910,9 @@ were committed as `fix:`.
   `bf3dd349`).
 
 - Images up to 179 MP, a few KB on the wire, were decoded at full size.
-  Images are now capped at 50 MP, and remote link thumbnails at 16 MP,
-  counting every frame (`5ecefc65`, `97c29538`).
+  Images are now capped at 50 MP, and remote link thumbnails and federated
+  images at 16 MP, counting every frame (`5ecefc65`, `97c29538`,
+  `a1e63e87`).
 - markdown2 constructs with quadratic cost could hold a request for minutes;
   they are neutralised and rendering is capped at 25,000 characters
   (`5ff48e37`).
@@ -1297,14 +1304,11 @@ PERM-1 to PERM-5.
 - **A GIF with many frames is not capped.** The 50 MP limit applies to each
   frame, not their total. A local icon upload of 400 frames at 2000x2000
   costs about 30 s and 3.3 GB. The owner chose not to add a frame cap. Remote
-  thumbnails are bounded by the 16 MP cap, which counts every frame.
-- **Open owner decisions from the fuzzing track:**
-  - whether the background resizing of federated images
-    (`make_image_sizes_async`) also gets the 16 MP remote cap;
-  - whether community creation, which stores an icon before its banner,
-    deletes the icon when the banner is refused, as the feed forms now do;
-  - whether `flask init-db` skips the empty Domain row a trailing newline in
-    a block list adds.
+  thumbnails and federated images are bounded by the 16 MP cap, which counts
+  every frame.
+- **Open owner decision from the fuzzing track:** whether community
+  creation, which stores an icon before its banner, deletes the icon when
+  the banner is refused, as the feed forms now do.
 - **Converted form buttons are not browser-verified.** The Join, Leave,
   notification-bell and feed buttons that changed from links to POST forms
   are covered by tests but have not been checked by hand in a browser.
