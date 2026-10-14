@@ -13,7 +13,7 @@ the user logs in as alice, as PieFedNNTPServer hides a community the user is ban
 import pytest
 
 from app.nntp.nntpserver import numbers_in_group, parse_datetime
-from tests.fuzz.targets.nntp import session_replies
+from tests.fuzz.targets.nntp import session_posts, session_replies
 
 READY = '201 NNTP Service Ready, posting prohibited'
 CLOSING = '205 Connection closing'
@@ -82,6 +82,18 @@ def test_an_unfinished_line_at_close_gets_no_reply():
 def test_a_command_that_is_not_utf8_closes_the_connection():
     """_getline decoded every line as UTF-8 unguarded, so one byte that is not killed the handler mid-session."""
     assert session_replies(b'GROUP \xff\r\nQUIT\r\n') == [READY, CLOSING]
+
+
+def test_an_article_from_an_lf_only_client_keeps_its_blank_lines():
+    """An LF-only blank line was skipped, so the blank line between an article's headers and its body vanished and
+    the body was read as more headers."""
+    assert session_posts(b'POST\nNewsgroups: a.example\nSubject: hi\n\nbody\n\n..more\n.\nQUIT\n') == [
+        'Newsgroups: a.example\nSubject: hi\n\nbody\n\n.more']
+    assert session_posts(b'POST\r\nSubject: hi\r\n\r\nbody\r\n.\r\nQUIT\r\n') == ['Subject: hi\n\nbody']
+
+
+def test_an_lf_only_blank_command_line_gets_no_reply():
+    assert session_replies(b'\n\nGROUP a.example\n\nQUIT\n') == [READY, '211 3 1 3 a.example', CLOSING]
 
 
 def test_an_article_line_that_is_not_utf8_closes_the_connection():

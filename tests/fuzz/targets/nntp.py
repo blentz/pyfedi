@@ -11,6 +11,8 @@ Properties, for every input:
 * every command line gets exactly one well-formed NNTP reply -- a status line with a three-digit code, and for a
   multi-line reply a block closed by "." (read as a client reads it, dropping the stuffed dot) -- so a client
   reading the replies in order stays in step with the commands it sent;
+* an article the server takes after POST is exactly the lines the client sent, blank lines included, each
+  without its CRLF or bare LF and its stuffed dot;
 * no line sent holds a CR or an LF of its own, and a reply carrying an article (HEAD, BODY, ARTICLE, OVER, HDR)
   carries exactly that article's header lines, body lines and overview fields, whatever its title, author or body
   say: a peer's text cannot end a reply early or forge the next one;
@@ -485,13 +487,15 @@ class _Replies:
                 assert line in self.infos, f'{command!r} sent {line!r}, not a message-id'
 
 
-def _check_conversation(config: bytes, stream: bytes, sent: bytes, groups, bodies) -> None:
-    """Walk the client's lines and the replies together; every command line gets its one reply."""
+def _check_conversation(config: bytes, stream: bytes, sent: bytes, groups, bodies, posted) -> None:
+    """Walk the client's lines and the replies together; every command line gets its one reply, and every article
+    the server takes (240) is exactly the lines the client sent, blank ones included, without their stuffed dots."""
     _auth, can_post, _subscriptions, _chunk = _server_config(config)
     replies = _Replies(sent, groups, bodies)
     greeting = replies.status('(connect)')
     assert greeting[:3] == ('200' if can_post else '201'), f'greeting {greeting!r}'
     lines = deque(_client_lines(stream))
+    posted = deque(text for _token, text in posted)
 
     def malformed(raw):
         try:
@@ -526,6 +530,7 @@ def _check_conversation(config: bytes, stream: bytes, sent: bytes, groups, bodie
             replies.check_block(text, status, replies.block(text))
         if code == '340':
             closed = False
+            article = []
             while True:
                 if not lines:
                     closed = True   # the client closed in the middle of the article: nothing more is owed
@@ -537,11 +542,16 @@ def _check_conversation(config: bytes, stream: bytes, sent: bytes, groups, bodie
                     break
                 if raw == b'.':
                     break
+                article.append(raw[1:] if raw.startswith(b'..') else raw)
             if closed:
                 break
             status = replies.status('(end of article)')
             assert status[:3] in ('240', '441'), f'an article got {status!r}'
+            if status[:3] == '240':
+                expected = b'\n'.join(article).decode('utf-8')
+                assert posted and posted.popleft() == expected, f'the server took an article other than {expected!r}'
     assert not replies.queue, f'replies nobody asked for: {list(replies.queue)[:4]!r}'
+    assert not posted, f'articles taken without a 240: {list(posted)!r}'
 
 
 def session_replies(stream: bytes, config: bytes = b'\x00\x05', **article) -> list[str]:
@@ -554,13 +564,21 @@ def session_replies(stream: bytes, config: bytes = b'\x00\x05', **article) -> li
     return bytes(sock.sent).decode('utf-8').split('\r\n')[:-1]
 
 
+def session_posts(stream: bytes, config: bytes = b'\x02\x05') -> list[str]:
+    """The articles the server is handed for one connection carrying `stream` (posting allowed without a login, by
+    default), as the text server.post receives -- for the regression tests in tests/test_nntpserver.py."""
+    groups, bodies = _groups_and_bodies()
+    server, _sock = _run_session(config, stream, groups, bodies)
+    return [text for _token, text in server.posted]
+
+
 def check_handler(data: bytes) -> None:
     """A whole connection: the input's command lines against three in-memory groups. See the module docstring."""
     config, stream = _fields(data, 2)
     stream = stream[:MAX_STREAM]
     groups, bodies = _groups_and_bodies()
-    _server, sock = _run_session(config, stream, groups, bodies)
-    _check_conversation(config, stream, bytes(sock.sent), groups, bodies)
+    server, sock = _run_session(config, stream, groups, bodies)
+    _check_conversation(config, stream, bytes(sock.sent), groups, bodies, server.posted)
 
 
 # The commands of check_article_framing: every reply that carries article 1, which the input writes.
@@ -585,8 +603,8 @@ def check_article_framing(data: bytes) -> None:
     groups, bodies = _groups_and_bodies(_text(subject[:MAX_ARGUMENT]), _text(from_[:MAX_ARGUMENT]),
                                         _text(body[:MAX_STREAM]))
     config = (config[:1] or b'\x00') + bytes([_CHUNKS.index(_MAXLINE + 1)])
-    _server, sock = _run_session(config, _FRAMING_SCRIPT, groups, bodies)
-    _check_conversation(config, _FRAMING_SCRIPT, bytes(sock.sent), groups, bodies)
+    server, sock = _run_session(config, _FRAMING_SCRIPT, groups, bodies)
+    _check_conversation(config, _FRAMING_SCRIPT, bytes(sock.sent), groups, bodies, server.posted)
 
 
 TARGETS = [
