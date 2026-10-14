@@ -2058,8 +2058,9 @@ def community_link_to_href(link: str, server_name_override: str | None = None) -
     else:
         server_name = current_app.config['SERVER_NAME']
 
-    code_placeholder = gibberish(10)
-    link_placeholder = gibberish(10)
+    # A NUL first: a placeholder of letters and digits right after a handle was read as more of its host.
+    code_placeholder = '\x00' + gibberish(10)
+    link_placeholder = '\x00' + gibberish(10)
 
     # Stash the <code> portions so they are not formatted
     code_snippets, link = stash_code_html(link, code_placeholder, _ANY_CODE_HTML_RE)
@@ -2086,8 +2087,9 @@ def feed_link_to_href(link: str, server_name_override: str | None = None) -> str
     else:
         server_name = current_app.config['SERVER_NAME']
 
-    code_placeholder = gibberish(10)
-    link_placeholder = gibberish(10)
+    # A NUL first: a placeholder of letters and digits right after a handle was read as more of its host.
+    code_placeholder = '\x00' + gibberish(10)
+    link_placeholder = '\x00' + gibberish(10)
 
     # Stash the <code> portions so they are not formatted
     code_snippets, link = stash_code_html(link, code_placeholder, _ANY_CODE_HTML_RE)
@@ -2114,8 +2116,9 @@ def person_link_to_href(link: str, server_name_override: str | None = None) -> s
     else:
         server_name = current_app.config['SERVER_NAME']
 
-    code_placeholder = gibberish(10)
-    link_placeholder = gibberish(10)
+    # A NUL first: a placeholder of letters and digits right after a handle was read as more of its host.
+    code_placeholder = '\x00' + gibberish(10)
+    link_placeholder = '\x00' + gibberish(10)
 
     # Stash the <code> portions so they are not formatted
     code_snippets, link = stash_code_html(link, code_placeholder, _ANY_CODE_HTML_RE)
