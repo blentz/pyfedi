@@ -1413,6 +1413,31 @@ class TestARemoteServerDoesNotChooseTheFileExtension:
             for path in left:
                 os.remove(path)
 
+    def test_a_later_frame_reaching_past_the_screen_is_not_decoded_at_that_size(self, app, http_mock, monkeypatch):
+        """Pillow grows a GIF's size to cover a frame that reaches past the logical screen, but only when it seeks
+        to that frame: n_frames walks the headers without growing it, so the cap check counts a 1x1 screen with a
+        second frame at (5999, 5999) as 2 pixels. That is honest for this path, which decodes frame 0 alone -- at
+        1x1. Seeking to frame 1 would decode a 6000x6000 canvas (36 MP), so this pins that nothing here does."""
+        import struct
+
+        from PIL import ImageFile
+
+        def frame(x, y):
+            return b',' + struct.pack('<HHHHB', x, y, 1, 1, 0) + b'\x02\x02\x44\x01\x00'
+
+        gif = b'GIF89a' + struct.pack('<HHBBB', 1, 1, 0, 0, 0) + frame(0, 0) + frame(5999, 5999) + b';'
+        decoded = []
+        real_load = ImageFile.ImageFile.load
+        monkeypatch.setattr(ImageFile.ImageFile, 'load', lambda img: decoded.append(img.size) or real_load(img))
+        result, left = self._fetch(app, http_mock, 'image/gif', content=gif)
+        try:
+            assert result is not None
+            assert set(decoded) == {(1, 1)}
+            assert (result.thumbnail_width, result.thumbnail_height) == (1, 1)
+        finally:
+            for path in left:
+                os.remove(path)
+
     @pytest.mark.parametrize('width, height, frames', [(4000, 4000, 1), (2000, 2000, 4)],
                              ids=['at_the_remote_cap', 'four_frames_at_it_together'])
     def test_an_image_at_the_remote_cap_is_still_thumbnailed(self, app, http_mock, width, height, frames):
