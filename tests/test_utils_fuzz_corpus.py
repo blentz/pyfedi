@@ -26,9 +26,12 @@ runs:
   seed (markdown_to_html/pump_image_links, budget 2000 ms) took 0.60 s alone,
   0.62 s under --cov (coverage's default sys.monitoring core; 0.96 s with
   COVERAGE_CORE=ctrace), and 1.2-1.3 s wall-clock but 0.82-0.84 s CPU beside 64
-  busy processes on 32 hardware threads: wall-clock is what made it flaky. With
-  markdown_to_html's rewrites switched off, nine of its twelve rewritten pump
-  seeds take 2.5-11 s of CPU, so the budget still catches their return.
+  busy processes on 32 hardware threads. CPU time still grows when the machine
+  slows (2047 ms in a full parallel suite run), so an input over its budget is
+  held to the budget times how much slower than nominal the machine runs a
+  fixed reference workload at that moment (machine_slowdown); see run_case.
+  With markdown_to_html's rewrites switched off, nine of its twelve rewritten
+  pump seeds take 2.5-11 s of CPU, so the budget still catches their return.
 
 The production change that would make these tests fail: any edit to a function
 listed in tests/fuzz/surfaces.py that breaks the property its target asserts --
@@ -40,6 +43,7 @@ makes a budgeted target's input exceed its budget.
 """
 
 import pathlib
+import re
 import time
 
 import pytest
@@ -89,23 +93,54 @@ def corpus_cases():
     return cases
 
 
-def run_case(target, data: bytes, clock=time.thread_time) -> None:
+def reference_work() -> int:
+    """A fixed piece of CPU-bound Python -- formatting, sorting, a regex scan --
+    whose time says how fast this machine is running Python right now."""
+    words = [str(i * 7919 % 100003) for i in range(80_000)]
+    return len(re.findall(r'[0-9]+7', ' '.join(sorted(words))))
+
+
+# reference_work's CPU time in the test container on an idle machine (AMD Ryzen
+# 9 7945HX, 2026-10-14), the machine every budget_ms was measured on.
+REFERENCE_WORK_MS = 44
+
+
+def machine_slowdown(clock=time.thread_time) -> float:
+    """How many times slower than nominal this machine runs reference_work now,
+    and never below 1: a faster machine does not tighten any budget."""
+    started = clock()
+    reference_work()
+    return max(1.0, (clock() - started) * 1000 / REFERENCE_WORK_MS)
+
+
+def run_case(target, data: bytes, clock=time.thread_time, slowdown=machine_slowdown) -> None:
     """Push one input through its target's check, then hold it to the budget.
 
     The check runs first and its AssertionError propagates untouched, so a
     property break is reported as itself and not as a slow input. The budget is
     the thread's CPU time around the check alone: reading the file is outside it.
 
-    `clock` is a parameter only so the budget assertion can be tested without a
-    genuinely slow check.
+    An input over its budget is held to the budget times machine_slowdown(),
+    measured then and only then. CPU time still grows when the machine slows:
+    beside other busy processes the cores clock down and share their units
+    (SMT), and in a full parallel suite run pump_image_links took 2047 ms of CPU
+    against its 0.60 s alone. reference_work slows by the same factor (its ratio
+    to the pump stayed 6.3-6.8, idle and beside 64 busy processes), so the
+    scaled budget allows for the machine, not for a slower function: a
+    regression is as many times slower than reference_work on any machine.
+
+    `clock` and `slowdown` are parameters only so the budget assertion can be
+    tested without a genuinely slow check or machine.
     """
     started = clock()
     target.check(data)
     elapsed_ms = (clock() - started) * 1000
-    if target.budget_ms is not None:
-        assert elapsed_ms <= target.budget_ms, (
+    if target.budget_ms is not None and elapsed_ms > target.budget_ms:
+        factor = slowdown()
+        assert elapsed_ms <= target.budget_ms * factor, (
             f'{target.name}: one input took {elapsed_ms:.0f} ms, over its '
-            f'{target.budget_ms} ms budget')
+            f'{target.budget_ms} ms budget ({target.budget_ms * factor:.0f} ms on '
+            f'this machine now, {factor:.2f} times slower than nominal)')
 
 
 @pytest.mark.parametrize('target,path', corpus_cases())
@@ -154,7 +189,31 @@ class TestRunCase:
     def test_an_input_over_its_budget_fails(self):
         target = self._target(lambda data: None, budget_ms=50)
         with pytest.raises(AssertionError, match='took 51 ms, over its 50 ms budget'):
-            run_case(target, b'x', clock=self._clock(10.0, 10.051))
+            run_case(target, b'x', clock=self._clock(10.0, 10.051), slowdown=lambda: 1.0)
+
+    def test_an_input_over_its_budget_on_a_slowed_machine_is_held_to_the_scaled_budget(self):
+        target = self._target(lambda data: None, budget_ms=2000)
+        run_case(target, b'x', clock=self._clock(0.0, 2.9), slowdown=lambda: 1.5)
+        with pytest.raises(AssertionError, match=r'took 3100 ms, over its 2000 ms budget \(3000 ms on this machine'):
+            run_case(target, b'x', clock=self._clock(0.0, 3.1), slowdown=lambda: 1.5)
+
+    def test_the_machine_is_measured_only_when_an_input_is_over_its_budget(self):
+        def never():
+            raise AssertionError('measured the machine for an input within its budget')
+        run_case(self._target(lambda data: None, budget_ms=50), b'x', clock=self._clock(0.0, 0.05), slowdown=never)
+
+    def test_the_slowdown_is_the_reference_work_against_its_nominal_time_and_never_below_one(self):
+        nominal = REFERENCE_WORK_MS / 1000
+        assert machine_slowdown(clock=self._clock(5.0, 5.0 + 2 * nominal)) == pytest.approx(2.0)
+        assert machine_slowdown(clock=self._clock(5.0, 5.0 + nominal / 3)) == 1.0
+
+    def test_the_reference_work_takes_about_its_nominal_time_on_an_idle_machine(self):
+        """REFERENCE_WORK_MS is a measurement: re-measure it if the reference work changes. A loose check, since
+        the suite may share the machine; it catches a reference that is now ten times lighter or heavier."""
+        started = time.thread_time()
+        reference_work()
+        elapsed_ms = (time.thread_time() - started) * 1000
+        assert REFERENCE_WORK_MS / 10 < elapsed_ms < REFERENCE_WORK_MS * 10
 
     def test_an_input_exactly_at_its_budget_passes(self):
         target = self._target(lambda data: None, budget_ms=50)
@@ -169,7 +228,7 @@ class TestRunCase:
             raise AssertionError('property broke')
         target = self._target(breaks, budget_ms=1)
         with pytest.raises(AssertionError, match='property broke'):
-            run_case(target, b'x', clock=self._clock(0.0, 99.0))
+            run_case(target, b'x', clock=self._clock(0.0, 99.0), slowdown=lambda: 1.0)
 
     def test_time_the_check_spends_waiting_is_not_held_against_its_budget(self):
         """The budget is the check's CPU time: wall-clock time also counted every moment the scheduler gave the
@@ -182,7 +241,7 @@ class TestRunCase:
             while time.thread_time() - started < 0.1:
                 pass
         with pytest.raises(AssertionError, match='over its 50 ms budget'):
-            run_case(self._target(spin, budget_ms=50), b'x')
+            run_case(self._target(spin, budget_ms=50), b'x', slowdown=lambda: 1.0)
 
     def test_the_check_receives_the_bytes_unchanged(self):
         seen = []
