@@ -1,12 +1,34 @@
 from flask import Blueprint, current_app, jsonify
-from flask_smorest import Blueprint as ApiBlueprint
+from flask_smorest import Blueprint as SmorestBlueprint
 from flask_limiter import RateLimitExceeded
 from marshmallow import ValidationError
 from sqlalchemy.orm.exc import NoResultFound
 import sentry_sdk
+from webargs.flaskparser import FlaskParser
 from werkzeug.exceptions import HTTPException, UnprocessableEntity
 
 from app.models import PostReplyValidationError
+
+
+
+class ApiArgumentsParser(FlaskParser):
+    """webargs' parser, except that a JSON body nested too deeply to decode is refused like any other invalid JSON.
+
+    json.loads raises RecursionError for one, and webargs turns only JSONDecodeError and UnicodeDecodeError into its
+    400 "Invalid JSON body.", so the RecursionError reached shared_error_handler and was answered as an internal error,
+    a 500 -- for a body anyone can send before any login check, since arguments are parsed before the view runs.
+    """
+
+    def _raw_load_json(self, req):
+        try:
+            return super()._raw_load_json(req)
+        except RecursionError as error:
+            return self._handle_invalid_json_error(error, req)
+
+
+class ApiBlueprint(SmorestBlueprint):
+    ARGUMENTS_PARSER = ApiArgumentsParser()
+
 
 # Non-documented routes in swagger UI
 bp = Blueprint('api_alpha', __name__)
