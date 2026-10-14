@@ -42,7 +42,7 @@ from PIL import Image
 
 from app import db
 from app.activitypub.util import make_image_sizes, make_image_sizes_async
-from app.constants import IMAGE_PIXEL_CAP
+from app.constants import IMAGE_PIXEL_CAP, REMOTE_THUMBNAIL_PIXEL_CAP
 from app.models import File, Post, Site
 from app.utils import MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS
 from tests.factories import (make_community, make_community_member, make_file,
@@ -239,6 +239,64 @@ class TestAnImageOverThePixelCap:
         stored = cleanup(file)
         assert stored.file_path is None and stored.thumbnail_path is None
         assert glob.glob('app/static/media/posts/pi/xe/pixelcapprobe00*') == []
+
+
+class TestAnImageOverTheRemoteThumbnailCap:
+    """REMOTE_THUMBNAIL_PIXEL_CAP (16 MP, width x height x frames). Every image this task resizes is a peer's -- a
+    federated post's image, an avatar, an icon, a banner -- and one between 16 and 50 MP was decoded at full size
+    and copied twice over. It is refused at its header now, right after Image.open and before exif_transpose or
+    anything else decodes it, with the ValueError refuse_over_remote_thumbnail_cap raises: the task fails as it
+    does for an image Pillow will not open, it is not retried, and nothing is written or recorded."""
+
+    @staticmethod
+    def _png(size, mode='1'):
+        buffer = io.BytesIO()
+        Image.new(mode, size).save(buffer, format='PNG')
+        return buffer.getvalue()
+
+    @staticmethod
+    def _load_spy(cls):
+        return patch.object(cls, 'load', autospec=True, side_effect=cls.load)
+
+    def _refused(self, env, monkeypatch, content, content_type, source, directory, image_class):
+        import glob
+        file = a_file(env, source)
+        monkeypatch.setattr('app.activitypub.util.gibberish', lambda length: 'remotecapprobe0')
+        with self._load_spy(image_class) as load, pytest.raises(ValueError, match='remote thumbnail cap'):
+            run(file, answered_with(content, content_type), directory=directory)
+        assert load.call_count == 0
+        stored = cleanup(file)
+        assert stored.file_path is None and stored.thumbnail_path is None
+        assert stored.width is None and stored.thumbnail_width is None
+        assert glob.glob(f'app/static/media/{directory}/re/mo/remotecapprobe0*') == []
+
+    def test_a_post_image_just_over_the_cap_is_never_decoded(self, env, monkeypatch):
+        from PIL import ImageFile
+        assert 4001 * 4000 > REMOTE_THUMBNAIL_PIXEL_CAP >= 4001 * 4000 - 4000
+        self._refused(env, monkeypatch, self._png((4001, 4000)), 'image/png', SOURCE, 'posts', ImageFile.ImageFile)
+
+    def test_every_frame_counts(self, env, monkeypatch):
+        from PIL import ImageFile
+        monkeypatch.setattr('app.utils.REMOTE_THUMBNAIL_PIXEL_CAP', 300 * 300)
+        buffer = io.BytesIO()
+        frames = [Image.new('RGBA', (300, 300), (n, 0, 0, 255)) for n in (0, 255)]
+        frames[0].save(buffer, format='PNG', save_all=True, append_images=frames[1:])
+        self._refused(env, monkeypatch, buffer.getvalue(), 'image/png', SOURCE, 'posts', ImageFile.ImageFile)
+
+    @pytest.mark.parametrize('directory', ['communities', 'users'])
+    def test_an_avif_icon_that_keeps_its_format_is_refused_too(self, env, monkeypatch, directory):
+        import pillow_avif  # NOQA
+        from pillow_avif.AvifImagePlugin import AvifImageFile
+        monkeypatch.setattr('app.utils.REMOTE_THUMBNAIL_PIXEL_CAP', 400 * 300 - 1)
+        self._refused(env, monkeypatch, image_bytes(400, 300, fmt='AVIF'), 'image/avif',
+                      'https://remote.test/media/icon.avif', directory, AvifImageFile)
+
+    def test_an_image_at_the_cap_still_gets_its_sizes(self, env):
+        file = a_file(env)
+        stored = run(file, answered_with(self._png((4000, 4000))))
+        assert 4000 * 4000 == REMOTE_THUMBNAIL_PIXEL_CAP
+        assert (stored.width, stored.height) == (120, 120)
+        assert (stored.thumbnail_width, stored.thumbnail_height) == (50, 50)
 
 
 class TestAnAvifCarriesNoMetadata:
