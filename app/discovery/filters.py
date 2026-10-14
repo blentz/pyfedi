@@ -105,7 +105,7 @@ def request_host(url) -> str | None:
     if target.userinfo or not host or stdlib_host is None:
         return None
     host = host.rstrip('.').lower()
-    if strict_ascii_host(stdlib_host) != host:
+    if not host or strict_ascii_host(stdlib_host) != host:   # a host of dots alone is empty once they go
         return None
     return host
 
