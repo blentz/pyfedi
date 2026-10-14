@@ -38,12 +38,23 @@ import atheris
 # SQLAlchemy, boto3, lxml's Python shims -- would spend the budget guiding the
 # mutator towards branches in third-party libraries that are not under test.
 #
+# PIL is the one exception. The image targets (tests/fuzz/targets/images.py)
+# exist to drive Pillow's format parsers, and most of those are Python -- the
+# plugin modules read headers, chunks and frame tables before any C decoder
+# runs. Left out, a 60s upload_decode run plateaued at cov 38: every input
+# looked alike to libFuzzer, because only the harness's own branches counted.
+# images.py calls Image.init() at import, inside this block, so the plugins
+# Pillow otherwise imports lazily on the first unknown format are loaded --
+# and instrumented -- here.
+#
 # tests.fuzz.campaign is what imports tests.fuzz.targets, so importing it here
 # is what pulls the registry, and every function its checks call, through the
 # hook. TARGETS comes from there and is tests.fuzz.targets.REGISTRY itself;
 # tests/test_fuzz_registry.py checks this file's source takes it from nowhere
 # else, without importing this file.
-with atheris.instrument_imports(include=['app', 'tests']):
+INSTRUMENTED = ['app', 'tests', 'PIL']
+
+with atheris.instrument_imports(include=INSTRUMENTED):
     from tests.fuzz.campaign import (TARGETS, WORK_ROOT, build_test_app,
                                      campaign_argv, select_target)
 
@@ -61,7 +72,7 @@ def main(argv=None):
         atheris.Fuzz()
         return 0
 
-    with atheris.instrument_imports(include=['app', 'tests']):
+    with atheris.instrument_imports(include=INSTRUMENTED):
         application = build_test_app()
     # One context for the whole campaign, pushed before Fuzz() and never
     # popped: atheris.Fuzz() does not return, it exits the process when
