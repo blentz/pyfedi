@@ -151,6 +151,12 @@ class TestLinksWithParens:
         html = '<a name="x">y)</a>)'
         assert links_with_parens(html) == html
 
+    def test_a_link_dropped_with_its_outer_link_is_skipped(self):
+        """Moving a ')' out of a link rewrites its content as text, which detaches a link nested in it; reaching
+        that detached link, insert_after raised ValueError out of markdown_to_html (fuzz: markdown_preprocessors/
+        links_with_parens_nested_unbalanced)."""
+        assert links_with_parens('<a href="x)">a<a href="y)">b)</a></a>') == '<a href="x">ab</a>)'
+
     def test_balanced_link_is_untouched(self):
         html = '<a href="https://example.com/(x)">(x)</a>'
         assert links_with_parens(html) == html

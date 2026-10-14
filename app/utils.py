@@ -1663,6 +1663,8 @@ def links_with_parens(text: str) -> str:
         target_url = link.get("href")
         if target_url is None:
             continue  # an <a name=...> has no URL whose parens could need balancing
+        if link.parent is None:
+            continue  # nested in a link already rewritten as text below, and dropped with its content
         contents = link.text
         following_text = link.next_sibling
 
