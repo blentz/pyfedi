@@ -39,6 +39,14 @@ class TestInboxDomain:
     def test_the_empty_string_survives(self):
         assert inbox_domain('') == ''
 
+    def test_an_ipv6_literal_is_put_in_one_spelling(self):
+        """Owner ruling 2026-10-13: [0:0::1] and [::1] are one address, so they are one domain -- ipaddress's
+        compressed form, unbracketed as urlparse gives a URL's host. A bare literal (the admin's blocklist box, a
+        User-Agent's claimed host read by url_host, which keeps the brackets) is put in the same form."""
+        spellings = ('https://[0:0::1]/inbox', 'https://[0:0:0:0:0:0:0:1]:8443/inbox', 'https://[::1]/inbox',
+                     '[0:0::1]', '0:0::1', '::1')
+        assert {inbox_domain(spelling) for spelling in spellings} == {'::1'}
+
 
 class TestInstanceAllowed:
     def test_a_bare_domain_matches_its_row(self, app, db_session):
@@ -92,6 +100,12 @@ class TestInstanceBanned:
         db.session.add(BannedInstances(domain='banned.example'))
         db.session.commit()
         assert instance_banned('https://Banned.Example/u/bob/inbox') is True
+
+    def test_a_ban_on_an_ipv6_address_matches_every_spelling(self, app, db_session):
+        db.session.add(BannedInstances(domain=inbox_domain('[::1]')))
+        db.session.commit()
+        assert instance_banned('https://[0:0::1]/u/bob/inbox') is True
+        assert instance_banned('[0:0:0:0:0:0:0:1]') is True
 
     def test_surrounding_whitespace_is_ignored(self, app, db_session):
         db.session.add(BannedInstances(domain='banned.example'))
