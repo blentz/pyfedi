@@ -259,3 +259,31 @@ class TestRateLimiting:
         code, body = handled(app, RateLimitExceeded(_Limit()))
 
         assert code == 429
+
+
+class TestAJsonBodyTooDeepToDecode:
+    """Found by the api_request_args fuzz target. A JSON body nested deeply enough
+    exhausts the decoder's stack: `json.loads` raises RecursionError, and webargs,
+    which turns a JSONDecodeError or UnicodeDecodeError into a 400 "Invalid JSON
+    body.", let it through, so this handler answered it as an internal error -- a 500,
+    a logged traceback and a Sentry event, for a request anyone can send before any
+    login check, since arguments are parsed before the view body runs."""
+
+    def test_it_is_refused_as_invalid_json(self, app, db_session):
+        client = app.test_client()
+
+        response = client.post('/api/alpha/post', data=b'[' * 100_000, content_type='application/json')
+
+        assert response.status_code == 400
+        assert response.get_json()['code'] == 400
+
+    def test_a_merely_nested_body_still_reaches_the_schema(self, app, db_session):
+        """The parser still decodes nesting it can handle: this body is valid JSON and is
+        refused by the schema, as a validation failure, not as invalid JSON."""
+        client = app.test_client()
+
+        response = client.post('/api/alpha/post', data=b'[' * 100 + b']' * 100,
+                               content_type='application/json')
+
+        assert response.status_code == 400
+        assert response.get_json()['message'] == 'Validation failed'
