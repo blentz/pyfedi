@@ -331,6 +331,50 @@ def test_an_upload_the_saver_rejects_leaves_no_avatar(users_admin):
     assert created.avatar is None
 
 
+def _a_png():
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new('RGB', (8, 8), (10, 20, 30)).save(buffer, format='PNG')
+    buffer.seek(0)
+    return buffer
+
+
+@pytest.mark.parametrize('uploads', ['avatar and banner', 'banner'])
+@pytest.mark.parametrize('storage', ['local', 's3'])
+def test_an_avatar_stored_before_its_banner_is_refused_is_removed(app, users_admin, monkeypatch, request, storage,
+                                                                  uploads):
+    """save_icon_file stores the new account's avatar, every size, locally or in the bucket; then save_banner_file
+    refuses the banner with its 400 and the account is never made. The avatar was left behind, referred to by
+    nothing. It is deleted again now, and the 400 stands."""
+    import glob
+
+    import boto3
+
+    client, token, roles, admin = users_admin
+    if storage == 's3':
+        bucket = request.getfixturevalue('s3_bucket')
+        for key, value in (('S3_ACCESS_KEY', 'test-key'), ('S3_ACCESS_SECRET', 'test-secret'),
+                           ('S3_ENDPOINT', 'https://s3.amazonaws.com'), ('S3_REGION', 'us-east-1'),
+                           ('S3_BUCKET', bucket), ('S3_PUBLIC_URL', 'cdn.example.test')):
+            monkeypatch.setitem(app.config, key, value)
+    names = iter(['storedavatarfi', 'refusedbanner0'] if uploads == 'avatar and banner' else ['refusedbanner0'])
+    monkeypatch.setattr('app.community.util.gibberish', lambda length: next(names) + '0')
+    files = {'banner_file': (io.BytesIO(b'not an image at all'), 'banner.png')}
+    if uploads == 'avatar and banner':
+        files['profile_file'] = (_a_png(), 'avatar.png')
+
+    response, render, finalize = _add(client, token, **files)
+
+    assert response.status_code == 400
+    assert User.query.filter_by(user_name='newbie').count() == 0
+    for name in ('storedavatarfi0', 'refusedbanner00'):
+        assert glob.glob(f'app/static/media/users/{name[0:2]}/{name[2:4]}/{name}*') == []
+        assert glob.glob(f'app/static/tmp/{name}*') == []
+    if storage == 's3':
+        assert boto3.client('s3', region_name='us-east-1').list_objects_v2(Bucket=bucket).get('Contents', []) == []
+
+
 def test_a_duplicate_email_is_refused(users_admin):
     """`AddUserForm.validate_email`. The form's own validator, pinned here
     because the refusal arm is what renders the page again."""
