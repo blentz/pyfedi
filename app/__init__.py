@@ -4,7 +4,7 @@
 import logging
 from logging.handlers import SMTPHandler, RotatingFileHandler
 import os
-from flask import Flask, request, current_app, session, g, has_app_context
+from flask import Flask, Request, request, current_app, session, g, has_app_context
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_login import LoginManager, current_user
@@ -16,7 +16,9 @@ from flask_compress import Compress
 from flask_limiter import Limiter
 from flask_smorest import Api
 from flask_bcrypt import Bcrypt
+from werkzeug.exceptions import BadRequest
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.utils import cached_property
 from celery import Celery
 from celery.signals import task_prerun
 from sqlalchemy_searchable import make_searchable
@@ -124,6 +126,33 @@ rest_api = Api()
 app_bcrypt = Bcrypt()
 
 
+class QueryStringNotUtf8(UnicodeDecodeError, BadRequest):
+    """A raw query string that is not UTF-8: a 400, and still the UnicodeDecodeError Werkzeug raised.
+
+    A BadRequest, so wherever it escapes Flask answers it as a 400; a UnicodeDecodeError, so the API's
+    ApiArgumentsParser.load_querystring, which catches that, refuses it in the API's own shape as before."""
+
+    def __init__(self, error: UnicodeDecodeError):
+        UnicodeDecodeError.__init__(self, error.encoding, error.object, error.start, error.end, error.reason)
+        BadRequest.__init__(self, 'The query string is not UTF-8.')
+
+
+class PieFedRequest(Request):
+    """Flask's Request, except that request.args refuses a query string that is not UTF-8 with a 400.
+
+    Werkzeug decodes the raw query string as strict UTF-8 the first time request.args (or request.values) is read,
+    so a raw byte such as 0xD1 in any URL raised UnicodeDecodeError out of whatever read it first -- a view, a hook,
+    a template -- and was answered as a 500. Refusing it here, where the decode happens, rather than in an
+    errorhandler(UnicodeDecodeError), leaves a UnicodeDecodeError raised by application code the 500 it was."""
+
+    @cached_property
+    def args(self):
+        try:
+            return super().args
+        except UnicodeDecodeError as error:
+            raise QueryStringNotUtf8(error) from error
+
+
 class StripCookieVaryForAnonymous:
     """WSGI middleware that removes 'Cookie' from the Vary header for requests
     that have no session cookie. This allows Cloudflare to cache responses for
@@ -154,6 +183,7 @@ class StripCookieVaryForAnonymous:
 
 def create_app(config_class=Config):
     app = Flask(__name__)
+    app.request_class = PieFedRequest
     app.config.from_object(config_class)
     if app.config['HTTP_PROTOCOL'] == 'mixed':  # mixed mode is for instances like retro.piefed.com which has a web ui that uses http while federation happens over https
         app.config["SERVER_URL"] = f"https://{app.config['SERVER_NAME']}"
