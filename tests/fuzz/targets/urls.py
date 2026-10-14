@@ -30,6 +30,7 @@ from urllib.parse import parse_qsl, unquote_to_bytes, urlparse, urlsplit
 
 import httpx
 from flask import current_app
+from furl import furl
 from werkzeug.exceptions import HTTPException
 
 import app.activitypub.routes as ap_routes
@@ -614,11 +615,17 @@ _TRACKING = ('utm_', 'at_', 'traffic_source')
 
 def check_strip_tracking(data: bytes) -> None:
     """strip_tracking, which every RSS-imported item's link goes through: never raises, always gives a str, and the
-    query of what it gives has no parameter named with a tracking prefix."""
+    query of what it gives has no parameter named with a tracking prefix -- except for a link furl cannot read,
+    which has no query furl can strip and comes back unchanged."""
     text = _text(data[:MAX_INPUT])
     stripped = strip_tracking(text)
     assert isinstance(stripped, str), f'strip_tracking gave {stripped!r}'
     assert strip_tracking(None) == '' and strip_tracking('') == ''
+    try:
+        furl(text)
+    except ValueError:
+        assert stripped == text, f'strip_tracking changed {text!r}, which furl cannot read'
+        return
     try:
         query = urlsplit(stripped).query
     except ValueError:
