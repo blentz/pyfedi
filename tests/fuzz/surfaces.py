@@ -257,6 +257,7 @@ SURFACES: dict[str, list[str]] = {
     ],
     # Uploaded import files (T6): the settings import JSON and the Mastodon follows CSV, up to the first lookup.
     'imports': [
+        'app.user.routes.settings_import_contents',
         'app.user.routes.import_entries',
         'app.instance.util.mastodon_csv_handles',
     ],

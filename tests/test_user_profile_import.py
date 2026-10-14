@@ -889,6 +889,51 @@ def test_every_import_key_is_capped(app, env):
     assert find.call_count == SETTINGS_IMPORT_MAX_ENTRIES * 3
 
 
+def run_import_of_stored(app, user, stored):
+    """The task reading `stored` from Redis as it is, through its own json.loads."""
+    from app.user.routes import import_settings_task
+
+    with patch('app.redis_client', create=True) as redis:
+        redis.get.return_value = stored
+        with patch('app.user.routes.find_actor_or_create',
+                   return_value=None) as find:
+            import_settings_task(user.id, 'a-redis-key')
+    return find
+
+
+@pytest.mark.parametrize('stored', [
+    b'[{"followed_communities": ["https://other.example/c/x"]}]',
+    b'"followed_communities"',
+    b'null',
+    b'followed_communities=https://other.example/c/x',
+    b'{"blocked_users": ["\xff"]}',
+    b'[' * 100_000,
+    None,
+], ids=['top_level_list', 'top_level_string', 'null', 'not_json', 'not_utf8', 'nested_past_the_decoder_stack',
+        'expired_from_redis'])
+def test_a_file_that_is_not_a_json_object_imports_nothing(app, env, stored):
+    """Found by the settings_import fuzz target. The upload is checked for a .json
+    extension and nothing else, and the task did `json.loads(contents).get(...)`: a
+    top-level list or string raised AttributeError, a file that is not JSON (or not
+    UTF-8, or nested past the decoder's stack) raised out of json.loads, and a key that
+    expired in Redis before the worker ran was json.loads(None). Each failed the task --
+    and, on a debug server, which runs it inline, the request -- instead of importing
+    nothing."""
+    client, viewer, other = env
+
+    find = run_import_of_stored(app, viewer, stored)
+
+    assert find.call_args_list == []
+
+
+def test_a_stored_json_object_is_still_imported(app, env):
+    client, viewer, other = env
+
+    find = run_import_of_stored(app, viewer, b'{"blocked_users": ["https://other.example/u/x"]}')
+
+    assert [c.args[0] for c in find.call_args_list] == ['https://other.example/u/x']
+
+
 def test_an_import_for_a_user_who_has_since_gone(app, env):
     """D1048. The task is queued and runs later, so the account can be gone by
     the time it does -- and every arm dereferences `user`. Measured with an
@@ -1354,10 +1399,12 @@ def test_an_import_that_fails_rolls_back(app, env):
     client, viewer, other = env
 
     with patch('app.user.routes.json.loads',
-               side_effect=ValueError('not json')):
+               return_value={'blocked_users': ['https://other.example/u/x']}):
         with patch('app.redis_client', create=True):
-            with pytest.raises(ValueError):
-                import_settings_task(viewer.id, 'a-redis-key')
+            with patch('app.user.routes.find_actor_or_create',
+                       side_effect=RuntimeError('lookup failed')):
+                with pytest.raises(RuntimeError):
+                    import_settings_task(viewer.id, 'a-redis-key')
 
 
 def test_backfilling_runs_inline_in_debug(app, env):

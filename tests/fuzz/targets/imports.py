@@ -22,7 +22,7 @@ import csv
 import json
 
 from app.instance.util import is_fedi_handle, mastodon_csv_handles
-from app.user.routes import SETTINGS_IMPORT_MAX_ENTRIES, import_entries
+from app.user.routes import SETTINGS_IMPORT_MAX_ENTRIES, import_entries, settings_import_contents
 from tests.fuzz.targets._target import Target
 
 # A settings export is a few kilobytes and the upload cap is 5 MiB; a longer fuzz input says nothing a shorter one
@@ -34,11 +34,6 @@ SETTINGS_KEYS = ('followed_communities', 'blocked_communities', 'blocked_users',
                  'saved_posts', 'saved_comments')
 
 
-def _task_contents(data: bytes):
-    """What import_settings_task does with the stored upload before reading any key."""
-    return json.loads(data)
-
-
 def well_formed_entry(key: str, entry) -> bool:
     """The shape the task uses an entry of `key` as."""
     if key == 'user_notes':
@@ -46,12 +41,24 @@ def well_formed_entry(key: str, entry) -> bool:
     return isinstance(entry, str)
 
 
+def _reference_contents(data: bytes) -> dict:
+    try:
+        value = json.loads(data)
+    except (ValueError, RecursionError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 def check_settings_import(data: bytes) -> None:
-    contents = _task_contents(data[:MAX_INPUT])
+    data = data[:MAX_INPUT]
+    contents = settings_import_contents(data)
+    assert isinstance(contents, dict), f'settings_import_contents gave a {type(contents).__name__}'
+    # Keys, not equality: a NaN in the file is a float that is unequal to itself.
+    assert list(contents) == list(_reference_contents(data)), 'a JSON object was not read as itself'
     for key in SETTINGS_KEYS:
         entries = import_entries(contents, key)
         assert isinstance(entries, list), f'{key}: {type(entries).__name__}'
-        raw = contents.get(key) if isinstance(contents, dict) else None
+        raw = contents.get(key)
         listed = raw[:SETTINGS_IMPORT_MAX_ENTRIES] if isinstance(raw, list) else []
         assert entries == [entry for entry in listed if well_formed_entry(key, entry)], (
             f'{key}: {entries!r:.300} from {raw!r:.300}')
