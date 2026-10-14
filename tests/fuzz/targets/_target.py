@@ -22,7 +22,7 @@ class Target:
                  calls it inside the ordinary suite.
     surface   -- key into tests.fuzz.surfaces.SURFACES: which production entry
                  points this target stands for.
-    budget_ms -- per-input wall-clock budget the corpus replay enforces, or None
+    budget_ms -- per-input CPU-time budget the corpus replay enforces, or None
                  for untimed. Set about ten times the slowest committed seed, so
                  CI noise cannot flake it but a ReDoS seed (committed at a size
                  that takes seconds on the vulnerable regex) fails loudly. The

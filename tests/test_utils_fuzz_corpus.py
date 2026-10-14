@@ -17,9 +17,18 @@ runs:
   from TestConfig with its context pushed). That fixture skips when
   TEST_DATABASE_URL is unset, so those cases need ./run_tests.sh; the
   sanitizer targets do not, and still replay from a bare checkout.
-* budget_ms -- the case also fails if one input takes longer than that, by
-  time.perf_counter. This is the ReDoS gate: a slow input is the finding, so it
-  has to fail the deterministic suite, not only a campaign.
+* budget_ms -- the case also fails if one input takes longer than that, in CPU
+  time of the thread running it (time.thread_time). This is the ReDoS gate: a
+  slow input is the finding, so it has to fail the deterministic suite, not only
+  a campaign. CPU time, not wall-clock: a backtracking regex or a quadratic
+  parser is CPU-bound, while wall-clock also counts the time the scheduler gives
+  the CPU to other work. Measured 2026-10-14 in the test container, the slowest
+  seed (markdown_to_html/pump_image_links, budget 2000 ms) took 0.60 s alone,
+  0.62 s under --cov (coverage's default sys.monitoring core; 0.96 s with
+  COVERAGE_CORE=ctrace), and 1.2-1.3 s wall-clock but 0.82-0.84 s CPU beside 64
+  busy processes on 32 hardware threads: wall-clock is what made it flaky. With
+  markdown_to_html's rewrites switched off, nine of its twelve rewritten pump
+  seeds take 2.5-11 s of CPU, so the budget still catches their return.
 
 The production change that would make these tests fail: any edit to a function
 listed in tests/fuzz/surfaces.py that breaks the property its target asserts --
@@ -80,12 +89,12 @@ def corpus_cases():
     return cases
 
 
-def run_case(target, data: bytes, clock=time.perf_counter) -> None:
+def run_case(target, data: bytes, clock=time.thread_time) -> None:
     """Push one input through its target's check, then hold it to the budget.
 
     The check runs first and its AssertionError propagates untouched, so a
     property break is reported as itself and not as a slow input. The budget is
-    wall-clock around the check alone: reading the file is outside it.
+    the thread's CPU time around the check alone: reading the file is outside it.
 
     `clock` is a parameter only so the budget assertion can be tested without a
     genuinely slow check.
@@ -161,6 +170,19 @@ class TestRunCase:
         target = self._target(breaks, budget_ms=1)
         with pytest.raises(AssertionError, match='property broke'):
             run_case(target, b'x', clock=self._clock(0.0, 99.0))
+
+    def test_time_the_check_spends_waiting_is_not_held_against_its_budget(self):
+        """The budget is the check's CPU time: wall-clock time also counted every moment the scheduler gave the
+        CPU to other work, so the pump seeds failed under coverage beside other test files and campaigns."""
+        run_case(self._target(lambda data: time.sleep(0.2), budget_ms=50), b'x')
+
+    def test_cpu_time_the_check_spends_is_held_against_its_budget(self):
+        def spin(data):
+            started = time.thread_time()
+            while time.thread_time() - started < 0.1:
+                pass
+        with pytest.raises(AssertionError, match='over its 50 ms budget'):
+            run_case(self._target(spin, budget_ms=50), b'x')
 
     def test_the_check_receives_the_bytes_unchanged(self):
         seen = []
