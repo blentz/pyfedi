@@ -183,6 +183,19 @@ def test_allowlist_mode_excludes_hosts_not_on_the_list(app, db_session):
     assert filters.host_is_excluded('other.example', frozenset()) is True
 
 
+def test_a_banned_ipv6_domain_excludes_every_spelling_of_it(app, db_session):
+    """Owner ruling 2026-10-13: [0:0::1] and [::1] are one address, and Domain names hold an IPv6 literal in
+    canonical_host's form ('::1'), so the host request_host reads ('0:0::1') is put in that form before the
+    banned-Domain comparison, both the per-host query and the in-memory set a refresh reads up front."""
+    db.session.add(Domain(name='::1', banned=True))
+    db.session.commit()
+
+    assert filters.url_is_excluded('https://[0:0::1]/x') is True
+    assert filters.host_is_excluded('0:0:0:0:0:0:0:1', frozenset()) is True
+    assert filters.host_is_excluded('0:0::1', frozenset(), filters.banned_domain_names()) is True
+    assert filters.host_is_excluded('::2', frozenset(), filters.banned_domain_names()) is False
+
+
 def test_an_overlong_actor_url_is_skipped_not_fatal(app, db_session, only):
     long_slug = 'x' * filters.URL_LIMIT
     only('sepiasearch', [entry(name='Too long', slug=long_slug), entry(name='Fine')])
