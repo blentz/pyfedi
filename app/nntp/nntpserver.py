@@ -706,7 +706,8 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
         if b"\n" in self._buffer:
             line = self._buffer[: self._buffer.find(b"\n")]
             self._buffer = self._buffer[len(line) + 1 :]
-        while not line:
+        # A blank line leaves `line` empty: take the next buffered line rather than read more past it.
+        while not line and b"\n" not in self._buffer:
             chunk = self.request.recv(_MAXLINE + 1)
             self._buffer += chunk
             if b"\n" in chunk or not chunk.strip():
