@@ -832,21 +832,31 @@ def save_icon_file(icon_file, directory='communities') -> File:
         img_width = img.width
         img_height = img.height
 
-        # Use scale_gif for resizing animated GIFs
-        if img.width > 250 or img.height > 250:
-            scale_gif(final_place, (250, 250))
-            img = Image.open(final_place)
-            img_width = img.width
-            img_height = img.height
-
-        # Create thumbnail
         final_ext = file_ext.lower()
         thumbnail_ext = '.gif'
         final_place_thumbnail = os.path.join(local_directory, new_filename + '_thumbnail.gif')
-        scale_gif(final_place, (40, 40), final_place_thumbnail)
-        img_thumb = Image.open(final_place_thumbnail)
-        thumbnail_width = img_thumb.width
-        thumbnail_height = img_thumb.height
+        # Pillow can decode a GIF it cannot write back: scale_gif gives every frame the first one's duration, the
+        # writer merges identical consecutive frames by adding theirs, and past the format's 16-bit delay it raises
+        # struct.error. Like open_upload_image, refuse what Pillow raises with a 400 and remove the upload.
+        try:
+            # Use scale_gif for resizing animated GIFs
+            if img.width > 250 or img.height > 250:
+                scale_gif(final_place, (250, 250))
+                img = Image.open(final_place)
+                img_width = img.width
+                img_height = img.height
+
+            # Create thumbnail
+            scale_gif(final_place, (40, 40), final_place_thumbnail)
+            img_thumb = Image.open(final_place_thumbnail)
+            thumbnail_width = img_thumb.width
+            thumbnail_height = img_thumb.height
+        except Exception:
+            img.close()
+            for path in (final_place, final_place_thumbnail):
+                if os.path.exists(path):
+                    os.unlink(path)
+            abort(400)
     else:  # handle regular images (jpg, png, webp, heic, etc.)
         img = open_upload_image(final_place)
         img = ImageOps.exif_transpose(img)
