@@ -457,3 +457,43 @@ def test_the_log_directory_is_left_alone_when_it_exists(restores_the_shared_logg
         create_app(_config())
 
     assert mkdir.call_args_list == []
+
+
+class TestAQueryStringThatIsNotUtf8:
+    """Werkzeug decodes the raw query string as strict UTF-8 when request.args is
+    first read, so a raw byte such as 0xD1 in any URL raised UnicodeDecodeError
+    out of whatever read request.args first -- a view, a before_request hook, a
+    template -- and was answered as a 500. The API's ApiArgumentsParser already
+    refused it with a 400 (tests/test_api_error_handler.py); PieFedRequest now
+    does so app-wide, at request.args itself, so a UnicodeDecodeError raised by
+    application code is still the error it was."""
+
+    # A WSGI environ holds the raw query string as bytes decoded as Latin-1 (PEP 3333): '\xd1' is byte 0xD1.
+    RAW_BYTE = {'QUERY_STRING': 'q=\xd1'}
+
+    @pytest.mark.parametrize('path', ['/', '/search', '/communities', '/instances'])
+    def test_it_is_refused_with_a_400(self, app, db_session, path):
+        response = app.test_client().get(path, environ_overrides=self.RAW_BYTE)
+
+        assert response.status_code == 400
+
+    def test_the_api_still_answers_in_its_own_shape(self, app, db_session):
+        response = app.test_client().get('/api/alpha/user', environ_overrides={'QUERY_STRING': 'username=\xd1'})
+
+        assert response.status_code == 400
+        assert response.get_json()['code'] == 400
+
+    def test_a_percent_encoded_byte_still_parses(self, app, db_session):
+        with app.test_request_context('/search?q=%D1'):
+            from flask import request
+            assert request.args['q'] == '%D1'
+
+    def test_a_unicode_decode_error_from_application_code_is_not_a_400(self, app, db_session):
+        error = UnicodeDecodeError('utf-8', b'\xd1', 0, 1, 'invalid continuation byte')
+        # The test app propagates exceptions rather than answering them, so the
+        # error itself reaching the client is what "not turned into a 400" looks like.
+        with patch('app.auth.routes.render_login_form', side_effect=error):
+            with pytest.raises(UnicodeDecodeError) as raised:
+                app.test_client().get('/auth/login')
+
+        assert raised.value is error
