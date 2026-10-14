@@ -20,3 +20,9 @@ def test_blank_lines_are_not_read_ahead_of():
     """A blank line read another 2049 bytes into the buffer while lines were still waiting in it, so a stream of
     blank lines grew the buffer without bound."""
     assert session_replies(b'\n' * 6000 + b'QUIT\r\n') == [READY, CLOSING]
+
+
+def test_a_line_past_the_line_limit_closes_the_connection():
+    """A line with no LF in sight was buffered for as long as the client kept sending: _MAXLINE bounded each read,
+    not the line."""
+    assert session_replies(b'X' * 5000 + b'\r\nQUIT\r\n') == [READY, CLOSING]
