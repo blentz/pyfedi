@@ -549,7 +549,7 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
         wildmat, date_str, time_str, *gmt = tokens
         try:
             date = parse_datetime(date_str, time_str=time_str)
-        except TypeError:
+        except (TypeError, ValueError):
             self.send_lines(["501 Syntax Error"])
             return
         # Check if server implements newnews, otherwise compute newnews on our own.
@@ -578,7 +578,7 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
         date_str, time_str, *gmt = tokens
         try:
             date = parse_datetime(date_str, time_str=time_str)
-        except TypeError:
+        except (TypeError, ValueError):
             self.send_lines(["501 Syntax Error"])
             return
         # Check if server implements newgroups, otherwise compute newgroups on our own.

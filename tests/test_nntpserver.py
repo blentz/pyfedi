@@ -83,3 +83,13 @@ def test_parse_datetime_refuses_a_field_past_what_datetime_holds(date_str, time_
     """datetime() raises OverflowError, not ValueError, for a field past a C long; the callers refuse ValueError."""
     with pytest.raises(ValueError):
         parse_datetime(date_str, time_str)
+
+
+def test_newnews_with_a_malformed_date_is_a_syntax_error():
+    """newnews() and newgroups() caught only TypeError around parse_datetime, which raises ValueError."""
+    assert session_replies(b'NEWNEWS a.example 2025x 000000\r\nQUIT\r\n') == [READY, '501 Syntax Error', CLOSING]
+
+
+def test_newgroups_with_a_malformed_date_is_a_syntax_error():
+    assert session_replies(b'NEWGROUPS 99999999999999999999990101 000000\r\nQUIT\r\n') == [
+        READY, '501 Syntax Error', CLOSING]
