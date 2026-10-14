@@ -88,8 +88,7 @@ def test_init_db_skips_the_block_lists_blank_lines(commands):
     split('\\n') made that a banned Domain row named '', listed at /domains/banned. A blank or
     whitespace-only line in either list, the Peertube Isolation list's included, now adds nothing: no Domain and no
     BannedInstances. Neither list has comment lines (No-QAnon is bare hostnames, Peertube Isolation a JSON array of
-    {"value": host}), so a '#' has no meaning to skip. A host on both lists (51 of Peertube Isolation's 52 are on
-    No-QAnon) still adds one Domain row per list: domain.name has a plain, non-unique index."""
+    {"value": host}), so a '#' has no meaning to skip."""
     from unittest.mock import MagicMock
 
     from app.models import BannedInstances, Domain
@@ -105,7 +104,37 @@ def test_init_db_skips_the_block_lists_blank_lines(commands):
     assert result.exception is None, result.exception
     added = [call.args[0] for call in fake_db.session.add.call_args_list]
     assert [row.name for row in added if isinstance(row, Domain)] == ['bad.example', 'worse.example',
-                                                                      'tube.example', 'bad.example']
+                                                                      'tube.example']
     banned = [row.domain for row in added if isinstance(row, BannedInstances)]
     assert '' not in banned
     assert banned[-2:] == ['tube.example', 'bad.example']
+
+
+def test_init_db_adds_each_host_once(commands):
+    """51 of Peertube Isolation's 52 hosts are also on No-QAnon (fetched 2026-10-14), and init-db added a banned
+    Domain row per list. domain.name has a plain, non-unique index, so nothing refused the second row, but
+    /domains/banned unbans by row id: unbanning one of the pair left its twin banned. A host is now added once per
+    table, whichever list names it first and in whatever spelling canonical_host makes one: a Domain row once
+    across both lists, a BannedInstances row once across the built-in list and Peertube Isolation (owner ruling
+    2026-10-14)."""
+    from unittest.mock import MagicMock
+
+    from app.models import BannedInstances, Domain
+
+    fake_db = MagicMock()
+    fake_db.inspect.return_value.get_table_names.return_value = ['alembic_version']
+    fake_db.session.execute.return_value.fetchone.return_value = ('UTF8',)
+    with patch('app.cli.db', fake_db), \
+            patch('app.cli.retrieve_block_list', return_value='bad.example\n[0:0::1]\nbad.example\n::1\n'), \
+            patch('app.cli.retrieve_peertube_block_list',
+                  return_value='tube.example\nbad.example\n[::1]\ngab.com\ntube.example'):
+        result = commands.invoke(args=['init-db', '--interactive', 'no'])
+
+    assert result.exception is None, result.exception
+    added = [call.args[0] for call in fake_db.session.add.call_args_list]
+    assert [row.name for row in added if isinstance(row, Domain)] == ['bad.example', '::1', 'tube.example',
+                                                                      'gab.com']
+    banned = [row.domain for row in added if isinstance(row, BannedInstances)]
+    assert len(banned) == len(set(banned))
+    assert banned.count('gab.com') == 1   # on the built-in list and Peertube Isolation
+    assert banned[-3:] == ['tube.example', 'bad.example', '::1']
