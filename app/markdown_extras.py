@@ -35,9 +35,18 @@ class EnhancedImages(Extra):
 
     # Regex to find markdown image syntax with :: separated attributes
     # Matches: ![alt text :: attributes](url) or ![alt text :: attributes](url "title")
+    #
+    # It used to be !\[([^\]]*?)\s*::\s*([^\]]+?)\]\(([^\)]+?)\), which retried every later '::' before the ']'
+    # when the rest failed, and scanned on from every '![': quadratic, 2 s for 16 KiB of '![' + '::'. The rest
+    # cannot succeed after a later '::' when it failed after the first (it needs the same ']' and what follows
+    # it), so the alt text and its '::' are an atomic group. A start that fails dooms every later start before
+    # the same ']', and when no ')' follows that ']' at all it dooms every later start: the two last
+    # alternatives (no groups; _process_markdown_image gives them back unchanged) skip that far.
     _md_img_with_attrs_re = re.compile(
-        r'!\[([^\]]*?)\s*::\s*([^\]]+?)\]'  # ![alt text :: attributes]
-        r'\(([^\)]+?)\)',  # (url) or (url "title")
+        r'!\[(?>([^\]]*?)\s*::)\s*([^\]]+?)\]'  # ![alt text :: attributes]
+        r'\(([^\)]+?)\)'  # (url) or (url "title")
+        r'|!\[[^\]]*+\]\([^)]*\Z'  # no ')' anywhere after: no later image can close
+        r'|!\[[^\]]*',  # every start before this ']' fails as this one did
         re.MULTILINE
     )
 
@@ -54,6 +63,8 @@ class EnhancedImages(Extra):
 
     def _process_markdown_image(self, match: re.Match) -> str:
         """Process a single markdown image and extract custom attributes"""
+        if match.lastindex is None:
+            return match.group(0)   # a skip alternative: no image here
         alt_text = match.group(1).strip()
         attrs_string = match.group(2).strip()
         url_and_title = match.group(3).strip()
