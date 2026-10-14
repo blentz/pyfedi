@@ -2086,7 +2086,9 @@ def stash_code_md(text: str, placeholder: str) -> tuple[list, str]:
 
 
 def pop_code(code_snippets: list, text: str, placeholder: str) -> str:
-    for i, code in enumerate(code_snippets):
+    # Last stashed first: stash_code_md lifts inline code after fenced blocks, so an inline snippet can hold a
+    # fenced block's placeholder, which has to be back in the text before that block is looked for.
+    for i, code in reversed(list(enumerate(code_snippets))):
         text = text.replace(f"{placeholder}{i}$", code)
 
     return text

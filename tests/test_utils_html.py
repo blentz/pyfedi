@@ -3,8 +3,8 @@ import re
 from app.utils import (allowlist_html, community_link_to_href, escape_img, feed_link_to_href,
                        handle_lemmy_autocomplete, links_with_parens,
                        mastodon_extra_field_link, person_link_to_href,
-                       piefed_markdown_to_lemmy_markdown, remove_images, stash_code_html,
-                       stash_link_html)
+                       piefed_markdown_to_lemmy_markdown, pop_code, remove_images, stash_code_html, stash_code_md,
+                       stash_link_html, escape_non_html_angle_brackets, handle_bold_em)
 from tests.test_allowlist_html import assert_linear, pump
 from tests.test_markdown_to_html import corpus_texts, random_texts
 
@@ -261,3 +261,19 @@ class TestCodeAndLinkStashesAreLinear:
 
     def test_unclosed_links_are_stashed_in_linear_time(self):
         assert_linear(self, [pump('<a href=')], lambda text: stash_link_html(text, 'PH'), seconds=0.5)
+
+
+class TestCodeStashRoundTrip:
+    """stash_code_md lifts fenced blocks first, then inline code from what is left, so an inline span can hold a
+    fenced block's placeholder. pop_code restored snippets in stash order, so the fenced block's placeholder was
+    put back after it had been looked for, and the random placeholder text reached the rendered post in place of
+    the code (fuzz: markdown_code_stash/inline_code_around_fenced_block)."""
+
+    def test_inline_code_around_a_fenced_block_round_trips(self):
+        text = '`x ```y``` z`'
+        snippets, stashed = stash_code_md(text, 'PH')
+        assert pop_code(snippets, stashed, 'PH') == text
+
+    def test_a_preprocessor_gives_the_code_back(self):
+        assert escape_non_html_angle_brackets('`x ```<y>``` z`') == '`x ```<y>``` z`'
+        assert handle_bold_em('`a ```**b**``` c`') == '`a ```**b**``` c`'
