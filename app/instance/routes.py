@@ -1,6 +1,5 @@
 from collections import namedtuple
 import csv
-import io
 from datetime import timedelta
 
 from flask import request, url_for, g, abort, flash, redirect, make_response, current_app
@@ -14,7 +13,7 @@ from app.constants import *
 from app.discovery import KIND_PERSON
 from app.discovery.search import discovery_fallback, viewer_allows_nsfw
 from app.instance import bp
-from app.instance.util import is_fedi_handle, bulk_follow
+from app.instance.util import is_fedi_handle, bulk_follow, mastodon_csv_handles
 from app.models import Instance, User, Post, read_posts, AllowedInstances, BannedInstances, utcnow
 from app.shared.site import block_remote_instance, unblock_remote_instance
 from app.visibility import listable_clause
@@ -230,19 +229,8 @@ def instance_add_people():
                     to_follow.append(person.strip())
 
         if form.mastodon_csv.data:
-            # D805: UTF-8, then UTF-8 with a byte-order mark, then Latin-1, which decodes any bytes at all
-            csv_bytes = form.mastodon_csv.data.read()
-            for encoding in ('utf-8', 'utf-8-sig', 'latin-1'):
-                try:
-                    csv_text = csv_bytes.decode(encoding)
-                    break
-                except UnicodeDecodeError:
-                    continue
-            csv_text = csv_text.lstrip('\ufeff')  # utf-8 accepts the mark as text, so utf-8-sig's job is done here
             try:
-                for csv_row in csv.reader(io.StringIO(csv_text)):
-                    if csv_row and is_fedi_handle(csv_row[0]):
-                        to_follow.append(csv_row[0])
+                to_follow.extend(mastodon_csv_handles(form.mastodon_csv.data.read()))
             except csv.Error:
                 flash(_('Could not read this file; export it again as a UTF-8 CSV'), 'error')
                 return render_template('instance/add_people.html', title=_('Add people'), form=form)
