@@ -212,6 +212,29 @@ class TestActorLinkHelpers:
         assert 'test.piefed.local/user/lookup/bob/lemmy.world' in result
 
 
+class TestActorLinksNeverNestALink:
+    """The filters run over allowlist_html output, which keeps class and id and attribute order. They stashed only
+    <a href=...> and plain <code>, so a handle inside <a class=... href=...>, inside an <a> left with no href, or
+    inside <code class=...> was linked again, nesting one link in another or in code (fuzz:
+    markdown_actor_links/handle_inside_*)."""
+
+    HTML = ('<p><a class="m" href="https://x.example/@p">@p@q.example</a> <a id="z">!c@t.example</a> '
+            '<a>~f@u.example</a></p><pre><code class="x">@a@b.example</code></pre>')
+
+    def test_no_filter_links_inside_a_link_or_code(self):
+        for function in (community_link_to_href, feed_link_to_href, person_link_to_href):
+            assert function(self.HTML, server_name_override='s.example') == self.HTML
+
+    def test_handles_outside_them_are_still_linked(self):
+        result = person_link_to_href(self.HTML + '<p>@bob@lemmy.world</p>', server_name_override='s.example')
+        assert result.endswith('<p><a href="https://s.example/user/lookup/bob/lemmy.world" '
+                               'rel="nofollow noindex">@bob@lemmy.world</a></p>')
+
+    def test_an_unclosed_anchor_or_code_is_read_in_linear_time(self):
+        assert_linear(self, [pump('<a '), pump('<a>'), pump('<code '), pump('<code>')],
+                      lambda text: person_link_to_href(text, server_name_override='s.example'), seconds=0.5)
+
+
 class TestHandleLemmyAutocomplete:
     def test_autocompleted_community_link_becomes_bare_handle(self):
         text = '[!news@lemmy.world](https://lemmy.world/c/news)'

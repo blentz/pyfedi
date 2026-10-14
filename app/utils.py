@@ -2181,10 +2181,10 @@ def community_link_to_href(link: str, server_name_override: str | None = None) -
     link_placeholder = gibberish(10)
 
     # Stash the <code> portions so they are not formatted
-    code_snippets, link = stash_code_html(link, code_placeholder)
+    code_snippets, link = stash_code_html(link, code_placeholder, _ANY_CODE_HTML_RE)
 
     # Stash the existing links so they are not formatted
-    link_snippets, link = stash_link_html(link, link_placeholder)
+    link_snippets, link = stash_link_html(link, link_placeholder, _ANY_LINK_HTML_RE)
 
     pattern = COMMUNITY_PATTERN
     server = r'<a href="https://' + server_name + r'/community/lookup/'
@@ -2209,10 +2209,10 @@ def feed_link_to_href(link: str, server_name_override: str | None = None) -> str
     link_placeholder = gibberish(10)
 
     # Stash the <code> portions so they are not formatted
-    code_snippets, link = stash_code_html(link, code_placeholder)
+    code_snippets, link = stash_code_html(link, code_placeholder, _ANY_CODE_HTML_RE)
 
     # Stash the existing links so they are not formatted
-    link_snippets, link = stash_link_html(link, link_placeholder)
+    link_snippets, link = stash_link_html(link, link_placeholder, _ANY_LINK_HTML_RE)
 
     pattern = FEED_PATTERN
     server = r'<a href="https://' + server_name + r'/feed/lookup/'
@@ -2237,10 +2237,10 @@ def person_link_to_href(link: str, server_name_override: str | None = None) -> s
     link_placeholder = gibberish(10)
 
     # Stash the <code> portions so they are not formatted
-    code_snippets, link = stash_code_html(link, code_placeholder)
+    code_snippets, link = stash_code_html(link, code_placeholder, _ANY_CODE_HTML_RE)
 
     # Stash the existing links so they are not formatted
-    link_snippets, link = stash_link_html(link, link_placeholder)
+    link_snippets, link = stash_link_html(link, link_placeholder, _ANY_LINK_HTML_RE)
 
     # Substitute @user@instance.tld with <a> tags, but ignore if it has a preceding / or [ character
     pattern = PERSON_PATTERN
@@ -2263,9 +2263,16 @@ def person_link_to_href(link: str, server_name_override: str | None = None) -> s
 _CODE_HTML_RE = re.compile(r'(<code>[\s\S]*?</code>)|<code>[\s\S]*')
 # <a href=...</a>, the same shape and the same skip: 2.5 s for 64 KiB of '<a href='.
 _LINK_HTML_RE = re.compile(r'(<a href=[\s\S]*?</a>)|<a href=[\s\S]*')
+# Any <code> or <a> element, whatever its attributes, for the actor-link filters. allowlist_html keeps class and id
+# and keeps attribute order, so a peer's <a class="mention" href=...>, an <a> whose only attribute was dropped,
+# and a <code class="language-x"> all reach them; the two patterns above, written for markdown2's own output,
+# miss those, and the filters then linked a handle inside an existing link or code span. A start that fails here
+# fails for every later one too (each needs a '>' and then a closing tag later still), so the skip takes the rest.
+_ANY_CODE_HTML_RE = re.compile(r'(<code\b[^>]*>[\s\S]*?</code>)|<code\b[\s\S]*')
+_ANY_LINK_HTML_RE = re.compile(r'(<a\b[^>]*>[\s\S]*?</a>)|<a\b[\s\S]*')
 
 
-def stash_code_html(text: str, placeholder: str) -> tuple[list, str]:
+def stash_code_html(text: str, placeholder: str, pattern: re.Pattern = _CODE_HTML_RE) -> tuple[list, str]:
     code_snippets = []
 
     def store_code(match):
@@ -2274,7 +2281,7 @@ def stash_code_html(text: str, placeholder: str) -> tuple[list, str]:
         code_snippets.append(match.group(0))
         return f"{placeholder}{len(code_snippets) - 1}$"
 
-    text = _CODE_HTML_RE.sub(store_code, text)
+    text = pattern.sub(store_code, text)
 
     return (code_snippets, text)
 
@@ -2447,7 +2454,7 @@ def pop_footnotes(footnote_snippets: list, text:str, placeholder: str) -> str:
     return text
 
 
-def stash_link_html(text: str, placeholder: str) -> tuple[list, str]:
+def stash_link_html(text: str, placeholder: str, pattern: re.Pattern = _LINK_HTML_RE) -> tuple[list, str]:
     link_snippets = []
 
     def store_link(match):
@@ -2456,7 +2463,7 @@ def stash_link_html(text: str, placeholder: str) -> tuple[list, str]:
         link_snippets.append(match.group(0))
         return f"{placeholder}{len(link_snippets) - 1}$"
 
-    text = _LINK_HTML_RE.sub(store_link, text)
+    text = pattern.sub(store_link, text)
 
     return (link_snippets, text)
 
