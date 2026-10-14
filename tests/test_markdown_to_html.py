@@ -581,6 +581,15 @@ And if you want to add your score to the database to help your fellow Bookworms 
         self.assertGreaterEqual(result.count('<blockquote>'), 20)
         self.assertIn('<p>a</p>', result)
 
+    def test_markdown_nested_past_markdown2s_recursion_renders_nothing(self):
+        """The RecursionError catch stays behind the depth limit: no input found reaches it with the limit on, so
+        the limit is switched off here and 200 real levels of '>' exhaust markdown2's stack. Nothing renders, as
+        before the limit."""
+        markdown = ('>' * 200 + 'a\n') * 2
+        with mock.patch('app.utils.limit_quote_depth', lambda value: value):
+            result = markdown_to_html(markdown, test_env={'fn_string': 'fn-test'})
+        self.assertEqual(result, '')
+
 
 class TestLinkPattern(unittest.TestCase):
     """LINK_PATTERN is matched over every rendered body (markdown2's link-patterns extra) and inside every <...>
