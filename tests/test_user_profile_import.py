@@ -934,6 +934,54 @@ def test_a_stored_json_object_is_still_imported(app, env):
     assert [c.args[0] for c in find.call_args_list] == ['https://other.example/u/x']
 
 
+@pytest.mark.parametrize('key', ['followed_communities', 'blocked_communities', 'blocked_users'])
+def test_an_entry_that_is_not_a_string_is_skipped(app, env, key):
+    """Found by the settings_import fuzz target. Entries went to find_actor_or_create
+    unchecked, which calls `.strip()` on them: a number raised AttributeError, an
+    object without an `id` KeyError, and the whole task failed. A string entry beside
+    them is still looked up."""
+    client, viewer, other = env
+
+    find = run_import(app, viewer, {key: [42, None, {'name': 'x'}, ['y'], True,
+                                          'https://other.example/u/x']})
+
+    assert [c.args[0] for c in find.call_args_list] == ['https://other.example/u/x']
+
+
+@pytest.mark.parametrize('note', [
+    'https://other.example/u/x',
+    {'target': 'https://other.example/u/x', 'note': 'what the export writes'},
+    {'target': 'https://other.example/u/x', 'body': {'x': 1}},
+    {'target': 42, 'body': 'a note'},
+    {'body': 'a note'},
+], ids=['a_string', 'no_body', 'body_not_a_string', 'target_not_a_string', 'no_target'])
+def test_a_user_note_that_is_not_a_target_and_body_is_skipped(app, env, note):
+    """Found by the settings_import fuzz target. `user_note['target']` and
+    `user_note['body']` were read unchecked: a string entry raised TypeError, a missing
+    key KeyError, and a body that is not a string reached the database. The task failed
+    on the first one."""
+    client, viewer, other = env
+
+    find = run_import(app, viewer, {'user_notes': [note]})
+
+    assert find.call_args_list == []
+
+
+def test_an_instance_block_that_is_not_a_string_is_skipped(app, env):
+    """Found by the settings_import fuzz target: an object compared with
+    Instance.domain failed the query, and the task."""
+    from app.models import InstanceBlock
+
+    client, viewer, other = env
+    make_instance('other.example', software='piefed')
+    db.session.commit()
+
+    run_import_with(app, viewer, {'blocked_instances': [{'domain': 'x'}, ['x'], 42, 'other.example']},
+                    lambda *a, **k: None)
+
+    assert InstanceBlock.query.filter_by(user_id=viewer.id).count() == 1
+
+
 def test_an_import_for_a_user_who_has_since_gone(app, env):
     """D1048. The task is queued and runs later, so the account can be gone by
     the time it does -- and every arm dereferences `user`. Measured with an
@@ -1257,6 +1305,8 @@ def test_importing_saved_comments(app, env):
     post = make_post(community, viewer, 'https://other.example/p/1',
                      title='a post')
     reply = make_post_reply(post, viewer, body='a reply')
+    # An export lists a comment by its ap_id, a string; the factory leaves it None, which the import now skips.
+    reply.ap_id = 'https://other.example/comment/1'
     db.session.commit()
 
     with patch('app.api.alpha.utils.misc.get_resolve_object',

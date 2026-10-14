@@ -1,0 +1,1 @@
+{"followed_communities": ["https://a.example/c/x"], "blocked_communities": [], "blocked_users": ["https://b.example/u/y"], "blocked_instances": ["c.example"], "saved_posts": ["https://a.example/post/1"], "saved_comments": [], "user_notes": [{"target": "https://b.example/u/y", "note": "exported note"}]}

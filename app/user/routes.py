@@ -89,17 +89,28 @@ def settings_import_contents(contents):
 
 
 def import_entries(contents_json, key):
-    """The entries under `key`, refused unless they are a list and capped.
+    """The entries under `key`, refused unless they are a list and capped, keeping only entries of the shape the task
+    uses them as.
 
     A string passed where a list belongs iterates its CHARACTERS: measured as
     `PROBE v4 find_actor_or_create calls: 25 first arg: h` for a single URL
     given as a bare string. The file is user-supplied, so its shape is an
-    input to validate rather than an assumption.
+    input to validate rather than an assumption -- and so is each entry's: a
+    number given to find_actor_or_create raised AttributeError, a user note
+    that was not an object with a string target and body raised TypeError or
+    KeyError, and any of them failed the whole task.
     """
     entries = contents_json.get(key)
     if not isinstance(entries, list):
         return []
-    return entries[:SETTINGS_IMPORT_MAX_ENTRIES]
+    return [entry for entry in entries[:SETTINGS_IMPORT_MAX_ENTRIES] if _is_import_entry(key, entry)]
+
+
+def _is_import_entry(key, entry):
+    """A user note is an object with a string target and body; every other entry is a string."""
+    if key == 'user_notes':
+        return isinstance(entry, dict) and isinstance(entry.get('target'), str) and isinstance(entry.get('body'), str)
+    return isinstance(entry, str)
 
 
 @bp.route('/people', methods=['GET', 'POST'])
