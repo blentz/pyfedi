@@ -114,6 +114,12 @@ def test_names_and_urls_are_cleaned(app, db_session):
                                                            ('Script avatar', None)]
 
 
+def test_a_name_loses_c1_control_characters_too(app):
+    """clean_name promises control characters removed, and removed only C0 and DEL: a directory row's or a podcast
+    feed's U+0080-U+009F (U+009B is a terminal's CSI) reached the stored name and the credit."""
+    assert filters.clean_name('Name\x9bwith\x80csi\x9f') == 'Name with csi'
+
+
 def test_banned_blocked_isolated_and_badly_named_entries_are_dropped(app, db_session, only, monkeypatch):
     make_banned_instance('banned.example')
     db.session.add(Domain(name='blockeddomain.example', banned=True))

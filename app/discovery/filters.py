@@ -16,7 +16,7 @@ NAME_LIMIT = 256
 URL_LIMIT = 1024
 
 _TAG = re.compile(r'<[^>]*>')
-_CONTROL = re.compile(r'[\x00-\x1f\x7f]+')
+_CONTROL = re.compile(r'[\x00-\x1f\x7f-\x9f]+')   # C0, DEL and C1
 _SPACE = re.compile(r'\s+')
 _NSFW = re.compile(r'\bnsfw\b|\b18\+|\bporn', re.IGNORECASE)
 
