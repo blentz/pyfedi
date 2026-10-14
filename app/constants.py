@@ -197,3 +197,12 @@ AS2_PROFILE = 'https://www.w3.org/ns/activitystreams'
 AS2_LD_MEDIA_TYPE = f'application/ld+json; profile="{AS2_PROFILE}"'
 AP_MEDIA_TYPES = (AP_MEDIA_TYPE, 'application/ld+json')   # compared with a mimetype, which carries no parameters
 AP_FETCH_ACCEPT = f'{AP_MEDIA_TYPE}, {AS2_LD_MEDIA_TYPE}'   # every outgoing ActivityPub GET, signed or not
+
+# D1045/D1046. Each entry of a user's import -- the settings import's lists,
+# the handles given to "Add people" -- drives one outbound actor fetch
+# (`find_actor_or_create` reaches `create_actor_from_remote`, `bulk_follow`
+# calls `search_for_user`), so an unbounded list is an unbounded outbound fetch
+# primitive, the same family as D993 and D1025. Measured: 50 entries, 50
+# lookups. A real Lemmy export lists tens of communities, not thousands.
+# Entries past the cap are dropped.
+IMPORT_MAX_ENTRIES = 500

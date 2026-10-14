@@ -853,15 +853,15 @@ def test_a_long_list_is_capped(app, env):
     uploader chose. An uncapped list is therefore an unbounded outbound-fetch
     primitive, the same family as D993 and D1025. Measured before the cap: 50
     entries, 50 lookups."""
-    from app.user.routes import SETTINGS_IMPORT_MAX_ENTRIES
+    from app.constants import IMPORT_MAX_ENTRIES
 
     client, viewer, other = env
     entries = [f'https://other.example/c/c{n}'
-               for n in range(SETTINGS_IMPORT_MAX_ENTRIES + 25)]
+               for n in range(IMPORT_MAX_ENTRIES + 25)]
 
     find = run_import(app, viewer, {'followed_communities': entries})
 
-    assert find.call_count == SETTINGS_IMPORT_MAX_ENTRIES
+    assert find.call_count == IMPORT_MAX_ENTRIES
 
 
 def test_a_list_under_the_cap_is_processed_whole(app, env):
@@ -876,17 +876,17 @@ def test_a_list_under_the_cap_is_processed_whole(app, env):
 def test_every_import_key_is_capped(app, env):
     """Seven keys, one helper -- and a row per key, because a key that was
     left calling the old expression would be invisible here otherwise."""
-    from app.user.routes import SETTINGS_IMPORT_MAX_ENTRIES
+    from app.constants import IMPORT_MAX_ENTRIES
 
     client, viewer, other = env
     long_list = [f'https://other.example/x{n}'
-                 for n in range(SETTINGS_IMPORT_MAX_ENTRIES + 5)]
+                 for n in range(IMPORT_MAX_ENTRIES + 5)]
 
     find = run_import(app, viewer, {'followed_communities': long_list,
                                     'blocked_communities': long_list,
                                     'blocked_users': long_list})
 
-    assert find.call_count == SETTINGS_IMPORT_MAX_ENTRIES * 3
+    assert find.call_count == IMPORT_MAX_ENTRIES * 3
 
 
 def run_import_of_stored(app, user, stored):

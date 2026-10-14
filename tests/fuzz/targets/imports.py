@@ -10,9 +10,9 @@ Properties:
 
 * settings_import -- what the task reads out of the stored file never raises, whatever the bytes: anything that is
   not a JSON object is no entries at all, and the entries under each key are a list of at most
-  SETTINGS_IMPORT_MAX_ENTRIES, each of the shape the task uses it as -- a string, or for user_notes an object with a
+  IMPORT_MAX_ENTRIES, each of the shape the task uses it as -- a string, or for user_notes an object with a
   string target and a string text, read from 'note' (what the export writes) when present, else from 'body' -- in
-  file order, taken from the first SETTINGS_IMPORT_MAX_ENTRIES the file lists.
+  file order, taken from the first IMPORT_MAX_ENTRIES the file lists.
 * mastodon_csv -- mastodon_csv_handles either raises csv.Error (which the view answers with a message) or returns
   at most one string per row, each passing is_fedi_handle and made of characters of the file's text as decoded
   (UTF-8, else Latin-1).
@@ -23,8 +23,9 @@ No database and no network: these are the parse steps only, before any lookup.
 import csv
 import json
 
+from app.constants import IMPORT_MAX_ENTRIES
 from app.instance.util import is_fedi_handle, mastodon_csv_handles
-from app.user.routes import SETTINGS_IMPORT_MAX_ENTRIES, import_entries, import_note_text, settings_import_contents
+from app.user.routes import import_entries, import_note_text, settings_import_contents
 from tests.fuzz.targets._target import Target
 
 # A settings export is a few kilobytes and the upload cap is 5 MiB; a longer fuzz input says nothing a shorter one
@@ -64,7 +65,7 @@ def check_settings_import(data: bytes) -> None:
         entries = import_entries(contents, key)
         assert isinstance(entries, list), f'{key}: {type(entries).__name__}'
         raw = contents.get(key)
-        listed = raw[:SETTINGS_IMPORT_MAX_ENTRIES] if isinstance(raw, list) else []
+        listed = raw[:IMPORT_MAX_ENTRIES] if isinstance(raw, list) else []
         assert entries == [entry for entry in listed if well_formed_entry(key, entry)], (
             f'{key}: {entries!r:.300} from {raw!r:.300}')
 
