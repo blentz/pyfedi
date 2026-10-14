@@ -233,6 +233,33 @@ class TestActorLinkHelpers:
         assert 'test.piefed.local/user/lookup/bob/lemmy.world' in result
 
 
+class TestActorLinksLeaveTagsAlone:
+    """Owner ruling 2026-10-13: a filter never rewrites inside a tag. markdown2 turns '![shot of @u@h](img)' into
+    <img alt="shot of @u@h" ...>, and the filters linked the handle inside the alt text, which broke the tag open
+    (fuzz: markdown_actor_links/handle_in_alt_text, handles_in_attribute_values). The alt text keeps the plain
+    handle; a handle in the text around the tag is still linked."""
+
+    HTML = ('<p><img alt="shot of @u@h.example !c@h.example ~f@h.example" src="https://x.example/i.png" '
+            'title="@t@h.example"></p>')
+
+    def test_no_filter_rewrites_an_attribute_value(self):
+        for function in (community_link_to_href, feed_link_to_href, person_link_to_href):
+            assert function(self.HTML, server_name_override='s.example') == self.HTML
+
+    def test_a_handle_beside_the_tag_is_still_linked(self):
+        result = person_link_to_href(self.HTML + '<p>@bob@lemmy.world</p>', server_name_override='s.example')
+        assert result == self.HTML + ('<p><a href="https://s.example/user/lookup/bob/lemmy.world" '
+                                      'rel="nofollow noindex">@bob@lemmy.world</a></p>')
+        result = community_link_to_href('<b>!c@h.example</b>', server_name_override='s.example')
+        assert result == '<b><a href="https://s.example/community/lookup/c/h.example">!c@h.example</a></b>'
+        result = feed_link_to_href('<i title="~g@h.example">~f@h.example</i>', server_name_override='s.example')
+        assert result == '<i title="~g@h.example"><a href="https://s.example/feed/lookup/f/h.example">~f@h.example</a></i>'
+
+    def test_open_tags_are_read_in_linear_time(self):
+        assert_linear(self, [pump('<'), pump('<img alt="@u@h '), pump('< @u@h.example ')],
+                      lambda text: person_link_to_href(text, server_name_override='s.example'), seconds=0.5)
+
+
 class TestActorLinksNeverNestALink:
     """The filters run over allowlist_html output, which keeps class and id and attribute order. They stashed only
     <a href=...> and plain <code>, so a handle inside <a class=... href=...>, inside an <a> left with no href, or
