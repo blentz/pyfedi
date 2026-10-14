@@ -1191,3 +1191,77 @@ def test_unsubscribing_when_you_were_never_subscribed_does_nothing(app, db_sessi
     assert response.status_code == 302
     assert db.session.get(Feed, feed.id).subscriptions_count == 4
     assert FeedMember.query.filter_by(feed_id=feed.id).count() == 0
+
+
+@pytest.mark.parametrize('field', ['icon_file', 'banner_file'])
+def test_an_image_that_is_not_accepted_is_flashed_not_a_500(app, db_session, monkeypatch, field):
+    """make_feed passes the form's icon and banner to process_upload, which refuses a file it will not store with
+    Exception('filetype not allowed') after removing it. The route caught nothing, so it was a 500. It is a flash
+    and the form again now, with no feed made and nothing of the file left."""
+    import io
+    import os
+
+    instance, owner, stranger = _seed()
+    monkeypatch.setattr('app.shared.upload.gibberish', lambda length: 'refusedupload00')
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()), \
+                patch('app.feed.routes.render_template', return_value='rendered') as render, \
+                patch('app.feed.routes.flash') as flashed:
+            response = client.post('/feed/new', data=_create_payload(
+                app, client, url='withanicon', **{field: (io.BytesIO(b'not an image at all'), 'picture.png')}),
+                content_type='multipart/form-data')
+
+    assert response.status_code == 200
+    assert render.call_args.args[0] == 'feed/feed_new.html'
+    messages = [(str(call.args[0]), call.args[1]) for call in flashed.call_args_list]
+    assert messages == [('The icon or banner is not an image of a type this site accepts.', 'error')]
+    assert Feed.query.filter_by(name='withanicon').count() == 0
+    assert not os.path.exists('app/static/media/feeds/re/fu/refusedupload00.png')
+
+
+def test_another_feed_failure_is_not_swallowed(app, db_session):
+    instance, owner, stranger = _seed()
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.shared_feed.make_feed', side_effect=Exception('something else')):
+            with pytest.raises(Exception, match='something else'):
+                client.post('/feed/new', data=_create_payload(app, client, url='another'))
+
+
+@pytest.mark.parametrize('field', ['icon_file', 'banner_file'])
+def test_an_edit_with_an_image_that_is_not_accepted_is_flashed_not_a_500(app, db_session, monkeypatch, field):
+    """The edit form's twin of the above: edit_feed's process_upload refusal was a 500. It is a flash and the edit
+    page again now, with the feed unchanged and nothing of the file left."""
+    import io
+    import os
+
+    instance, owner, stranger = _seed()
+    feed = _feed(owner, name='lifecyclefeed')
+    monkeypatch.setattr('app.shared.upload.gibberish', lambda length: 'refusedupload00')
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()), \
+                patch('app.shared.feed.existing_communities', return_value=[]), \
+                patch('app.feed.routes.flash') as flashed:
+            response = client.post(f'/feed/{feed.id}/edit', data=_edit_payload(
+                app, client, title='Not saved', **{field: (io.BytesIO(b'not an image at all'), 'picture.png')}),
+                content_type='multipart/form-data')
+
+    assert response.status_code == 302
+    assert response.location.endswith(f'/feed/{feed.id}/edit')
+    messages = [(str(call.args[0]), call.args[1]) for call in flashed.call_args_list]
+    assert messages == [('The icon or banner is not an image of a type this site accepts.', 'error')]
+    db.session.expire_all()
+    assert db.session.get(Feed, feed.id).title != 'Not saved'
+    assert not os.path.exists('app/static/media/feeds/re/fu/refusedupload00.png')
+
+
+def test_another_feed_edit_failure_is_not_swallowed(app, db_session):
+    instance, owner, stranger = _seed()
+    feed = _feed(owner, name='lifecyclefeed')
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.shared_feed.edit_feed', side_effect=Exception('something else')):
+            with pytest.raises(Exception, match='something else'):
+                client.post(f'/feed/{feed.id}/edit', data=_edit_payload(app, client))
