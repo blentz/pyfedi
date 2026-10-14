@@ -735,7 +735,8 @@ class _LinkPattern:
 LINK_PATTERN = _LinkPattern()
 
 PERSON_PATTERN = re.compile(r"(?<![\/])@([a-zA-Z0-9_.-]*)@([a-zA-Z0-9_.-]*)\b")
-COMMUNITY_PATTERN = re.compile(r"(?<![\/])!([a-zA-Z0-9_.-]*)@([a-zA-Z0-9_.-]*)\b")
+# Not after '<' either: the '!' of '<!--' or '<!DOCTYPE' opens markup, and linking it broke the comment open.
+COMMUNITY_PATTERN = re.compile(r"(?<![\/<])!([a-zA-Z0-9_.-]*)@([a-zA-Z0-9_.-]*)\b")
 FEED_PATTERN = re.compile(r"(?<![\/])~([a-zA-Z0-9_.-]*)@([a-zA-Z0-9_.-]*)\b")
 
 # The WHATWG URL Standard's basic URL parser normalises a URL BEFORE it reads
