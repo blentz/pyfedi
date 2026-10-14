@@ -152,7 +152,7 @@ def _hrefs(html: str) -> list:
 def check_markdown_to_html(data: bytes) -> None:
     """markdown_to_html: for any text, and either setting of anchors_new_tab and allow_img (first byte), the HTML
     out satisfies the allowlist property and nothing raises. With allow_img=False (the notification pages) no image
-    is loaded. Empty text is ''."""
+    is loaded. Empty text is ''. Budgeted: the pump_* seeds are the constructs markdown2 is quadratic in."""
     control = data[0] if data else 0
     text = _input_text(data[1:])
     html = markdown_to_html(text, anchors_new_tab=not control & 1, allow_img=not control & 2, test_env=TEST_ENV)
@@ -656,9 +656,12 @@ def check_redos_hostnames(data: bytes) -> None:
 # per level), markdown_code_stash/fence_pump 20 ms, enhanced_images/img_tag_pump 2 ms, the link pumps 11 ms,
 # redos_allowlist_html/spoiler_pump 60 ms, redos_actor_patterns/person_pump 51 ms, redos_castopod/space_pump 2 ms,
 # redos_hostnames/email_domain_pump 23 ms. Every pump seed took seconds to hours on the regex it was built for.
+# markdown_to_html is budgeted too (owner ruling 2026-10-13): its pump_* seeds are the constructs markdown2 reads in
+# quadratic time, which markdown_to_html now rewrites first, and each is cut to MARKDOWN_RENDER_CAP; the slowest,
+# pump_image_links, took 0.7 s, and the slowest shape known at the cap about 1 s.
 # The untimed targets run BeautifulSoup or markdown2 over the input, whose cost is theirs, not a regex's.
 TARGETS = [
-    Target(name='markdown_to_html', check=check_markdown_to_html, surface='markdown', budget_ms=None,
+    Target(name='markdown_to_html', check=check_markdown_to_html, surface='markdown', budget_ms=2000,
            needs_app=False),
     Target(name='markdown_preprocessors', check=check_markdown_preprocessors, surface='markdown', budget_ms=2000,
            needs_app=False),
