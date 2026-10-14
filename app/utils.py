@@ -1694,6 +1694,10 @@ def links_with_parens(text: str) -> str:
         if target_url is None:
             continue  # an <a name=...> has no URL whose parens could need balancing
         following_text = link.next_sibling
+        # Plain text only. A Comment (or CDATA, a doctype...) subclasses NavigableString, and rewriting one as a str
+        # turned it into visible text (owner ruling 2026-10-14).
+        if type(following_text) is not NavigableString:
+            following_text = None
 
         num_left_paren = target_url.count("(")
         num_right_paren = target_url.count(")")
@@ -1701,7 +1705,7 @@ def links_with_parens(text: str) -> str:
         # The ')' moves into or out of the end of the link's last text node. Rewriting the link's whole content as
         # text instead (link.string = ...) dropped every element inside it -- nested markup and nested links -- and
         # cut the last character off text that did not end in ')' (owner ruling 2026-10-13).
-        if following_text and isinstance(following_text, NavigableString) and following_text.startswith(")"):
+        if following_text and following_text.startswith(")"):
             if num_left_paren - num_right_paren == 1:
                 # Link dropped the trailing paren, add it back and remove it from trailing text
                 link['href'] = link['href'] + ")"
@@ -1715,7 +1719,7 @@ def links_with_parens(text: str) -> str:
                 texts = [node for node in link.descendants if type(node) is NavigableString]
                 if texts and texts[-1].endswith(")"):
                     texts[-1].replace_with(texts[-1][:-1])
-                    if not following_text or not isinstance(following_text, NavigableString):
+                    if not following_text:
                         link.insert_after(")")
                     else:
                         following_text.replace_with(")" + following_text)

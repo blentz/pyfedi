@@ -222,10 +222,19 @@ def _anchors(html: str) -> list:
             for a in BeautifulSoup(html, 'html.parser').find_all('a')]
 
 
+def _unrendered(html):
+    """The comments, CDATA, declarations, doctypes and processing instructions in `html`, in order."""
+    soup = BeautifulSoup(html, 'html.parser')
+    return [(type(node).__name__, str(node))
+            for node in soup.find_all(string=lambda string: isinstance(string, PreformattedString))]
+
+
 def _check_links_with_parens(text, result):
     """Never raises; keeps every anchor and every element inside one (nested markup and nested links included),
     changes an href by at most one ')' added or removed at its end, and changes a link's text only by moving one
-    ')' into or out of its end: the text never loses another character."""
+    ')' into or out of its end: the text never loses another character. A comment (or any node a browser renders
+    nothing for) is never read as the text after a link: every one is left as it was, none made visible."""
+    assert _unrendered(result) == _unrendered(text), 'links_with_parens changed a comment'
     before, after = _anchors(text), _anchors(result)
     assert len(before) == len(after), 'links_with_parens changed the number of anchors'
     for (old_href, old_inner, old_text), (new_href, new_inner, new_text) in zip(before, after):
