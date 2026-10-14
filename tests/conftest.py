@@ -1,7 +1,11 @@
+import atexit
 import json
+import logging.handlers
 import os
 import re
+import shutil
 import sys
+import tempfile
 import time
 
 # --- One database and one pair of Redis dbs per xdist worker -----------------
@@ -104,6 +108,30 @@ from app.activitypub.ld_contexts import ld_document_loader
 from config import Config
 
 TEST_DATABASE_URL = os.environ.get('TEST_DATABASE_URL')
+
+
+# --- The app's log file goes to a scratch directory -------------------------
+#
+# create_app() attaches a RotatingFileHandler on `logs/pyfedi.log`, relative to
+# the working directory -- the checkout, bind-mounted at /app. So every app the
+# suite builds appended every INFO line the tests provoked to the checkout's own
+# log, and rotated it: one full run filled and rotated all sixteen of
+# logs/pyfedi.log*, so whatever a developer's own server had logged there was
+# gone by the end of it. There is no setting for the path, so the name the
+# factory resolves is replaced here, before any app is built, by the same
+# handler pointed at a directory of this process's own. Same class, same rotation, same format -- only the directory
+# differs -- and nothing in the suite reads the file back.
+TEST_LOG_DIRECTORY = tempfile.mkdtemp(prefix='pyfedi-test-logs-')
+atexit.register(shutil.rmtree, TEST_LOG_DIRECTORY, ignore_errors=True)
+
+
+class _ScratchRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    def __init__(self, filename, *args, **kwargs):
+        super().__init__(os.path.join(TEST_LOG_DIRECTORY, os.path.basename(filename)),
+                         *args, **kwargs)
+
+
+app.RotatingFileHandler = _ScratchRotatingFileHandler
 
 
 def is_disposable_database_url(url):
