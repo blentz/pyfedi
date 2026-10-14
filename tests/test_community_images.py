@@ -65,9 +65,8 @@ HOSTILE_SVG = (b'<?xml version="1.0"?><!DOCTYPE svg [<!ENTITY a "'
 @pytest.fixture
 def env(app, api_baseline, monkeypatch, tmp_path, private_static_tree):
     """`private_static_tree`: both functions write under app/static by relative
-    path, and `cleanup` below cannot reach everything they write -- with
-    MEDIA_IMAGE_FORMAT set the upload's original sits beside the re-encoded
-    file under a name no File row records, and every run left one behind."""
+    path, and a test that fails before `cleanup` below runs would otherwise
+    leave its files in the checkout's tree."""
     from types import SimpleNamespace
 
     g.admin_ids = []
@@ -659,6 +658,33 @@ class TestAFileThatIsNotWhatItSaysItIs:
             save_icon_file(a_file(b'this is not a PNG', 'upload.png'))
 
 
+class TestTheUploadsOriginalIsNotKeptBesideItsReEncoding:
+    """With MEDIA_IMAGE_FORMAT set, both functions saved the upload as it came (`<name>.png`), re-encoded it to a
+    second path (`<name>.webp`) and never removed the first: every icon and banner upload left a file no File row
+    names, under app/static/media locally and in app/static/tmp on an S3 instance."""
+
+    @pytest.mark.parametrize('save, size', [(save_icon_file, (300, 300)), (save_banner_file, (2000, 600))])
+    def test_only_the_stored_file_and_its_thumbnail_remain(self, env, monkeypatch, save, size):
+        monkeypatch.setitem(current_app.config, 'MEDIA_IMAGE_FORMAT', 'WEBP')
+        file = save(an_image(*size, fmt='PNG'))
+        try:
+            directory = os.path.dirname(file.file_path)
+            assert sorted(os.listdir(directory)) == sorted({os.path.basename(file.file_path),
+                                                            os.path.basename(file.thumbnail_path)})
+        finally:
+            cleanup(file)
+
+    @pytest.mark.parametrize('save, size', [(save_icon_file, (300, 300)), (save_banner_file, (2000, 600))])
+    def test_an_upload_already_in_the_chosen_format_is_kept(self, env, monkeypatch, save, size):
+        """A .webp upload re-encoded as WEBP is written over itself: the one path is the stored file."""
+        monkeypatch.setitem(current_app.config, 'MEDIA_IMAGE_FORMAT', 'WEBP')
+        file = save(an_image(*size, fmt='WEBP'))
+        try:
+            assert os.path.exists(file.file_path)
+        finally:
+            cleanup(file)
+
+
 class TestWhenTheInstanceStoresImagesInS3:
     @pytest.fixture
     def s3(self, env, s3_bucket, monkeypatch):
@@ -683,6 +709,12 @@ class TestWhenTheInstanceStoresImagesInS3:
         file = save_icon_file(an_image(300, 300))
         assert not os.path.exists('app/static/tmp/' +
                                   os.path.basename(file.file_name))
+
+    @pytest.mark.parametrize('save, size', [(save_icon_file, (300, 300)), (save_banner_file, (2000, 600))])
+    def test_nothing_is_left_in_tmp_when_the_upload_is_re_encoded(self, env, s3, monkeypatch, save, size):
+        monkeypatch.setitem(current_app.config, 'MEDIA_IMAGE_FORMAT', 'WEBP')
+        save(an_image(*size, fmt='PNG'))
+        assert os.listdir('app/static/tmp') == []
 
     def test_an_svg_has_one_url_for_both(self, env, s3):
         """An SVG is its own thumbnail, so there is one object, not two."""

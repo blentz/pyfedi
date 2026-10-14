@@ -880,6 +880,7 @@ def save_icon_file(icon_file, directory='communities') -> File:
             img.thumbnail((250, 250), resample=Image.LANCZOS)
 
             kwargs = {}
+            uploaded_place = final_place
             if image_format:
                 kwargs['format'] = image_format.upper()
                 final_ext = '.' + image_format.lower()
@@ -887,6 +888,8 @@ def save_icon_file(icon_file, directory='communities') -> File:
             if image_quality:
                 kwargs['quality'] = int(image_quality)
             save_image_without_metadata(img, final_place, optimize=True, **kwargs)
+            if final_place != uploaded_place:   # re-encoded under a new extension: no File row names the upload
+                os.unlink(uploaded_place)
 
             img_width = img.width
             img_height = img.height
@@ -1013,6 +1016,7 @@ def save_banner_file(banner_file, directory='communities') -> File:
         img.thumbnail((1600, 600), resample=Image.LANCZOS)
 
         kwargs = {}
+        uploaded_place = final_place
         if image_format:
             kwargs['format'] = image_format.upper()
             final_ext = '.' + image_format.lower()
@@ -1020,6 +1024,8 @@ def save_banner_file(banner_file, directory='communities') -> File:
         if image_quality:
             kwargs['quality'] = int(image_quality)
         save_image_without_metadata(img, final_place, optimize=True, **kwargs)
+        if final_place != uploaded_place:   # re-encoded under a new extension: no File row names the upload
+            os.unlink(uploaded_place)
 
         img_width = img.width
         img_height = img.height
