@@ -587,3 +587,46 @@ def test_a_blank_url_line_creates_no_file(app, env):
                   content_type='multipart/form-data')
 
     assert File.query.count() == 0
+
+
+@pytest.mark.parametrize('content,name', [(b'not an image at all', 'photo.png'), (b'BM whatever', 'photo.bmp')],
+                         ids=['undecodable', 'extension_not_allowed'])
+def test_a_file_that_is_not_an_accepted_image_is_flashed_not_a_500(app, env, monkeypatch, content, name):
+    """process_upload refuses a file it will not store with Exception('filetype not allowed') -- for an extension
+    the list does not name, before saving it, and for bytes Pillow cannot decode or reads as another format, after
+    removing it. The route caught nothing, so either was a 500. It is a flash naming the file now, the other files
+    are still processed, and nothing of the refused one is left."""
+    import io
+    import os
+
+    client, author, community = env
+    uploader = as_user(app, author)
+    token = csrf(app, uploader)
+    monkeypatch.setattr('app.shared.upload.gibberish', lambda length: 'refusedupload00')
+
+    with patch('app.user.routes.flash') as flashed:
+        response = uploader.post('/user/files/upload',
+                                 data=upload_payload(token, file1=(io.BytesIO(content), name),
+                                                     urls='https://example.com/one.png'),
+                                 content_type='multipart/form-data')
+
+    assert response.status_code == 302
+    messages = [(str(call.args[0]), call.args[1]) for call in flashed.call_args_list]
+    assert messages == [(f'{name} was not uploaded: it is not an image of a type this site accepts.', 'error')]
+    assert [file.source_url for file in File.query.all()] == ['https://example.com/one.png']
+    assert not any(os.path.exists(f'app/static/media/posts/re/fu/refusedupload00{ext}') for ext in ('.png', '.bmp'))
+
+
+def test_another_upload_failure_is_not_swallowed(app, env):
+    """Only the refusal is a flash: anything else process_upload raises still propagates."""
+    import io
+
+    client, author, community = env
+    uploader = as_user(app, author)
+    token = csrf(app, uploader)
+
+    with patch('app.user.routes.process_upload', side_effect=Exception('SVG file could not be sanitized')):
+        with pytest.raises(Exception, match='SVG file could not be sanitized'):    # TESTING propagates it
+            uploader.post('/user/files/upload',
+                          data=upload_payload(token, file1=(io.BytesIO(b'<svg/>'), 'a.svg')),
+                          content_type='multipart/form-data')

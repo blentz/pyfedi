@@ -26,7 +26,7 @@ from app.models import Post, Community, CommunityMember, User, PostReply, Notifi
     UserExtraField, Feed, FeedMember, user_file, UserFollower, BotChallenge, votes_cast_today, \
     CommunityFlair, CommunityFlairBlock
 from app.shared.site import block_remote_instance
-from app.shared.upload import process_file_delete, process_upload
+from app.shared.upload import is_refused_upload, process_file_delete, process_upload
 # The module, not the names: app.shared.user reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.user)
 import app.shared.user as shared_user
@@ -2622,26 +2622,17 @@ def user_file_upload():
                         {'file_id': file.id, 'user_id': current_user.id, 'size': 0})
                     db.session.commit()
 
-        if form.file1.data:
-            process_upload(form.file1.data, user=current_user)
-        if form.file2.data:
-            process_upload(form.file2.data, user=current_user)
-        if form.file3.data:
-            process_upload(form.file3.data, user=current_user)
-        if form.file4.data:
-            process_upload(form.file4.data, user=current_user)
-        if form.file5.data:
-            process_upload(form.file5.data, user=current_user)
-        if form.file6.data:
-            process_upload(form.file6.data, user=current_user)
-        if form.file7.data:
-            process_upload(form.file7.data, user=current_user)
-        if form.file8.data:
-            process_upload(form.file8.data, user=current_user)
-        if form.file9.data:
-            process_upload(form.file9.data, user=current_user)
-        if form.file10.data:
-            process_upload(form.file10.data, user=current_user)
+        for field in (form.file1, form.file2, form.file3, form.file4, form.file5,
+                      form.file6, form.file7, form.file8, form.file9, form.file10):
+            if field.data:
+                try:
+                    process_upload(field.data, user=current_user)
+                except Exception as e:
+                    # A file process_upload will not store was a 500 here; the rest of the form still counts.
+                    if not is_refused_upload(e):
+                        raise
+                    flash(_('%(name)s was not uploaded: it is not an image of a type this site accepts.',
+                            name=field.data.filename), 'error')
 
         return redirect(safe_redirect_target(form.referrer.data, url_for('user.user_files')))
 

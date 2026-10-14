@@ -1388,3 +1388,18 @@ def test_add_local_falls_back_when_the_request_hook_has_not_set_g_site(
 
     assert response.status_code == 200
     assert render.call_args.kwargs['form'] is not None
+
+
+@pytest.mark.parametrize('field', ['icon_file', 'banner_file'])
+def test_an_image_that_is_not_accepted_is_a_400_not_a_500(app, creator, monkeypatch, field):
+    """The create form's icon and banner go through save_icon_file and save_banner_file, not process_upload: a file
+    either refuses is their 400, with the upload removed (open_upload_image), and no community is made."""
+    import os
+
+    client, token, founder = creator
+    monkeypatch.setattr('app.community.util.gibberish', lambda length: 'refusedupload00')
+    response, render = _add(app, client, token, **{field: (io.BytesIO(b'not an image at all'), 'picture.png')})
+
+    assert response.status_code == 400
+    assert Community.query.filter_by(name='brandnew').count() == 0
+    assert not os.path.exists('app/static/media/communities/re/fu/refusedupload00.png')

@@ -40,6 +40,16 @@ def open_uploaded_image(path, allowed_extensions):
     return img
 
 
+UPLOAD_REFUSED = 'filetype not allowed'
+
+
+def is_refused_upload(exc: Exception) -> bool:
+    """Whether exc is process_upload's refusal of a file it will not store: an extension the list does not name, or
+    bytes Pillow cannot decode, reads as another format or finds over IMAGE_PIXEL_CAP. The upload is already gone,
+    so a web form flashes it rather than letting it become a 500."""
+    return str(exc) == UPLOAD_REFUSED
+
+
 def process_upload(image_file, destination='posts', user: User | None = None):
     # should have errored earlier if no upload, but just to be paranoid
     if not image_file or image_file.filename == '':

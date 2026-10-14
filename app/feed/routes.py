@@ -31,6 +31,7 @@ import app.shared.community as shared_community
 # The module, not the names: app.shared.feed reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.feed)
 import app.shared.feed as shared_feed
+from app.shared.upload import is_refused_upload
 from app.utils import back, show_ban_message, piefed_markdown_to_lemmy_markdown, markdown_to_html, render_template, \
     user_filters_posts, joined_communities, menu_instance_feeds, validation_required, feed_membership, \
     gibberish, get_task_session, instance_banned, menu_subscribed_feeds, referrer, community_membership, \
@@ -75,10 +76,16 @@ def feed_new():
         if g.site.enable_nsfl is False:
             form.nsfl.data = False
 
-        shared_feed.make_feed(form, SRC_WEB, None, form.icon_file.data, form.banner_file.data)
-
-        flash(_('Your new Feed has been created.'))
-        return redirect(url_for('user.user_myfeeds', actor=current_user.link()))
+        try:
+            shared_feed.make_feed(form, SRC_WEB, None, form.icon_file.data, form.banner_file.data)
+        except Exception as e:
+            # An icon or banner process_upload will not store was a 500; it is the form again, as filled in.
+            if not is_refused_upload(e):
+                raise
+            flash(_('The icon or banner is not an image of a type this site accepts.'), 'error')
+        else:
+            flash(_('Your new Feed has been created.'))
+            return redirect(url_for('user.user_myfeeds', actor=current_user.link()))
 
     # Create Feed from a topic
     # D1395. `type=int`, and read ONCE rather than twice. A 404 rather than an
@@ -175,7 +182,14 @@ def feed_edit(feed_id: int):
         # D711: the slug is edit_feed's alone. Renaming here first hid the rename
         # from it, so a renamed feed's ActivityPub urls were never moved.
         old_url = feed_to_edit.name
-        shared_feed.edit_feed(edit_feed_form, feed_to_edit, SRC_WEB, None, edit_feed_form.icon_file.data, edit_feed_form.banner_file.data, from_scratch=False)
+        try:
+            shared_feed.edit_feed(edit_feed_form, feed_to_edit, SRC_WEB, None, edit_feed_form.icon_file.data, edit_feed_form.banner_file.data, from_scratch=False)
+        except Exception as e:
+            # As feed_new: refused before edit_feed changes anything.
+            if not is_refused_upload(e):
+                raise
+            flash(_('The icon or banner is not an image of a type this site accepts.'), 'error')
+            return redirect(url_for('feed.feed_edit', feed_id=feed_id))
         url_changed = feed_to_edit.name != old_url
 
         flash(_('Settings saved.'))
