@@ -3,7 +3,7 @@ import re
 from app.utils import (allowlist_html, community_link_to_href, escape_img, feed_link_to_href,
                        handle_lemmy_autocomplete, links_with_parens,
                        mastodon_extra_field_link, person_link_to_href,
-                       piefed_markdown_to_lemmy_markdown, pop_code, remove_images, stash_code_html, stash_code_md,
+                       piefed_markdown_to_lemmy_markdown, pop_code, pop_link, remove_images, stash_code_html, stash_code_md,
                        stash_link_html, escape_non_html_angle_brackets, handle_bold_em)
 from tests.test_allowlist_html import assert_linear, pump
 from tests.test_markdown_to_html import corpus_texts, random_texts
@@ -277,3 +277,15 @@ class TestCodeStashRoundTrip:
     def test_a_preprocessor_gives_the_code_back(self):
         assert escape_non_html_angle_brackets('`x ```<y>``` z`') == '`x ```<y>``` z`'
         assert handle_bold_em('`a ```**b**``` c`') == '`a ```**b**``` c`'
+
+    def test_thousands_of_snippets_are_restored_in_linear_time(self):
+        """One str.replace over the whole text per snippet: 2 s for one preprocessor over 64 KiB of `a` spans
+        (fuzz: markdown_preprocessors/many_code_spans, many_html_code_spans, markdown_code_stash/fence_pump)."""
+        assert_linear(self, [pump('`a` ')], handle_bold_em, seconds=0.5)
+        text = pump('<a href=x>y</a> ')
+        snippets, stashed = stash_link_html(text, 'PH')
+        assert_linear(self, [stashed], lambda stashed: pop_link(snippets, stashed, 'PH'), seconds=0.5)
+        assert pop_link(snippets, stashed, 'PH') == text
+
+    def test_an_index_no_snippet_has_is_left_as_it_is(self):
+        assert pop_code(['a'], 'PH0$ PH1$ PH01$', 'PH') == 'a PH1$ PH01$'

@@ -2085,13 +2085,27 @@ def stash_code_md(text: str, placeholder: str) -> tuple[list, str]:
     return (code_snippets, text)
 
 
-def pop_code(code_snippets: list, text: str, placeholder: str) -> str:
-    # Last stashed first: stash_code_md lifts inline code after fenced blocks, so an inline snippet can hold a
-    # fenced block's placeholder, which has to be back in the text before that block is looked for.
-    for i, code in reversed(list(enumerate(code_snippets))):
-        text = text.replace(f"{placeholder}{i}$", code)
+def _restore_snippets(snippets: list, text: str, placeholder: str) -> str:
+    """Every '{placeholder}{i}$' in `text` replaced by snippets[i], in one pass over the text.
 
-    return text
+    It used to be one str.replace over the whole text per snippet, which is the number of snippets times the
+    length of the text: 2 s for one preprocessor over 64 KiB of `a` spans, and markdown_to_html runs eight.
+    A snippet can hold an earlier snippet's placeholder (stash_code_md lifts inline code after fenced blocks, so an
+    inline span can carry a block's), so a restored snippet is restored in turn. An index no snippet has is left
+    as it is, as replace() left it."""
+    if not snippets:
+        return text
+    token = re.compile(re.escape(placeholder) + r'(0|[1-9][0-9]*)\$')
+
+    def restore(match):
+        index = int(match.group(1))
+        return token.sub(restore, snippets[index]) if index < len(snippets) else match.group(0)
+
+    return token.sub(restore, text)
+
+
+def pop_code(code_snippets: list, text: str, placeholder: str) -> str:
+    return _restore_snippets(code_snippets, text, placeholder)
 
 
 def stash_link_html(text: str, placeholder: str) -> tuple[list, str]:
@@ -2109,10 +2123,7 @@ def stash_link_html(text: str, placeholder: str) -> tuple[list, str]:
 
 
 def pop_link(link_snippets: list, text: str, placeholder: str) -> str:
-    for i, link in enumerate(link_snippets):
-        text = text.replace(f"{placeholder}{i}$", link)
-
-    return text
+    return _restore_snippets(link_snippets, text, placeholder)
 
 
 def url_is_parseable(url) -> bool:
