@@ -25,7 +25,7 @@ PieFed should behave, that choice was put to the project owner and the owner's
 ruling was implemented; none of the behaviour changes below were decided by
 the implementer alone.
 
-After the register closed (2026-10-01 to 2026-10-13), work moved to feature
+After the register closed (2026-10-01 to 2026-10-14), work moved to feature
 and hardening tracks, each with a design spec under `docs/superpowers/specs/`:
 
 - ActivityPub audience: followers-only posts and replies, stored, enforced on
@@ -45,21 +45,21 @@ and hardening tracks, each with a design spec under `docs/superpowers/specs/`:
 - Fuzzing every input surface with atheris, with each finding fixed
   (`2026-10-13-fuzz-all-input-surfaces-design.md`).
 
-The range contains 3,143 commits:
+The range contains 3,250 commits:
 
 | Type | Commits |
 |---|---|
-| `fix` | 1,103 |
-| `test` | 1,074 |
-| `docs` | 699 |
+| `fix` | 1,179 |
+| `test` | 1,099 |
+| `docs` | 702 |
 | `feat` | 146 |
-| `refactor` | 47 |
+| `refactor` | 48 |
 | `chore` | 39 |
 | `security` | 12 |
 | `perf` | 6 |
-| other (`revert`, `build`, `deploy`, untyped) | 17 |
+| other (`revert`, `build`, `deploy`, untyped) | 19 |
 
-The test suite collects 22,420 tests.
+The test suite collects 23,526 tests.
 
 ---
 
@@ -67,10 +67,11 @@ The test suite collects 22,420 tests.
 
 ### 2.1 Database migrations
 
-Twenty-five Alembic migrations were added. They form a single chain on top of
+Twenty-six Alembic migrations were added. They form a single chain on top of
 `7b8bf43fa079`, which is already present in v1.7.17, so `flask db upgrade`
-applies them in the order below. Several of them rewrite data; none delete
-rows.
+applies them in the order below. Several of them rewrite data. Only the last
+deletes rows: it merges rows that name one IPv6 address in different
+spellings.
 
 The NOT NULL migrations among the first four use a lock-friendly recipe: each adds a
 `CHECK (col IS NOT NULL) NOT VALID` constraint, validates it (which scans the
@@ -106,10 +107,12 @@ scan. The backfill `UPDATE`s touch only rows that are actually NULL.
 | 23 | `b8e2d4f6a1c3` language_variants | Adds the JSONB `language_variants` to `post` and `post_reply`. (`a4c1460f`) | No |
 | 24 | `c9f3a5b7d2e4` vote_federated_like | Adds the nullable `federated_like` to `post_vote` and `post_reply_vote`. (`f6cec283`, `df3e8cce`) | No |
 | 25 | `d4a8e2c6f1b9` server_view_member | Creates `server_view_member` (user, instance), the joins of microblog server views. (`c91d5054`) | No |
+| 26 | `3d52b8a19cf5` ipv6_canonical_hosts | Rewrites IPv6 hosts in `domain`, `banned_instances` and `allowed_instances` to one canonical spelling (`[0:0::1]` becomes `::1`). `domain` rows that name the same address are merged into the oldest or already-canonical row: flags are OR-ed, `post_count` is summed, a posting warning is kept, and every foreign key to `domain.id` (found from the catalogue: `post`, `post_reply`, `scheduled_post`, `domain_block`) is repointed before the duplicates are deleted. A user's block of a merged row is dropped when that user already blocks the survivor. A repeated `banned_instances` or `allowed_instances` row is deleted. Hosts without a `:` are untouched. (`82f6e115`) | Yes, IPv6 host rows only. Deletes duplicates. Not reversible |
 
 Downgrades remove defaults, constraints, columns and the new tables, but do
-not restore the NULLs, invented counters, rankings or cross-post links that
-the upgrades replaced; there is no record of which rows held them.
+not restore the NULLs, invented counters, rankings, cross-post links or
+merged host rows that the upgrades replaced; there is no record of which rows
+held them. The downgrade of `3d52b8a19cf5` does nothing.
 
 ### 2.2 Configuration
 
@@ -415,6 +418,62 @@ The translate buttons translate the variant shown (`f6d1860c`).
 **Media objects.** A Create of a bare `Audio`, `Image`, `Document` or `Video`
 object becomes a post (`7b967d8f`, `36ad000a`), and an Audio post plays on
 its page even when its URL has no audio extension (`97cc40e3`).
+
+**Input limits from the fuzzing track.** The fuzzing track (section 4) set
+limits on input that could cost seconds of CPU or crash a request:
+
+- **Long posts render truncated.** `markdown_to_html` renders at most 25,000
+  characters of one text and puts `…` in place of the rest. The markdown2
+  constructs whose cost is quadratic in their length (`![a::b](`, runs of
+  `![` and of `<img `) are neutralised first; ordinary text is unchanged.
+  The worst case measured was about 1 s (`5ff48e37`).
+- **Images over 50 megapixels are refused.** This applies on every decode
+  path: uploads, post edits, icons and banners, link thumbnails and the
+  background resizing of federated images. The check runs at the header, and
+  again for each GIF frame, ICO entry and TIFF tile, before a pixel is
+  decoded. Pillow used to decode up to 179 MP, so a 6 KB PNG could cost seconds
+  of CPU and hundreds of MB (`5ecefc65`).
+- **Link thumbnails from other servers are capped at 16 megapixels,**
+  counting every frame. A 29-byte GIF could declare a 37.7 MP screen. Larger
+  sources get no thumbnail. Local uploads keep the 50 MP cap (`97c29538`).
+- **Stored images carry no EXIF or XMP.** With `MEDIA_IMAGE_FORMAT=AVIF`, the
+  uploader's EXIF and XMP, including GPS position and camera make, were
+  copied into the stored file. Every re-encoded image is now saved without
+  them, and malformed EXIF no longer fails the save (`bf6112c3`).
+- **Uploads Pillow cannot handle are refused, not 500s.** The message is
+  "filetype not allowed" on the web forms and a 400 on icon and banner
+  uploads, and the file is removed. This covers images Pillow cannot decode
+  (`01beb863`, `43e08474`, `78023ec5`), an icon in a format PieFed does not
+  accept (`bed3b48c`), and a GIF icon that cannot be written back
+  (`393f1c21`). The user-files, feed create and feed edit forms show the
+  refusal as a message, also for an SVG that cannot be sanitised (`a79b7108`,
+  `dbd4051d`). A feed icon stored before its banner is refused is deleted
+  again (`1e25198d`). `.mpo` photos are stored as RGB instead of failing
+  (`e90ea1c4`).
+- **A query string that is not UTF-8 gets a 400** on every route, not only
+  the API (`b5a1c9c0`, `e7c5414f`).
+- **Bulk follows are capped at 500.** The "Add people" box and the Mastodon
+  follows CSV follow the first 500 handles, like the settings import, and
+  the message counts those followed (`0ac2c67b`).
+- **Settings import.** A user note in a PieFed settings export imports again
+  (`6113c95e`). A file that is not a JSON object imports nothing, and an
+  entry of the wrong shape is skipped (`9ca010c3`, `a6ac7522`).
+- **Flair colours must be `#hex`.** A peer's flair colour that is not one is
+  stored as no colour (`6017465e`). The API (`b524a804`) and the local flair
+  form (`08973db1`) refuse it.
+- **IPv6 bans match every spelling.** Domain bans, instance bans, user domain
+  blocks, discovery's banned-domain check, the admin ban-list import,
+  defederation subscriptions and `flask init-db` all compare and store IPv6
+  hosts canonically. Migration 26 rewrites existing rows (`283b7855`,
+  `3419a94d`, `3c36e318`, `82f6e115`, `9d3510f9`).
+- **The admin ban-list upload** refuses a file that is not a ban list with a
+  message (`10a21a6d`).
+- **NNTP clients.** An article body keeps its indentation and trailing
+  spaces (`b7c85d14`). A client that sends LF-only line ends works
+  (`2e1eb90b`). A line split over several reads is read whole
+  (`9bec2994`). LISTGROUP of a group not yet selected sends one status line
+  (`840e4935`). Malformed commands get an NNTP error reply instead of
+  closing the connection (section 4).
 
 ### 2.4 API contract changes (for client developers)
 
@@ -844,7 +903,36 @@ were committed as `fix:`.
   unclosed input, a ReDoS. Each was fixed to run in linear time (`534e6183` to
   `bf3dd349`).
 
+- Images up to 179 MP, a few KB on the wire, were decoded at full size.
+  Images are now capped at 50 MP, and remote link thumbnails at 16 MP,
+  counting every frame (`5ecefc65`, `97c29538`).
+- markdown2 constructs with quadratic cost could hold a request for minutes;
+  they are neutralised and rendering is capped at 25,000 characters
+  (`5ff48e37`).
+- The NNTP server buffered a line without limit before refusing it, and its
+  range commands looked up every number in a client-supplied range
+  (`4ac699b9`, `e01d68cc`). An API JSON body nested deeply enough to exhaust
+  the decoder was a 500 (`52f1b7c8`).
+
+**Ban bypasses**
+- `url_is_storable` read a host differently from a browser, so a banned
+  domain could pass:
+  - written with an ideographic full stop (U+3002) (`6918a4ab`);
+  - as a shorthand IPv4 address such as `127.1` (`6d832f4c`);
+  - with a space or another character no hostname holds (`7910ed89`,
+    `09ca51aa`).
+- An IPv6 address in a spelling other than the one banned passed domain,
+  instance and discovery bans (`283b7855`, `3419a94d`, `3c36e318`).
+- `is_refused_address` allowed IPv6 site-local addresses, `fec0::/10`
+  (`4a3c0c0d`).
+- Discovery's host check accepted a last label that a browser reads as an
+  IPv4 address, all digits or hex (`0d6f0782`, `e74de868`), and a URL
+  holding a backslash, which browsers read as `/` (`7c90a937`,
+  `516bf971`).
+
 **Information disclosure**
+- Stored AVIF images kept the uploader's EXIF and XMP, including GPS
+  position (`bf6112c3`).
 - `/activities` served any logged activity to anyone (`ec22836d`).
 - Followers-only content leaked through moderator acknowledgements, the
   modlog, notifications, cross-posts and the purge page (`29617f0b`,
@@ -859,7 +947,13 @@ were committed as `fix:`.
   read could pass a domain ban (`bfb1a32e`, `67daf49a`).
 - A comment's translation was swapped into the page unsanitised (`60780390`).
 - The actor-link filters linked handles inside links and code spans
-  (`27dfc34b`).
+  (`27dfc34b`), and rewrote handles inside tag attributes such as `alt`
+  (`6cf54d9c`).
+- A peer's title or name holding a CR or LF, or a body line of whitespace and
+  a dot, could end an NNTP reply early and inject lines into it (`b1201035`,
+  `97ee687b`).
+- `links_with_parens` turned an HTML comment after a link into visible text
+  (`a6fbb7ac`).
 
 ---
 
@@ -1038,9 +1132,13 @@ their features in 2.3 and 2.5. Fixes to code that predates the tracks:
 
 ### Fuzzing track
 
-Atheris harnesses now cover the input surfaces in tiers: signatures and
-transport, ActivityPub JSON, and markdown with ReDoS checks so far. Each
-finding was fixed test-first, one commit per defect. Typical fixes:
+Atheris now fuzzes every external input surface: 72 targets on 12 surfaces,
+run in seven tiers. The tiers are signatures and transport, ActivityPub JSON,
+markdown with ReDoS checks, URLs and discovery, NNTP, the API and imports, and
+image decoding (`2026-10-13-fuzz-all-input-surfaces-design.md`). Each finding
+was fixed test-first, one commit per defect, with its minimised input kept in
+the corpus the suite replays. Where a fix needed a choice about behaviour, the
+owner ruled; those rulings are the limits listed in 2.3. Typical fixes:
 
 - malformed Signature, Content-Length and Accept headers are a format error
   rather than an exception (`959a73d1`, `ce9f14cd`, `28803316`, `3a0c91fc`);
@@ -1050,7 +1148,17 @@ finding was fixed test-first, one commit per defect. Typical fixes:
 - a gallery reads at most 20 attachment entries (`a2cf04a8`);
 - markdown nested past markdown2's recursion limit renders nothing
   (`e5c030c5`);
-- the linear-time regex rewrites listed in 3.1.
+- the linear-time regex rewrites listed in 3.1;
+- a URL, User-Agent or webfinger resource that furl or urlparse cannot read
+  is refused instead of raising (`a9177f22`, `59dca6b0`, `afbe4106`);
+- `links_with_parens` moves a `)` without flattening the link's markup
+  (`2cadc5d7`), and `shorten_url` honours its `max_length` (`105767da`);
+- sixteen NNTP handler fixes: wrong argument counts and malformed dates get
+  `501`, a line that is not UTF-8 closes with `205`, AUTHINFO with a NUL is a
+  failed login, and the handler returns when the client closes the
+  connection (`de81c6eb` to `6a38eb3b`);
+- a compressed body in an encoding the capped reader does not decode is
+  refused as such whatever length it declares (`9a077682`).
 
 ---
 
@@ -1149,10 +1257,17 @@ decides redirect safety (`04730629`).
   (`compose.test.yaml`).
 - `run_tests.sh` also runs the client-side tests for `live_feed.js` with node
   when it is installed, and fails below 100% coverage.
-- `tests/fuzz/` holds the atheris harnesses, a smoke campaign
-  (`tests/fuzz/smoke.py`) and corpora replayed by the suite with a per-input
-  time budget for ReDoS.
-- The suite collects 22,420 tests.
+- `tests/fuzz/` holds the atheris targets (`tests/fuzz/targets/`, one module
+  per surface, collected into `REGISTRY`) and the manifest of input surfaces
+  (`tests/fuzz/surfaces.py`). Three gates run in the suite:
+  - a registry test fails when a surface has no target or a target has no
+    corpus;
+  - the corpus replay fails an input that runs over its target's CPU-time
+    budget, scaled to the machine's measured speed;
+  - the smoke script's own test.
+  `python -m tests.fuzz.smoke --seconds N` runs every target as a campaign.
+  `tests/README.md` describes it all (`6cddd020`).
+- The suite collects 23,526 tests.
 
 **The findings register.**
 `docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md` records
@@ -1179,8 +1294,17 @@ PERM-1 to PERM-5.
   under-signed requests.
 - **Domain bans match one spelling only.** A ban on `bücher.example` does not
   match `xn--bcher-kva.example`, or the reverse.
-- **Fuzzing is in progress.** Tiers for URLs and feeds, NNTP, API and imports,
-  and image decoding are planned but not yet run.
+- **A GIF with many frames is not capped.** The 50 MP limit applies to each
+  frame, not their total. A local icon upload of 400 frames at 2000x2000
+  costs about 30 s and 3.3 GB. The owner chose not to add a frame cap. Remote
+  thumbnails are bounded by the 16 MP cap, which counts every frame.
+- **Open owner decisions from the fuzzing track:**
+  - whether the background resizing of federated images
+    (`make_image_sizes_async`) also gets the 16 MP remote cap;
+  - whether community creation, which stores an icon before its banner,
+    deletes the icon when the banner is refused, as the feed forms now do;
+  - whether `flask init-db` skips the empty Domain row a trailing newline in
+    a block list adds.
 - **Converted form buttons are not browser-verified.** The Join, Leave,
   notification-bell and feed buttons that changed from links to POST forms
   are covered by tests but have not been checked by hand in a browser.
