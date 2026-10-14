@@ -151,11 +151,26 @@ class TestLinksWithParens:
         html = '<a name="x">y)</a>)'
         assert links_with_parens(html) == html
 
-    def test_a_link_dropped_with_its_outer_link_is_skipped(self):
-        """Moving a ')' out of a link rewrites its content as text, which detaches a link nested in it; reaching
-        that detached link, insert_after raised ValueError out of markdown_to_html (fuzz: markdown_preprocessors/
-        links_with_parens_nested_unbalanced)."""
-        assert links_with_parens('<a href="x)">a<a href="y)">b)</a></a>') == '<a href="x">ab</a>)'
+    def test_a_link_nested_in_a_moved_link_is_kept(self):
+        """Moving a ')' out of a link used to rewrite its content as text, which dropped a link nested in it (and,
+        reaching that detached link, insert_after raised ValueError: fuzz markdown_preprocessors/
+        links_with_parens_nested_unbalanced). Owner ruling 2026-10-13: the inner markup stays. The outer link's
+        ')' is the one in the inner link's text; the inner href still loses its unbalanced ')'."""
+        assert links_with_parens('<a href="x)">a<a href="y)">b)</a></a>') == '<a href="x">a<a href="y">b</a></a>)'
+
+    def test_markup_inside_a_link_survives_a_pulled_in_paren(self):
+        html = '<a href="https://x.example/a_(b"><em>A</em> (b</a>) after'
+        assert links_with_parens(html) == '<a href="https://x.example/a_(b)"><em>A</em> (b)</a> after'
+
+    def test_markup_inside_a_link_survives_a_pushed_out_paren(self):
+        html = '<a href="https://x.example/c)"><strong>c)</strong></a>'
+        assert links_with_parens(html) == '<a href="https://x.example/c"><strong>c</strong></a>)'
+
+    def test_link_text_without_a_trailing_paren_keeps_its_last_character(self):
+        """The href's unbalanced ')' is still dropped, but the text showed no ')', so none is moved: it used to
+        lose its last character ('labe') and gain a ')' after the link."""
+        html = '<a href="https://x.example/a)">label</a>'
+        assert links_with_parens(html) == '<a href="https://x.example/a">label</a>'
 
     def test_balanced_link_is_untouched(self):
         html = '<a href="https://example.com/(x)">(x)</a>'

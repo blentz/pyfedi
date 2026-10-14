@@ -1689,29 +1689,32 @@ def links_with_parens(text: str) -> str:
         target_url = link.get("href")
         if target_url is None:
             continue  # an <a name=...> has no URL whose parens could need balancing
-        if link.parent is None:
-            continue  # nested in a link already rewritten as text below, and dropped with its content
-        contents = link.text
         following_text = link.next_sibling
 
         num_left_paren = target_url.count("(")
         num_right_paren = target_url.count(")")
 
+        # The ')' moves into or out of the end of the link's last text node. Rewriting the link's whole content as
+        # text instead (link.string = ...) dropped every element inside it -- nested markup and nested links -- and
+        # cut the last character off text that did not end in ')' (owner ruling 2026-10-13).
         if following_text and isinstance(following_text, NavigableString) and following_text.startswith(")"):
             if num_left_paren - num_right_paren == 1:
                 # Link dropped the trailing paren, add it back and remove it from trailing text
                 link['href'] = link['href'] + ")"
                 following_text.replace_with(following_text[1:])
-                link.string = contents + ")"
+                link.append(")")
         elif target_url.endswith(")"):
             if num_right_paren - num_left_paren == 1:
-                # Trailing paren added to link, strip it and add it to trailing text
+                # Trailing paren added to link, strip it and, when the link's text shows it, move it to the
+                # trailing text
                 link['href'] = link['href'][:-1]
-                link.string = contents[:-1]
-                if not following_text or not isinstance(following_text, NavigableString):
-                    link.insert_after(")")
-                else:
-                    following_text.replace_with(")" + following_text)
+                texts = [node for node in link.descendants if type(node) is NavigableString]
+                if texts and texts[-1].endswith(")"):
+                    texts[-1].replace_with(texts[-1][:-1])
+                    if not following_text or not isinstance(following_text, NavigableString):
+                        link.insert_after(")")
+                    else:
+                        following_text.replace_with(")" + following_text)
 
     better_html = str(soup)
 

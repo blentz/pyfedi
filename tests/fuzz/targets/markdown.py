@@ -216,21 +216,26 @@ def _check_lemmy_spoilers(text, result):
     _html_stashing(handle_lemmy_spoilers, ('<div class="spoiler_block symmetric">', '</div></details>'))(text, result)
 
 
-def _check_links_with_parens(text, result):
-    """Never raises; keeps every anchor, and changes an href by at most one ')' added or removed at its end.
+def _anchors(html: str) -> list:
+    """(href, names of the elements inside, text) of every anchor, in document order."""
+    return [(a.get('href'), [e.name for e in a.find_all(True)], a.get_text())
+            for a in BeautifulSoup(html, 'html.parser').find_all('a')]
 
-    When it moves a ')' it rewrites the link's content as plain text (link.string = ...), which drops any element
-    inside the link -- a nested <a> among them -- and, where the text does not end in ')', its last character.
-    That is reported as a product decision (2026-10-13), not asserted: the anchor count is compared only when no
-    anchor holds an element."""
-    before, after = _hrefs(text), _hrefs(result)
-    if any(a.find(True) for a in BeautifulSoup(text, 'html.parser').find_all('a')):
-        return
+
+def _check_links_with_parens(text, result):
+    """Never raises; keeps every anchor and every element inside one (nested markup and nested links included),
+    changes an href by at most one ')' added or removed at its end, and changes a link's text only by moving one
+    ')' into or out of its end: the text never loses another character."""
+    before, after = _anchors(text), _anchors(result)
     assert len(before) == len(after), 'links_with_parens changed the number of anchors'
-    for old, new in zip(before, after):
-        if old is None or new == old:
+    for (old_href, old_inner, old_text), (new_href, new_inner, new_text) in zip(before, after):
+        assert new_inner == old_inner, f'links_with_parens changed the markup inside a link: {old_inner} {new_inner}'
+        assert new_text in (old_text, old_text + ')') or (old_text.endswith(')') and new_text == old_text[:-1]), (
+            f'links_with_parens changed link text {old_text[-80:]!r} to {new_text[-80:]!r}')
+        if old_href is None or new_href == old_href:
             continue
-        assert new + ')' == old or old + ')' == new, f'links_with_parens changed href {old!r} to {new!r}'
+        assert new_href + ')' == old_href or old_href + ')' == new_href, (
+            f'links_with_parens changed href {old_href!r} to {new_href!r}')
 
 
 def _check_fix_www_links(text, result):
