@@ -42,13 +42,15 @@ def open_uploaded_image(path, allowed_extensions):
 
 
 UPLOAD_REFUSED = 'filetype not allowed'
+SVG_REFUSED = 'SVG file could not be sanitized'
 
 
 def is_refused_upload(exc: Exception) -> bool:
-    """Whether exc is process_upload's refusal of a file it will not store: an extension the list does not name, or
-    bytes Pillow cannot decode, reads as another format or finds over IMAGE_PIXEL_CAP. The upload is already gone,
-    so a web form flashes it rather than letting it become a 500."""
-    return str(exc) == UPLOAD_REFUSED
+    """Whether exc is process_upload's refusal of a file it will not store: an extension the list does not name,
+    bytes Pillow cannot decode, reads as another format or finds over IMAGE_PIXEL_CAP, or an SVG sanitize_svg will
+    not clean (SVG_REFUSED, its own message for the API). The upload is already gone, so a web form flashes it
+    rather than letting it become a 500."""
+    return str(exc) in (UPLOAD_REFUSED, SVG_REFUSED)
 
 
 def process_upload(image_file, destination='posts', user: User | None = None):
@@ -84,7 +86,7 @@ def process_upload(image_file, destination='posts', user: User | None = None):
     # sanitize_svg has already destroyed it by the time it returns False.
     if final_ext == '.svg':
         if not sanitize_svg(final_place):
-            raise Exception('SVG file could not be sanitized')
+            raise Exception(SVG_REFUSED)
 
     if file_ext.lower() in ('.heic', '.heif'):
         register_heif_opener()

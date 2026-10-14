@@ -1348,3 +1348,44 @@ def test_an_icon_stored_in_s3_before_its_banner_is_refused_is_removed(app, db_se
     assert put == ['feeds/st/or/storediconfile0.png']
     assert bucket.list_objects_v2(Bucket=s3_bucket).get('Contents', []) == []
     assert glob.glob('app/static/tmp/storediconfile0*') == glob.glob('app/static/tmp/refusedbanner00*') == []
+
+
+UNSANITIZABLE_SVG = (b'<!DOCTYPE svg [<!ENTITY xxe "pwned">]>'
+                     b'<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8"/></svg>')
+
+
+@pytest.mark.parametrize('route', ['create', 'edit'])
+@pytest.mark.parametrize('field', ['icon_file', 'banner_file'])
+def test_an_svg_that_cannot_be_sanitized_is_flashed_not_a_500(app, db_session, monkeypatch, route, field):
+    """process_upload raises 'SVG file could not be sanitized' for an SVG sanitize_svg refuses, having destroyed
+    it. Both feed forms let that out as a 500; it is the same flash as any refused icon or banner now, with no
+    feed made or changed and nothing of the file left."""
+    import io
+    import os
+
+    instance, owner, stranger = _seed()
+    feed = _feed(owner, name='lifecyclefeed') if route == 'edit' else None
+    monkeypatch.setattr('app.shared.upload.gibberish', lambda length: 'refusedupload00')
+    files = {field: (io.BytesIO(UNSANITIZABLE_SVG), 'drawing.svg')}
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()), \
+                patch('app.shared.feed.existing_communities', return_value=[]), \
+                patch('app.feed.routes.render_template', return_value='rendered'), \
+                patch('app.feed.routes.flash') as flashed:
+            if route == 'create':
+                response = client.post('/feed/new', data=_create_payload(app, client, url='withansvg', **files),
+                                       content_type='multipart/form-data')
+            else:
+                response = client.post(f'/feed/{feed.id}/edit', data=_edit_payload(app, client, title='Not saved',
+                                                                                  **files),
+                                       content_type='multipart/form-data')
+
+    assert response.status_code == (200 if route == 'create' else 302)
+    messages = [(str(call.args[0]), call.args[1]) for call in flashed.call_args_list]
+    assert messages == [('The icon or banner is not an image of a type this site accepts.', 'error')]
+    assert Feed.query.filter_by(name='withansvg').count() == 0
+    if feed is not None:
+        db.session.expire_all()
+        assert db.session.get(Feed, feed.id).title != 'Not saved'
+    assert not os.path.exists('app/static/media/feeds/re/fu/refusedupload00.svg')

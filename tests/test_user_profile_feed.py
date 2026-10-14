@@ -625,8 +625,37 @@ def test_another_upload_failure_is_not_swallowed(app, env):
     uploader = as_user(app, author)
     token = csrf(app, uploader)
 
-    with patch('app.user.routes.process_upload', side_effect=Exception('SVG file could not be sanitized')):
-        with pytest.raises(Exception, match='SVG file could not be sanitized'):    # TESTING propagates it
+    with patch('app.user.routes.process_upload', side_effect=Exception('something else')):
+        with pytest.raises(Exception, match='something else'):    # TESTING propagates it
             uploader.post('/user/files/upload',
                           data=upload_payload(token, file1=(io.BytesIO(b'<svg/>'), 'a.svg')),
                           content_type='multipart/form-data')
+
+
+UNSANITIZABLE_SVG = (b'<!DOCTYPE svg [<!ENTITY xxe "pwned">]>'
+                     b'<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8"/></svg>')
+
+
+def test_an_svg_that_cannot_be_sanitized_is_flashed_not_a_500(app, env, monkeypatch):
+    """process_upload raises 'SVG file could not be sanitized' for an SVG sanitize_svg refuses, which has already
+    destroyed it. The route let that out as a 500. It is the same flash as any refused file now, naming it, and the
+    other files are still processed."""
+    import io
+    import os
+
+    client, author, community = env
+    uploader = as_user(app, author)
+    token = csrf(app, uploader)
+    monkeypatch.setattr('app.shared.upload.gibberish', lambda length: 'refusedupload00')
+
+    with patch('app.user.routes.flash') as flashed:
+        response = uploader.post('/user/files/upload',
+                                 data=upload_payload(token, file1=(io.BytesIO(UNSANITIZABLE_SVG), 'drawing.svg'),
+                                                     urls='https://example.com/one.png'),
+                                 content_type='multipart/form-data')
+
+    assert response.status_code == 302
+    messages = [(str(call.args[0]), call.args[1]) for call in flashed.call_args_list]
+    assert messages == [('drawing.svg was not uploaded: it is not an image of a type this site accepts.', 'error')]
+    assert [file.source_url for file in File.query.all()] == ['https://example.com/one.png']
+    assert not os.path.exists('app/static/media/posts/re/fu/refusedupload00.svg')
