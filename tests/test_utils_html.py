@@ -243,6 +243,12 @@ class TestActorLinksNeverNestALink:
         assert result == ('<p><a href="https://s.example/community/lookup/c/h.example">!c@h.example</a>'
                           '<a href="https://x.example/">y</a></p>')
 
+    def test_a_comment_opener_is_not_a_community_handle(self):
+        """COMMUNITY_PATTERN read the '!' of '<!--' as a handle's sigil, so '<!--@dd@ex-->' became '<<a ...>!--@dd</a>'
+        and the comment's text was rendered (fuzz: markdown_actor_links/comment_opener_read_as_a_handle)."""
+        html = '<p>x</p><!--@dd@ex-->'
+        assert community_link_to_href(html, server_name_override='s.example') == html
+
     def test_an_unclosed_anchor_or_code_is_read_in_linear_time(self):
         assert_linear(self, [pump('<a '), pump('<a>'), pump('<code '), pump('<code>')],
                       lambda text: person_link_to_href(text, server_name_override='s.example'), seconds=0.5)
