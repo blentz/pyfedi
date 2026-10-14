@@ -7,7 +7,7 @@ Before the fix in this commit, line 1443 read
 whole URL string, before parsing, removing every occurrence rather than a
 leading host label. `awww.evil.example` was recorded as `aevil.example`.
 """
-from app.utils import domain_from_url
+from app.utils import canonical_host, domain_from_url, domain_name_from_url
 from tests.factories import make_domain
 
 
@@ -76,3 +76,34 @@ class TestUnparseable:
 
     def test_an_empty_string_returns_none(self, app, db_session):
         assert domain_from_url('', create=False) is None
+
+
+class TestIpv6Literals:
+    """Owner ruling 2026-10-13: an IPv6 literal is filed under ipaddress's compressed form, without brackets as
+    urlparse gives every host, so the spellings a browser reads as one address share one row and one ban.
+    Mutation that fails these: dropping canonical_host from domain_name_from_url."""
+
+    def test_spellings_of_one_address_share_one_row(self, app, db_session):
+        rows = [domain_from_url(url) for url in
+                ('https://[::1]/a', 'https://[0:0::1]/b', 'https://[0:0:0:0:0:0:0:1]:8080/', 'http://[0::0:1]/')]
+        assert {row.id for row in rows} == {rows[0].id}
+        assert rows[0].name == '::1'
+
+    def test_upper_case_hex_is_the_same_address(self, app, db_session):
+        assert domain_from_url('https://[2001:DB8::0:1]/').name == '2001:db8::1'
+
+    def test_a_host_that_is_no_address_is_left_as_it_is(self, app, db_session):
+        assert domain_name_from_url('https://example.com:8080/') == 'example.com'
+        assert domain_name_from_url('') is None
+        assert domain_name_from_url('https://[::1/x') is None
+        assert domain_name_from_url('mailto:a@example.com') is None
+
+
+class TestCanonicalHost:
+    def test_ipv6_literals_with_or_without_brackets(self):
+        assert canonical_host('[0:0::1]') == canonical_host('0:0:0:0:0:0:0:1') == '::1'
+        assert canonical_host('[::FFFF:7F00:1]') == canonical_host('::ffff:127.0.0.1')
+
+    def test_anything_else_is_unchanged(self):
+        for host in ('example.com', 'example.com:8080', '1.2.3.4', '[zzz]', 'a:b', ''):
+            assert canonical_host(host) == host

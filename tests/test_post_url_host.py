@@ -190,3 +190,20 @@ class TestIngestingANewPost:
         with pytest.raises(Exception, match='banned.example is blocked by admin'):
             _create(env, 'https://banned.example/x', slug='plain')
         db.session.rollback()
+
+
+class TestIpv6LiteralSpellings:
+    """A browser reads [0:0::1], [0:0:0:0:0:0:0:1] and [::1] as one address, and so must the domain ban
+    (owner ruling 2026-10-13): domain_from_url files an IPv6 literal under ipaddress's compressed form, so a ban
+    on one spelling refuses them all. It used to file each spelling under its own text."""
+
+    @pytest.mark.parametrize('url', ['https://[0:0::1]/x', 'https://[0:0:0:0:0:0:0:1]:8443/x', 'https://[::1]/x'])
+    def test_every_spelling_of_a_banned_address_is_refused(self, env, url):
+        banned = make_domain('::1')
+        banned.banned = True
+        db.session.commit()
+
+        assert url_is_storable(url) is True
+        with pytest.raises(Exception, match='::1 is blocked by admin'):
+            _create(env, url, slug='ipv6')
+        db.session.rollback()
