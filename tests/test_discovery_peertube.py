@@ -38,6 +38,13 @@ def test_a_channel_whose_url_is_not_on_its_host_is_dropped(app):
                              'name': 'x'}) is None
 
 
+def test_a_channel_whose_url_has_a_backslash_in_its_authority_is_dropped(app):
+    """urlparse reads tube.example after the '@' of 'own.example\\@tube.example'; a browser reads the backslash as a
+    slash and visits own.example, so the row pointed the entry's actor_url at a host it does not name."""
+    assert channel_to_entry({'url': 'https://own.example\\@tube.example/video-channels/x', 'host': 'tube.example',
+                             'name': 'x'}) is None
+
+
 def test_malformed_rows_are_skipped_not_fatal(app, http_mock):
     """Review focus 1."""
     rows = [None, 'a string', {'url': 42, 'host': 'tube.example'},
