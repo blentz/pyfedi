@@ -1001,7 +1001,8 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
 
             ret.append("")
         for line in article.body.split("\n"):
-            if line.startswith("."):
+            # send_lines strips the line, so whitespace before a dot does not keep it from needing a stuffed one
+            if line.strip().startswith("."):
                 ret.append(f".{line}")
                 continue
             ret.append(line)
