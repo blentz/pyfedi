@@ -727,7 +727,10 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
         for line in lines:
             if self.server.debugging:
                 print("sending", line)
-            self.request.sendall(bytes(line.strip(), "utf-8") + _CRLF)
+            # A CR or LF inside a line -- a remote post's title, say -- would end it early, and the client
+            # would read what follows, "." included, as lines of their own.
+            line = line.strip().replace("\r", " ").replace("\n", " ")
+            self.request.sendall(bytes(line, "utf-8") + _CRLF)
 
     def _getline(self, strip_crlf: bool = True) -> str:
         line = None
