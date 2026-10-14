@@ -401,6 +401,22 @@ def test_an_allowed_extension_passes(db_session, chdir_upload, http_mock):
     assert s.post.image_id is not None
 
 
+def test_an_mpo_upload_is_stored_as_rgb(db_session, chdir_upload, http_mock):
+    """'.mpo' is in the extension list and Pillow saves it as JPEG, but it took the RGBA arm, so with no
+    MEDIA_IMAGE_FORMAT every one failed at the save with 'cannot write mode RGBA as JPEG'. It takes the JPEG arm."""
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/jpeg'})
+    s = _seed()
+    edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+              uploaded_file=make_upload(filename='photo.mpo', fmt='MPO', content_type='image/jpeg'))
+
+    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+    assert [path.suffix for path in written] == ['.mpo']
+    with Image.open(written[0]) as img:
+        assert (img.format, img.mode) == ('JPEG', 'RGB')
+    db.session.refresh(s.post)
+    assert s.post.image_id is not None
+
+
 def test_a_video_upload_is_refused_when_video_uploads_are_off(db_session, chdir_upload):
     """`:464`'s SECOND conjunct taken FALSE with the first TRUE, arc
     `464->466`.
