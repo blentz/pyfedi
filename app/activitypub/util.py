@@ -56,7 +56,7 @@ from app.utils import strip_quote_fallback, FETCH_MAX_BYTES, get_request, get_re
 import app.activitypub.actor as activitypub_actor
 import app.discovery.credits as discovery_credits   # the module: app.discovery.credits imports this one
 import urllib.parse
-from app.utils import random_chars, site_language_id, is_hex_color
+from app.utils import random_chars, site_language_id, is_hex_color, save_image_without_metadata
 from app.visibility import OPEN_VISIBILITIES, can_view, is_open, post_title_for
 from app.discovery.podcast import ensure_podcast_community, podcast_twin_named_by_other
 from app.interop.workarounds import is_castopod_podcast
@@ -3005,7 +3005,7 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
                                         if medium_image_quality:
                                             kwargs['quality'] = int(medium_image_quality)
 
-                                        medium_image.save(final_place, optimize=True, **kwargs)
+                                        save_image_without_metadata(medium_image, final_place, optimize=True, **kwargs)
 
                                         if store_files_in_s3():
                                             content_type = guess_mime_type(final_place)
@@ -3052,7 +3052,7 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
                                         if thumbnail_image_quality:
                                             kwargs['quality'] = int(thumbnail_image_quality)
 
-                                        thumbnail_image.save(final_place_thumbnail, optimize=True, **kwargs)
+                                        save_image_without_metadata(thumbnail_image, final_place_thumbnail, optimize=True, **kwargs)
 
                                         if store_files_in_s3():
                                             content_type = guess_mime_type(final_place_thumbnail)

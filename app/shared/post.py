@@ -29,7 +29,7 @@ from app.utils import render_template, authorise_api_user, shorten_string, gibbe
     opengraph_parse, url_to_thumbnail_file, can_create_post, is_video_hosting_site, recently_upvoted_posts, \
     is_image_url, add_to_modlog, store_files_in_s3, guess_mime_type, retrieve_image_hash, \
     hash_matches_blocked_image, can_upvote, can_downvote, get_recipient_language, to_srgb, can_upload_video, \
-    is_video_url, sanitize_svg, user_ip_banned, ip_address, inspect_image_c2pa, \
+    is_video_url, sanitize_svg, user_ip_banned, ip_address, inspect_image_c2pa, save_image_without_metadata, \
     community_membership_private, is_local_microblogs, communities_banned_from, can_moderate, can_create_post_reply
 import app as app_pkg
 
@@ -624,7 +624,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
             if image_quality:
                 kwargs['quality'] = int(image_quality)
 
-            img.save(final_place, optimize=True, **kwargs)
+            save_image_without_metadata(img, final_place, optimize=True, **kwargs)
             if final_place != original_place:
                 os.unlink(original_place)   # the upload was re-encoded under a new extension (D465)
 

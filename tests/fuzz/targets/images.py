@@ -19,7 +19,8 @@ Properties:
   MEDIA_IMAGE_MAX_DIMENSION, save. Pillow may refuse inside open_uploaded_image, which turns that into 'filetype
   not allowed'; nothing may raise after it, where nothing catches. An image the format check passes is one of the
   formats the extension list names; the result is RGB for a JPEG target and RGBA otherwise, fits
-  MEDIA_IMAGE_MAX_DIMENSION on both sides, and saves and reopens as the format it was saved as, at that size.
+  MEDIA_IMAGE_MAX_DIMENSION on both sides, and saves and reopens as the format it was saved as, at that size,
+  carrying no EXIF and no XMP (the uploader's GPS position and camera make; app.utils.save_image_without_metadata).
 * icon_banner_decode -- save_icon_file (its still-image and its animated-GIF arm) and save_banner_file: the same,
   through open_upload_image (which decodes every frame for the GIF arm and refuses with a 400), with their own
   caps (250 and 40 for an icon and its thumbnail, 1600x600 and 878x500 for a banner).
@@ -77,7 +78,8 @@ from pillow_heif import register_heif_opener
 
 from app.community.util import allowed_extensions
 from app.constants import IMAGE_PIXEL_CAP
-from app.utils import allowed_thumbnail_extensions, inspect_image_c2pa, scale_gif, to_srgb
+from app.utils import IMAGE_METADATA_KEYS, allowed_thumbnail_extensions, inspect_image_c2pa, save_image_without_metadata, \
+    scale_gif, to_srgb
 from config import Config
 from tests.fuzz.targets._target import Target
 
@@ -161,10 +163,11 @@ def _refused(step, *args):
 
 
 def _save(img, fmt: str, quality=None) -> bytes:
-    """img.save(path, optimize=True, format=..., quality=...) as the production paths call it, into memory."""
+    """save_image_without_metadata(img, path, optimize=True, format=..., quality=...) as the production paths call
+    it, into memory."""
     buffer = io.BytesIO()
     kwargs = {'quality': quality} if quality else {}
-    img.save(buffer, format=fmt, optimize=True, **kwargs)
+    save_image_without_metadata(img, buffer, format=fmt, optimize=True, **kwargs)
     return buffer.getvalue()
 
 
@@ -174,11 +177,17 @@ def _format_of(ext: str) -> str:
 
 
 def _assert_saved(saved: bytes, fmt: str, size, label: str) -> None:
+    """The stored output reopens as the format and size it was saved at, and carries no EXIF and no XMP: the
+    uploader's GPS position and camera make are not published with the image (pillow_avif wrote them from
+    img.info, and a malformed block made it raise or write an AVIF Pillow cannot reopen -- upload_decode's
+    avif_invalid_exif_payload and avif_unreadable_exif)."""
     reopened = Image.open(io.BytesIO(saved))
     # One frame saved as MPO is a plain JPEG, and Pillow reads it as one.
     expected = 'JPEG' if fmt == 'MPO' else fmt
     assert reopened.format == expected, f'{label}: saved as {fmt}, reopened as {reopened.format}'
     assert reopened.size == size, f'{label}: saved at {size}, reopened at {reopened.size}'
+    carried = [key for key in IMAGE_METADATA_KEYS if reopened.info.get(key)]  # pillow_heif reads 'exif': None
+    assert not carried, f'{label}: saved as {fmt}, carries {carried}'
 
 
 def _fits(img, box, label: str) -> None:

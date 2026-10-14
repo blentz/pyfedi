@@ -1,7 +1,11 @@
+import io
+
+import pillow_avif  # noqa: F401  -- registers the AVIF writer, as production's first AVIF save does
 import pytest
 from PIL import Image, ImageCms
 
-from app.utils import get_new_frames, save_new_gif, scale_gif, to_srgb
+from app.utils import get_new_frames, save_image_without_metadata, save_new_gif, scale_gif, to_srgb
+from tests.image_samples import MALFORMED_EXIF, assert_no_metadata, jpeg_with_gps_exif, jpeg_with_malformed_exif
 
 
 def make_gif(path, frames=3, size=(64, 64)):
@@ -196,3 +200,30 @@ class TestSaveNewGif:
 
         with Image.open(target) as result:
             assert result.n_frames == 3
+
+
+class TestSaveImageWithoutMetadata:
+    """Every re-encode of an upload or a peer's image saves through this. Pillow keeps a JPEG's EXIF and XMP in
+    img.info through exif_transpose, convert and thumbnail, and the pillow_avif writer copies them from there into
+    the file: the uploader's GPS position and camera make, published with the image. A malformed EXIF block made
+    the same writer raise 'Invalid Exif payload', or write an AVIF Pillow cannot reopen."""
+
+    @pytest.mark.parametrize('fmt', ['AVIF', 'WEBP', 'PNG', 'JPEG'])
+    def test_gps_exif_and_xmp_are_not_written(self, fmt):
+        img = Image.open(io.BytesIO(jpeg_with_gps_exif()))
+        assert 'exif' in img.info and 'xmp' in img.info
+        img = img.convert('RGB' if fmt == 'JPEG' else 'RGBA')
+        out = io.BytesIO()
+
+        save_image_without_metadata(img, out, format=fmt, optimize=True, quality=80)
+
+        assert_no_metadata(io.BytesIO(out.getvalue()), fmt)
+
+    @pytest.mark.parametrize('name', MALFORMED_EXIF)
+    def test_malformed_exif_is_saved_and_reopens(self, name):
+        img = Image.open(io.BytesIO(jpeg_with_malformed_exif(name))).convert('RGBA')
+        out = io.BytesIO()
+
+        save_image_without_metadata(img, out, format='AVIF', optimize=True)
+
+        assert_no_metadata(io.BytesIO(out.getvalue()), 'AVIF')

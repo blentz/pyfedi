@@ -4558,7 +4558,7 @@ def url_to_thumbnail_file(filename) -> File:
                         if medium_image_quality:
                             kwargs['quality'] = int(medium_image_quality)
 
-                        img_170.save(temp_file_path, optimize=True, **kwargs)
+                        save_image_without_metadata(img_170, temp_file_path, optimize=True, **kwargs)
                         thumbnail_width = img_170.width
                         thumbnail_height = img_170.height
 
@@ -4568,7 +4568,7 @@ def url_to_thumbnail_file(filename) -> File:
 
                         # Create filename for 512px thumbnail
                         temp_file_path_512 = os.path.splitext(temp_file_path)[0] + '_512' + final_ext
-                        img_512.save(temp_file_path_512, optimize=True, **kwargs)
+                        save_image_without_metadata(img_512, temp_file_path_512, optimize=True, **kwargs)
                         thumbnail_512_width = img_512.width
                         thumbnail_512_height = img_512.height
                 except Exception as e:
@@ -6946,6 +6946,29 @@ def libretranslate_string(text: str, source: str, target: str):
     except Exception as e:
         current_app.logger.exception(str(e))
         return ''
+
+
+IMAGE_METADATA_KEYS = ('exif', 'xmp', 'XML:com.adobe.xmp')
+
+
+def save_image_without_metadata(img: Image.Image, fp, **kwargs) -> None:
+    """img.save(fp, **kwargs) with no EXIF and no XMP in what is written.
+
+    Every re-encode of an upload or of a peer's image saves through this. Pillow reads a file's EXIF and XMP into
+    img.info, and they survive exif_transpose, convert and thumbnail. The pillow_avif writer copies both from
+    img.info into the file it writes, so with MEDIA_IMAGE_FORMAT=AVIF the uploader's GPS position and camera make
+    were published with the image, and so does pillow_heif's (the WebP, PNG and JPEG writers read them only from
+    the save's own arguments). A malformed EXIF block made the AVIF writer raise 'Invalid Exif payload', or write
+    an AVIF Pillow cannot reopen (tests/fuzz/corpus/upload_decode/avif_*_exif*).
+
+    So both are dropped from img itself, the copy in img.info and any EXIF already parsed from it (getexif(), which
+    pillow_heif falls back to), rather than overridden per save: the writers disagree on what an empty override
+    means (pillow_heif refuses exif=b'', JpegImagePlugin refuses exif=None). img is the caller's re-encoded copy,
+    which nothing reads metadata from afterwards."""
+    for key in IMAGE_METADATA_KEYS:
+        img.info.pop(key, None)
+    img.getexif().clear()
+    img.save(fp, **kwargs)
 
 
 def to_srgb(im: Image.Image, assume="sRGB"):

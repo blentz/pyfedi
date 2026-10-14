@@ -10,7 +10,8 @@ from sqlalchemy import text
 
 from app import db
 from app.models import File, User, user_file, served_path
-from app.utils import can_upload_video, gibberish, ensure_directory_exists, is_video_url, store_files_in_s3, guess_mime_type, sanitize_svg
+from app.utils import can_upload_video, gibberish, ensure_directory_exists, is_video_url, store_files_in_s3, guess_mime_type, sanitize_svg, \
+    save_image_without_metadata
 
 
 def open_uploaded_image(path, allowed_extensions):
@@ -112,7 +113,7 @@ def process_upload(image_file, destination='posts', user: User | None = None):
         if image_quality:
             kwargs['quality'] = int(image_quality)
 
-        img.save(final_place, optimize=True, **kwargs)
+        save_image_without_metadata(img, final_place, optimize=True, **kwargs)
     file_size = os.path.getsize(final_place)
     url = f"{current_app.config['SERVER_URL']}{served_path(final_place)}"  # D1363
 

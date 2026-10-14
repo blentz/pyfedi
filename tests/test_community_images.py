@@ -49,6 +49,7 @@ from app import db
 from app.community.util import save_banner_file, save_icon_file
 from app.constants import IMAGE_PIXEL_CAP
 from app.models import Site
+from tests.image_samples import MALFORMED_EXIF, assert_no_metadata, jpeg_with_gps_exif, jpeg_with_malformed_exif
 
 SVG = (b'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">'
        b'<rect width="10" height="10"/></svg>')
@@ -503,6 +504,27 @@ class TestTheFormatTheInstanceHasChosen:
         try:
             assert file.file_path.endswith('.webp')
             assert file.thumbnail_path.endswith('.webp')
+        finally:
+            cleanup(file)
+
+
+class TestAnAvifCarriesNoUploaderMetadata:
+    """With MEDIA_IMAGE_FORMAT / MEDIA_IMAGE_THUMBNAIL_FORMAT = AVIF the pillow_avif writer copied the upload's EXIF
+    and XMP from img.info into both stored files, GPS position and camera make included. A malformed EXIF block
+    made the save raise 'Invalid Exif payload' (a 500), or wrote an AVIF Pillow cannot reopen. Neither file
+    carries either now, and both reopen."""
+
+    @pytest.mark.parametrize('save', [save_icon_file, save_banner_file], ids=['icon', 'banner'])
+    @pytest.mark.parametrize('content', [jpeg_with_gps_exif((2000, 700))] +
+                             [jpeg_with_malformed_exif(n) for n in MALFORMED_EXIF],
+                             ids=['gps_exif_and_xmp', *MALFORMED_EXIF])
+    def test_neither_stored_file_carries_it(self, env, monkeypatch, save, content):
+        monkeypatch.setitem(current_app.config, 'MEDIA_IMAGE_FORMAT', 'AVIF')
+        monkeypatch.setitem(current_app.config, 'MEDIA_IMAGE_THUMBNAIL_FORMAT', 'AVIF')
+        file = save(a_file(content, 'photo.jpg'))
+        try:
+            assert_no_metadata(file.file_path, 'AVIF')
+            assert_no_metadata(file.thumbnail_path, 'AVIF')
         finally:
             cleanup(file)
 
