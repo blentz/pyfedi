@@ -888,6 +888,9 @@ _HOSTED_URL_SCHEMES = frozenset({'http', 'https', 'ws', 'wss', 'ftp'})
 # 10 microseconds a character.
 MAX_URL_HOST_LENGTH = 253
 
+# The label separators IDNA reads besides '.' (RFC 3490 section 3.1).
+_IDNA_LABEL_SEPARATORS = ('。', '．', '｡')
+
 
 def _host_reads_alike(url: str) -> bool:
     """Whether a browser visits the host `domain_from_url` reads from `url`.
@@ -910,6 +913,11 @@ def _host_reads_alike(url: str) -> bool:
     if url_scheme(url) not in _HOSTED_URL_SCHEMES:
         return True
     if not host or '\\' in parsed.netloc or '%' in host:
+        return False
+    # IDNA splits labels on the ideographic, fullwidth and halfwidth full stops as well as '.', so a browser visits
+    # banned.example for 'banned。example', which urlparse reads as one label. NFKC maps the latter two to
+    # '.' and U+3002, but U+3002 maps to itself and would pass every label check below.
+    if any(stop in host for stop in _IDNA_LABEL_SEPARATORS):
         return False
     for label in host.split('.'):
         if not label:
