@@ -399,7 +399,7 @@ container rather than editing it by hand:
 | `nntp` | 19 | `nntp_datetime`, `nntp_range`, `nntp_names`, `nntp_handler` (500 ms), `nntp_article_framing` (500 ms) |
 | `api` | 7 | `api_schemas`, `api_request_args` (app), `api_validators`, `safe_order_by` |
 | `imports` | 5 | `settings_import`, `mastodon_csv`, `ban_list` |
-| `images` | 10 | `upload_decode` (500 ms), `icon_banner_decode` (200 ms), `remote_thumbnail_decode` (200 ms), `to_srgb` (200 ms), `scale_gif` (200 ms), `c2pa_inspect` (50 ms) |
+| `images` | 10 | `upload_decode` (500 ms), `icon_banner_decode` (200 ms), `remote_thumbnail_decode` (1200 ms), `to_srgb` (200 ms), `scale_gif` (200 ms), `c2pa_inspect` (50 ms) |
 
 ### The three gates
 
