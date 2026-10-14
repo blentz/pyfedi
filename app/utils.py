@@ -2399,7 +2399,7 @@ def shorten_string(input_str, max_length=50):
 
 def shorten_url(input: str, max_length=20):
     if input:
-        return shorten_string(input.replace('https://', '').replace('http://', ''))
+        return shorten_string(input.replace('https://', '').replace('http://', ''), max_length)
     else:
         return ''
 

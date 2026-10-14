@@ -146,6 +146,14 @@ class TestShortenUrl:
         """
         assert shorten_url(None) == ''
 
+    def test_max_length_is_honoured(self):
+        """It used to ignore max_length and always cut at shorten_string's default of 50 (owner ruling
+        2026-10-13: honour it). No caller or template passes a length, so nothing displayed depended on 50."""
+        url = 'https://' + 'a' * 80
+        assert shorten_url(url) == 'a' * 17 + '…'
+        assert shorten_url(url, max_length=30) == 'a' * 27 + '…'
+        assert shorten_url('https://example.com', max_length=11) == 'example.com'
+
 
 class TestIsBot:
     def test_bot_substring(self):
