@@ -22,6 +22,7 @@ from app.models import File, Notification, NotificationSubscription, Poll, PollC
     PostBookmark, PostVote, Report, Site, User, utcnow, Instance, Event, Community, CommunityFlair, \
     votes_cast_today, adjust_domain_post_count, served_path, _as_url
 from app.shared.tasks import task_selector
+from app.shared.upload import open_uploaded_image
 from app.visibility import is_open, post_title_for
 from app.utils import render_template, authorise_api_user, shorten_string, gibberish, ensure_directory_exists, \
     piefed_markdown_to_lemmy_markdown, markdown_to_html, fixup_url, domain_from_url, \
@@ -606,30 +607,26 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
             import pillow_avif  # NOQA  # do not remove  # lazy: registers Pillow's AVIF plugin only on the AVIF path
 
         if not final_place.endswith('.svg') and not final_place.endswith('.gif') and not is_video_url(final_place):
-            img = Image.open(final_place)
-            # D579: Pillow reports a .heic file as 'HEIF'
-            if '.' + img.format.lower() in allowed_extensions or (img.format == 'HEIF' and '.heic' in allowed_extensions):
-                img = ImageOps.exif_transpose(img)
-                if (image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg']):
-                    img = to_srgb(img)
-                else:
-                    img = img.convert('RGBA')
-                img.thumbnail((image_max_dimension, image_max_dimension), resample=Image.LANCZOS)
-
-                kwargs = {}
-                original_place = final_place
-                if image_format:
-                    kwargs['format'] = image_format.upper()
-                    final_ext = '.' + image_format.lower()
-                    final_place = os.path.splitext(final_place)[0] + final_ext
-                if image_quality:
-                    kwargs['quality'] = int(image_quality)
-
-                img.save(final_place, optimize=True, **kwargs)
-                if final_place != original_place:
-                    os.unlink(original_place)   # the upload was re-encoded under a new extension (D465)
+            img = open_uploaded_image(final_place, allowed_extensions)
+            img = ImageOps.exif_transpose(img)
+            if (image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg']):
+                img = to_srgb(img)
             else:
-                raise Exception('filetype not allowed')
+                img = img.convert('RGBA')
+            img.thumbnail((image_max_dimension, image_max_dimension), resample=Image.LANCZOS)
+
+            kwargs = {}
+            original_place = final_place
+            if image_format:
+                kwargs['format'] = image_format.upper()
+                final_ext = '.' + image_format.lower()
+                final_place = os.path.splitext(final_place)[0] + final_ext
+            if image_quality:
+                kwargs['quality'] = int(image_quality)
+
+            img.save(final_place, optimize=True, **kwargs)
+            if final_place != original_place:
+                os.unlink(original_place)   # the upload was re-encoded under a new extension (D465)
 
         url = f"{current_app.config['SERVER_URL']}{served_path(final_place)}"  # D1363
 
