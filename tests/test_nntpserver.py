@@ -45,3 +45,13 @@ def test_the_handler_returns_when_the_client_closes_in_the_middle_of_an_article(
 
 def test_an_unfinished_line_at_close_gets_no_reply():
     assert session_replies(b'GROUP a.example\r\nQUI') == [READY, '211 3 1 3 a.example']
+
+
+def test_a_command_that_is_not_utf8_closes_the_connection():
+    """_getline decoded every line as UTF-8 unguarded, so one byte that is not killed the handler mid-session."""
+    assert session_replies(b'GROUP \xff\r\nQUIT\r\n') == [READY, CLOSING]
+
+
+def test_an_article_line_that_is_not_utf8_closes_the_connection():
+    assert session_replies(b'POST\r\nSubject: \xfe\r\n.\r\nQUIT\r\n', config=POSTING) == [
+        POSTING_READY, '340 Input article; end with <CR-LF>.<CR-LF>', CLOSING]

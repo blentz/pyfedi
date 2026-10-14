@@ -734,7 +734,10 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
                 line = line[:-2]
             elif line[-1:] in _CRLF:
                 line = line[:-1]
-        return line.decode("utf-8")
+        try:
+            return line.decode("utf-8")
+        except UnicodeDecodeError:
+            raise NNTPDataError("Line is not UTF-8.")
 
     def _getlines(self) -> str:
         lines = []
