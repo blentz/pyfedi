@@ -316,13 +316,21 @@ class _Socket:
                 self.spinning = True
                 raise _Spinning
             return b''
+        # Two reads make _getline refuse a valid line as too long (reported, not fixed): one of nothing but
+        # whitespace in the middle of a line, and one that ends in the middle of a line after a complete one (the
+        # leftover fragment trips the check once the complete line is taken). The fake produces neither, so a
+        # campaign keeps hunting past them: a read that holds an LF ends at its last LF, a whitespace-only read
+        # is extended to the next byte that is not, and a trailing fragment of only whitespace is never sent.
+        if not self._stream.strip() and b'\n' not in self._stream:
+            self._stream = b''
+            return self.recv(size)
         limit = min(size, len(self._stream))
         count = min(self._chunk, limit)
-        # A read of nothing but whitespace, in the middle of a line, makes _getline refuse the line as too long
-        # (reported, not fixed: it is a valid command split across reads). The fake never produces one, so a
-        # campaign keeps hunting past it.
         while count < limit and not self._stream[:count].strip() and b'\n' not in self._stream[:count]:
             count += 1
+        last_lf = self._stream[:count].rfind(b'\n')
+        if last_lf >= 0:
+            count = last_lf + 1
         piece, self._stream = self._stream[:count], self._stream[count:]
         if self.handler is not None:   # _getline appends the piece to its buffer straight away
             self.max_buffered = max(self.max_buffered, len(self.handler._buffer) + len(piece))
