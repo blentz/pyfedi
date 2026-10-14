@@ -731,8 +731,10 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
             if self.server.debugging:
                 print("sending", line)
             # A CR or LF inside a line -- a remote post's title, say -- would end it early, and the client
-            # would read what follows, "." included, as lines of their own.
-            line = line.strip().replace("\r", " ").replace("\n", " ")
+            # would read what follows, "." included, as lines of their own. Only CR and LF go: an article body
+            # keeps its indentation and the trailing spaces of a markdown hard break. No caller depends on
+            # more: a status, header, overview or HDR line starts with its code, name or number.
+            line = line.rstrip("\r\n").replace("\r", " ").replace("\n", " ")
             self.request.sendall(bytes(line, "utf-8") + _CRLF)
 
     def _getline(self, strip_crlf: bool = True) -> str:
@@ -994,8 +996,8 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
 
             ret.append("")
         for line in article.body.split("\n"):
-            # send_lines strips the line, so whitespace before a dot does not keep it from needing a stuffed one
-            if line.strip().startswith("."):
+            # send_lines keeps the start of the line, so only a line that starts with a dot needs a stuffed one
+            if line.startswith("."):
                 ret.append(f".{line}")
                 continue
             ret.append(line)

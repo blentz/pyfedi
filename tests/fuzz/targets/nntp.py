@@ -409,11 +409,6 @@ def _sent_lines(sent: bytes) -> deque:
     return deque(line.decode('utf-8') for line in lines)
 
 
-def _ink(text: str) -> str:
-    """Text without its whitespace: what has to survive the trip, however lines are trimmed."""
-    return ''.join(text.split())
-
-
 class _Replies:
     """Reads the reply stream in step with the commands, and checks each reply that carries an article."""
 
@@ -458,7 +453,10 @@ class _Replies:
         expected = self.bodies[info.message_id].split('\n')
         assert len(lines) == len(expected), f'{command!r} sent {len(lines)} body lines, not {len(expected)}'
         for sent, written in zip(lines, expected):
-            assert _ink(sent) == _ink(written), f'{command!r} sent body line {sent!r} for {written!r}'
+            # Exactly the line written, indentation and trailing spaces included; only a CR at its end is dropped
+            # and one inside it sent as a space, since a line sent cannot hold one.
+            written = written.rstrip('\r').replace('\r', ' ')
+            assert sent == written, f'{command!r} sent body line {sent!r} for {written!r}'
 
     def check_block(self, command, status, lines):
         code = status[:3]
