@@ -607,7 +607,10 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
         if group_name != self.current_selected_newsgroup:
             if not self.select_group(group_name):
                 return
-        group = self.server.groups[typing.cast(str, self.current_selected_newsgroup)]
+        group = self._selected_group()
+        if group is None:
+            self.send_lines(["412 No newsgroup selected"])
+            return
         if len(tokens) > 1:
             range_ = parse_range(tokens[1])
         else:
@@ -706,6 +709,10 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
             return True
         self.send_lines(["411 No such newsgroup"])
         return False
+
+    def _selected_group(self) -> typing.Optional[NNTPGroup]:
+        """The selected group, or None if it is no longer listed: logging in can hide one the user may not read."""
+        return self.server.groups.get(typing.cast(str, self.current_selected_newsgroup))
 
     def send_lines(self, lines: typing.List[str]) -> None:
         for line in lines:
@@ -811,9 +818,10 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
                     return
                 # Second form (range specified)
                 if not range_[1]:
-                    group = self.server.groups[
-                        typing.cast(str, self.current_selected_newsgroup)
-                    ]
+                    group = self._selected_group()
+                    if group is None:
+                        self.send_lines(["412 No newsgroup selected"])
+                        return
                     range_ = (range_[0], group.high)
                 ret = []
                 for i in range(range_[0], typing.cast(int, range_[1]) + 1):
@@ -862,7 +870,10 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
             range_ = parse_range(tokens[0])
             if range_:
                 if not range_[1]:
-                    group = self.server.groups[self.current_selected_newsgroup]
+                    group = self._selected_group()
+                    if group is None:
+                        self.send_lines(["412 No newsgroup selected"])
+                        return
                     range_ = (range_[0], group.high)
                 self.send_lines(["224 Overview information follows (multi-line)"])
                 for i in range(range_[0], typing.cast(int, range_[1]) + 1):

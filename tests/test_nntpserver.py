@@ -98,3 +98,15 @@ def test_newgroups_with_a_malformed_date_is_a_syntax_error():
 def test_newnews_without_a_time_is_a_syntax_error():
     """newnews() let two arguments through its length check, then unpacked three: ValueError."""
     assert session_replies(b'NEWNEWS a.example 20250101\r\nQUIT\r\n') == [READY, '501 Syntax Error', CLOSING]
+
+
+LOGIN = b'AUTHINFO USER alice\r\nAUTHINFO PASS secret word\r\n'
+
+
+@pytest.mark.parametrize('command', [b'OVER 1-', b'XHDR Subject 1-', b'LISTGROUP'])
+def test_a_group_hidden_by_logging_in_is_no_longer_selected(command):
+    """PieFedNNTPServer.groups leaves out a community the user is banned from once they log in; the handler then
+    looked the selected group up by name and raised KeyError."""
+    assert session_replies(b'GROUP c.example\r\n' + LOGIN + command + b'\r\nQUIT\r\n', config=b'\x01\x05') == [
+        READY, '211 1 1 1 c.example', '381 Enter passphrase', '281 Authentication accepted',
+        '412 No newsgroup selected', CLOSING]
