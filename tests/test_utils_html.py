@@ -176,40 +176,29 @@ class TestLinksWithParens:
         html = '<a href="https://example.com/(x)">(x)</a>'
         assert links_with_parens(html) == html
 
-    def test_a_pushed_out_paren_absorbs_a_following_comment_into_text(self):
-        """Covers app/utils.py line 953 / branch [950, 953], AND discriminates.
+    def test_a_pushed_out_paren_leaves_a_following_comment_a_comment(self):
+        """The push-out arm with a node FOLLOWING the link: the `)` goes in front of it when it is text, and as a
+        new sibling otherwise.
 
-        The final whole-branch review found that line uncovered with no recorded
-        reason. It is the second arm of the push-out branch -- reached when a
-        node FOLLOWS the link, so the `)` is prepended to that node instead of
-        inserted as a new sibling.
-
-        A test using ordinary following text covers the line and catches
-        NOTHING: prepending `)` to a text node and inserting `)` as a sibling
-        render identically, so collapsing both arms onto insert_after passes it.
-        That test was written, measured against exactly that break, found to be
-        worthless, and deleted. This one is its replacement.
-
-        PINS A PRE-EXISTING QUIRK, reported rather than fixed.
-
-        bs4's Comment subclasses NavigableString, so an HTML comment following
-        the link takes the prepend arm. `")" + comment` is a plain str, and
-        replace_with then swaps the Comment node for a NavigableString -- the
-        comment's TEXT becomes visible content. The insert_after arm would have
-        left the comment intact.
-
-        Consequences checked before deciding not to fix: this is markdown output
-        heading for allowlist_html, the absorbed text is escaped as character
-        data like any other text, and it needs an author to write both an
-        unbalanced trailing `)` in a link and an adjacent HTML comment. Cosmetic,
-        not a security property. Fixing it means choosing what a comment beside a
-        link should do, which is a behaviour decision and its own change; this
-        test says what happens today so that change is visible when someone makes
-        it.
+        bs4's Comment subclasses NavigableString, so an HTML comment after the link took the text arm, and
+        `")" + comment` -- a plain str -- replaced the Comment: the comment's text became visible content. It is
+        left a comment now and the `)` goes in before it (owner ruling 2026-10-14). Ordinary following text is
+        the other arm, below; a test with only that would not tell the two arms apart, because prepending `)` to
+        a text node and inserting it as a sibling render the same.
         """
         html = '<a href="https://example.com/x)">x)</a><!-- note -->'
-        result = links_with_parens(html)
-        assert result == '<a href="https://example.com/x">x</a>) note '
+        assert links_with_parens(html) == '<a href="https://example.com/x">x</a>)<!-- note -->'
+
+    def test_a_pushed_out_paren_goes_in_front_of_following_text(self):
+        html = '<a href="https://example.com/x)">x)</a> after'
+        assert links_with_parens(html) == '<a href="https://example.com/x">x</a>) after'
+
+    def test_a_comment_after_a_link_is_not_read_as_its_dropped_paren(self):
+        """The pull-in arm: a link whose href lost its trailing `)` takes it back from the text after the link.
+        A comment starting with `)` was read as that text, and replacing it with its own remainder made the rest
+        of the comment visible. A comment is not text: the link and the comment are left as they are."""
+        html = '<a href="https://example.com/(x">x</a><!--) note -->'
+        assert links_with_parens(html) == html
 
 
 class TestActorLinkHelpers:
