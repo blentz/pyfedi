@@ -3,6 +3,7 @@ import time
 import unittest
 
 import markdown2
+from app import markdown_extras
 from app.markdown_extras import EnhancedImages, apply_enhanced_image_attributes
 from tests.test_markdown_to_html import corpus_texts, random_texts
 
@@ -204,6 +205,26 @@ Some text here.
             md.reset()
             started = time.perf_counter()
             EnhancedImages(md, None).run(text)
+            self.assertLess(time.perf_counter() - started, 0.5)
+
+    def test_finds_the_tags_the_old_pattern_found(self):
+        """apply_enhanced_image_attributes' tag pattern backtracked over the spaces after '<img' and over every
+        data-enhanced-img=, from every '<img' (fuzz: enhanced_images/img_tag_pump)."""
+        old = re.compile(r'<img\s+([^>]*?data-enhanced-img=[^>]*?)(/?>)', re.IGNORECASE)
+        new = markdown_extras._ENHANCED_IMG_TAG_RE
+        fragments = ['<img ', '<IMG\t', 'data-enhanced-img="e-1"', 'DATA-ENHANCED-IMG=', ' ', '/', '>', '/>', 'a', '\n']
+        for text in random_texts(fragments, 6000, 10, seed=13) + corpus_texts('enhanced_images', 300):
+            expected = [(m.span(), m.groups()) for m in old.finditer(text)]
+            self.assertEqual([(m.span(), m.groups()) for m in new.finditer(text) if m.lastindex is not None],
+                             expected, repr(text))
+
+    def test_unclosed_img_tags_are_read_in_linear_time(self):
+        md = markdown2.Markdown(extras={'enhanced-images': True})
+        md.convert('![a :: width=1](u)')
+        size = 64 * 1024
+        for html in ('<img ' * (size // 5), '<img' + ' ' * size, '<img data-enhanced-img=' * (size // 23)):
+            started = time.perf_counter()
+            apply_enhanced_image_attributes(html, md)
             self.assertLess(time.perf_counter() - started, 0.5)
 
     def test_integration_with_markdown_to_html(self):
