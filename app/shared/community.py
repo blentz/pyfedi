@@ -479,28 +479,36 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
     db.session.commit()
 
     if src != SRC_API and not from_scratch:
-        # The web edit form: an uploaded image replaces the old one, which is
-        # deleted only once the new one has been saved.
+        # The web edit form: an uploaded image replaces the old one. Both new
+        # images are stored before anything old is touched, and a banner
+        # save_banner_file refuses (its 400) deletes the icon just stored for
+        # it, so a refused upload leaves the community's images exactly as
+        # they were. The old files go only once the new ones are committed.
+        new_icon = new_banner = None
         if uploaded_icon_file and uploaded_icon_file.filename != '':
-            old_icon_id = community.icon_id
-            file = save_icon_file(uploaded_icon_file)
-            if file:
-                community.icon = file
-                if old_icon_id:
-                    old_icon_file = db.session.get(File, old_icon_id)
-                    db.session.delete(old_icon_file)
-                    old_icon_file.delete_from_disk()
+            new_icon = save_icon_file(uploaded_icon_file)
         if uploaded_banner_file and uploaded_banner_file.filename != '':
-            old_banner_id = community.image_id
-            file = save_banner_file(uploaded_banner_file)
-            if file:
-                community.image = file
-                cache.delete_memoized(Community.header_image, community)
-                if old_banner_id:
-                    old_banner_file = db.session.get(File, old_banner_id)
-                    db.session.delete(old_banner_file)
-                    old_banner_file.delete_from_disk()
+            try:
+                new_banner = save_banner_file(uploaded_banner_file)
+            except Exception:
+                if new_icon:
+                    new_icon.delete_from_disk(purge_cdn=False)
+                raise
+        replaced = []
+        if new_icon:
+            if community.icon_id:
+                replaced.append(db.session.get(File, community.icon_id))
+            community.icon = new_icon
+        if new_banner:
+            if community.image_id:
+                replaced.append(db.session.get(File, community.image_id))
+            community.image = new_banner
+            cache.delete_memoized(Community.header_image, community)
+        for old_file in replaced:
+            db.session.delete(old_file)
         db.session.commit()
+        for old_file in replaced:
+            old_file.delete_from_disk()
 
     if community.topic_id != old_topic_id:
         if community.topic_id:
