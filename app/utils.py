@@ -1378,9 +1378,11 @@ def handle_escaped_angle_brackets(text: str) -> str:
     return text
 
 
-# <img ...> as <img.+?> matched it: up to the first '>' on the line. Without one, no later '<img' on the line has one
-# either, so the skip alternative (no group) ends the line instead of each scanning it again: 5 s per 64 KiB line.
-_IMG_TAG_RE = re.compile(r"(<img.+?>)|<img[^\n]*")
+# An <img ...> tag, up to the first '>' after it. In any case and across lines, as the HTML parser reads it: <img.+?>
+# missed <IMG src=...> and an <img whose attributes start on the next line, and both loaded on the pages that render
+# with allow_img=False. Without a '>' after one '<img' there is none after a later one, so the skip alternative (no
+# group) takes the rest instead of each scanning it again: 5 s per 64 KiB line.
+_IMG_TAG_RE = re.compile(r"(<img[\s\S]+?>)|<img[\s\S]*", re.IGNORECASE)
 
 
 def escape_img(raw_html: str) -> str:
