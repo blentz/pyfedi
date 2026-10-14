@@ -1321,11 +1321,15 @@ def handle_bold_em(text: str) -> str:
     return text
 
 
+# <img ...> as <img.+?> matched it: up to the first '>' on the line. Without one, no later '<img' on the line has one
+# either, so the skip alternative (no group) ends the line instead of each scanning it again: 5 s per 64 KiB line.
+_IMG_TAG_RE = re.compile(r"(<img.+?>)|<img[^\n]*")
+
+
 def escape_img(raw_html: str) -> str:
     """Prevents embedding images for places where an image would break formatting."""
 
-    re_img = re.compile(r"<img.+?>")
-    raw_html = re_img.sub(r"<code><image placeholder></code>", raw_html)
+    raw_html = sub_skipping(_IMG_TAG_RE, r"<code><image placeholder></code>", raw_html)
 
     return raw_html
 

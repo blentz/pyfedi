@@ -46,6 +46,17 @@ class TestEscapeImg:
     def test_text_without_images_is_unchanged(self):
         assert escape_img('no images here') == 'no images here'
 
+    def test_matches_what_it_matched(self):
+        """<img.+?> scanned to the end of the line from every '<img' when no '>' followed (fuzz:
+        markdown_preprocessors/escape_img_pump)."""
+        old = re.compile(r"<img.+?>")
+        fragments = ['<img', '<img src=x>', '>', 'a', ' ', '\n', '<']
+        for text in random_texts(fragments, 3000, 12, seed=9) + corpus_texts('markdown_preprocessors', 300):
+            assert escape_img(text) == old.sub(r"<code><image placeholder></code>", text), repr(text)
+
+    def test_an_unclosed_line_is_read_in_linear_time(self):
+        assert_linear(self, [pump('<img')], escape_img, seconds=0.5)
+
 
 class TestPiefedMarkdownToLemmyMarkdown:
     def test_soft_break_gains_two_spaces(self):
