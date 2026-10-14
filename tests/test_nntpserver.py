@@ -164,3 +164,11 @@ def test_a_body_line_of_whitespace_and_a_dot_cannot_end_the_article(line, sent):
     '.' that ends the reply, and the rest of the body as forged replies."""
     replies = session_replies(b'GROUP a.example\r\nBODY 1\r\nQUIT\r\n', body=f'one\n{line}\n200 forged')
     assert replies[2:] == ['222 1 <post-1@stub.example>', 'one', sent, '200 forged', '.', CLOSING]
+
+
+def test_a_tab_in_a_title_stays_inside_its_overview_field():
+    """OVER separates fields with TAB, and ArticleInfo.__str__ joined them as they were: a title holding a tab
+    shifted every field after it, so the client read the author as the date and so on."""
+    replies = session_replies(b'GROUP a.example\r\nOVER 1\r\nQUIT\r\n', subject='a\tb')
+    fields = replies[3].split('\t')
+    assert fields[:3] == ['1', 'a b', 'alice@stub.example'] and len(fields) == 10

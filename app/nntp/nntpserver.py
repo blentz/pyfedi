@@ -180,8 +180,10 @@ class ArticleInfo(typing.NamedTuple):
     headers: typing.Dict[str, str]
 
     def __str__(self) -> str:
+        # The overview line separates fields with TAB: one inside a field (a title, say) would shift the rest.
         return "\t".join(
-            [
+            field.replace("\t", " ")
+            for field in [
                 str(self.number),
                 self.subject,
                 self.from_,
