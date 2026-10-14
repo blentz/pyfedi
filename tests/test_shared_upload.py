@@ -30,6 +30,7 @@ from sqlalchemy import text
 from werkzeug.datastructures import FileStorage
 
 from app import db
+from app.constants import IMAGE_PIXEL_CAP
 from app.models import File
 from app.shared.upload import process_file_delete, process_upload
 from tests.factories import make_instance, make_user
@@ -287,6 +288,34 @@ class TestAnImagePillowCannotDecode:
     def test_is_refused_and_not_left_behind(self, app, content):
         before = files_under(MEDIA_ROOT)
         upload = FileStorage(stream=io.BytesIO(content), filename='upload.png')
+        with app.app_context():
+            try:
+                with pytest.raises(Exception) as caught:
+                    process_upload(upload)
+                assert str(caught.value) == 'filetype not allowed'
+                assert files_under(MEDIA_ROOT) == before
+            finally:
+                _cleanup(before)
+
+
+def png_declaring(width, height):
+    """A valid PNG of width x height one-bit pixels: a few KB on the wire, however many pixels it declares."""
+    buffer = io.BytesIO()
+    Image.new('1', (width, height)).save(buffer, format='PNG')
+    return buffer.getvalue()
+
+
+class TestAnImageOverThePixelCap:
+    """IMAGE_PIXEL_CAP (50 MP). Pillow's own ceiling only raised above 178,956,970 pixels and only warned above
+    half that, so a 6 KB PNG declaring 7072x7072 -- or 10000x10000, inside Pillow's warning band -- was decoded and
+    re-encoded at full size: seconds of CPU and hundreds of MB per upload. It is the 'filetype not allowed' refusal
+    now, refused at the header before a pixel is decoded, and the upload is gone."""
+
+    @pytest.mark.parametrize('size', [(7072, 7072), (10000, 10000)], ids=['just_over_the_cap', 'pillow_warning_band'])
+    def test_is_refused_and_not_left_behind(self, app, size):
+        assert size[0] * size[1] > IMAGE_PIXEL_CAP
+        before = files_under(MEDIA_ROOT)
+        upload = FileStorage(stream=io.BytesIO(png_declaring(*size)), filename='upload.png')
         with app.app_context():
             try:
                 with pytest.raises(Exception) as caught:

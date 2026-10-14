@@ -45,11 +45,13 @@ avif_color_planes_fail_to_decode). So the production paths have to catch Excepti
 url_to_thumbnail_file does (D1328), and a refusal here is judged by where it was raised, not by its type (_refused).
 An exception raised in PieFed's own code -- app/, or a check -- is the finding.
 
-Decompression bombs. Pillow's guard is in force on every path -- nothing in app/ changes Image.MAX_IMAGE_PIXELS --
-but it only RAISES above twice that (178,956,970 pixels); between MAX_IMAGE_PIXELS and twice it, it warns, and a
-warning is not a refusal. A 140 KB PNG of 12000x12000 decodes through upload_decode's steps in about 4 s and 1.2
-GB. Whether to refuse those is the owner's call (a 108-megapixel phone photo is in that band), so the checks escalate
-DecompressionBombWarning to a refusal: a campaign then spends its time on the codecs instead of re-finding that.
+Decompression bombs. app/__init__.py sets Pillow's ceiling so that every Image.open in the process refuses an image
+of more than IMAGE_PIXEL_CAP (50 MP) at its header, with DecompressionBombError, before a pixel is decoded -- and
+Pillow repeats the check for the sizes it learns later (GIF frames, ICO and ICNS entries, TIFF tiles). Before the
+cap, Pillow raised only above 178,956,970 pixels and warned above half that, and a 140 KB PNG of 12000x12000 went
+through upload_decode's steps in about 4 s and 1.2 GB; the checks turned the warning into a refusal to keep campaigns
+on the codecs. They now run Pillow as production does, with no warning filter, and hold every image Pillow opens or
+decodes to the cap (_within_cap): one larger than it is the finding (upload_decode's png_7072x7072_over_the_cap).
 
 Frame counts. Nothing bounds the frames get_new_frames walks, and each costs a full-canvas RGBA paste and a
 thumbnail: a 14 KB GIF of 400 frames on a 2000x2000 screen (each frame a one-pixel delta) took 30 s of CPU and 3.3
@@ -66,7 +68,6 @@ No database, no network, no files: everything is BytesIO.
 
 import io
 import os
-import warnings
 
 import PIL
 import pillow_avif  # NOQA  # registers the plugin, as production's first AVIF upload does
@@ -75,6 +76,7 @@ import pillow_heif
 from pillow_heif import register_heif_opener
 
 from app.community.util import allowed_extensions
+from app.constants import IMAGE_PIXEL_CAP
 from app.utils import allowed_thumbnail_extensions, inspect_image_c2pa, scale_gif, to_srgb
 from config import Config
 from tests.fuzz.targets._target import Target
@@ -121,17 +123,21 @@ def icon_format_allowed(img) -> bool:
 ACCEPTED_FORMATS = frozenset(ext[1:].upper() for ext in allowed_extensions) | {'HEIF'}
 
 
+def _within_cap(img):
+    """img, if it is no larger than IMAGE_PIXEL_CAP, which Pillow should have refused it for (module docstring)."""
+    assert img.width * img.height <= IMAGE_PIXEL_CAP, f'Pillow let {img.size} through, over {IMAGE_PIXEL_CAP} pixels'
+    return img
+
+
 def _open(data: bytes):
-    """Image.open as production calls it, except that a DecompressionBombWarning is a refusal (module docstring)."""
-    with warnings.catch_warnings():
-        warnings.simplefilter('error', Image.DecompressionBombWarning)
-        return Image.open(io.BytesIO(data))
+    """Image.open as production calls it, held to the pixel cap."""
+    return _within_cap(Image.open(io.BytesIO(data)))
 
 
 def _open_loaded(data: bytes):
     img = _open(data)
     img.load()
-    return img
+    return _within_cap(img)
 
 
 def raised_by_pillow(exc: BaseException) -> bool:
@@ -146,13 +152,11 @@ def _refused(step, *args):
     """step(*args), or None when Pillow refuses (module docstring). Anything else propagates: an AssertionError is
     a check's property break, and any other exception raised outside Pillow is PieFed's."""
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter('error', Image.DecompressionBombWarning)
-            return step(*args)
+        return step(*args)
     except AssertionError:
         raise
     except Exception as exc:
-        if isinstance(exc, Image.DecompressionBombWarning) or raised_by_pillow(exc):
+        if raised_by_pillow(exc):
             return None
         raise
 
@@ -192,7 +196,7 @@ def _open_uploaded_image(image: bytes):
     if not accepted_format(img):
         return None
     img.load()
-    return img
+    return _within_cap(img)
 
 
 def check_upload_decode(data: bytes) -> None:
@@ -244,6 +248,7 @@ def _open_upload_image(image: bytes, every_frame: bool):
     for frame in range(getattr(img, 'n_frames', 1) if every_frame else 1):
         img.seek(frame)
         img.load()
+        _within_cap(img)
     img.seek(0)
     return img
 
@@ -312,7 +317,7 @@ def check_remote_thumbnail_decode(data: bytes) -> None:
     """Selector byte: bits 0-2 MEDIA_IMAGE_MEDIUM_FORMAT; bits 3-7 the extension the content type mapped to.
 
     Production wraps every step in `except Exception` and drops the thumbnail, so any exception is a refusal
-    here; what is checked is what a thumbnail that survives looks like."""
+    here -- except the pixel cap's AssertionError; what is checked is what a thumbnail that survives looks like."""
     data = data[:MAX_INPUT]
     if not data:
         return
@@ -320,18 +325,18 @@ def check_remote_thumbnail_decode(data: bytes) -> None:
     medium_format = FORMATS[(selector & 7) % len(FORMATS)]
     final_ext = THUMBNAIL_EXTENSIONS[(selector >> 3) % len(THUMBNAIL_EXTENSIONS)]
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter('error', Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(image)) as img:
-                img = ImageOps.exif_transpose(img)
-                rgb = medium_format == 'JPEG' or final_ext in ['.jpg', '.jpeg']
-                img = img.convert('RGB' if rgb else 'RGBA')
-                fmt = medium_format.upper() if medium_format else _format_of(final_ext)
-                sizes = []
-                for box in ((170, 170), (512, 512)):
-                    copy = img.copy()
-                    copy.thumbnail(box, resample=Image.LANCZOS)
-                    sizes.append((copy, box, _save(copy, fmt, Config.MEDIA_IMAGE_MEDIUM_QUALITY)))
+        with _open(image) as img:
+            img = ImageOps.exif_transpose(img)
+            rgb = medium_format == 'JPEG' or final_ext in ['.jpg', '.jpeg']
+            img = _within_cap(img.convert('RGB' if rgb else 'RGBA'))
+            fmt = medium_format.upper() if medium_format else _format_of(final_ext)
+            sizes = []
+            for box in ((170, 170), (512, 512)):
+                copy = img.copy()
+                copy.thumbnail(box, resample=Image.LANCZOS)
+                sizes.append((copy, box, _save(copy, fmt, Config.MEDIA_IMAGE_MEDIUM_QUALITY)))
+    except AssertionError:
+        raise
     except Exception:
         return
     for copy, box, saved in sizes:

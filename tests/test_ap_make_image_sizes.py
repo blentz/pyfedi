@@ -42,6 +42,7 @@ from PIL import Image
 
 from app import db
 from app.activitypub.util import make_image_sizes, make_image_sizes_async
+from app.constants import IMAGE_PIXEL_CAP
 from app.models import File, Post, Site
 from app.utils import MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS
 from tests.factories import (make_community, make_community_member, make_file,
@@ -217,6 +218,26 @@ class TestWhatTheContentTypeSays:
         stored = run(file, answered_with(image_bytes(400, 300),
                                          content_type=None))
         assert stored.file_path is None
+
+
+class TestAnImageOverThePixelCap:
+    """IMAGE_PIXEL_CAP (50 MP). A peer's few-KB PNG declaring 7072x7072 -- or 10000x10000, where Pillow only
+    warned -- was decoded at full size here and copied twice over. Pillow refuses it at the header now, with the
+    DecompressionBombError the task already raised for Pillow's own ceiling, and nothing is written or recorded."""
+
+    @pytest.mark.parametrize('size', [(7072, 7072), (10000, 10000)], ids=['just_over_the_cap', 'pillow_warning_band'])
+    def test_it_is_refused_before_anything_is_made(self, env, size, monkeypatch):
+        import glob
+        assert size[0] * size[1] > IMAGE_PIXEL_CAP
+        buffer = io.BytesIO()
+        Image.new('1', size).save(buffer, format='PNG')
+        file = a_file(env)
+        monkeypatch.setattr('app.activitypub.util.gibberish', lambda length: 'pixelcapprobe00')
+        with pytest.raises(Image.DecompressionBombError):
+            run(file, answered_with(buffer.getvalue()))
+        stored = cleanup(file)
+        assert stored.file_path is None and stored.thumbnail_path is None
+        assert glob.glob('app/static/media/posts/pi/xe/pixelcapprobe00*') == []
 
 
 class TestWhatIsNotResizedAtAll:
