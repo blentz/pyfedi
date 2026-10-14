@@ -5,6 +5,14 @@ import re
 from markdown2 import Extra, Stage
 
 
+def _quoted(value: str) -> str:
+    """`value` safe inside a double-quoted attribute: a '"' in the alt text, a width or a url used to close the
+    attribute and turn the rest into attributes of the author's choosing. Only the quote is escaped; '&' is left
+    for markdown2 and the HTML parser to read as they always have, so output for markdown without a '"' is
+    unchanged."""
+    return value.replace('"', '&quot;')
+
+
 class EnhancedImages(Extra):
     """
     Enhances markdown image syntax to support additional attributes like alignment and dimensions.
@@ -139,7 +147,7 @@ class EnhancedImages(Extra):
         # Return raw HTML instead of markdown so we can control the output exactly
         # Parse title if present
         title_match = re.search(r'"([^"]*)"', url_and_title)
-        title_attr = f' title="{title_match.group(1)}"' if title_match else ''
+        title_attr = f' title="{_quoted(title_match.group(1))}"' if title_match else ''
 
         # Get the URL (first part before any title)
         # A blank url (only spaces, or nothing before the comma) has no first word: src="", as for a bare title.
@@ -147,7 +155,7 @@ class EnhancedImages(Extra):
 
         # Create the HTML and hash it to protect from smarty-pants and other processing
         # Use double quotes since the HTML is protected by hashing
-        html = f'<img src="{url}" alt="{alt_text}"{title_attr} data-enhanced-img="{marker_id}" />'
+        html = f'<img src="{_quoted(url)}" alt="{_quoted(alt_text)}"{title_attr} data-enhanced-img="{marker_id}" />'
         # Use markdown2's hashing to protect the HTML from further processing (especially smarty-pants)
         return self.md._hash_span(html)
 
@@ -183,13 +191,13 @@ def apply_enhanced_image_attributes(html: str, md_instance) -> str:
 
         # Add custom attributes
         for attr_name, attr_value in custom_attrs.items():
-            new_attrs += f' {attr_name}="{attr_value}"'
+            new_attrs += f' {attr_name}="{_quoted(attr_value)}"'
 
         img_tag = f'<img {new_attrs}{closing}'
 
         # Wrap in anchor if needed
         if full_url:
-            return f'<a href="{full_url}">{img_tag}</a>'
+            return f'<a href="{_quoted(full_url)}">{img_tag}</a>'
         return img_tag
 
     return _ENHANCED_IMG_TAG_RE.sub(add_attrs, html)

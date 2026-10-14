@@ -3,6 +3,7 @@ import time
 import unittest
 
 import markdown2
+from bs4 import BeautifulSoup
 from app import markdown_extras
 from app.markdown_extras import EnhancedImages, apply_enhanced_image_attributes
 from tests.test_markdown_to_html import corpus_texts, random_texts
@@ -226,6 +227,19 @@ Some text here.
             started = time.perf_counter()
             apply_enhanced_image_attributes(html, md)
             self.assertLess(time.perf_counter() - started, 0.5)
+
+    def test_a_quote_in_a_value_cannot_add_an_attribute(self):
+        """Every value from the markdown was put between double quotes as it was, so a '"' in the alt text, a
+        width, a height or the full-size url closed the attribute and the rest became attributes of the author's
+        choosing: ![x" onerror="alert(1) :: w](u) built <img ... alt="x" onerror="alert(1)" ...> (fuzz:
+        enhanced_images/quote_in_alt, quote_in_width). allowlist_html strips the handler later, but the extra's
+        own output must not carry one."""
+        img = BeautifulSoup(markdown_with_enhanced_images('![x" onerror="alert(1) :: width=1"onload=y](u, f"z)'),
+                            'html.parser').find('img')
+        self.assertEqual(img['alt'], 'x" onerror="alert(1)')
+        self.assertEqual(img['width'], '1"onload=y')
+        self.assertEqual(sorted(img.attrs), ['alt', 'src', 'width'])
+        self.assertEqual(img.parent['href'], 'f"z')
 
     def test_integration_with_markdown_to_html(self):
         """Test integration with markdown_to_html function (full extras suite)"""
