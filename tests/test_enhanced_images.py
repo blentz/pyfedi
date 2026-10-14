@@ -1,7 +1,10 @@
+import re
+import time
 import unittest
 
 import markdown2
-from app.markdown_extras import apply_enhanced_image_attributes
+from app.markdown_extras import EnhancedImages, apply_enhanced_image_attributes
+from tests.test_markdown_to_html import corpus_texts, random_texts
 
 
 def markdown_with_enhanced_images(text, extras_list=None):
@@ -180,6 +183,28 @@ Some text here.
         result = markdown_with_enhanced_images('![a :: b](, full.jpg)')
         self.assertIn('src=""', result)
         self.assertIn('href="full.jpg"', result)
+
+    def test_finds_the_images_the_old_pattern_found(self):
+        """The old pattern backtracked over every '::' and from every '![' (fuzz: enhanced_images/separator_pump,
+        open_image_pump, unclosed_link_pump)."""
+        old = re.compile(r'!\[([^\]]*?)\s*::\s*([^\]]+?)\]\(([^\)]+?)\)', re.MULTILINE)
+        new = EnhancedImages._md_img_with_attrs_re
+        fragments = ['![a :: b](c)', '![', '::', ':', ']', '(', ')', '](', 'a', ' ', '\n', '"t"', ',']
+        for text in random_texts(fragments, 6000, 12, seed=12) + corpus_texts('enhanced_images', 300):
+            expected = [(m.span(), m.groups()) for m in old.finditer(text)]
+            self.assertEqual([(m.span(), m.groups()) for m in new.finditer(text) if m.lastindex is not None],
+                             expected, repr(text))
+
+    def test_unclosed_images_are_read_in_linear_time(self):
+        """The extra alone: markdown2's own link and image regexes are quadratic on the last two shapes too, which
+        is markdown2's to fix, not this module's."""
+        size = 64 * 1024
+        for text in ('![' + '::' * (size // 2), '![' * (size // 2) + '::', '![a::b](' * (size // 8)):
+            md = markdown2.Markdown(extras={'enhanced-images': True})
+            md.reset()
+            started = time.perf_counter()
+            EnhancedImages(md, None).run(text)
+            self.assertLess(time.perf_counter() - started, 0.5)
 
     def test_integration_with_markdown_to_html(self):
         """Test integration with markdown_to_html function (full extras suite)"""
