@@ -113,7 +113,7 @@ def accepted_format(img) -> bool:
 
 
 def icon_format_allowed(img) -> bool:
-    """open_allowed_icon's check, in front of both of save_icon_file's Pillow arms."""
+    """open_upload_image's check, in front of save_banner_file and both of save_icon_file's Pillow arms."""
     return ('.heic' if img.format == 'HEIF' else '.' + img.format.lower()) in allowed_extensions
 
 
@@ -222,7 +222,7 @@ def check_upload_decode(data: bytes) -> None:
 
 
 # ---------------------------------------------------------------------------
-# icon_banner_decode: app/community/util.py save_icon_file:798-858, save_banner_file:952-1003
+# icon_banner_decode: app/community/util.py open_upload_image, save_icon_file, save_banner_file
 # ---------------------------------------------------------------------------
 
 class _NamedBuffer(io.BytesIO):
@@ -231,12 +231,22 @@ class _NamedBuffer(io.BytesIO):
     name = 'fuzz.gif'
 
 
-def _icon_gif(image: bytes):
-    """save_icon_file's animated-GIF arm, util.py:798-817: whatever the bytes are, under a .gif name."""
+def _open_upload_image(image: bytes, every_frame: bool):
+    """open_upload_image (app/community/util.py) on BytesIO, None for its 400: the format check, then the decode of
+    the first frame or, for the GIF arm, of every frame. Run under _refused, because production catches what Pillow
+    raises here; what the steps after it raise, production does not catch, so they run outside it."""
     img = _open(image)
     if not icon_format_allowed(img):
-        return  # open_allowed_icon: abort(400)
-    assert img.format in ACCEPTED_FORMATS, f'save_icon_file decoded a {img.format} as a .gif icon'
+        return None
+    for frame in range(getattr(img, 'n_frames', 1) if every_frame else 1):
+        img.seek(frame)
+        img.load()
+    img.seek(0)
+    return img
+
+
+def _icon_gif(image: bytes, img):
+    """save_icon_file's animated-GIF arm, util.py:830-848: whatever the bytes are, under a .gif name."""
     if img.width > 250 or img.height > 250:
         scaled = _NamedBuffer()
         scale_gif(io.BytesIO(image), (250, 250), scaled)
@@ -249,7 +259,7 @@ def _icon_gif(image: bytes):
 
 
 def _two_sizes(img, ext, image_format, thumbnail_format, box, thumbnail_box, label):
-    """The resize-and-thumbnail tail both functions share (util.py:832-858 and 974-1000)."""
+    """The resize-and-thumbnail tail both functions share (util.py:862-888 and 993-1018)."""
     if img.width > box[0] or img.height > box[1] or image_format or thumbnail_format:
         img = img.convert('RGB' if (image_format == 'JPEG' or ext in ['.jpg', '.jpeg']) else 'RGBA')
         img.thumbnail(box, resample=Image.LANCZOS)
@@ -263,31 +273,12 @@ def _two_sizes(img, ext, image_format, thumbnail_format, box, thumbnail_box, lab
     _fits(img, thumbnail_box, label + ' thumbnail')
 
 
-def _icon_still(image: bytes, ext, image_format, thumbnail_format):
-    """save_icon_file's still-image arm, util.py:818-858."""
-    img = _open(image)
-    if not icon_format_allowed(img):
-        return  # open_allowed_icon: abort(400)
-    assert img.format in ACCEPTED_FORMATS, f'save_icon_file decoded a {img.format} as a {ext} icon'
-    img = ImageOps.exif_transpose(img)
-    _two_sizes(img, ext, image_format, thumbnail_format, (250, 250), (40, 40), 'icon')
-
-
-def _banner(image: bytes, ext, image_format, thumbnail_format):
-    """save_banner_file, util.py:952-1003."""
-    img = _open(image)
-    img_ext = '.heic' if img.format == 'HEIF' else '.' + img.format.lower()
-    if img_ext not in allowed_extensions:
-        return  # abort(400)
-    assert img.format in ACCEPTED_FORMATS, f'save_banner_file let {img.format} through'
-    img = ImageOps.exif_transpose(img)
-    _two_sizes(img, ext, image_format, thumbnail_format, (1600, 600), (878, 500), 'banner')
-
-
 def check_icon_banner_decode(data: bytes) -> None:
     """Selector byte: bits 0-1 the path (icon still, icon GIF, banner, banner); bits 2-4 MEDIA_IMAGE_FORMAT;
     bit 5 MEDIA_IMAGE_THUMBNAIL_FORMAT WEBP (its default), else the same as MEDIA_IMAGE_FORMAT; bits 6-7 the
-    extension."""
+    extension.
+
+    save_icon_file's still arm (util.py:850-888) and save_banner_file (util.py:984-1018) differ only in their caps."""
     data = data[:MAX_INPUT]
     if not data:
         return
@@ -296,12 +287,18 @@ def check_icon_banner_decode(data: bytes) -> None:
     image_format = FORMATS[(selector >> 2 & 7) % len(FORMATS)]
     thumbnail_format = 'WEBP' if selector & 32 else FORMATS[(selector >> 2 & 7) % len(FORMATS)]
     ext = UPLOAD_EXTENSIONS[(selector >> 6) % len(UPLOAD_EXTENSIONS)]
+    img = _refused(_open_upload_image, image, path == 1)
+    if img is None:
+        return
+    assert img.format in ACCEPTED_FORMATS, f'open_upload_image let {img.format} through'
     if path == 1:
-        _refused(_icon_gif, image)
-    elif path == 0:
-        _refused(_icon_still, image, ext, image_format, thumbnail_format)
+        _icon_gif(image, img)
+        return
+    img = ImageOps.exif_transpose(img)
+    if path == 0:
+        _two_sizes(img, ext, image_format, thumbnail_format, (250, 250), (40, 40), 'icon')
     else:
-        _refused(_banner, image, ext, image_format, thumbnail_format)
+        _two_sizes(img, ext, image_format, thumbnail_format, (1600, 600), (878, 500), 'banner')
 
 
 # ---------------------------------------------------------------------------

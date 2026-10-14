@@ -45,14 +45,33 @@ from app.activitypub.util import find_language_or_create
 allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.mpo', '.avif', '.svg']
 
 
-def open_allowed_icon(path):
-    """Image.open(path), or a 400 -- with the upload removed -- for an image Pillow reads as a format the extension
-    list does not name. The extension is the uploader's to choose and Pillow sniffs the bytes, so without this a
-    TGA, BMP, TIFF or any other format Pillow opens went through its decoder under a .png or .gif name.
-    save_banner_file asks the same question its own way; Pillow calls a .heic file HEIF (D579)."""
-    img = Image.open(path)
-    if ('.heic' if img.format == 'HEIF' else '.' + img.format.lower()) not in allowed_extensions:
-        img.close()
+def open_upload_image(path, every_frame=False):
+    """Image.open(path), decoded, or a 400 -- with the upload removed -- for an image Pillow reads as a format the
+    extension list does not name, or cannot decode.
+
+    The extension is the uploader's to choose and Pillow sniffs the bytes, so without the format check a TGA, BMP,
+    TIFF or any other format Pillow opens went through its decoder under a .png or .gif name. Pillow calls a .heic
+    file HEIF (D579).
+
+    The decode happens here, inside the try, so that what Pillow raises for a broken file is a refusal and not a 500
+    further down with the upload left in the media root. It raises no one type: UnidentifiedImageError at open,
+    OSError for data cut short, SyntaxError for a broken PNG chunk, RuntimeError from the AVIF plugin
+    (tests/fuzz/targets/images.py) -- so Exception, as url_to_thumbnail_file catches (D1328). every_frame decodes an
+    animation's every frame too, for the caller that goes on to scale_gif, which seeks through them all."""
+    img = None
+    try:
+        img = Image.open(path)
+        allowed = ('.heic' if img.format == 'HEIF' else '.' + img.format.lower()) in allowed_extensions
+        if allowed:
+            for frame in range(getattr(img, 'n_frames', 1) if every_frame else 1):
+                img.seek(frame)
+                img.load()
+            img.seek(0)
+    except Exception:
+        allowed = False
+    if not allowed:
+        if img is not None:
+            img.close()
         os.unlink(path)
         abort(400)
     return img
@@ -809,7 +828,7 @@ def save_icon_file(icon_file, directory='communities') -> File:
         thumbnail_ext = file_ext.lower()
         final_place_thumbnail = final_place
     elif file_ext.lower() == '.gif':  # handle animated gifs specially
-        img = open_allowed_icon(final_place)
+        img = open_upload_image(final_place, every_frame=True)
         img_width = img.width
         img_height = img.height
 
@@ -829,7 +848,7 @@ def save_icon_file(icon_file, directory='communities') -> File:
         thumbnail_width = img_thumb.width
         thumbnail_height = img_thumb.height
     else:  # handle regular images (jpg, png, webp, heic, etc.)
-        img = open_allowed_icon(final_place)
+        img = open_upload_image(final_place)
         img = ImageOps.exif_transpose(img)
         img_width = img.width
         img_height = img.height
@@ -962,101 +981,94 @@ def save_banner_file(banner_file, directory='communities') -> File:
         import pillow_avif  # NOQA  # lazy: registers Pillow's AVIF plugin only on the AVIF path
 
     # resize if necessary
-    img = Image.open(final_place)
-    # Pillow names the format of a .heic file HEIF, and the allowlist spells
-    # it .heic -- so a HEIC banner failed this check and was refused with a
-    # 400, though .heic is an allowed extension and save_icon_file takes one.
-    img_ext = '.heic' if img.format == 'HEIF' else '.' + img.format.lower()
-    if img_ext in allowed_extensions:
-        img = ImageOps.exif_transpose(img)
+    img = open_upload_image(final_place)
+    img = ImageOps.exif_transpose(img)
 
-        image_format = current_app.config['MEDIA_IMAGE_FORMAT']
-        image_quality = current_app.config['MEDIA_IMAGE_QUALITY']
-        thumbnail_image_format = current_app.config['MEDIA_IMAGE_THUMBNAIL_FORMAT']
-        thumbnail_image_quality = current_app.config['MEDIA_IMAGE_THUMBNAIL_QUALITY']
+    image_format = current_app.config['MEDIA_IMAGE_FORMAT']
+    image_quality = current_app.config['MEDIA_IMAGE_QUALITY']
+    thumbnail_image_format = current_app.config['MEDIA_IMAGE_THUMBNAIL_FORMAT']
+    thumbnail_image_quality = current_app.config['MEDIA_IMAGE_THUMBNAIL_QUALITY']
 
-        final_ext = file_ext.lower()
-        thumbnail_ext = file_ext.lower()
+    final_ext = file_ext.lower()
+    thumbnail_ext = file_ext.lower()
+    img_width = img.width
+    img_height = img.height
+
+    if image_format == 'AVIF' or thumbnail_image_format == 'AVIF':
+        import pillow_avif  # NOQA  # lazy: registers Pillow's AVIF plugin only on the AVIF path
+
+    if img.width > 1600 or img.height > 600 or image_format or thumbnail_image_format:
+        img = img.convert('RGB' if (image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg']) else 'RGBA')
+        img.thumbnail((1600, 600), resample=Image.LANCZOS)
+
+        kwargs = {}
+        if image_format:
+            kwargs['format'] = image_format.upper()
+            final_ext = '.' + image_format.lower()
+            final_place = os.path.splitext(final_place)[0] + final_ext
+        if image_quality:
+            kwargs['quality'] = int(image_quality)
+        img.save(final_place, optimize=True, **kwargs)
+
         img_width = img.width
         img_height = img.height
 
-        if image_format == 'AVIF' or thumbnail_image_format == 'AVIF':
-            import pillow_avif  # NOQA  # lazy: registers Pillow's AVIF plugin only on the AVIF path
+    # save a second, smaller, version as a thumbnail
+    img = img.convert('RGB' if thumbnail_image_format == 'JPEG' else 'RGBA')
+    img.thumbnail((878, 500), resample=Image.LANCZOS)
 
-        if img.width > 1600 or img.height > 600 or image_format or thumbnail_image_format:
-            img = img.convert('RGB' if (image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg']) else 'RGBA')
-            img.thumbnail((1600, 600), resample=Image.LANCZOS)
+    kwargs = {}
+    if thumbnail_image_format:
+        kwargs['format'] = thumbnail_image_format.upper()
+        thumbnail_ext = '.' + thumbnail_image_format.lower()
+        final_place_thumbnail = os.path.splitext(final_place_thumbnail)[0] + thumbnail_ext
+    if thumbnail_image_quality:
+        kwargs['quality'] = int(thumbnail_image_quality)
+    img.save(final_place_thumbnail, optimize=True, **kwargs)
 
-            kwargs = {}
-            if image_format:
-                kwargs['format'] = image_format.upper()
-                final_ext = '.' + image_format.lower()
-                final_place = os.path.splitext(final_place)[0] + final_ext
-            if image_quality:
-                kwargs['quality'] = int(image_quality)
-            img.save(final_place, optimize=True, **kwargs)
+    thumbnail_width = img.width
+    thumbnail_height = img.height
 
-            img_width = img.width
-            img_height = img.height
+    file = File(file_path=final_place, file_name=new_filename + final_ext, alt_text=f'{directory} banner',
+                width=img_width, height=img_height, thumbnail_path=final_place_thumbnail,
+                thumbnail_width=thumbnail_width, thumbnail_height=thumbnail_height)
+    db.session.add(file)
 
-        # save a second, smaller, version as a thumbnail
-        img = img.convert('RGB' if thumbnail_image_format == 'JPEG' else 'RGBA')
-        img.thumbnail((878, 500), resample=Image.LANCZOS)
+    # Move uploaded files to S3 if needed
+    if store_files_in_s3():
+        session = boto3.session.Session()
+        s3 = session.client(
+            service_name='s3',
+            region_name=current_app.config['S3_REGION'],
+            endpoint_url=current_app.config['S3_ENDPOINT'],
+            aws_access_key_id=current_app.config['S3_ACCESS_KEY'],
+            aws_secret_access_key=current_app.config['S3_ACCESS_SECRET'],
+        )
+        # Upload main image
+        s3_path = f'{s3_directory}/{new_filename}{final_ext}'
+        extra_args = {'ContentType': guess_mime_type(final_place)}
+        if current_app.config.get('S3_STORAGE_CLASS'):
+            extra_args['StorageClass'] = current_app.config['S3_STORAGE_CLASS']
+        if current_app.config.get('S3_PUBLIC_ACL'):
+            extra_args['ACL'] = 'public-read'
+        s3.upload_file(final_place, current_app.config['S3_BUCKET'], s3_path, ExtraArgs=extra_args)
+        file.file_path = f"https://{current_app.config['S3_PUBLIC_URL']}/{s3_path}"
 
-        kwargs = {}
-        if thumbnail_image_format:
-            kwargs['format'] = thumbnail_image_format.upper()
-            thumbnail_ext = '.' + thumbnail_image_format.lower()
-            final_place_thumbnail = os.path.splitext(final_place_thumbnail)[0] + thumbnail_ext
-        if thumbnail_image_quality:
-            kwargs['quality'] = int(thumbnail_image_quality)
-        img.save(final_place_thumbnail, optimize=True, **kwargs)
+        # Upload thumbnail
+        s3_thumbnail_path = f'{s3_directory}/{new_filename}_thumbnail{thumbnail_ext}'
+        extra_args = {'ContentType': guess_mime_type(final_place_thumbnail)}
+        if current_app.config.get('S3_STORAGE_CLASS'):
+            extra_args['StorageClass'] = current_app.config['S3_STORAGE_CLASS']
+        if current_app.config.get('S3_PUBLIC_ACL'):
+            extra_args['ACL'] = 'public-read'
+        s3.upload_file(final_place_thumbnail, current_app.config['S3_BUCKET'], s3_thumbnail_path, ExtraArgs=extra_args)
+        file.thumbnail_path = f"https://{current_app.config['S3_PUBLIC_URL']}/{s3_thumbnail_path}"
 
-        thumbnail_width = img.width
-        thumbnail_height = img.height
+        s3.close()
+        os.unlink(final_place)
+        os.unlink(final_place_thumbnail)
 
-        file = File(file_path=final_place, file_name=new_filename + final_ext, alt_text=f'{directory} banner',
-                    width=img_width, height=img_height, thumbnail_path=final_place_thumbnail,
-                    thumbnail_width=thumbnail_width, thumbnail_height=thumbnail_height)
-        db.session.add(file)
-        
-        # Move uploaded files to S3 if needed
-        if store_files_in_s3():
-            session = boto3.session.Session()
-            s3 = session.client(
-                service_name='s3',
-                region_name=current_app.config['S3_REGION'],
-                endpoint_url=current_app.config['S3_ENDPOINT'],
-                aws_access_key_id=current_app.config['S3_ACCESS_KEY'],
-                aws_secret_access_key=current_app.config['S3_ACCESS_SECRET'],
-            )
-            # Upload main image
-            s3_path = f'{s3_directory}/{new_filename}{final_ext}'
-            extra_args = {'ContentType': guess_mime_type(final_place)}
-            if current_app.config.get('S3_STORAGE_CLASS'):
-                extra_args['StorageClass'] = current_app.config['S3_STORAGE_CLASS']
-            if current_app.config.get('S3_PUBLIC_ACL'):
-                extra_args['ACL'] = 'public-read'
-            s3.upload_file(final_place, current_app.config['S3_BUCKET'], s3_path, ExtraArgs=extra_args)
-            file.file_path = f"https://{current_app.config['S3_PUBLIC_URL']}/{s3_path}"
-            
-            # Upload thumbnail
-            s3_thumbnail_path = f'{s3_directory}/{new_filename}_thumbnail{thumbnail_ext}'
-            extra_args = {'ContentType': guess_mime_type(final_place_thumbnail)}
-            if current_app.config.get('S3_STORAGE_CLASS'):
-                extra_args['StorageClass'] = current_app.config['S3_STORAGE_CLASS']
-            if current_app.config.get('S3_PUBLIC_ACL'):
-                extra_args['ACL'] = 'public-read'
-            s3.upload_file(final_place_thumbnail, current_app.config['S3_BUCKET'], s3_thumbnail_path, ExtraArgs=extra_args)
-            file.thumbnail_path = f"https://{current_app.config['S3_PUBLIC_URL']}/{s3_thumbnail_path}"
-            
-            s3.close()
-            os.unlink(final_place)
-            os.unlink(final_place_thumbnail)
-            
-        return file
-    else:
-        abort(400)
+    return file
 
 
 def set_community_theme_allowed(community_id: int, user_id: int, allowed:bool):

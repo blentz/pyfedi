@@ -255,6 +255,60 @@ class TestAnIconInAFormatNobodyAllows:
             cleanup(file)
 
 
+def truncated(data):
+    return data[:len(data) * 2 // 3]
+
+
+def png_bytes(width=300, height=300):
+    buffer = io.BytesIO()
+    Image.new('RGB', (width, height)).save(buffer, format='PNG', compress_level=0)
+    return buffer.getvalue()
+
+
+def gif_with_a_truncated_last_frame():
+    """Three frames, the last cut short: Image.open and the first frame are fine, scale_gif's seek is not."""
+    buffer = io.BytesIO()
+    frames = [Image.effect_noise((300, 300), 64 + index).convert('P') for index in range(3)]
+    frames[0].save(buffer, format='GIF', save_all=True, append_images=frames[1:])
+    data = buffer.getvalue()
+    return data[:len(data) - 2000]
+
+
+class TestAnImagePillowCannotDecode:
+    """Pillow refuses a file it cannot decode with an exception, and of no one type: UnidentifiedImageError at
+    open, OSError for data cut short at load (and in scale_gif's seek through a GIF's frames), SyntaxError for a
+    broken PNG chunk, RuntimeError from the AVIF plugin. Neither function caught any of them, so every one was a
+    500 with the upload left in the media root -- where nothing refers to it and it is served from this instance's
+    own origin. They are the functions' own 400 now, as the extension check's refusal is, and the upload goes."""
+
+    @pytest.mark.parametrize('content,name', [
+        (b'not an image at all', 'icon.png'),
+        (truncated(png_bytes()), 'icon.png'),
+        (truncated(png_bytes()), 'icon.gif'),
+        (gif_with_a_truncated_last_frame(), 'icon.gif'),
+    ], ids=['garbage', 'truncated_png', 'truncated_png_as_gif', 'gif_with_a_truncated_last_frame'])
+    def test_an_icon_is_refused_and_not_left_behind(self, env, content, name):
+        import glob
+        before = set(glob.glob('app/static/media/communities/*/*/*'))
+        with pytest.raises(HTTPException) as caught:
+            save_icon_file(a_file(content, name))
+        assert caught.value.code == 400
+        assert set(glob.glob('app/static/media/communities/*/*/*')) == before
+
+    @pytest.mark.parametrize('content,name', [
+        (b'not an image at all', 'banner.png'),
+        (truncated(png_bytes()), 'banner.png'),
+        (a_disguised_image('TGA', 'banner.png').read(), 'banner.png'),
+    ], ids=['garbage', 'truncated_png', 'tga'])
+    def test_a_banner_is_refused_and_not_left_behind(self, env, content, name):
+        import glob
+        before = set(glob.glob('app/static/media/communities/*/*/*'))
+        with pytest.raises(HTTPException) as caught:
+            save_banner_file(a_file(content, name))
+        assert caught.value.code == 400
+        assert set(glob.glob('app/static/media/communities/*/*/*')) == before
+
+
 class TestAnAnimatedGif:
     def test_a_small_one(self, env):
         file = save_icon_file(an_animated_gif(60, 60))
