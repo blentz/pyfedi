@@ -90,8 +90,9 @@ def avatar_of(value):
 
 
 def uri_is_on(uri, host: str) -> bool:
-    """True for an https uri whose host is exactly `host`. Anything unparseable is False."""
-    if not isinstance(uri, str):
+    """True for an https uri whose host is exactly `host`. Anything unparseable is False, and so is a backslash: a
+    browser reads it as a slash, so 'https://evil.example\\@host/' visits evil.example where urlparse reads host."""
+    if not isinstance(uri, str) or '\\' in uri:
         return False
     try:
         parsed = urlparse(uri)

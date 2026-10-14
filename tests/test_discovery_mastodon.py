@@ -43,6 +43,16 @@ def test_an_account_uri_on_another_host_is_not_trusted(app):
     assert entry['actor_url'] == 'https://mastodon.example/users/ann'
 
 
+def test_an_account_uri_with_a_backslash_in_its_authority_is_not_trusted(app):
+    """urlparse reads mastodon.example after the '@' of 'evil.example\\@mastodon.example'; a browser reads a backslash
+    as a slash and visits evil.example. The directory row's uri was kept as the entry's actor_url."""
+    entry = account_to_entry({'username': 'ann', 'discoverable': True,
+                              'uri': 'https://evil.example\\@mastodon.example/users/ann'}, 'mastodon.example')
+
+    assert entry['actor_url'] == 'https://mastodon.example/users/ann'
+    assert sources.uri_is_on('https://evil.example\\@mastodon.example/users/ann', 'mastodon.example') is False
+
+
 def test_malformed_account_rows_are_skipped_and_good_rows_kept(app, http_mock):
     """Review focus 1: no single malformed row aborts the source."""
     good = {'username': 'ann', 'discoverable': True, 'uri': 'https://mastodon.example/users/ann'}
