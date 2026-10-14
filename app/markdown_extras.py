@@ -7,10 +7,11 @@ from markdown2 import Extra, Stage
 
 def _quoted(value: str) -> str:
     """`value` safe inside a double-quoted attribute: a '"' in the alt text, a width or a url used to close the
-    attribute and turn the rest into attributes of the author's choosing. Only the quote is escaped; '&' is left
-    for markdown2 and the HTML parser to read as they always have, so output for markdown without a '"' is
-    unchanged."""
-    return value.replace('"', '&quot;')
+    attribute and turn the rest into attributes of the author's choosing, and a '>' hid the tag's marker from
+    apply_enhanced_image_attributes, which reads a tag up to its first '>'. '&' is left for markdown2 and the HTML
+    parser to read as they always have, so output for markdown holding none of '"', '<' and '>' is unchanged
+    (allowlist_html writes '<' and '>' in an attribute as &lt; and &gt; whichever way they arrive)."""
+    return value.replace('"', '&quot;').replace('<', '&lt;').replace('>', '&gt;')
 
 
 class EnhancedImages(Extra):

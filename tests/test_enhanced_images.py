@@ -241,6 +241,15 @@ Some text here.
         self.assertEqual(sorted(img.attrs), ['alt', 'src', 'width'])
         self.assertEqual(img.parent['href'], 'f"z')
 
+    def test_an_angle_bracket_in_a_value_keeps_the_attributes(self):
+        """apply_enhanced_image_attributes finds the built <img> by reading up to its first '>', so a '>' in the url
+        or the alt text hid the marker: the image lost its width, alignment and class and kept
+        data-enhanced-img (fuzz: enhanced_images/angle_bracket_in_url)."""
+        img = BeautifulSoup(markdown_with_enhanced_images('![a>b :: align-left width=200px](x>y.jpg)'),
+                            'html.parser').find('img')
+        self.assertEqual((img['src'], img['alt'], img['width'], img['align']), ('x>y.jpg', 'a>b', '200px', 'left'))
+        self.assertNotIn('data-enhanced-img', img.attrs)
+
     def test_integration_with_markdown_to_html(self):
         """Test integration with markdown_to_html function (full extras suite)"""
         from app.utils import markdown_to_html
