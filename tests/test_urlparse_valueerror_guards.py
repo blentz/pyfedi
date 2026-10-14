@@ -270,6 +270,12 @@ class TestMimetypeFromUrlSurvivesAMalformedNetloc:
     def test_a_malformed_netloc_has_no_mimetype(self, url):
         assert mimetype_from_url(url) is None
 
+    def test_a_path_that_reads_as_a_malformed_netloc_has_no_mimetype(self):
+        """mimetypes.guess_type urlparses the PATH it is given, and a path opening '//' has a netloc of its own:
+        'https://tps://[x/a.png' parses (host 'tps', so url_is_storable lets a peer store it), but its path
+        '//[x/a.png' does not, and the ValueError came from that second parse."""
+        assert mimetype_from_url('https://tps://[x/a.png') is None
+
 
 class TestMimetypeFromUrlStillGuessesTypes:
     """The over-correction guard."""

@@ -2709,7 +2709,12 @@ def mimetype_from_url(url):
         # is the same None mimetypes.guess_type returns for an unrecognised one.
         return None
     path = parsed_url.path.split('?')[0]  # Strip off anything after '?'
-    mime_type, _ = mimetypes.guess_type(path)
+    try:
+        mime_type, _ = mimetypes.guess_type(path)
+    except ValueError:
+        # guess_type urlparses the path too, and a path opening '//' has a netloc of its own: the path of the
+        # storable 'https://tps://[x/a.png' is '//[x/a.png', an unbalanced bracket. The same None as above.
+        return None
     return mime_type
 
 
