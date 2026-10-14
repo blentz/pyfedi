@@ -116,6 +116,14 @@ def test_listgroup_without_a_name_lists_the_selected_group():
         READY, '211 3 1 3 a.example', '211 3 1 3 a.example', '1', '2', '3', '.', CLOSING]
 
 
+def test_listgroup_naming_another_group_sends_one_status_line():
+    """LISTGROUP selected the group it named through GROUP's code, which sent its own 211, then sent another."""
+    assert session_replies(b'GROUP a.example\r\nLISTGROUP b.example\r\nQUIT\r\n') == [
+        READY, '211 3 1 3 a.example', '211 0 0 0 b.example', '.', CLOSING]
+    assert session_replies(b'LISTGROUP a.example 2-\r\nLISTGROUP nowhere\r\nQUIT\r\n') == [
+        READY, '211 3 1 3 a.example', '2', '3', '.', '411 No such newsgroup', CLOSING]
+
+
 @pytest.mark.parametrize('date_str,time_str', [
     ('99999999999999999999990101', '000000'),
     ('20250101', '0000999999999999999999999'),
