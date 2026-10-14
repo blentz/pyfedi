@@ -357,8 +357,9 @@ def _redirect_policy(policy, allowed: bool):
     def instance_allowed(host, trusted_only):
         asked.append((host, trusted_only))
         # An instance's domain is a DNS name it federates from: none ends in a number (a browser reads that as an
-        # IPv4 address), so the stub allows no such host, as the instance table could not.
-        return allowed and not _ends_in_a_number(host)
+        # IPv4 address), so the stub allows no such host, as the instance table could not hold one.
+        # Nor one IDNA would map to another (a browser visits the mapped host): such a domain cannot be fetched.
+        return allowed and not _ends_in_a_number(host) and unicodedata.normalize('NFKC', host).casefold() == host
 
     saved = app_utils.get_setting, app_utils.instance_redirect_allowed
     app_utils.get_setting, app_utils.instance_redirect_allowed = setting, instance_allowed
@@ -427,15 +428,26 @@ _NOT_PUBLIC_V4 = [ipaddress.IPv4Network(block) for block in (
     '0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12', '192.0.0.0/24',
     '192.0.2.0/24', '192.88.99.0/24', '192.168.0.0/16', '198.18.0.0/15', '198.51.100.0/24', '203.0.113.0/24',
     '224.0.0.0/4', '240.0.0.0/4')]
-# IPv6: only 2000::/3 is global unicast; inside it, these are not public.
+# The registry's "globally reachable" exceptions inside those blocks.
+_PUBLIC_V4 = [ipaddress.IPv4Network(block) for block in ('192.0.0.9/32', '192.0.0.10/32')]
+# IPv6: only 2000::/3 is global unicast, and an IPv4-mapped address is as public as the IPv4 address it maps.
 _GLOBAL_UNICAST = ipaddress.IPv6Network('2000::/3')
+_MAPPED = ipaddress.IPv6Network('::ffff:0:0/96')
 _NOT_PUBLIC_V6 = [ipaddress.IPv6Network(block) for block in (
     '2001::/23', '2001:db8::/32', '2002::/16', '3fff::/20')]
+_PUBLIC_V6 = [ipaddress.IPv6Network(block) for block in (
+    '2001:1::1/128', '2001:1::2/128', '2001:1::3/128', '2001:3::/32', '2001:4:112::/48', '2001:20::/28',
+    '2001:30::/28')]
 
 
 def is_public(address) -> bool:
     if address.version == 4:
-        return not any(address in block for block in _NOT_PUBLIC_V4)
+        return (any(address in block for block in _PUBLIC_V4)
+                or not any(address in block for block in _NOT_PUBLIC_V4))
+    if address in _MAPPED:
+        return is_public(address.ipv4_mapped)
+    if any(address in block for block in _PUBLIC_V6):
+        return True
     return address in _GLOBAL_UNICAST and not any(address in block for block in _NOT_PUBLIC_V6)
 
 
@@ -598,7 +610,9 @@ def check_webfinger_resource(data: bytes) -> None:
         domain = resource.split(':')[1].partition('@')[2].lower()
     elif 'https:' in resource or 'http:' in resource:
         reading = rfc3986_authority(resource)
-        domain = None if reading is None else reading[0]
+        # None also when RFC 3986 reads no authority at all ('acc,http://x@host'): a malformed resource may be
+        # looked up by its last path segment, which names no local actor, and gets the same 404.
+        domain = None if reading is None or not reading[0] else reading[0]
     else:
         assert response is None and not lookups, f'{resource!r} is neither acct: nor a URL and was answered'
         return
