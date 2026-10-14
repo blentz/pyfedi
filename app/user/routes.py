@@ -72,6 +72,22 @@ SETTINGS_IMPORT_MAX_ENTRIES = 500
 FILE_URLS_PER_UPLOAD = 25
 
 
+def settings_import_contents(contents):
+    """The stored settings upload as a dict, or {} -- nothing to import -- when it is not a JSON object.
+
+    The upload is checked for a .json extension and nothing else, so its bytes are an input like its entries: not
+    JSON, not UTF-8, nested past the decoder's stack, or a list or string at the top all used to raise out of the
+    task. None is a Redis key that expired before the worker ran.
+    """
+    if contents is None:
+        return {}
+    try:
+        contents_json = json.loads(contents)
+    except (ValueError, RecursionError):
+        return {}
+    return contents_json if isinstance(contents_json, dict) else {}
+
+
 def import_entries(contents_json, key):
     """The entries under `key`, refused unless they are a list and capped.
 
@@ -1493,8 +1509,7 @@ def import_settings_task(user_id, redis_key):
                 # D992's shape, in a background task rather than a route.
                 if user is None:
                     return
-                contents = app_pkg.redis_client.get(redis_key)
-                contents_json = json.loads(contents)
+                contents_json = settings_import_contents(app_pkg.redis_client.get(redis_key))
 
                 # Follow communities
                 for community_ap_id in import_entries(contents_json, 'followed_communities'):
