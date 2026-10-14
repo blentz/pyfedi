@@ -287,3 +287,31 @@ class TestAJsonBodyTooDeepToDecode:
 
         assert response.status_code == 400
         assert response.get_json()['message'] == 'Validation failed'
+
+
+class TestAQueryStringThatIsNotUtf8:
+    """Found by the api_request_args fuzz target. Werkzeug decodes the raw query string
+    as strict UTF-8 when `request.args` is first read, which for a GET listing is the
+    argument parser -- so a raw byte such as 0xD1 in the URL raised UnicodeDecodeError,
+    and this handler answered it as an internal error: a 500, a logged traceback and a
+    Sentry event, before any login check. Percent-encoded bytes were always fine."""
+
+    def test_it_is_refused_with_a_400(self, app, db_session):
+        client = app.test_client()
+
+        # A WSGI environ holds the raw query string as bytes decoded as Latin-1 (PEP 3333): '\xd1' is byte 0xD1.
+        response = client.get('/api/alpha/user', environ_overrides={'QUERY_STRING': 'username=\xd1'})
+
+        assert response.status_code == 400
+        assert response.get_json()['code'] == 400
+
+    def test_a_percent_encoded_byte_still_parses(self, app, db_session):
+        """The same byte percent-encoded gets past the parser to the view: the refusal
+        above is for raw bytes only. (Werkzeug keeps an undecodable escape as written.)"""
+        client = app.test_client()
+
+        with patch('app.api.alpha.routes.enable_api', return_value=True), \
+                patch('app.api.alpha.routes.get_user', return_value={}) as view:
+            client.get('/api/alpha/user?username=%D1')
+
+        assert view.call_args.args[1]['username'] == '%D1'

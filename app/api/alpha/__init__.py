@@ -4,7 +4,7 @@ from flask_limiter import RateLimitExceeded
 from marshmallow import ValidationError
 from sqlalchemy.orm.exc import NoResultFound
 import sentry_sdk
-from webargs.flaskparser import FlaskParser
+from webargs.flaskparser import FlaskParser, abort
 from werkzeug.exceptions import HTTPException, UnprocessableEntity
 
 from app.models import PostReplyValidationError
@@ -12,7 +12,8 @@ from app.models import PostReplyValidationError
 
 
 class ApiArgumentsParser(FlaskParser):
-    """webargs' parser, except that a JSON body nested too deeply to decode is refused like any other invalid JSON.
+    """webargs' parser, except that a JSON body nested too deeply to decode is refused like any other invalid JSON,
+    and a query string that is not UTF-8 is refused too.
 
     json.loads raises RecursionError for one, and webargs turns only JSONDecodeError and UnicodeDecodeError into its
     400 "Invalid JSON body.", so the RecursionError reached shared_error_handler and was answered as an internal error,
@@ -24,6 +25,14 @@ class ApiArgumentsParser(FlaskParser):
             return super()._raw_load_json(req)
         except RecursionError as error:
             return self._handle_invalid_json_error(error, req)
+
+    def load_querystring(self, req, schema):
+        # Werkzeug decodes the raw query string as strict UTF-8 when request.args is first read, which for a GET
+        # listing is here: a raw byte such as 0xD1 in the URL raised UnicodeDecodeError, answered as a 500.
+        try:
+            return super().load_querystring(req, schema)
+        except UnicodeDecodeError as error:
+            abort(400, exc=error, messages={"query": ["Invalid query string."]})
 
 
 class ApiBlueprint(SmorestBlueprint):
