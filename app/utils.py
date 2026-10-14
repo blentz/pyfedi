@@ -1522,6 +1522,13 @@ def make_quotes_straight(text: str) -> str:
     return text
 
 
+# >!spoiler!<, as >!\s?(.+?)\s?!< matched it. When a start fails, no '!<' ends a spoiler anywhere later on its
+# line, so every later start on the line fails too -- except a '>!' that ends the line, whose optional space can
+# be the newline itself, carrying it to the next line. The skip alternative ends at the line or just before such
+# a '>!'. A line of '>!' took 32 s per 64 KiB.
+_REDDIT_SPOILER_RE = re.compile(r'>!\s?(.+?)\s?!<|>![^\n]*?(?=>!\n|\n|\Z)')
+
+
 def handle_reddit_spoilers(text: str) -> str:
     """Handle reddit-style in-line spoilers >! like this !<"""
 
@@ -1531,8 +1538,7 @@ def handle_reddit_spoilers(text: str) -> str:
     code_snippets, text = stash_code_html(text, placeholder)
 
     # Step 2: Do the regex matching and substitutions
-    img_md = re.compile(r'>!\s?(.+?)\s?!<', re.M)
-    text = img_md.sub(r'<tg-spoiler>\1</tg-spoiler>', text)
+    text = sub_skipping(_REDDIT_SPOILER_RE, r'<tg-spoiler>\1</tg-spoiler>', text)
 
     # Step 3: Restore code snippets
     text = pop_code(code_snippets=code_snippets, text=text, placeholder=placeholder)
