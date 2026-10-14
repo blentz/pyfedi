@@ -472,6 +472,9 @@ limits on input that could cost seconds of CPU or crash a request:
 - **`flask init-db` adds no empty banned domain.** A blank line in the
   No-QAnon or Peertube Isolation block list, such as the No-QAnon list's
   trailing newline, used to add a banned Domain named `''` (`0d98d81e`).
+  A host on both lists, or repeated in one, is added once; 51 of Peertube
+  Isolation's 52 hosts are also on No-QAnon, and unbanning one of the twin
+  rows left the other banned (`c5b3d20f`).
 - **The admin ban-list upload** refuses a file that is not a ban list with a
   message (`10a21a6d`).
 - **NNTP clients.** An article body keeps its indentation and trailing
