@@ -223,6 +223,20 @@ def feed_machine_name(url, public, user):
     return url[:50]
 
 
+def store_icon_and_banner(uploaded_icon_file, uploaded_banner_file):
+    """process_upload's urls for a feed form's icon and banner, None for one not given. The icon is stored first, so
+    when the banner then raises -- refused as 'filetype not allowed', say -- the icon is deleted again, locally or
+    from S3, before the exception goes on: the form is refused, and nothing would ever refer to it."""
+    icon_url = process_upload(uploaded_icon_file, destination='feeds') if uploaded_icon_file else None
+    try:
+        banner_url = process_upload(uploaded_banner_file, destination='feeds') if uploaded_banner_file else None
+    except Exception:
+        if icon_url:
+            File(source_url=icon_url).delete_from_disk(purge_cdn=False)
+        raise
+    return icon_url, banner_url
+
+
 def make_feed(input, src, auth=None, uploaded_icon_file=None, uploaded_banner_file=None):
     if src == SRC_API:
         url = input['url']
@@ -257,8 +271,7 @@ def make_feed(input, src, auth=None, uploaded_icon_file=None, uploaded_banner_fi
         title = input.title.data
         public = input.public.data
         description = piefed_markdown_to_lemmy_markdown(input.description.data)
-        icon_url = process_upload(uploaded_icon_file, destination='feeds') if uploaded_icon_file else None
-        banner_url = process_upload(uploaded_banner_file, destination='feeds') if uploaded_banner_file else None
+        icon_url, banner_url = store_icon_and_banner(uploaded_icon_file, uploaded_banner_file)
         nsfw = input.nsfw.data
         nsfl = input.nsfl.data
         communities = input.communities.data
@@ -384,8 +397,7 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
         title = input.title.data
         public = input.public.data
         description = piefed_markdown_to_lemmy_markdown(input.description.data)
-        icon_url = process_upload(uploaded_icon_file, destination='feeds') if uploaded_icon_file else None
-        banner_url = process_upload(uploaded_banner_file, destination='feeds') if uploaded_banner_file else None
+        icon_url, banner_url = store_icon_and_banner(uploaded_icon_file, uploaded_banner_file)
         nsfw = input.nsfw.data
         nsfl = input.nsfl.data
         communities = input.communities.data

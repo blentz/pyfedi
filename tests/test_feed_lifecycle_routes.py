@@ -1265,3 +1265,86 @@ def test_another_feed_edit_failure_is_not_swallowed(app, db_session):
         with patch('app.feed.routes.shared_feed.edit_feed', side_effect=Exception('something else')):
             with pytest.raises(Exception, match='something else'):
                 client.post(f'/feed/{feed.id}/edit', data=_edit_payload(app, client))
+
+
+def _a_png():
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new('RGB', (8, 8), (10, 20, 30)).save(buffer, format='PNG')
+    buffer.seek(0)
+    return buffer
+
+
+@pytest.mark.parametrize('route', ['create', 'edit'])
+def test_an_icon_stored_before_its_banner_is_refused_is_removed(app, db_session, monkeypatch, route):
+    """The icon goes through process_upload first and is stored; then the banner is refused ('filetype not
+    allowed') and the route flashes that. Nothing refers to the stored icon, and it was left in the media root,
+    served from this origin for ever. It is removed now, so nothing of either file is left."""
+    import io
+    import os
+
+    instance, owner, stranger = _seed()
+    feed = _feed(owner, name='lifecyclefeed') if route == 'edit' else None
+    names = iter(['storediconfile', 'refusedbanner0'])
+    monkeypatch.setattr('app.shared.upload.gibberish', lambda length: next(names) + '0')
+    files = {'icon_file': (_a_png(), 'icon.png'), 'banner_file': (io.BytesIO(b'not an image at all'), 'banner.png')}
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()), \
+                patch('app.shared.feed.existing_communities', return_value=[]), \
+                patch('app.feed.routes.render_template', return_value='rendered'), \
+                patch('app.feed.routes.flash') as flashed:
+            if route == 'create':
+                response = client.post('/feed/new', data=_create_payload(app, client, url='withanicon', **files),
+                                       content_type='multipart/form-data')
+            else:
+                response = client.post(f'/feed/{feed.id}/edit', data=_edit_payload(app, client, **files),
+                                       content_type='multipart/form-data')
+
+    assert response.status_code == (200 if route == 'create' else 302)
+    messages = [(str(call.args[0]), call.args[1]) for call in flashed.call_args_list]
+    assert messages == [('The icon or banner is not an image of a type this site accepts.', 'error')]
+    assert not os.path.exists('app/static/media/feeds/st/or/storediconfile0.png')
+    assert not os.path.exists('app/static/media/feeds/re/fu/refusedbanner00.png')
+
+
+def test_an_icon_stored_in_s3_before_its_banner_is_refused_is_removed(app, db_session, monkeypatch, s3_bucket):
+    """The same, with the icon in the bucket: the object is deleted, and no copy is left in app/static/tmp."""
+    import glob
+    import io
+
+    import boto3
+    import botocore.client
+
+    instance, owner, stranger = _seed()
+    for key, value in (('S3_ACCESS_KEY', 'test-key'), ('S3_ACCESS_SECRET', 'test-secret'),
+                       ('S3_ENDPOINT', 'https://s3.amazonaws.com'), ('S3_REGION', 'us-east-1'),
+                       ('S3_BUCKET', s3_bucket), ('S3_PUBLIC_URL', 'cdn.example.test')):
+        monkeypatch.setitem(app.config, key, value)
+    names = iter(['storediconfile', 'refusedbanner0'])
+    monkeypatch.setattr('app.shared.upload.gibberish', lambda length: next(names) + '0')
+    bucket = boto3.client('s3', region_name='us-east-1')
+    put = []
+    real_call = botocore.client.BaseClient._make_api_call
+
+    def make_api_call(self, operation, params):
+        if operation == 'PutObject':
+            put.append(params['Key'])
+        return real_call(self, operation, params)
+
+    monkeypatch.setattr(botocore.client.BaseClient, '_make_api_call', make_api_call)
+    files = {'icon_file': (_a_png(), 'icon.png'), 'banner_file': (io.BytesIO(b'not an image at all'), 'banner.png')}
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()), \
+                patch('app.feed.routes.render_template', return_value='rendered'), \
+                patch('app.feed.routes.flash'):
+            client.post('/feed/new', data=_create_payload(app, client, url='withanicon', **files),
+                        content_type='multipart/form-data')
+
+    assert put == ['feeds/st/or/storediconfile0.png']
+    assert bucket.list_objects_v2(Bucket=s3_bucket).get('Contents', []) == []
+    assert glob.glob('app/static/tmp/storediconfile0*') == glob.glob('app/static/tmp/refusedbanner00*') == []
