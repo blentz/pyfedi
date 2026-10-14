@@ -230,6 +230,19 @@ class TestActorLinksNeverNestALink:
         assert result.endswith('<p><a href="https://s.example/user/lookup/bob/lemmy.world" '
                                'rel="nofollow noindex">@bob@lemmy.world</a></p>')
 
+    def test_a_handle_right_before_a_link_or_code_keeps_both(self):
+        """The stashed link or code is replaced by a placeholder of letters and digits, which a handle's host
+        pattern went on reading: '@bob@lemmy.world<code>x</code>' -- what markdown2 makes of '@bob@lemmy.world`x`'
+        -- became a lookup link to 'lemmy.world' plus the placeholder, and the code was lost with the placeholder
+        text left in its place (fuzz: markdown_actor_links/handle_before_a_stashed_link)."""
+        result = person_link_to_href('<p>@bob@lemmy.world<code>x</code></p>', server_name_override='s.example')
+        assert result == ('<p><a href="https://s.example/user/lookup/bob/lemmy.world" rel="nofollow noindex">'
+                          '@bob@lemmy.world</a><code>x</code></p>')
+        result = community_link_to_href('<p>!c@h.example<a href="https://x.example/">y</a></p>',
+                                        server_name_override='s.example')
+        assert result == ('<p><a href="https://s.example/community/lookup/c/h.example">!c@h.example</a>'
+                          '<a href="https://x.example/">y</a></p>')
+
     def test_an_unclosed_anchor_or_code_is_read_in_linear_time(self):
         assert_linear(self, [pump('<a '), pump('<a>'), pump('<code '), pump('<code>')],
                       lambda text: person_link_to_href(text, server_name_override='s.example'), seconds=0.5)
