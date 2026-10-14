@@ -71,8 +71,10 @@ def as_count(value) -> int:
 
 
 def is_hostname(value) -> bool:
-    """A lower-case DNS name with at least one dot. Peers name hosts; we build urls from them."""
-    return isinstance(value, str) and _HOSTNAME.fullmatch(value) is not None
+    """A lower-case DNS name with at least one dot. Peers name hosts; we build urls from them. Not one whose last label
+    is all digits: a browser reads that as an IPv4 address ('https://1.02/' visits 1.0.0.2), and no top-level domain
+    is all-numeric."""
+    return isinstance(value, str) and _HOSTNAME.fullmatch(value) is not None and not value.rpartition('.')[2].isdigit()
 
 
 def is_username(value) -> bool:
