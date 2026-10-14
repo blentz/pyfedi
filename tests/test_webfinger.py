@@ -273,6 +273,20 @@ def test_a_malformed_resource_is_400(app, db_session):
     assert response.status_code == 400
 
 
+@pytest.mark.parametrize('resource', ['https://[x', 'https://test.piefed.local:abc/u/alice', 'https://%zz/u/alice'])
+def test_a_url_resource_whose_host_cannot_be_read_is_404(app, db_session, resource):
+    """furl raises ValueError on an unterminated IPv6 bracket, a port that is not a number or a host it will not
+    accept, and the resource is the requester's to write: each answered 500. A URL whose host cannot be read names
+    no host, so it is not on this instance: 404, as for any foreign resource, before any lookup."""
+    site, instance = seed_local_actors()
+    make_user(instance, 'alice', local=True)
+
+    with app.test_client() as client:
+        response = client.get('/.well-known/webfinger', query_string={'resource': resource})
+
+    assert response.status_code == 404
+
+
 def test_the_instance_actor_is_served_from_the_special_case(app, db_session):
     """`actor == current_app.config['SERVER_NAME']` short-circuits every
     database lookup and returns a fixed JRD pointing at /actor. No User, Community
