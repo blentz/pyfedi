@@ -254,6 +254,17 @@ class TestWhatTheSubscriptionWrites:
             download_defeds_worker(subscription.id, DOMAIN)
         assert BannedInstances.query.filter_by(domain='nasty.test').count() == 1
 
+    def test_an_ipv6_host_is_stored_in_one_spelling(self, env, subscription):
+        """instance_banned compares canonical_host's spelling (compressed, unbracketed; owner ruling 2026-10-14).
+        The list's host was stored as given, so '[0:0::1]' was a ban no lookup reads, and a second spelling of
+        one address a second row. An allowlisted address in another spelling is still not banned."""
+        db.session.add(AllowedInstances(domain='2001:db8::7'))
+        db.session.commit()
+        with patch('app.utils.retrieve_defederation_list',
+                   return_value=['[0:0::1]', '::1', '0:0:0:0:0:0:0:1', '[2001:db8:0::7]']):
+            download_defeds_worker(subscription.id, DOMAIN)
+        assert [row.domain for row in BannedInstances.query.filter_by(subscription_id=subscription.id)] == ['::1']
+
     def test_the_same_subscription_downloaded_twice(self, env, subscription):
         with patch('app.utils.retrieve_defederation_list',
                    return_value=['nasty.test']):

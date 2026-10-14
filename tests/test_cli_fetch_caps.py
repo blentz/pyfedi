@@ -56,3 +56,28 @@ def test_a_feed_and_its_redirect_are_fetched_under_the_media_cap(commands):
     assert all(call.kwargs == {'max_bytes': MEDIA_MAX_BYTES, 'max_seconds': MEDIA_MAX_SECONDS, 'retry': True}
                for call in fetch.call_args_list)
     assert (MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS) == (10 * 1024 * 1024, 30)
+
+
+def test_init_db_stores_the_block_lists_hosts_in_one_spelling(commands):
+    """init-db adds the No-QAnon and Peertube Isolation lists as Domain and BannedInstances rows. It stored each
+    line as given, so an IPv6 literal written '[0:0::1]' was a row no lookup reads: instance_banned and the Domain
+    lookups compare canonical_host's spelling (compressed, unbracketed; owner ruling 2026-10-14). Everything that
+    would touch the real schema -- drop_all, create_all, the session -- is a stand-in here; what is checked is what
+    the command adds."""
+    from unittest.mock import MagicMock
+
+    from app.models import BannedInstances, Domain
+
+    fake_db = MagicMock()
+    fake_db.inspect.return_value.get_table_names.return_value = ['alembic_version']
+    fake_db.session.execute.return_value.fetchone.return_value = ('UTF8',)
+    with patch('app.cli.db', fake_db), \
+            patch('app.cli.retrieve_block_list', return_value='[0:0::1]\nbad.example\n'), \
+            patch('app.cli.retrieve_peertube_block_list', return_value='[2001:db8:0::5]\ntube.example'):
+        result = commands.invoke(args=['init-db', '--interactive', 'no'])
+
+    assert result.exception is None, result.exception
+    added = [call.args[0] for call in fake_db.session.add.call_args_list]
+    assert [row.name for row in added if isinstance(row, Domain)] == ['::1', 'bad.example', '', '2001:db8::5',
+                                                                      'tube.example']
+    assert [row.domain for row in added if isinstance(row, BannedInstances)][-2:] == ['2001:db8::5', 'tube.example']
