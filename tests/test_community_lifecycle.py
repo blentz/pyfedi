@@ -1466,3 +1466,124 @@ def test_a_refused_banner_alone_deletes_nothing_else(app, creator, monkeypatch):
 
     assert response.status_code == 400
     assert delete_from_disk.call_args_list == []
+
+
+def _an_old_icon(storage, bucket=None):
+    """A stored icon of the community's, both sizes really present: on disk, or as objects in the moto bucket."""
+    import os
+
+    import boto3
+
+    names = ('communities/ol/di/oldiconfile0.png', 'communities/ol/di/oldiconfile0_thumbnail.webp')
+    if storage == 's3':
+        s3 = boto3.client('s3', region_name='us-east-1')
+        for key in names:
+            s3.put_object(Bucket=bucket, Key=key, Body=b'old icon')
+        paths = [f'https://cdn.example.test/{key}' for key in names]
+    else:
+        os.makedirs('app/static/media/communities/ol/di', exist_ok=True)
+        paths = [f'app/static/media/{key}' for key in names]
+        for path in paths:
+            with open(path, 'wb') as stored:
+                stored.write(b'old icon')
+    old = File(file_path=paths[0], thumbnail_path=paths[1], file_name='oldiconfile0.png')
+    db.session.add(old)
+    db.session.commit()
+    return old
+
+
+def _old_icon_still_stored(storage, bucket=None):
+    import os
+
+    import boto3
+
+    if storage == 's3':
+        contents = boto3.client('s3', region_name='us-east-1').list_objects_v2(Bucket=bucket).get('Contents', [])
+        return sorted(item['Key'] for item in contents) == ['communities/ol/di/oldiconfile0.png',
+                                                           'communities/ol/di/oldiconfile0_thumbnail.webp']
+    return all(os.path.exists(f'app/static/media/communities/ol/di/oldiconfile0{rest}')
+               for rest in ('.png', '_thumbnail.webp'))
+
+
+@pytest.mark.parametrize('uploads', ['icon and banner', 'banner'])
+@pytest.mark.parametrize('storage', ['local', 's3'])
+def test_a_refused_banner_leaves_the_edited_communitys_icon_as_it_was(app, owned_community, owner_client,
+                                                                      monkeypatch, request, storage, uploads):
+    """The edit form stored the new icon, pointed the community at it and deleted the OLD icon's files; then
+    save_banner_file refused the banner with its 400 and the session rolled back. The community still named the
+    old icon, whose files were gone, and the new icon's files were left behind, referred to by nothing. Now
+    nothing old is touched until both new images are stored, and the new icon is deleted again when the banner
+    is refused: the community keeps its old icon, files and all, and nothing new is left behind."""
+    import os
+
+    community, owner, ordinary, english = owned_community
+    client, token = owner_client
+    bucket = None
+    if storage == 's3':
+        bucket = request.getfixturevalue('s3_bucket')
+        _use_s3(app, monkeypatch, bucket)
+    old = _an_old_icon(storage, bucket)
+    community.icon_id = old.id
+    db.session.commit()
+    old_id = old.id
+    names = iter(['storediconfile', 'refusedbanner0'] if uploads == 'icon and banner' else ['refusedbanner0'])
+    monkeypatch.setattr('app.community.util.gibberish', lambda length: next(names) + '0')
+    files = {'banner_file': (io.BytesIO(b'not an image at all'), 'banner.png')}
+    if uploads == 'icon and banner':
+        files['icon_file'] = (_a_png(), 'icon.png')
+
+    try:
+        response, render = _edit(app, client, token, community, english, **files)
+
+        assert response.status_code == 400
+        db.session.expire_all()
+        assert db.session.get(Community, community.id).icon_id == old_id
+        assert db.session.get(File, old_id) is not None
+        assert _old_icon_still_stored(storage, bucket)
+        assert _stored_anywhere('storediconfile0') == _stored_anywhere('refusedbanner00') == []
+    finally:
+        for rest in ('.png', '_thumbnail.webp'):
+            path = f'app/static/media/communities/ol/di/oldiconfile0{rest}'
+            if os.path.exists(path):
+                os.unlink(path)
+
+
+@pytest.mark.parametrize('storage', ['local', 's3'])
+def test_replacing_both_images_deletes_the_old_ones_once_the_new_ones_are_in(app, owned_community, owner_client,
+                                                                             monkeypatch, request, storage):
+    """Both accepted: the community points at the two new images, and the old icon and banner go, rows and
+    files, only once the new ones have been committed."""
+    import boto3
+
+    community, owner, ordinary, english = owned_community
+    client, token = owner_client
+    bucket = None
+    if storage == 's3':
+        bucket = request.getfixturevalue('s3_bucket')
+        _use_s3(app, monkeypatch, bucket)
+    old_icon = _an_old_icon(storage, bucket)
+    old_banner = File(file_path='app/static/media/communities/ol/db/oldbanner.png', file_name='oldbanner.png')
+    db.session.add(old_banner)
+    db.session.commit()
+    community.icon_id, community.image_id = old_icon.id, old_banner.id
+    db.session.commit()
+    old_ids = (old_icon.id, old_banner.id)
+    names = iter(['newiconfile000', 'newbannerfile0'])
+    monkeypatch.setattr('app.community.util.gibberish', lambda length: next(names) + '0')
+
+    response, render = _edit(app, client, token, community, english, icon_file=(_a_png(), 'icon.png'),
+                             banner_file=(_a_png(), 'banner.png'))
+
+    assert response.status_code == 302
+    db.session.expire_all()
+    edited = db.session.get(Community, community.id)
+    assert edited.icon.file_name.startswith('newiconfile0000')
+    assert edited.image.file_name.startswith('newbannerfile00')
+    assert [db.session.get(File, file_id) for file_id in old_ids] == [None, None]
+    if storage == 's3':
+        contents = boto3.client('s3', region_name='us-east-1').list_objects_v2(Bucket=bucket).get('Contents', [])
+        assert not [item['Key'] for item in contents if 'oldiconfile0' in item['Key']]
+    else:
+        assert _stored_anywhere('oldiconfile0') == []
+    edited.icon.delete_from_disk(purge_cdn=False)
+    edited.image.delete_from_disk(purge_cdn=False)
