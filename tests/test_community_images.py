@@ -63,7 +63,11 @@ HOSTILE_SVG = (b'<?xml version="1.0"?><!DOCTYPE svg [<!ENTITY a "'
 
 
 @pytest.fixture
-def env(app, api_baseline, monkeypatch, tmp_path):
+def env(app, api_baseline, monkeypatch, tmp_path, private_static_tree):
+    """`private_static_tree`: both functions write under app/static by relative
+    path, and `cleanup` below cannot reach everything they write -- with
+    MEDIA_IMAGE_FORMAT set the upload's original sits beside the re-encoded
+    file under a name no File row records, and every run left one behind."""
     from types import SimpleNamespace
 
     g.admin_ids = []

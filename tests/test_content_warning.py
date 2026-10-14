@@ -117,6 +117,7 @@ def test_reply_update_changes_the_content_warning(community, author):
     assert reply.content_warning == 'lighter'
 
 
+@pytest.mark.usefixtures('private_static_tree')  # the image's sizes are written under app/static
 def test_post_page_collapses_body_and_image_under_the_warning(app, community, author):
     from tests.test_gallery import a_jpeg
     import respx
