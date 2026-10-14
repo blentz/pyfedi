@@ -396,9 +396,9 @@ def check_html_text_helpers(data: bytes) -> None:
 
     html_to_text never lengthens its input (entities only shorten) and is the identity on text holding no '<'
     or '&' and not only whitespace (BeautifulSoup turns a document of only whitespace into one space or newline). shorten_string(s, n), n from the first byte, is s when it fits and otherwise s cut to n-3 characters
-    and an ellipsis, so never longer than n. shorten_url is at most 50 characters: it ignores its max_length
-    argument (default 20) and always cuts at shorten_string's default 50, which is reported as a product decision
-    rather than asserted here (2026-10-13). remove_images leaves no <img> and no <video>. mastodon_extra_field_link
+    and an ellipsis, so never longer than n. shorten_url(s, n) is s without its http:// and https:// shortened
+    the same way, and at most 20 characters by default. remove_images leaves no <img> and no <video>.
+    mastodon_extra_field_link
     gives the field back or the href of one of its anchors."""
     control, text = _fields(data[:MAX_INPUT], 2)
     text = _text(text)
@@ -419,7 +419,9 @@ def check_html_text_helpers(data: bytes) -> None:
     assert len(short) <= max_length
     assert short == (text if len(text) <= max_length else text[:max_length - 3] + '…')
 
-    assert len(shorten_url(text)) <= 50
+    bare = text.replace('https://', '').replace('http://', '')
+    assert shorten_url(text, max_length) == (bare if len(bare) <= max_length else bare[:max_length - 3] + '…')
+    assert len(shorten_url(text)) <= 20
 
     without = BeautifulSoup(remove_images(text), 'html.parser')
     assert not without.find_all(['img', 'video']), 'remove_images left an image or a video'
