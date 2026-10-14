@@ -52,9 +52,9 @@ from tests.fuzz.targets._target import REFERENCE_WORK_MS, hold_to_budget, machin
 
 CORPUS_ROOT = pathlib.Path(__file__).parent / 'fuzz' / 'corpus'
 
-# Inputs that break a property because the DEFECT IS REAL AND UNFIXED. A security
-# fix in deployed software is the project owner's decision, so these are reported
-# and pinned, not patched.
+# Inputs that break a property because the DEFECT IS REAL AND UNFIXED. Findings
+# are fixed (TDD, one commit per defect; see tests/README.md "Fuzzing"), so an
+# entry belongs here only when the project owner has deferred the fix.
 #
 # strict=True on purpose: when a defect is fixed its cases XPASS and fail the
 # run, which is the signal to delete the entry rather than let a stale xfail hide

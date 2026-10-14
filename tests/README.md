@@ -278,7 +278,11 @@ what closing one looks like.)
 
 ## Fuzzing
 
-Two modes, and the split is the point.
+Every parser of remote or user-supplied bytes is fuzzed with atheris
+(libFuzzer for Python). Two modes, and the split is the point: the **campaign**
+is nondeterministic, on demand and runs outside the suite; the **corpus replay**
+is deterministic and runs in every suite run, and it is what makes a finding
+permanent.
 
 `atheris` is a TEST dependency and lives in `requirements-test.txt`, not
 `requirements.txt`. `requirements.txt` is the production install path
@@ -297,77 +301,231 @@ Note that `compose.dev.yaml` still builds `builder`, so the DEV app stack no
 longer carries pytest. Tests run through `./run_tests.sh` / `compose.test.yaml`,
 which is where they always ran.
 
-**The corpus replay** is an ordinary pytest file, `tests/test_utils_fuzz_corpus.py`.
-It reads every file under `tests/fuzz/corpus/<target>/` and pushes it through the
-matching property check in `tests/fuzz/harnesses.py`. Deterministic, no atheris,
-runs in well under a second, and it is what makes a finding permanent.
+### Structure
 
-**The campaign** is on demand and runs OUTSIDE the coverage run:
+- **`tests/fuzz/targets/`** -- one module per input surface: `sanitizers`,
+  `signatures`, `ap_json`, `ap_models`, `markdown`, `urls`, `discovery`, `nntp`,
+  `api`, `imports`, `images`. Each holds plain property checks and a `TARGETS`
+  list. No module in the package imports atheris, so the replay can call the
+  same checks inside the ordinary suite.
+- **`Target`** (`tests/fuzz/targets/_target.py`) -- one frozen record per target:
+  - `name` -- the corpus directory under `tests/fuzz/corpus/`, and the name
+    `run_campaign` and `smoke` take on the command line;
+  - `check` -- takes the raw input bytes and raises `AssertionError` on a
+    property break;
+  - `surface` -- a key into `SURFACES`;
+  - `budget_ms` -- the per-input CPU-time budget the replay enforces, or `None`
+    for untimed. It is set about ten times the slowest committed seed. The
+    campaign turns it into a default libFuzzer `-timeout` of ten times the
+    budget, rounded up to whole seconds (`campaign.default_timeout_seconds`),
+    because the fuzzer runs instrumented and several times slower;
+  - `needs_app` -- the check runs inside a Flask app context built from
+    `TestConfig`. It may still not touch the database: one that does is a
+    harness bug.
 
-    podman-compose -f compose.test.yaml exec -T -w /app test-runner \
-        python -m tests.fuzz.run_campaign is_valid_xml_utf8 -max_total_time=60
-
-Targets: `is_valid_xml_utf8`, `sanitize_svg_bytes` and `allowlist_html`.
-`-max_total_time` is the budget in seconds; every other libFuzzer flag passes
-straight through.
-
-Use `python -m`, from the repository root. Running the file by path puts
-`tests/fuzz/` on `sys.path` instead of the root and the import of
-`tests.fuzz.harnesses` fails.
-
-**Never run a campaign under `--cov`.** atheris installs its own bytecode
-instrumentation to guide mutation and coverage.py is already tracing; they must
-not fight. They never meet, because a bare `import atheris` installs no
-instrumentation by itself -- only `atheris.instrument_imports()` (called from
-`run_campaign.py`, which pytest never collects: it is neither named `test_*.py`
-nor holds test functions) or `atheris.Fuzz()` turns on bytecode tracing.
-`tests/test_link_parsers_fuzz.py` **does** `import atheris` at line 80 and
-**is** collected by the coverage run -- but it only uses
-`atheris.FuzzedDataProvider` as a structured bytes decoder (see Sub-project 1c
-below) and calls neither `instrument_imports()` nor `Fuzz()`, so it installs no
-instrumentation either. The conclusion still holds; the reason is that nothing
-in the coverage run's collected files calls the two functions that actually
-instrument, not that nothing collected imports atheris at all.
-
-`run_campaign.py` instruments only `app` and `tests` (`atheris.instrument_imports(include=...)`).
-Without instrumentation libFuzzer gets no feedback and degenerates into blind
-random bytes -- it says so, with "no interesting inputs were found so far. Is the
-code instrumented for coverage?", and the corpus never grows.
+  `_target.py` also holds the load calibration a budget is held to
+  (`reference_work`, `machine_slowdown`, `hold_to_budget`).
+- **`REGISTRY`** (`tests/fuzz/targets/__init__.py`) -- `name -> Target` over every
+  module in `SURFACE_MODULES`. A duplicate name is an import-time `ValueError`,
+  because two targets with one name would share a corpus directory.
+  `run_campaign`, `smoke`, the replay and the registry gate read `REGISTRY` and
+  nothing else, so a target exists in all four places or in none. Adding a
+  surface means adding its module to `SURFACE_MODULES`.
+- **`SURFACES`** (`tests/fuzz/surfaces.py`) -- the committed manifest of external
+  input entry points: surface key to the dotted names of the production
+  functions it covers (`module.Class.method` for a method). A function is listed
+  by what it parses, not by which target calls it, so `app.utils.sanitize_svg`
+  is not listed: its only input handling is `sanitize_svg_bytes`.
+- **`tests/fuzz/campaign.py`** versus **`tests/fuzz/run_campaign.py`** --
+  `campaign.py` is everything the campaign does that is not atheris: target
+  selection, the libFuzzer argv, the test app. It imports no atheris, so the
+  collected tests can check it. `run_campaign.py` is the thin atheris half and
+  no collected test imports it: importing it means importing atheris and
+  entering `atheris.instrument_imports()`, and whether that instrumented anything
+  under the coverage run would then depend on import order.
+  `run_campaign` imports `tests.fuzz.campaign`, and through it the registry and
+  every function the checks call, inside
+  `atheris.instrument_imports(include=['app', 'tests', 'PIL'])`. That import has
+  to happen inside the block: atheris rewrites bytecode as a module loads, and a
+  module already imported cannot be instrumented afterwards. A `needs_app`
+  target also builds its app inside the same block, so the blueprint modules
+  `create_app()` loads first are instrumented as well. `PIL` is included because
+  the image targets exist to drive Pillow's format parsers, most of which are
+  Python; left out, a 60 s `upload_decode` run plateaued at `cov: 38`. Without
+  instrumentation libFuzzer gets no feedback and degenerates into blind random
+  bytes -- it says so, with "no interesting inputs were found so far. Is the
+  code instrumented for coverage?", and the corpus never grows.
+- **`tests/fuzz/smoke.py`** -- every target (or the named ones) for a short
+  campaign each, one `python -m tests.fuzz.run_campaign <name>` subprocess per
+  target.
+- **`tests/fuzz/harnesses.py`** -- a re-export shim for the three original
+  sanitizer checks, which now live in `tests/fuzz/targets/sanitizers.py`. New
+  code reads `REGISTRY`.
 
 Two corpus directories, and which is which matters:
 
 - `tests/fuzz/corpus/<target>/` is committed and hand-curated: named hostile
-  seeds, plus a reproducer for every real finding. libFuzzer only READS it, and
-  writes crash artifacts into it via `-artifact_prefix`.
+  seeds, plus a reproducer for every real finding. A campaign only READS it, and
+  writes crash artifacts into it via its default `-artifact_prefix`.
 - `tests/fuzz/.work/<target>/` is gitignored. libFuzzer writes every
-  coverage-increasing unit there, and a later campaign resumes from it. One 60s
-  run against `sanitize_svg_bytes` produces about a hundred of these; they do not
-  belong in review.
+  coverage-increasing unit into the first corpus directory it is given, which
+  `campaign_argv` makes this one, and a later campaign (or smoke run) resumes
+  from it. One 60 s run against `sanitize_svg_bytes` produces about a hundred of
+  these; they do not belong in review.
 
-**Findings are reported, not fixed.** A security fix in deployed software is the
-project owner's decision. When a campaign finds something: rename the
-`crash-<sha1>` artifact to something that says what it is, keep it in the
-committed corpus, and add its id to `KNOWN_UNFIXED` in
-`tests/test_utils_fuzz_corpus.py` with a reason naming the defect. Those are
-`strict=True` xfails, so the day the defect is fixed they XPASS and fail the run
--- which is the signal to delete the entry, not to relax it. `KNOWN_UNFIXED` is
-currently empty: it held six entries covering two `allowlist_html` defects, the
-owner authorised fixing both, and the fix made all six XPASS. Their corpus files
-are still replayed on every run, now as regression pins that pass.
+### Targets
 
-A campaign stops at its first crash, so an unfixed defect blocks the search
-behind it. There used to be a fourth target, `allowlist_html_past_known_defects`
--- the same target with those two defects suppressed, so the fuzzer could hunt
-for a third. With both fixed, the suppression would only serve to swallow a
-regression, so it and its target have been deleted. `allowlist_html` runs
-honestly: 90,984 executions in 60s, `cov: 90 ft: 513`, no finding.
+72 targets over 12 surfaces. Generated from `REGISTRY` and `SURFACES` on
+2026-10-14; "Entry points" is the number of functions the surface lists, a
+budget is `budget_ms`, and "app" is `needs_app`. Regenerate it in the test
+container rather than editing it by hand:
+
+    podman-compose -f compose.test.yaml exec -T -w /app test-runner python -c "
+    from tests.fuzz.targets import REGISTRY
+    from tests.fuzz.surfaces import SURFACES
+    for s in SURFACES:
+        print(s, len(SURFACES[s]), [t.name for t in REGISTRY.values() if t.surface == s])"
+
+| Surface | Entry points | Targets |
+|---|---|---|
+| `sanitizers` | 3 | `allowlist_html`, `is_valid_xml_utf8`, `sanitize_svg_bytes` |
+| `signatures` | 20 | `signature_header`, `http_signature_verify`, `http_ld_dates`, `ld_signature_verify`, `ld_contexts`, `sf_dictionary`, `rfc9421_verify`, `capped_body`, `accept_header` |
+| `ap_json` | 41 | `ap_activity_types`, `ap_hosts`, `ap_inboxes` (app), `ap_content_warning`, `ap_language_variants`, `ap_media_urls`, `ap_ban_expiry`, `ap_addressing`, `ap_ids`, `ap_entitlement`, `ap_flair_colors`, `redos_castopod` (50 ms) |
+| `ap_models` | 15 | `models_coercers`, `models_actor_fields`, `models_timestamps`, `models_local_url` (app) |
+| `markdown` | 37 | `markdown_to_html` (2000 ms), `markdown_preprocessors` (2000 ms), `markdown_code_stash` (200 ms), `markdown_actor_links`, `html_text_helpers`, `microblog_html`, `posting_warning_html`, `enhanced_images` (50 ms), `redos_link_pattern` (150 ms), `redos_allowlist_html` (600 ms), `redos_actor_patterns` (500 ms) |
+| `text_patterns` | 6 | `credit_urls`, `redos_hostnames` (250 ms) |
+| `urls` | 25 | `url_predicates`, `url_host_helpers`, `media_urls`, `redirect_targets` (app), `invalid_get_uri` (app), `requestor_domain` (app), `webfinger_resource` (app), `strip_tracking`, `nodeinfo_hrefs` |
+| `discovery` | 22 | `discovery_filters`, `discovery_entries`, `discovery_video_rows`, `podcast_feed_credits` |
+| `nntp` | 19 | `nntp_datetime`, `nntp_range`, `nntp_names`, `nntp_handler` (500 ms), `nntp_article_framing` (500 ms) |
+| `api` | 7 | `api_schemas`, `api_request_args` (app), `api_validators`, `safe_order_by` |
+| `imports` | 5 | `settings_import`, `mastodon_csv`, `ban_list` |
+| `images` | 10 | `upload_decode` (500 ms), `icon_banner_decode` (200 ms), `remote_thumbnail_decode` (200 ms), `to_srgb` (200 ms), `scale_gif` (200 ms), `c2pa_inspect` (50 ms) |
+
+### The three gates
+
+All three are collected by the ordinary suite. None imports atheris
+instrumentation or starts libFuzzer.
+
+- **`tests/test_fuzz_registry.py`** -- the completeness gate. It fails when a
+  `SURFACES` name no longer imports or is not callable; a surface has no target;
+  a target names a surface that is not listed, or is registered under a key that
+  is not its name; a target has no corpus directory, or an empty one; a corpus
+  directory belongs to no target; a module in `tests/fuzz/targets/` is missing
+  from `SURFACE_MODULES`; `campaign.TARGETS` is not `REGISTRY`; `run_campaign.py`
+  (read as source, never imported) binds `TARGETS` anywhere except an import from
+  `tests.fuzz.campaign` inside `atheris.instrument_imports()`; any collected
+  `test_*.py` or `conftest.py` imports `run_campaign` or calls
+  `instrument_imports()`, `instrument_all()` or `Fuzz()`; or `campaign_argv`
+  stops putting the work corpus first, the committed corpus second and its
+  defaults where an explicit `-timeout=` or `-artifact_prefix=` replaces them.
+- **`tests/test_fuzz_smoke.py`** -- tests `smoke.py`'s argument handling, command
+  line and result logic with a stand-in for `subprocess.run`, without starting
+  libFuzzer. It fails if the smoke stops routing artifacts out of the committed
+  corpus, stops failing a target on a `crash-`, `timeout-`, `oom-` or `leak-`
+  artifact (even on exit 0), a non-zero exit or a hung campaign, starts failing
+  one on a `slow-unit-` alone, or stops clearing stale artifacts and keeping the
+  log.
+- **`tests/test_utils_fuzz_corpus.py`** -- the corpus replay. Every file under
+  `tests/fuzz/corpus/<target>/` goes through its target's check, and the test
+  fails on an `AssertionError` (a property break) or any other exception. A
+  budgeted target's input also fails when its check takes more CPU time
+  (`time.thread_time`) than `budget_ms`. CPU time, not wall-clock, because
+  wall-clock also counts time the scheduler gives to other work. An input over
+  its budget is held to the budget times `machine_slowdown()`, measured only
+  then: how many times slower than nominal the machine now runs a fixed
+  reference workload, never below 1. So a busy machine does not flake the
+  replay, and a regression still fails on any machine. `needs_app` cases run
+  inside the suite's `app` fixture, which skips without `TEST_DATABASE_URL`, so
+  those need `./run_tests.sh`.
+
+### Running a campaign
+
+One target, in the test container, from the repository root:
+
+    podman-compose -f compose.test.yaml exec -T -w /app test-runner \
+        python -m tests.fuzz.run_campaign <target> -max_total_time=60
+
+`-max_total_time` is the budget in seconds; every other libFuzzer flag passes
+straight through, and an explicit `-timeout=` or `-artifact_prefix=` replaces
+the campaign's default. With no or an unknown target name it prints the list of
+targets. A finding is written as a `crash-<sha1>` (or `timeout-`) artifact
+straight into `tests/fuzz/corpus/<target>/`.
+
+Use `python -m`, from the repository root. Running the file by path puts
+`tests/fuzz/` on `sys.path` instead of the root, and the import of
+`tests.fuzz.campaign` fails with `No module named 'tests'`.
+
+The smoke runs every registered target (or only the ones named) for a short
+campaign each:
+
+    podman-compose -f compose.test.yaml exec -T -w /app test-runner \
+        python -m tests.fuzz.smoke --seconds N --jobs N [targets]
+
+`--seconds` (default 20) is each target's `-max_total_time`; `--jobs` (default 1)
+is how many run at once. More jobs is faster, but budgeted targets then share
+the CPU, and a `-timeout` set for an idle machine can trip on a busy one. Keep
+`--jobs` well under the core count. Artifacts do NOT go to the committed corpus:
+each target gets `-artifact_prefix=tests/fuzz/.work/smoke/<target>/`, emptied
+before its run, with that run's libFuzzer output beside it as `campaign.log`.
+The final `DONE` line there has the execution count and `cov:`. The smoke exits
+non-zero, naming each failing target, when a target left a `crash-`,
+`timeout-`, `oom-` or `leak-` artifact, exited non-zero, or did not finish
+within `--seconds` plus 120 s. A `slow-unit-` artifact alone is not a failure.
+
+### Findings are fixed
+
+The owner ruled on 2026-10-13 that fuzz findings are fixed, with TDD and one
+commit per defect. When a campaign or the smoke finds something:
+
+1. Minimise the input to the smallest bytes that still break the property, and
+   put the reproducer under `tests/fuzz/corpus/<target>/` with a name that says
+   what it is. The replay now fails on it.
+2. Write a regression test that fails for the same reason, beside the production
+   function's other tests, and watch it fail.
+3. Make the narrowest fix that turns both green. A clean refusal -- a `400`, a
+   flash, a `None`, the error the function's contract already names -- is the
+   normal shape.
+4. One commit per defect: reproducer, test and fix together.
+
+If the fix would change behaviour beyond a clean refusal -- dropping content a
+user would see, a new cap, a different answer to a valid request -- stop and ask
+the owner first.
+
+`KNOWN_UNFIXED` in `tests/test_utils_fuzz_corpus.py` is only for a finding the
+owner has deferred. An entry is `case_id -> reason naming the defect` and makes
+that corpus file a `strict=True` xfail, so the day the defect is fixed it XPASSes
+and fails the run -- the signal to delete the entry, not to relax it. It is
+empty now; its last six entries were two `allowlist_html` defects, fixed and
+still replayed as passing pins.
+
+A campaign stops at its first crash, so an unfixed finding blocks the search
+behind it. That is one more reason to fix rather than suppress.
+
+### Operational warnings
+
+- **Never run `./run_tests.sh` while a campaign or smoke is running.** It takes
+  the test stack down when it exits, pass or fail, and that kills the campaign
+  inside `test-runner`.
+- **Never use `-n auto`.** Each xdist worker takes two of Redis's 16 databases,
+  so 7 workers is the ceiling; `./run_tests.sh` caps `PYTEST_WORKERS` there.
+- **Never run a campaign under `--cov`.** atheris installs its own bytecode
+  instrumentation and coverage.py is already tracing; they must not meet. They
+  do not, because a bare `import atheris` installs nothing -- only
+  `atheris.instrument_imports()`, `instrument_all()` or `atheris.Fuzz()` does,
+  and the registry gate keeps all three out of every collected file.
+  `tests/test_link_parsers_fuzz.py` does `import atheris` and is collected, but
+  only uses `atheris.FuzzedDataProvider` as a structured bytes decoder (see
+  Sub-project 1c below), which instruments nothing.
+
+### Writing a check
 
 **Assert properties, not the absence of crashes.** "It did not crash" would pass
-a sanitiser that returned its input unchanged. Each check in `harnesses.py`
-asserts a security property instead, against a PARSED tree rather than raw bytes
--- every one of these functions may legally emit the text `javascript:` or
-` onload=` as escaped character data, and a substring check reports that inert
-text as a break-in within seconds of fuzzing.
+a sanitiser that returned its input unchanged. Each check asserts a security
+property instead, against a PARSED tree rather than raw bytes -- every one of
+the sanitizer functions may legally emit the text `javascript:` or ` onload=` as
+escaped character data, and a substring check reports that inert text as a
+break-in within seconds of fuzzing. A refusal the function is contracted to make
+(the `ValueError` of the SVG path, say) is a success, not a crash.
 
 Inertness cuts finer than "text vs markup". `allowlist_html`'s URL property is
 asserted on ANCHORS only: `href` is on its `allowed_attrs` for every element, so
@@ -377,7 +535,7 @@ inert because HTML defines no `href` on `img`. `a` is the only element in
 hard way -- the first campaign the fixed target could run flagged exactly that
 `<img href>` at seed load.
 
-`src` is now scheme-checked too, and it is a SEPARATE decision from `href`, not
+`src` is scheme-checked too, and it is a SEPARATE decision from `href`, not
 the same one widened. `app.utils.UNSAFE_SRC_SCHEMES` is `UNSAFE_URL_SCHEMES`
 minus `data`: a `data:` href is a document the attacker wrote and navigates to,
 while a `data:` src is decoded as an image in a non-scripted context and inline
@@ -387,11 +545,6 @@ keeps them for `image/jpeg|png|gif|webp|avif`. Both halves are pinned by
 change one and that class must be changed with a reason. `UNSAFE_URL_SCHEMES`
 is a blocklist and says so in its own comment, including why it is not an
 allowlist yet.
-
-`app.utils.sanitize_svg` is deliberately not a target. It opens a path, calls
-`sanitize_svg_bytes` and writes the result back; all of its input handling is
-`sanitize_svg_bytes`, which is fuzzed. Fuzzing a filesystem path would exercise
-`open()`, not PieFed.
 
 ## The coverage ratchet
 
