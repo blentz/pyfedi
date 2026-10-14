@@ -310,6 +310,43 @@ class TestAnImagePillowCannotDecode:
         assert set(glob.glob('app/static/media/communities/*/*/*')) == before
 
 
+def gif_of_identical_frames(width, height, delay_cs, frames=2):
+    """`frames` copies of one frame, each with a delay of `delay_cs` hundredths of a second. Pillow's own writer
+    merges identical frames, so the file is put together from one Pillow-encoded frame by hand."""
+    buffer = io.BytesIO()
+    Image.new('P', (width, height), 0).save(buffer, format='GIF')
+    data = buffer.getvalue()
+    packed = data[10]    # the logical screen descriptor's flags: a global colour table of 3 * 2**(n+1) bytes
+    start = 13 + (3 * 2 ** ((packed & 7) + 1) if packed & 0x80 else 0)
+    assert data[start] == 0x2c, 'Pillow wrote an extension before the image descriptor'
+    header, frame = data[:start], data[start:-1]
+    control = b'\x21\xf9\x04\x00' + delay_cs.to_bytes(2, 'little') + b'\x00\x00'
+    return header + (control + frame) * frames + b'\x3b'
+
+
+class TestAGifPillowCannotWriteBack:
+    """scale_gif saves every frame with the first frame's duration, and Pillow's GIF writer merges identical
+    consecutive frames by adding their durations. Past 65535 hundredths of a second the sum does not fit the
+    format's 16-bit delay and Pillow raises struct.error: two identical frames of 327.68 s were a 500 out of
+    save_icon_file, with the upload left in the media root. They are its 400 now, and the upload goes."""
+
+    @pytest.mark.parametrize('size', [(2, 2), (300, 300)], ids=['thumbnail_only', 'scaled_to_250_first'])
+    def test_an_icon_is_refused_and_not_left_behind(self, env, size):
+        import glob
+        before = set(glob.glob('app/static/media/communities/*/*/*'))
+        with pytest.raises(HTTPException) as caught:
+            save_icon_file(a_file(gif_of_identical_frames(*size, delay_cs=32768), 'icon.gif'))
+        assert caught.value.code == 400
+        assert set(glob.glob('app/static/media/communities/*/*/*')) == before
+
+    def test_the_same_frames_just_under_the_limit_are_kept(self, env):
+        file = save_icon_file(a_file(gif_of_identical_frames(2, 2, delay_cs=32767), 'icon.gif'))
+        try:
+            assert (file.width, file.height) == (2, 2)
+        finally:
+            cleanup(file)
+
+
 def declaring(width, height, fmt='PNG'):
     """A valid one-bit image of width x height: a few KB, however many pixels it declares."""
     buffer = io.BytesIO()

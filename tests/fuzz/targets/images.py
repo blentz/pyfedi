@@ -255,7 +255,9 @@ def _open_upload_image(image: bytes, every_frame: bool):
 
 
 def _icon_gif(image: bytes, img):
-    """save_icon_file's animated-GIF arm, util.py:830-848: whatever the bytes are, under a .gif name."""
+    """save_icon_file's animated-GIF arm: whatever the bytes are, under a .gif name. Run under _refused, because
+    production catches what Pillow raises from its two scale_gif calls (a GIF Pillow decodes but cannot write
+    back, icon_gif_identical_frames_over_the_delay_limit)."""
     if img.width > 250 or img.height > 250:
         scaled = _NamedBuffer()
         scale_gif(io.BytesIO(image), (250, 250), scaled)
@@ -301,7 +303,7 @@ def check_icon_banner_decode(data: bytes) -> None:
         return
     assert img.format in ACCEPTED_FORMATS, f'open_upload_image let {img.format} through'
     if path == 1:
-        _icon_gif(image, img)
+        _refused(_icon_gif, image, img)
         return
     img = ImageOps.exif_transpose(img)
     if path == 0:
