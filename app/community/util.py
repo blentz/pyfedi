@@ -45,6 +45,19 @@ from app.activitypub.util import find_language_or_create
 allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.mpo', '.avif', '.svg']
 
 
+def open_allowed_icon(path):
+    """Image.open(path), or a 400 -- with the upload removed -- for an image Pillow reads as a format the extension
+    list does not name. The extension is the uploader's to choose and Pillow sniffs the bytes, so without this a
+    TGA, BMP, TIFF or any other format Pillow opens went through its decoder under a .png or .gif name.
+    save_banner_file asks the same question its own way; Pillow calls a .heic file HEIF (D579)."""
+    img = Image.open(path)
+    if ('.heic' if img.format == 'HEIF' else '.' + img.format.lower()) not in allowed_extensions:
+        img.close()
+        os.unlink(path)
+        abort(400)
+    return img
+
+
 def search_for_community(address: str, allow_fetch: bool = True, retry: bool = False) -> Community | None:
     """The community `address` names, fetched through WebFinger when it is not known yet. Only a Celery caller
     passes retry: a request path makes one attempt at each URL and never sleeps (D738/D775)."""
@@ -796,7 +809,7 @@ def save_icon_file(icon_file, directory='communities') -> File:
         thumbnail_ext = file_ext.lower()
         final_place_thumbnail = final_place
     elif file_ext.lower() == '.gif':  # handle animated gifs specially
-        img = Image.open(final_place)
+        img = open_allowed_icon(final_place)
         img_width = img.width
         img_height = img.height
 
@@ -816,7 +829,7 @@ def save_icon_file(icon_file, directory='communities') -> File:
         thumbnail_width = img_thumb.width
         thumbnail_height = img_thumb.height
     else:  # handle regular images (jpg, png, webp, heic, etc.)
-        img = Image.open(final_place)
+        img = open_allowed_icon(final_place)
         img = ImageOps.exif_transpose(img)
         img_width = img.width
         img_height = img.height

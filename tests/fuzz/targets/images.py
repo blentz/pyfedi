@@ -112,6 +112,11 @@ def accepted_format(img) -> bool:
     return '.' + img.format.lower() in allowed_extensions or (img.format == 'HEIF' and '.heic' in allowed_extensions)
 
 
+def icon_format_allowed(img) -> bool:
+    """open_allowed_icon's check, in front of both of save_icon_file's Pillow arms."""
+    return ('.heic' if img.format == 'HEIF' else '.' + img.format.lower()) in allowed_extensions
+
+
 ACCEPTED_FORMATS = frozenset(ext[1:].upper() for ext in allowed_extensions) | {'HEIF'}
 
 
@@ -229,6 +234,8 @@ class _NamedBuffer(io.BytesIO):
 def _icon_gif(image: bytes):
     """save_icon_file's animated-GIF arm, util.py:798-817: whatever the bytes are, under a .gif name."""
     img = _open(image)
+    if not icon_format_allowed(img):
+        return  # open_allowed_icon: abort(400)
     assert img.format in ACCEPTED_FORMATS, f'save_icon_file decoded a {img.format} as a .gif icon'
     if img.width > 250 or img.height > 250:
         scaled = _NamedBuffer()
@@ -259,6 +266,8 @@ def _two_sizes(img, ext, image_format, thumbnail_format, box, thumbnail_box, lab
 def _icon_still(image: bytes, ext, image_format, thumbnail_format):
     """save_icon_file's still-image arm, util.py:818-858."""
     img = _open(image)
+    if not icon_format_allowed(img):
+        return  # open_allowed_icon: abort(400)
     assert img.format in ACCEPTED_FORMATS, f'save_icon_file decoded a {img.format} as a {ext} icon'
     img = ImageOps.exif_transpose(img)
     _two_sizes(img, ext, image_format, thumbnail_format, (250, 250), (40, 40), 'icon')

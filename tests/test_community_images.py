@@ -223,6 +223,38 @@ class TestAnIcon:
             cleanup(file)
 
 
+def a_disguised_image(fmt, name):
+    """A real image in `fmt`, uploaded under a name the extension check accepts."""
+    buffer = io.BytesIO()
+    Image.new('RGB', (300, 300), (10, 20, 30)).save(buffer, format=fmt)
+    return FileStorage(stream=io.BytesIO(buffer.getvalue()), filename=name)
+
+
+class TestAnIconInAFormatNobodyAllows:
+    """An icon is decoded only if Pillow reads it as one of the formats the extension list names, as a banner and
+    a post image already were. save_icon_file never asked, so a TGA, BMP, TIFF, PCX -- any of the forty-odd formats
+    Pillow opens -- under a .png or .gif name went through that format's decoder, a crash surface PieFed never meant
+    to expose (found by the icon_banner_decode fuzz target). The refusal is the function's own 400, and the upload is
+    not left behind in the media root."""
+
+    @pytest.mark.parametrize('fmt,name', [('TGA', 'icon.png'), ('BMP', 'icon.jpg'), ('TIFF', 'icon.webp'),
+                                          ('PCX', 'icon.gif'), ('TGA', 'icon.gif')])
+    def test_is_refused(self, env, fmt, name):
+        import glob
+        before = set(glob.glob('app/static/media/communities/*/*/*'))
+        with pytest.raises(HTTPException) as caught:
+            save_icon_file(a_disguised_image(fmt, name))
+        assert caught.value.code == 400
+        assert set(glob.glob('app/static/media/communities/*/*/*')) == before
+
+    def test_an_allowed_format_under_another_allowed_name_is_still_taken(self, env):
+        file = save_icon_file(a_disguised_image('JPEG', 'icon.png'))
+        try:
+            assert file.width <= 250
+        finally:
+            cleanup(file)
+
+
 class TestAnAnimatedGif:
     def test_a_small_one(self, env):
         file = save_icon_file(an_animated_gif(60, 60))
