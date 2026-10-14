@@ -619,8 +619,10 @@ _EMAIL_LABEL = frozenset('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01
 
 
 def _reference_hostname(value: str) -> bool:
+    """...and the last label not all digits: a browser reads such a name as an IPv4 address (RFC 3696 section 2: no
+    top-level domain is all-numeric)."""
     labels = value.split('.')
-    return len(labels) >= 2 and all(
+    return len(labels) >= 2 and not labels[-1].isdigit() and all(
         1 <= len(label) <= 63 and set(label) <= _LABEL and label[0] != '-' and label[-1] != '-' for label in labels)
 
 
@@ -634,9 +636,9 @@ def _reference_email(value: str) -> bool:
 def check_redos_hostnames(data: bytes) -> None:
     """discovery's is_hostname (_HOSTNAME), utils.validate_email (EMAIL_RE) and instance.util.is_fedi_handle, timed,
     each against an independent reading of the grammar it implements: a lower-case DNS name of two or more labels
-    of 1-63 letters, digits and hyphens, no label starting or ending with a hyphen; an address whose local part is
-    the RFC 5322 atom characters and dots and whose domain is two or more labels (validate_email strips first);
-    a handle that is such an address with or without one leading character."""
+    of 1-63 letters, digits and hyphens, no label starting or ending with a hyphen, the last not all digits; an
+    address whose local part is the RFC 5322 atom characters and dots and whose domain is two or more labels
+    (validate_email strips first); a handle that is such an address with or without one leading character."""
     text = _input_text(data)
     assert is_hostname(text) is _reference_hostname(text), f'is_hostname disagrees about {text[:80]!r}'
     assert validate_email(text) is _reference_email(text.strip()), f'validate_email disagrees about {text[:80]!r}'
