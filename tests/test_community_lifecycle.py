@@ -1403,3 +1403,66 @@ def test_an_image_that_is_not_accepted_is_a_400_not_a_500(app, creator, monkeypa
     assert response.status_code == 400
     assert Community.query.filter_by(name='brandnew').count() == 0
     assert not os.path.exists('app/static/media/communities/re/fu/refusedupload00.png')
+
+
+def _a_png():
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new('RGB', (8, 8), (10, 20, 30)).save(buffer, format='PNG')
+    buffer.seek(0)
+    return buffer
+
+
+def _use_s3(app, monkeypatch, bucket):
+    """The S3 settings store_files_in_s3 and File.delete_from_disk read, pointed at the moto bucket."""
+    for key, value in (('S3_ACCESS_KEY', 'test-key'), ('S3_ACCESS_SECRET', 'test-secret'),
+                       ('S3_ENDPOINT', 'https://s3.amazonaws.com'), ('S3_REGION', 'us-east-1'),
+                       ('S3_BUCKET', bucket), ('S3_PUBLIC_URL', 'cdn.example.test')):
+        monkeypatch.setitem(app.config, key, value)
+
+
+def _stored_anywhere(name, directory='communities'):
+    """Every file save_icon_file/save_banner_file would have written for the gibberish `name`: in its media
+    directory, or left in app/static/tmp on the way to S3. Exact directories, as app/static/media is too big to
+    walk."""
+    import glob
+
+    return (glob.glob(f'app/static/media/{directory}/{name[0:2]}/{name[2:4]}/{name}*')
+            + glob.glob(f'app/static/tmp/{name}*'))
+
+
+@pytest.mark.parametrize('storage', ['local', 's3'])
+def test_an_icon_stored_before_its_banner_is_refused_is_removed(app, creator, monkeypatch, request, storage):
+    """save_icon_file stores the icon (and its thumbnail), locally or in the bucket; then save_banner_file refuses
+    the banner with a 400 and the community is never made. Nothing refers to the stored icon, and it was left
+    behind, served from this origin for ever. It is deleted again now, every size of it, and the 400 stands."""
+    import boto3
+
+    client, token, founder = creator
+    if storage == 's3':
+        bucket = request.getfixturevalue('s3_bucket')
+        _use_s3(app, monkeypatch, bucket)
+    names = iter(['storediconfile', 'refusedbanner0'])
+    monkeypatch.setattr('app.community.util.gibberish', lambda length: next(names) + '0')
+
+    response, render = _add(app, client, token, icon_file=(_a_png(), 'icon.png'),
+                            banner_file=(io.BytesIO(b'not an image at all'), 'banner.png'))
+
+    assert response.status_code == 400
+    assert Community.query.filter_by(name='brandnew').count() == 0
+    assert _stored_anywhere('storediconfile0') == _stored_anywhere('refusedbanner00') == []
+    if storage == 's3':
+        assert boto3.client('s3', region_name='us-east-1').list_objects_v2(Bucket=bucket).get('Contents', []) == []
+
+
+def test_a_refused_banner_alone_deletes_nothing_else(app, creator, monkeypatch):
+    """No icon was uploaded, so there is nothing to delete when the banner is refused: still the 400."""
+    client, token, founder = creator
+    monkeypatch.setattr('app.community.util.gibberish', lambda length: 'refusedbanner00')
+
+    with patch.object(File, 'delete_from_disk') as delete_from_disk:
+        response, render = _add(app, client, token, banner_file=(io.BytesIO(b'not an image at all'), 'banner.png'))
+
+    assert response.status_code == 400
+    assert delete_from_disk.call_args_list == []
