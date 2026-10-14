@@ -132,3 +132,14 @@ def test_a_range_past_the_group_looks_up_only_the_groups_articles(command):
 ])
 def test_numbers_in_group_keeps_only_what_the_group_can_hold(first, last, low, high, numbers):
     assert list(numbers_in_group(first, last, low, high)) == numbers
+
+
+def test_help_sends_each_paragraph_as_lines_of_its_own():
+    """help() wrapped the whole text at once with replace_whitespace=False, so the blank lines between its
+    paragraphs went out inside wrapped lines as bare LFs."""
+    replies = session_replies(b'HELP\r\nQUIT\r\n', config=b'\x05\x05')
+    assert replies[1] == '100 Help text follows' and replies[-2:] == ['.', CLOSING]
+    text = replies[2:-2]
+    assert not any('\n' in line or '\r' in line for line in text)
+    assert text[0].startswith('This is an NNTP version 2 server.') and '' in text
+    assert text[-1].endswith('followed by your password.')

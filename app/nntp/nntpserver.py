@@ -1071,4 +1071,8 @@ You can submit an article by issuing `POST` and the article content with each li
 
 You can authenticate by issuing `AUTHINFO USER ` followed by your username and then `AUTHINFO PASS ` followed by your password."""
 
-        self.send_lines(["100 Help text follows"] + wrapper.wrap(server_help) + ["."])
+        # Paragraph by paragraph: wrapping the whole text keeps its line breaks inside the wrapped lines.
+        lines: typing.List[str] = []
+        for paragraph in server_help.split("\n"):
+            lines += wrapper.wrap(paragraph) or [""]
+        self.send_lines(["100 Help text follows"] + lines + ["."])
