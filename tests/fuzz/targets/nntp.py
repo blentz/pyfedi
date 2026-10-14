@@ -9,7 +9,7 @@ Properties, for every input:
 
 * the handler never dies with an exception, and returns when the client closes the connection;
 * every command line gets exactly one well-formed NNTP reply -- a status line with a three-digit code, and for a
-  multi-line reply a block closed by "." with every other line beginning with "." dot-stuffed -- so a client
+  multi-line reply a block closed by "." (read as a client reads it, dropping the stuffed dot) -- so a client
   reading the replies in order stays in step with the commands it sent;
 * no line sent holds a CR or an LF of its own, and a reply carrying an article (HEAD, BODY, ARTICLE, OVER, HDR)
   carries exactly that article's header lines, body lines and overview fields, whatever its title, author or body
@@ -440,8 +440,7 @@ class _Replies:
             if line == '.':
                 return lines
             if line.startswith('.'):
-                assert line.startswith('..'), f'the reply to {command!r} holds {line!r}, not dot-stuffed'
-                line = line[1:]
+                line = line[1:]   # RFC 3977 3.1.1: the client drops the first '.' of every other line that has one
             lines.append(line)
 
     def next_is(self, code) -> bool:
