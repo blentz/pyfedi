@@ -260,6 +260,7 @@ SURFACES: dict[str, list[str]] = {
     'imports': [
         'app.user.routes.settings_import_contents',
         'app.user.routes.import_entries',
+        'app.user.routes.import_note_text',
         'app.instance.util.mastodon_csv_handles',
     ],
 }

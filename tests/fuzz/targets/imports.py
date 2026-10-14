@@ -11,7 +11,8 @@ Properties:
 * settings_import -- what the task reads out of the stored file never raises, whatever the bytes: anything that is
   not a JSON object is no entries at all, and the entries under each key are a list of at most
   SETTINGS_IMPORT_MAX_ENTRIES, each of the shape the task uses it as -- a string, or for user_notes an object with a
-  string target and body -- in file order, taken from the first SETTINGS_IMPORT_MAX_ENTRIES the file lists.
+  string target and a string text, read from 'note' (what the export writes) when present, else from 'body' -- in
+  file order, taken from the first SETTINGS_IMPORT_MAX_ENTRIES the file lists.
 * mastodon_csv -- mastodon_csv_handles either raises csv.Error (which the view answers with a message) or returns
   at most one string per row, each passing is_fedi_handle and made of characters of the file's text as decoded
   (UTF-8, else Latin-1).
@@ -23,7 +24,7 @@ import csv
 import json
 
 from app.instance.util import is_fedi_handle, mastodon_csv_handles
-from app.user.routes import SETTINGS_IMPORT_MAX_ENTRIES, import_entries, settings_import_contents
+from app.user.routes import SETTINGS_IMPORT_MAX_ENTRIES, import_entries, import_note_text, settings_import_contents
 from tests.fuzz.targets._target import Target
 
 # A settings export is a few kilobytes and the upload cap is 5 MiB; a longer fuzz input says nothing a shorter one
@@ -38,7 +39,10 @@ SETTINGS_KEYS = ('followed_communities', 'blocked_communities', 'blocked_users',
 def well_formed_entry(key: str, entry) -> bool:
     """The shape the task uses an entry of `key` as."""
     if key == 'user_notes':
-        return isinstance(entry, dict) and isinstance(entry.get('target'), str) and isinstance(entry.get('body'), str)
+        if not isinstance(entry, dict) or not isinstance(entry.get('target'), str):
+            return False
+        text = entry['note'] if 'note' in entry else entry.get('body')
+        return isinstance(text, str) and import_note_text(entry) is text
     return isinstance(entry, str)
 
 

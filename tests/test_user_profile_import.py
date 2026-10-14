@@ -950,16 +950,19 @@ def test_an_entry_that_is_not_a_string_is_skipped(app, env, key):
 
 @pytest.mark.parametrize('note', [
     'https://other.example/u/x',
-    {'target': 'https://other.example/u/x', 'note': 'what the export writes'},
+    {'target': 'https://other.example/u/x'},
     {'target': 'https://other.example/u/x', 'body': {'x': 1}},
+    {'target': 'https://other.example/u/x', 'note': ['x']},
+    {'target': 'https://other.example/u/x', 'note': 42, 'body': 'the note wins, and is not a string'},
     {'target': 42, 'body': 'a note'},
-    {'body': 'a note'},
-], ids=['a_string', 'no_body', 'body_not_a_string', 'target_not_a_string', 'no_target'])
-def test_a_user_note_that_is_not_a_target_and_body_is_skipped(app, env, note):
+    {'note': 'a note'},
+], ids=['a_string', 'no_text', 'body_not_a_string', 'note_not_a_string', 'note_shadows_body', 'target_not_a_string',
+        'no_target'])
+def test_a_user_note_that_is_not_a_target_and_text_is_skipped(app, env, note):
     """Found by the settings_import fuzz target. `user_note['target']` and
     `user_note['body']` were read unchecked: a string entry raised TypeError, a missing
     key KeyError, and a body that is not a string reached the database. The task failed
-    on the first one."""
+    on the first one. The text is read from 'note', else 'body' (import_note_text)."""
     client, viewer, other = env
 
     find = run_import(app, viewer, {'user_notes': [note]})
@@ -1231,6 +1234,41 @@ def test_importing_user_notes(app, env):
     note = UserNote.query.filter_by(user_id=viewer.id).one()
     assert note.target_id == other.id
     assert note.body == 'a note about them'
+
+
+def test_importing_a_user_note_under_the_key_the_export_writes(app, env):
+    """export_user_settings writes a note as {'target', 'note'}; the import read only
+    'body', so every note in a PieFed export was skipped. 'note' is read first, and
+    'body' -- what the import always read -- is still taken when 'note' is absent."""
+    from app.models import UserNote
+
+    client, viewer, other = env
+
+    run_import_with(app, viewer,
+                    {'user_notes': [{'target': other.ap_profile_id, 'note': 'from note',
+                                     'body': 'from body'}]},
+                    lambda *a, **k: other)
+
+    assert UserNote.query.filter_by(user_id=viewer.id).one().body == 'from note'
+
+
+def test_an_exported_user_note_imports_again(app, env):
+    """The round trip: what the export writes, the import reads back."""
+    from app.models import UserNote
+
+    client, viewer, other = env
+    db.session.add(UserNote(user_id=viewer.id, target_id=other.id, body='a note about them'))
+    db.session.commit()
+    _response, exported_json = exported(app, client)
+    UserNote.query.filter_by(user_id=viewer.id).delete()
+    db.session.commit()
+
+    targets = {other.profile_id(): other}
+    run_import_with(app, viewer, {'user_notes': exported_json['user_notes']},
+                    lambda target, **k: targets.get(target))
+
+    note = UserNote.query.filter_by(user_id=viewer.id).one()
+    assert (note.target_id, note.body) == (other.id, 'a note about them')
 
 
 def test_importing_blocked_instances(app, env):

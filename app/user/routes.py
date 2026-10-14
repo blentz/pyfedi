@@ -107,10 +107,18 @@ def import_entries(contents_json, key):
 
 
 def _is_import_entry(key, entry):
-    """A user note is an object with a string target and body; every other entry is a string."""
+    """A user note is an object with a string target and text (import_note_text); every other entry is a string."""
     if key == 'user_notes':
-        return isinstance(entry, dict) and isinstance(entry.get('target'), str) and isinstance(entry.get('body'), str)
+        return (isinstance(entry, dict) and isinstance(entry.get('target'), str)
+                and isinstance(import_note_text(entry), str))
     return isinstance(entry, str)
+
+
+def import_note_text(entry: dict):
+    """A user note entry's text: under 'note', which is what export_user_settings writes, else under 'body', which
+    is what this import used to read -- so an export imports again and a file written for the old import still
+    does. 'note' wins whenever it is present, string or not, as text_color wins over textColor on a flair."""
+    return entry['note'] if 'note' in entry else entry.get('body')
 
 
 @bp.route('/people', methods=['GET', 'POST'])
@@ -1595,7 +1603,8 @@ def import_settings_task(user_id, redis_key):
                 for user_note in import_entries(contents_json, 'user_notes'):
                     note_target = find_actor_or_create(user_note['target'], retry=True)
                     if note_target:
-                        session.add(UserNote(user_id=user.id, target_id=note_target.id, body=user_note['body']))
+                        session.add(UserNote(user_id=user.id, target_id=note_target.id,
+                                                body=import_note_text(user_note)))
 
                 cache.delete_memoized(user_notes, user.id)
 
