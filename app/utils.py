@@ -7099,6 +7099,16 @@ def following_user_ids(user_id):
 
 SHORTHAND_HEX_COLOR_PATTERN = re.compile(r'#[0-9A-Fa-f]{3}')
 
+# A CSS colour as '#' and three or six hex digits: the one rule a flair colour is held to, whether a local API client
+# or a remote peer sent it, because both end up inside a style attribute.
+HEX_COLOR_CODE = re.compile(r'#([a-fA-F0-9]{6}|[a-fA-F0-9]{3})')
+
+
+def is_hex_color(value) -> bool:
+    """True when `value` is a string that is a #hex colour in full. fullmatch rather than a `$` anchor, which also
+    matches just before a final newline; anything else -- 'red; background: url(...)', a number, None -- is False."""
+    return isinstance(value, str) and HEX_COLOR_CODE.fullmatch(value) is not None
+
 
 def expand_hex_color(text: str) -> str:
     """Expand CSS three-digit shorthand: '#abc' -> '#aabbcc'. Case is preserved.

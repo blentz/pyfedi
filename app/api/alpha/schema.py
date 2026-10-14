@@ -3,6 +3,8 @@ import re
 from datetime import datetime
 from marshmallow import Schema, fields, validate, ValidationError, EXCLUDE, validates_schema, INCLUDE
 
+from app.utils import is_hex_color
+
 
 # Lists used in schema for validation
 reg_mode_list = ["Closed", "RequireApplication", "Open"]
@@ -39,15 +41,12 @@ def validate_datetime_string(text):
         raise ValidationError(f"Bad datetime string: {text}")
 
 
-HEX_COLOR_CODE = re.compile(r'#([a-fA-F0-9]{6}|[a-fA-F0-9]{3})')
-
-
 def validate_color_code(text):
     # Ensures that hex color code strings have the correct format. It has to RAISE on a bad one: marshmallow 4 ignores
     # a validator's return value, so returning False -- as this did -- let any string through as a colour, to be stored
     # on the flair, written into its style attribute and federated. fullmatch rather than a `$` anchor, which also
     # matches just before a final newline.
-    if isinstance(text, str) and HEX_COLOR_CODE.fullmatch(text):
+    if is_hex_color(text):
         return True
     raise ValidationError(f"Bad hex color code string: {text}")
 

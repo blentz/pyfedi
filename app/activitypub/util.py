@@ -56,7 +56,7 @@ from app.utils import strip_quote_fallback, FETCH_MAX_BYTES, get_request, get_re
 import app.activitypub.actor as activitypub_actor
 import app.discovery.credits as discovery_credits   # the module: app.discovery.credits imports this one
 import urllib.parse
-from app.utils import random_chars, site_language_id
+from app.utils import random_chars, site_language_id, is_hex_color
 from app.visibility import OPEN_VISIBILITIES, can_view, is_open, post_title_for
 from app.discovery.podcast import ensure_podcast_community, podcast_twin_named_by_other
 from app.interop.workarounds import is_castopod_podcast
@@ -742,15 +742,14 @@ def find_flair_or_create(flair: dict, community_id: int, session=None) -> Commun
 
     if existing_flair:
         # Update flair properties
-        if "text_color" in flair:
-            existing_flair.text_color = flair['text_color']
-        elif "textColor" in flair:
-            existing_flair.text_color = flair["textColor"]
-        
-        if "background_color" in flair:
-            existing_flair.background_color = flair['background_color']
-        elif "backgroundColor" in flair:
-            existing_flair.background_color = flair["backgroundColor"]
+        # A colour that is missing or not #hex leaves the stored one alone (remote_flair_color).
+        text_color = remote_flair_color(flair, 'text_color', 'textColor')
+        if text_color is not None:
+            existing_flair.text_color = text_color
+
+        background_color = remote_flair_color(flair, 'background_color', 'backgroundColor')
+        if background_color is not None:
+            existing_flair.background_color = background_color
         
         if "blur_images" in flair:
             existing_flair.blur_images = flair['blur_images'] if 'blur_images' in flair else False
@@ -780,17 +779,11 @@ def find_flair_or_create(flair: dict, community_id: int, session=None) -> Commun
 
         return existing_flair
     else:
-        flair_text = text_color = background_color = ''
+        flair_text = ''
         blur_images = False
-        if "text_color" in flair:
-            text_color = flair['text_color']
-        elif "textColor" in flair:
-            text_color = flair["textColor"]
-
-        if "background_color" in flair:
-            background_color = flair['background_color']
-        elif "backgroundColor" in flair:
-            background_color = flair["backgroundColor"]
+        # A colour that is missing or not #hex starts as '' (remote_flair_color).
+        text_color = remote_flair_color(flair, 'text_color', 'textColor') or ''
+        background_color = remote_flair_color(flair, 'background_color', 'backgroundColor') or ''
 
         if "blur_images" in flair:
             blur_images = flair['blur_images'] if 'blur_images' in flair else False
@@ -813,6 +806,20 @@ def find_flair_or_create(flair: dict, community_id: int, session=None) -> Commun
             return new_flair
         else:
             return None
+
+
+def remote_flair_color(flair, snake_key: str, camel_key: str) -> str | None:
+    """The colour a peer's flair entry gives under snake_key, else under camel_key, when it is a #hex colour
+    (app.utils.is_hex_color, the rule the API holds a local flair colour to); None when it gives none or gives
+    anything else, which the caller treats alike.
+
+    The colour is written into the style attribute of every page showing the flair. Jinja escapes it for HTML but
+    not for CSS, so a peer's 'red; background-image: url(...)' used to become CSS of its choosing on this
+    instance's pages."""
+    if not isinstance(flair, dict):
+        return None
+    value = flair[snake_key] if snake_key in flair else flair.get(camel_key)
+    return value if is_hex_color(value) else None
 
 
 def find_flair(flair: str, community_id: int, session=None) -> CommunityFlair | None:
