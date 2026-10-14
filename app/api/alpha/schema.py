@@ -39,13 +39,17 @@ def validate_datetime_string(text):
         raise ValidationError(f"Bad datetime string: {text}")
 
 
+HEX_COLOR_CODE = re.compile(r'#([a-fA-F0-9]{6}|[a-fA-F0-9]{3})')
+
+
 def validate_color_code(text):
-    try:
-        # Ensures that hex color code strings have the correct format
-        color_pattern = re.compile(r'^#([a-fA-F0-9]{6}|[a-fA-F0-9]{3})$')
-        return bool(re.match(color_pattern, text))
-    except:
-        raise ValidationError(f"Bad hex color code string: {text}")
+    # Ensures that hex color code strings have the correct format. It has to RAISE on a bad one: marshmallow 4 ignores
+    # a validator's return value, so returning False -- as this did -- let any string through as a colour, to be stored
+    # on the flair, written into its style attribute and federated. fullmatch rather than a `$` anchor, which also
+    # matches just before a final newline.
+    if isinstance(text, str) and HEX_COLOR_CODE.fullmatch(text):
+        return True
+    raise ValidationError(f"Bad hex color code string: {text}")
 
 def validate_non_empty_string(text):
     # Makes sure a string has length >0 after removing whitespace

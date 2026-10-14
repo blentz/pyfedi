@@ -80,18 +80,35 @@ class TestTheSchemaValidators:
         with pytest.raises(ValidationError, match='Bad datetime string'):
             validate_datetime_string('2026-01-01 00:00:00')
 
-    @pytest.mark.parametrize('value', ['#ff', 'ff0000', '#gggggg', '#1234567', ''])
-    def test_a_colour_that_is_not_a_hex_code_is_false(self, value):
-        """The refusal arm here is `except:` around a `re.match`, which a string cannot
-        reach -- so what these rows pin is the FALSE return, and the row below reaches the
-        except by handing it something that is not a string at all."""
-        from app.api.alpha.schema import validate_color_code
+    @pytest.mark.parametrize('value', ['#ff', 'ff0000', '#gggggg', '#1234567', '', 'red',
+                                       'red; background-image: url(https://tracker.example/p)',
+                                       '#abcdef\n', '#abc\n'])
+    def test_a_colour_that_is_not_a_hex_code_is_refused(self, value):
+        """Found by the api_schemas fuzz target. This returned False for these, and
+        marshmallow 4 ignores a validator's return value -- only a raise refuses -- so every
+        one of them loaded, was stored on the flair as sent, written into its style
+        attribute and federated. The newline rows are the second half: `re.match` with a
+        `$` anchor matches just before a final newline, so '#abcdef\n' passed the pattern
+        itself, and '#abc\n', five characters long, also skipped the shorthand expansion
+        the flair code applies to four-character colours."""
+        from app.api.alpha.schema import CommunityFlairCreateRequest, validate_color_code
 
-        assert validate_color_code(value) is False
+        with pytest.raises(ValidationError, match='Bad hex color code string'):
+            validate_color_code(value)
+        with pytest.raises(ValidationError):
+            CommunityFlairCreateRequest().load({'community_id': 1, 'flair_title': 'x',
+                                                'text_color': value})
+
+    @pytest.mark.parametrize('value', ['#abc', '#ABCDEF', '#0f0f0f'])
+    def test_a_hex_colour_loads(self, value):
+        from app.api.alpha.schema import CommunityFlairCreateRequest
+
+        loaded = CommunityFlairCreateRequest().load({'community_id': 1, 'flair_title': 'x',
+                                                     'text_color': value})
+        assert loaded['text_color'] == value
 
     def test_a_colour_that_is_not_a_string_raises(self):
-        """`re.match` against a non-string is a TypeError, which the bare `except:` turns
-        into the ValidationError the API reports."""
+        """A non-string is refused too rather than reaching `fullmatch` as a TypeError."""
         from app.api.alpha.schema import validate_color_code
 
         assert validate_color_code('#abc') is True
