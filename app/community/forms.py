@@ -19,7 +19,7 @@ from app import db
 from app.constants import DOWNVOTE_ACCEPT_ALL, DOWNVOTE_ACCEPT_MEMBERS, DOWNVOTE_ACCEPT_INSTANCE, \
     DOWNVOTE_ACCEPT_TRUSTED, DOWNVOTE_ACCEPT_NONE
 from app.models import Community, Site, utcnow, User, Feed
-from app.utils import domain_from_url, MultiCheckboxField, get_timezones, url_is_parseable
+from app.utils import domain_from_url, MultiCheckboxField, get_timezones, url_is_parseable, is_hex_color
 
 MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
 
@@ -731,10 +731,17 @@ class MoveCommunityForm(FlaskForm):
     submit = SubmitField(_l('Request move'))
 
 
+def hex_color_or_empty(form, field):
+    """A flair colour is stored as posted, written into the flair's style attribute and federated, so it is a #hex
+    colour (app.utils.is_hex_color, as the API's validate_color_code and the inbox's remote_flair_color) or nothing."""
+    if field.data and not is_hex_color(field.data):
+        raise ValidationError(_l('Choose a colour.'))
+
+
 class EditCommunityFlairForm(FlaskForm):
     flair = StringField(_l('Flair'), validators=[DataRequired()])
-    text_color = StringField(_l('Text color'), render_kw={"type": "color"})
-    background_color = StringField(_l('Background color'), render_kw={"type": "color"})
+    text_color = StringField(_l('Text color'), validators=[hex_color_or_empty], render_kw={"type": "color"})
+    background_color = StringField(_l('Background color'), validators=[hex_color_or_empty], render_kw={"type": "color"})
     blur_images = BooleanField(_l('Blur images and thumbnails for posts with this flair'))
     submit = SubmitField(_l('Save'))
 
