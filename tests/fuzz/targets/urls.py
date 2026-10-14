@@ -40,10 +40,10 @@ from app.pinned_http import is_refused_address
 from app.utils import (MAX_URL_HOST_LENGTH, REDIRECT_POLICY_ALL_REFERRERS, REDIRECT_POLICY_FEDERATED_SERVERS,
                        REDIRECT_POLICY_SAME_ORIGIN, REDIRECT_POLICY_TRUSTED_SERVERS, UNSAFE_SRC_SCHEMES,
                        UNSAFE_URL_SCHEMES, _host_reads_alike, _nodeinfo2_software, _nodeinfo_href_on_host,
-                       domain_from_email, guess_mime_type, has_unsafe_url_scheme, inbox_domain, is_bot,
-                       is_invalid_get_request_uri, is_safe_redirect_target, is_video_hosting_site, is_video_url,
-                       mimetype_from_url, remote_instance_software, requestor_domain, safe_redirect_target,
-                       url_host, url_is_parseable, url_is_storable, url_scheme)
+                       domain_from_email, domain_name_from_url, guess_mime_type, has_unsafe_url_scheme, inbox_domain,
+                       is_bot, is_invalid_get_request_uri, is_safe_redirect_target, is_video_hosting_site,
+                       is_video_url, mimetype_from_url, remote_instance_software, requestor_domain,
+                       safe_redirect_target, url_host, url_is_parseable, url_is_storable, url_scheme)
 from tests.fuzz.targets._target import Target
 from tests.fuzz.targets.ap_json import rfc3986_authority
 from tests.fuzz.targets.signatures import _fields, _json_or_text, _network_forbidden, _text
@@ -216,7 +216,8 @@ def check_url_predicates(data: bytes) -> None:
     it is given; url_is_parseable is True exactly when urlparse reads the URL and its lower-cased form; url_host is
     None or a str and never raises; url_is_storable never accepts an unsafe scheme, an unparseable URL or a host
     longer than MAX_URL_HOST_LENGTH, and for a special scheme only accepts a URL whose host a browser reads
-    exactly as domain_from_url's urlparse(url.lower()).hostname does -- the host a domain ban is checked against."""
+    exactly as domain_from_url's urlparse(url.lower()).hostname does -- the host a domain ban is checked against --
+    and whose Domain name (domain_name_from_url) is the one the browser's host is filed under."""
     value = _json_or_text(data[:MAX_INPUT])
     storable = url_is_storable(value)
     parseable = url_is_parseable(value)
@@ -255,6 +256,11 @@ def check_url_predicates(data: bytes) -> None:
         assert ban_host, f'{url!r} is storable with no host'
         assert browser_host == _ip_text(ban_host), (
             f'{url!r} is storable: a domain ban reads {ban_host!r}, a browser visits {browser_host!r}')
+        # The Domain row a ban is on depends only on the host a browser visits: every spelling of one IPv6 address
+        # ([0:0::1], [::1]) is filed under the same name.
+        visited = f'[{browser_host}]' if ':' in browser_host else browser_host
+        assert domain_name_from_url(url) == domain_name_from_url(f'{scheme}://{visited}/'), (
+            f'{url!r} is filed under {domain_name_from_url(url)!r}, its browser host {browser_host!r} elsewhere')
 
 
 # ---------------------------------------------------------------------------

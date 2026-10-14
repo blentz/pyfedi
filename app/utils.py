@@ -2294,7 +2294,30 @@ def url_is_parseable(url) -> bool:
     return True
 
 
-def domain_from_url(url: str, create=True) -> Domain:
+def canonical_host(host: str) -> str:
+    """`host` in the form a domain or instance ban is stored and compared in.
+
+    An IPv6 literal, bracketed or not, becomes ipaddress's compressed form WITHOUT brackets, because that is how
+    every stored name holds one: domain_from_url and inbox_domain store urlparse(...).hostname, which drops them.
+    A browser reads [0:0::1], [0:0:0:0:0:0:0:1] and [::1] as one address, so a ban on one spelling has to match
+    the others (owner ruling 2026-10-13). Anything else, an IPv4 address or a 'host:port' included, is returned
+    unchanged.
+    """
+    if ':' not in host:
+        return host
+    literal = host[1:-1] if host.startswith('[') and host.endswith(']') else host
+    try:
+        return ipaddress.IPv6Address(literal).compressed
+    except ValueError:
+        return host
+
+
+def domain_name_from_url(url: str) -> Optional[str]:
+    """The Domain.name a link to `url` is filed, blocked and banned under, or None when it has no host.
+
+    The host as urlparse reads it from the lower-cased url, an IPv6 literal in canonical_host's form, a leading
+    'www.' dropped and youtu.be read as youtube.com.
+    """
     if not url:
         # See is_image_url for why this is a conditional. This one does not even
         # reach urlparse: url.lower() on None is AttributeError, which no
@@ -2308,28 +2331,33 @@ def domain_from_url(url: str, create=True) -> Domain:
         # urlparse itself refuses some netlocs a person can put in the URL box:
         # an unbalanced IPv6 bracket ('https://[::1/x'), an address with two
         # '::' runs, or a host that fails its NFKC confusability check. No host
-        # could be determined, which is the same answer the else: arm below
-        # gives for a hostless URL.
-        #
-        # Scoped to the parse alone on purpose. The Domain query below raises
-        # its own ValueError from the Postgres driver when the host contains a
-        # NUL byte; widening this guard to cover the query would silently
-        # swallow that (see tests/test_urlparse_valueerror_guards.py).
+        # could be determined, which is the same answer the hostless case below
+        # gives.
         return None
-    if parsed_url and parsed_url.hostname:
-        find_this = parsed_url.hostname.lower()
-        if find_this.startswith('www.'):
-            find_this = find_this[4:]
-        if find_this == 'youtu.be':
-            find_this = 'youtube.com'
-        domain = db.session.query(Domain).filter_by(name=find_this).first()
-        if create and domain is None:
-            domain = Domain(name=find_this)
-            db.session.add(domain)
-            db.session.commit()
-        return domain
-    else:
+    if not parsed_url.hostname:
         return None
+    find_this = canonical_host(parsed_url.hostname.lower())
+    if find_this.startswith('www.'):
+        find_this = find_this[4:]
+    if find_this == 'youtu.be':
+        find_this = 'youtube.com'
+    return find_this
+
+
+def domain_from_url(url: str, create=True) -> Domain:
+    find_this = domain_name_from_url(url)
+    if find_this is None:
+        return None
+    # The Domain query below raises its own ValueError from the Postgres driver
+    # when the host contains a NUL byte; domain_name_from_url's guard is scoped
+    # to the parse alone so that it does not swallow that (see
+    # tests/test_urlparse_valueerror_guards.py).
+    domain = db.session.query(Domain).filter_by(name=find_this).first()
+    if create and domain is None:
+        domain = Domain(name=find_this)
+        db.session.add(domain)
+        db.session.commit()
+    return domain
 
 
 def domain_from_email(email: str) -> str:
