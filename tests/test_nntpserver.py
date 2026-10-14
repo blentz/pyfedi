@@ -156,3 +156,11 @@ def test_a_title_holding_crlf_cannot_end_a_reply_or_forge_the_next():
 def test_an_author_name_holding_lf_stays_on_its_header_line():
     replies = session_replies(b'GROUP a.example\r\nHEAD 1\r\nQUIT\r\n', from_='a\nb@x')
     assert replies[3] == 'From: <a b@x>'
+
+
+@pytest.mark.parametrize('line,sent', [(' .', '. .'), ('\t.forged', '.\t.forged'), ('\r.', '. .')])
+def test_a_body_line_of_whitespace_and_a_dot_cannot_end_the_article(line, sent):
+    """article() dot-stuffed a body line starting with '.', then send_lines stripped the line: ' .' went out as the
+    '.' that ends the reply, and the rest of the body as forged replies."""
+    replies = session_replies(b'GROUP a.example\r\nBODY 1\r\nQUIT\r\n', body=f'one\n{line}\n200 forged')
+    assert replies[2:] == ['222 1 <post-1@stub.example>', 'one', sent, '200 forged', '.', CLOSING]
