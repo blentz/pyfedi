@@ -180,26 +180,24 @@ def _fits(img, box, label: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# upload_decode: app/shared/upload.py:64-79, app/shared/post.py:608-627
+# upload_decode: app/shared/upload.py open_uploaded_image and process_upload, app/shared/post.py edit_post
 # ---------------------------------------------------------------------------
 
-def _upload_steps(img, ext: str, image_format: str, srgb: bool):
-    # D579: Pillow reports a .heic file as 'HEIF'. A format the list does not name: 'filetype not allowed'.
+def _open_uploaded_image(image: bytes):
+    """open_uploaded_image (app/shared/upload.py) on BytesIO, None for its 'filetype not allowed': the format check,
+    then the decode. Run under _refused, because production catches what Pillow raises here; what the steps after
+    it raise, production does not catch, so they run outside it."""
+    img = _open(image)
     if not accepted_format(img):
         return None
-    assert img.format in ACCEPTED_FORMATS, f'the format check let {img.format} through'
-    img = ImageOps.exif_transpose(img)
-    rgb = image_format == 'JPEG' or ext in ['.jpg', '.jpeg']
-    if srgb and rgb:    # edit_post converts its JPEG arm with to_srgb; process_upload converts it plainly
-        img = to_srgb(img)
-    else:
-        img = img.convert('RGB' if rgb else 'RGBA')
-    img.thumbnail((MAX_DIMENSION, MAX_DIMENSION), resample=Image.LANCZOS)
-    return img, rgb
+    img.load()
+    return img
 
 
 def check_upload_decode(data: bytes) -> None:
-    """Selector byte: bit 0 edit_post (else process_upload); bits 1-3 MEDIA_IMAGE_FORMAT; bits 4-7 extension."""
+    """Selector byte: bit 0 edit_post (else process_upload); bits 1-3 MEDIA_IMAGE_FORMAT; bits 4-7 extension.
+
+    The steps after open_uploaded_image: upload.py process_upload's and post.py edit_post's Pillow block."""
     data = data[:MAX_INPUT]
     if not data:
         return
@@ -208,13 +206,17 @@ def check_upload_decode(data: bytes) -> None:
     image_format = FORMATS[(selector >> 1 & 7) % len(FORMATS)]
     ext = UPLOAD_EXTENSIONS[(selector >> 4) % len(UPLOAD_EXTENSIONS)]
 
-    img = _refused(_open, image)
+    img = _refused(_open_uploaded_image, image)
     if img is None:
         return
-    result = _refused(_upload_steps, img, ext, image_format, srgb)
-    if result is None:
-        return
-    img, rgb = result
+    assert img.format in ACCEPTED_FORMATS, f'the format check let {img.format} through'
+    img = ImageOps.exif_transpose(img)
+    rgb = image_format == 'JPEG' or ext in ['.jpg', '.jpeg']
+    if srgb and rgb:    # edit_post converts its JPEG arm with to_srgb; process_upload converts it plainly
+        img = to_srgb(img)
+    else:
+        img = img.convert('RGB' if rgb else 'RGBA')
+    img.thumbnail((MAX_DIMENSION, MAX_DIMENSION), resample=Image.LANCZOS)
     assert img.mode == ('RGB' if rgb else 'RGBA'), f'{ext} with format {image_format!r} came out {img.mode}'
     _fits(img, (MAX_DIMENSION, MAX_DIMENSION), 'upload')
     fmt = image_format.upper() if image_format else _format_of(ext)
