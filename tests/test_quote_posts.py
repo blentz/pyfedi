@@ -227,6 +227,19 @@ def test_text_after_the_link_is_never_removed(html):
     assert strip_quote_fallback(html, QUOTED) == html
 
 
+@pytest.mark.parametrize('after', ['author text after it', '<div>more author text</div>'])
+def test_text_after_the_last_paragraph_keeps_the_link(after):
+    """The last <p> is not the end of the post when author text follows it outside any paragraph; the "RE:" in
+    it is then not a final fallback and is kept (fuzz: microblog_html/text_after_the_last_paragraph)."""
+    html = f'<p>my take</p><p>RE: <a href="{QUOTED}">x</a></p>{after}'
+    assert strip_quote_fallback(html, QUOTED) == html
+
+
+def test_a_newline_after_the_last_paragraph_still_counts_as_the_end():
+    html = f'<p>my take</p><p>RE: <a href="{QUOTED}">x</a></p>\n'
+    assert strip_quote_fallback(html, QUOTED) == '<p>my take</p>\n'
+
+
 def test_whitespace_and_breaks_after_the_link_are_dropped_with_it():
     html = f'<p>my take</p><p><span>RE: <a href="{QUOTED}">x</a></span> <br></p>'
     assert strip_quote_fallback(html, QUOTED) == '<p>my take</p>'
