@@ -356,10 +356,10 @@ def _redirect_policy(policy, allowed: bool):
 
     def instance_allowed(host, trusted_only):
         asked.append((host, trusted_only))
-        # An instance's domain is a DNS name it federates from: none ends in a number (a browser reads that as an
-        # IPv4 address), so the stub allows no such host, as the instance table could not hold one.
-        # Nor one IDNA would map to another (a browser visits the mapped host): such a domain cannot be fetched.
-        return allowed and not _ends_in_a_number(host) and unicodedata.normalize('NFKC', host).casefold() == host
+        # An instance's domain is a plain DNS name it federates from: none ends in a number (a browser reads that
+        # as an IPv4 address) or holds a '%' or other character no hostname holds, so the stub allows none either.
+        return allowed and not _ends_in_a_number(host) and host.isascii() and all(
+            char.isalnum() or char in '-._' for char in host)
 
     saved = app_utils.get_setting, app_utils.instance_redirect_allowed
     app_utils.get_setting, app_utils.instance_redirect_allowed = setting, instance_allowed
