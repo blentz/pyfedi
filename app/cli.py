@@ -185,6 +185,8 @@ def register(app):
             block_list = retrieve_block_list()
             if block_list:
                 for domain in block_list.split('\n'):
+                    if not domain.strip():   # the list ends in a newline: not a Domain named ''
+                        continue
                     db.session.add(Domain(name=canonical_host(domain.strip()), banned=True))
                 print("Added 'No-QAnon' blocklist, see https://github.com/rimu/no-qanon.")
                 print("This can be reversed at /domains/banned using the 'unban all' button.")
@@ -193,6 +195,8 @@ def register(app):
             block_list = retrieve_peertube_block_list()
             if block_list:
                 for domain in block_list.split('\n'):
+                    if not domain.strip():   # a blank value: neither a Domain nor a BannedInstances named ''
+                        continue
                     # canonical_host: the spelling instance_banned and the Domain lookups compare (an IPv6 literal)
                     db.session.add(Domain(name=canonical_host(domain.strip()), banned=True))
                     db.session.add(BannedInstances(domain=canonical_host(domain.strip())))

@@ -78,6 +78,34 @@ def test_init_db_stores_the_block_lists_hosts_in_one_spelling(commands):
 
     assert result.exception is None, result.exception
     added = [call.args[0] for call in fake_db.session.add.call_args_list]
-    assert [row.name for row in added if isinstance(row, Domain)] == ['::1', 'bad.example', '', '2001:db8::5',
+    assert [row.name for row in added if isinstance(row, Domain)] == ['::1', 'bad.example', '2001:db8::5',
                                                                       'tube.example']
     assert [row.domain for row in added if isinstance(row, BannedInstances)][-2:] == ['2001:db8::5', 'tube.example']
+
+
+def test_init_db_skips_the_block_lists_blank_lines(commands):
+    """No-QAnon's domains.txt ends in a newline (4945 domains and one empty last line, fetched 2026-10-14), and
+    split('\\n') made that a banned Domain row named '', listed at /domains/banned. A blank or
+    whitespace-only line in either list, the Peertube Isolation list's included, now adds nothing: no Domain and no
+    BannedInstances. Neither list has comment lines (No-QAnon is bare hostnames, Peertube Isolation a JSON array of
+    {"value": host}), so a '#' has no meaning to skip. A host on both lists (51 of Peertube Isolation's 52 are on
+    No-QAnon) still adds one Domain row per list: domain.name has a plain, non-unique index."""
+    from unittest.mock import MagicMock
+
+    from app.models import BannedInstances, Domain
+
+    fake_db = MagicMock()
+    fake_db.inspect.return_value.get_table_names.return_value = ['alembic_version']
+    fake_db.session.execute.return_value.fetchone.return_value = ('UTF8',)
+    with patch('app.cli.db', fake_db), \
+            patch('app.cli.retrieve_block_list', return_value='\nbad.example\n \t\nworse.example\n\n'), \
+            patch('app.cli.retrieve_peertube_block_list', return_value='tube.example\n  \n\nbad.example'):
+        result = commands.invoke(args=['init-db', '--interactive', 'no'])
+
+    assert result.exception is None, result.exception
+    added = [call.args[0] for call in fake_db.session.add.call_args_list]
+    assert [row.name for row in added if isinstance(row, Domain)] == ['bad.example', 'worse.example',
+                                                                      'tube.example', 'bad.example']
+    banned = [row.domain for row in added if isinstance(row, BannedInstances)]
+    assert '' not in banned
+    assert banned[-2:] == ['tube.example', 'bad.example']
