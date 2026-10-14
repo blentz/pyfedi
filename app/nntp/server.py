@@ -524,6 +524,8 @@ class PieFedNNTPServer(NNTPServer):
     # -- Auth and posting ---------------------------------------------------
 
     def auth_user(self, user: str, password: str) -> bytes:
+        if '\x00' in user:  # no account has one, and psycopg2 refuses it in a query with ValueError
+            raise NNTPAuthenticationError("Invalid username or password")
         with self._app.app_context():
 
             u = (
