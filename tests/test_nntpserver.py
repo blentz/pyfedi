@@ -93,3 +93,8 @@ def test_newnews_with_a_malformed_date_is_a_syntax_error():
 def test_newgroups_with_a_malformed_date_is_a_syntax_error():
     assert session_replies(b'NEWGROUPS 99999999999999999999990101 000000\r\nQUIT\r\n') == [
         READY, '501 Syntax Error', CLOSING]
+
+
+def test_newnews_without_a_time_is_a_syntax_error():
+    """newnews() let two arguments through its length check, then unpacked three: ValueError."""
+    assert session_replies(b'NEWNEWS a.example 20250101\r\nQUIT\r\n') == [READY, '501 Syntax Error', CLOSING]
