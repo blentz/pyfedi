@@ -1991,7 +1991,7 @@ def strip_quote_fallback(html: str, quote_id: str | None) -> str:
         link = links[-1] if links else None
         before = link.previous_sibling if link is not None else None
         if (link is not None and link.get('href') == quote_id
-                and _nothing_follows(link, last)
+                and _nothing_follows(link, soup)   # to the end of the post, not just of its last <p>
                 and isinstance(before, NavigableString) and before.strip() == 'RE:'):
             previous = before.previous_sibling
             link.decompose()
