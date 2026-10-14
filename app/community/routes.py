@@ -164,7 +164,14 @@ def add_local():
                 community.icon = file
         banner_file = request.files.get('banner_file')
         if banner_file and banner_file.filename != '':
-            file = save_banner_file(banner_file)
+            # A banner save_banner_file refuses is its 400, and the community is never made: the icon already
+            # stored for it, every size and locally or in S3, is deleted again, as nothing will ever refer to it.
+            try:
+                file = save_banner_file(banner_file)
+            except Exception:
+                if community.icon:
+                    community.icon.delete_from_disk(purge_cdn=False)
+                raise
             if file:
                 community.image = file
         db.session.add(community)
