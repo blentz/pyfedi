@@ -600,7 +600,7 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
         if len(tokens) == 0 and self.current_selected_newsgroup is None:
             self.send_lines(["412 No newsgroups selected"])
             return
-        group_name = tokens[0]
+        group_name = tokens[0] if tokens else self.current_selected_newsgroup
         if group_name != self.current_selected_newsgroup:
             if not self.select_group(group_name):
                 return

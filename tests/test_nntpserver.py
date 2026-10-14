@@ -64,3 +64,9 @@ def test_group_without_a_name_is_a_syntax_error():
 
 def test_group_with_two_names_is_a_syntax_error():
     assert session_replies(b'GROUP a.example b.example\r\nQUIT\r\n') == [READY, '501 Syntax Error', CLOSING]
+
+
+def test_listgroup_without_a_name_lists_the_selected_group():
+    """LISTGROUP refused no argument only while no group was selected, then read tokens[0] anyway: IndexError."""
+    assert session_replies(b'GROUP a.example\r\nLISTGROUP\r\nQUIT\r\n') == [
+        READY, '211 3 1 3 a.example', '211 3 1 3 a.example', '1', '2', '3', '.', CLOSING]
