@@ -256,10 +256,44 @@ class TestFormatVersusExtensionMismatch:
                 with pytest.raises(Exception, match='filetype not allowed'):
                     process_upload(disguised)
             finally:
-                # The BMP is saved to disk (:39) before the format check runs
-                # (:68-84), so a rejected upload still leaves the raw bytes
-                # behind under the media root -- clean them up like any other
-                # test here.
+                # The BMP is saved to disk before the format check runs; the
+                # refusal removes it (TestAnImagePillowCannotDecode), and this
+                # cleans up after a regression all the same.
+                _cleanup(before)
+
+
+class TestAnImagePillowCannotDecode:
+    """The upload is written under the media root before Pillow sees it. A file Pillow could not decode raised
+    whatever Pillow raised -- UnidentifiedImageError, OSError for data cut short, SyntaxError for a broken PNG
+    chunk, RuntimeError from the AVIF plugin, each with the file's path on this server in its message -- and a file
+    in a format the list does not name raised 'filetype not allowed'; both left the uploader's bytes there, served
+    from this origin with nothing referring to them. Both are the 'filetype not allowed' refusal now, and the upload
+    is gone."""
+
+    @staticmethod
+    def _bmp():
+        buffer = io.BytesIO()
+        Image.new('RGB', (8, 8)).save(buffer, format='BMP')
+        return buffer.getvalue()
+
+    @staticmethod
+    def _truncated_png():
+        buffer = io.BytesIO()
+        Image.new('RGB', (64, 64)).save(buffer, format='PNG', compress_level=0)
+        return buffer.getvalue()[:6000]
+
+    @pytest.mark.parametrize('content', [b'not an image at all', _truncated_png(), _bmp()],
+                             ids=['garbage', 'truncated_png', 'bmp'])
+    def test_is_refused_and_not_left_behind(self, app, content):
+        before = files_under(MEDIA_ROOT)
+        upload = FileStorage(stream=io.BytesIO(content), filename='upload.png')
+        with app.app_context():
+            try:
+                with pytest.raises(Exception) as caught:
+                    process_upload(upload)
+                assert str(caught.value) == 'filetype not allowed'
+                assert files_under(MEDIA_ROOT) == before
+            finally:
                 _cleanup(before)
 
 

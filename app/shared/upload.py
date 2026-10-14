@@ -13,6 +13,33 @@ from app.models import File, User, user_file, served_path
 from app.utils import can_upload_video, gibberish, ensure_directory_exists, is_video_url, store_files_in_s3, guess_mime_type, sanitize_svg
 
 
+def open_uploaded_image(path, allowed_extensions):
+    """Image.open(path), decoded, or Exception('filetype not allowed') -- with the upload removed -- for an image
+    Pillow reads as a format allowed_extensions does not name, or cannot decode. Pillow reports a .heic file as
+    'HEIF' (D579).
+
+    The upload is already on disk under the media root, so a refusal that left it there left the uploader's bytes
+    served from this origin with nothing referring to them. And the decode happens here, inside the try, because
+    what Pillow raises for a broken file is of no one type -- UnidentifiedImageError at open, OSError for data cut
+    short, SyntaxError for a broken PNG chunk, RuntimeError from the AVIF plugin (tests/fuzz/targets/images.py) --
+    and each used to escape as itself, its message naming the file's path on this server."""
+    img = None
+    try:
+        img = Image.open(path)
+        allowed = '.' + img.format.lower() in allowed_extensions or \
+            (img.format == 'HEIF' and '.heic' in allowed_extensions)
+        if allowed:
+            img.load()
+    except Exception:
+        allowed = False
+    if not allowed:
+        if img is not None:
+            img.close()
+        os.unlink(path)
+        raise Exception('filetype not allowed')
+    return img
+
+
 def process_upload(image_file, destination='posts', user: User | None = None):
     # should have errored earlier if no upload, but just to be paranoid
     if not image_file or image_file.filename == '':
@@ -62,24 +89,20 @@ def process_upload(image_file, destination='posts', user: User | None = None):
         import pillow_avif  # NOQA  # lazy: registers Pillow's AVIF plugin only on the AVIF path
 
     if not final_place.endswith('.svg') and not final_place.endswith('.gif') and not is_video_url(final_place):
-        img = Image.open(final_place)
-        # D579: Pillow reports a .heic file as 'HEIF'
-        if '.' + img.format.lower() in allowed_extensions or (img.format == 'HEIF' and '.heic' in allowed_extensions):
-            img = ImageOps.exif_transpose(img)
-            img = img.convert('RGB' if (image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg']) else 'RGBA')
-            img.thumbnail((image_max_dimension, image_max_dimension), resample=Image.LANCZOS)
+        img = open_uploaded_image(final_place, allowed_extensions)
+        img = ImageOps.exif_transpose(img)
+        img = img.convert('RGB' if (image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg']) else 'RGBA')
+        img.thumbnail((image_max_dimension, image_max_dimension), resample=Image.LANCZOS)
 
-            kwargs = {}
-            if image_format:
-                kwargs['format'] = image_format.upper()
-                final_ext = '.' + image_format.lower()
-                final_place = os.path.splitext(final_place)[0] + final_ext
-            if image_quality:
-                kwargs['quality'] = int(image_quality)
+        kwargs = {}
+        if image_format:
+            kwargs['format'] = image_format.upper()
+            final_ext = '.' + image_format.lower()
+            final_place = os.path.splitext(final_place)[0] + final_ext
+        if image_quality:
+            kwargs['quality'] = int(image_quality)
 
-            img.save(final_place, optimize=True, **kwargs)
-        else:
-            raise Exception('filetype not allowed')
+        img.save(final_place, optimize=True, **kwargs)
     file_size = os.path.getsize(final_place)
     url = f"{current_app.config['SERVER_URL']}{served_path(final_place)}"  # D1363
 
