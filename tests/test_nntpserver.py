@@ -31,6 +31,35 @@ def test_a_line_past_the_line_limit_closes_the_connection():
     assert session_replies(b'X' * 5000 + b'\r\nQUIT\r\n') == [READY, CLOSING]
 
 
+ONE_BYTE_READS, SEVEN_BYTE_READS = b'\x00\x00', b'\x00\x02'   # the stub's config: recv hands over 1 or 7 bytes
+
+
+def test_a_read_of_only_whitespace_inside_a_line_is_part_of_the_line():
+    """_getline stopped reading at a read of nothing but whitespace and refused the unfinished line as too long."""
+    assert session_replies(b'MODE READER\r\nGROUP' + b' ' * 14 + b'a.example\r\nQUIT\r\n', config=SEVEN_BYTE_READS) == [
+        READY, READY, '211 3 1 3 a.example', CLOSING]
+    assert session_replies(b'GROUP a.example\r\nQUIT\r\n', config=ONE_BYTE_READS) == [
+        READY, '211 3 1 3 a.example', CLOSING]
+
+
+def test_a_read_that_ends_inside_a_line_after_a_complete_one_keeps_the_rest():
+    """Once the complete line was taken, the start of the next one left in the buffer was refused as too long."""
+    assert session_replies(b'GROUP a.example\r\nA\r\nQUIT\r\n', config=SEVEN_BYTE_READS) == [
+        READY, '211 3 1 3 a.example', '500 Unknown command', CLOSING]
+
+
+def test_a_line_of_the_line_limit_is_read_and_one_past_it_refused():
+    assert session_replies(b'X' * 2048 + b'\nQUIT\r\n') == [READY, '500 Unknown command', CLOSING]
+    assert session_replies(b'X' * 2048 + b'\r\nQUIT\r\n') == [READY, CLOSING]
+
+
+def test_a_line_past_the_line_limit_is_refused_when_its_lf_arrives_with_it():
+    """The limit held only while no LF was buffered: a long line whose LF came in the read that took it past the
+    limit was read whole."""
+    replies = session_replies(b'DATE\r\n' + b'X' * 2143 + b'\r\nQUIT\r\n')
+    assert replies[0] == READY and replies[1].startswith('111 ') and replies[2:] == [CLOSING]
+
+
 POSTING = b'\x02\x05'   # the stub's config: no login, posting allowed
 POSTING_READY = '200 NNTP Service Ready, posting allowed'
 
