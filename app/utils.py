@@ -4410,6 +4410,15 @@ allowed_thumbnail_extensions = ('.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic
                                 '.mpo', '.avif', '.svg', '.bmp', '.tiff')
 
 
+def refuse_over_remote_thumbnail_cap(img: Image.Image) -> None:
+    """Raise ValueError for an image a peer served that is larger than REMOTE_THUMBNAIL_PIXEL_CAP, counting its
+    width x height once per frame. Read from the header Image.open has parsed, so call it before anything decodes:
+    n_frames walks a GIF's frame headers without decoding them, and every other format states its count."""
+    pixels = img.width * img.height * getattr(img, 'n_frames', 1)
+    if pixels > REMOTE_THUMBNAIL_PIXEL_CAP:
+        raise ValueError(f'{pixels} pixels is over the remote thumbnail cap of {REMOTE_THUMBNAIL_PIXEL_CAP}')
+
+
 def url_to_thumbnail_file(filename) -> File:
     if is_invalid_get_request_uri(filename):
         return None
@@ -4541,8 +4550,10 @@ def url_to_thumbnail_file(filename) -> File:
                 #
                 # A thumbnail that cannot be processed is dropped, exactly as one
                 # that cannot be fetched or sanitized is, and its bytes go with it.
+                # So is one over REMOTE_THUMBNAIL_PIXEL_CAP, refused at its header.
                 try:
                     with Image.open(temp_file_path) as img:
+                        refuse_over_remote_thumbnail_cap(img)
                         img = ImageOps.exif_transpose(img)
                         img = img.convert('RGB' if (medium_image_format == 'JPEG' or final_ext in ['.jpg', '.jpeg']) else 'RGBA')
 

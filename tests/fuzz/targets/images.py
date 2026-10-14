@@ -24,10 +24,11 @@ Properties:
 * icon_banner_decode -- save_icon_file (its still-image and its animated-GIF arm) and save_banner_file: the same,
   through open_upload_image (which decodes every frame for the GIF arm and refuses with a 400), with their own
   caps (250 and 40 for an icon and its thumbnail, 1600x600 and 878x500 for a banner).
-* remote_thumbnail_decode -- url_to_thumbnail_file's resize: any format Pillow opens (a peer chooses), exif_transpose,
-  convert, the 170 and 512 thumbnails, saved in MEDIA_IMAGE_MEDIUM_FORMAT. The function catches Exception around
-  all of it, so the property is the output: both thumbnails fit their caps, are RGB or RGBA as configured, and
-  reopen as saved.
+* remote_thumbnail_decode -- url_to_thumbnail_file's resize: any format Pillow opens (a peer chooses), the
+  REMOTE_THUMBNAIL_PIXEL_CAP check at the header (16 MP, width x height x frames), exif_transpose, convert, the 170
+  and 512 thumbnails, saved in MEDIA_IMAGE_MEDIUM_FORMAT. The function catches Exception around all of it, so the
+  property is the output: nothing over the remote cap was thumbnailed, both thumbnails fit their caps, are RGB or
+  RGBA as configured, and reopen as saved.
 * to_srgb -- any image Pillow opens and loads, with its own ICC profile or with the input's bytes as one, comes
   out of to_srgb as RGB at the same size, and to_srgb itself raises nothing.
 * scale_gif -- scale_gif on any image Pillow opens gives an animation with one frame per input frame, each within
@@ -77,9 +78,9 @@ import pillow_heif
 from pillow_heif import register_heif_opener
 
 from app.community.util import allowed_extensions
-from app.constants import IMAGE_PIXEL_CAP
-from app.utils import IMAGE_METADATA_KEYS, allowed_thumbnail_extensions, inspect_image_c2pa, save_image_without_metadata, \
-    scale_gif, to_srgb
+from app.constants import IMAGE_PIXEL_CAP, REMOTE_THUMBNAIL_PIXEL_CAP
+from app.utils import IMAGE_METADATA_KEYS, allowed_thumbnail_extensions, inspect_image_c2pa, \
+    refuse_over_remote_thumbnail_cap, save_image_without_metadata, scale_gif, to_srgb
 from config import Config
 from tests.fuzz.targets._target import Target
 
@@ -338,6 +339,8 @@ def check_remote_thumbnail_decode(data: bytes) -> None:
     final_ext = THUMBNAIL_EXTENSIONS[(selector >> 3) % len(THUMBNAIL_EXTENSIONS)]
     try:
         with _open(image) as img:
+            refuse_over_remote_thumbnail_cap(img)
+            frames = getattr(img, 'n_frames', 1)
             img = ImageOps.exif_transpose(img)
             rgb = medium_format == 'JPEG' or final_ext in ['.jpg', '.jpeg']
             img = _within_cap(img.convert('RGB' if rgb else 'RGBA'))
@@ -351,6 +354,8 @@ def check_remote_thumbnail_decode(data: bytes) -> None:
         raise
     except Exception:
         return
+    assert img.width * img.height * frames <= REMOTE_THUMBNAIL_PIXEL_CAP, \
+        f'{img.size} x {frames} frames thumbnailed, over {REMOTE_THUMBNAIL_PIXEL_CAP} pixels'
     for copy, box, saved in sizes:
         assert copy.mode == ('RGB' if rgb else 'RGBA'), f'{final_ext}/{medium_format!r} thumbnail is {copy.mode}'
         _fits(copy, box, f'remote {box[0]} thumbnail')
@@ -466,14 +471,21 @@ def check_c2pa_inspect(data: bytes) -> None:
 
 
 # Budgets are about ten times the slowest committed seed, measured 2026-10-14 in the test container (CPU time):
-# upload_decode 36 ms (heif), icon_banner_decode 8 ms, remote_thumbnail_decode 8 ms, to_srgb 8 ms, scale_gif 6 ms,
-# c2pa_inspect 0.4 ms. The campaign's -timeout is ten times the budget again, so a decode that runs for seconds --
-# the shape of a decompression bomb Pillow lets through -- comes out of a campaign as a timeout artifact.
+# upload_decode 36 ms (heif), icon_banner_decode 8 ms, to_srgb 8 ms, scale_gif 6 ms, c2pa_inspect 0.4 ms. The
+# campaign's -timeout is ten times the budget again, so a decode that runs for seconds -- the shape of a
+# decompression bomb Pillow lets through -- comes out of a campaign as a timeout artifact.
+#
+# remote_thumbnail_decode is the exception: its budget covers the slowest image its cap lets through, not ten times
+# a seed. At REMOTE_THUMBNAIL_PIXEL_CAP (4000x4000) the check takes 0.71 s for gif_4000x4000_screen_at_the_remote_cap
+# (29 bytes), and 0.71-0.88 s for an AVIF, HEIF, WebP, GIF or RGBA PNG of that size that fits MAX_INPUT (measured
+# 2026-10-14, test container, CPU time). 1200 ms holds the worst of them with a third to spare, and still fails the
+# 37.7 MP gif_6144x6144_screen_over_the_remote_cap (1.6 s) were the cap to go; the 12 s -timeout leaves room for
+# atheris's instrumentation.
 TARGETS = [
     Target(name='upload_decode', check=check_upload_decode, surface='images', budget_ms=500, needs_app=False),
     Target(name='icon_banner_decode', check=check_icon_banner_decode, surface='images', budget_ms=200,
            needs_app=False),
-    Target(name='remote_thumbnail_decode', check=check_remote_thumbnail_decode, surface='images', budget_ms=200,
+    Target(name='remote_thumbnail_decode', check=check_remote_thumbnail_decode, surface='images', budget_ms=1200,
            needs_app=False),
     Target(name='to_srgb', check=check_to_srgb, surface='images', budget_ms=200, needs_app=False),
     Target(name='scale_gif', check=check_scale_gif, surface='images', budget_ms=200, needs_app=False),

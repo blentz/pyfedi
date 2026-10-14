@@ -212,3 +212,10 @@ IMPORT_MAX_ENTRIES = 500
 # 50 MP is above any phone camera's default output (48 MP and 50 MP sensors bin to 12 MP) and below the 89.5 MP at
 # which Pillow starts even to warn. A 6 KB PNG can declare 7072x7072 and cost seconds of CPU and hundreds of MB.
 IMAGE_PIXEL_CAP = 50_000_000
+
+# The lower ceiling for an image a peer serves to be made into a link's thumbnail (app/utils.py
+# url_to_thumbnail_file), which fetches whatever url a federated post names. Counted as width x height times the
+# frame count, at the header, before a pixel is decoded. A 29-byte GIF can declare a 37.7 MP screen, within
+# IMAGE_PIXEL_CAP, and Pillow decodes even a one-pixel frame onto a full-screen canvas: 1.6 s of CPU per fetch. At
+# 16 MP (4000x4000) the slowest thumbnail measured takes 0.9 s. Local uploads keep IMAGE_PIXEL_CAP.
+REMOTE_THUMBNAIL_PIXEL_CAP = 16_000_000

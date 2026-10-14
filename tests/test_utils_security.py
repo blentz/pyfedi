@@ -1377,6 +1377,56 @@ class TestARemoteServerDoesNotChooseTheFileExtension:
             for path in left:
                 os.remove(path)
 
+    @staticmethod
+    def _gif_screen(width, height, frames=1):
+        """A GIF of `frames` one-pixel frames on a width x height screen: under 60 bytes, and Pillow decodes each
+        frame onto a full-screen canvas. 6144x6144 (37.7 MP) took 1.6 s of CPU to thumbnail."""
+        import struct
+
+        out = b'GIF89a' + struct.pack('<HHBBB', width, height, 0, 0, 0)
+        for _ in range(frames):
+            out += b',' + struct.pack('<HHHHB', 0, 0, 1, 1, 0) + b'\x02\x02\x44\x01\x00'
+        return out + b';'
+
+    @pytest.mark.parametrize('width, height, frames', [(6144, 6144, 1), (4001, 4000, 1), (2400, 2400, 3)],
+                             ids=['gif_37_7_mp', 'just_over_the_remote_cap', 'three_frames_over_it_together'])
+    def test_an_image_over_the_remote_cap_is_refused_before_it_is_decoded(self, app, http_mock, monkeypatch,
+                                                                          width, height, frames):
+        """REMOTE_THUMBNAIL_PIXEL_CAP (16 MP): a peer's 29-byte GIF declaring 37.7 MP is within IMAGE_PIXEL_CAP,
+        and was decoded at full size for two small thumbnails -- seconds of CPU per fetch. It is refused at its
+        header now: width x height, times the frame count, so many smaller frames are bounded too. Nothing is
+        decoded and nothing is left behind."""
+        from PIL import ImageFile
+
+        from app.constants import IMAGE_PIXEL_CAP, REMOTE_THUMBNAIL_PIXEL_CAP
+
+        assert REMOTE_THUMBNAIL_PIXEL_CAP < width * height * frames <= IMAGE_PIXEL_CAP
+        loads = []
+        real_load = ImageFile.ImageFile.load
+        monkeypatch.setattr(ImageFile.ImageFile, 'load', lambda img: loads.append(img) or real_load(img))
+        result, left = self._fetch(app, http_mock, 'image/gif', content=self._gif_screen(width, height, frames))
+        try:
+            assert result is None
+            assert left == [], f'left behind: {left}'
+            assert loads == []
+        finally:
+            for path in left:
+                os.remove(path)
+
+    @pytest.mark.parametrize('width, height, frames', [(4000, 4000, 1), (2000, 2000, 4)],
+                             ids=['at_the_remote_cap', 'four_frames_at_it_together'])
+    def test_an_image_at_the_remote_cap_is_still_thumbnailed(self, app, http_mock, width, height, frames):
+        from app.constants import REMOTE_THUMBNAIL_PIXEL_CAP
+
+        assert width * height * frames == REMOTE_THUMBNAIL_PIXEL_CAP
+        result, left = self._fetch(app, http_mock, 'image/gif', content=self._gif_screen(width, height, frames))
+        try:
+            assert result is not None
+            assert result.thumbnail_width <= 170
+        finally:
+            for path in left:
+                os.remove(path)
+
     def test_it_returns_none_rather_than_raising(self, app, http_mock):
         """`edit_post` calls this and does not catch anything, so the refusal has
         to be a return value."""
