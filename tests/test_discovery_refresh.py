@@ -270,7 +270,8 @@ def test_an_isolation_list_that_raises_is_empty(app, monkeypatch):
                                        ('https://bücher.example/x', 'xn--bcher-kva.example'),
                                        ('https://ok.example:8443/x', 'ok.example'),
                                        ('https://[@ok.example/x', None), ('https://u@ok.example/x', None),
-                                       ('https://a.example\\@ok.example/x', None), ('not a url', None), (None, None)])
+                                       ('https://a.example\\@ok.example/x', None), ('not a url', None), (None, None),
+                                       ('https://./x', None), ('https://@../x', None)])
 def test_request_host_is_the_host_httpx_connects_to_or_a_refusal(app, url, host):
     assert request_host(url) == host
 
