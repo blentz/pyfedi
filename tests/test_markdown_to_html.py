@@ -3,8 +3,11 @@ import random
 import re
 import time
 import unittest
+from unittest import mock
 
-from app.utils import LINK_PATTERN, markdown_to_html
+from app.utils import (LINK_PATTERN, MARKDOWN_IN_HTML_LINE_LIMIT, MARKDOWN_MAX_BACKTICK_RUN, MARKDOWN_MAX_QUOTE_DEPTH,
+                       MARKDOWN_MAX_SPACE_RUN, MARKDOWN_RENDER_CAP, limit_quote_depth, markdown_to_html,
+                       neutralise_quadratic_markdown)
 
 CORPUS = pathlib.Path(__file__).parent / 'fuzz' / 'corpus'
 
@@ -558,12 +561,19 @@ And if you want to add your score to the database to help your fellow Bookworms 
         self.assertEqual(target_html, result)
 
 
-    def test_quotes_nested_past_markdown2s_recursion_render_nothing(self):
+    def test_quotes_nested_past_the_depth_limit_render_that_deep(self):
         """markdown2 recurses once per blockquote level, so 200 nested '>' (402 bytes) raised RecursionError out of
-        markdown_to_html, for a peer's post on ingest and for a notification page on render (fuzz:
-        markdown_to_html/blockquote_200_levels). Such a body is refused: it renders as nothing."""
+        markdown_to_html (fuzz: markdown_to_html/blockquote_200_levels), and well before that its cost grows faster
+        than the square of the depth: one line of 128 levels took 0.9 s. A '>' past MARKDOWN_MAX_QUOTE_DEPTH levels
+        is now text (owner ruling 2026-10-13), so such a body renders that many levels deep."""
         markdown = ('>' * 200 + 'a\n') * 2
-        self.assertEqual(markdown_to_html(markdown, test_env={'fn_string': 'fn-test'}), '')
+        result = markdown_to_html(markdown, test_env={'fn_string': 'fn-test'})
+        depth = deepest = 0
+        for tag in re.findall(r'</?blockquote>', result):
+            depth += -1 if tag.startswith('</') else 1
+            deepest = max(deepest, depth)
+        self.assertEqual(deepest, MARKDOWN_MAX_QUOTE_DEPTH)
+        self.assertIn('&gt;' * (200 - MARKDOWN_MAX_QUOTE_DEPTH) + 'a', result)
 
     def test_quotes_nested_well_inside_the_limit_still_render(self):
         markdown = ('>' * 20 + 'a\n') * 2
@@ -608,6 +618,142 @@ class TestLinkPattern(unittest.TestCase):
         result = markdown_to_html('see https://pizza.com. and www.x.example/a_(b) ok', test_env={'fn_string': 'fn-test'})
         self.assertIn('<a href="https://pizza.com" rel="nofollow ugc" target="_blank">https://pizza.com</a>.', result)
         self.assertIn('href="https://www.x.example/a_(b)"', result)
+
+E = {'fn_string': 'fn-test'}
+
+
+def pump(unit: str, size: int = 64 * 1024) -> str:
+    return (unit * (size // len(unit) + 1))[:size]
+
+
+class TestTheRenderCap(unittest.TestCase):
+    """Owner ruling 2026-10-13: remote markdown has no length cap on ingest, so markdown_to_html renders at most
+    MARKDOWN_RENDER_CAP characters, then '…'. The slowest shape known renders in about a second at that length (see
+    app/utils.py); the quadratic constructs are rewritten first (TestQuadraticConstructs)."""
+
+    def test_a_text_past_the_cap_renders_its_first_characters_then_an_ellipsis(self):
+        text = 'word ' * (MARKDOWN_RENDER_CAP // 5 + 100)
+        result = markdown_to_html(text, test_env=E)
+        self.assertEqual(result, markdown_to_html(text[:MARKDOWN_RENDER_CAP] + '…', test_env=E))
+        self.assertTrue(result.endswith('…</p>\n'))
+
+    def test_a_text_at_the_cap_is_rendered_whole(self):
+        text = 'a' * MARKDOWN_RENDER_CAP
+        self.assertEqual(markdown_to_html(text, test_env=E), f'<p>{text}</p>\n')
+
+    def test_the_cut_never_splits_a_stash_placeholder(self):
+        """The preprocessors stash code and links behind placeholders and restore them; the cut is made on the text
+        as given, before any of them runs, so a cut through code or a link renders exactly as the shortened text
+        would, and no placeholder is left in the output."""
+        for text, cap in (('`code span` tail', 5), ('```\nfenced\n```\ntail', 8),
+                          ('[link](https://x.example/a) tail', 12),
+                          ('<code>x</code> <a href="https://x.example/">y</a>', 22), ('> quoted `code` here', 12)):
+            with mock.patch('app.utils.MARKDOWN_RENDER_CAP', cap):
+                result = markdown_to_html(text, test_env=E)
+            self.assertEqual(result, markdown_to_html(text[:cap] + '…', test_env=E), text)
+
+
+class TestQuadraticConstructs(unittest.TestCase):
+    """markdown2 2.5.5 is quadratic (or worse) in several constructs; 64 KiB of '![a::b](' took 32 s, runs of '!['
+    7 s and of '<img ' 8 s. Owner ruling 2026-10-13: neutralise them before markdown2 sees them, leaving ordinary
+    markdown byte-identical (TestOrdinaryMarkdownIsUnchanged). Each pump is also a markdown_to_html fuzz seed,
+    replayed against the target's budget (fuzz: markdown_to_html/pump_*)."""
+
+    def test_unmatched_link_openers_are_text(self):
+        for unit in ('![', '![a::b](', '[a]('):
+            result = neutralise_quadratic_markdown(pump(unit))
+            self.assertNotIn('[', result)
+            self.assertEqual(result.replace('&#91;', '['), pump(unit))
+        ordinary = 'x] y) see ![a](b) and [c](d) and [e'
+        self.assertEqual(neutralise_quadratic_markdown(ordinary), ordinary)
+
+    def test_links_past_the_copy_limit_stay_text(self):
+        result = neutralise_quadratic_markdown(pump('[a](b)', 25_000))
+        kept = result.count('[a](b)')
+        self.assertGreater(kept, 1000)
+        self.assertEqual(result.count('&#91;a](b)'), 25_000 // 6 - kept)
+        self.assertEqual(result[:kept * 6], '[a](b)' * kept)
+
+    def test_unended_tag_openers_are_text(self):
+        for unit in ('<img ', '<div ', '<a ', '<http://', '<!--', '<?x'):
+            result = neutralise_quadratic_markdown(pump(unit, 25_000))
+            self.assertEqual(result.replace('&lt;', '<'), pump(unit, 25_000))
+            self.assertLessEqual(result.count('<'), 1, unit)   # the last scans only to the end, once
+        ordinary = '<!DOCTYPE html><img src="x"> a < b <b>bold</b> <!-- note --> <?php ?> <div\nclass="x">'
+        self.assertEqual(neutralise_quadratic_markdown(ordinary), ordinary)
+
+    def test_long_backtick_runs_are_text(self):
+        run = '`' * (MARKDOWN_MAX_BACKTICK_RUN + 1)
+        self.assertEqual(neutralise_quadratic_markdown(f'a {run} b'), 'a ' + '&#96;' * len(run) + ' b')
+        fence = '`' * MARKDOWN_MAX_BACKTICK_RUN
+        self.assertEqual(neutralise_quadratic_markdown(f'{fence}\ncode\n{fence}'), f'{fence}\ncode\n{fence}')
+
+    def test_quotes_deeper_than_the_limit_are_text(self):
+        depth = MARKDOWN_MAX_QUOTE_DEPTH
+        self.assertEqual(limit_quote_depth('> ' * (depth + 3) + 'a\nb'),
+                         '> ' * depth + '&gt; ' + '> ' * 2 + 'a\nb')
+        self.assertEqual(limit_quote_depth('>' * depth + ' a\n  > > b'), '>' * depth + ' a\n  > > b')
+
+    def test_lines_heavy_with_pipes_lose_their_table_markup(self):
+        result = neutralise_quadratic_markdown(pump('|a', 25_000))
+        self.assertEqual(result, pump('|a', 25_000).replace('|', '&#124;'))
+        table = '| a | b |\n|---|---|\n| ' + 'c' * 20_000 + ' | d |\n'
+        self.assertEqual(neutralise_quadratic_markdown(table), table)
+
+    def test_a_long_line_after_a_markdown_block_tag_moves_to_the_next_line(self):
+        long_line = 'x' * (MARKDOWN_IN_HTML_LINE_LIMIT + 1)
+        self.assertEqual(neutralise_quadratic_markdown(f'<blockquote markdown="1">{long_line}'),
+                         f'<blockquote markdown="1">\n{long_line}')
+        for text in (f'<blockquote markdown="1">{long_line[1:]}', f'<blockquote>{long_line}</blockquote>',
+                     f'<span markdown="1">{long_line}</span>', f'<div markdown="1">\n{long_line}'):
+            self.assertEqual(neutralise_quadratic_markdown(text), text)
+        self.assertEqual(markdown_to_html(f'> {long_line}', test_env=E),
+                         f'<blockquote>\n<p>{long_line}</p>\n</blockquote>\n')
+
+    def test_long_space_runs_keep_only_their_first_spaces(self):
+        run = ' ' * (MARKDOWN_MAX_SPACE_RUN + 2)
+        self.assertEqual(neutralise_quadratic_markdown(f'a{run}b'), f'a{" " * MARKDOWN_MAX_SPACE_RUN}&#32;&#32;b')
+        for text in (f'a{run}\nb', f'a{run}', f'a{run}\\\nb', 'a' + ' ' * MARKDOWN_MAX_SPACE_RUN + 'b'):
+            self.assertEqual(neutralise_quadratic_markdown(text), text)
+
+    def test_bare_urls_past_the_autolink_limit_stay_text(self):
+        result = markdown_to_html(pump('http://a.b ', 25_000), test_env=E)
+        self.assertLess(0, result.count('<a '), 25_000 // 11)
+        few = 'see http://a.example and www.b.example and [c](https://c.example/x) and http://d.example.'
+        self.assertEqual(markdown_to_html(few, test_env=E).count('<a '), 4)
+
+
+class TestOrdinaryMarkdownIsUnchanged(unittest.TestCase):
+    """The differential behind 'leaves ordinary markdown byte-identical': over every committed markdown seed but
+    those built to be slow, and this repository's README and developer docs, markdown_to_html gives exactly what it
+    gives with both rewrites switched off. (The markdown tests above, unchanged, are the rest of it.)"""
+
+    ROOT = pathlib.Path(__file__).parent.parent
+
+    def texts(self):
+        for target in ('markdown_to_html', 'markdown_preprocessors'):
+            for path in sorted((CORPUS / target).iterdir()):
+                text = path.read_bytes()[1:].decode('utf-8', errors='replace')
+                # Not the pumps (64 KiB of one construct, built to be slow) or the 200- and 250-level quotes.
+                if len(text) <= 4096 and '>' * 100 not in text.replace(' ', ''):
+                    yield path.name, text
+        for path in [self.ROOT / 'README.md', *sorted((self.ROOT / 'docs' / 'developer_docs').glob('*.md'))]:
+            text = path.read_text()
+            for start in range(0, len(text), MARKDOWN_RENDER_CAP):
+                yield f'{path.name}:{start}', text[start:start + MARKDOWN_RENDER_CAP]
+
+    def test_the_rewrites_change_no_ordinary_output(self):
+        for name, text in self.texts():
+            with mock.patch('app.utils.limit_quote_depth', lambda value: value), \
+                    mock.patch('app.utils.neutralise_quadratic_markdown', lambda value: value):
+                plain = markdown_to_html(text, test_env=E)
+            self.assertEqual(markdown_to_html(text, test_env=E), plain, name)
+
+    def test_the_rewrites_leave_ordinary_text_alone(self):
+        for name, text in self.texts():
+            self.assertEqual(limit_quote_depth(text), text, name)
+            self.assertEqual(neutralise_quadratic_markdown(text), text, name)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -1522,6 +1522,9 @@ def _markdown_images(text: str) -> list:
     cannot do better, so the next candidate is after the word; and when a '![' finds nothing, no later '![' on its
     line can, so the search moves to the next line."""
     matches, position, length = [], 0, len(text)
+    # The candidates only move right, so the whitespace found for one serves every later one before it: searching
+    # again from each '](' scanned the same run to the end of the text, 0.4 s for 25,000 characters of '![a](b)'.
+    word_end = -1
     while True:
         start = text.find('![', position)
         if start == -1:
@@ -1530,8 +1533,9 @@ def _markdown_images(text: str) -> list:
         line_end = length if line_end == -1 else line_end
         bracket = text.find('](', start + 2, line_end)
         while bracket != -1:
-            space = _WHITESPACE.search(text, bracket + 2)
-            word_end = space.start() if space else length
+            if word_end < bracket + 2:
+                space = _WHITESPACE.search(text, bracket + 2)
+                word_end = space.start() if space else length
             close = text.find(')', bracket + 2, word_end)
             if close != -1:
                 matches.append((start, close + 1, text[start + 2:bracket], text[bracket + 2:close]))
@@ -1783,10 +1787,244 @@ def handle_better_lists(text: str) -> str:
     return text
 
 
+# markdown2 2.5.5 reads several constructs in time that grows with the square of their number (or worse), and
+# remote markdown has no length cap on ingest. markdown_to_html therefore (a) rewrites each such construct, when a
+# text holds enough of it to be slow, into numeric character references markdown2 does not read as markup, and
+# (b) renders at most MARKDOWN_RENDER_CAP characters. (a) leaves every ordinary text unchanged -- the trigger
+# levels below sit far above anything the markdown tests, the fuzz corpus or this repository's own docs reach
+# (tests/test_markdown_to_html.py checks that) -- so their output is byte-identical. A text over a trigger loses
+# that construct's markup (its links, its long backtick runs ...) and keeps the characters, which a browser shows
+# as before outside code; inside code it shows the reference.
+#
+# Measured in the test container, 2026-10-13, on 64 KiB of one construct (the markdown_to_html/pump_* fuzz seeds).
+# Before: '![a::b](' 32 s, '<img ' 9 s, '![' 7 s, a quoted line 21 s, a run of spaces 21 s; at 16 KiB, '[a](' 4.3 s,
+# '[' 3.7 s, a backtick run 2.7 s, '<div ' 1.5 s, '<a ' 1.2 s, '|a' 1.0 s, and the quadratic ones four times as
+# slow per doubling. After, each cut to the cap: every pump under 0.6 s (pump_image_links 0.57, pump_quote_depth
+# 0.44, pump_bare_urls 0.33, the rest under 0.25). What is left is linear, about 40 microseconds a character for
+# the heaviest shapes (64 KiB of '`*', "'`", '# a\n' or '\n=' all render in 1.0-1.1 s at the cap), most of it
+# BeautifulSoup reading the output: so the cap is 25,000 characters, not the local form's 50,000, which took
+# 2.1 s for those shapes. A 60 s fuzz campaign on markdown_to_html (9,667 inputs, up to 16 KiB) found no input
+# slower than a second.
+
+# The most characters of one text markdown_to_html renders; the rest is dropped and '…' put in its place.
+MARKDOWN_RENDER_CAP = 25_000
+# markdown2's link reader scans from each '[' for its balancing ']' (at most 3000 characters) and from the '(' after
+# a ']' for its balancing ')' (to the end of the text), in Python. Past this many characters scanned in all, every
+# '[' is written '&#91;'.
+MARKDOWN_LINK_SCAN_LIMIT = 1_000_000
+_MARKDOWN_LINK_TEXT_SENTINEL = 3000   # markdown2's MAX_LINK_TEXT_SENTINEL
+# ... and it rebuilds the whole text for every link and image it makes. Only as many as keep that under this many
+# characters copied are given to it; the '[' of each later one is written '&#91;'.
+MARKDOWN_LINK_COPY_LIMIT = 50_000_000
+# A backtick run longer than this is written as '&#96;' characters: markdown2's code-span regex backtracks over a
+# run in time quadratic in its length, and no fence or code span needs more than a handful.
+MARKDOWN_MAX_BACKTICK_RUN = 32
+# markdown2 tokenises HTML with lazy regexes that, from a '<' they cannot end, run to the end of the line: a '<tag'
+# or '<https:' with another '<' before any '>' ('<tag(?:.*?)>' and the autolink regex), a '<!--' with no '-->' and
+# a '<?' with no '?>' after it on the line. Past this many characters scanned that way in all, each such '<' is
+# written '&lt;', as markdown2 writes a '<' that opens no tag.
+MARKDOWN_TAG_SCAN_LIMIT = 1_000_000
+# markdown2's table regex backtracks over a line in time proportional to its '|' count times its length (about
+# 9 ns a unit: 0.1 s for 500 '|' in 20,000 characters). When the lines' products add up past the first limit, each
+# line whose product is past the second has its '|' written '&#124;'. A table row with long cells is about 100,000
+# (5 '|' in 20,000 characters, in this repository's own docs); a whole document of them stays far under 20,000,000.
+MARKDOWN_PIPE_SCAN_LIMIT = 20_000_000
+MARKDOWN_LINE_PIPE_LIMIT = 100_000
+# Quote levels past this have their '>' written '&gt;'; markdown2's cost grows faster than the square of the depth.
+MARKDOWN_MAX_QUOTE_DEPTH = 32
+# For every bare URL markdown2's link-patterns extra links, it searches the whole text again with two regexes
+# (its <url> autolink and [text](url) patterns). It is given only as many bare URLs as keep those searches under
+# this many characters in all; the rest stay text.
+MARKDOWN_AUTOLINK_SCAN_LIMIT = 10_000_000
+
+_MARKDOWN_QUOTE_MARKERS_RE = re.compile(r'^[ \t>]+', re.M)
+_MARKDOWN_LONG_BACKTICK_RUN_RE = re.compile('`{%d,}' % (MARKDOWN_MAX_BACKTICK_RUN + 1))
+# markdown2's markdown-in-html extra splits the first line of a block tag carrying markdown="1" (handle_blockquotes
+# writes <blockquote markdown="1">) after the tag with re.split(r'(.*?<tag.*markdown=.*?>)'), which retries from
+# every character after the tag to the end of the line: 2.8 s for 24,000 characters. When more than this many follow
+# the tag on its line, the rest goes on the next line first -- the split markdown2 makes itself.
+MARKDOWN_IN_HTML_LINE_LIMIT = 2000
+# markdown2's breaks extra looks for a hard break with '(?: *\\| {2,})\n', which from every space of a run that no
+# newline ends scans the rest of the run: 0.9 s for 12,000 spaces. In such a run, the spaces past this many are
+# written '&#32;' (each still a space to a browser).
+MARKDOWN_MAX_SPACE_RUN = 64
+_MARKDOWN_LONG_SPACE_RUN_RE = re.compile(' {%d,}' % (MARKDOWN_MAX_SPACE_RUN + 1))
+# markdown2's block tags (Markdown._block_tags_a), at the start of a line.
+_MARKDOWN_BLOCK_TAG_RE = re.compile(
+    r'^<(?:blockquote|body|dd|del|div|dl|dt|fieldset|form|h[1-6]|head|hr|html|iframe|ins|li|math|noscript|ol|p|pre|'
+    r'script|style|table|tfoot|ul|address|article|aside|canvas|figcaption|figure|footer|header|main|nav|section|'
+    r'video)\b[^<>\n]*>', re.M)
+_MARKDOWN_IN_HTML_ATTR_RE = re.compile(r'\s+markdown=("1"|\'1\')')   # markdown2's _html_markdown_attr_re
+
+
+def limit_quote_depth(text: str) -> str:
+    """`text` with the '>' that would open a quote level past MARKDOWN_MAX_QUOTE_DEPTH written '&gt;'. A line's
+    depth is the number of '>' in its leading run of spaces, tabs and '>', as handle_blockquotes reads it."""
+    def limit(match):
+        markers, depth = match.group(), 0
+        for index, char in enumerate(markers):
+            if char == '>':
+                depth += 1
+                if depth > MARKDOWN_MAX_QUOTE_DEPTH:
+                    return markers[:index] + '&gt;' + markers[index + 1:]
+        return markers
+    return _MARKDOWN_QUOTE_MARKERS_RE.sub(limit, text)
+
+
+def _neutralise_links(text: str) -> str:
+    """`text` with '[' written '&#91;' where markdown2's link reader would be slow on it.
+
+    It scans from each '[' for its balancing ']' (at most _MARKDOWN_LINK_TEXT_SENTINEL characters) and from the
+    '(' after a ']' for its balancing ')' (to the end of the text); past MARKDOWN_LINK_SCAN_LIMIT characters in all,
+    every '[' is written '&#91;'. And it rebuilds the whole text for every link and image it makes; past
+    MARKDOWN_LINK_COPY_LIMIT characters copied, the '[' of each later link -- a '[' whose ']' is followed by '(' or
+    '[' -- is written '&#91;', so it stays text."""
+    cost, opened, links = 0, [], []
+    for match in re.finditer(r'[\[\]]', text):
+        if match.group() == '[':
+            opened.append(match.start())
+        elif opened:
+            start = opened.pop()
+            cost += min(_MARKDOWN_LINK_TEXT_SENTINEL, match.start() - start)
+            if text[match.end():match.end() + 1] in ('(', '['):
+                links.append(start)
+    cost += sum(min(_MARKDOWN_LINK_TEXT_SENTINEL, len(text) - start) for start in opened)
+    opened = []
+    for match in re.finditer(r'[()]', text):
+        if match.group() == '(':
+            opened.append(match.start() if text[match.start() - 1:match.start()] == ']' else None)
+        elif opened:
+            start = opened.pop()
+            cost += 0 if start is None else match.start() - start
+    cost += sum(len(text) - start for start in opened if start is not None)
+    if cost > MARKDOWN_LINK_SCAN_LIMIT:
+        return text.replace('[', '&#91;')
+    allowed = MARKDOWN_LINK_COPY_LIMIT // len(text)
+    if len(links) <= allowed:
+        return text
+    pieces, last = [], 0
+    for start in sorted(links)[allowed:]:
+        pieces += [text[last:start], '&#91;']
+        last = start + 1
+    return ''.join(pieces) + text[last:]
+
+
+def _unended_tag_openers(line: str) -> list:
+    """The positions in `line` of each '<' markdown2's HTML tokenising scans to the end of the line from (see
+    MARKDOWN_TAG_SCAN_LIMIT)."""
+    found = []
+    next_lt = next_gt = len(line)
+    for match in reversed(list(re.finditer(r'[<>]', line))):
+        position = match.start()
+        if match.group() == '>':
+            next_gt = position
+            continue
+        following = line[position + 1:position + 2]
+        if following == '!':
+            if line.startswith('<!--', position) and line.find('-->', position + 4) == -1:
+                found.append(position)
+        elif following == '?':
+            if line.find('?>', position + 2) == -1:
+                found.append(position)
+        elif (following == '/' or following.isascii() and following.isalpha()) and next_lt < next_gt:
+            found.append(position)
+        next_lt = position
+    return found
+
+
+def _neutralise_tag_scans(text: str) -> str:
+    lines = text.split('\n')
+    cost, openers = 0, []
+    for index, line in enumerate(lines):
+        if '<' in line:
+            found = _unended_tag_openers(line)
+            cost += sum(len(line) - position for position in found)
+            openers.append((index, found))
+    if cost <= MARKDOWN_TAG_SCAN_LIMIT:
+        return text
+    for index, found in openers:
+        line, pieces, last = lines[index], [], 0
+        for position in reversed(found):   # found runs right to left
+            pieces += [line[last:position], '&lt;']
+            last = position + 1
+        lines[index] = ''.join(pieces) + line[last:]
+    return '\n'.join(lines)
+
+
+def _neutralise_pipes(text: str) -> str:
+    lines = text.split('\n')
+    costs = [line.count('|') * len(line) for line in lines]
+    if sum(costs) <= MARKDOWN_PIPE_SCAN_LIMIT:
+        return text
+    return '\n'.join(line.replace('|', '&#124;') if cost > MARKDOWN_LINE_PIPE_LIMIT else line
+                     for line, cost in zip(lines, costs))
+
+
+def _split_markdown_in_html(match: re.Match, text: str) -> str:
+    tag = match.group()
+    line_end = text.find('\n', match.end())
+    rest = (len(text) if line_end == -1 else line_end) - match.end()
+    return tag + '\n' if rest > MARKDOWN_IN_HTML_LINE_LIMIT and _MARKDOWN_IN_HTML_ATTR_RE.search(tag) else tag
+
+
+def _neutralise_space_runs(text: str) -> str:
+    def shorten(match):
+        run = match.group()
+        if text[match.end():match.end() + 1] in ('\n', '\\', ''):
+            return run   # a hard break ends it, and markdown2 reads it in one step
+        return run[:MARKDOWN_MAX_SPACE_RUN] + '&#32;' * (len(run) - MARKDOWN_MAX_SPACE_RUN)
+    return _MARKDOWN_LONG_SPACE_RUN_RE.sub(shorten, text)
+
+
+def neutralise_quadratic_markdown(text: str) -> str:
+    """`text`, about to be given to markdown2, with each construct markdown2 reads in super-linear time written as
+    character references when the text holds enough of it to be slow (see MARKDOWN_RENDER_CAP above), and a long
+    line after a markdown="1" block tag moved to the next line, as markdown2 would split it. The identity on ordinary
+    markdown."""
+    if '[' in text:
+        text = _neutralise_links(text)
+    text = _MARKDOWN_LONG_BACKTICK_RUN_RE.sub(lambda match: '&#96;' * len(match.group()), text)
+    if '<' in text:
+        text = _neutralise_tag_scans(text)
+        text = _MARKDOWN_BLOCK_TAG_RE.sub(lambda match: _split_markdown_in_html(match, text), text)
+    if '|' in text:
+        text = _neutralise_pipes(text)
+    return _neutralise_space_runs(text)
+
+
+class _MarkdownAutolinks:
+    """LINK_PATTERN as markdown2's link-patterns extra is given it, one per markdown_to_html call: the same
+    matches, but only as many of those the extra searches the whole text again for as keep the searches of all its
+    calls (it is called once per block) under MARKDOWN_AUTOLINK_SCAN_LIMIT characters. The matches it skips without
+    searching -- a URL in a link's [text] or (url), or in triple quotes -- are always given and cost nothing."""
+    pattern = _LINK_RE.pattern
+
+    def __init__(self):
+        self.remaining = MARKDOWN_AUTOLINK_SCAN_LIMIT
+
+    def finditer(self, text: str):
+        # Each search reads the whole text, and from every '[' and '<' up to the end of its line.
+        per_link = len(text) + sum(len(line) - match.start()
+                                   for line in text.split('\n') for match in re.finditer(r'[\[<]', line))
+        for match in LINK_PATTERN.finditer(text):
+            start, end = match.span(1)
+            skipped = (text[start - 1:start] == '[' and text[end:end + 1] == ']') or text[start - 2:start] == '](' \
+                or text[end:end + 2] == '")' or (text[start - 3:start] == '"""' and text[end:end + 3] == '"""')
+            if not skipped:
+                if self.remaining < per_link:
+                    continue
+                self.remaining -= per_link
+            yield match
+
+
 # use this for Markdown irrespective of origin, as it can deal with both soft break newlines ('\n' used by PieFed) and hard break newlines ('  \n' or ' \\n')
 # ' \\n' will create <br /><br /> instead of just <br />, but hopefully that's acceptable.
 def markdown_to_html(markdown_text, anchors_new_tab=True, allow_img=True, a_target="_blank", test_env=False) -> str:
     if markdown_text:
+        # Cut before anything else, so no stash placeholder exists yet for the cut to split.
+        if len(markdown_text) > MARKDOWN_RENDER_CAP:
+            markdown_text = markdown_text[:MARKDOWN_RENDER_CAP] + '…'
+        markdown_text = limit_quote_depth(markdown_text)
 
         markdown_text = handle_reddit_spoilers(markdown_text)
 
@@ -1801,6 +2039,7 @@ def markdown_to_html(markdown_text, anchors_new_tab=True, allow_img=True, a_targ
         markdown_text = handle_naked_spoilers(markdown_text)
         markdown_text = handle_spoiler_spacing(markdown_text)
         markdown_text = handle_video_embeds(markdown_text)
+        markdown_text = neutralise_quadratic_markdown(markdown_text)
 
         try:
             md = markdown2.Markdown(extras={'middle-word-em': False,
@@ -1808,7 +2047,7 @@ def markdown_to_html(markdown_text, anchors_new_tab=True, allow_img=True, a_targ
                                             'fenced-code-blocks': None,
                                             'strike': True,
                                             'tg-spoiler': True,
-                                            'link-patterns': [(LINK_PATTERN, r'\1')],
+                                            'link-patterns': [(_MarkdownAutolinks(), r'\1')],
                                             'breaks': {'on_backslash': True},
                                             'tag-friendly': True,
                                             'smarty-pants': True,
@@ -1830,7 +2069,7 @@ def markdown_to_html(markdown_text, anchors_new_tab=True, allow_img=True, a_targ
                                                 'tables': True,
                                                 'strike': True,
                                                 'tg-spoiler': True,
-                                                'link-patterns': [(LINK_PATTERN, r'\1')],
+                                                'link-patterns': [(_MarkdownAutolinks(), r'\1')],
                                                 'breaks': {'on_backslash': True},
                                                 'tag-friendly': True,
                                                 'smarty-pants': True,
