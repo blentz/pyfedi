@@ -352,14 +352,13 @@ class TestAnAvifCarriesNoUploaderMetadata:
     EXIF block made the save raise 'Invalid Exif payload' (a 500), or wrote an AVIF Pillow cannot reopen. The
     stored file carries neither, and a malformed block is stored like any other upload."""
 
+    @pytest.fixture(autouse=True)
+    def _monkeypatch(self, monkeypatch):
+        self.monkeypatch = monkeypatch
+
     def _store(self, app, content, filename='photo.jpg', image_format='AVIF'):
-        upload = FileStorage(stream=io.BytesIO(content), filename=filename)
-        original = app.config['MEDIA_IMAGE_FORMAT']
-        app.config['MEDIA_IMAGE_FORMAT'] = image_format
-        try:
-            return process_upload(upload)
-        finally:
-            app.config['MEDIA_IMAGE_FORMAT'] = original
+        self.monkeypatch.setitem(app.config, 'MEDIA_IMAGE_FORMAT', image_format)
+        return process_upload(FileStorage(stream=io.BytesIO(content), filename=filename))
 
     def test_gps_exif_and_xmp_are_not_stored(self, app):
         before = files_under(MEDIA_ROOT)
