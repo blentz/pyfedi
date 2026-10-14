@@ -1,7 +1,5 @@
 """PeerTube channels from SepiaSearch (interop D24). Public publisher channels. SepiaSearch cannot sort
 by followers, so up to MAX_PAGES pages are read and ranked here."""
-from urllib.parse import urlparse
-
 from flask import current_app
 
 from app.discovery import KIND_COMMUNITY, sources
@@ -32,11 +30,7 @@ def channel_to_entry(channel) -> dict | None:
     url, host = channel.get('url'), channel.get('host')
     if not isinstance(url, str) or not isinstance(host, str) or not sources.is_hostname(host.lower()):
         return None
-    try:
-        parsed = urlparse(url)
-    except ValueError:
-        return None
-    if parsed.scheme != 'https' or parsed.hostname != host.lower():
+    if not sources.uri_is_on(url, host.lower()):   # which also refuses a backslash, read as a slash by a browser
         return None
     name = channel.get('displayName') or channel.get('name')
     return sources.make_entry(kind=KIND_COMMUNITY, platform='peertube', actor_url=url,
