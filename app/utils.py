@@ -2093,6 +2093,7 @@ def community_link_to_href(link: str, server_name_override: str | None = None) -
     # A NUL first: a placeholder of letters and digits right after a handle was read as more of its host.
     code_placeholder = '\x00' + gibberish(10)
     link_placeholder = '\x00' + gibberish(10)
+    tag_placeholder = '\x00' + gibberish(10)
 
     # Stash the <code> portions so they are not formatted
     code_snippets, link = stash_code_html(link, code_placeholder, _ANY_CODE_HTML_RE)
@@ -2100,11 +2101,15 @@ def community_link_to_href(link: str, server_name_override: str | None = None) -
     # Stash the existing links so they are not formatted
     link_snippets, link = stash_link_html(link, link_placeholder, _ANY_LINK_HTML_RE)
 
+    # Stash every other tag, so a handle in an attribute value (an image's alt text) is not formatted
+    tag_snippets, link = stash_code_html(link, tag_placeholder, _ANY_TAG_HTML_RE)
+
     pattern = COMMUNITY_PATTERN
     server = r'<a href="https://' + server_name + r'/community/lookup/'
     link = re.sub(pattern, server + r'\g<1>/\g<2>">' + r'!\g<1>@\g<2></a>', link)
 
-    # Bring back the links
+    # Bring back the tags, then the links
+    link = pop_code(code_snippets=tag_snippets, text=link, placeholder=tag_placeholder)
     link = pop_link(link_snippets=link_snippets, text=link, placeholder=link_placeholder)
 
     # Bring back the <code> portions
@@ -2122,6 +2127,7 @@ def feed_link_to_href(link: str, server_name_override: str | None = None) -> str
     # A NUL first: a placeholder of letters and digits right after a handle was read as more of its host.
     code_placeholder = '\x00' + gibberish(10)
     link_placeholder = '\x00' + gibberish(10)
+    tag_placeholder = '\x00' + gibberish(10)
 
     # Stash the <code> portions so they are not formatted
     code_snippets, link = stash_code_html(link, code_placeholder, _ANY_CODE_HTML_RE)
@@ -2129,11 +2135,15 @@ def feed_link_to_href(link: str, server_name_override: str | None = None) -> str
     # Stash the existing links so they are not formatted
     link_snippets, link = stash_link_html(link, link_placeholder, _ANY_LINK_HTML_RE)
 
+    # Stash every other tag, so a handle in an attribute value (an image's alt text) is not formatted
+    tag_snippets, link = stash_code_html(link, tag_placeholder, _ANY_TAG_HTML_RE)
+
     pattern = FEED_PATTERN
     server = r'<a href="https://' + server_name + r'/feed/lookup/'
     link = re.sub(pattern, server + r'\g<1>/\g<2>">' + r'~\g<1>@\g<2></a>', link)
 
-    # Bring back the links
+    # Bring back the tags, then the links
+    link = pop_code(code_snippets=tag_snippets, text=link, placeholder=tag_placeholder)
     link = pop_link(link_snippets=link_snippets, text=link, placeholder=link_placeholder)
 
     # Bring back the <code> portions
@@ -2151,6 +2161,7 @@ def person_link_to_href(link: str, server_name_override: str | None = None) -> s
     # A NUL first: a placeholder of letters and digits right after a handle was read as more of its host.
     code_placeholder = '\x00' + gibberish(10)
     link_placeholder = '\x00' + gibberish(10)
+    tag_placeholder = '\x00' + gibberish(10)
 
     # Stash the <code> portions so they are not formatted
     code_snippets, link = stash_code_html(link, code_placeholder, _ANY_CODE_HTML_RE)
@@ -2158,13 +2169,17 @@ def person_link_to_href(link: str, server_name_override: str | None = None) -> s
     # Stash the existing links so they are not formatted
     link_snippets, link = stash_link_html(link, link_placeholder, _ANY_LINK_HTML_RE)
 
+    # Stash every other tag, so a handle in an attribute value (an image's alt text) is not formatted
+    tag_snippets, link = stash_code_html(link, tag_placeholder, _ANY_TAG_HTML_RE)
+
     # Substitute @user@instance.tld with <a> tags, but ignore if it has a preceding / or [ character
     pattern = PERSON_PATTERN
     server = f'https://{server_name}/user/lookup/'
     replacement = (r'<a href="' + server + r'\g<1>/\g<2>" rel="nofollow noindex">@\g<1>@\g<2></a>')
     link = re.sub(pattern, replacement, link)
 
-    # Bring back the links
+    # Bring back the tags, then the links
+    link = pop_code(code_snippets=tag_snippets, text=link, placeholder=tag_placeholder)
     link = pop_link(link_snippets=link_snippets, text=link, placeholder=link_placeholder)
 
     # Bring back the <code> portions
@@ -2186,6 +2201,11 @@ _LINK_HTML_RE = re.compile(r'(<a href=[\s\S]*?</a>)|<a href=[\s\S]*')
 # fails for every later one too (each needs a '>' and then a closing tag later still), so the skip takes the rest.
 _ANY_CODE_HTML_RE = re.compile(r'(<code\b[^>]*>[\s\S]*?</code>)|<code\b[\s\S]*')
 _ANY_LINK_HTML_RE = re.compile(r'(<a\b[^>]*>[\s\S]*?</a>)|<a\b[\s\S]*')
+# Any tag, for the actor-link filters, which never rewrite inside one (owner ruling 2026-10-13): a handle in an
+# attribute value, such as the alt text markdown2 makes of '![shot of @u@h](img)', was linked and broke the tag
+# open. allowlist_html writes '<' and '>' in an attribute value as entities, so a tag is a '<', no '<' or '>', and
+# a '>'. Linear: a failed start stops at the next '<', where the next attempt begins.
+_ANY_TAG_HTML_RE = re.compile(r'(<[^<>]*>)')
 
 
 def stash_code_html(text: str, placeholder: str, pattern: re.Pattern = _CODE_HTML_RE) -> tuple[list, str]:

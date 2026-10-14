@@ -319,16 +319,6 @@ _ACTOR_PATTERNS = (COMMUNITY_PATTERN, FEED_PATTERN, PERSON_PATTERN, MENTION_PATT
 _HANDLE_CHARS = frozenset('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-')
 
 
-def _attribute_names_a_handle(soup) -> bool:
-    """Whether some attribute value in the document holds an @/!/~ handle the filters would link."""
-    for tag in soup.find_all(True):
-        for value in tag.attrs.values():
-            value = ' '.join(value) if isinstance(value, list) else value
-            if any(pattern.search(value) for pattern in _ACTOR_PATTERNS[:3]):
-                return True
-    return False
-
-
 def _rendered(soup):
     """`soup` without the nodes a browser renders nothing for: comments, CDATA, declarations, doctypes and
     processing instructions."""
@@ -345,14 +335,16 @@ def check_markdown_actor_links(data: bytes) -> None:
     A link the filter creates is never inside an existing <a> or a <code>, and taking the created links back out
     gives the document it was given: the filter only wraps handles in text. Comments, CDATA and the like are left
     out of that comparison: the filters also rewrite a handle inside a comment, which renders nothing, and cannot
-    end it (a created link holds no '-->'). That second property is not asserted
-    when an attribute value holds a handle (an image's alt naming @user@host): the filter rewrites inside the tag
-    there, which is reported as a product decision rather than fixed (2026-10-13)."""
+    end it (a created link holds no '-->'). A filter never rewrites inside a tag (owner ruling 2026-10-13): the
+    output has the <img> and <a> elements it was given, plus the created links, and every element other than a
+    created link carries the attributes it had -- an alt or title naming @user@host is left as it is, no '<a'
+    injected into it."""
     html = allowlist_html(_input_text(data), test_env=TEST_ENV)
     if SERVER in html or PLACEHOLDER in html:
         return
     original = _rendered(BeautifulSoup(html, 'html.parser'))
-    in_attribute = _attribute_names_a_handle(original)
+    attributes = [(tag.name, tag.attrs) for tag in original.find_all(True)]
+    images, anchors = len(original.find_all('img')), len(original.find_all('a'))
     # html.parser nests an <a> inside an <a> as written; a browser closes the first at the second, so text after the
     # inner one's end is in no link at all. In such a document "inside an existing <a>" means different things to
     # the two, and only <code> is asserted.
@@ -364,10 +356,13 @@ def check_markdown_actor_links(data: bytes) -> None:
         for anchor in soup.find_all('a', href=_CREATED):
             assert anchor.find_parent(containers) is None, (
                 f'{function.__name__} created a link inside an existing <a> or <code>: {anchor}')
-        if in_attribute:
-            continue
-        for anchor in soup.find_all('a', href=_CREATED):
+        created = soup.find_all('a', href=_CREATED)
+        assert len(soup.find_all('img')) == images, f'{function.__name__} changed the number of <img> elements'
+        assert len(soup.find_all('a')) == anchors + len(created), f'{function.__name__} broke an <a> element'
+        for anchor in created:
             anchor.unwrap()
+        assert [(tag.name, tag.attrs) for tag in _rendered(soup).find_all(True)] == attributes, (
+            f'{function.__name__} rewrote inside a tag')
         assert str(_rendered(soup)) == str(original), f'{function.__name__} changed more than wrapping handles in links'
 
 
