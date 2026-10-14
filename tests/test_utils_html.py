@@ -4,8 +4,8 @@ from app import utils
 from app.utils import (allowlist_html, community_link_to_href, escape_img, feed_link_to_href,
                        handle_lemmy_autocomplete, links_with_parens,
                        mastodon_extra_field_link, person_link_to_href,
-                       piefed_markdown_to_lemmy_markdown, pop_code, pop_link, remove_images, stash_code_html, stash_code_md,
-                       stash_link_html, escape_non_html_angle_brackets, handle_bold_em)
+                       piefed_markdown_to_lemmy_markdown, pop_code, pop_link, remove_images, sub_skipping, stash_code_html, stash_code_md,
+                       stash_link_html, escape_non_html_angle_brackets, handle_bold_em, handle_reddit_spoilers)
 from tests.test_allowlist_html import assert_linear, pump
 from tests.test_markdown_to_html import corpus_texts, random_texts
 
@@ -219,6 +219,23 @@ class TestLemmyAutocompleteIsLinear:
 
     def test_an_unclosed_line_is_read_in_linear_time(self):
         assert_linear(self, [pump('[!'), pump('[!a](')], handle_lemmy_autocomplete, seconds=0.5)
+
+
+class TestRedditSpoilersAreLinear:
+    """A line of '>!' scanned to the end of the line from every one (fuzz: markdown_preprocessors/
+    reddit_spoilers_pump)."""
+
+    def test_matches_what_it_matched(self):
+        old = re.compile(r'>!\s?(.+?)\s?!<', re.M)
+        fragments = ['>!', '!<', '>!a!<', 'a', ' ', '\n', '\t', '!', '<', '>']
+        for text in random_texts(fragments, 6000, 12, seed=8) + corpus_texts('markdown_preprocessors', 300):
+            assert sub_skipping(utils._REDDIT_SPOILER_RE, r'[\1]', text) == old.sub(r'[\1]', text), repr(text)
+
+    def test_a_spoiler_opened_at_the_end_of_a_line_can_close_on_the_next(self):
+        assert handle_reddit_spoilers('x >!y >!\nz!<') == 'x >!y <tg-spoiler>z</tg-spoiler>'
+
+    def test_an_unclosed_line_is_read_in_linear_time(self):
+        assert_linear(self, [pump('>!'), pump('>! a')], handle_reddit_spoilers, seconds=0.5)
 
 
 class TestAllowlistHtmlResidue:
