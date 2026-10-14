@@ -26,3 +26,22 @@ def test_a_line_past_the_line_limit_closes_the_connection():
     """A line with no LF in sight was buffered for as long as the client kept sending: _MAXLINE bounded each read,
     not the line."""
     assert session_replies(b'X' * 5000 + b'\r\nQUIT\r\n') == [READY, CLOSING]
+
+
+POSTING = b'\x02\x05'   # the stub's config: no login, posting allowed
+POSTING_READY = '200 NNTP Service Ready, posting allowed'
+
+
+def test_the_handler_returns_when_the_client_closes_without_quit():
+    """recv gives b'' forever on a closed connection, and _getline turned each into an empty line, which the
+    handler skips: a client that left without QUIT pinned its thread in a busy loop for good."""
+    assert session_replies(b'GROUP a.example\r\n') == [READY, '211 3 1 3 a.example']
+
+
+def test_the_handler_returns_when_the_client_closes_in_the_middle_of_an_article():
+    assert session_replies(b'POST\r\nSubject: x\r\n', config=POSTING) == [
+        POSTING_READY, '340 Input article; end with <CR-LF>.<CR-LF>']
+
+
+def test_an_unfinished_line_at_close_gets_no_reply():
+    assert session_replies(b'GROUP a.example\r\nQUI') == [READY, '211 3 1 3 a.example']

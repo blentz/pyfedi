@@ -369,6 +369,9 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
                 self._quit = True
                 self.send_lines(["205 Connection closing"])
                 return
+            except EOFError:
+                self._quit = True
+                return
             data_caseless = self.data.casefold()
             if not self.data:
                 continue
@@ -406,6 +409,9 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
                         print(f"Data error: {exc}")
                         self._quit = True
                         self.send_lines(["205 Connection closing"])
+                        return
+                    except EOFError:
+                        self._quit = True
                         return
                     except NNTPPostError as exc:
                         self.send_lines([f"441 Posting failed: {exc.response}"])
@@ -711,6 +717,8 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
             if len(self._buffer) > _MAXLINE:
                 raise NNTPDataError("Too big a line.")
             chunk = self.request.recv(_MAXLINE + 1)
+            if not chunk:
+                raise EOFError  # the client closed the connection
             self._buffer += chunk
             if b"\n" in chunk or not chunk.strip():
                 break
