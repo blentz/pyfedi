@@ -336,6 +336,55 @@ def test_a_moderator_can_edit_their_own_communitys_flair(app, two_communities,
     assert CommunityFlair.query.count() == 1, 'a duplicate was added'
 
 
+@pytest.mark.parametrize('field,value', [
+    ('text_color', 'red; background: url(https://evil.example/x)'),
+    ('background_color', '#ffffff\n'),
+    ('text_color', '#12345'),
+    ('background_color', 'blue'),
+], ids=['css_injection', 'trailing_newline', 'five_digits', 'named_colour'])
+def test_a_flair_colour_that_is_not_hex_is_refused(app, two_communities, mod_client, field, value):
+    """The form's colour fields were plain StringFields, so whatever was posted was stored on the flair, written into
+    its style attribute and federated as its colour -- what the API (validate_color_code) and the inbox
+    (remote_flair_color) already refused. They are validated with app.utils.is_hex_color now; the form is shown
+    again and nothing changes."""
+    mine, theirs, moderator, outsider = two_communities
+    client, token = mod_client
+    flair = _flair(mine, 'mine')
+    data = {'flair': 'renamed', 'text_color': '#111111', 'background_color': '#eeeeee', 'submit': 'Save',
+            'csrf_token': token}
+    data[field] = value
+
+    with patch('app.community.routes.task_selector'):
+        with patch('app.community.routes.render_template', return_value='rendered'):
+            response = client.post(url(app, 'community.community_flair_edit',
+                                       community_id=mine.id, flair_id=flair.id), data=data)
+
+    assert response.status_code == 200
+    db.session.expire_all()
+    unchanged = db.session.get(CommunityFlair, flair.id)
+    assert (unchanged.flair, unchanged.text_color, unchanged.background_color) == ('mine', '#000000', '#ffffff')
+
+
+@pytest.mark.parametrize('colours', [('#abc', '#DEF'), ('', '')], ids=['shorthand', 'empty'])
+def test_a_hex_or_empty_flair_colour_is_still_accepted(app, two_communities, mod_client, colours):
+    """Shorthand hex is hex, and an empty field was accepted before and still is."""
+    mine, theirs, moderator, outsider = two_communities
+    client, token = mod_client
+    flair = _flair(mine, 'mine')
+
+    with patch('app.community.routes.task_selector'):
+        with patch('app.community.routes.render_template', return_value='rendered'):
+            response = client.post(url(app, 'community.community_flair_edit',
+                                       community_id=mine.id, flair_id=flair.id),
+                                   data={'flair': 'renamed', 'text_color': colours[0],
+                                         'background_color': colours[1], 'submit': 'Save', 'csrf_token': token})
+
+    assert response.status_code == 302
+    db.session.expire_all()
+    updated = db.session.get(CommunityFlair, flair.id)
+    assert (updated.flair, updated.text_color, updated.background_color) == ('renamed',) + colours
+
+
 def test_a_moderator_can_delete_their_own_communitys_flair(app,
                                                            two_communities,
                                                            mod_client):
