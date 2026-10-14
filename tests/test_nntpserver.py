@@ -143,3 +143,16 @@ def test_help_sends_each_paragraph_as_lines_of_its_own():
     assert not any('\n' in line or '\r' in line for line in text)
     assert text[0].startswith('This is an NNTP version 2 server.') and '' in text
     assert text[-1].endswith('followed by your password.')
+
+
+def test_a_title_holding_crlf_cannot_end_a_reply_or_forge_the_next():
+    """A remote post's title can hold line breaks. send_lines sent each line as it was, so `Hi CRLF . CRLF 200`
+    ended the HEAD reply early and made the client read a forged reply after it."""
+    replies = session_replies(b'GROUP a.example\r\nHEAD 1\r\nQUIT\r\n', subject='Hi\r\n.\r\n200 forged')
+    assert replies[2:5] == ['221 1 <post-1@stub.example>', 'From: <alice@stub.example>', 'Subject: Hi  .  200 forged']
+    assert replies.count('.') == 1 and replies[-2:] == ['.', CLOSING]
+
+
+def test_an_author_name_holding_lf_stays_on_its_header_line():
+    replies = session_replies(b'GROUP a.example\r\nHEAD 1\r\nQUIT\r\n', from_='a\nb@x')
+    assert replies[3] == 'From: <a b@x>'
