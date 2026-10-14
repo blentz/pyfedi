@@ -42,7 +42,7 @@ from app.visibility import listable_clause, post_title_for
 from app.shared.tasks.maintenance import add_remote_communities, remove_old_bot_content, pwn_bots
 from app.shared.post import make_post
 from app.relays.expiry import expire_relayed_posts
-from app.utils import retrieve_block_list, blocked_domains, retrieve_peertube_block_list, \
+from app.utils import retrieve_block_list, blocked_domains, retrieve_peertube_block_list, canonical_host, \
     shorten_string, get_request, blocked_communities, gibberish, \
     DOMAIN_LIST_MAX_BYTES, DOMAIN_LIST_MAX_SECONDS, LEMMYVERSE_MAX_BYTES, LEMMYVERSE_MAX_SECONDS, \
     MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, \
@@ -185,7 +185,7 @@ def register(app):
             block_list = retrieve_block_list()
             if block_list:
                 for domain in block_list.split('\n'):
-                    db.session.add(Domain(name=domain.strip(), banned=True))
+                    db.session.add(Domain(name=canonical_host(domain.strip()), banned=True))
                 print("Added 'No-QAnon' blocklist, see https://github.com/rimu/no-qanon.")
                 print("This can be reversed at /domains/banned using the 'unban all' button.")
 
@@ -193,8 +193,9 @@ def register(app):
             block_list = retrieve_peertube_block_list()
             if block_list:
                 for domain in block_list.split('\n'):
-                    db.session.add(Domain(name=domain.strip(), banned=True))
-                    db.session.add(BannedInstances(domain=domain.strip()))
+                    # canonical_host: the spelling instance_banned and the Domain lookups compare (an IPv6 literal)
+                    db.session.add(Domain(name=canonical_host(domain.strip()), banned=True))
+                    db.session.add(BannedInstances(domain=canonical_host(domain.strip())))
                 print("Added 'Peertube Isolation' blocklist, see https://peertube_isolation.frama.io/")
                 print("This can be reversed at /domains/banned using the 'unban all' button.")
 

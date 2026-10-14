@@ -5286,7 +5286,8 @@ def download_defeds(defederation_subscription_id: int, domain: str, replace: boo
 def download_defeds_worker(defederation_subscription_id: int, domain: str, replace: bool = False):
     session = get_task_session()  # noqa: F811
     try:
-        allowed_instances = [instance.domain for instance in session.query(AllowedInstances).all()]
+        # Every host in canonical_host's spelling, the one instance_banned compares: a list's '[0:0::1]' is '::1'.
+        allowed_instances = {canonical_host(instance.domain) for instance in session.query(AllowedInstances).all()}
         defederation_list = retrieve_defederation_list(domain)
         if defederation_list is None:
             # Could not fetch the list: that is not an empty list, so the
@@ -5304,7 +5305,7 @@ def download_defeds_worker(defederation_subscription_id: int, domain: str, repla
         # looked for one, and `BannedInstances.domain` is not unique.
         already = {row.domain for row in session.query(BannedInstances).filter(
             BannedInstances.subscription_id == defederation_subscription_id)}
-        for defederation_url in defederation_list:
+        for defederation_url in map(canonical_host, defederation_list):
             if defederation_url not in allowed_instances and defederation_url not in already:
                 already.add(defederation_url)
                 session.add(BannedInstances(domain=defederation_url, reason='auto', subscription_id=defederation_subscription_id))
