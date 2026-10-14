@@ -45,8 +45,12 @@ def _strings(value) -> list:
 
 
 def https_on(url, host: str) -> bool:
-    """True when a browser reads `url` as an https URL on exactly `host`."""
-    return isinstance(url, str) and whatwg_reading(url) == ('https', host)
+    """True when a browser reads `url` as an https URL on exactly `host`, or refuses it outright (a host ending in a
+    label like '0xa1' is an IPv4 address to a browser, and an invalid one): a refused URL sends nobody anywhere."""
+    if not isinstance(url, str):
+        return False
+    scheme, browser_host = whatwg_reading(url)
+    return scheme == 'https' and (browser_host == host or browser_host is INVALID)
 
 
 # ---------------------------------------------------------------------------

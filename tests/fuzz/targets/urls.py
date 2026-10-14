@@ -356,7 +356,9 @@ def _redirect_policy(policy, allowed: bool):
 
     def instance_allowed(host, trusted_only):
         asked.append((host, trusted_only))
-        return allowed
+        # An instance's domain is a DNS name it federates from: none ends in a number (a browser reads that as an
+        # IPv4 address), so the stub allows no such host, as the instance table could not.
+        return allowed and not _ends_in_a_number(host)
 
     saved = app_utils.get_setting, app_utils.instance_redirect_allowed
     app_utils.get_setting, app_utils.instance_redirect_allowed = setting, instance_allowed
@@ -534,7 +536,9 @@ def check_requestor_domain(data: bytes) -> None:
         return
     assert '+' in user_agent
     claimed = user_agent.split('+')[-1].replace(')', '')
-    assert not set(domain) & set('@/?# '), f'requestor_domain({user_agent!r}) = {domain!r}'
+    # Not a hostname check: the claim is the visitor's own, and a host furl reads with a space in it names no
+    # instance, so it can neither be banned nor allowed.
+    assert not set(domain) & set('@/?#'), f'requestor_domain({user_agent!r}) = {domain!r}'
     reading = rfc3986_authority(claimed)
     if reading is not None and reading[0]:
         assert domain.lower() == reading[0], f'requestor_domain({user_agent!r}) = {domain!r}, RFC 3986 reads {reading[0]!r}'
@@ -639,10 +643,13 @@ def check_strip_tracking(data: bytes) -> None:
 # ---------------------------------------------------------------------------
 
 def _fetch_host(url: str):
+    """The host httpx connects to for `url`, or None when it cannot fetch it (no host, or a URL it refuses)."""
     try:
-        return httpx.URL(url).raw_host.decode('ascii').lower().rstrip('.')
+        target = httpx.URL(url)
+        host = target.raw_host.decode('ascii').lower().rstrip('.')
     except (httpx.InvalidURL, ValueError, TypeError):
         return None
+    return host if host and target.scheme in ('http', 'https') else None
 
 
 def check_nodeinfo_hrefs(data: bytes) -> None:
@@ -661,6 +668,8 @@ def check_nodeinfo_hrefs(data: bytes) -> None:
 
     def nodeinfo_json(uri, deadline):
         fetched.append(uri)
+        if _fetch_host(uri) is None:   # httpx refuses a URL it cannot read before any connection
+            raise httpx.UnsupportedProtocol(f'fuzz: httpx cannot fetch {uri!r}')
         body = documents['nodeinfo' if uri == well_known else 'nodeinfo2' if uri == well_known2 else 'other']
         return json.loads(body)   # ValueError for a body that is not JSON, as the real one
 
@@ -701,8 +710,8 @@ def check_nodeinfo_hrefs(data: bytes) -> None:
                 assert url_host(href) and (url_host(href) or '').lower().rstrip('.') == (
                     url_host(remote_url) or '').lower().rstrip('.')
                 href_host = _fetch_host(href)
-                if href_host is not None:
-                    assert href_host == _fetch_host(well_known), f'{href!r} accepted for {remote_url!r}'
+                if href_host is not None and own_host is not None:   # both fetchable: one host
+                    assert href_host == own_host, f'{href!r} accepted for {remote_url!r}'
 
 
 # None is budgeted: no regex here has a backtracking shape. The redirect, request-host, webfinger and resolver
