@@ -1,7 +1,22 @@
+import re
+
 from app.utils import (allowlist_html, community_link_to_href, escape_img, feed_link_to_href,
                        handle_lemmy_autocomplete, links_with_parens,
                        mastodon_extra_field_link, person_link_to_href,
-                       piefed_markdown_to_lemmy_markdown, remove_images)
+                       piefed_markdown_to_lemmy_markdown, remove_images, stash_code_html)
+from tests.test_allowlist_html import assert_linear, pump
+from tests.test_markdown_to_html import corpus_texts, random_texts
+
+
+def old_stash(pattern, text, placeholder):
+    """A stash as it was before its regex was made linear: re.sub over `pattern`, numbering each snippet."""
+    snippets = []
+
+    def store(match):
+        snippets.append(match.group(0))
+        return f'{placeholder}{len(snippets) - 1}$'
+
+    return snippets, re.sub(pattern, store, text)
 
 
 class TestRemoveImages:
@@ -223,3 +238,17 @@ class TestAllowlistHtmlResidue:
         html = '<table><tr><td>x</td></tr></table>'
         result = allowlist_html(html, test_env={'fn_string': 'fn-test'})
         assert '<table class="table">' in result
+
+
+class TestCodeAndLinkStashesAreLinear:
+    """The stashes run on every rendered body, several times each. A tag with no closing tag after it scanned to
+    the end of the text from every later opener too (fuzz: markdown_code_stash/unclosed_*_pump,
+    the link stash in redos_allowlist_html/empty_anchor_pump)."""
+
+    def test_the_code_stash_stashes_what_it_stashed(self):
+        fragments = ['<code>', '</code>', '<code>x</code>', 'a', ' ', '\n', '<', '>']
+        for text in random_texts(fragments, 3000, 12, seed=5) + corpus_texts('markdown_code_stash', 300):
+            assert stash_code_html(text, 'PH') == old_stash(r'<code>[\s\S]*?<\/code>', text, 'PH'), text
+
+    def test_unclosed_code_is_stashed_in_linear_time(self):
+        assert_linear(self, [pump('<code>')], lambda text: stash_code_html(text, 'PH'), seconds=0.5)

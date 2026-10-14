@@ -2048,14 +2048,22 @@ def person_link_to_href(link: str, server_name_override: str | None = None) -> s
     return link
 
 
+# <code>...</code>, the leftmost <code> to the first </code> after it. Without a </code> after a <code>, there is
+# none after any later one either, so the second alternative (no group) takes the rest of the text in one step
+# instead of every later <code> scanning to the end again: 3.6 s for 64 KiB of '<code>'.
+_CODE_HTML_RE = re.compile(r'(<code>[\s\S]*?</code>)|<code>[\s\S]*')
+
+
 def stash_code_html(text: str, placeholder: str) -> tuple[list, str]:
     code_snippets = []
 
     def store_code(match):
+        if match.group(1) is None:
+            return match.group(0)   # an unclosed <code>: nothing to stash
         code_snippets.append(match.group(0))
         return f"{placeholder}{len(code_snippets) - 1}$"
 
-    text = re.sub(r'<code>[\s\S]*?<\/code>', store_code, text)
+    text = _CODE_HTML_RE.sub(store_code, text)
 
     return (code_snippets, text)
 
