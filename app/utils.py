@@ -3703,7 +3703,11 @@ def inbox_domain(inbox: str) -> str:
     # row in banned_instances and federated normally. The allowlist direction
     # failed safe (an unrecognised string is simply not on the list), which is
     # why this only ever showed up as a ban bypass.
-    return inbox.rstrip('.')
+    #
+    # An IPv6 literal is put in canonical_host's one spelling for the same
+    # reason: [0:0::1] and [::1] are one address, and a ban stored as '::1'
+    # missed the other spelling (owner ruling 2026-10-13).
+    return canonical_host(inbox.rstrip('.'))
 
 
 def awaken_dormant_instance(instance):

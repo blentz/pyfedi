@@ -267,9 +267,19 @@ def check_url_predicates(data: bytes) -> None:
 # Small host helpers: inbox_domain, domain_from_email, is_bot and the two discovery _host readers
 # ---------------------------------------------------------------------------
 
+def _one_spelling(host: str) -> str:
+    """An instance ban's spelling of `host`: an IPv6 literal, bracketed or not, as ipaddress compresses it and
+    without brackets (owner ruling 2026-10-13); anything else as it is."""
+    literal = host[1:-1] if host.startswith('[') and host.endswith(']') else host
+    try:
+        return ipaddress.IPv6Address(literal).compressed
+    except ValueError:
+        return host
+
+
 def check_host_helpers(data: bytes) -> None:
     """inbox_domain gives a lower-case str with no trailing dot and never raises; for a well-formed http(s) URL it
-    is the RFC 3986 host. domain_from_email gives '' or the text after the last '@'. is_bot is a bool, True exactly
+    is the RFC 3986 host, and for a bare value the value, an IPv6 literal in either case in its one spelling. domain_from_email gives '' or the text after the last '@'. is_bot is a bool, True exactly
     when 'bot' or 'meta-externalagent' appears in any case. The two discovery `_host` readers never raise and give
     the lower-case urlsplit host or ''."""
     from app.discovery.instance_answers import _host as answers_host
@@ -284,9 +294,10 @@ def check_host_helpers(data: bytes) -> None:
     if text.lower().startswith(('http://', 'https://')):
         reading = rfc3986_authority(text.lower())
         if reading is not None:
-            assert domain == reading[0].rstrip('.'), f'inbox_domain({text!r}) = {domain!r}, RFC 3986 reads {reading[0]!r}'
+            assert domain == _one_spelling(reading[0].rstrip('.')), (
+                f'inbox_domain({text!r}) = {domain!r}, RFC 3986 reads {reading[0]!r}')
     elif 'http://' not in text.lower() and 'https://' not in text.lower():
-        assert domain == text.lower().rstrip('.'), f'inbox_domain({text!r}) = {domain!r}'
+        assert domain == _one_spelling(text.lower().rstrip('.')), f'inbox_domain({text!r}) = {domain!r}'
 
     email_domain = domain_from_email(text)
     if not text.strip() or '@' not in text:
