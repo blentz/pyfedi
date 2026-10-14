@@ -44,7 +44,7 @@ from app.activitypub.util import (AS_PUBLIC, CONTENT_WARNING_MAX_LENGTH, DISPATC
                                   language_variants_from, media_url_from, names_actor, normalise_activity_types,
                                   normalise_actor_string, object_has_missing_fields, off_host_inbox, on_owner_host,
                                   parse_ban_expiry, posting_warning_from_ap, primary_subtag, quote_id_from,
-                                  shared_inbox_of, stable_create_token)
+                                  remote_flair_color, shared_inbox_of, stable_create_token)
 from app.models import language_from_ap
 from app.utils import random_chars, url_is_storable
 from tests.fuzz.targets._target import Target
@@ -686,6 +686,30 @@ def check_entitlement(data: bytes) -> None:
     assert _path_matches(path, prefixes) is _reference_path_matches(path, prefixes)
 
 
+# ---------------------------------------------------------------------------
+# Remote flair colours
+# ---------------------------------------------------------------------------
+
+# Written out here rather than imported, so a loosened HEX_COLOR_CODE in app.utils fails the check.
+_HEX_COLOUR = re.compile(r'#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})')
+
+
+def check_flair_colors(data: bytes) -> None:
+    """remote_flair_color, for both colour keys, over any JSON value.
+
+    What comes out is None or a string that is a #hex colour in full -- the only thing find_flair_or_create
+    stores in a flair's style-bound colour -- and when it is a string, it is the entry's own value: the
+    snake_case key's when that key is present, else the camelCase key's."""
+    value = _json_or_text(data)
+    for snake_key, camel_key in (('text_color', 'textColor'), ('background_color', 'backgroundColor')):
+        colour = remote_flair_color(value, snake_key, camel_key)
+        if colour is None:
+            continue
+        assert isinstance(colour, str) and _HEX_COLOUR.fullmatch(colour), f'{snake_key}: stored {colour!r}'
+        given = value[snake_key] if snake_key in value else value[camel_key]
+        assert colour == given, f'{snake_key}: {colour!r} is not the entry\'s {given!r}'
+
+
 # None is budgeted: no regex here has a backtracking shape (the one to watch, _CASTOPOD_EPISODE_LINK, is T3's
 # timed target). Only the inbox target needs an app: delivery_inbox_of logs through current_app.logger.
 TARGETS = [
@@ -701,4 +725,5 @@ TARGETS = [
     Target(name='ap_addressing', check=check_addressing, surface='ap_json', budget_ms=None, needs_app=False),
     Target(name='ap_ids', check=check_ids, surface='ap_json', budget_ms=None, needs_app=False),
     Target(name='ap_entitlement', check=check_entitlement, surface='ap_json', budget_ms=None, needs_app=False),
+    Target(name='ap_flair_colors', check=check_flair_colors, surface='ap_json', budget_ms=None, needs_app=False),
 ]

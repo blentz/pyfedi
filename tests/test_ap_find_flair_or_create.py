@@ -46,45 +46,41 @@ Note that the command is reproduced above with the indentation this docstring
 gives it; dedent it before feeding it to `python -c`, which rejects a leading
 indent.
 
-Output -- NINETEEN rows, not the ten this transcript used to carry. Both the
-'found' update block and the 'not found' create block hold their own copy of
-each pair, so each of the three genuine spelling pairs appears twice; two
-further rows are the id-lookup guard and the preferredUsername/display_name
-lookup priority, which are shape-alike but not spelling pairs. That accounts
-for the first ten rows. The remaining nine are the SAME `elif`s seen a second
-time in their own right: an `elif` is an `ast.If` sitting in its parent's
-`orelse`, so `ast.walk` yields it as a node of its own, and it prints again
-as an `if ... elif None` row. Nine and not ten because the id-lookup guard is
-the one row of the ten whose elif is None already -- it has no nested `if` to
-be revisited. The earlier transcript silently dropped all nine, which made
-the output look like a clean one-row-per-pair listing when it is not.
+Output -- ELEVEN rows. Both the 'found' update block and the 'not found'
+create block hold their own copy of each pair, so the one genuine spelling
+pair left inline (blur_images/blurImages) and the name choice each appear
+twice; the id-lookup guard and the preferredUsername/display_name lookup
+priority are two further rows, shape-alike but not spelling pairs. That
+accounts for the first six rows. The remaining five are the SAME `elif`s
+seen a second time in their own right: an `elif` is an `ast.If` sitting in
+its parent's `orelse`, so `ast.walk` yields it as a node of its own, and it
+prints again as an `if ... elif None` row. Five and not six because the
+id-lookup guard's elif is None already -- it has no nested `if` to be
+revisited.
 
-`ast.walk` is breadth-first, so the ten parents print before the nine
-children rather than interleaved with them. The script prints each row's line
-number as `node.lineno`; those are omitted below since they move on the next
-edit -- re-run the command to see them.
+`ast.walk` is breadth-first, so the parents print before the children rather
+than interleaved with them. The script prints each row's line number as
+`node.lineno`; those are omitted below since they move on the next edit --
+re-run the command to see them.
 
     if 'id' ... elif None                             -- ap_id lookup guard
     if 'preferredUsername' ... elif 'display_name'    -- lookup priority (not a spelling pair)
-    if 'text_color' ... elif 'textColor'              -- update block
-    if 'background_color' ... elif 'backgroundColor'  -- update block
     if 'blur_images' ... elif 'blurImages'            -- update block
     if 'display_name' ... elif 'preferredUsername'    -- update block: which name wins
-    if 'text_color' ... elif 'textColor'              -- create block
-    if 'background_color' ... elif 'backgroundColor'  -- create block
     if 'blur_images' ... elif 'blurImages'            -- create block
     if 'display_name' ... elif 'preferredUsername'    -- create block: which name wins
     if 'display_name' ... elif None                   -- the lookup priority's own elif
-    if 'textColor' ... elif None                      -- update block elif
-    if 'backgroundColor' ... elif None                -- update block elif
     if 'blurImages' ... elif None                     -- update block elif
     if 'preferredUsername' ... elif None              -- update block elif
-    if 'textColor' ... elif None                      -- create block elif
-    if 'backgroundColor' ... elif None                -- create block elif
     if 'blurImages' ... elif None                     -- create block elif
     if 'preferredUsername' ... elif None              -- create block elif
 
-Three genuine dual-spelling property pairs, each needing both halves tested
+The colour pairs, text_color/textColor and background_color/backgroundColor,
+no longer show up: both blocks read them through remote_flair_color, which
+picks the snake_case key when present, else the camelCase one, and keeps
+only a #hex colour. They are still tested in both blocks.
+
+Three dual-spelling property pairs, each needing both halves tested
 in BOTH the update block and the create block (six coverage points, not
 three): text_color/textColor, background_color/backgroundColor,
 blur_images/blurImages. A test that supplies both spellings of one property
@@ -108,7 +104,7 @@ it; that gap is now closed by
 TestNotFoundCreatesNewFlair.test_no_match_creates_new_flair_from_preferred_username_alone.)
 """
 from app import db
-from app.activitypub.util import find_flair_or_create
+from app.activitypub.util import find_flair_or_create, remote_flair_color
 from app.models import CommunityFlair
 from app.utils import get_task_session
 from tests.factories import make_community, make_community_flair, seed_community_owner
@@ -666,3 +662,54 @@ class TestMissingIdKeyOnTheBackfill:
         rows = CommunityFlair.query.filter_by(community_id=community.id).all()
         assert sorted(row.flair for row in rows) == ['Discussion', 'Meta']
         assert all(row.ap_id is None for row in rows)
+
+
+class TestRemoteFlairColoursAreHexOnly:
+    """A peer's flair colour is written into the style attribute of every page
+    showing the flair. Jinja escapes it for HTML, not for CSS, so a colour of
+    'red; background-image: url(...)' used to land in the page as CSS of the
+    peer's choosing. The colour is now held to the API's #hex rule
+    (app.utils.is_hex_color), and anything else is treated as a missing
+    colour: the create block stores '', the update block keeps the old one."""
+
+    INJECTED = 'red; background-image: url(https://tracker.example/p.gif)'
+
+    def test_a_non_hex_colour_creates_the_flair_with_no_colour(self, app, db_session):
+        seed_community_owner()
+        community = make_community('cssinjectcreate')
+        result = find_flair_or_create({
+            'display_name': 'injected',
+            'text_color': self.INJECTED,
+            'backgroundColor': '#abc\n',
+        }, community.id)
+        db.session.commit()
+        assert result.text_color == ''
+        assert result.background_color == ''
+
+    def test_a_non_hex_colour_leaves_the_existing_colour_alone(self, app, db_session):
+        seed_community_owner()
+        community = make_community('cssinjectupdate')
+        existing = make_community_flair(community, name='kept', ap_id='https://peer.example/tag/kept',
+                                        text_color='#010101', background_color='#020202')
+        result = find_flair_or_create({
+            'id': existing.ap_id,
+            'textColor': self.INJECTED,
+            'background_color': 12,
+        }, community.id)
+        assert result.text_color == '#010101'
+        assert result.background_color == '#020202'
+
+    def test_a_valid_snake_case_colour_wins_over_the_camel_case_one(self, app, db_session):
+        seed_community_owner()
+        community = make_community('cssinjectboth')
+        result = find_flair_or_create({
+            'display_name': 'both',
+            'text_color': '#123',
+            'textColor': '#456',
+        }, community.id)
+        db.session.commit()
+        assert result.text_color == '#123'
+
+    def test_an_entry_that_is_not_an_object_has_no_colour(self):
+        # update_community_flair_from_tags hands each 'tag' entry over unchecked.
+        assert remote_flair_color(['text_color', '#fff'], 'text_color', 'textColor') is None

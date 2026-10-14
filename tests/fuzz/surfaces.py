@@ -74,6 +74,7 @@ SURFACES: dict[str, list[str]] = {
         'app.activitypub.util.media_url_from',
         'app.activitypub.util.gallery_attachments',
         'app.activitypub.util.parse_ban_expiry',
+        'app.activitypub.util.remote_flair_color',
         'app.activitypub.util.castopod_episode_url',
         'app.activitypub.util._note_urls',
         'app.activitypub.util.quote_id_from',
