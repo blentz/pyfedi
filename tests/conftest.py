@@ -106,6 +106,7 @@ import app  # noqa: F401
 from app import celery
 from app.activitypub.ld_contexts import ld_document_loader
 from config import Config
+from tests import static_leak_gate
 
 TEST_DATABASE_URL = os.environ.get('TEST_DATABASE_URL')
 
@@ -1130,39 +1131,165 @@ def touches_shared_static(path):
 
 
 # A measurement mode, off unless asked for. `PYFEDI_WATCH_STATIC=1` makes every
-# test report whether it added or removed a file under the shared static tree,
-# which is how SHARED_STATIC_MODULES below was arrived at: a test that reaches
-# that tree THROUGH APP CODE names no path of its own, so reading the sources
-# finds the victims of a collision and not the causes. Re-measure with:
+# test report each file it added to or removed from the shared static tree,
+# measured by walking the tree before setup and again after teardown -- so a
+# fixture's teardown counts, and so does a write that does not go through
+# Python, which the leak gate below cannot see. It is how SHARED_STATIC_MODULES
+# above was arrived at: a test that reaches that tree THROUGH APP CODE names no
+# path of its own, so reading the sources finds the victims of a collision and
+# not the causes. Serial only: under xdist another worker's write lands in
+# whichever test happens to be running here. Re-measure with:
 #
 #   podman-compose -f compose.test.yaml exec -T -e PYFEDI_WATCH_STATIC=1 \
 #       test-runner pytest tests/ -q -p no:xdist
 #   podman-compose -f compose.test.yaml exec -T test-runner \
-#       sort -u /tmp/static_touchers.txt
+#       cut -f2 /tmp/static_touchers.txt | cut -d: -f1 | sort -u
+#
+# Each line is `+` or `-`, the test's node id and the path, tab-separated.
 WATCH_STATIC = os.environ.get('PYFEDI_WATCH_STATIC') == '1'
-STATIC_TREES = ('app/static/media', 'app/static/tmp', 'app/static/posts')
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Absolute, because `private_static_tree` changes the working directory: a
+# relative walk taken inside such a test would see the scratch tree instead.
+STATIC_TREES = tuple(os.path.join(REPO_ROOT, tree)
+                     for tree in ('app/static/media', 'app/static/tmp', 'app/static/posts'))
 STATIC_TOUCHERS_LOG = '/tmp/static_touchers.txt'
 
 
 def static_tree_snapshot():
-    found = set()
-    for tree in STATIC_TREES:
-        for directory, _subdirectories, filenames in os.walk(tree):
-            found.update(os.path.join(directory, name) for name in filenames)
-    return found
+    return static_leak_gate.tree_snapshot(STATIC_TREES)[0]
 
 
 @pytest.hookimpl(wrapper=True)
-def pytest_runtest_call(item):
+def pytest_runtest_protocol(item, nextitem):
     if not WATCH_STATIC:
         return (yield)
     before = static_tree_snapshot()
     try:
         return (yield)
     finally:
-        if static_tree_snapshot() != before:
+        after = static_tree_snapshot()
+        if after != before:
             with open(STATIC_TOUCHERS_LOG, 'a', encoding='utf8') as log:
-                log.write(item.nodeid.split('::', 1)[0] + '\n')
+                for path in sorted(after - before):
+                    log.write(f'+\t{item.nodeid}\t{path}\n')
+                for path in sorted(before - after):
+                    log.write(f'-\t{item.nodeid}\t{path}\n')
+
+
+# --- A test leaves nothing behind in the static tree --------------------------
+#
+# App code writes uploads, image sizes and exports into STATIC_TREES by relative
+# path, so a test that provokes one writes into the checkout's served tree, and
+# before this gate nothing removed what it left: the tree reached about 19,500
+# files. Now, after a test's teardown -- its own fixtures' finalizers included,
+# and those of any module- or session-scoped fixture that finishes with it -- any
+# file it CREATED there and did not remove fails it with a teardown error naming
+# the paths, and is deleted so the next test does not inherit it.
+#
+# HOW IT ATTRIBUTES. Not by walking the tree. tests/static_leak_gate.py's
+# tracker is a CPython audit hook, so it records each file as the process that
+# creates it opens it (or renames, links or symlinks it into place), and only if
+# the path did not exist a moment before. That matters twice:
+#
+# - Under xdist every worker is its own process with its own tracker, so a test
+#   is only ever blamed for files ITS process created. A before/after walk on
+#   one worker would see another worker's file appear mid-test -- one written
+#   by a module NOT in SHARED_STATIC_GROUP, through app code -- blame the wrong
+#   test, and then delete the file out from under the test that is using it,
+#   which is the very collision the grouping above exists to prevent. So the
+#   gate runs on every test, on every worker, and in a serial run alike.
+# - Its cost does not grow with the tree. A walk of the ~108,000 entries a
+#   neglected checkout held is seconds through the bind mount; twice per test
+#   that would have been hours. The hook's cost is one dict lookup per audited
+#   event, and a few syscalls for each write that lands under STATIC_TREES.
+#   Measured 2026-10-14: about 0.1 microseconds per audited event, and about
+#   1,050 events per test (mostly `builtins.id`), so about 0.1 ms per test --
+#   some 0.1% of the suite, below the run-to-run noise of a 6,900-test A/B
+#   (1151s with the gate, 1270s without).
+#
+# WHAT IT CANNOT SEE: a write that never goes through Python's open/os calls --
+# a C library writing on its own, or a subprocess. None in app/ does today, and
+# the session sweep below catches one if it appears: the controller walks the
+# tree at session start and again after every worker has finished, and a file
+# that appeared in between fails the run and is listed and deleted. That sweep
+# cannot say which test wrote the file; `PYFEDI_WATCH_STATIC=1` above can, run
+# serially. Its two walks cost about a second each on a tree of 20,000 files in
+# 48,000 directories, and nothing on a clean one: once per run, not per test.
+# It also removes the directories the run created and left empty
+# (`ensure_directory_exists` makes `posts/ab/cd` for every upload): those are
+# not a failure, since app code makes them in normal use, but they are debris,
+# and the controller is the one place nothing is still writing into them.
+STATIC_WRITES = static_leak_gate.StaticWriteTracker(STATIC_TREES)
+static_leak_gate.install(STATIC_WRITES)
+STATIC_SWEEP_BEFORE = pytest.StashKey()
+STATIC_SWEEP_APPEARED = pytest.StashKey()
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_setup(item):
+    STATIC_WRITES.start()
+    return (yield)
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_teardown(item, nextitem):
+    """Outermost, so every other teardown -- fixtures, wrappers -- has run."""
+    try:
+        result = yield
+    except BaseException as error:
+        leaked = STATIC_WRITES.stop()
+        static_leak_gate.remove_files(leaked)
+        if leaked:
+            error.add_note('It also left these files in the static tree (now deleted):\n'
+                           + '\n'.join(leaked))
+        raise
+    leaked = STATIC_WRITES.stop()
+    if leaked:
+        static_leak_gate.remove_files(leaked)
+        pytest.fail(f'{item.nodeid} left {len(leaked)} file(s) in the static tree '
+                    '(deleted now; clean up what the test creates):\n  '
+                    + '\n  '.join(leaked), pytrace=False)
+    return result
+
+
+def _is_xdist_worker(config):
+    return hasattr(config, 'workerinput')
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_sessionstart(session):
+    """`tryfirst`: before xdist's own sessionstart starts the workers."""
+    if not _is_xdist_worker(session.config):
+        session.config.stash[STATIC_SWEEP_BEFORE] = static_leak_gate.tree_snapshot(STATIC_TREES)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_sessionfinish(session, exitstatus):
+    """`tryfirst`: so the terminal summary, printed after this, can list them."""
+    before = session.config.stash.get(STATIC_SWEEP_BEFORE, None)
+    if before is None:
+        return
+    files_before, directories_before = before
+    files_after, directories_after = static_leak_gate.tree_snapshot(STATIC_TREES)
+    appeared = sorted(files_after - files_before)
+    static_leak_gate.remove_files(appeared)
+    static_leak_gate.prune_new_empty_directories(directories_before, directories_after)
+    session.config.stash[STATIC_SWEEP_APPEARED] = appeared
+    if appeared and session.exitstatus == pytest.ExitCode.OK:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
+def pytest_terminal_summary(terminalreporter):
+    appeared = terminalreporter.config.stash.get(STATIC_SWEEP_APPEARED, None)
+    if appeared:
+        terminalreporter.section('files left in the static tree', sep='=', red=True)
+        terminalreporter.line(
+            f'{len(appeared)} file(s) appeared under {", ".join(STATIC_TREES)} during '
+            'this run without any test being blamed for them (a write that did not '
+            'go through Python, or one made outside a test). They are deleted now. '
+            'Find the writer with PYFEDI_WATCH_STATIC=1, serially:')
+        for path in appeared:
+            terminalreporter.line(f'  {path}')
 
 
 def pytest_configure(config):
