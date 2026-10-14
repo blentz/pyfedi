@@ -265,4 +265,19 @@ SURFACES: dict[str, list[str]] = {
         'app.user.routes.import_note_text',
         'app.instance.util.mastodon_csv_handles',
     ],
+    # Image decode (T7): every upload and peer thumbnail Pillow decodes, from the bytes to the resized result, and
+    # the C2PA manifest reader every post image goes through. The decode steps are inline in the first five, so
+    # tests/fuzz/targets/images.py runs the same steps on BytesIO.
+    'images': [
+        'app.shared.upload.process_upload',
+        'app.shared.post.edit_post',
+        'app.community.util.save_icon_file',
+        'app.community.util.save_banner_file',
+        'app.utils.url_to_thumbnail_file',
+        'app.utils.to_srgb',
+        'app.utils.scale_gif',
+        'app.utils.get_new_frames',
+        'app.utils.save_new_gif',
+        'app.utils.inspect_image_c2pa',
+    ],
 }
