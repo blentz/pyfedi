@@ -906,8 +906,8 @@ class TestAllowlistRegexesAreLinear:
                               count=3000, longest=10)
 
     def test_unclosed_empty_anchors_are_read_in_linear_time(self):
-        """fuzz: redos_allowlist_html/empty_anchor_closed_pump. Each '<a href="</a>' is a whole anchor to the link
-        stash, so only the empty-anchor regex sees an opener with no end."""
+        """fuzz: redos_allowlist_html/empty_anchor_one_close_pump. Each '<a href="</a>' is a whole anchor to the
+        link stash, so only the empty-anchor regex sees an opener with no end."""
         assert_linear(self, [pump('<a href="</a>')],
                       lambda text: allowlist_html(text, test_env={'fn_string': 'fn-test'}))
 

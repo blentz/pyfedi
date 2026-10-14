@@ -617,14 +617,18 @@ def check_redos_hostnames(data: bytes) -> None:
     assert bool(is_fedi_handle(text)) is expected, f'is_fedi_handle disagrees about {text[:80]!r}'
 
 
-# Budgets are about ten times the slowest committed seed, measured in the test container (see each seed's
-# name for its shape); a pump seed that takes seconds on a vulnerable regex then fails loudly.
+# Budgets are about ten times the slowest committed seed, measured in the test container outside coverage
+# (2026-10-13): markdown_preprocessors/blockquotes_250_deep 184 ms (handle_blockquotes re-reads the body once
+# per level), markdown_code_stash/fence_pump 20 ms, enhanced_images/img_tag_pump 2 ms, the link pumps 11 ms,
+# redos_allowlist_html/spoiler_pump 60 ms, redos_actor_patterns/person_pump 51 ms, redos_castopod/space_pump 2 ms,
+# redos_hostnames/email_domain_pump 23 ms. Every pump seed took seconds to hours on the regex it was built for.
+# The untimed targets run BeautifulSoup or markdown2 over the input, whose cost is theirs, not a regex's.
 TARGETS = [
     Target(name='markdown_to_html', check=check_markdown_to_html, surface='markdown', budget_ms=None,
            needs_app=False),
-    Target(name='markdown_preprocessors', check=check_markdown_preprocessors, surface='markdown', budget_ms=1000,
+    Target(name='markdown_preprocessors', check=check_markdown_preprocessors, surface='markdown', budget_ms=2000,
            needs_app=False),
-    Target(name='markdown_code_stash', check=check_markdown_code_stash, surface='markdown', budget_ms=None,
+    Target(name='markdown_code_stash', check=check_markdown_code_stash, surface='markdown', budget_ms=200,
            needs_app=False),
     Target(name='markdown_actor_links', check=check_markdown_actor_links, surface='markdown', budget_ms=None,
            needs_app=False),
@@ -633,12 +637,12 @@ TARGETS = [
     Target(name='microblog_html', check=check_microblog_html, surface='markdown', budget_ms=None, needs_app=False),
     Target(name='posting_warning_html', check=check_posting_warning_html, surface='markdown', budget_ms=None,
            needs_app=False),
-    Target(name='enhanced_images', check=check_enhanced_images, surface='markdown', budget_ms=500,
+    Target(name='enhanced_images', check=check_enhanced_images, surface='markdown', budget_ms=50,
            needs_app=False),
     Target(name='credit_urls', check=check_credit_urls, surface='text_patterns', budget_ms=None, needs_app=False),
-    Target(name='redos_link_pattern', check=check_redos_link_pattern, surface='markdown', budget_ms=500,
+    Target(name='redos_link_pattern', check=check_redos_link_pattern, surface='markdown', budget_ms=150,
            needs_app=False),
-    Target(name='redos_allowlist_html', check=check_redos_allowlist_html, surface='markdown', budget_ms=1000,
+    Target(name='redos_allowlist_html', check=check_redos_allowlist_html, surface='markdown', budget_ms=600,
            needs_app=False),
     Target(name='redos_actor_patterns', check=check_redos_actor_patterns, surface='markdown', budget_ms=500,
            needs_app=False),
