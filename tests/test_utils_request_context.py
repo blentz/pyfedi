@@ -29,6 +29,14 @@ class TestRequestorDomain:
         with app.test_request_context():
             assert requestor_domain() == ''
 
+    @pytest.mark.parametrize('ua', ['x (+https://[x)', 'x (+https://a.example:port/)', 'x (+https://%zz/)'])
+    def test_a_claimed_url_furl_refuses_names_no_domain(self, app, ua):
+        """The User-Agent is the visitor's to write, and furl raises ValueError on an unterminated IPv6 bracket, a
+        port that is not a number or a host it will not accept: /.well-known/webfinger and every signed-fetch
+        route answered 500. A claim with no readable host names no domain, as one with no host already does."""
+        with app.test_request_context(headers={'User-Agent': ua}):
+            assert requestor_domain() is None
+
 
 class TestReferrer:
     """referrer() reads three user-controlled sources -- ?next=, a posted

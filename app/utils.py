@@ -7282,7 +7282,9 @@ def requestor_domain():
         if '+' in user_agent:
             parts = user_agent.split('+')
             requesting_domain = parts[-1].replace(')', '')
-            requesting_domain = furl(requesting_domain).host
+            # url_host, not furl(...).host: the User-Agent is the visitor's to write, and a claim furl refuses
+            # ('+https://[x') raised ValueError out of webfinger and every signed-fetch route. It names no domain.
+            requesting_domain = url_host(requesting_domain)
     return requesting_domain
 
 
