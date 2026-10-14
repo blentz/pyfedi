@@ -43,12 +43,12 @@ makes a budgeted target's input exceed its budget.
 """
 
 import pathlib
-import re
 import time
 
 import pytest
 
 from tests.fuzz.targets import REGISTRY, Target
+from tests.fuzz.targets._target import REFERENCE_WORK_MS, hold_to_budget, machine_slowdown, reference_work
 
 CORPUS_ROOT = pathlib.Path(__file__).parent / 'fuzz' / 'corpus'
 
@@ -93,26 +93,6 @@ def corpus_cases():
     return cases
 
 
-def reference_work() -> int:
-    """A fixed piece of CPU-bound Python -- formatting, sorting, a regex scan --
-    whose time says how fast this machine is running Python right now."""
-    words = [str(i * 7919 % 100003) for i in range(80_000)]
-    return len(re.findall(r'[0-9]+7', ' '.join(sorted(words))))
-
-
-# reference_work's CPU time in the test container on an idle machine (AMD Ryzen
-# 9 7945HX, 2026-10-14), the machine every budget_ms was measured on.
-REFERENCE_WORK_MS = 44
-
-
-def machine_slowdown(clock=time.thread_time) -> float:
-    """How many times slower than nominal this machine runs reference_work now,
-    and never below 1: a faster machine does not tighten any budget."""
-    started = clock()
-    reference_work()
-    return max(1.0, (clock() - started) * 1000 / REFERENCE_WORK_MS)
-
-
 def run_case(target, data: bytes, clock=time.thread_time, slowdown=machine_slowdown) -> None:
     """Push one input through its target's check, then hold it to the budget.
 
@@ -135,12 +115,8 @@ def run_case(target, data: bytes, clock=time.thread_time, slowdown=machine_slowd
     started = clock()
     target.check(data)
     elapsed_ms = (clock() - started) * 1000
-    if target.budget_ms is not None and elapsed_ms > target.budget_ms:
-        factor = slowdown()
-        assert elapsed_ms <= target.budget_ms * factor, (
-            f'{target.name}: one input took {elapsed_ms:.0f} ms, over its '
-            f'{target.budget_ms} ms budget ({target.budget_ms * factor:.0f} ms on '
-            f'this machine now, {factor:.2f} times slower than nominal)')
+    if target.budget_ms is not None:
+        hold_to_budget(f'{target.name}: one input', elapsed_ms, target.budget_ms, slowdown)
 
 
 @pytest.mark.parametrize('target,path', corpus_cases())
@@ -257,3 +233,32 @@ class TestRunCase:
         path.write_bytes(b'x')
         test_corpus_input_still_satisfies_its_property(target, path, request)
         assert contexts == [True]
+
+
+class TestDeepLdRefusalBudget:
+    """signatures' _check_deep_ld_refused timed the refusal by wall-clock against a fixed 0.5 s, so a loaded machine
+    failed it with nothing slower in the code. It is held as run_case holds a replay: CPU time, and over the budget,
+    the budget times machine_slowdown() -- the same helper, in tests/fuzz/targets/_target.py."""
+
+    @staticmethod
+    def _deep_document():
+        from app.activitypub.signature import LD_MAX_NESTING_DEPTH
+        nested = 'x'
+        for _ in range(LD_MAX_NESTING_DEPTH + 5):
+            nested = [nested]
+        return {'@context': 'https://www.w3.org/ns/activitystreams', 'type': 'Note', 'content': nested}
+
+    def test_over_the_budget_on_a_slowed_machine_is_held_to_the_scaled_budget(self, app):
+        from tests.fuzz.targets.signatures import _DEEP_REFUSAL_MS, _check_deep_ld_refused
+        over = (_DEEP_REFUSAL_MS * 1.4) / 1000
+        _check_deep_ld_refused(self._deep_document(), clock=TestRunCase._clock(0.0, over), slowdown=lambda: 1.5)
+        too_slow = (_DEEP_REFUSAL_MS * 1.6) / 1000
+        with pytest.raises(AssertionError, match='refusing a too-deep document took'):
+            _check_deep_ld_refused(self._deep_document(), clock=TestRunCase._clock(0.0, too_slow), slowdown=lambda: 1.5)
+
+    def test_within_the_budget_the_machine_is_not_measured(self, app):
+        from tests.fuzz.targets.signatures import _check_deep_ld_refused
+
+        def never():
+            raise AssertionError('measured the machine for a refusal within its budget')
+        _check_deep_ld_refused(self._deep_document(), clock=TestRunCase._clock(0.0, 0.001), slowdown=never)

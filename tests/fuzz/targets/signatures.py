@@ -49,7 +49,7 @@ from app.activitypub.signature import (LD_MAX_NESTING_DEPTH, HttpSignature, LDSi
                                        parse_ld_date, parse_signature_header, signature_part)
 from app.activitypub.signature_errors import KeyMismatchError, VerificationError, VerificationFormatError
 from app.utils import ResponseTooLarge, UnreadableEncoding, _read_capped_body, accepted_media_ranges
-from tests.fuzz.targets._target import Target
+from tests.fuzz.targets._target import Target, hold_to_budget, machine_slowdown
 
 # One key for every check, made once: generating RSA keys per input would cost the campaign most of its budget.
 _PRIVATE_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -227,8 +227,10 @@ def check_http_ld_dates(data: bytes) -> None:
 
 # LDSignature.verify_signature refuses, before any JSON-LD work, a document or signature section nested deeper
 # than LD_MAX_NESTING_DEPTH: URDNA2015 costs about the cube of the depth (a 300-deep signature section took 13 s).
-# The check holds it to refusing those well inside this many seconds.
-_DEEP_REFUSAL_SECONDS = 0.5
+# The check holds it to refusing those well inside this many milliseconds of CPU time, scaled to the machine's load
+# as the corpus replay scales a target's budget (hold_to_budget). It used to be wall-clock against a fixed 0.5 s,
+# which a loaded machine failed with nothing slower in the code.
+_DEEP_REFUSAL_MS = 500
 
 
 def _depth(node) -> int:
@@ -279,10 +281,11 @@ def _ld_document(data: bytes):
     return document
 
 
-def _check_deep_ld_refused(document) -> None:
-    """Too deep is refused quickly, before normalizing, whatever the signature section holds."""
+def _check_deep_ld_refused(document, clock=time.thread_time, slowdown=machine_slowdown) -> None:
+    """Too deep is refused quickly, before normalizing, whatever the signature section holds. `clock` and
+    `slowdown` are parameters only so the budget can be tested without a slow refusal or machine."""
     with _network_forbidden() as attempts:
-        started = time.perf_counter()
+        started = clock()
         try:
             LDSignature.verify_signature(_clone(document), PUBLIC_PEM)
         except VerificationFormatError as refusal:
@@ -291,9 +294,9 @@ def _check_deep_ld_refused(document) -> None:
             pass
         else:
             raise AssertionError('a document nested past LD_MAX_NESTING_DEPTH was accepted')
-        elapsed = time.perf_counter() - started
+        elapsed_ms = (clock() - started) * 1000
     assert not attempts, f'LD verification reached for the network: {attempts!r}'
-    assert elapsed < _DEEP_REFUSAL_SECONDS, f'refusing a too-deep document took {elapsed:.2f} s'
+    hold_to_budget('refusing a too-deep document', elapsed_ms, _DEEP_REFUSAL_MS, slowdown)
 
 
 def check_ld_signature_verify(data: bytes) -> None:
@@ -306,7 +309,8 @@ def check_ld_signature_verify(data: bytes) -> None:
     genuinely signed one with no extra section keys is accepted exactly when check_ld_coverage accepts it;
     an accepted document has lost its signature section and every null and empty value; normalized_hash is
     64 hex digits and deterministic. A document or signature section nested deeper than LD_MAX_NESTING_DEPTH is
-    refused, as a plain VerificationError (unsigned, not malformed), in under _DEEP_REFUSAL_SECONDS."""
+    refused, as a plain VerificationError (unsigned, not malformed), within _DEEP_REFUSAL_MS of CPU time scaled to
+    the machine's load."""
     genuine = bool(data[:1] and data[0] & 1)
     document = _ld_document(data[1:])
     unsigned_depth = _depth({key: value for key, value in document.items() if key != 'signature'})
