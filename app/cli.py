@@ -176,6 +176,10 @@ def register(app):
                                 'pawoo.net', 'shitposter.club', 'spinster.xyz', 'catgirl.life', 'gameliberty.club',
                                 'yggdrasil.social', 'beefyboys.win', 'brighteon.social', 'cum.salon', 'wizard.casa',
                                 'maga.place', 'lemmychan.org']
+            # Each host once per table, across this list and the two below: /domains/banned unbans by row id, so a
+            # twin row would stay banned. 51 of Peertube Isolation's 52 hosts are also on No-QAnon.
+            banned_domain_names = set()
+            banned_instance_names = set(banned_instances)
             for bi in banned_instances:
                 db.session.add(BannedInstances(domain=bi))
                 print("Added banned instance", bi)
@@ -187,7 +191,10 @@ def register(app):
                 for domain in block_list.split('\n'):
                     if not domain.strip():   # the list ends in a newline: not a Domain named ''
                         continue
-                    db.session.add(Domain(name=canonical_host(domain.strip()), banned=True))
+                    name = canonical_host(domain.strip())
+                    if name not in banned_domain_names:
+                        banned_domain_names.add(name)
+                        db.session.add(Domain(name=name, banned=True))
                 print("Added 'No-QAnon' blocklist, see https://github.com/rimu/no-qanon.")
                 print("This can be reversed at /domains/banned using the 'unban all' button.")
 
@@ -198,8 +205,13 @@ def register(app):
                     if not domain.strip():   # a blank value: neither a Domain nor a BannedInstances named ''
                         continue
                     # canonical_host: the spelling instance_banned and the Domain lookups compare (an IPv6 literal)
-                    db.session.add(Domain(name=canonical_host(domain.strip()), banned=True))
-                    db.session.add(BannedInstances(domain=canonical_host(domain.strip())))
+                    name = canonical_host(domain.strip())
+                    if name not in banned_domain_names:
+                        banned_domain_names.add(name)
+                        db.session.add(Domain(name=name, banned=True))
+                    if name not in banned_instance_names:
+                        banned_instance_names.add(name)
+                        db.session.add(BannedInstances(domain=name))
                 print("Added 'Peertube Isolation' blocklist, see https://peertube_isolation.frama.io/")
                 print("This can be reversed at /domains/banned using the 'unban all' button.")
 
