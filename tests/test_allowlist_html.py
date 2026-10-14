@@ -897,6 +897,20 @@ class TestAllowlistRegexesAreLinear:
         """fuzz: redos_allowlist_html/fandom_pump."""
         assert_linear(self, [pump('<img alt="')], lambda text: allowlist_html(text, test_env={'fn_string': 'fn-test'}))
 
+    def test_empty_anchors_match_what_they_matched(self):
+        old = re.compile(r'<a href="(.*?)" rel="nofollow ugc" target="_blank"><\/a>')
+        self.assert_same_subs(lambda text: old.sub(r'[\1]', text),
+                              lambda text: sub_skipping(utils._EMPTY_ANCHOR_RE, r'[\1]', text),
+                              ['<a href="x" rel="nofollow ugc" target="_blank"></a>', '<a href="',
+                               '" rel="nofollow ugc" target="_blank"></a>', 'a', '"', ' ', '\n'],
+                              count=3000, longest=10)
+
+    def test_unclosed_empty_anchors_are_read_in_linear_time(self):
+        """fuzz: redos_allowlist_html/empty_anchor_closed_pump. Each '<a href="</a>' is a whole anchor to the link
+        stash, so only the empty-anchor regex sees an opener with no end."""
+        assert_linear(self, [pump('<a href="</a>')],
+                      lambda text: allowlist_html(text, test_env={'fn_string': 'fn-test'}))
+
     def test_ruby_still_renders(self):
         result = allowlist_html('<p>{漢字|かんじ}</p>', test_env={'fn_string': 'fn-test'})
         assert result == '<p><ruby>漢字<rp>(</rp><rt>かんじ</rt><rp>)</rp></ruby></p>'
