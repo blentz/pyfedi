@@ -983,3 +983,51 @@ def test_copying_a_feed_to_a_url_that_is_taken_is_refused_before_the_insert(app,
     assert response.headers['Location'].endswith(f'/feed/{source.id}/copy')
     assert 'A Feed with this url already exists.' in str(flash_stub.call_args)
     assert Feed.query.filter_by(name='copiedfeed').count() == 1
+
+
+def _a_png():
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new('RGB', (8, 8), (10, 20, 30)).save(buffer, format='PNG')
+    buffer.seek(0)
+    return buffer
+
+
+@pytest.mark.parametrize('uploads', ['icon and banner', 'banner'])
+@pytest.mark.parametrize('storage', ['local', 's3'])
+def test_an_icon_stored_before_its_banner_is_refused_is_removed(app, db_session, monkeypatch, request, storage,
+                                                                uploads):
+    """save_icon_file stores the copy's icon, every size, locally or in the bucket; then save_banner_file refuses
+    the banner with its 400 and the feed is never made. The icon was left behind, referred to by nothing. It is
+    deleted again now, and the 400 stands."""
+    import glob
+
+    import boto3
+
+    instance, owner = _seed()
+    source = _feed(owner)
+    if storage == 's3':
+        bucket = request.getfixturevalue('s3_bucket')
+        for key, value in (('S3_ACCESS_KEY', 'test-key'), ('S3_ACCESS_SECRET', 'test-secret'),
+                           ('S3_ENDPOINT', 'https://s3.amazonaws.com'), ('S3_REGION', 'us-east-1'),
+                           ('S3_BUCKET', bucket), ('S3_PUBLIC_URL', 'cdn.example.test')):
+            monkeypatch.setitem(app.config, key, value)
+    names = iter(['storediconfile', 'refusedbanner0'] if uploads == 'icon and banner' else ['refusedbanner0'])
+    monkeypatch.setattr('app.community.util.gibberish', lambda length: next(names) + '0')
+    files = {'banner_file': (io.BytesIO(b'not an image at all'), 'banner.png')}
+    if uploads == 'icon and banner':
+        files['icon_file'] = (_a_png(), 'icon.png')
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', return_value='rendered'):
+            response = client.post(f'/feed/{source.id}/copy', data=_copy_payload(app, client, **files))
+
+    assert response.status_code == 400
+    assert Feed.query.filter_by(name='copiedfeed').count() == 0
+    for name in ('storediconfile0', 'refusedbanner00'):
+        assert glob.glob(f'app/static/media/feeds/{name[0:2]}/{name[2:4]}/{name}*') == []
+        assert glob.glob(f'app/static/tmp/{name}*') == []
+    if storage == 's3':
+        assert boto3.client('s3', region_name='us-east-1').list_objects_v2(Bucket=bucket).get('Contents', []) == []
