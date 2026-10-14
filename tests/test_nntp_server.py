@@ -18,3 +18,8 @@ def test_a_user_name_holding_nul_is_refused_as_a_failed_login(app, user):
     literal, before a login, from anyone who can reach the port."""
     with pytest.raises(NNTPAuthenticationError):
         PieFedNNTPServer.auth_user(SimpleNamespace(_app=app), user, 'secret')
+
+
+def test_a_user_name_without_nul_still_reaches_the_account_lookup(app):
+    with pytest.raises(NNTPAuthenticationError, match='Invalid username or password'):
+        PieFedNNTPServer.auth_user(SimpleNamespace(_app=app), 'nobody-by-this-name', 'secret')
