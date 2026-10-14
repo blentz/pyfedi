@@ -14,14 +14,15 @@ instance's MEDIA_IMAGE_*FORMAT settings and the uploaded file's extension.
 
 Properties:
 
-* upload_decode -- the process_upload and edit_post sequence: open, the format check, exif_transpose, convert (or
-  to_srgb on edit_post's JPEG arm), thumbnail to MEDIA_IMAGE_MAX_DIMENSION, save. Only Pillow's refusals escape
-  (see below); an image the format check passes is one of the formats the extension list names; the result is RGB
-  for a JPEG target and RGBA otherwise, fits MEDIA_IMAGE_MAX_DIMENSION on both sides, and saves and reopens as
-  the format it was saved as, at that size.
+* upload_decode -- the process_upload and edit_post sequence: open_uploaded_image (open, the format check, the
+  decode), then exif_transpose, convert (or to_srgb on edit_post's JPEG arm), thumbnail to
+  MEDIA_IMAGE_MAX_DIMENSION, save. Pillow may refuse inside open_uploaded_image, which turns that into 'filetype
+  not allowed'; nothing may raise after it, where nothing catches. An image the format check passes is one of the
+  formats the extension list names; the result is RGB for a JPEG target and RGBA otherwise, fits
+  MEDIA_IMAGE_MAX_DIMENSION on both sides, and saves and reopens as the format it was saved as, at that size.
 * icon_banner_decode -- save_icon_file (its still-image and its animated-GIF arm) and save_banner_file: the same,
-  with their own caps (250 and 40 for an icon and its thumbnail, 1600x600 and 878x500 for a banner), and every
-  image either path decodes is one of the formats the extension list names.
+  through open_upload_image (which decodes every frame for the GIF arm and refuses with a 400), with their own
+  caps (250 and 40 for an icon and its thumbnail, 1600x600 and 878x500 for a banner).
 * remote_thumbnail_decode -- url_to_thumbnail_file's resize: any format Pillow opens (a peer chooses), exif_transpose,
   convert, the 170 and 512 thumbnails, saved in MEDIA_IMAGE_MEDIUM_FORMAT. The function catches Exception around
   all of it, so the property is the output: both thumbnails fit their caps, are RGB or RGBA as configured, and
@@ -403,6 +404,32 @@ def check_scale_gif(data: bytes) -> None:
 # c2pa_inspect: app/utils.py inspect_image_c2pa
 # ---------------------------------------------------------------------------
 
+# File signatures, by the formats c2pa reads. Only used to give libFuzzer something to tell inputs apart by.
+_SIGNATURES = ((b'\xff\xd8', 'jpeg'), (b'\x89PNG', 'png'), (b'RIFF', 'riff'), (b'GIF8', 'gif'), (b'II*\x00', 'tiff'),
+               (b'MM\x00*', 'tiff'), (b'<svg', 'svg'), (b'<?xml', 'svg'), (b'ID3', 'mp3'))
+
+
+def _c2pa_shape(mimetype: str, body: bytes) -> tuple:
+    """Which signature the body starts with and which family the mimetype names, by branches the campaign can see.
+
+    The c2pa reader is native (Rust), so atheris has no coverage inside it: every input looked alike, a 60 s run
+    kept one one-byte input and mutated that blind. Branching here on the two things the reader dispatches on keeps
+    a seed of each format in the corpus, so mutations start from files the reader parses some way into."""
+    for signature, name in _SIGNATURES:
+        if body.startswith(signature):
+            break
+    else:
+        name = 'other' if body[4:8] not in (b'ftyp', b'jumb') else body[4:8].decode()
+    family = mimetype.partition('/')[0]
+    if family == 'image':
+        subtype = mimetype.partition('/')[2].partition(';')[0]
+    elif family in ('video', 'audio', 'application'):
+        subtype = family
+    else:
+        subtype = ''
+    return name, subtype
+
+
 def check_c2pa_inspect(data: bytes) -> None:
     """The first field (two-byte big-endian length, then that many bytes, as UTF-8 with replacement) is the
     mimetype the browser sent; the rest is the file."""
@@ -410,6 +437,7 @@ def check_c2pa_inspect(data: bytes) -> None:
     length = int.from_bytes(data[:2], 'big')
     mimetype = data[2:2 + length].decode('utf-8', errors='replace')
     body = data[2 + length:]
+    _c2pa_shape(mimetype, body)
     result = inspect_image_c2pa(body, mimetype)
     assert isinstance(result, dict) and list(result) == ['c2pa'], f'{result!r:.300}'
     c2pa = result['c2pa']
