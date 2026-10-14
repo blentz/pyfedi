@@ -73,7 +73,7 @@ from app.utils import user_banned_from_community, gibberish, get_setting, commun
     feed_membership, get_task_session, patch_db_session, \
     blocked_phrases, orjson_response, moderating_communities, joined_communities, moderating_communities_ids, \
     moderating_communities_ids_all_users, publish_sse_event, blocked_users, block_honey_pot, instance_allowed, \
-    requestor_domain, accepted_media_ranges
+    requestor_domain, accepted_media_ranges, url_host
 import urllib.parse
 import app as app_pkg
 
@@ -164,7 +164,9 @@ def process_webfinger_request(resource):
             actor = actor[1:]
     elif 'https:' in query or 'http:' in query:
         actor = query.split('/')[-1]
-        domain = furl(query).host or ''
+        # url_host, not furl(...).host: furl raises ValueError on a resource it cannot read ('https://[x'), which
+        # was a 500. Such a URL names no host, so it is not on this instance.
+        domain = url_host(query) or ''
     else:
         abort(400, description='Webfinger regex failed to match')
 
