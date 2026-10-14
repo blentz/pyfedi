@@ -279,5 +279,7 @@ SURFACES: dict[str, list[str]] = {
         'app.utils.get_new_frames',
         'app.utils.save_new_gif',
         'app.utils.inspect_image_c2pa',
+        'app.utils.save_image_without_metadata',
+        'app.utils.refuse_over_remote_thumbnail_cap',
     ],
 }
