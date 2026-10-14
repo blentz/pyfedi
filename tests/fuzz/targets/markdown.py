@@ -62,20 +62,22 @@ def _input_text(data: bytes) -> str:
 def _code_spans_md(text: str) -> list[str]:
     """The fenced and inline code spans stash_code_md lifts out of markdown, read without its regexes: a fenced
     block is the leftmost ``` and the first ``` after it; inline code is a backtick, one or more characters that
-    are neither a backtick nor a newline, and a backtick, in what the fenced blocks leave. Linear, so a pump seed
-    times the function under test and not this check."""
-    spans, rest, position = [], [], 0
+    are neither a backtick nor a newline, and a backtick, in what the fenced blocks leave -- where an inline span
+    can hold a fenced block, which is then part of it. Linear, so a pump seed times the function under test and
+    not this check. The caller has made sure PLACEHOLDER is not in `text`."""
+    fenced, rest, position = [], [], 0
     while True:
         start = text.find('```', position)
         end = text.find('```', start + 3) if start != -1 else -1
         if end == -1:
             rest.append(text[position:])
             break
-        spans.append(text[start:end + 3])
-        rest.append(text[position:start] + '\x00')
+        fenced.append(text[start:end + 3])
+        rest.append(text[position:start] + f'{PLACEHOLDER}{len(fenced) - 1}$')
         position = end + 3
-    spans.extend(re.findall(r'`[^`\n]+`', ''.join(rest)))
-    return spans
+    marker = re.compile(re.escape(PLACEHOLDER) + r'([0-9]+)\$')
+    inline = [marker.sub(lambda m: fenced[int(m.group(1))], span) for span in re.findall(r'`[^`\n]+`', ''.join(rest))]
+    return fenced + inline
 
 
 def _code_spans_html(text: str) -> list[str]:
@@ -339,12 +341,16 @@ def check_markdown_actor_links(data: bytes) -> None:
         return
     original = _rendered(BeautifulSoup(html, 'html.parser'))
     in_attribute = _attribute_names_a_handle(original)
+    # html.parser nests an <a> inside an <a> as written; a browser closes the first at the second, so text after the
+    # inner one's end is in no link at all. In such a document "inside an existing <a>" means different things to
+    # the two, and only <code> is asserted.
+    containers = ['code'] if any(a.find_parent('a') for a in original.find_all('a')) else ['a', 'code']
     for function in _ACTOR_FILTERS:
         result = function(html, server_name_override=SERVER)
         assert isinstance(result, str)
         soup = BeautifulSoup(result, 'html.parser')
         for anchor in soup.find_all('a', href=_CREATED):
-            assert anchor.find_parent(['a', 'code']) is None, (
+            assert anchor.find_parent(containers) is None, (
                 f'{function.__name__} created a link inside an existing <a> or <code>: {anchor}')
         if in_attribute:
             continue
