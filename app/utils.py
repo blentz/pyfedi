@@ -1022,6 +1022,15 @@ _FANDOM_HOTLINK_RE = re.compile(r'<img alt="(.*?)" loading="lazy" src="https://s
 # of '<a href="' took 2.7 s per 64 KiB.
 _EMPTY_ANCHOR_RE = re.compile(r'<a href="(.*?)" rel="nofollow ugc" target="_blank"><\/a>|<a href="[^\n]*')
 
+
+# Lemmy's '::: spoiler title' block left in HTML. The title ends at the first newline or </p>; if no closing
+# ':::' follows that, none follows a later one either, so the atomic group gives the same matches as the old
+# lazy group that retried every later newline (quadratic per start). And when a start fails, so does every later
+# start, which needs its title end and its ':::' later still: the skip alternative takes the rest of the text.
+# 64 KiB of ':::spoiler x</p>' took minutes.
+_SPOILER_RE = re.compile(r':{3}\s*?spoiler\s+?(?>(\S.+?)(?:\n|</p>))(.+?)(?:\n|<p>):{3}'
+                         r'|:{3}\s*?spoiler\s+?\S[\s\S]*', re.S)
+
 # sanitise HTML using an allow list
 def allowlist_html(html: str, a_target='_blank', test_env=False) -> str:
     # RUN THE TESTS in tests/test_allowlist_html.py whenever you alter this function, it's fragile and bugs are hard to spot.
@@ -1046,8 +1055,7 @@ def allowlist_html(html: str, a_target='_blank', test_env=False) -> str:
     # replace lemmy's spoiler markdown left in HTML
     clean_html = clean_html.replace('<h2>:::</h2>',
                                     '<p>:::</p>')  # this is needed for lemmy.world/c/hardware's sidebar, for some reason.
-    re_spoiler = re.compile(r':{3}\s*?spoiler\s+?(\S.+?)(?:\n|</p>)(.+?)(?:\n|<p>):{3}', re.S)
-    clean_html = re_spoiler.sub(r'<details><summary>\1</summary><div class="spoiler_block"><p>\2</p></div></details>', clean_html)
+    clean_html = sub_skipping(_SPOILER_RE, r'<details><summary>\1</summary><div class="spoiler_block"><p>\2</p></div></details>', clean_html)
 
     # replace strikethough markdown left in HTML
     re_strikethough = re.compile(r'~~(.*)~~')
