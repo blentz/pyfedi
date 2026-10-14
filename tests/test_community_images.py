@@ -47,6 +47,7 @@ from werkzeug.exceptions import HTTPException
 
 from app import db
 from app.community.util import save_banner_file, save_icon_file
+from app.constants import IMAGE_PIXEL_CAP
 from app.models import Site
 
 SVG = (b'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">'
@@ -305,6 +306,39 @@ class TestAnImagePillowCannotDecode:
         before = set(glob.glob('app/static/media/communities/*/*/*'))
         with pytest.raises(HTTPException) as caught:
             save_banner_file(a_file(content, name))
+        assert caught.value.code == 400
+        assert set(glob.glob('app/static/media/communities/*/*/*')) == before
+
+
+def declaring(width, height, fmt='PNG'):
+    """A valid one-bit image of width x height: a few KB, however many pixels it declares."""
+    buffer = io.BytesIO()
+    Image.new('1', (width, height)).save(buffer, format=fmt)
+    return buffer.getvalue()
+
+
+class TestAnImageOverThePixelCap:
+    """IMAGE_PIXEL_CAP (50 MP). Pillow raised only above 178,956,970 pixels and warned above half that, so a few KB
+    declaring 7072x7072 -- or 10000x10000, in Pillow's warning band -- was decoded at full size (for the GIF arm,
+    every frame of it) and resized. Each is the functions' 400 now, refused at the header, and the upload goes."""
+
+    @pytest.mark.parametrize('size', [(7072, 7072), (10000, 10000)], ids=['just_over_the_cap', 'pillow_warning_band'])
+    @pytest.mark.parametrize('fmt,name', [('PNG', 'icon.png'), ('GIF', 'icon.gif')], ids=['still', 'gif_arm'])
+    def test_an_icon_is_refused_and_not_left_behind(self, env, size, fmt, name):
+        import glob
+        assert size[0] * size[1] > IMAGE_PIXEL_CAP
+        before = set(glob.glob('app/static/media/communities/*/*/*'))
+        with pytest.raises(HTTPException) as caught:
+            save_icon_file(a_file(declaring(*size, fmt=fmt), name))
+        assert caught.value.code == 400
+        assert set(glob.glob('app/static/media/communities/*/*/*')) == before
+
+    @pytest.mark.parametrize('size', [(7072, 7072), (10000, 10000)], ids=['just_over_the_cap', 'pillow_warning_band'])
+    def test_a_banner_is_refused_and_not_left_behind(self, env, size):
+        import glob
+        before = set(glob.glob('app/static/media/communities/*/*/*'))
+        with pytest.raises(HTTPException) as caught:
+            save_banner_file(a_file(declaring(*size), 'banner.png'))
         assert caught.value.code == 400
         assert set(glob.glob('app/static/media/communities/*/*/*')) == before
 

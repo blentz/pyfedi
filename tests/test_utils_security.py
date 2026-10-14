@@ -1351,6 +1351,30 @@ class TestARemoteServerDoesNotChooseTheFileExtension:
             for path in left:
                 os.remove(path)
 
+    @pytest.mark.parametrize('size', [(7072, 7072), (10000, 10000)],
+                             ids=['just_over_the_cap', 'pillow_warning_band'])
+    def test_an_image_over_the_pixel_cap_leaves_nothing_behind(self, app, http_mock, size):
+        """IMAGE_PIXEL_CAP (50 MP): a peer's few-KB PNG declaring 7072x7072, or
+        10000x10000 where Pillow only warned, was decoded at full size to make
+        two small thumbnails. Pillow refuses it at the header now, and D1328's
+        handler drops it with its bytes."""
+        import io
+
+        from PIL import Image as PILImage
+
+        from app.constants import IMAGE_PIXEL_CAP
+
+        assert size[0] * size[1] > IMAGE_PIXEL_CAP
+        buffer = io.BytesIO()
+        PILImage.new('1', size).save(buffer, format='PNG')
+        result, left = self._fetch(app, http_mock, 'image/png', content=buffer.getvalue())
+        try:
+            assert result is None
+            assert left == [], f'left behind: {left}'
+        finally:
+            for path in left:
+                os.remove(path)
+
     def test_it_returns_none_rather_than_raising(self, app, http_mock):
         """`edit_post` calls this and does not catch anything, so the refusal has
         to be a return value."""

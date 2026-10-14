@@ -4,6 +4,8 @@
 import logging
 from logging.handlers import SMTPHandler, RotatingFileHandler
 import os
+import warnings
+from PIL import Image
 from flask import Flask, Request, request, current_app, session, g, has_app_context
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
@@ -26,6 +28,7 @@ import httpx
 from authlib.integrations.flask_client import OAuth
 
 from config import Config
+from app.constants import IMAGE_PIXEL_CAP
 from app.pinned_http import pinned_transport
 import sentry_sdk
 from app.plugins import load_plugins
@@ -90,6 +93,16 @@ def get_ip_address() -> str:
         ip = ''
     return ip
 
+
+# IMAGE_PIXEL_CAP, for every image this process decodes. Pillow checks an image's declared size against its
+# ceiling wherever it learns one -- at Image.open, from the header, and again for GIF frames, ICO and ICNS entries
+# and TIFF tiles -- and raises DecompressionBombError (an Exception) above TWICE the ceiling, before decoding a
+# pixel. Setting the ceiling here, once, covers every decode path including any added later, and each path already
+# turns an exception out of Pillow into its own refusal. A helper checking img.size after each Image.open would
+# miss the sizes Pillow learns after the header. Between the ceiling and twice it Pillow only warns, which here
+# means an image within the cap, so the warning is noise.
+Image.MAX_IMAGE_PIXELS = IMAGE_PIXEL_CAP // 2
+warnings.filterwarnings('ignore', category=Image.DecompressionBombWarning)
 
 db = SQLAlchemy(session_options={"autoflush": False}, engine_options={'pool_size': Config.DB_POOL_SIZE, 'max_overflow': Config.DB_MAX_OVERFLOW, 'pool_recycle': 3600})
 make_searchable(db.metadata)

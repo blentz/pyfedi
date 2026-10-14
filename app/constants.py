@@ -206,3 +206,9 @@ AP_FETCH_ACCEPT = f'{AP_MEDIA_TYPE}, {AS2_LD_MEDIA_TYPE}'   # every outgoing Act
 # lookups. A real Lemmy export lists tens of communities, not thousands.
 # Entries past the cap are dropped.
 IMPORT_MAX_ENTRIES = 500
+
+# The largest image, in pixels, any decode path accepts: an upload, an icon or banner, a remote thumbnail or a
+# federated image. app/__init__.py makes Pillow refuse anything larger at the header, before decoding a pixel.
+# 50 MP is above any phone camera's default output (48 MP and 50 MP sensors bin to 12 MP) and below the 89.5 MP at
+# which Pillow starts even to warn. A 6 KB PNG can declare 7072x7072 and cost seconds of CPU and hundreds of MB.
+IMAGE_PIXEL_CAP = 50_000_000

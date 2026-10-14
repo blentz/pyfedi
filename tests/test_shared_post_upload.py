@@ -104,7 +104,7 @@ from werkzeug.datastructures import FileStorage
 
 import app.shared.post as post_module
 from app import db
-from app.constants import POST_TYPE_ARTICLE, POST_TYPE_IMAGE, POST_TYPE_VIDEO, SRC_API
+from app.constants import IMAGE_PIXEL_CAP, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, POST_TYPE_VIDEO, SRC_API
 from app.models import File
 from app.shared.post import edit_post
 from app.utils import get_setting, set_setting
@@ -1187,6 +1187,23 @@ def test_a_file_pillow_cannot_decode_is_refused_and_not_left_behind(db_session, 
     with pytest.raises(Exception) as caught:
         edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
                   uploaded_file=FileStorage(stream=BytesIO(content), filename='pic.png', content_type='image/png'))
+    assert str(caught.value) == 'filetype not allowed'
+    assert list(chdir_upload.rglob('app/static/media/posts/*/*/*')) == []
+
+
+@pytest.mark.parametrize('size', [(7072, 7072), (10000, 10000)], ids=['just_over_the_cap', 'pillow_warning_band'])
+def test_an_image_over_the_pixel_cap_is_refused_and_not_left_behind(db_session, chdir_upload, size):
+    """IMAGE_PIXEL_CAP (50 MP): a 6 KB PNG declaring 7072x7072, or 10000x10000 inside the band where Pillow only
+    warned, was decoded and re-encoded at full size. It is refused at the header now, as 'filetype not allowed',
+    and the bytes go."""
+    assert size[0] * size[1] > IMAGE_PIXEL_CAP
+    buffer = BytesIO()
+    Image.new('1', size).save(buffer, format='PNG')
+    s = _seed()
+    with pytest.raises(Exception) as caught:
+        edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+                  uploaded_file=FileStorage(stream=BytesIO(buffer.getvalue()), filename='pic.png',
+                                            content_type='image/png'))
     assert str(caught.value) == 'filetype not allowed'
     assert list(chdir_upload.rglob('app/static/media/posts/*/*/*')) == []
 
