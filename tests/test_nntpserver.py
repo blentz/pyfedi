@@ -207,12 +207,27 @@ def test_an_author_name_holding_lf_stays_on_its_header_line():
     assert replies[3] == 'From: <a b@x>'
 
 
-@pytest.mark.parametrize('line,sent', [(' .', '. .'), ('\t.forged', '.\t.forged'), ('\r.', '. .')])
+@pytest.mark.parametrize('line,sent', [(' .', ' .'), ('\t.forged', '\t.forged'), ('\r.', ' .'), ('.\r', '..')])
 def test_a_body_line_of_whitespace_and_a_dot_cannot_end_the_article(line, sent):
     """article() dot-stuffed a body line starting with '.', then send_lines stripped the line: ' .' went out as the
     '.' that ends the reply, and the rest of the body as forged replies."""
     replies = session_replies(b'GROUP a.example\r\nBODY 1\r\nQUIT\r\n', body=f'one\n{line}\n200 forged')
     assert replies[2:] == ['222 1 <post-1@stub.example>', 'one', sent, '200 forged', '.', CLOSING]
+
+
+def test_a_body_line_keeps_its_indentation_and_trailing_spaces():
+    """send_lines stripped every line, so indented code lost its indentation and a markdown hard break (two
+    trailing spaces) its spaces. Only a CR at the end of a body line is dropped."""
+    body = 'Code:\n    def f():\n        return 1\nline one  \n\tindented\ncrlf line\r'
+    replies = session_replies(b'GROUP a.example\r\nBODY 1\r\nQUIT\r\n', body=body)
+    assert replies[3:-2] == ['Code:', '    def f():', '        return 1', 'line one  ', '\tindented', 'crlf line']
+
+
+def test_status_header_and_overview_lines_keep_their_framing():
+    """A title with spaces at its ends stays inside its header line and overview field."""
+    replies = session_replies(b'GROUP a.example\r\nHEAD 1\r\nOVER 1\r\nQUIT\r\n', subject='  Hi  ')
+    assert replies[3:5] == ['From: <alice@stub.example>', 'Subject:   Hi  ']
+    assert replies[-3].split('\t')[1] == '  Hi  '
 
 
 def test_a_tab_in_a_title_stays_inside_its_overview_field():
