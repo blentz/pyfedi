@@ -619,10 +619,13 @@ _EMAIL_LABEL = frozenset('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01
 
 
 def _reference_hostname(value: str) -> bool:
-    """...and the last label not all digits: a browser reads such a name as an IPv4 address (RFC 3696 section 2: no
-    top-level domain is all-numeric)."""
+    """...and the last label not a number by the WHATWG test (all digits, or '0x' and hex digits): a browser reads
+    such a name as an IPv4 address ('0x7f.0x1' is 127.0.0.1), and no top-level domain is all-numeric."""
     labels = value.split('.')
-    return len(labels) >= 2 and not labels[-1].isdigit() and all(
+    last = labels[-1]
+    if last.isdigit() or (last.startswith('0x') and set(last[2:]) <= set('0123456789abcdef')):
+        return False
+    return len(labels) >= 2 and all(
         1 <= len(label) <= 63 and set(label) <= _LABEL and label[0] != '-' and label[-1] != '-' for label in labels)
 
 
@@ -636,7 +639,7 @@ def _reference_email(value: str) -> bool:
 def check_redos_hostnames(data: bytes) -> None:
     """discovery's is_hostname (_HOSTNAME), utils.validate_email (EMAIL_RE) and instance.util.is_fedi_handle, timed,
     each against an independent reading of the grammar it implements: a lower-case DNS name of two or more labels
-    of 1-63 letters, digits and hyphens, no label starting or ending with a hyphen, the last not all digits; an
+    of 1-63 letters, digits and hyphens, no label starting or ending with a hyphen, the last not a number; an
     address whose local part is the RFC 5322 atom characters and dots and whose domain is two or more labels
     (validate_email strips first); a handle that is such an address with or without one leading character."""
     text = _input_text(data)

@@ -14,6 +14,7 @@ MAX_DIRECTORY_BYTES = 5 * 1024 * 1024
 
 _HOSTNAME = re.compile(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+')
 _USERNAME = re.compile(r'[A-Za-z0-9_.-]{1,64}')
+_NUMBER_LABEL = re.compile(r'[0-9]+|0x[0-9a-f]*')   # the WHATWG URL Standard's "ends in a number"
 
 
 class DiscoverySourceError(Exception):
@@ -72,9 +73,10 @@ def as_count(value) -> int:
 
 def is_hostname(value) -> bool:
     """A lower-case DNS name with at least one dot. Peers name hosts; we build urls from them. Not one whose last label
-    is all digits: a browser reads that as an IPv4 address ('https://1.02/' visits 1.0.0.2), and no top-level domain
-    is all-numeric."""
-    return isinstance(value, str) and _HOSTNAME.fullmatch(value) is not None and not value.rpartition('.')[2].isdigit()
+    is a number by the WHATWG test (all digits, or '0x' and hex digits): a browser reads that as an IPv4 address
+    ('https://1.02/' visits 1.0.0.2, 'https://0x7f.0x1/' 127.0.0.1), and no top-level domain is all-numeric."""
+    return (isinstance(value, str) and _HOSTNAME.fullmatch(value) is not None
+            and _NUMBER_LABEL.fullmatch(value.rpartition('.')[2]) is None)
 
 
 def is_username(value) -> bool:
