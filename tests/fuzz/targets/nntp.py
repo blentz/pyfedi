@@ -37,7 +37,7 @@ from collections import deque
 import app.nntp.server as nntp_server
 from app.nntp.nntpserver import (_DEFAULT_OVERVIEW_FMT, _MAXLINE, Article, ArticleInfo, NNTPArticleNotFound,
                                  NNTPAuthenticationError, NNTPAuthSetting, NNTPPostError, NNTPPostSetting,
-                                 format_datetime, parse_datetime, parse_range)
+                                 format_datetime, numbers_in_group, parse_datetime, parse_range)
 from app.nntp.server import (PieFedNNTPConnectionHandler, _make_message_id, _parse_message_id,
                              _sanitize_group_name)
 from tests.fuzz.targets._target import Target
@@ -98,14 +98,30 @@ def check_datetime(data: bytes) -> None:
 _STRICT_RANGE = re.compile(r'([0-9]+)(?:(-)([0-9]*))?')
 
 
+# Water marks numbers_in_group is held to: an empty group, a small one, a large community.
+_WATER_MARKS = ((0, 0), (1, 3), (1, 10 ** 6))
+
+
 def check_range(data: bytes) -> None:
     """parse_range never raises and gives None or (int, int-or-None). An RFC 3977 range -- n, n- or n-m in ASCII
-    digits -- is read as (n, n), (n, None) and (n, m)."""
+    digits -- is read as (n, n), (n, None) and (n, m). numbers_in_group, which the range commands loop over, gives
+    exactly the numbers of that range the group's water marks hold, so never more than the group holds."""
     text = _text(data[:MAX_ARGUMENT])
     parsed = parse_range(text)
     assert parsed is None or (
         isinstance(parsed, tuple) and len(parsed) == 2 and type(parsed[0]) is int
         and (parsed[1] is None or type(parsed[1]) is int)), f'parse_range({text!r}) gave {parsed!r}'
+    if parsed is not None and parsed[1] is not None:
+        first, last = parsed
+        for low, high in _WATER_MARKS:
+            numbers = numbers_in_group(first, last, low, high)
+            assert len(numbers) <= high - low + 1, f'{text!r} in {low}..{high} gave {len(numbers)} numbers'
+            if numbers:
+                assert low <= numbers[0] and numbers[-1] <= high and first <= numbers[0] and numbers[-1] <= last, (
+                    f'{text!r} in {low}..{high} gave {numbers!r}')
+            if -10 ** 4 < first and last < 10 ** 4:
+                assert list(numbers) == [n for n in range(first, last + 1) if low <= n <= high], (
+                    f'{text!r} in {low}..{high} gave {numbers!r}')
     strict = _STRICT_RANGE.fullmatch(text)
     if strict is None or len(text) > 4000:   # int() refuses more than 4300 digits
         return

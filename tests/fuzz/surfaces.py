@@ -225,6 +225,7 @@ SURFACES: dict[str, list[str]] = {
     'nntp': [
         'app.nntp.nntpserver.parse_datetime',
         'app.nntp.nntpserver.parse_range',
+        'app.nntp.nntpserver.numbers_in_group',
         'app.nntp.nntpserver.NNTPConnectionHandler.handle',
         'app.nntp.nntpserver.NNTPConnectionHandler._getline',
         'app.nntp.nntpserver.NNTPConnectionHandler._getlines',
