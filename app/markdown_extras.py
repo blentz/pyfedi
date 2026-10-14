@@ -162,10 +162,9 @@ def apply_enhanced_image_attributes(html: str, md_instance) -> str:
     if not hasattr(md_instance, '_enhanced_images_attrs'):
         return html
 
-    # Match img tags with data-enhanced-img attribute
-    img_pattern = re.compile(r'<img\s+([^>]*?data-enhanced-img=[^>]*?)(/?>)', re.IGNORECASE)
-
     def add_attrs(match):
+        if match.lastindex is None:
+            return match.group(0)   # the skip alternative: no enhanced image in this tag
         attrs_str = match.group(1)
         closing = match.group(2)
 
@@ -193,7 +192,15 @@ def apply_enhanced_image_attributes(html: str, md_instance) -> str:
             return f'<a href="{full_url}">{img_tag}</a>'
         return img_tag
 
-    return img_pattern.sub(add_attrs, html)
+    return _ENHANCED_IMG_TAG_RE.sub(add_attrs, html)
+
+
+# An <img> tag with a data-enhanced-img attribute, as <img\s+([^>]*?data-enhanced-img=[^>]*?)(/?>) matched it. That
+# pattern gave back the spaces after '<img' and retried every later data-enhanced-img= when the tag did not close,
+# and scanned on from every '<img': 5 s for 64 KiB of '<img ' after one enhanced image in a post. Neither retry can
+# succeed where the first try failed, so the spaces are possessive and the first attribute atomic; a tag that
+# fails dooms every '<img' before its '>', which the skip alternative (no groups) consumes.
+_ENHANCED_IMG_TAG_RE = re.compile(r'<img\s++((?>[^>]*?data-enhanced-img=)[^>]*?)(/?>)|<img\s+[^>]*', re.IGNORECASE)
 
 
 # Register the extra for markdown2
