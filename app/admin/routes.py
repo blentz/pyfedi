@@ -31,7 +31,7 @@ from app.admin.forms import FederationForm, SiteMiscForm, SiteProfileForm, EditC
     CmsPageForm, CreateOfflineInstanceForm, InstanceChooserForm, CloseInstanceForm, EmojiForm, TopicImportForm, \
     MastodonDirectoryScanForm
 from flask_wtf import FlaskForm
-from app.admin.util import unsubscribe_from_everything_then_delete, unsubscribe_from_community, send_newsletter, \
+from app.admin.util import ban_list_entries, unsubscribe_from_everything_then_delete, unsubscribe_from_community, send_newsletter, \
     topics_for_form, move_community_images_to_here, switch_to_unsilenced, switch_to_silenced, serialize_topic_tree, \
     create_topic_and_children, fetch_mastodon_directory, directory_candidates, remote_instance_software
 from app.auth.util import send_email_verification, random_token
@@ -1140,7 +1140,11 @@ def admin_federation_ban_lists():
             if file_ext.lower() != '.json':
                 abort(400)
             # D930: read in memory and pass the text on, so the ban list is never written into the served media tree
-            contents = import_file.read().decode('utf-8')
+            contents = import_file.read()
+            if ban_list_entries(contents) is None:
+                flash(_('That file is not a ban list. Import a .json file exported from this page.'), 'error')
+                return redirect(url_for('admin.admin_federation_ban_lists'))
+            contents = contents.decode('utf-8')  # ban_list_entries has checked it is UTF-8
 
             # import bans in background task
             if current_app.debug:
@@ -1221,7 +1225,11 @@ def import_bans_task(contents):
         session = get_task_session()
         try:
             with patch_db_session(session):
-                contents_json = json.loads(contents)
+                # Every section a list of well-formed entries (ban_list_entries). None is a file the view would
+                # have refused, which leaves nothing to import.
+                contents_json = ban_list_entries(contents)
+                if contents_json is None:
+                    return
 
                 # .get(key, []) throughout, not contents_json[key]. Each
                 # section below commits on its own, so a file missing one key

@@ -696,6 +696,29 @@ def test_an_import_hands_the_task_the_contents_and_writes_no_file(
     assert set(glob.glob(f'{MEDIA}/**', recursive=True)) == before
 
 
+@pytest.mark.parametrize('body', [
+    b'["evil.example"]',
+    b'"evil.example"',
+    b'{"banned_instances": ["evil.example"]',
+    b'{"banned_instances": ["\xd1vil.example"]}',
+    b'[' * 100000,
+], ids=['a_list', 'a_string', 'truncated', 'not_utf8', 'nested_past_the_decoder_stack'])
+def test_a_file_that_is_not_a_ban_list_is_refused_with_a_message(admin_client, media_is_clean, body):
+    """Found by the T6 fuzzing (owner ruling 2026-10-14). The view decoded the upload
+    as strict UTF-8, so a file that was not raised UnicodeDecodeError -- a 500 for the
+    admin -- and anything that decoded went to the task, where a top level that was not
+    an object raised AttributeError on `.get`, out of a background worker with nothing
+    said to the admin. The file is now checked before anything is queued."""
+    client, token = admin_client
+
+    with patch('app.admin.routes.import_bans_task') as task:
+        response, flashed = _import(client, token, body)
+
+    assert response.status_code == 302
+    assert task.delay.call_count == 0
+    assert _flashes(flashed) == ['That file is not a ban list. Import a .json file exported from this page.']
+
+
 def test_an_export_sends_the_blocklist_as_a_json_download(admin_client):
     """The export branch. `use_allowlist` False means the banned list is sent
     and the allowed one is not -- exporting the wrong one would publish the
@@ -967,7 +990,7 @@ def test_an_empty_section_is_ignored(app, db_session, bans_file):
     assert BannedInstances.query.count() == 0
 
 
-def test_a_failed_import_rolls_back_and_re_raises(app, db_session):
+def test_a_failed_import_rolls_back_and_re_raises(app, db_session, bans_file):
     """`except Exception: session.rollback(); raise`. The task holds its own
     session, so a failure that did not roll back would leave it poisoned for
     whatever ran next on that worker."""
@@ -975,10 +998,51 @@ def test_a_failed_import_rolls_back_and_re_raises(app, db_session):
 
     _seed()
 
-    with pytest.raises(ValueError):
-        import_bans_task('{"banned_instances": ["evil.example"]')  # truncated JSON
+    with patch('app.admin.routes.Domain', side_effect=ValueError('boom')):
+        with pytest.raises(ValueError):
+            import_bans_task(bans_file({'banned_instances': ['evil.example'],
+                                        'banned_domains': ['bad.example']}))
+
+    db.session.rollback()
+    assert [row.domain for row in BannedInstances.query.all()] == ['evil.example']
+    assert Domain.query.count() == 0
+
+
+def test_a_task_given_a_file_that_is_not_a_ban_list_imports_nothing(app, db_session):
+    """The view refuses such a file before queueing; a task queued before it did,
+    or handed one some other way, imports nothing rather than raising."""
+    from app.admin.routes import import_bans_task
+
+    _seed()
+
+    import_bans_task('["evil.example"]')
 
     assert BannedInstances.query.count() == 0
+
+
+def test_malformed_entries_are_skipped_and_the_rest_imported(app, db_session, bans_file):
+    """Found by the T6 fuzzing (owner ruling 2026-10-14). `tag_ban['name']` was read
+    unchecked, so one tag that was not an object with a name raised -- after the
+    sections before it had committed. Entries that are not what the export writes are
+    now skipped: names that are not non-empty strings that fit their column, tags that
+    are not objects with such a name and a string or null display_as."""
+    from app.admin.routes import import_bans_task
+
+    _seed()
+
+    import_bans_task(bans_file({
+        'banned_instances': [42, None, '', 'x' * 256, ['evil.example'], 'evil.example'],
+        'banned_domains': [{'name': 'bad.example'}, 'bad.example'],
+        'banned_tags': ['badtag', {'display_as': 'NoName'}, {'name': 7}, {'name': 'x', 'display_as': 7},
+                        {'name': 'nodisplay'}, {'name': 'badtag', 'display_as': 'BadTag'}],
+        'banned_users': [3.5, 'bad@remote.example'],
+    }))
+
+    assert [row.domain for row in BannedInstances.query.all()] == ['evil.example']
+    assert [row.name for row in Domain.query.filter_by(banned=True)] == ['bad.example']
+    assert sorted((tag.name, tag.display_as) for tag in Tag.query.filter_by(banned=True)) == [
+        ('badtag', 'BadTag'), ('nodisplay', None)]
+    assert [user.ap_id for user in User.query.filter_by(banned=True)] == ['bad@remote.example']
 
 
 def test_the_cross_origin_delete_delay_is_stored(admin_client):

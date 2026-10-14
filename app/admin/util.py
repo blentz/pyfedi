@@ -1,3 +1,4 @@
+import json
 import os
 from typing import List, Tuple
 
@@ -560,3 +561,51 @@ def fetch_mastodon_directory(remote_url: str, max_pages: int = 20) -> List[dict]
             break
 
     return accounts
+
+
+# The sections of a ban list whose entries are names, as the ban lists export writes them; banned_tags is the other.
+BAN_LIST_NAME_SECTIONS = ('allowed_instances', 'banned_instances', 'banned_domains', 'banned_users')
+# Every name lands in a 255- or 256-character column, which Postgres refuses to overflow rather than truncating.
+BAN_LIST_NAME_MAX_LENGTH = 255
+
+
+def _is_ban_list_name(entry) -> bool:
+    return isinstance(entry, str) and 0 < len(entry) <= BAN_LIST_NAME_MAX_LENGTH
+
+
+def _is_ban_list_tag(entry) -> bool:
+    if not isinstance(entry, dict) or not _is_ban_list_name(entry.get('name')):
+        return False
+    display_as = entry.get('display_as')
+    return display_as is None or _is_ban_list_name(display_as)
+
+
+def ban_list_entries(contents: str | bytes) -> dict | None:
+    """An uploaded ban list's entries, or None when the file is not a ban list: not UTF-8, not JSON, nested past the
+    decoder's stack, or not a JSON object at the top.
+
+    Otherwise a dict holding every section, each a list in file order of the entries shaped as the ban lists export
+    writes them: names that are non-empty strings that fit their column, and for banned_tags objects with such a
+    name and a display_as that is one too or null (absent reads as null). Anything else -- a section that is not a
+    list, an entry of another shape -- is skipped, so one bad entry no longer fails the import of the rest.
+    """
+    if isinstance(contents, bytes):
+        try:
+            contents = contents.decode('utf-8')
+        except UnicodeDecodeError:
+            return None
+    try:
+        contents_json = json.loads(contents)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(contents_json, dict):
+        return None
+
+    def section(key, well_formed):
+        value = contents_json.get(key)
+        return [entry for entry in value if well_formed(entry)] if isinstance(value, list) else []
+
+    entries = {key: section(key, _is_ban_list_name) for key in BAN_LIST_NAME_SECTIONS}
+    entries['banned_tags'] = [{'name': tag['name'], 'display_as': tag.get('display_as')}
+                              for tag in section('banned_tags', _is_ban_list_tag)]
+    return entries
