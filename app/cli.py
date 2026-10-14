@@ -2360,7 +2360,12 @@ def strip_tracking(url):
     if url is None or url == '':
         return ''
 
-    f = furl(url)
+    try:
+        f = furl(url)
+    except ValueError:
+        # A feed's item link furl cannot read ('https://[x') has no query furl can strip. It used to raise out of
+        # the import loop, outside its per-item handling, and stop the whole feed every run; make_post decides it.
+        return url
 
     tracking_prefixes = (
         "utm_",
