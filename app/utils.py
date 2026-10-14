@@ -2052,6 +2052,8 @@ def person_link_to_href(link: str, server_name_override: str | None = None) -> s
 # none after any later one either, so the second alternative (no group) takes the rest of the text in one step
 # instead of every later <code> scanning to the end again: 3.6 s for 64 KiB of '<code>'.
 _CODE_HTML_RE = re.compile(r'(<code>[\s\S]*?</code>)|<code>[\s\S]*')
+# <a href=...</a>, the same shape and the same skip: 2.5 s for 64 KiB of '<a href='.
+_LINK_HTML_RE = re.compile(r'(<a href=[\s\S]*?</a>)|<a href=[\s\S]*')
 
 
 def stash_code_html(text: str, placeholder: str) -> tuple[list, str]:
@@ -2094,10 +2096,12 @@ def stash_link_html(text: str, placeholder: str) -> tuple[list, str]:
     link_snippets = []
 
     def store_link(match):
+        if match.group(1) is None:
+            return match.group(0)   # an unclosed <a href=: nothing to stash
         link_snippets.append(match.group(0))
         return f"{placeholder}{len(link_snippets) - 1}$"
 
-    text = re.sub(r'<a href=[\s\S]*?<\/a>', store_link, text)
+    text = _LINK_HTML_RE.sub(store_link, text)
 
     return (link_snippets, text)
 
