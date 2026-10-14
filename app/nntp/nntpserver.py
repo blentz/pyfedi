@@ -103,9 +103,12 @@ def parse_datetime(
         year += 2000
     elif year < 100:
         year += 1900
-    return datetime.datetime(
-        year, month, day, hours, minutes, seconds, tzinfo=datetime.timezone.utc
-    )
+    try:
+        return datetime.datetime(
+            year, month, day, hours, minutes, seconds, tzinfo=datetime.timezone.utc
+        )
+    except OverflowError as exc:
+        raise ValueError(f"date or time out of range: {date_str!r} {time_str!r}") from exc
 
 
 def format_datetime(

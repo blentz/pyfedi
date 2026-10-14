@@ -10,6 +10,9 @@ The stub serves three groups: a.example (articles 1-3), b.example (empty) and c.
 the user logs in as alice, as PieFedNNTPServer hides a community the user is banned from).
 """
 
+import pytest
+
+from app.nntp.nntpserver import parse_datetime
 from tests.fuzz.targets.nntp import session_replies
 
 READY = '201 NNTP Service Ready, posting prohibited'
@@ -70,3 +73,13 @@ def test_listgroup_without_a_name_lists_the_selected_group():
     """LISTGROUP refused no argument only while no group was selected, then read tokens[0] anyway: IndexError."""
     assert session_replies(b'GROUP a.example\r\nLISTGROUP\r\nQUIT\r\n') == [
         READY, '211 3 1 3 a.example', '211 3 1 3 a.example', '1', '2', '3', '.', CLOSING]
+
+
+@pytest.mark.parametrize('date_str,time_str', [
+    ('99999999999999999999990101', '000000'),
+    ('20250101', '0000999999999999999999999'),
+])
+def test_parse_datetime_refuses_a_field_past_what_datetime_holds(date_str, time_str):
+    """datetime() raises OverflowError, not ValueError, for a field past a C long; the callers refuse ValueError."""
+    with pytest.raises(ValueError):
+        parse_datetime(date_str, time_str)
