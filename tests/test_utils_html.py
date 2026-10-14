@@ -3,7 +3,8 @@ import re
 from app.utils import (allowlist_html, community_link_to_href, escape_img, feed_link_to_href,
                        handle_lemmy_autocomplete, links_with_parens,
                        mastodon_extra_field_link, person_link_to_href,
-                       piefed_markdown_to_lemmy_markdown, remove_images, stash_code_html)
+                       piefed_markdown_to_lemmy_markdown, remove_images, stash_code_html,
+                       stash_link_html)
 from tests.test_allowlist_html import assert_linear, pump
 from tests.test_markdown_to_html import corpus_texts, random_texts
 
@@ -252,3 +253,11 @@ class TestCodeAndLinkStashesAreLinear:
 
     def test_unclosed_code_is_stashed_in_linear_time(self):
         assert_linear(self, [pump('<code>')], lambda text: stash_code_html(text, 'PH'), seconds=0.5)
+
+    def test_the_link_stash_stashes_what_it_stashed(self):
+        fragments = ['<a href=', '</a>', '<a href=x>y</a>', 'a', ' ', '\n', '<', '>']
+        for text in random_texts(fragments, 3000, 12, seed=6) + corpus_texts('markdown_code_stash', 300):
+            assert stash_link_html(text, 'PH') == old_stash(r'<a href=[\s\S]*?<\/a>', text, 'PH'), text
+
+    def test_unclosed_links_are_stashed_in_linear_time(self):
+        assert_linear(self, [pump('<a href=')], lambda text: stash_link_html(text, 'PH'), seconds=0.5)
