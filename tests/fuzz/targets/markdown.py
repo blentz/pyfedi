@@ -280,14 +280,16 @@ def check_markdown_preprocessors(data: bytes) -> None:
 
 def check_markdown_code_stash(data: bytes) -> None:
     """stash_code_html, stash_code_md and stash_link_html, each undone by pop_code/pop_link: the round trip is the
-    identity, and the stashed text holds one placeholder per snippet. The preprocessors format the stashed text, so
-    a round trip that is not the identity changes code (or a link) the author wrote."""
+    identity, and there is one placeholder per snippet, in the stashed text or inside another snippet (an inline
+    code span can hold a fenced block's). The preprocessors format the stashed text, so a round trip that is not
+    the identity changes code (or a link) the author wrote."""
     text = _input_text(data)
     if PLACEHOLDER in text:
         return
     for stash, pop in ((stash_code_html, pop_code), (stash_code_md, pop_code), (stash_link_html, pop_link)):
         snippets, stashed = stash(text, PLACEHOLDER)
-        assert stashed.count(PLACEHOLDER) == len(snippets), f'{stash.__name__} placeholders != snippets'
+        placeholders = stashed.count(PLACEHOLDER) + sum(snippet.count(PLACEHOLDER) for snippet in snippets)
+        assert placeholders == len(snippets), f'{stash.__name__} placeholders != snippets'
         restored = pop(snippets, stashed, PLACEHOLDER)
         assert restored == text, f'{stash.__name__} then {pop.__name__} changed the text'
 
