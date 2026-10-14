@@ -243,4 +243,21 @@ SURFACES: dict[str, list[str]] = {
         'app.nntp.server._parse_message_id',
         'app.nntp.server._sanitize_group_name',
     ],
+    # The alpha API (T6): every request schema a route parses its JSON body, query string or upload with, the
+    # hand-written validators in those schemas, the error handler that answers a malformed request, and the helpers a
+    # client-chosen colour or sort order reaches.
+    'api': [
+        'app.api.alpha.schema.DefaultSchema.load',
+        'app.api.alpha.schema.validate_datetime_string',
+        'app.api.alpha.schema.validate_color_code',
+        'app.api.alpha.schema.validate_non_empty_string',
+        'app.api.alpha.shared_error_handler',
+        'app.utils.expand_hex_color',
+        'app.utils.safe_order_by',
+    ],
+    # Uploaded import files (T6): the settings import JSON and the Mastodon follows CSV, up to the first lookup.
+    'imports': [
+        'app.user.routes.import_entries',
+        'app.instance.util.mastodon_csv_handles',
+    ],
 }
