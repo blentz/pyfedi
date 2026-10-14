@@ -34,6 +34,7 @@ from app.constants import IMAGE_PIXEL_CAP
 from app.models import File
 from app.shared.upload import process_file_delete, process_upload
 from tests.factories import make_instance, make_user
+from tests.image_samples import MALFORMED_EXIF, assert_no_metadata, jpeg_with_gps_exif, jpeg_with_malformed_exif
 
 pytestmark = pytest.mark.usefixtures('private_static_tree')
 
@@ -341,6 +342,57 @@ class TestAnMpoUpload:
                 assert url.endswith('.mpo')
                 with Image.open(_stored_path(url)) as img:
                     assert (img.format, img.mode, img.size) == ('JPEG', 'RGB', (8, 8))
+            finally:
+                _cleanup(before)
+
+
+class TestAnAvifCarriesNoUploaderMetadata:
+    """With MEDIA_IMAGE_FORMAT=AVIF the pillow_avif writer copied the upload's EXIF and XMP from img.info into the
+    stored file -- GPS position and camera make included -- where WebP, PNG and JPEG output carry none. A malformed
+    EXIF block made the save raise 'Invalid Exif payload' (a 500), or wrote an AVIF Pillow cannot reopen. The
+    stored file carries neither, and a malformed block is stored like any other upload."""
+
+    def _store(self, app, content, filename='photo.jpg', image_format='AVIF'):
+        upload = FileStorage(stream=io.BytesIO(content), filename=filename)
+        original = app.config['MEDIA_IMAGE_FORMAT']
+        app.config['MEDIA_IMAGE_FORMAT'] = image_format
+        try:
+            return process_upload(upload)
+        finally:
+            app.config['MEDIA_IMAGE_FORMAT'] = original
+
+    def test_gps_exif_and_xmp_are_not_stored(self, app):
+        before = files_under(MEDIA_ROOT)
+        with app.app_context():
+            try:
+                url = self._store(app, jpeg_with_gps_exif())
+                assert url.endswith('.avif')
+                assert_no_metadata(_stored_path(url), 'AVIF')
+            finally:
+                _cleanup(before)
+
+    @pytest.mark.parametrize('name', MALFORMED_EXIF)
+    def test_malformed_exif_is_stored_and_reopens(self, app, name):
+        before = files_under(MEDIA_ROOT)
+        with app.app_context():
+            try:
+                url = self._store(app, jpeg_with_malformed_exif(name))
+                assert_no_metadata(_stored_path(url), 'AVIF')
+            finally:
+                _cleanup(before)
+
+    def test_an_avif_upload_kept_as_avif_drops_its_own_exif(self, app):
+        """No MEDIA_IMAGE_FORMAT: the format comes from the '.avif' name, and the source's EXIF is in img.info."""
+        import pillow_avif  # noqa: F401  -- registers the AVIF plugin for this test's encode
+        source = Image.open(io.BytesIO(jpeg_with_gps_exif()))
+        buffer = io.BytesIO()
+        source.save(buffer, format='AVIF', exif=source.info['exif'], xmp=source.info['xmp'])
+        assert 'exif' in Image.open(io.BytesIO(buffer.getvalue())).info
+        before = files_under(MEDIA_ROOT)
+        with app.app_context():
+            try:
+                url = self._store(app, buffer.getvalue(), filename='photo.avif', image_format='')
+                assert_no_metadata(_stored_path(url), 'AVIF')
             finally:
                 _cleanup(before)
 

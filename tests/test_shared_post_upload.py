@@ -108,6 +108,7 @@ from app.constants import IMAGE_PIXEL_CAP, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, P
 from app.models import File
 from app.shared.post import edit_post
 from app.utils import get_setting, set_setting
+from tests.image_samples import MALFORMED_EXIF, assert_no_metadata, jpeg_with_gps_exif, jpeg_with_malformed_exif
 from tests.test_shared_post_edit import _api_input, _seed
 
 
@@ -1418,6 +1419,26 @@ def test_exif_orientation_is_corrected_before_conversion(
     assert len(written) == 1
     with Image.open(written[0]) as saved:
         assert saved.size == (4, 8)
+
+
+@pytest.mark.parametrize('content', [jpeg_with_gps_exif()] + [jpeg_with_malformed_exif(n) for n in MALFORMED_EXIF],
+                         ids=['gps_exif_and_xmp', *MALFORMED_EXIF])
+def test_an_avif_carries_no_uploader_metadata(db_session, chdir_upload, http_mock, app, monkeypatch, content):
+    """With MEDIA_IMAGE_FORMAT=AVIF the pillow_avif writer copied the upload's EXIF and XMP from img.info into the
+    stored file, GPS position and camera make included. A malformed EXIF block made the save raise 'Invalid Exif
+    payload', or wrote an AVIF Pillow cannot reopen. The stored post image carries neither, and reopens.
+
+    Named '.png', so it takes the plain convert('RGBA') arm: to_srgb, on the '.jpg' arm, happens to build a new
+    image without the source's info."""
+    monkeypatch.setitem(app.config, 'MEDIA_IMAGE_FORMAT', 'AVIF')
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/avif'})
+    s = _seed()
+    edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+              uploaded_file=FileStorage(stream=BytesIO(content), filename='pic.png', content_type='image/png'))
+
+    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+    assert [path.suffix for path in written] == ['.avif']
+    assert_no_metadata(written[0], 'AVIF')
 
 
 def test_a_malformed_svg_fails_sanitization_and_is_rejected(db_session, chdir_upload):

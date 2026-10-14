@@ -32,7 +32,7 @@ from app.models import Community, File, PostReply, Post, utcnow, CommunityMember
     Instance, User, Tag, CommunityFlair, CommunityThemeAllowed, Notification, markdown_source, language_from_ap, _as_dict, _as_url, parse_ap_published
 from app.utils import get_request, gibberish, ensure_directory_exists, ap_datetime, instance_banned, get_task_session, \
     store_files_in_s3, guess_mime_type, patch_db_session, instance_allowed, get_setting, scale_gif, theme_list, \
-    add_to_modlog, role_access, sanitize_svg, can_create_post, can_create_post_reply
+    add_to_modlog, role_access, sanitize_svg, can_create_post, can_create_post_reply, save_image_without_metadata
 from sqlalchemy import func, desc, text
 import os
 import boto3
@@ -907,7 +907,7 @@ def save_icon_file(icon_file, directory='communities') -> File:
                 final_place = os.path.splitext(final_place)[0] + final_ext
             if image_quality:
                 kwargs['quality'] = int(image_quality)
-            img.save(final_place, optimize=True, **kwargs)
+            save_image_without_metadata(img, final_place, optimize=True, **kwargs)
 
             img_width = img.width
             img_height = img.height
@@ -922,7 +922,7 @@ def save_icon_file(icon_file, directory='communities') -> File:
             final_place_thumbnail = os.path.splitext(final_place_thumbnail)[0] + thumbnail_ext
         if thumbnail_image_quality:
             kwargs['quality'] = int(thumbnail_image_quality)
-        img.save(final_place_thumbnail, optimize=True, **kwargs)
+        save_image_without_metadata(img, final_place_thumbnail, optimize=True, **kwargs)
 
         thumbnail_width = img.width
         thumbnail_height = img.height
@@ -1035,7 +1035,7 @@ def save_banner_file(banner_file, directory='communities') -> File:
             final_place = os.path.splitext(final_place)[0] + final_ext
         if image_quality:
             kwargs['quality'] = int(image_quality)
-        img.save(final_place, optimize=True, **kwargs)
+        save_image_without_metadata(img, final_place, optimize=True, **kwargs)
 
         img_width = img.width
         img_height = img.height
@@ -1051,7 +1051,7 @@ def save_banner_file(banner_file, directory='communities') -> File:
         final_place_thumbnail = os.path.splitext(final_place_thumbnail)[0] + thumbnail_ext
     if thumbnail_image_quality:
         kwargs['quality'] = int(thumbnail_image_quality)
-    img.save(final_place_thumbnail, optimize=True, **kwargs)
+    save_image_without_metadata(img, final_place_thumbnail, optimize=True, **kwargs)
 
     thumbnail_width = img.width
     thumbnail_height = img.height

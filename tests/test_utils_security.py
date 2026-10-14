@@ -36,6 +36,8 @@ from app.shared.upload import process_upload
 from app.utils import (MAX_SVG_SIZE, gibberish, is_valid_xml_utf8, refuse_svg_entity_declarations,
                        sanitize_svg, sanitize_svg_bytes, url_to_thumbnail_file)
 
+from tests.image_samples import MALFORMED_EXIF, assert_no_metadata, jpeg_with_gps_exif, jpeg_with_malformed_exif
+
 KEEP_DATA_URL_MIME_TYPES = {"image": ["jpeg", "png", "gif", "webp", "avif"]}
 
 # Every SVG-to-disk path in app/ writes below this, relative to the repo root,
@@ -1482,6 +1484,33 @@ class TestARemoteServerDoesNotChooseTheFileExtension:
                 for path in left:
                     if os.path.isfile(path):
                         os.remove(path)
+
+
+class TestARemoteThumbnailCarriesNoMetadata:
+    """With MEDIA_IMAGE_MEDIUM_FORMAT=AVIF the pillow_avif writer copied the peer's EXIF and XMP from img.info into
+    both thumbnails, GPS position and camera make included. A malformed EXIF block made the save raise 'Invalid
+    Exif payload', so the thumbnail was dropped, or wrote an AVIF Pillow cannot reopen. Both thumbnails are kept
+    now, with neither."""
+
+    @pytest.mark.parametrize('name', ['gps_exif_and_xmp', *MALFORMED_EXIF])
+    def test_neither_thumbnail_carries_it(self, app, http_mock, monkeypatch, name):
+        content = jpeg_with_gps_exif((600, 400)) if name == 'gps_exif_and_xmp' else jpeg_with_malformed_exif(name)
+        url = f'https://thumbnails.example/{gibberish(8)}.jpg'
+        http_mock.get(url).mock(return_value=httpx.Response(200, content=content,
+                                                            headers={'content-type': 'image/jpeg'}))
+        before = files_under(MEDIA_ROOT)
+        with app.app_context():
+            monkeypatch.setitem(app.config, 'MEDIA_IMAGE_MEDIUM_FORMAT', 'AVIF')
+            result = url_to_thumbnail_file(url)
+        left = sorted(set(files_under(MEDIA_ROOT)) - set(before))
+        try:
+            assert result is not None
+            assert sorted(left) == sorted([result.file_path, result.thumbnail_path])
+            for path in left:
+                assert_no_metadata(path, 'AVIF')
+        finally:
+            for path in left:
+                os.remove(path)
 
 
 class TestTheOriginalDownloadIsNotLeftBehind:

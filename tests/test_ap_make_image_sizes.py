@@ -47,6 +47,7 @@ from app.models import File, Post, Site
 from app.utils import MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS
 from tests.factories import (make_community, make_community_member, make_file,
                              make_post)
+from tests.image_samples import MALFORMED_EXIF, assert_no_metadata, jpeg_with_gps_exif, jpeg_with_malformed_exif
 
 SOURCE = 'https://remote.test/media/photo.png'
 
@@ -238,6 +239,30 @@ class TestAnImageOverThePixelCap:
         stored = cleanup(file)
         assert stored.file_path is None and stored.thumbnail_path is None
         assert glob.glob('app/static/media/posts/pi/xe/pixelcapprobe00*') == []
+
+
+class TestAnAvifCarriesNoMetadata:
+    """With MEDIA_IMAGE_MEDIUM_FORMAT / MEDIA_IMAGE_THUMBNAIL_FORMAT = AVIF -- or a community or user image that
+    arrived as AVIF, which keeps its format -- the pillow_avif writer copied the peer's EXIF and XMP from img.info
+    into the medium copy and the thumbnail, GPS position and camera make included. A malformed EXIF block made the
+    save raise 'Invalid Exif payload', or wrote an AVIF Pillow cannot reopen. Neither copy carries either now."""
+
+    @pytest.mark.parametrize('name', ['gps_exif_and_xmp', *MALFORMED_EXIF])
+    def test_neither_copy_carries_it(self, env, monkeypatch, name):
+        content = jpeg_with_gps_exif((300, 200)) if name == 'gps_exif_and_xmp' else jpeg_with_malformed_exif(name)
+        monkeypatch.setitem(current_app.config, 'MEDIA_IMAGE_MEDIUM_FORMAT', 'AVIF')
+        monkeypatch.setitem(current_app.config, 'MEDIA_IMAGE_THUMBNAIL_FORMAT', 'AVIF')
+        file = a_file(env, 'https://remote.test/media/photo.jpg')
+        with patch('app.activitypub.util.get_request', return_value=answered_with(content, 'image/jpeg')):
+            make_image_sizes_async(file.id, 50, 120, 'posts', False)
+        db.session.expire_all()
+        stored = db.session.get(File, file.id)
+        try:
+            assert stored.file_path.endswith('.avif') and stored.thumbnail_path.endswith('.avif')
+            assert_no_metadata(stored.file_path, 'AVIF')
+            assert_no_metadata(stored.thumbnail_path, 'AVIF')
+        finally:
+            cleanup(file)
 
 
 class TestWhatIsNotResizedAtAll:
