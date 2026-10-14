@@ -7035,6 +7035,11 @@ def is_invalid_get_request_uri(uri):
             ip = ipaddress.ip_address(host)
             ips = [ip]
         except ValueError:
+            # furl keeps a space, '|' or brace in a host, which httpx -- the client that makes the request --
+            # percent-encodes ('a b.example' is fetched as 'a%20b.example'), so the name resolved below would not
+            # be the name fetched. No hostname holds an ASCII character outside letters, digits, '-', '.' and '_'.
+            if any(char.isascii() and not (char.isalnum() or char in '-._') for char in host):
+                return True
             # otherwise, resolve hostname and check the IP(s) associated with that.
             # Resolution can fail transiently (a single flaky/overloaded nameserver,
             # packet loss, UDP rate-limiting). Don't let a momentary DNS blip mark a

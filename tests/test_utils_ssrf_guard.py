@@ -221,6 +221,21 @@ class TestWhenAHostnameHasToBeResolved:
 
         assert is_invalid_get_request_uri('https://peer.example/actor') is False
 
+    @pytest.mark.parametrize('uri', ['https://a b.example/actor', 'https://a|b.example/', 'https://a{b}.example/'])
+    def test_a_name_holding_a_character_no_hostname_holds_is_refused(self, app, resolves, uri):
+        """furl keeps a space, '|' or brace in the host; httpx, which makes the request, percent-encodes it and
+        resolves 'a%20b.example'. The name resolved and judged here was not the one fetched -- for a name whose
+        DNS the sender controls, two answers -- and no hostname holds such a character, so it is refused."""
+        resolves('93.184.216.34')
+
+        assert is_invalid_get_request_uri(uri) is True
+
+    def test_an_underscore_or_an_internationalised_name_still_resolves(self, app, resolves):
+        resolves('93.184.216.34')
+
+        assert is_invalid_get_request_uri('https://my_host.example/actor') is False
+        assert is_invalid_get_request_uri('https://bücher.example/actor') is False
+
     def test_a_resolution_failure_fails_open(self, app, monkeypatch):
         """Deliberate, and documented in the function: a flaky nameserver must not
         make a valid peer unreachable. It is the one place this guard chooses
