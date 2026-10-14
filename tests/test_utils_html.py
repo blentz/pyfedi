@@ -5,7 +5,8 @@ from app.utils import (allowlist_html, community_link_to_href, escape_img, feed_
                        handle_lemmy_autocomplete, links_with_parens,
                        mastodon_extra_field_link, person_link_to_href,
                        piefed_markdown_to_lemmy_markdown, pop_code, pop_link, remove_images, sub_skipping, stash_code_html, stash_code_md,
-                       stash_link_html, escape_non_html_angle_brackets, handle_bold_em, handle_reddit_spoilers)
+                       stash_link_html, escape_non_html_angle_brackets, handle_bold_em, handle_reddit_spoilers,
+                       handle_video_embeds)
 from tests.test_allowlist_html import assert_linear, pump
 from tests.test_markdown_to_html import corpus_texts, random_texts
 
@@ -247,6 +248,27 @@ class TestRedditSpoilersAreLinear:
 
     def test_an_unclosed_line_is_read_in_linear_time(self):
         assert_linear(self, [pump('>!'), pump('>! a')], handle_reddit_spoilers, seconds=0.5)
+
+
+class TestVideoEmbedsAreLinear:
+    """handle_video_embeds' !\\[(.*?)\\]\\((\\S*?)\\) retried every '](' on the line from every '![' and scanned
+    the rest of the word from each: 11 s for 4 KiB of '![](' (fuzz: markdown_preprocessors/
+    video_embeds_pump_open_links, video_embeds_pump_open_images)."""
+
+    def test_finds_the_images_the_regex_found(self):
+        old = re.compile(r'!\[(.*?)\]\((\S*?)\)', re.M)
+        fragments = ['![a](b)', '![', '](', ')', ']', '(', 'a', ' ', '\n', '\t', '!', '\u00a0', '](x)']
+        for text in random_texts(fragments, 6000, 12, seed=10) + corpus_texts('markdown_preprocessors', 300):
+            expected = [(m.start(), m.end(), m.group(1), m.group(2)) for m in old.finditer(text)]
+            assert utils._markdown_images(text) == expected, repr(text)
+
+    def test_a_video_link_still_becomes_a_video(self):
+        result = handle_video_embeds('see ![clip](https://x.example/a.mp4) and ![pic](https://x.example/b.png)')
+        assert '<source type="video/mp4" src="https://x.example/a.mp4">' in result
+        assert '![pic](https://x.example/b.png)' in result
+
+    def test_unclosed_images_are_read_in_linear_time(self):
+        assert_linear(self, [pump('![]('), pump('!['), pump('![a](b ')], handle_video_embeds, seconds=0.5)
 
 
 class TestAllowlistHtmlResidue:

@@ -1452,6 +1452,39 @@ def handle_spoiler_spacing(text: str) -> str:
     return text
 
 
+_WHITESPACE = re.compile(r'\s')
+
+
+def _markdown_images(text: str) -> list:
+    """(start, end, alt, link) for each ![alt](link) that re.sub over !\\[(.*?)\\]\\((\\S*?)\\) replaced, left to right.
+
+    That regex retried every '](' on the line from every '![', and for each one scanned the rest of the word
+    after it looking for ')': cubic, 11 s for 4 KiB of '![]('. The matches it makes are these: from a '![', the
+    first '](' on the same line whose word (the run of non-space characters it starts) holds a ')' after it; the
+    alt is what lies between, the link is the word up to that first ')'. A '](' later in a word that holds no ')'
+    cannot do better, so the next candidate is after the word; and when a '![' finds nothing, no later '![' on its
+    line can, so the search moves to the next line."""
+    matches, position, length = [], 0, len(text)
+    while True:
+        start = text.find('![', position)
+        if start == -1:
+            return matches
+        line_end = text.find('\n', start)
+        line_end = length if line_end == -1 else line_end
+        bracket = text.find('](', start + 2, line_end)
+        while bracket != -1:
+            space = _WHITESPACE.search(text, bracket + 2)
+            word_end = space.start() if space else length
+            close = text.find(')', bracket + 2, word_end)
+            if close != -1:
+                matches.append((start, close + 1, text[start + 2:bracket], text[bracket + 2:close]))
+                position = close + 1
+                break
+            bracket = text.find('](', word_end, line_end)
+        else:
+            position = line_end
+
+
 def handle_video_embeds(text: str) -> str:
     """
     Takes markdown video embedding format and turns it into html.
@@ -1462,11 +1495,8 @@ def handle_video_embeds(text: str) -> str:
     # Step 1: Extract inline and block code, replacing with placeholders
     code_snippets, text = stash_code_md(text, placeholder)
 
-    # Step 2: Function to handle matched regex groups
-    def sub_video_markdown(match):
-        alt_text = match.group(1)
-        link = match.group(2)
-
+    # Step 2: Function to handle each ![alt](link)
+    def sub_video_markdown(whole, alt_text, link):
         if is_video_url(link):
             output = ('<video class="responsive-video" muted controls loop ' +
                       'playsinline disablepictureinpicture" preload="metadata">')
@@ -1484,11 +1514,16 @@ def handle_video_embeds(text: str) -> str:
             return output
         else:
             # return things unchanged (probably an image link)
-            return match.group(0)
+            return whole
 
-    # Step 3: Do the regex matching and substitutions
-    img_md = re.compile(r'!\[(.*?)\]\((\S*?)\)', re.M)
-    text = re.sub(img_md, sub_video_markdown, text)
+    # Step 3: Do the matching and substitutions
+    pieces, position = [], 0
+    for start, end, alt_text, link in _markdown_images(text):
+        pieces.append(text[position:start])
+        pieces.append(sub_video_markdown(text[start:end], alt_text, link))
+        position = end
+    pieces.append(text[position:])
+    text = ''.join(pieces)
 
     # Step 4: Restore code snippets
     text = pop_code(code_snippets=code_snippets, text=text, placeholder=placeholder)
