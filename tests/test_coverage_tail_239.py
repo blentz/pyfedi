@@ -4,16 +4,17 @@ registrations page's disposable-domain list.
 Three clusters in `app/admin/routes.py`.
 
     1585, 1591-1595   the admin community form's image replacement. Uploading a new icon
-                      or banner DELETES THE OLD FILE FROM DISK first, and then only
-                      attaches the new one if saving it returned something.
+                      or banner attaches it if saving it returned something, and the
+                      old file is deleted from disk once the edit is committed.
     1893, 1897        the `?days=` window on the deleted-content listing, which is the only
                       one of the three views whose two filters differ from the others.
     1933-1942         the registrations queue's disposable-domain list, read from a file
                       this repository does not ship.
 
-The icon rows carry the weight: `community.icon.delete_from_disk()` runs before
-`save_icon_file`, so a community whose upload is rejected has lost its old icon either way,
-and a mistake in which File object is deleted takes somebody else's image with it.
+The icon rows carry the weight: a mistake in which File object is deleted takes somebody
+else's image with it. (`community.icon.delete_from_disk()` used to run before
+`save_icon_file`, so a community whose upload was rejected lost its old icon either way; the
+old files are now deleted only once the new ones are committed.)
 """
 import os
 from types import SimpleNamespace
@@ -114,7 +115,7 @@ class TestReplacingACommunitysImages:
                                data=data, content_type='multipart/form-data')
 
     def test_a_new_icon_replaces_the_old_one_and_deletes_it_from_disk(self, seeded):
-        """`community.icon.delete_from_disk()` then `save_icon_file(...)`. The old File row
+        """`save_icon_file(...)`, then the old icon's `delete_from_disk()`. The old File row
         stays in the database; what goes is the file on disk, which is why the assertion is
         on that call and on the NEW attachment."""
         deleted = []
@@ -171,14 +172,11 @@ class TestReplacingACommunitysImages:
         assert db.session.get(Community, seeded.community.id).icon.file_path == \
             'app/static/media/communities/old_icon.png'
 
-    def test_a_save_that_returns_nothing_leaves_the_community_without_an_icon(self,
-                                                                             seeded):
-        """`if file:` -- and the honest consequence, asserted rather than glossed: the old
-        file has ALREADY been deleted from disk by the line above, so a save that returns
-        None leaves the community pointing at a File row whose image is gone. Recorded
-        because the ordering is the design: the delete cannot be deferred without keeping
-        the old path around, and `save_icon_file` aborts rather than returning None for
-        every input it rejects."""
+    def test_a_save_that_returns_nothing_leaves_the_old_icon_alone(self, seeded):
+        """`if new_icon:` -- the old file used to be deleted from disk BEFORE the save, so a
+        save that returned None (or aborted) left the community pointing at a File row whose
+        image was gone. The old files are deleted only once a new image has replaced them
+        and the edit is committed, so nothing is deleted here."""
         deleted = []
 
         with patch('app.admin.routes.save_icon_file', return_value=None), \
@@ -187,7 +185,7 @@ class TestReplacingACommunitysImages:
                              side_effect=lambda self: deleted.append(self.file_path)):
             self._edit(seeded, files={'icon_file': (_png(), 'new_icon.png')})
 
-        assert deleted == ['app/static/media/communities/old_icon.png']
+        assert deleted == []
         db.session.expire_all()
         assert db.session.get(Community, seeded.community.id).icon_id == \
             seeded.old_icon.id
