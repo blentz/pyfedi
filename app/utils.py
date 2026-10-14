@@ -3391,7 +3391,12 @@ def guess_mime_type(file_path: str) -> str:
     # (type, encoding) TUPLE and never None, so the tuple's own `[0] is None` was
     # always the live test. The duplicate is gone rather than both being kept in
     # step by hand.
-    guessed_type = mimetypes.guess_type(file_path)[0]
+    try:
+        guessed_type = mimetypes.guess_type(file_path)[0]
+    except ValueError:
+        # mimetypes urlparses its argument, which refuses an unbalanced IPv6 bracket ('https://[x/e.png'). A peer's
+        # custom emoji url is one such argument; its type is then guessed from the extension, as for an unknown one.
+        guessed_type = None
     if guessed_type is None:
         ext = os.path.splitext(file_path)[1].lower().lstrip('.')  # get extension without dot
         return f'image/{ext}' if ext else 'application/octet-stream'

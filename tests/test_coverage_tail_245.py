@@ -190,6 +190,14 @@ class TestGuessingAStoredFilesType:
         """`.lstrip('.')` leaves an empty extension, and `image/` is not a media type."""
         assert guess_mime_type('justaname.') == 'application/octet-stream'
 
+    def test_an_unparseable_url_falls_back_to_its_extension(self, env):
+        """A peer's custom emoji keeps the image_url its site JSON gave, and every local post using that emoji's
+        token asks this for the url's type while it is serialised. mimetypes urlparses a url, which raises
+        ValueError on an unbalanced IPv6 bracket, so one peer's emoji broke every such post's ActivityPub
+        document. The type now falls back to the extension, as for one mimetypes does not know."""
+        assert guess_mime_type('https://[x/emoji.png') == 'image/png'
+        assert guess_mime_type('https://[x') == 'application/octet-stream'
+
 
 # --------------------------------------------------------------------------
 # A viewer's keyword filters for replies
