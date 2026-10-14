@@ -1108,7 +1108,7 @@ def test_a_gif_path_skips_the_pil_reencode_block(db_session, chdir_upload, http_
     assert s.post.image_id is not None
 
 
-def test_a_file_whose_bytes_disagree_with_its_name_is_refused(db_session, chdir_upload):
+def test_a_file_whose_bytes_disagree_with_its_name_is_refused(db_session, chdir_upload, monkeypatch):
     """`:513`'s TRUE arm (arc `513->514`) and `:515`'s FALSE arm feeding
     `:533`'s raise (arc `515->533`).
 
@@ -1141,15 +1141,12 @@ def test_a_file_whose_bytes_disagree_with_its_name_is_refused(db_session, chdir_
     post type adds it), so `:515`'s condition is False and `:533` raises.
 
     Per the module docstring's ruling on the two byte-identical 'filetype
-    not allowed' messages (`:468` vs `:533`), this test also confirms a
-    file DOES exist under `chdir_upload` -- unlike every raising test
-    earlier in this file (which assert NO file exists, because `:468`
-    fires before `:487`'s save), `:533` fires AFTER `:487` saves the raw
-    BMP-content bytes under a `.png`-suffixed path, so this is the one
-    test in this file that must find something there. If this asserted
-    the opposite (no file), it would pass equally were `:468` to fire
-    instead of `:533` -- which is exactly the ambiguity the docstring
-    warns against.
+    not allowed' messages (`:468` vs `:533`), this test also confirms the
+    refusal came AFTER the save: Pillow was asked to open the saved file.
+    It used to confirm that by finding the raw bytes still on disk, which
+    was the defect -- open_uploaded_image now removes them before it
+    refuses, so nothing is left under `chdir_upload` either way, and the
+    Image.open spy is what tells the two refusals apart.
 
     Positive control, named explicitly rather than left to inference:
     `test_a_jpeg_upload_takes_the_to_srgb_conversion_path` below drives a
@@ -1161,12 +1158,37 @@ def test_a_file_whose_bytes_disagree_with_its_name_is_refused(db_session, chdir_
     right one.
     """
     s = _seed()
+    opened = []
+    real_open = Image.open
+
+    def spy_open(fp, *args, **kwargs):
+        opened.append(fp)
+        return real_open(fp, *args, **kwargs)
+
+    monkeypatch.setattr(post_module.Image, 'open', spy_open)
     with pytest.raises(Exception, match='filetype not allowed'):
         edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
                   uploaded_file=make_upload(filename='pic.png', fmt='BMP'))
 
-    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
-    assert len(written) == 1
+    assert len(opened) == 1
+    assert list(chdir_upload.rglob('app/static/media/posts/*/*/*')) == []
+
+
+@pytest.mark.parametrize('content', [b'not an image at all', None], ids=['garbage', 'truncated_png'])
+def test_a_file_pillow_cannot_decode_is_refused_and_not_left_behind(db_session, chdir_upload, content):
+    """A file Pillow could not decode raised whatever Pillow raised -- UnidentifiedImageError with this server's
+    path to the file in its message, OSError for data cut short, SyntaxError, RuntimeError -- and left the bytes
+    it had just saved in the media directory. It is the 'filetype not allowed' refusal now, and the bytes go."""
+    if content is None:
+        buffer = BytesIO()
+        Image.new('RGB', (64, 64)).save(buffer, format='PNG', compress_level=0)
+        content = buffer.getvalue()[:6000]
+    s = _seed()
+    with pytest.raises(Exception) as caught:
+        edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+                  uploaded_file=FileStorage(stream=BytesIO(content), filename='pic.png', content_type='image/png'))
+    assert str(caught.value) == 'filetype not allowed'
+    assert list(chdir_upload.rglob('app/static/media/posts/*/*/*')) == []
 
 
 def test_a_jpeg_upload_takes_the_to_srgb_conversion_path(db_session, chdir_upload, http_mock, monkeypatch):
