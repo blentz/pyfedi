@@ -256,8 +256,10 @@ SURFACES: dict[str, list[str]] = {
         'app.utils.expand_hex_color',
         'app.utils.safe_order_by',
     ],
-    # Uploaded import files (T6): the settings import JSON and the Mastodon follows CSV, up to the first lookup.
+    # Uploaded import files (T6): the settings import JSON, the Mastodon follows CSV and the admin's ban list, up to
+    # the first lookup or write.
     'imports': [
+        'app.admin.util.ban_list_entries',
         'app.user.routes.settings_import_contents',
         'app.user.routes.import_entries',
         'app.user.routes.import_note_text',

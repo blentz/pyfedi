@@ -1,0 +1,1 @@
+{"banned_instances": [42, null, "", ["x"], "evil.example"], "banned_domains": "bad.example", "banned_tags": ["badtag", {"display_as": "NoName"}, {"name": 7}, {"name": "x", "display_as": 7}], "banned_users": [3.5]}

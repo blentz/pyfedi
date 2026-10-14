@@ -1,0 +1,1 @@
+{"banned_instances": ["evil.example"], "banned_domains": ["bad.example"], "banned_tags": [{"name": "badtag", "display_as": "BadTag"}], "banned_users": ["https://remote.example/u/bad"]}

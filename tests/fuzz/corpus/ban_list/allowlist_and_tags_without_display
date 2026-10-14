@@ -1,0 +1,1 @@
+{"allowed_instances": ["friend.example"], "banned_tags": [{"name": "nodisplay"}, {"name": "nulldisplay", "display_as": null}]}

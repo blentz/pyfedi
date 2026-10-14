@@ -1,10 +1,11 @@
 """Property checks for the files a user uploads to import (tier T6, app/user/routes.py and app/instance/util.py).
 
-Two uploads drive outbound work on a user's behalf:
+Two uploads drive outbound work on a user's behalf, and a third writes an instance's bans:
 
 * the settings import (user settings, Import & Export): a JSON file stored in Redis and read back by
   import_settings_task, whose every entry becomes an actor lookup, a block or a bookmark;
-* the Mastodon follows CSV (Add people): a CSV export whose first column is a handle to follow.
+* the Mastodon follows CSV (Add people): a CSV export whose first column is a handle to follow;
+* the admin's ban list (Federation, ban lists): a JSON file whose entries become instance, domain, tag and user bans.
 
 Properties:
 
@@ -16,6 +17,10 @@ Properties:
 * mastodon_csv -- mastodon_csv_handles either raises csv.Error (which the view answers with a message) or returns
   at most one string per row, each passing is_fedi_handle and made of characters of the file's text as decoded
   (UTF-8, else Latin-1).
+* ban_list -- ban_list_entries never raises: it is None exactly when the bytes are not UTF-8 JSON with an object at
+  the top, and otherwise holds every section, each the file's own entries of the shape the import task writes into
+  a column -- a non-empty name of at most 255 characters, or for banned_tags an object with such a name and a
+  display_as that is one or null -- in file order.
 
 No database and no network: these are the parse steps only, before any lookup.
 """
@@ -23,6 +28,7 @@ No database and no network: these are the parse steps only, before any lookup.
 import csv
 import json
 
+from app.admin.util import ban_list_entries
 from app.constants import IMPORT_MAX_ENTRIES
 from app.instance.util import is_fedi_handle, mastodon_csv_handles
 from app.user.routes import import_entries, import_note_text, settings_import_contents
@@ -89,7 +95,38 @@ def check_mastodon_csv(data: bytes) -> None:
         assert set(handle) <= characters, f'{handle!r} holds characters the file does not'
 
 
+BAN_LIST_NAME_SECTIONS = ('allowed_instances', 'banned_instances', 'banned_domains', 'banned_users')
+
+
+def _ban_list_name(entry) -> bool:
+    return isinstance(entry, str) and 1 <= len(entry) <= 255
+
+
+def check_ban_list(data: bytes) -> None:
+    data = data[:MAX_INPUT]
+    entries = ban_list_entries(data)
+    try:
+        value = json.loads(data.decode('utf-8'))
+    except (ValueError, RecursionError):   # UnicodeDecodeError is a ValueError
+        value = None
+    if not isinstance(value, dict):
+        assert entries is None, f'{entries!r:.300} out of a file that is not a JSON object'
+        return
+    assert isinstance(entries, dict) and set(entries) == {*BAN_LIST_NAME_SECTIONS, 'banned_tags'}, f'{entries!r:.300}'
+    for key in BAN_LIST_NAME_SECTIONS:
+        raw = value.get(key)
+        listed = raw if isinstance(raw, list) else []
+        assert entries[key] == [entry for entry in listed if _ban_list_name(entry)], f'{key}: {entries[key]!r:.300}'
+    raw = value.get('banned_tags')
+    listed = raw if isinstance(raw, list) else []
+    expected = [{'name': tag['name'], 'display_as': tag.get('display_as')} for tag in listed
+                if isinstance(tag, dict) and _ban_list_name(tag.get('name'))
+                and (tag.get('display_as') is None or _ban_list_name(tag.get('display_as')))]
+    assert entries['banned_tags'] == expected, f'banned_tags: {entries["banned_tags"]!r:.300}'
+
+
 TARGETS = [
     Target(name='settings_import', check=check_settings_import, surface='imports', budget_ms=None, needs_app=False),
     Target(name='mastodon_csv', check=check_mastodon_csv, surface='imports', budget_ms=None, needs_app=False),
+    Target(name='ban_list', check=check_ban_list, surface='imports', budget_ms=None, needs_app=False),
 ]
