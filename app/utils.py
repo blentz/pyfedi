@@ -1295,6 +1295,36 @@ def escape_non_html_angle_brackets(text: str) -> str:
 
     return text
 
+def _wrap_emphasis(text: str, width: int, opening: str, closing: str) -> str:
+    """re.sub(r"(D|U)(?=\\S)(.+?)(?<=\\S)\\1", opening + r"\\2" + closing, text, flags=re.S), D being `width`
+    asterisks and U `width` underscores, without the regex.
+
+    The regex scanned to the end of the text from every opening delimiter that had no closing one after it:
+    64 KiB of '**x ' took 12 s. The matches it makes are these: from an opening delimiter followed by a non-space,
+    the first matching delimiter after at least one character that follows a non-space. If an opening delimiter
+    has no such closing one, no later opening delimiter of the same kind has one either, so that kind is not
+    looked for again; the other kind still is."""
+    delimiters = ('*' * width, '_' * width)
+    closings = {delimiter: [match.start() for match in re.finditer(r'(?<=\S)(?=' + re.escape(delimiter) + ')', text)]
+                for delimiter in delimiters}
+    openings = re.finditer(r'(?=(' + '|'.join(re.escape(d) for d in delimiters) + r')\S)', text)
+    pieces, position, exhausted = [], 0, set()
+    for opening_match in openings:
+        start, delimiter = opening_match.start(), opening_match.group(1)
+        if start < position or delimiter in exhausted:
+            continue
+        candidates = closings[delimiter]
+        index = bisect.bisect_left(candidates, start + width + 1)
+        if index == len(candidates):
+            exhausted.add(delimiter)
+            continue
+        end = candidates[index]
+        pieces.append(text[position:start] + opening + text[start + width:end] + closing)
+        position = end + width
+    pieces.append(text[position:])
+    return ''.join(pieces)
+
+
 def handle_bold_em(text: str) -> str:
     """
     Handles properly assigning <strong> tags to **bolded** words in markdown even if there are **two** of them in the
@@ -1308,12 +1338,10 @@ def handle_bold_em(text: str) -> str:
 
     # Step 2: Wrap **bold** sections with <strong></strong>
     # First, sub any that are both italics and bold
-    re_em_bold = re.compile(r"(\*\*\*|___)(?=\S)(.+?)(?<=\S)\1", re.S | re.X)
-    text = re_em_bold.sub(r"<em><strong>\2</strong></em>", text)
+    text = _wrap_emphasis(text, 3, '<em><strong>', '</strong></em>')
 
     # Second, sub any that are just bold
-    re_bold = re.compile(r"(\*\*|__)(?=\S)(.+?)(?<=\S)\1", re.S | re.X)
-    text = re_bold.sub(r"<strong>\2</strong>", text)
+    text = _wrap_emphasis(text, 2, '<strong>', '</strong>')
 
     # Step 3: Restore code blocks
     text = pop_code(code_snippets=code_snippets, text=text, placeholder=placeholder)

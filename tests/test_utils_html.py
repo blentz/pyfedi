@@ -271,6 +271,23 @@ class TestVideoEmbedsAreLinear:
         assert_linear(self, [pump('![]('), pump('!['), pump('![a](b ')], handle_video_embeds, seconds=0.5)
 
 
+class TestBoldAndEmphasisAreLinear:
+    """handle_bold_em's two regexes scanned to the end of the text from every unclosed delimiter: 12 s for 64 KiB
+    of '**x ' (fuzz: markdown_preprocessors/bold_pump_unclosed_runs, em_bold_pump_unclosed_runs)."""
+
+    OLD_EM_BOLD = re.compile(r"(\*\*\*|___)(?=\S)(.+?)(?<=\S)\1", re.S | re.X)
+    OLD_BOLD = re.compile(r"(\*\*|__)(?=\S)(.+?)(?<=\S)\1", re.S | re.X)
+
+    def test_wraps_what_the_regexes_wrapped(self):
+        fragments = ['**', '__', '***', '___', '*', '_', 'a', ' ', '\n', '**a**', '__b__', '\u00a0']
+        for text in random_texts(fragments, 8000, 12, seed=11) + corpus_texts('markdown_preprocessors', 300):
+            assert utils._wrap_emphasis(text, 3, '<E>', '</E>') == self.OLD_EM_BOLD.sub(r'<E>\2</E>', text), repr(text)
+            assert utils._wrap_emphasis(text, 2, '<B>', '</B>') == self.OLD_BOLD.sub(r'<B>\2</B>', text), repr(text)
+
+    def test_unclosed_runs_are_read_in_linear_time(self):
+        assert_linear(self, [pump('**x '), pump('***x '), pump('__x **y ')], handle_bold_em, seconds=0.5)
+
+
 class TestAllowlistHtmlResidue:
     """Closes the remaining uncovered lines in allowlist_html (387, 392, 407, 471,
     479, 494) that survive after tests/test_allowlist_html.py. Always pass
