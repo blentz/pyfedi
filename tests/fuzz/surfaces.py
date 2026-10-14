@@ -219,4 +219,27 @@ SURFACES: dict[str, list[str]] = {
         'app.discovery.credits.episode_credits',
         'app.discovery.credits.parse_feed_credits',
     ],
+    # NNTP (T5): every line a news client sends the bridge, from before any login -- the command dispatch, the
+    # AUTHINFO exchange, POST's article lines, NEWNEWS/NEWGROUPS dates, OVER/HDR/LISTGROUP ranges and the message-ids
+    # of ARTICLE/HEAD/BODY -- and the group names the bridge derives from community names.
+    'nntp': [
+        'app.nntp.nntpserver.parse_datetime',
+        'app.nntp.nntpserver.parse_range',
+        'app.nntp.nntpserver.NNTPConnectionHandler.handle',
+        'app.nntp.nntpserver.NNTPConnectionHandler._getline',
+        'app.nntp.nntpserver.NNTPConnectionHandler._getlines',
+        'app.nntp.nntpserver.NNTPConnectionHandler.auth',
+        'app.nntp.nntpserver.NNTPConnectionHandler.newnews',
+        'app.nntp.nntpserver.NNTPConnectionHandler.newgroups',
+        'app.nntp.nntpserver.NNTPConnectionHandler.listgroup',
+        'app.nntp.nntpserver.NNTPConnectionHandler.list',
+        'app.nntp.nntpserver.NNTPConnectionHandler.hdr',
+        'app.nntp.nntpserver.NNTPConnectionHandler.overview',
+        'app.nntp.nntpserver.NNTPConnectionHandler.stat',
+        'app.nntp.nntpserver.NNTPConnectionHandler.article',
+        'app.nntp.nntpserver.NNTPConnectionHandler.head',
+        'app.nntp.server.PieFedNNTPConnectionHandler.select_group',
+        'app.nntp.server._parse_message_id',
+        'app.nntp.server._sanitize_group_name',
+    ],
 }
