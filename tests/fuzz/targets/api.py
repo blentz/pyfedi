@@ -242,14 +242,14 @@ def check_api_request_args(data: bytes) -> None:
 # ---------------------------------------------------------------------------
 
 def _accepts(validator, text: str) -> bool:
-    """validate_*'s verdict: True for a return of True, False for a ValidationError. marshmallow refuses a value whose
-    validator returns False, so False counts as a refusal too. Any other result or exception escapes."""
+    """validate_*'s verdict as marshmallow 4 reads it: refused when it raises ValidationError, accepted when it returns,
+    WHATEVER it returns -- marshmallow 4 ignores a validator's return value, so a validator returning False for a bad
+    value accepts it. Any other exception escapes."""
     try:
-        result = validator(text)
+        validator(text)
     except ValidationError:
         return False
-    assert isinstance(result, bool), f'{validator.__name__}({text!r}) returned {result!r}'
-    return result
+    return True
 
 
 def check_api_validators(data: bytes) -> None:
