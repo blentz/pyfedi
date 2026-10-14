@@ -735,32 +735,23 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
             self.request.sendall(bytes(line, "utf-8") + _CRLF)
 
     def _getline(self, strip_crlf: bool = True) -> str:
-        line = None
-        if b"\n" in self._buffer:
-            line = self._buffer[: self._buffer.find(b"\n")]
-            self._buffer = self._buffer[len(line) + 1 :]
-        # A blank line leaves `line` empty: take the next buffered line rather than read more past it.
-        while not line and b"\n" not in self._buffer:
-            if len(self._buffer) > _MAXLINE:
+        line = b""
+        while not line:  # an LF-only blank line is skipped
+            # Read only while no complete line is buffered, and refuse a line once it passes _MAXLINE: the buffer
+            # never holds more than one line limit and one read.
+            while b"\n" not in self._buffer:
+                if len(self._buffer) > _MAXLINE:
+                    raise NNTPDataError("Too big a line.")
+                chunk = self.request.recv(_MAXLINE + 1)
+                if not chunk:
+                    raise EOFError  # the client closed the connection
+                self._buffer += chunk
+            end = self._buffer.index(b"\n")
+            if end > _MAXLINE:
                 raise NNTPDataError("Too big a line.")
-            chunk = self.request.recv(_MAXLINE + 1)
-            if not chunk:
-                raise EOFError  # the client closed the connection
-            self._buffer += chunk
-            if b"\n" in chunk or not chunk.strip():
-                break
-        if b"\n" not in self._buffer and self._buffer:
-            raise NNTPDataError("Too big a line.")
-        if not line:
-            line = self._buffer[: self._buffer.find(b"\n")]
-            self._buffer = self._buffer[len(line) + 1 :]
-        if line is None:
-            raise EOFError
-        if strip_crlf:
-            if line[-2:] == _CRLF:
-                line = line[:-2]
-            elif line[-1:] in _CRLF:
-                line = line[:-1]
+            line, self._buffer = self._buffer[:end], self._buffer[end + 1 :]
+        if strip_crlf and line[-1:] == b"\r":
+            line = line[:-1]
         try:
             return line.decode("utf-8")
         except UnicodeDecodeError:
