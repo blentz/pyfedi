@@ -454,7 +454,9 @@ limits on input that could cost seconds of CPU or crash a request:
   deleted again, locally or from S3, on the feed create and edit forms
   (`1e25198d`), feed copy (`9fffb9a3`), community create (`5417f77a`),
   community edit by its owner (`a2bac4a5`) or an admin (`5fc279b4`), and the
-  admin add-user form (`3f518c6f`). `.mpo` photos are stored as RGB instead of failing
+  admin add-user form (`3f518c6f`). With `MEDIA_IMAGE_FORMAT` set, an icon
+  or banner upload no longer leaves its original beside the re-encoded file
+  (`4ae08fd0`). `.mpo` photos are stored as RGB instead of failing
   (`e90ea1c4`).
 - **A query string that is not UTF-8 gets a 400** on every route, not only
   the API (`b5a1c9c0`, `e7c5414f`).
