@@ -55,3 +55,12 @@ def test_a_command_that_is_not_utf8_closes_the_connection():
 def test_an_article_line_that_is_not_utf8_closes_the_connection():
     assert session_replies(b'POST\r\nSubject: \xfe\r\n.\r\nQUIT\r\n', config=POSTING) == [
         POSTING_READY, '340 Input article; end with <CR-LF>.<CR-LF>', CLOSING]
+
+
+def test_group_without_a_name_is_a_syntax_error():
+    """`_, group_name = self.data.split()` raised ValueError for any GROUP without exactly one argument."""
+    assert session_replies(b'GROUP\r\nQUIT\r\n') == [READY, '501 Syntax Error', CLOSING]
+
+
+def test_group_with_two_names_is_a_syntax_error():
+    assert session_replies(b'GROUP a.example b.example\r\nQUIT\r\n') == [READY, '501 Syntax Error', CLOSING]

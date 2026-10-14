@@ -416,8 +416,11 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
                     except NNTPPostError as exc:
                         self.send_lines([f"441 Posting failed: {exc.response}"])
             elif data_caseless.startswith("group"):
-                _, group_name = self.data.split()
-                self.select_group(group_name)
+                tokens = self.data.split()
+                if len(tokens) != 2:
+                    self.send_lines(["501 Syntax Error"])
+                else:
+                    self.select_group(tokens[1])
             elif data_caseless.startswith("over") or data_caseless.startswith("xover"):
                 self.overview()
             elif data_caseless.startswith("hdr") or data_caseless.startswith("xhdr"):
