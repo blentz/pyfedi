@@ -708,6 +708,8 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
             self._buffer = self._buffer[len(line) + 1 :]
         # A blank line leaves `line` empty: take the next buffered line rather than read more past it.
         while not line and b"\n" not in self._buffer:
+            if len(self._buffer) > _MAXLINE:
+                raise NNTPDataError("Too big a line.")
             chunk = self.request.recv(_MAXLINE + 1)
             self._buffer += chunk
             if b"\n" in chunk or not chunk.strip():
