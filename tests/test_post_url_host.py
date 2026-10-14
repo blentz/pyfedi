@@ -14,6 +14,7 @@ instead, and for the special schemes (http, https, ws, wss, ftp) the two disagre
     https://bＡnned.example/  (fullwidth A)   bａnned.example     banned.example
     https://banned.example./                  banned.example.     banned.example.
     https://banned。example/  (ideographic .)  banned。example     banned.example
+    https://0x7f.1/                           0x7f.1              127.0.0.1
 
 A browser treats a backslash as a slash, skips any run of slashes after the scheme,
 percent-decodes the host, and maps it through IDNA (NFKC, case folding, and dropping
@@ -71,6 +72,13 @@ HOST_MISMATCH = [
     # An ideographic full stop is a label separator to IDNA, so a browser visits banned.example; urlparse reads
     # one label, and nameprep and NFKC both leave U+3002 as it is (the fullwidth and halfwidth stops NFKC maps).
     'https://banned\u3002example/x',
+    # A host that ends in a number is an IPv4 address to a browser, which reads decimal, octal and hex parts and
+    # fewer than four of them; urlparse reads the text. A ban on 127.0.0.1 or 1.2.3.4 never matches these.
+    'https://2130706433/x',
+    'https://0x7f.1/x',
+    'https://0x7f000001/x',
+    'https://1.2.3.04/x',
+    'https://127.1/x',
 ]
 
 STILL_STORABLE = [
@@ -79,6 +87,9 @@ STILL_STORABLE = [
     'https://bücher.example/x',
     'https://xn--bcher-kva.example/x',
     'https://[2001:db8::1]/x',
+    'https://1.2.3.4/x',
+    'https://[::ffff:1.2.3.4]/x',
+    'https://example.0xyz/x',
     'https://good.example/a%2Fb',
     'https://good.example/x\\..\\y',
     'https://good.example/x?next=https:///y',

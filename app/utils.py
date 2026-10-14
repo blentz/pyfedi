@@ -889,7 +889,10 @@ _HOSTED_URL_SCHEMES = frozenset({'http', 'https', 'ws', 'wss', 'ftp'})
 MAX_URL_HOST_LENGTH = 253
 
 # The label separators IDNA reads besides '.' (RFC 3490 section 3.1).
-_IDNA_LABEL_SEPARATORS = ('。', '．', '｡')
+_IDNA_LABEL_SEPARATORS = ('\u3002', '\uff0e', '\uff61')
+
+# The WHATWG URL Standard's "ends in a number" test, on a lower-cased last label.
+_ENDS_IN_A_NUMBER = re.compile(r'[0-9]+|0x[0-9a-f]*')
 
 
 def _host_reads_alike(url: str) -> bool:
@@ -915,10 +918,18 @@ def _host_reads_alike(url: str) -> bool:
     if not host or '\\' in parsed.netloc or '%' in host:
         return False
     # IDNA splits labels on the ideographic, fullwidth and halfwidth full stops as well as '.', so a browser visits
-    # banned.example for 'banned。example', which urlparse reads as one label. NFKC maps the latter two to
+    # banned.example for 'banned\u3002example', which urlparse reads as one label. NFKC maps the latter two to
     # '.' and U+3002, but U+3002 maps to itself and would pass every label check below.
     if any(stop in host for stop in _IDNA_LABEL_SEPARATORS):
         return False
+    # A host whose last label is a number is an IPv4 address to a browser, which reads decimal, octal and hex parts
+    # and fewer than four of them: https://2130706433/ and https://0x7f.1/ both visit 127.0.0.1, and urlparse reads
+    # the text. Only the dotted-decimal spelling, which ipaddress alone accepts, reads alike.
+    if ':' not in host and _ENDS_IN_A_NUMBER.fullmatch(host.rpartition('.')[2]):
+        try:
+            ipaddress.IPv4Address(host)
+        except ValueError:
+            return False
     for label in host.split('.'):
         if not label:
             return False
