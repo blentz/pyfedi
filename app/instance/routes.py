@@ -235,6 +235,7 @@ def instance_add_people():
                 flash(_('Could not read this file; export it again as a UTF-8 CSV'), 'error')
                 return render_template('instance/add_people.html', title=_('Add people'), form=form)
 
+        to_follow = to_follow[:IMPORT_MAX_ENTRIES]  # D1046's cap: each handle is a remote lookup
         if current_app.debug:
             bulk_follow(current_user.id, to_follow)
         else:

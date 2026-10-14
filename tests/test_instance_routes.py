@@ -926,6 +926,33 @@ def test_a_mastodon_csv_is_read_for_handles(app, db_session):
     assert follower.delay.call_args.args[1] == ['@alice@example.test', '@bob@other.example']
 
 
+def test_at_most_IMPORT_MAX_ENTRIES_people_are_followed(app, db_session):
+    """Each handle is a remote lookup in bulk_follow, so an unbounded list was an
+    unbounded outbound fetch primitive -- D1046's shape. Capped like the settings
+    import: the first IMPORT_MAX_ENTRIES handles, textarea before file, are
+    followed, the rest are dropped, and the message counts the ones followed."""
+    from app.constants import IMPORT_MAX_ENTRIES
+
+    instance, alice, bob = _seed()
+    _submitter(alice)
+    client = app.test_client()
+    login(client, alice)
+    token = csrf(app, client)
+    typed = [f'@typed{n}@example.test' for n in range(IMPORT_MAX_ENTRIES - 10)]
+    listed = [f'@listed{n}@example.test' for n in range(20)]
+
+    with patch('app.instance.routes.render_template', return_value='rendered'), \
+         patch('app.instance.routes.bulk_follow') as follower, \
+         patch('app.instance.routes.flash') as flashed:
+        client.post('/instance/add_people',
+                    data={'csrf_token': token, 'people': '\n'.join(typed),
+                          'mastodon_csv': (io.BytesIO('\n'.join(listed).encode('utf-8')), 'follows.csv')},
+                    content_type='multipart/form-data')
+
+    assert follower.delay.call_args.args[1] == typed + listed[:10]
+    assert flashed.call_args.kwargs == {} and f'{IMPORT_MAX_ENTRIES} people' in str(flashed.call_args.args[0])
+
+
 def test_a_debug_server_follows_in_process(app, db_session):
     """`if current_app.debug` -- the whole body of that branch is the choice
     between a direct call and a task, so both arms are rows.

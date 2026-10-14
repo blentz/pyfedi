@@ -60,13 +60,6 @@ import app as app_pkg
 # its own, so without a limit here the upload size is whatever the client sends.
 SETTINGS_IMPORT_MAX_BYTES = 5 * 1024 * 1024
 
-# D1045/D1046. One import file drives one outbound actor fetch per entry --
-# `find_actor_or_create` defaults to `create_if_not_found=True`, which reaches
-# `create_actor_from_remote` -- so an unbounded list is an unbounded outbound
-# fetch primitive, the same family as D993 and D1025. Measured: 50 entries, 50
-# lookups. A real Lemmy export lists tens of communities, not thousands.
-SETTINGS_IMPORT_MAX_ENTRIES = 500
-
 # D1062. The URL box holds 10,000 characters, which is roughly a thousand
 # lines, and each line became a File row exempt from the storage quota.
 FILE_URLS_PER_UPLOAD = 25
@@ -103,7 +96,7 @@ def import_entries(contents_json, key):
     entries = contents_json.get(key)
     if not isinstance(entries, list):
         return []
-    return [entry for entry in entries[:SETTINGS_IMPORT_MAX_ENTRIES] if _is_import_entry(key, entry)]
+    return [entry for entry in entries[:IMPORT_MAX_ENTRIES] if _is_import_entry(key, entry)]
 
 
 def _is_import_entry(key, entry):
