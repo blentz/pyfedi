@@ -16,7 +16,7 @@ Properties:
 
 * upload_decode -- the process_upload and edit_post sequence: open, the format check, exif_transpose, convert (or
   to_srgb on edit_post's JPEG arm), thumbnail to MEDIA_IMAGE_MAX_DIMENSION, save. Only Pillow's refusals escape
-  (REFUSALS); an image the format check passes is one of the formats the extension list names; the result is RGB
+  (see below); an image the format check passes is one of the formats the extension list names; the result is RGB
   for a JPEG target and RGBA otherwise, fits MEDIA_IMAGE_MAX_DIMENSION on both sides, and saves and reopens as
   the format it was saved as, at that size.
 * icon_banner_decode -- save_icon_file (its still-image and its animated-GIF arm) and save_banner_file: the same,
@@ -35,10 +35,14 @@ Properties:
   mimetype string (the mimetype is the browser's to send), and raises nothing -- not even a Rust panic, which
   surfaces as pyo3's PanicException, a BaseException its `except Exception` does not catch.
 
-REFUSALS are what Pillow raises for a file it will not decode: UnidentifiedImageError (an OSError), OSError
-(truncated or corrupt data), ValueError, and DecompressionBombError. What each production path does with one is
-its own business (process_upload's API callers answer 400; url_to_thumbnail_file drops the thumbnail); a different
-exception type is the finding.
+A refusal is an exception Pillow (or its HEIF/AVIF plugin) raises from its own code for a file it will not
+decode. The types are not a closed set: besides UnidentifiedImageError, OSError, ValueError and
+DecompressionBombError, the first campaigns found "SyntaxError: broken PNG file" out of load() for a PNG whose chunk
+after IDAT is garbage (Image.open turns SyntaxError into UnidentifiedImageError, load() does not), and pillow_avif's
+"RuntimeError: Failed to decode frame 0" for a damaged AVIF (upload_decode's png_broken_chunk_after_idat and
+avif_color_planes_fail_to_decode). So the production paths have to catch Exception around their Pillow steps, as
+url_to_thumbnail_file does (D1328), and a refusal here is judged by where it was raised, not by its type (_refused).
+An exception raised in PieFed's own code -- app/, or a check -- is the finding.
 
 Decompression bombs. Pillow's guard is in force on every path -- nothing in app/ changes Image.MAX_IMAGE_PIXELS --
 but it only RAISES above twice that (178,956,970 pixels); between MAX_IMAGE_PIXELS and twice it, it warns, and a
@@ -60,10 +64,13 @@ No database, no network, no files: everything is BytesIO.
 """
 
 import io
+import os
 import warnings
 
+import PIL
 import pillow_avif  # NOQA  # registers the plugin, as production's first AVIF upload does
 from PIL import Image, ImageOps
+import pillow_heif
 from pillow_heif import register_heif_opener
 
 from app.community.util import allowed_extensions
@@ -72,8 +79,13 @@ from config import Config
 from tests.fuzz.targets._target import Target
 
 register_heif_opener()
+# Every plugin, now rather than on the first unknown format: run_campaign imports this module inside
+# atheris.instrument_imports, and only a module imported there is instrumented (see its comment on PIL).
+# Production loads them all the same way, on the first Image.open of a format preinit() does not cover.
+Image.init()
 
-REFUSALS = (OSError, ValueError, Image.DecompressionBombError)
+# Where a refusal is raised from: Pillow and the two plugins production registers.
+PILLOW_PACKAGES = tuple(os.path.dirname(module.__file__) + os.sep for module in (PIL, pillow_avif, pillow_heif))
 
 # The upload cap (R207) is 10 MB, but a fuzz input past 64 KiB says nothing about the codecs a shorter one does not,
 # and the seeds stay under it.
@@ -116,14 +128,27 @@ def _open_loaded(data: bytes):
     return img
 
 
+def raised_by_pillow(exc: BaseException) -> bool:
+    """Whether `exc` was raised from Pillow's or a plugin's own code: the innermost frame of its traceback."""
+    tb = exc.__traceback__
+    while tb.tb_next is not None:
+        tb = tb.tb_next
+    return tb.tb_frame.f_code.co_filename.startswith(PILLOW_PACKAGES)
+
+
 def _refused(step, *args):
-    """step(*args), or None when Pillow refuses: a refusal is not a finding, any other exception is."""
+    """step(*args), or None when Pillow refuses (module docstring). Anything else propagates: an AssertionError is
+    a check's property break, and any other exception raised outside Pillow is PieFed's."""
     try:
         with warnings.catch_warnings():
             warnings.simplefilter('error', Image.DecompressionBombWarning)
             return step(*args)
-    except (*REFUSALS, Image.DecompressionBombWarning):
-        return None
+    except AssertionError:
+        raise
+    except Exception as exc:
+        if isinstance(exc, Image.DecompressionBombWarning) or raised_by_pillow(exc):
+            return None
+        raise
 
 
 def _save(img, fmt: str, quality=None) -> bytes:
