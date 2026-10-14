@@ -56,7 +56,8 @@ from app.utils import strip_quote_fallback, FETCH_MAX_BYTES, get_request, get_re
 import app.activitypub.actor as activitypub_actor
 import app.discovery.credits as discovery_credits   # the module: app.discovery.credits imports this one
 import urllib.parse
-from app.utils import random_chars, site_language_id, is_hex_color, save_image_without_metadata
+from app.utils import random_chars, site_language_id, is_hex_color, save_image_without_metadata, \
+    refuse_over_remote_thumbnail_cap
 from app.visibility import OPEN_VISIBILITIES, can_view, is_open, post_title_for
 from app.discovery.podcast import ensure_podcast_community, podcast_twin_named_by_other
 from app.interop.workarounds import is_castopod_podcast
@@ -2937,8 +2938,12 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
                                     if file_ext == '.avif':  # this is quite a big package so we'll only load it if necessary
                                         import pillow_avif  # NOQA  # lazy: registers Pillow's AVIF plugin only on the AVIF path
 
-                                    # Load image data into Pillow
+                                    # Load image data into Pillow. Every image here is a peer's, so one over
+                                    # REMOTE_THUMBNAIL_PIXEL_CAP is refused at its header, before anything decodes
+                                    # it: the ValueError fails the task as an image Pillow will not open does, it
+                                    # is not retried, and nothing has been written yet.
                                     image = Image.open(BytesIO(source_image))
+                                    refuse_over_remote_thumbnail_cap(image)
                                     image = ImageOps.exif_transpose(image)
                                     img_width = image.width
 

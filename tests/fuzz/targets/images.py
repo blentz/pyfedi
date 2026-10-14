@@ -2,7 +2,8 @@
 
 Every image PieFed stores is decoded by Pillow first, and the bytes are somebody else's: a user's upload
 (app/shared/upload.py process_upload, app/shared/post.py edit_post, app/community/util.py save_icon_file and
-save_banner_file) or a peer's thumbnail (app/utils.py url_to_thumbnail_file). Pillow's C decoders are the main
+save_banner_file) or a peer's (app/utils.py url_to_thumbnail_file, and app/activitypub/util.py
+make_image_sizes_async for a federated post's image, an avatar, an icon or a banner). Pillow's C decoders are the main
 crash surface, and how many of them a hostile file can reach depends on which formats each path lets through.
 
 The decode/transform steps are inline in those functions, between writing the upload to disk and writing the
@@ -28,7 +29,10 @@ Properties:
   REMOTE_THUMBNAIL_PIXEL_CAP check at the header (16 MP, width x height x frames), exif_transpose, convert, the 170
   and 512 thumbnails, saved in MEDIA_IMAGE_MEDIUM_FORMAT. The function catches Exception around all of it, so the
   property is the output: nothing over the remote cap was thumbnailed, both thumbnails fit their caps, are RGB or
-  RGBA as configured, and reopen as saved.
+  RGBA as configured, and reopen as saved. make_image_sizes_async makes the same refuse_over_remote_thumbnail_cap
+  call right after its Image.open, before exif_transpose, so the cap half of the property -- nothing over 16 MP
+  gets past the header -- holds for it too (png_4001x4000_just_over_the_remote_cap is the shape it is sent);
+  its medium/thumbnail tail is not mirrored here.
 * to_srgb -- any image Pillow opens and loads, with its own ICC profile or with the input's bytes as one, comes
   out of to_srgb as RGB at the same size, and to_srgb itself raises nothing.
 * scale_gif -- scale_gif on any image Pillow opens gives an animation with one frame per input frame, each within
@@ -323,7 +327,8 @@ def check_icon_banner_decode(data: bytes) -> None:
 
 
 # ---------------------------------------------------------------------------
-# remote_thumbnail_decode: app/utils.py url_to_thumbnail_file:4541-4568
+# remote_thumbnail_decode: app/utils.py url_to_thumbnail_file:4541-4568; the cap check, as
+# app/activitypub/util.py make_image_sizes_async makes it
 # ---------------------------------------------------------------------------
 
 def check_remote_thumbnail_decode(data: bytes) -> None:

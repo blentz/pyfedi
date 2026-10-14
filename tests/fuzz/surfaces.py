@@ -281,5 +281,6 @@ SURFACES: dict[str, list[str]] = {
         'app.utils.inspect_image_c2pa',
         'app.utils.save_image_without_metadata',
         'app.utils.refuse_over_remote_thumbnail_cap',
+        'app.activitypub.util.make_image_sizes_async',
     ],
 }
