@@ -1,5 +1,6 @@
 import re
 
+from app import utils
 from app.utils import (allowlist_html, community_link_to_href, escape_img, feed_link_to_href,
                        handle_lemmy_autocomplete, links_with_parens,
                        mastodon_extra_field_link, person_link_to_href,
@@ -202,6 +203,22 @@ class TestHandleLemmyAutocomplete:
     def test_an_ordinary_markdown_link_is_left_alone(self):
         text = '[example](https://example.com)'
         assert handle_lemmy_autocomplete(text) == text
+
+
+class TestLemmyAutocompleteIsLinear:
+    """A line of '[!' (or '[@', '[~') scanned to the end of the line from every one, and from every '](' when no
+    ')' followed (fuzz: markdown_preprocessors/lemmy_autocomplete_pump)."""
+
+    def test_matches_what_it_matched(self):
+        old = re.compile(r"\[((!|@|~).*?)\]\(.*?\)")
+        fragments = ['[!a@b](x)', '[', '!', '@', '~', ']', '(', ')', '](', 'a', ' ', '\n', '`c`']
+        for text in random_texts(fragments, 4000, 12, seed=7) + corpus_texts('markdown_preprocessors', 300):
+            expected = old.sub(lambda m: '<' + m.group(1) + '>', text)
+            assert utils._LEMMY_AUTOCOMPLETE_RE.sub(
+                lambda m: m.group(0) if m.lastindex is None else '<' + m.group(1) + '>', text) == expected, text
+
+    def test_an_unclosed_line_is_read_in_linear_time(self):
+        assert_linear(self, [pump('[!'), pump('[!a](')], handle_lemmy_autocomplete, seconds=0.5)
 
 
 class TestAllowlistHtmlResidue:

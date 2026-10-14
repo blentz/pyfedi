@@ -1330,6 +1330,13 @@ def escape_img(raw_html: str) -> str:
     return raw_html
 
 
+# [!c@host](url), [@u@host](url) or [~f@host](url) as \[((!|@|~).*?)\]\(.*?\) matched it. That pattern retried
+# every later '](' when no ')' followed the first, though none can follow a later one either: the atomic group
+# commits to the first. A start that fails leaves nothing for a later start on the line, so the skip alternative
+# ends the line. A line of '[!' took 12 s per 64 KiB.
+_LEMMY_AUTOCOMPLETE_RE = re.compile(r"\[((!|@|~)(?>.*?(?=\]\()))\]\(.*?\)|\[[!@~][^\n]*")
+
+
 def handle_lemmy_autocomplete(text: str) -> str:
     """
     Handles markdown formatted links that are in the format that lemmy autocompletes users/communities to and replaces
@@ -1350,6 +1357,8 @@ def handle_lemmy_autocomplete(text: str) -> str:
 
     # Step 2: ID all the markdown-formatted links and check the part in [] if it matches comm/person/feed formats
     def sub_non_formatted_actor(match):
+        if match.lastindex is None:
+            return match.group(0)   # the skip alternative: no link starts here or later on the line
         bracket_part = match.group(1)
         if re.match(COMMUNITY_PATTERN, bracket_part):
             return bracket_part
@@ -1359,9 +1368,7 @@ def handle_lemmy_autocomplete(text: str) -> str:
             return bracket_part
         return match.group(0)
 
-    re_link = re.compile(r"\[((!|@|~).*?)\]\(.*?\)")
-
-    text = re.sub(re_link, sub_non_formatted_actor, text)
+    text = _LEMMY_AUTOCOMPLETE_RE.sub(sub_non_formatted_actor, text)
 
     # Step 3: Restore code blocks
     text = pop_code(code_snippets=code_snippets, text=text, placeholder=placeholder)
