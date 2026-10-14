@@ -450,8 +450,11 @@ limits on input that could cost seconds of CPU or crash a request:
   accept (`bed3b48c`), and a GIF icon that cannot be written back
   (`393f1c21`). The user-files, feed create and feed edit forms show the
   refusal as a message, also for an SVG that cannot be sanitised (`a79b7108`,
-  `dbd4051d`). A feed icon stored before its banner is refused is deleted
-  again (`1e25198d`). `.mpo` photos are stored as RGB instead of failing
+  `dbd4051d`). An icon or avatar stored before its banner is refused is
+  deleted again, locally or from S3, on the feed create and edit forms
+  (`1e25198d`), feed copy (`9fffb9a3`), community create (`5417f77a`),
+  community edit by its owner (`a2bac4a5`) or an admin (`5fc279b4`), and the
+  admin add-user form (`3f518c6f`). `.mpo` photos are stored as RGB instead of failing
   (`e90ea1c4`).
 - **A query string that is not UTF-8 gets a 400** on every route, not only
   the API (`b5a1c9c0`, `e7c5414f`).
@@ -1169,6 +1172,10 @@ owner ruled; those rulings are the limits listed in 2.3. Typical fixes:
   connection (`de81c6eb` to `6a38eb3b`);
 - a compressed body in an encoding the capped reader does not decode is
   refused as such whatever length it declares (`9a077682`).
+- a banner refused on the community edit form, by its owner or an admin, no
+  longer leaves the community naming an old icon (or, on the admin form, an
+  old banner) whose files were already deleted: the old files go only once
+  the new images are committed (`a2bac4a5`, `5fc279b4`).
 
 ---
 
@@ -1309,9 +1316,6 @@ PERM-1 to PERM-5.
   costs about 30 s and 3.3 GB. The owner chose not to add a frame cap. Remote
   thumbnails and federated images are bounded by the 16 MP cap, which counts
   every frame.
-- **Open owner decision from the fuzzing track:** whether community
-  creation, which stores an icon before its banner, deletes the icon when
-  the banner is refused, as the feed forms now do.
 - **Converted form buttons are not browser-verified.** The Join, Leave,
   notification-bell and feed buttons that changed from links to POST forms
   are covered by tests but have not been checked by hand in a browser.
