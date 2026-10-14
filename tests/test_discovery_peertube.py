@@ -155,10 +155,13 @@ def test_as_count(value, expected):
 @pytest.mark.parametrize('value, expected', [('tube.example', True), ('Tube.Example', False), ('a/b.example', False),
                                              ('localhost', False), ('tube.example\n', False), (None, False),
                                              ('1.02', False), ('tube.123', False), ('1.2.3.4', False),
+                                             ('0x7f.0x1', False), ('1.0x', False), ('1.0x1f', False),
+                                             ('tube.0xa1', False), ('tube.0xyz', True),
                                              ('tube.example2', True), ('123.example', True)])
 def test_is_hostname(value, expected):
-    """A name whose last label is all digits is an IPv4 address to a browser: 'https://1.02/' visits 1.0.0.2, so a
-    SepiaSearch row naming host '1.02' got a video link to another address than the one its bans are checked on."""
+    """A name whose last label is a number -- all digits, or '0x' and hex digits -- is an IPv4 address to a browser:
+    'https://1.02/' visits 1.0.0.2 and 'https://0x7f.0x1/' visits 127.0.0.1, so a SepiaSearch row naming such a host
+    got a video link to another address than the one its bans are checked on."""
     assert sources.is_hostname(value) is expected
 
 
