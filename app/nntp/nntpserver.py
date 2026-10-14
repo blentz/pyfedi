@@ -543,7 +543,7 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
     def newnews(self) -> None:
         self.server.refresh()
         command, *tokens = self.data.strip().split()
-        if len(tokens) < 2:
+        if len(tokens) < 3:
             self.send_lines(["501 Syntax Error"])
             return
         wildmat, date_str, time_str, *gmt = tokens
