@@ -1,0 +1,1 @@
+{"allowed_instances": ["[0:0::1]", "::1", "friend.example"], "banned_instances": ["[0:0::1]", "0:0:0:0:0:0:0:1", "[::1]", "[::1", "::FFFF:1.2.3.4", "evil.example:8443"], "banned_domains": ["[0::2]", "::0:2", "bad.example"], "banned_users": ["[::1]"], "banned_tags": []}

@@ -943,6 +943,39 @@ def test_importing_skips_domains_tags_and_users_already_banned(app, db_session,
     assert User.query.filter_by(banned=True).count() == 1
 
 
+def test_ipv6_spellings_are_stored_and_compared_in_one_form(app, db_session, bans_file):
+    """[0:0::1], 0:0:0:0:0:0:0:1 and ::1 are one address, and instance_banned and the Domain lookups compare
+    canonical_host's spelling (compressed, unbracketed). The import stored each entry as written and compared it
+    with the stored names as text, so '[0:0::1]' became a row no lookup reads and '::1' already banned did not stop
+    a second row. Entries are canonical now, compared with the stored names canonically, and a spelling the file
+    repeats is added once (owner ruling 2026-10-14)."""
+    from app.admin.routes import import_bans_task
+
+    _seed()
+    db.session.add_all([BannedInstances(domain='::1'), Domain(name='0:0::2', banned=True)])
+    db.session.commit()
+
+    import_bans_task(bans_file({'banned_instances': ['[0:0::1]', '[::3]', '0:0:0:0:0:0:0:3', 'evil.example'],
+                                'banned_domains': ['[0::2]', '[::4]', '::0:4', 'bad.example']}))
+
+    assert sorted(row.domain for row in BannedInstances.query.all()) == ['::1', '::3', 'evil.example']
+    assert sorted(row.name for row in Domain.query.filter_by(banned=True)) == ['0:0::2', '::4', 'bad.example']
+
+
+def test_ipv6_spellings_are_allowed_in_one_form(app, db_session, bans_file):
+    from app.admin.routes import import_bans_task
+    from app.utils import set_setting
+
+    _seed()
+    set_setting('use_allowlist', True)
+    db.session.add(AllowedInstances(domain='::1'))
+    db.session.commit()
+
+    import_bans_task(bans_file({'allowed_instances': ['[0:0::1]', '[::5]', '0::5']}))
+
+    assert sorted(row.domain for row in AllowedInstances.query.all()) == ['::1', '::5']
+
+
 def test_a_file_missing_a_section_imports_the_rest(app, db_session, bans_file):
     """D923's pin, inverted.
 

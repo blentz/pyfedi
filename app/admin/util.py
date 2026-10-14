@@ -16,7 +16,7 @@ from app.community.util import search_for_community
 from app.constants import POST_TYPE_IMAGE
 from app.models import User, Community, Instance, CommunityMember, Post, Topic
 from app.utils import gibberish, topic_tree, get_request, store_files_in_s3, ensure_directory_exists, guess_mime_type, get_task_session, patch_db_session, sanitize_svg_bytes, \
-    remote_instance_software, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, PAGE_MAX_BYTES
+    remote_instance_software, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, PAGE_MAX_BYTES, canonical_host
 import shutil
 from app.email import send_email
 
@@ -565,6 +565,9 @@ def fetch_mastodon_directory(remote_url: str, max_pages: int = 20) -> List[dict]
 
 # The sections of a ban list whose entries are names, as the ban lists export writes them; banned_tags is the other.
 BAN_LIST_NAME_SECTIONS = ('allowed_instances', 'banned_instances', 'banned_domains', 'banned_users')
+# The sections whose names are hosts, compared by instance_banned/instance_allowed and the Domain lookups in
+# canonical_host's spelling.
+BAN_LIST_HOST_SECTIONS = ('allowed_instances', 'banned_instances', 'banned_domains')
 # Every name lands in a 255- or 256-character column, which Postgres refuses to overflow rather than truncating.
 BAN_LIST_NAME_MAX_LENGTH = 255
 
@@ -587,7 +590,9 @@ def ban_list_entries(contents: str | bytes) -> dict | None:
     Otherwise a dict holding every section, each a list in file order of the entries shaped as the ban lists export
     writes them: names that are non-empty strings that fit their column, and for banned_tags objects with such a
     name and a display_as that is one too or null (absent reads as null). Anything else -- a section that is not a
-    list, an entry of another shape -- is skipped, so one bad entry no longer fails the import of the rest.
+    list, an entry of another shape -- is skipped, so one bad entry no longer fails the import of the rest. A host
+    (an instance or domain entry) is in canonical_host's spelling, the one every ban lookup compares: [0:0::1] and
+    ::1 are one address.
     """
     if isinstance(contents, bytes):
         try:
@@ -606,6 +611,8 @@ def ban_list_entries(contents: str | bytes) -> dict | None:
         return [entry for entry in value if well_formed(entry)] if isinstance(value, list) else []
 
     entries = {key: section(key, _is_ban_list_name) for key in BAN_LIST_NAME_SECTIONS}
+    for key in BAN_LIST_HOST_SECTIONS:
+        entries[key] = [canonical_host(entry) for entry in entries[key]]
     entries['banned_tags'] = [{'name': tag['name'], 'display_as': tag.get('display_as')}
                               for tag in section('banned_tags', _is_ban_list_tag)]
     return entries

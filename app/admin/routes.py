@@ -47,7 +47,7 @@ from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJo
 from app.shared.tasks import task_selector
 from app.shared.upload import process_file_delete
 from app.translation import LibreTranslateAPI
-from app.utils import render_template, permission_required, set_setting, get_setting, gibberish, markdown_to_html, \
+from app.utils import canonical_host, render_template, permission_required, set_setting, get_setting, gibberish, markdown_to_html, \
     moderating_communities, joined_communities, finalize_user_setup, theme_list, blocked_phrases, blocked_referrers, \
     topic_tree, languages_for_form, menu_topics, ensure_directory_exists, add_to_modlog, get_request, \
     LEMMYVERSE_MAX_BYTES, LEMMYVERSE_MAX_SECONDS, PAGE_MAX_BYTES, \
@@ -1250,11 +1250,9 @@ def import_bans_task(contents):
                     instances_allowed = contents_json.get('allowed_instances', [])
                     if isinstance(instances_allowed, list) and len(instances_allowed) > 0:
                         # get the existing allows and their domains
-                        already_allowed_instances = []
-                        already_allowed = AllowedInstances.query.all()
-                        if len(already_allowed) > 0:
-                            for already_allowed in already_allowed:
-                                already_allowed_instances.append(already_allowed.domain)
+                        # compared in canonical_host's spelling, as ban_list_entries gives the entries
+                        already_allowed_instances = {canonical_host(row.domain or '')
+                                                     for row in AllowedInstances.query.all()}
 
                         # loop through the instances_allowed
                         for allowed_instance in instances_allowed:
@@ -1264,6 +1262,7 @@ def import_bans_task(contents):
                             else:
                                 # allow the instance
                                 db.session.add(AllowedInstances(domain=allowed_instance))
+                                already_allowed_instances.add(allowed_instance)
                     # commit to the db
                     db.session.commit()
 
@@ -1273,11 +1272,9 @@ def import_bans_task(contents):
                     instance_bans = contents_json.get('banned_instances', [])
                     if isinstance(instance_bans, list) and len(instance_bans) > 0:
                         # get the existing bans and their domains
-                        already_banned_instances = []
-                        already_banned = BannedInstances.query.all()
-                        if len(already_banned) > 0:
-                            for ab in already_banned:
-                                already_banned_instances.append(ab.domain)
+                        # compared in canonical_host's spelling, as ban_list_entries gives the entries
+                        already_banned_instances = {canonical_host(row.domain or '')
+                                                    for row in BannedInstances.query.all()}
 
                         # loop through the instance_bans
                         for instance_ban in instance_bans:
@@ -1287,6 +1284,7 @@ def import_bans_task(contents):
                             else:
                                 # ban the domain
                                 db.session.add(BannedInstances(domain=instance_ban))
+                                already_banned_instances.add(instance_ban)
                     # commit to the db
                     db.session.commit()
 
@@ -1295,11 +1293,9 @@ def import_bans_task(contents):
                 domain_bans = contents_json.get('banned_domains', [])
                 if isinstance(domain_bans, list) and len(domain_bans) > 0:
                     # get the existing bans and their domains
-                    already_banned_domains = []
-                    already_banned = Domain.query.filter_by(banned=True).all()
-                    if len(already_banned) > 0:
-                        for ab in already_banned:
-                            already_banned_domains.append(ab.name)
+                    # compared in canonical_host's spelling, as ban_list_entries gives the entries
+                    already_banned_domains = {canonical_host(row.name or '')
+                                              for row in Domain.query.filter_by(banned=True).all()}
 
                     # loop through the domain_bans
                     for domain_ban in domain_bans:
@@ -1309,6 +1305,7 @@ def import_bans_task(contents):
                         else:
                             # ban the domain
                             db.session.add(Domain(name=domain_ban, banned=True))
+                            already_banned_domains.add(domain_ban)
                     # commit to the db
                     db.session.commit()
 

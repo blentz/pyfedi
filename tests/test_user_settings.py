@@ -536,6 +536,24 @@ def test_a_domain_is_normalised_before_it_is_blocked(app, env, typed):
     assert Domain.query.filter_by(name='example.com').count() == 1
 
 
+@pytest.mark.parametrize('typed', ['[0:0::1]', 'https://[::1]/', '0:0:0:0:0:0:0:1'])
+def test_an_ipv6_domain_is_stored_in_one_form(app, env, typed):
+    """An IPv6 literal is filed under canonical_host's spelling, the one domain_from_url gives a link to it, so the
+    block reaches its posts whatever spelling was typed (owner ruling 2026-10-14)."""
+    client, viewer, other = env
+    db.session.add(Domain(name='::1'))
+    db.session.commit()
+    token = csrf(app, client)
+
+    with patch('app.user.routes.render_template', return_value='rendered'):
+        client.post('/user/settings/block/domain',
+                    data={'domain_name': typed, 'submit': 'Block domain', 'csrf_token': token})
+
+    domain = Domain.query.one()
+    assert domain.name == '::1'
+    assert DomainBlock.query.filter_by(user_id=viewer.id, domain_id=domain.id).count() == 1
+
+
 def test_blocking_a_domain_twice_says_so(app, env):
     client, viewer, other = env
     domain = Domain(name='example.com')

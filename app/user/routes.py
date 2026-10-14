@@ -53,6 +53,7 @@ from app.rss_extras import RSSFeed
 import app.api.alpha.views as alpha_views
 from app.utils import user_filters_languages
 from app.utils import ap_alternate_url
+from app.utils import canonical_host
 import app as app_pkg
 
 # D1042. A settings export is a few kilobytes; this is two orders of magnitude
@@ -1870,8 +1871,8 @@ def user_settings_block_domain():
 
         # Remove protocol if present
         domain_name = domain_name.replace('https://', '').replace('http://', '')
-        # Remove trailing slash if present
-        domain_name = domain_name.rstrip('/')
+        # Remove trailing slash if present, and file an IPv6 literal under the one spelling domain_from_url uses
+        domain_name = canonical_host(domain_name.rstrip('/'))
 
         # D581: nobody blocks this instance's own domain, as app.shared.domain.block_domain refuses it
         if domain_name == current_app.config['SERVER_NAME'].lower():

@@ -20,12 +20,14 @@ Properties:
 * ban_list -- ban_list_entries never raises: it is None exactly when the bytes are not UTF-8 JSON with an object at
   the top, and otherwise holds every section, each the file's own entries of the shape the import task writes into
   a column -- a non-empty name of at most 255 characters, or for banned_tags an object with such a name and a
-  display_as that is one or null -- in file order.
+  display_as that is one or null -- in file order. An instance or domain entry that is an IPv6 literal, bracketed or
+  not, is in its compressed unbracketed spelling (the one every ban lookup compares); every other name is as listed.
 
 No database and no network: these are the parse steps only, before any lookup.
 """
 
 import csv
+import ipaddress
 import json
 
 from app.admin.util import ban_list_entries
@@ -96,6 +98,16 @@ def check_mastodon_csv(data: bytes) -> None:
 
 
 BAN_LIST_NAME_SECTIONS = ('allowed_instances', 'banned_instances', 'banned_domains', 'banned_users')
+BAN_LIST_HOST_SECTIONS = ('allowed_instances', 'banned_instances', 'banned_domains')
+
+
+def _one_spelling(host: str) -> str:
+    """An IPv6 literal's compressed spelling, without brackets; anything else unchanged."""
+    literal = host[1:-1] if host[:1] == '[' and host[-1:] == ']' else host
+    try:
+        return ipaddress.IPv6Address(literal).compressed
+    except ValueError:
+        return host
 
 
 def _ban_list_name(entry) -> bool:
@@ -116,7 +128,10 @@ def check_ban_list(data: bytes) -> None:
     for key in BAN_LIST_NAME_SECTIONS:
         raw = value.get(key)
         listed = raw if isinstance(raw, list) else []
-        assert entries[key] == [entry for entry in listed if _ban_list_name(entry)], f'{key}: {entries[key]!r:.300}'
+        expected = [entry for entry in listed if _ban_list_name(entry)]
+        if key in BAN_LIST_HOST_SECTIONS:
+            expected = [_one_spelling(entry) for entry in expected]
+        assert entries[key] == expected, f'{key}: {entries[key]!r:.300}'
     raw = value.get('banned_tags')
     listed = raw if isinstance(raw, list) else []
     expected = [{'name': tag['name'], 'display_as': tag.get('display_as')} for tag in listed

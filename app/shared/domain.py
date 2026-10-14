@@ -5,7 +5,7 @@ from flask_login import current_user
 from app import db, cache
 from app.constants import *
 from app.models import DomainBlock, Domain
-from app.utils import authorise_api_user, blocked_domains
+from app.utils import authorise_api_user, blocked_domains, canonical_host
 
 
 def block_domain(domain, src, auth=None):
@@ -14,7 +14,8 @@ def block_domain(domain, src, auth=None):
     else:
         user_id = current_user.id
 
-    domain_to_block = db.session.query(Domain).filter(Domain.name == domain).first()
+    # canonical_host: Domain names hold an IPv6 literal in one spelling, and every spelling is one address
+    domain_to_block = db.session.query(Domain).filter(Domain.name == canonical_host(domain)).first()
 
     # D581: an unknown domain is an error, not a silent success, and nobody blocks this instance's own domain
     if domain_to_block is None:
@@ -47,7 +48,7 @@ def unblock_domain(domain, src, auth=None):
     else:
         user_id = current_user.id
 
-    domain_to_unblock = db.session.query(Domain).filter(Domain.name == domain).first()
+    domain_to_unblock = db.session.query(Domain).filter(Domain.name == canonical_host(domain)).first()
 
     if domain_to_unblock is None:  # D581
         if src == SRC_API:

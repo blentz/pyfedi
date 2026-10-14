@@ -226,3 +226,20 @@ def test_unblock_domain_web_answers_404_for_an_unknown_domain(app, db_session):
 
     assert exc.value.code == 404
     assert db.session.query(DomainBlock).count() == 1
+
+
+@pytest.mark.parametrize('spelling', ['[0:0::1]', '0:0:0:0:0:0:0:1', '[::1]'])
+def test_an_ipv6_domain_is_found_by_any_spelling(app, db_session, spelling):
+    """Domain names hold an IPv6 literal in canonical_host's spelling, and a browser reads every spelling as one
+    address. block_domain and unblock_domain compared the name as given, so any other spelling was
+    domain_not_found (owner ruling 2026-10-14)."""
+    s = _seed_blocker()
+    domain = Domain(name='::1')
+    db.session.add(domain)
+    db.session.commit()
+
+    block_domain(spelling, SRC_API, bearer(s.blocker))
+    assert db.session.query(DomainBlock).filter_by(domain_id=domain.id, user_id=s.blocker.id).count() == 1
+
+    unblock_domain(spelling, SRC_API, bearer(s.blocker))
+    assert db.session.query(DomainBlock).filter_by(domain_id=domain.id, user_id=s.blocker.id).count() == 0
