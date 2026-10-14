@@ -27,7 +27,7 @@ class Target:
     name: str              # corpus dir name, campaign CLI name
     check: Callable[[bytes], None]
     surface: str           # key into SURFACES
-    budget_ms: int | None  # per-input wall-clock budget in replay; None = untimed
+    budget_ms: int | None  # per-input CPU-time budget in replay; None = untimed
     needs_app: bool        # check must run inside a Flask app context
 ```
 
@@ -139,8 +139,9 @@ helper from an inline view, that helper joins its surface.
 2. **Replay with budget** (`tests/test_utils_fuzz_corpus.py`, generalised over
    the registry): each corpus file runs through its check; a target with
    `budget_ms` fails if one input exceeds it (measured with
-   `time.perf_counter`; budgets are set ~10x the measured worst seed so CI noise
-   does not flake). ReDoS seeds are committed at a size that takes seconds
+   `time.thread_time`, the thread's CPU time, so time spent waiting for a CPU
+   under load does not count; budgets are set ~10x the measured worst seed so
+   CI noise does not flake). ReDoS seeds are committed at a size that takes seconds
    on the vulnerable regex, so a regression fails loudly and fast.
 3. **Smoke campaign** (`tests/fuzz/smoke.py`, run as
    `python -m tests.fuzz.smoke [--seconds N] [targets...]` in the test
