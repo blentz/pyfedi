@@ -104,6 +104,10 @@ class TestAddressesThatUsedToGetThrough:
         '[64:ff9b::a00:1]',
         '[ff02::1]',
         '224.0.0.1',
+        # fec0::/10, the deprecated IPv6 site-local block: outside 2000::/3, neither private nor reserved to
+        # ipaddress, so is_global, yet still routed to a site's own hosts where it is configured.
+        '[fec0::1]',
+        '[fef9:1468:7474:601:6814:7473:b874:0]',
     ])
     def test_it_is_refused(self, app, host):
         assert is_invalid_get_request_uri(f'https://{host}/actor') is True
