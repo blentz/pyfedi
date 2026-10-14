@@ -49,11 +49,20 @@ class TestEscapeImg:
 
     def test_matches_what_it_matched(self):
         """<img.+?> scanned to the end of the line from every '<img' when no '>' followed (fuzz:
-        markdown_preprocessors/escape_img_pump)."""
+        markdown_preprocessors/escape_img_pump). Held to the old matches on single-line, lower-case tags, which
+        is all markdown2 itself writes."""
         old = re.compile(r"<img.+?>")
-        fragments = ['<img', '<img src=x>', '>', 'a', ' ', '\n', '<']
+        fragments = ['<img', '<img src=x>', '>', 'a', ' ', '<']
         for text in random_texts(fragments, 3000, 12, seed=9) + corpus_texts('markdown_preprocessors', 300):
-            assert escape_img(text) == old.sub(r"<code><image placeholder></code>", text), repr(text)
+            if '\n' not in text and not re.search(r'<(?!img)(?i:img)', text):
+                assert escape_img(text) == old.sub(r"<code><image placeholder></code>", text), repr(text)
+
+    def test_an_upper_case_or_multi_line_img_tag_is_escaped_too(self):
+        """The notification pages render markdown with allow_img=False, and a raw <IMG src=...> or an <img whose
+        attributes start on the next line got past <img.+?> and loaded (fuzz: markdown_to_html/no_images_*,
+        markdown_preprocessors/escape_img_uppercase, escape_img_multiline)."""
+        assert escape_img('a <IMG src="x.png"> b') == 'a <code><image placeholder></code> b'
+        assert escape_img('a <img\nsrc="x.png"> b') == 'a <code><image placeholder></code> b'
 
     def test_an_unclosed_line_is_read_in_linear_time(self):
         assert_linear(self, [pump('<img')], escape_img, seconds=0.5)
