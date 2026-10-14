@@ -12,7 +12,7 @@ the user logs in as alice, as PieFedNNTPServer hides a community the user is ban
 
 import pytest
 
-from app.nntp.nntpserver import parse_datetime
+from app.nntp.nntpserver import numbers_in_group, parse_datetime
 from tests.fuzz.targets.nntp import session_replies
 
 READY = '201 NNTP Service Ready, posting prohibited'
@@ -110,3 +110,25 @@ def test_a_group_hidden_by_logging_in_is_no_longer_selected(command):
     assert session_replies(b'GROUP c.example\r\n' + LOGIN + command + b'\r\nQUIT\r\n', config=b'\x01\x05') == [
         READY, '211 1 1 1 c.example', '381 Enter passphrase', '281 Authentication accepted',
         '412 No newsgroup selected', CLOSING]
+
+
+@pytest.mark.parametrize('command', [b'OVER 1-1000000000000000', b'XHDR Subject 1-1000000000000000',
+                                     b'LISTGROUP a.example 1-1000000000000000', b'OVER -1000000000000000-2'])
+def test_a_range_past_the_group_looks_up_only_the_groups_articles(command):
+    """The range commands looped over every number the client named, looking each one up: `OVER 1-1000000000000000`
+    held a thread for good. The stub fails the session if one command looks up more than the group holds."""
+    replies = session_replies(b'GROUP a.example\r\n' + command + b'\r\nQUIT\r\n')
+    assert replies[0] == READY and replies[-2:] == ['.', CLOSING]
+
+
+@pytest.mark.parametrize('first,last,low,high,numbers', [
+    (1, 10 ** 15, 1, 3, [1, 2, 3]),
+    (-(10 ** 15), 2, 1, 3, [1, 2]),
+    (2, 2, 1, 3, [2]),
+    (5, 9, 1, 3, []),
+    (3, 1, 1, 3, []),
+    (1, 5, 0, 0, []),
+    (0, 5, 0, 0, [0]),
+])
+def test_numbers_in_group_keeps_only_what_the_group_can_hold(first, last, low, high, numbers):
+    assert list(numbers_in_group(first, last, low, high)) == numbers

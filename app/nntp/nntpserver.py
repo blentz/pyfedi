@@ -159,6 +159,15 @@ def parse_range(s) -> typing.Optional[typing.Tuple[int, typing.Optional[int]]]:
         return None
 
 
+def numbers_in_group(first: int, last: int, low: int, high: int) -> range:
+    """The article numbers first..last that a group with water marks low..high can hold.
+
+    The range commands loop over this rather than over first..last, so their work is bounded by the group and
+    not by the numbers a client names: `OVER 1-1000000000000000` looked up a quadrillion articles.
+    """
+    return range(max(first, low), min(last, high) + 1)
+
+
 class ArticleInfo(typing.NamedTuple):
     number: int
     subject: str
@@ -620,7 +629,7 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
         if not range_[1]:
             range_ = (range_[0], group.high)
         ret = [f"211 {group.number} {group.low} {group.high} {group.name}"]
-        for i in range(range_[0], typing.cast(int, range_[1]) + 1):
+        for i in numbers_in_group(range_[0], typing.cast(int, range_[1]), group.low, group.high):
             try:
                 _articleinfo = self.server.articles[i]
                 ret.append(str(i))
@@ -817,14 +826,14 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
                     self.send_lines(["412 No newsgroup selected"])
                     return
                 # Second form (range specified)
+                group = self._selected_group()
+                if group is None:
+                    self.send_lines(["412 No newsgroup selected"])
+                    return
                 if not range_[1]:
-                    group = self._selected_group()
-                    if group is None:
-                        self.send_lines(["412 No newsgroup selected"])
-                        return
                     range_ = (range_[0], group.high)
                 ret = []
-                for i in range(range_[0], typing.cast(int, range_[1]) + 1):
+                for i in numbers_in_group(range_[0], typing.cast(int, range_[1]), group.low, group.high):
                     try:
                         articleinfo = self.server.articles[i]
                         value = get_value(articleinfo, tokens[0])
@@ -869,14 +878,14 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
         if len(tokens) == 1:
             range_ = parse_range(tokens[0])
             if range_:
+                group = self._selected_group()
+                if group is None:
+                    self.send_lines(["412 No newsgroup selected"])
+                    return
                 if not range_[1]:
-                    group = self._selected_group()
-                    if group is None:
-                        self.send_lines(["412 No newsgroup selected"])
-                        return
                     range_ = (range_[0], group.high)
                 self.send_lines(["224 Overview information follows (multi-line)"])
-                for i in range(range_[0], typing.cast(int, range_[1]) + 1):
+                for i in numbers_in_group(range_[0], typing.cast(int, range_[1]), group.low, group.high):
                     try:
                         self.send_lines([str(self.server.articles[i])])
                     except NNTPArticleNotFound:
