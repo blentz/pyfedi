@@ -79,6 +79,9 @@ HOST_MISMATCH = [
     'https://0x7f000001/x',
     'https://1.2.3.04/x',
     'https://127.1/x',
+    # A browser strips trailing spaces from the whole url before reading it; urlparse keeps them in the host.
+    'https://banned.example ',
+    'https://banned.example\t ',
 ]
 
 STILL_STORABLE = [
