@@ -13,6 +13,7 @@ instead, and for the special schemes (http, https, ws, wss, ftp) the two disagre
     https://banned%2Eexample/                 banned%2eexample    banned.example
     https://bＡnned.example/  (fullwidth A)   bａnned.example     banned.example
     https://banned.example./                  banned.example.     banned.example.
+    https://banned。example/  (ideographic .)  banned。example     banned.example
 
 A browser treats a backslash as a slash, skips any run of slashes after the scheme,
 percent-decodes the host, and maps it through IDNA (NFKC, case folding, and dropping
@@ -67,6 +68,9 @@ HOST_MISMATCH = [
     'https://ban\U000E0100ned.example/x',
     # Unassigned in this Python's tables: a browser on newer Unicode may map it.
     'https://ban\u0378ned.example/x',
+    # An ideographic full stop is a label separator to IDNA, so a browser visits banned.example; urlparse reads
+    # one label, and nameprep and NFKC both leave U+3002 as it is (the fullwidth and halfwidth stops NFKC maps).
+    'https://banned\u3002example/x',
 ]
 
 STILL_STORABLE = [
