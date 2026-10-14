@@ -24,6 +24,7 @@ from urllib.parse import urlsplit
 
 import markdown2
 from bs4 import BeautifulSoup
+from bs4.element import PreformattedString
 from furl import furl
 
 from app.activitypub.util import castopod_episode_url
@@ -314,19 +315,29 @@ def _attribute_names_a_handle(soup) -> bool:
     return False
 
 
+def _rendered(soup):
+    """`soup` without the nodes a browser renders nothing for: comments, CDATA, declarations, doctypes and
+    processing instructions."""
+    for node in soup.find_all(string=lambda string: isinstance(string, PreformattedString)):
+        node.extract()
+    return soup
+
+
 def check_markdown_actor_links(data: bytes) -> None:
     """community_link_to_href, feed_link_to_href and person_link_to_href, the jinja filters every rendered body
     goes through, over what they are given in production: allowlist_html output. (redos_actor_patterns times
     their regexes on raw text.)
 
     A link the filter creates is never inside an existing <a> or a <code>, and taking the created links back out
-    gives the document it was given: the filter only wraps handles in text. That second property is not asserted
+    gives the document it was given: the filter only wraps handles in text. Comments, CDATA and the like are left
+    out of that comparison: the filters also rewrite a handle inside a comment, which renders nothing, and cannot
+    end it (a created link holds no '-->'). That second property is not asserted
     when an attribute value holds a handle (an image's alt naming @user@host): the filter rewrites inside the tag
     there, which is reported as a product decision rather than fixed (2026-10-13)."""
     html = allowlist_html(_input_text(data), test_env=TEST_ENV)
     if SERVER in html or PLACEHOLDER in html:
         return
-    original = BeautifulSoup(html, 'html.parser')
+    original = _rendered(BeautifulSoup(html, 'html.parser'))
     in_attribute = _attribute_names_a_handle(original)
     for function in _ACTOR_FILTERS:
         result = function(html, server_name_override=SERVER)
@@ -339,7 +350,7 @@ def check_markdown_actor_links(data: bytes) -> None:
             continue
         for anchor in soup.find_all('a', href=_CREATED):
             anchor.unwrap()
-        assert str(soup) == str(original), f'{function.__name__} changed more than wrapping handles in links'
+        assert str(_rendered(soup)) == str(original), f'{function.__name__} changed more than wrapping handles in links'
 
 
 # What each filter wraps a handle in, read back out: the created anchor and its text.
@@ -371,7 +382,7 @@ def check_html_text_helpers(data: bytes) -> None:
     """html_to_text, markdown_to_text, shorten_string, shorten_url, remove_images and mastodon_extra_field_link.
 
     html_to_text never lengthens its input (entities only shorten) and is the identity on text holding no '<'
-    or '&'. shorten_string(s, n), n from the first byte, is s when it fits and otherwise s cut to n-3 characters
+    or '&' and not only whitespace (BeautifulSoup turns a document of only whitespace into one space or newline). shorten_string(s, n), n from the first byte, is s when it fits and otherwise s cut to n-3 characters
     and an ellipsis, so never longer than n. shorten_url is at most 50 characters: it ignores its max_length
     argument (default 20) and always cuts at shorten_string's default 50, which is reported as a product decision
     rather than asserted here (2026-10-13). remove_images leaves no <img> and no <video>. mastodon_extra_field_link
@@ -383,7 +394,10 @@ def check_html_text_helpers(data: bytes) -> None:
     plain = html_to_text(text)
     assert isinstance(plain, str) and len(plain) <= len(text), 'html_to_text lengthened its input'
     if '<' not in text and '&' not in text:
-        assert plain == text, 'html_to_text changed text that holds no markup'
+        if text.strip():
+            assert plain == text, 'html_to_text changed text that holds no markup'
+        else:
+            assert not plain.strip(), 'html_to_text turned whitespace into text'
 
     stripped = markdown_to_text(text)
     assert len(stripped) == len(text) - 2 * text.count('# ')
