@@ -601,13 +601,74 @@ def test_store_uploaded_media_refuses_what_it_cannot_accept(env):
     assert post.url is None and media_of(post) is None
 
 
-def test_media_local_path_is_only_for_local_media(env):
-    post = make_post(env.chan, env.mod, ap_id='https://test.piefed.local/post/y')
-    assert media_local_path(post) is None
-    post.url = 'https://example.com/static/media/posts/ab/cd/x.mp4'
-    assert media_local_path(post) is None
-    post.url = env.app.config['SERVER_URL'] + '/static/media/posts/ab/cd/x.mp4'
-    assert media_local_path(post) == 'app/static/media/posts/ab/cd/x.mp4'
+def recorded_post(env, url, ap_id='https://test.piefed.local/post/crafted'):
+    """A post carrying a media record and `url`, as no code path but store_uploaded_media makes one."""
+    post = make_post(env.chan, env.mod, ap_id=ap_id)
+    post.url = url
+    with_media(post, status='ready')
+    db.session.commit()
+    return post
+
+
+def media_url(env, rest):
+    return env.app.config['SERVER_URL'] + '/static/media/posts/' + rest
+
+
+def test_media_local_path_names_a_file_this_server_stored(env):
+    post = stored_post(env, env.chan)
+    path = media_local_path(post)
+    assert re.fullmatch(r'app/static/media/posts/(\w\w)/(\w\w)/\1\2\w{11}\.mp4', path)
+    assert os.path.exists(path) and post.url == media_url(env, path[len('app/static/media/posts/'):])
+
+
+@pytest.mark.parametrize('rest', [
+    '../../../config.py',                       # traversal
+    'ab/cd/../../../../config.py',
+    '%2e%2e/%2e%2e/abcdEFGHIJKLMNO.mp4',        # percent-escaped traversal
+    'ab/cd/abceEFGHIJKLMNO.mp4',               # directories that are not the name's first four characters
+    'ab/cd/x/abcdEFGHIJKLMNO.mp4',             # an extra segment
+    'ab/cd/abcdEFGHIJKLMN.mp4',                # a name one character short
+    'ab/cd/abcdEFGHIJKLMNO.py',                # an extension we never write
+    'ab/cd/abcdEFGHIJKLMNO.mp4\n',
+])
+def test_media_local_path_refuses_a_url_it_did_not_write(env, rest):
+    assert media_local_path(recorded_post(env, media_url(env, rest))) is None
+
+
+def test_media_local_path_needs_a_media_record_and_a_local_post(env):
+    stored = stored_post(env, env.chan)
+    link = make_post(env.chan, env.stranger, ap_id='https://test.piefed.local/post/link')
+    link.url = stored.url                       # another post's media, on a link post with no record
+    assert media_local_path(link) is None
+    remote = recorded_post(env, stored.url, ap_id='https://peer.example/post/1')
+    assert media_local_path(remote) is None     # a remote post, whatever record it carries
+    assert media_local_path(recorded_post(env, None, ap_id='https://test.piefed.local/post/n')) is None
+    assert media_local_path(recorded_post(env, 'https://example.com/static/media/posts/ab/cd/abcdEFGHIJKLMNO.mp4',
+                                          ap_id='https://test.piefed.local/post/o')) is None
+
+
+def test_media_local_path_refuses_a_path_that_resolves_outside_the_media_tree(env, tmp_path):
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    os.makedirs('app/static/media/posts/ab', exist_ok=True)
+    os.symlink(outside, 'app/static/media/posts/ab/cd')
+    assert media_local_path(recorded_post(env, media_url(env, 'ab/cd/abcdEFGHIJKLMNO.mp4'))) is None
+
+
+def test_a_failed_link_post_never_deletes_another_posts_media(env, monkeypatch):
+    """A link post naming another post's media URL, failing inside edit_post, must not unlink that file."""
+    stored = stored_post(env, env.chan)
+    path = media_local_path(stored)
+
+    def fail(*args, **kwargs):
+        raise RuntimeError('a later step fails')
+    monkeypatch.setattr('app.shared.post.is_image_url', lambda url: False)
+    monkeypatch.setattr('app.shared.post.opengraph_parse', lambda url: None)
+    monkeypatch.setattr(Post, 'calculate_cross_posts', fail)   # after post.url is set
+    response = submit(env, env.mod, env.talk, 'link', link_url=stored.url)
+
+    assert response.status_code == 302 and Post.query.count() == 1
+    assert os.path.exists(path)
 
 
 def test_queue_probe_queues_the_probe_task(monkeypatch):

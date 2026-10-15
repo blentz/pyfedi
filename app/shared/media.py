@@ -1,5 +1,6 @@
 """Uploaded video and audio (spec §3.4, §5.1, A13): who may upload, how big, what type, and the media record."""
 import os
+import re
 import shutil
 import uuid
 
@@ -20,6 +21,8 @@ MEDIA_EXT = {'video/mp4': '.mp4', 'video/quicktime': '.mov', 'video/webm': '.web
              'audio/mpeg': '.mp3', 'audio/mp4': '.m4a', 'audio/ogg': '.ogg'}
 MEDIA_DIRECTORY = 'app/static/media/posts'
 COPY_CHUNK = 1024 * 1024
+# The only names store_uploaded_media writes: two shard directories that are the name's first four characters
+_STORED_NAME = re.compile(r'([A-Za-z0-9]{2})/([A-Za-z0-9]{2})/([A-Za-z0-9]{15})\.(?:mp4|mov|webm|mp3|m4a|ogg)')
 
 
 class MediaRefused(Exception):
@@ -102,6 +105,7 @@ def store_uploaded_media(post, uploaded_file, kind) -> str | None:
     path = f'{directory}/{name}{MEDIA_EXT[mime]}'
     with open(path, 'wb') as out:
         shutil.copyfileobj(stream, out, COPY_CHUNK)
+    post.stored_media_path = path   # not a column: make_post removes exactly this file if the create then fails
     post.url = f"{current_app.config['SERVER_URL']}{served_path(path)}"
     post.status = POST_STATUS_PROCESSING
     with_media(post, status='processing', uuid=str(uuid.uuid4()), mime=mime, bytes=size)
@@ -111,11 +115,23 @@ def store_uploaded_media(post, uploaded_file, kind) -> str | None:
 
 
 def media_local_path(post) -> str | None:
-    """The local file behind `post.url`, when it is media this server stored."""
-    prefix = current_app.config['SERVER_URL'] + served_path(MEDIA_DIRECTORY) + '/'
-    if not isinstance(post.url, str) or not post.url.startswith(prefix):
+    """The local file behind `post.url`, when it is media this server stored for this post, else None.
+
+    `post.url` is not trusted: a link post can name any URL, including another post's media or a traversal. A path
+    is returned only for a local post with a media record (which only store_uploaded_media writes) whose URL is
+    exactly a name store_uploaded_media would write, resolving inside the media tree."""
+    if media_of(post) is None or not post.is_local() or not isinstance(post.url, str):
         return None
-    return 'app' + post.url[len(current_app.config['SERVER_URL']):]
+    prefix = current_app.config['SERVER_URL'] + served_path(MEDIA_DIRECTORY) + '/'
+    name = post.url[len(prefix):] if post.url.startswith(prefix) else ''
+    match = _STORED_NAME.fullmatch(name)
+    if match is None or match[1] + match[2] != match[3][:4]:
+        return None
+    path = f'{MEDIA_DIRECTORY}/{name}'
+    root = os.path.realpath(MEDIA_DIRECTORY)
+    if os.path.commonpath([root, os.path.realpath(path)]) != root:
+        return None
+    return path
 
 
 def queue_probe(post_id) -> None:
