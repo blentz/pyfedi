@@ -6,6 +6,7 @@ import pytest
 from app.shared import ffmpeg
 from app.shared.ffmpeg import MediaToolError, extract_cover, extract_frame, run_ffprobe
 
+FORMATS = 'mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,mp3,ogg'
 FIX = os.path.join(os.path.dirname(__file__), 'fixtures', 'media')
 
 
@@ -28,10 +29,82 @@ def test_probe_command_is_sandboxed(monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, stdout=b'{"streams": [], "format": {}}', stderr=b'')
     monkeypatch.setattr(ffmpeg.subprocess, 'run', fake_run)
     run_ffprobe('/x/y.mp4')
-    assert seen['cmd'][:9] == ['ffprobe', '-v', 'error', '-print_format', 'json', '-show_format',
-                               '-show_streams', '-protocol_whitelist', 'file']
-    assert seen['cmd'][-1] == 'file:/x/y.mp4'
+    assert seen['cmd'] == ['ffprobe', '-v', 'error', '-print_format', 'json', '-show_format',
+                           '-show_streams', '-protocol_whitelist', 'file',
+                           '-format_whitelist', FORMATS, 'file:/x/y.mp4']
     assert seen['timeout'] == 60 and seen['preexec_fn'] is ffmpeg._limit_address_space
+    assert seen['stdin'] is subprocess.DEVNULL
+
+
+def test_ffmpeg_commands_are_sandboxed(monkeypatch, tmp_path):
+    seen = []
+
+    def fake_run(cmd, **kwargs):
+        seen.append((cmd, kwargs))
+        open(cmd[-1][len('file:'):], 'wb').write(b'\xff\xd8')
+        return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+    monkeypatch.setattr(ffmpeg.subprocess, 'run', fake_run)
+    extract_frame('/x/y.mp4', 0.5, str(tmp_path / 'f.jpg'))
+    extract_cover('/x/y.mp3', str(tmp_path / 'c.jpg'))
+    frame, cover = seen
+    assert frame[0] == ['ffmpeg', '-nostdin', '-v', 'error', '-protocol_whitelist', 'file',
+                        '-format_whitelist', FORMATS, '-ss', '0.500', '-i', 'file:/x/y.mp4',
+                        '-frames:v', '1', '-y', 'file:' + str(tmp_path / 'f.jpg')]
+    assert cover[0] == ['ffmpeg', '-nostdin', '-v', 'error', '-protocol_whitelist', 'file',
+                        '-format_whitelist', FORMATS, '-i', 'file:/x/y.mp3', '-an', '-map', '0:v:0',
+                        '-frames:v', '1', '-y', 'file:' + str(tmp_path / 'c.jpg')]
+    assert all(kw['stdin'] is subprocess.DEVNULL and kw['timeout'] == 60 for _, kw in seen)
+
+
+def _playlist(tmp_path, name):
+    # A playlist is media for the hls demuxer; the whitelist must refuse it before any segment is read.
+    path = tmp_path / name
+    path.write_bytes(b'#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\nfile:///etc/hostname\n#EXT-X-ENDLIST\n')
+    return str(path)
+
+
+def test_probe_refuses_a_playlist_demuxer(tmp_path):
+    with pytest.raises(MediaToolError, match='not on whitelist'):
+        run_ffprobe(_playlist(tmp_path, 'evil.m3u8'))
+
+
+def test_frame_refuses_a_playlist_demuxer(tmp_path):
+    with pytest.raises(MediaToolError, match='not on whitelist'):
+        extract_frame(_playlist(tmp_path, 'evil.m3u8'), 0, str(tmp_path / 'f.jpg'))
+
+
+def test_id3_prefixed_playlist_is_refused(tmp_path):
+    evil = tmp_path / 'evil.mp3'
+    evil.write_bytes(b'ID3\x03\x00\x00\x00\x00\x00\x00#EXTM3U\n#EXTINF:1,\nfile:///etc/hostname\n#EXT-X-ENDLIST\n')
+    with pytest.raises(MediaToolError):
+        run_ffprobe(str(evil))
+    with pytest.raises(MediaToolError):
+        extract_frame(str(evil), 0, str(tmp_path / 'f.jpg'))
+
+
+def test_error_text_hides_local_paths(tmp_path):
+    bad = tmp_path / 'secret-name.mp4'
+    bad.write_bytes(b'not media at all')
+    with pytest.raises(MediaToolError) as caught:
+        run_ffprobe(str(bad))
+    assert str(tmp_path) not in str(caught.value) and '<file>' in str(caught.value)
+    with pytest.raises(MediaToolError) as caught:
+        extract_frame(str(bad), 0, str(tmp_path / 'out.jpg'))
+    assert str(tmp_path) not in str(caught.value)
+
+
+def test_frame_past_the_end_raises(tmp_path):
+    # ffmpeg 7.1 exits non-zero here; the 'wrote no image' guard covers builds that exit 0 (next test).
+    with pytest.raises(MediaToolError):
+        extract_frame(os.path.join(FIX, 'video_h264.mp4'), 60, str(tmp_path / 'f.jpg'))
+
+
+def test_empty_output_raises(monkeypatch, tmp_path):
+    out = tmp_path / 'f.jpg'
+    monkeypatch.setattr(ffmpeg.subprocess, 'run', lambda cmd, **k: (
+        out.write_bytes(b''), subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b''))[1])
+    with pytest.raises(MediaToolError, match='wrote no image'):
+        extract_frame('/x/y.mp4', 0, str(out))
 
 
 def test_probe_timeout_raises(monkeypatch):
