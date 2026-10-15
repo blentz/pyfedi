@@ -94,6 +94,8 @@ def make_user(instance, name: str, local: bool = False, with_keys: bool = False)
         ap_profile_id=None if local else f'https://{instance.domain}/users/{name}',
         ap_public_url=None if local else f'https://{instance.domain}/users/{name}',
         ap_inbox_url=None if local else f'https://{instance.domain}/users/{name}/inbox',
+        # stored at creation since spec 2026-10-14 A12; a test of an actor stored before that sets it to None
+        ap_own_inbox_url=None if local else f'https://{instance.domain}/users/{name}/inbox',
     )
     db.session.add(user)
     db.session.commit()

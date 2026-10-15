@@ -21,7 +21,7 @@ from app.activitypub.actor import find_actor_by_url
 from app.activitypub.entitlement import PRIVATE_HEADERS, actor_document, addressees_of, audience_entitles, signed_requester_actor
 from app.activitypub.signature import POST_REQUIRED, HttpSignature, VerificationError, VerificationFormatError, default_context, LDSignature, \
     send_post_request, verify_with_key_refresh, request_key_id
-from app.activitypub.util import MEDIA_OBJECT_TYPES, MEDIA_URL_KIND, media_url_from, activity_dedupe_key, community_actor_data, refresh_community_profile_task, claim_activity, release_activity, host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
+from app.activitypub.util import MEDIA_OBJECT_TYPES, follow_answer_inbox, MEDIA_URL_KIND, media_url_from, activity_dedupe_key, community_actor_data, refresh_community_profile_task, claim_activity, release_activity, host_of, users_total, active_half_year, active_month, local_posts, local_comments, \
     post_to_activity, post_count_collections, comment_count_collections, find_actor_or_create_cached, find_liked_object, \
     lemmy_site_data, is_activitypub_request, delete_post_or_comment, community_members, \
     create_post, create_post_reply, update_post_reply_from_activity, \
@@ -1273,7 +1273,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                                  "type": "Follow", "id": follow_id},
                                       "type": "Reject",
                                       "id": f"{current_app.config['SERVER_URL']}/activities/reject/" + gibberish(32)}
-                            send_post_request(user.follow_answer_inbox(), reject, community.private_key, f"{community.public_url()}#main-key")
+                            send_post_request(follow_answer_inbox(user), reject, community.private_key, f"{community.public_url()}#main-key")
                         else:
                             existing_member = session.query(CommunityMember).filter_by(user_id=user.id, community_id=community.id).first()
                             if not existing_member:
@@ -1292,7 +1292,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                                  "object": community.public_url(), "type": "Follow", "id": follow_id},
                                       "type": "Accept",
                                       "id": f"{current_app.config['SERVER_URL']}/activities/accept/" + gibberish(32)}
-                            send_post_request(user.follow_answer_inbox(), accept, community.private_key, f"{community.public_url()}#main-key")
+                            send_post_request(follow_answer_inbox(user), accept, community.private_key, f"{community.public_url()}#main-key")
                             log_incoming_ap(id, APLOG_FOLLOW, APLOG_SUCCESS, saved_json,
                                             'Already a member, Accept re-sent' if existing_member else None)
                         return
@@ -1313,7 +1313,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                                  "type": "Follow", "id": follow_id},
                                       "type": "Reject",
                                       "id": f"{current_app.config['SERVER_URL']}/activities/reject/" + gibberish(32)}
-                            send_post_request(user.follow_answer_inbox(), reject, feed.private_key, f"{feed.public_url()}#main-key")
+                            send_post_request(follow_answer_inbox(user), reject, feed.private_key, f"{feed.public_url()}#main-key")
                         else:
                             already_member = feed_membership(user, feed) == SUBSCRIPTION_MEMBER
                             if not already_member:
@@ -1329,7 +1329,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                                  "type": "Follow", "id": follow_id},
                                       "type": "Accept",
                                       "id": f"{current_app.config['SERVER_URL']}/activities/accept/" + gibberish(32)}
-                            send_post_request(user.follow_answer_inbox(), accept, feed.private_key,
+                            send_post_request(follow_answer_inbox(user), accept, feed.private_key,
                                               f"{feed.public_url()}#main-key")
                             log_incoming_ap(id, APLOG_FOLLOW, APLOG_SUCCESS, saved_json,
                                             'Already a member, Accept re-sent' if already_member else None)
@@ -1361,7 +1361,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                                      "object": local_user.public_url(), "type": "Follow", "id": follow_id},
                                           "type": "Accept",
                                           "id": f"{current_app.config['SERVER_URL']}/activities/accept/" + gibberish(32)}
-                                send_post_request(remote_user.follow_answer_inbox(), accept, local_user.private_key,
+                                send_post_request(follow_answer_inbox(remote_user), accept, local_user.private_key,
                                                   f"{local_user.public_url()}#main-key")
 
                                 targets_data = {'gen': '0',
@@ -1396,7 +1396,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                                  "object": local_user.public_url(), "type": "Follow", "id": follow_id},
                                       "type": "Accept",
                                       "id": f"{current_app.config['SERVER_URL']}/activities/accept/" + gibberish(32)}
-                            send_post_request(remote_user.follow_answer_inbox(), accept, local_user.private_key,
+                            send_post_request(follow_answer_inbox(remote_user), accept, local_user.private_key,
                                               f"{local_user.public_url()}#main-key")
                             log_incoming_ap(id, APLOG_FOLLOW, APLOG_SUCCESS, saved_json, 'Already following, Accept re-sent')
                         elif existing_follower.is_accepted is None:

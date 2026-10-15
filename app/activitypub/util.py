@@ -27,6 +27,7 @@ from flask_babel import _, force_locale, gettext
 from furl import furl
 from sqlalchemy import func, text, Integer, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import object_session as sa_object_session
 
 from app import db, cache, celery, plugins
 from app.activitypub.signature import signed_get_capped, signed_get_request, send_post_request, default_context, RsaKeys
@@ -1164,6 +1165,25 @@ def own_inbox_of(actor_json: dict) -> str | None:
     off the actor's host."""
     inbox = actor_json.get('inbox')
     return inbox if isinstance(inbox, str) and inbox and len(inbox) <= INBOX_URL_MAX else None
+
+
+def follow_answer_inbox(follower: User) -> str:
+    """Where the Accept or Reject of `follower`'s Follow goes: their own inbox (spec 2026-10-14 §10 A12).
+
+    A remote follower stored before ap_own_inbox_url existed has none yet. Their actor document is fetched once,
+    here and synchronously, so that the first answer after the upgrade reaches it: PeerTube ignores one at its
+    shared inbox and the follow would stay pending. The document must name the follower and pass delivery_inbox_of's
+    own-host rule. If the fetch or a check fails, the answer goes to the shared inbox, as it did before."""
+    if follower.ap_own_inbox_url is None and not follower.is_local():
+        document = remote_object_to_json(follower.ap_public_url, retry_delay=0)   # a request path: no sleep (D775)
+        if isinstance(document, dict) and names_actor(document.get('id'), follower) \
+                and delivery_inbox_of(document, follower.ap_profile_id):
+            own_inbox = own_inbox_of(document)
+            if own_inbox:
+                follower.ap_own_inbox_url = own_inbox
+                session = sa_object_session(follower) or db.session
+                session.commit()
+    return follower.follow_answer_inbox()
 
 
 def names_actor(candidate, actor) -> bool:

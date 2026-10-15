@@ -11,7 +11,7 @@ from sqlalchemy import desc, or_, text, asc
 
 from app import db, cache, celery
 from app.activitypub.signature import default_context, send_post_request
-from app.activitypub.util import find_actor_or_create, extract_domain_and_actor
+from app.activitypub.util import find_actor_or_create, extract_domain_and_actor, follow_answer_inbox
 # The module, not the name: app.auth.util reaches this file through
 # app.activitypub.util before random_token is defined (import cycle: auth.util)
 import app.auth.util as auth_util
@@ -2682,7 +2682,7 @@ def user_follow_request_accept(user_id):
                                  "object": current_user.public_url(), "type": "Follow", "id": f'{current_app.config["SERVER_URL"]}/activities/follow/{gibberish(32)}'},
                       "type": "Accept",
                       "id": f"{current_app.config['SERVER_URL']}/activities/accept/" + gibberish(32)}
-            send_post_request(remote_user.follow_answer_inbox(), accept, current_user.private_key,
+            send_post_request(follow_answer_inbox(remote_user), accept, current_user.private_key,
                               f"{current_user.public_url()}#main-key")
     return 'Done'
 
@@ -2716,7 +2716,7 @@ def user_follow_request_reject(user_id):
                                  "id": f'{current_app.config["SERVER_URL"]}/activities/follow/{gibberish(32)}'},
                       "type": "Reject",
                       "id": f"{current_app.config['SERVER_URL']}/activities/reject/" + gibberish(32)}
-            send_post_request(remote_user.follow_answer_inbox(), accept, current_user.private_key,
+            send_post_request(follow_answer_inbox(remote_user), accept, current_user.private_key,
                               f"{current_user.public_url()}#main-key")
     return 'Done'
 
