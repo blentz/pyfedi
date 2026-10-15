@@ -592,3 +592,22 @@ def test_a_public_or_unlisted_post_is_still_boosted_by_a_follower(db_session, fe
 
     assert result is not None and result.id == post.id
     assert PostBoost.query.filter_by(post_id=post.id, user_id=booster.id).count() == 1
+
+
+def test_a_fetched_followers_only_note_is_not_boosted(db_session, fetch_spy, followed_booster, log_spy):
+    """The fetch path: a boosted Note we did not hold is fetched and stored with the visibility its audience gives.
+    A followers-only one is refused like a held one (A12), though it is stored. (A Note addressed to nobody does not
+    resolve to a post at all.)"""
+    from app.activitypub.util import process_microblog_announce
+    from app.models import PostBoost
+    fake_fetch, _ = fetch_spy
+    make_site()
+    author = make_user(make_instance('other.example'), 'alice')
+    note_uri = 'https://other.example/notes/43'
+    fake_fetch.result = {'id': note_uri, 'type': 'Note', 'attributedTo': author.ap_profile_id,
+                         'content': '<p>for my followers</p>', 'published': '2026-08-20T12:00:00Z',
+                         'to': ['https://other.example/users/alice/followers'], 'cc': []}
+
+    assert process_microblog_announce(announce(followed_booster.ap_public_url, note_uri), 'a8', False) is None
+    assert PostBoost.query.count() == 0
+    assert log_spy[-1][2] == 'Boosted post is not public'
