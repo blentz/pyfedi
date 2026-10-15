@@ -231,3 +231,33 @@ def test_non_indexable_public_post_is_not_searchable(db_session):
     db.session.commit()
     note = microblog_note(post, [])
     assert 'searchableBy' not in note and 'likes' in note
+
+
+def test_title_that_is_only_a_prefix_of_a_word_is_kept(db_session):
+    post = _local(title='Hi', body='Hiking today', body_html='<p>Hiking today</p>')
+    assert note_content(post) == '<p>Hi</p><p>Hiking today</p>'
+
+
+def test_title_followed_by_a_word_break_is_omitted(db_session):
+    post = _local(title='Hi', body='Hi there', body_html='<p>Hi there</p>')
+    assert note_content(post) == '<p>Hi there</p>'
+
+
+def test_title_equal_to_body_is_omitted(db_session):
+    post = _local(title='Hi', body='Hi', body_html='<p>Hi</p>')
+    assert note_content(post) == '<p>Hi</p>'
+
+
+@pytest.mark.parametrize('post_type', [POST_TYPE_LINK, POST_TYPE_VIDEO])
+def test_non_http_url_is_not_linked(db_session, post_type):
+    post = _local(title='A site', post_type=post_type)
+    post.url = 'javascript:alert(1)'
+    assert note_content(post) == '<p>A site</p>'
+    assert note_attachments(post) == []
+
+
+def test_uppercase_https_scheme_is_linked(db_session):
+    post = _local(title='A site', post_type=POST_TYPE_LINK)
+    post.url = 'HTTPS://example.com/x'
+    assert note_content(post) == '<p><a href="HTTPS://example.com/x">A site</a></p>'
+    assert note_attachments(post) == [{'type': 'Link', 'href': 'HTTPS://example.com/x'}]

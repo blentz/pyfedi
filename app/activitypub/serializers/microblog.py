@@ -1,4 +1,6 @@
 """A post in the local microblogs community as a Mastodon-native Note (spec 2026-10-14 §4.2, amended §10 A2)."""
+from urllib.parse import urlsplit
+
 from flask import current_app
 from markupsafe import escape
 
@@ -10,6 +12,21 @@ from app.visibility import followers_only_addressing, is_open
 PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
 
 
+def _web_url(post):
+    """The post's url when it is http or https, else None: anything else (javascript:, data:) is never linked."""
+    if post.url and urlsplit(post.url).scheme.lower() in ('http', 'https'):
+        return post.url
+    return None
+
+
+def _starts_with_title(text: str, title: str) -> bool:
+    """True when `text` starts with `title` as whole words: the next character is the end or not alphanumeric."""
+    if not text.startswith(title):
+        return False
+    rest = text[len(title):]
+    return not rest or not rest[0].isalnum()
+
+
 def uses_microblog_note(post) -> bool:
     """A post goes out as a Note when it is in the local microblogs community. Polls and events keep their
     Question and Event shapes."""
@@ -18,12 +35,12 @@ def uses_microblog_note(post) -> bool:
 
 def note_content(post) -> str:
     """The title as its own paragraph, then the body. A Note has no title, and the form requires one, so leaving it
-    out would lose what the author wrote. Left out only when the body's text already starts with it."""
+    out would lose what the author wrote. Left out only when the body's text already starts with it as whole words."""
     body = post.body_html or ''
     title = (post.title or '').strip()
-    if not title or html_to_text(body).strip().startswith(title):
+    if not title or _starts_with_title(html_to_text(body).strip(), title):
         return body
-    if post.type in (POST_TYPE_LINK, POST_TYPE_VIDEO) and post.url:
+    if post.type in (POST_TYPE_LINK, POST_TYPE_VIDEO) and _web_url(post):
         return f'<p><a href="{escape(post.url)}">{escape(title)}</a></p>{body}'
     return f'<p>{escape(title)}</p>{body}'
 
@@ -45,7 +62,7 @@ def note_attachments(post) -> list:
             attachment['width'] = post.image.width
             attachment['height'] = post.image.height
         return [attachment]
-    if post.type in (POST_TYPE_LINK, POST_TYPE_VIDEO) and post.url:
+    if post.type in (POST_TYPE_LINK, POST_TYPE_VIDEO) and _web_url(post):
         return [{'type': 'Link', 'href': post.url}]
     return []
 
