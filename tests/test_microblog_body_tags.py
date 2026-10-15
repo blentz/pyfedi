@@ -79,3 +79,10 @@ def test_the_note_lists_the_stored_tags(db_session, monkeypatch):
     tags = [entry['name'] for entry in microblog_note(db.session.get(Post, post.id), [])['tag']
             if entry['type'] == 'Hashtag']
     assert sorted(tags) == ['#cats', '#news']
+
+
+def test_a_body_hashtag_longer_than_a_tag_name_is_not_stored(db_session, monkeypatch):
+    """Tag.name and display_as are String(256); a longer #word failed the whole save."""
+    longest, too_long = 'a' * 256, 'b' * 257
+    _, post = _create(monkeypatch, f'#{longest} #{too_long} #cats')
+    assert _names(post) == sorted([longest, 'cats'])
