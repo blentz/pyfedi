@@ -107,6 +107,11 @@ class PeerTube:
         """Subscribe to a channel by handle (`name@host`); PeerTube resolves it by webfinger and sends Follow."""
         self.http.post('/users/me/subscriptions', json={'uri': handle}).raise_for_status()
 
+    def unsubscribe(self, handle):
+        r = self.http.delete(f'/users/me/subscriptions/{handle}')
+        if r.status_code != 404:
+            r.raise_for_status()
+
     def subscription(self, handle):
         r = self.http.get(f'/users/me/subscriptions/{handle}')
         return None if r.status_code == 404 else r.raise_for_status().json()
