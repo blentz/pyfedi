@@ -150,6 +150,7 @@ def send_microblog_note(post, user, community, recipients: list, edit: bool) -> 
                 'to': note['to'], 'cc': note['cc'], '@context': default_context()}
     followers_only = not is_open(post)
 
+    sent_to = set()
     if not followers_only:
         announce_id = f"{current_app.config['SERVER_URL']}/activities/announce/{gibberish(15)}"
         inner = {key: value for key, value in activity.items() if key != '@context'}
@@ -166,6 +167,7 @@ def send_microblog_note(post, user, community, recipients: list, edit: bool) -> 
             if instance.software in MICROBLOG_APPS:
                 if edit:
                     send_post_request(instance.inbox, activity, user.private_key, user.public_url() + '#main-key')
+                    sent_to.add(instance.domain)
                 else:
                     send_post_request(instance.inbox, microblog_announce, community.private_key,
                                       community.public_url() + '#main-key')
@@ -175,7 +177,6 @@ def send_microblog_note(post, user, community, recipients: list, edit: bool) -> 
 
     targets = [recipient.instance for recipient in recipients if recipient.instance_id != 1]
     targets += follower_instances(user) if followers_only else user.following_instances()
-    sent_to = set()
     for instance in targets:
         if instance.domain in sent_to or not can_deliver_to(user, instance):
             continue

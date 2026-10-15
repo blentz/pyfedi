@@ -148,6 +148,19 @@ def test_microblog_app_community_follower_gets_authors_update_on_edit(db_session
     assert update['type'] == 'Update' and update['actor'] == alice.public_url()
 
 
+def test_edit_reaches_an_instance_following_community_and_author_once(db_session, http_mock):
+    alice, community, post = _seed()
+    post.edited_at = datetime(2026, 10, 14, 12, 0)
+    masto, dave = _remote('mastodon.example', 'mastodon', 'dave')
+    db.session.add(CommunityMember(user_id=dave.id, community_id=community.id))
+    make_follow(alice, dave, is_inward=True)
+    db.session.commit()
+    route = http_mock.post('https://mastodon.example/inbox').respond(202)
+    send_post(post.id, edit=True, session=db.session)
+    (update,) = _bodies(route)
+    assert update['type'] == 'Update'
+
+
 def test_mentioned_remote_user_gets_the_create(db_session, http_mock, monkeypatch):
     alice, community, post = _seed()
     instance, bob = _remote('mastodon.example', 'mastodon', 'bob')
