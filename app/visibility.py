@@ -28,7 +28,7 @@ def _follows(viewer_id: int, author_id: int) -> bool:
         UserFollower.is_accepted.is_(True))).scalar()
 
 
-# The @user@instance syntax send_post and send_reply resolve Mentions from (app/shared/tasks/pages.py:mentioned_users)
+# The @user@instance syntax send_post and send_reply resolve Mentions from (app/mentions.py:mentioned_users_found_by)
 MENTION_PATTERN = re.compile(r"@([a-zA-Z0-9_.-]*)@([a-zA-Z0-9_.-]*)\b")
 
 
