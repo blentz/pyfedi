@@ -54,6 +54,7 @@ from app.shared.site import block_remote_instance
 # The module, not the names: app.shared.community reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
+from app.shared.media import media_of
 from app.shared.tasks import task_selector
 import app.variants as variants
 from app.utils import clean_ap_url, can_moderate, render_template, markdown_to_html, validation_required, \
@@ -126,6 +127,16 @@ def refuse_invisible_ids(post_id=None, reply_id=None):
         refuse_invisible(db.session.get(Post, post_id) or abort(404))
     if reply_id is not None:
         refuse_invisible(db.session.get(PostReply, reply_id) or abort(404))
+
+
+def refused_media_replacement(post) -> bool:
+    """A13.7: an edit cannot replace a media post's file. Its edit form shows no file field, so a file sent anyway
+    is refused with a message on the redisplayed form, and nothing is saved."""
+    uploaded = request.files.get('image_file')
+    if media_of(post) is None or not uploaded:
+        return False
+    flash(_('The file of a media post cannot be replaced.'), 'error')
+    return True
 
 
 def refuse_unpublished_post(post):
@@ -1338,9 +1349,10 @@ def post_edit(post_id: int):
 
         form.language_id.choices = languages_for_form()
 
-        if form.validate_on_submit():
+        if form.validate_on_submit() and not refused_media_replacement(post):
             try:
-                uploaded_file = request.files.get('image_file') if post_type == POST_TYPE_IMAGE or post_type == POST_TYPE_EVENT or post_type == POST_TYPE_VIDEO else None
+                # A13.6/A13.7: video is uploaded only with a new post, never by an edit
+                uploaded_file = request.files.get('image_file') if post_type == POST_TYPE_IMAGE or post_type == POST_TYPE_EVENT else None
                 shared_post.edit_post(form, post, post_type, SRC_WEB, uploaded_file=uploaded_file)
                 flash(Markup(_('Your changes have been saved. <a href="/post/%(post_id)d/edit">Edit it</a> if you notice any typos!')))
             except Exception as ex:

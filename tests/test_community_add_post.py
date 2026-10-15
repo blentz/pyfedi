@@ -707,7 +707,7 @@ def test_a_post_without_a_community_field_falls_back_to_the_actor(app, poster):
 
 @pytest.mark.parametrize('type_name', ['image', 'event', 'video'])
 def test_the_upload_types_pass_the_file_through(app, poster, type_name):
-    """`if type == 'image' or type == 'event': uploaded_file =
+    """`if type == 'image' or type == 'event' or media_upload: uploaded_file =
     request.files['image_file']` -- three of the six types carry an upload and
     the other three must pass None, or `make_post` stores nothing for a post
     the user attached a file to."""
@@ -716,8 +716,10 @@ def test_the_upload_types_pass_the_file_through(app, poster, type_name):
                             **_type_extras(type_name))
     payload['image_file'] = (io.BytesIO(b'not really a png'), 'x.png')
 
-    with patch('app.shared.post.make_post', return_value=FakePost()) as make:
-        with patch('app.community.routes.can_upload_video', return_value=True):
+    # spec A13.6: a video file is taken from a moderator `can_upload_media` admits, in a video_channel
+    with patch('app.shared.post.make_post', return_value=FakePost()) as make, \
+            patch('app.community.routes.media_kind_for', return_value='video'):
+        with patch('app.community.routes.can_upload_media', return_value=True):
             with patch('app.community.routes.render_template', return_value='rendered') as render:
                 client.post(url(app, 'community.add_post',
                                 actor=community.name, type=type_name),
@@ -752,16 +754,17 @@ def test_a_before_post_create_plugin_can_rewrite_the_title_and_body(app, poster)
 
 
 def test_a_video_post_without_upload_permission_gets_no_file(app, poster):
-    """`elif type == 'video' and can_upload_video()` -- the permission is half
+    """`media_upload = type == media_kind_for(community) and can_upload_media(...)` -- the permission is half
     of the condition, so an account without it posts a video by URL only and
-    the file it attached is dropped."""
+    the file it attached is dropped (spec A13.6)."""
     client, token, community, author, english = poster
     payload = _post_payload(token, english, community, title='No video upload',
                             **_type_extras('video'))
     payload['image_file'] = (io.BytesIO(b'not really a png'), 'x.png')
 
-    with patch('app.shared.post.make_post', return_value=FakePost()) as make:
-        with patch('app.community.routes.can_upload_video', return_value=False):
+    with patch('app.shared.post.make_post', return_value=FakePost()) as make, \
+            patch('app.community.routes.media_kind_for', return_value='video'):
+        with patch('app.community.routes.can_upload_media', return_value=False):
             with patch('app.community.routes.render_template', return_value='rendered') as render:
                 client.post(url(app, 'community.add_post',
                                 actor=community.name, type='video'),

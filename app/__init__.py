@@ -285,6 +285,7 @@ def create_app(config_class=Config):
         'app.shared.tasks.maintenance.*': {'queue': 'background'},
         'app.admin.routes.*': {'queue': 'background'},
         'app.admin.util.*': {'queue': 'background'},
+        'app.shared.tasks.media.*': {'queue': 'background'},   # A13.9: probe_media and transcodes
     })
 
     # Initialize redis_client

@@ -22,6 +22,8 @@ from app.constants import *
 from app.models import File, Notification, NotificationSubscription, Poll, PollChoice, PollChoiceVote, Post, \
     PostBookmark, PostVote, Report, Site, User, utcnow, Instance, Event, Community, CommunityFlair, \
     votes_cast_today, adjust_domain_post_count, served_path, _as_url
+from app.shared.media import MediaRefused, can_upload_media, media_kind_for, media_of, queue_probe, \
+    store_uploaded_media
 from app.shared.tasks import task_selector
 from app.shared.upload import open_uploaded_image
 from app.visibility import is_open, post_title_for
@@ -29,7 +31,7 @@ from app.utils import render_template, authorise_api_user, shorten_string, gibbe
     piefed_markdown_to_lemmy_markdown, markdown_to_html, fixup_url, domain_from_url, \
     opengraph_parse, url_to_thumbnail_file, can_create_post, is_video_hosting_site, recently_upvoted_posts, \
     is_image_url, add_to_modlog, store_files_in_s3, guess_mime_type, retrieve_image_hash, \
-    hash_matches_blocked_image, can_upvote, can_downvote, get_recipient_language, to_srgb, can_upload_video, \
+    hash_matches_blocked_image, can_upvote, can_downvote, get_recipient_language, to_srgb, \
     is_video_url, sanitize_svg, user_ip_banned, ip_address, inspect_image_c2pa, save_image_without_metadata, \
     community_membership_private, is_local_microblogs, communities_banned_from, can_moderate, can_create_post_reply
 import app as app_pkg
@@ -236,6 +238,29 @@ def with_body_hashtags(tags: list, body_html) -> list:
     return tags
 
 
+_MEDIA_POST_TYPE = {MEDIA_KIND_VIDEO: POST_TYPE_VIDEO, MEDIA_KIND_AUDIO: POST_TYPE_LINK}   # A13.5
+
+
+def media_upload_kind(user, community, type, uploaded_file) -> str | None:
+    """The media kind `uploaded_file` is stored as, or None when it is not a media upload (A13.6): the post type must
+    be the one `community`'s kind takes, and `user` a moderator the upload switch admits."""
+    kind = media_kind_for(community)
+    if kind is None or not uploaded_file or _MEDIA_POST_TYPE[kind] != type:
+        return None
+    return kind if can_upload_media(user, community) else None
+
+
+def web_form_url(input, type):
+    """The link a web form submitted for a post of `type`. The audio form names its link `audio_url`."""
+    if type == POST_TYPE_LINK:
+        field = input.audio_url if hasattr(input, 'audio_url') else input.link_url
+    elif type == POST_TYPE_VIDEO:
+        field = input.video_url
+    else:
+        return None
+    return (field.data or '').strip()
+
+
 def make_post(input, community, type, src, auth=None, uploaded_file=None):
     if src == SRC_API:
         user = authorise_api_user(auth, return_type='model')
@@ -262,12 +287,7 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None):
     else:
         user = current_user
         title = input.title.data.strip()
-        if type == POST_TYPE_LINK:
-            url = input.link_url.data.strip()
-        elif type == POST_TYPE_VIDEO:
-            url = input.video_url.data.strip()
-        else:
-            url = None
+        url = web_form_url(input, type)
         language_id = input.language_id.data
 
     # taking values from one JSON to put in another JSON to put in a DB to put in another JSON feels bad
@@ -287,11 +307,9 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None):
             if domain.banned or domain.name.endswith('.pages.dev'):
                 raise Exception(domain.name + ' is blocked by admin')
 
-    if uploaded_file and uploaded_file.filename != '':
-        # check if this is an allowed type of file
+    if uploaded_file and uploaded_file.filename != '' and media_upload_kind(user, community, type, uploaded_file) is None:
+        # check if this is an allowed type of file. A media upload is checked by its bytes instead (A13.6).
         allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.mpo', '.avif', '.svg']
-        if type == POST_TYPE_VIDEO and can_upload_video(user):
-            allowed_extensions.extend(['.mp4', '.webm', '.mov'])
         file_ext = os.path.splitext(uploaded_file.filename)[1]
         if file_ext.lower() not in allowed_extensions:
             raise Exception('filetype not allowed')
@@ -431,14 +449,10 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
             user = current_user
         title = input.title.data.strip()
         body = input.body.data
-        if type == POST_TYPE_LINK:
-            url = input.link_url.data.strip()
-        elif type == POST_TYPE_VIDEO:
-            url = input.video_url.data.strip()
-        elif type == POST_TYPE_IMAGE and not from_scratch:
+        if type == POST_TYPE_IMAGE and not from_scratch:
             url = post.url
         else:
-            url = None
+            url = web_form_url(input, type)
         nsfw = input.nsfw.data
         ai_generated = input.ai_generated.data
         notify_author = input.notify_author.data
@@ -498,6 +512,11 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
 
     # WARNING: beyond this point do not use the input variable as it can be either a dict or a form object!
 
+    if media_of(post) is not None:   # A13.7: an edit cannot replace a media post's file, by a new file or a new url
+        url = post.url
+        uploaded_file = None
+    media_kind = media_upload_kind(user, post.community, type, uploaded_file) if from_scratch else None
+
     post.indexable = user.indexable
     if can_mod_post(post, user):
         post.sticky = False if src == SRC_API else input.sticky.data
@@ -525,7 +544,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         elif is_image_url(post.url):
             post.type = POST_TYPE_IMAGE
 
-    if scheduled_for:
+    if scheduled_for and post.status != POST_STATUS_PROCESSING:   # A13.7: processing media is published by probe_media
         date_with_tz = post.scheduled_for.replace(tzinfo=ZoneInfo(post.timezone))
         if date_with_tz.astimezone(ZoneInfo('UTC')) > utcnow(naive=False):
             post.status = POST_STATUS_SCHEDULED
@@ -573,11 +592,14 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
 
         db.session.commit()
 
-    if uploaded_file and uploaded_file.filename != '':
+    if media_kind is not None:
+        refusal = store_uploaded_media(post, uploaded_file, media_kind)
+        if refusal is not None:
+            raise MediaRefused(refusal)
+        url = None   # the stored file is post.url; a link sent alongside it is not read
+    elif uploaded_file and uploaded_file.filename != '':
         # check if this is an allowed type of file
         allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.mpo', '.avif', '.svg']
-        if type == POST_TYPE_VIDEO and can_upload_video(user):
-            allowed_extensions.extend(['.mp4', '.webm', '.mov'])
         file_ext = os.path.splitext(uploaded_file.filename)[1]
         if file_ext.lower() not in allowed_extensions:
             raise Exception('filetype not allowed')
@@ -878,6 +900,10 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
 
     db.session.commit()
 
+    if media_kind is not None:
+        queue_probe(post.id)   # stored and committed: probe_media publishes it when the media is ready
+
+    # Scheduled and processing posts alike (A13.1): nothing federates before the post is published
     if post.status < POST_STATUS_PUBLISHED or post.community.local_only or post.community.private:
         federate = False
 

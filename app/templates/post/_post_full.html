@@ -9,6 +9,13 @@
         {% if post.type != POST_TYPE_EVENT or (post.type == POST_TYPE_EVENT and post.image_id is none) -%}
             {% include "post/_breadcrumb_nav.html" %}
         {% endif %}
+        {# A13.1/A13.9: only the author, the community's moderators and admins can open an unpublished post #}
+        {% set media = media_of(post) -%}
+        {% if media and media.status == 'processing' -%}
+            <div class="alert alert-info" role="status">{{ _('This media is still being processed. The post will be published when it is ready.') }}</div>
+        {% elif media and media.status == 'failed' -%}
+            <div class="alert alert-danger" role="alert">{{ _('This media could not be processed: %(reason)s', reason=media.error) }}</div>
+        {% endif -%}
         {% if post.type == POST_TYPE_LINK and post.image_id and not (post.url and 'youtube.com' in post.url) and not post.deleted -%}
             <div class="url_thumbnail">
                 <a href="{{ post.url }}" target="_blank" rel="nofollow ugc" class="post_link">

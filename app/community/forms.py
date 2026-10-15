@@ -375,8 +375,21 @@ class CreateLinkForm(SubmittedUrlMixin, CreatePostForm):
             field, lambda name: _l("Links to %(domain)s are not allowed.", domain=name))
 
 
-class CreateVideoForm(SubmittedUrlMixin, CreatePostForm):
-    video_url = StringField(_l('URL'), validators=[Regexp(r'^https?://', message='Submitted links need to start with "http://"" or "https://"')],
+class MediaUrlOrFileMixin(SubmittedUrlMixin):
+    """A form that takes a link or, from a moderator `can_upload_media` admits, a file (spec A13.6).
+
+    `add_post` deletes `image_file` for everyone else, so for them only the link counts and the file they may have
+    sent anyway is never read."""
+
+    def url_or_file_given(self, url_field) -> bool:
+        if url_field.data or ('image_file' in self and self.image_file.data):
+            return True
+        url_field.errors.append(_l('Give a URL or upload a file.'))
+        return False
+
+
+class CreateVideoForm(MediaUrlOrFileMixin, CreatePostForm):
+    video_url = StringField(_l('URL'), validators=[Optional(), Regexp(r'^https?://', message='Submitted links need to start with "http://"" or "https://"')],
                             render_kw={'placeholder': 'https://...'})
     image_file = FileField(_l('Video file (mp4, webm or mov)'), render_kw={'accept': 'video/mp4,video/webm,video/quicktime'})    # do not change from image_file even though this is a video
 
@@ -392,8 +405,22 @@ class CreateVideoForm(SubmittedUrlMixin, CreatePostForm):
         # override go -- left in place because moving it changes when the
         # error is reported (a hook runs even when another field fails; this
         # does not), and that is a separate decision.
-        return self.url_field_is_acceptable(
+        return self.url_or_file_given(self.video_url) and self.url_field_is_acceptable(
             self.video_url, lambda name: _l("Videos from %(domain)s are not allowed.", domain=name))
+
+
+class CreateAudioForm(MediaUrlOrFileMixin, CreatePostForm):
+    """An audio post (A13.5): a link, or an uploaded file that becomes a POST_TYPE_LINK post with
+    `extensions.media_type = 'audio'`."""
+    audio_url = StringField(_l('URL'), validators=[Optional(), Regexp(r'^https?://', message='Submitted links need to start with "http://"" or "https://"')],
+                            render_kw={'placeholder': 'https://...'})
+    image_file = FileField(_l('Audio file (mp3, m4a or ogg)'), render_kw={'accept': 'audio/mpeg,audio/mp4,audio/ogg'})    # image_file, as on the video form
+
+    def validate(self, extra_validators=None) -> bool:
+        if not super().validate(extra_validators):
+            return False
+        return self.url_or_file_given(self.audio_url) and self.url_field_is_acceptable(
+            self.audio_url, lambda name: _l("Audio from %(domain)s is not allowed.", domain=name))
 
 
 class CreateImageForm(CreatePostForm):

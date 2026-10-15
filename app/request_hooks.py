@@ -14,8 +14,9 @@ from flask import before_render_template, session, g, json, request, current_app
 from sqlalchemy import text
 from app.constants import POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_ARTICLE, POST_TYPE_VIDEO, POST_TYPE_POLL, \
     SUBSCRIPTION_MODERATOR, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, SUBSCRIPTION_PENDING, ROLE_ADMIN_NAME, VERSION, \
-    POST_TYPE_EVENT, AP_MEDIA_TYPES
+    POST_TYPE_EVENT, AP_MEDIA_TYPES, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO
 from app.models import Site, utcnow
+from app.shared.media import can_upload_media, media_kind_for, media_of, upload_byte_limit
 from app.utils import getmtime, gibberish, shorten_string, shorten_url, digits, user_access, community_membership, joined_server_views, \
     can_upvote, can_downvote, shorten_number, ap_datetime, current_theme, community_link_to_href, \
     in_sorted_list, role_access, first_paragraph, person_link_to_href, feed_membership, html_to_text, remove_images, \
@@ -25,6 +26,8 @@ from app.utils import getmtime, gibberish, shorten_string, shorten_url, digits, 
 from app.quotes import prime_quotes, quote_state
 from app.variants import shown, switch_url
 from app.visibility import can_view
+
+MEDIA_UPLOAD_SLACK = 1024 * 1024   # the form fields around the file (A13.2)
 
 
 def viewer_can_view(obj) -> bool:
@@ -64,6 +67,9 @@ def register_request_hooks(app):
     app.jinja_env.globals['can_downvote'] = can_downvote
     app.jinja_env.globals['can_upload_video'] = can_upload_video
     app.jinja_env.globals['can_upload_audio'] = can_upload_audio
+    app.jinja_env.globals['can_upload_media'] = can_upload_media
+    app.jinja_env.globals['media_kind_for'] = media_kind_for
+    app.jinja_env.globals['media_of'] = media_of
     app.jinja_env.globals['show_explore'] = show_explore
     app.jinja_env.globals['in_sorted_list'] = in_sorted_list
     app.jinja_env.globals['theme'] = current_theme
@@ -96,6 +102,17 @@ def register_request_hooks(app):
     app.jinja_env.filters['shorten_url'] = shorten_url
     app.jinja_env.filters['remove_images'] = remove_images
     app.jinja_env.filters["human_filesize"] = human_filesize
+
+    @app.before_request
+    def cap_media_upload():
+        """A13.2: a media upload is refused at its kind's limit, before the body is read past it. Werkzeug answers
+        413 for a larger Content-Length and stops a chunked or lying body at the cap. Registered first, so nothing
+        has read the stream under the global MAX_CONTENT_LENGTH yet."""
+        if request.method != 'POST' or request.endpoint != 'community.add_post':
+            return
+        kind = request.view_args.get('type')
+        if kind in (MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO):
+            request.max_content_length = upload_byte_limit(kind) + MEDIA_UPLOAD_SLACK
 
     @app.before_request
     def before_request():

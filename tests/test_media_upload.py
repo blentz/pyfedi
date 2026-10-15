@@ -1,0 +1,589 @@
+"""Step 3, Task 4: the upload path, the processing state and its gating (spec A13).
+
+A video or audio file is taken only from a moderator of a `video_channel` or `podcast`
+community whom the upload switch admits (A13.6). It is sniffed, stored under
+`app/static/media/posts/`, served from `Post.url` with no `File` row (A13.4), and the
+post waits in `POST_STATUS_PROCESSING` (A13.1) until `probe_media` (Task 5) finishes.
+Every unpublished-post gate then hides it.
+
+`probe_media` does not exist yet, so `queue_probe` is patched in every test that
+stores media. Every test that stores media removes the files (the static leak gate).
+"""
+import io
+import os
+import uuid
+from types import SimpleNamespace
+
+import pytest
+from flask import g, request, session as flask_session, url_for
+from flask.testing import EnvironBuilder
+from flask_wtf.csrf import generate_csrf
+from werkzeug.datastructures import FileStorage
+
+from app import db
+from app.constants import (COMMUNITY_KIND_DISCUSSION, COMMUNITY_KIND_PODCAST, COMMUNITY_KIND_VIDEO_CHANNEL,
+                           POST_STATUS_PROCESSING, POST_STATUS_PUBLISHED, POST_TYPE_IMAGE, POST_TYPE_LINK,
+                           POST_TYPE_VIDEO)
+from app.models import Language, Post, Site
+from app.shared import media as media_module
+from app.shared.media import media_local_path, media_of, queue_probe, store_uploaded_media, with_media
+from app.shared.post import media_upload_kind
+from app.shared.tasks.pages import send_post
+from app.utils import set_setting
+from tests.factories import make_community, make_community_member, make_instance, make_post, make_user
+
+pytestmark = pytest.mark.usefixtures('site', 'private_static_tree')
+
+FIX = os.path.join(os.path.dirname(__file__), 'fixtures', 'media')
+BIG = 1024 * 1024 + 64 * 1024   # past the 1 MiB of form slack the request cap allows
+
+
+def fixture_bytes(name):
+    with open(os.path.join(FIX, name), 'rb') as f:
+        return f.read()
+
+
+def login(client, user):
+    with client.session_transaction() as session:
+        session['_user_id'] = str(user.id)
+        session['_fresh'] = True
+
+
+def csrf(app, client):
+    with app.test_request_context():
+        g.pop('csrf_token', None)   # the app context, and with it generate_csrf's cache, outlives one client
+        token = generate_csrf()
+        raw = flask_session['csrf_token']
+    with client.session_transaction() as session:
+        session['csrf_token'] = raw
+    return token
+
+
+def stored_files():
+    """Every file under the media tree; private_static_tree makes it this test's own, so the walk is cheap."""
+    return [os.path.join(d, f) for d, _, files in os.walk('app/static/media/posts') for f in files]
+
+
+def remove_stored_media():
+    for post in Post.query.all():
+        path = media_local_path(post)
+        if path and os.path.exists(path):
+            os.unlink(path)
+
+
+@pytest.fixture
+def env(app, db_session, monkeypatch):
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the templates render form.csrf_token()
+    site = db.session.get(Site, 1)
+    site.private_instance = False
+    local = make_instance('test.piefed.local', software='piefed')
+    founder = make_user(local, 'founder', local=True)
+    assert founder.id == 1   # user 1 is the admin
+    mod = make_user(local, 'mod', local=True)
+    stranger = make_user(local, 'stranger', local=True)
+    for user in (mod, stranger):
+        user.verified = True
+        user.private_key = 'a private key'   # validation_required / approval_required
+    english = Language(code='en', name='English')
+    db.session.add(Language(code='und', name='Undetermined'))
+    db.session.add(english)
+    chan, cast, talk = make_community('chan'), make_community('cast'), make_community('talk')
+    chan.kind, cast.kind, talk.kind = COMMUNITY_KIND_VIDEO_CHANNEL, COMMUNITY_KIND_PODCAST, COMMUNITY_KIND_DISCUSSION
+    db.session.commit()
+    for community in (chan, cast, talk):
+        make_community_member(mod, community, is_moderator=True)
+        make_community_member(stranger, community)
+    set_setting('allow_video_file_uploads', 'users')
+    set_setting('allow_audio_file_uploads', 'users')
+    db.session.commit()
+
+    probes = []
+    monkeypatch.setattr('app.shared.media.queue_probe', probes.append)
+    monkeypatch.setattr('app.shared.post.queue_probe', probes.append)
+
+    def client_for(user):
+        # The test's app context outlives a request, and with it flask_login's cached `g._login_user`: drop it, or
+        # every request is answered for whoever asked first
+        g.pop('_login_user', None)
+        client = app.test_client()
+        login(client, user)
+        return client, csrf(app, client)
+
+    yield SimpleNamespace(app=app, local=local, founder=founder, mod=mod, stranger=stranger, english=english,
+                          chan=chan, cast=cast, talk=talk, probes=probes, client_for=client_for)
+    db.session.rollback()
+    remove_stored_media()
+
+
+def submit_url(app, community, kind):
+    with app.test_request_context():
+        return url_for('community.add_post', actor=community.name, type=kind)
+
+
+def form_data(env, token, community, filename=None, payload=b'', **fields):
+    data = {'title': 'A clip', 'body': 'about it', 'communities': str(community.id),
+            'language_id': str(env.english.id), 'notify_author': 'y', 'timezone': 'Europe/London',
+            'submit': 'Publish', 'csrf_token': token}
+    if filename is not None:
+        data['image_file'] = (io.BytesIO(payload), filename)
+    data.update(fields)
+    return data
+
+
+def submit(env, user, community, kind, filename=None, payload=b'', **fields):
+    client, token = env.client_for(user)
+    return client.post(submit_url(env.app, community, kind),
+                       data=form_data(env, token, community, filename, payload, **fields),
+                       content_type='multipart/form-data')
+
+
+def stored_post(env, community, fixture='video_h264.mp4', kind='video', post_type=POST_TYPE_VIDEO, title='Processing'):
+    post = make_post(community, env.mod, ap_id=f'https://test.piefed.local/post/{title}', title=title)
+    post.type = post_type
+    upload = FileStorage(stream=io.BytesIO(fixture_bytes(fixture)), filename='upload.bin')
+    assert store_uploaded_media(post, upload, kind) is None
+    db.session.commit()
+    return post
+
+
+# ---------------------------------------------------------------- 1, 2: a stored upload
+
+
+def test_a_video_upload_is_stored_and_waits_in_processing(env):
+    data = fixture_bytes('video_h264.mp4')
+    response = submit(env, env.mod, env.chan, 'video', 'clip.mp4', data)
+
+    post = Post.query.one()
+    assert response.status_code == 302
+    assert response.headers['Location'].endswith(post.slug)
+    assert post.status == POST_STATUS_PROCESSING
+    assert post.type == POST_TYPE_VIDEO
+    media = media_of(post)
+    assert media['status'] == 'processing'
+    assert uuid.UUID(media['uuid']).version == 4
+    assert media['mime'] == 'video/mp4' and media['bytes'] == len(data)
+    assert post.url.startswith(env.app.config['SERVER_URL'] + '/static/media/posts/')
+    assert post.url.endswith('.mp4') and post.image_id is None
+    with open(media_local_path(post), 'rb') as f:
+        assert f.read() == data
+    assert env.probes == [post.id]
+
+
+def test_an_audio_upload_is_a_link_post_with_the_audio_media_type(env):
+    data = fixture_bytes('audio.mp3')
+    response = submit(env, env.mod, env.cast, 'audio', 'episode.mp3', data)
+
+    post = Post.query.one()
+    assert response.status_code == 302
+    assert post.type == POST_TYPE_LINK and post.status == POST_STATUS_PROCESSING
+    assert post.extensions['media_type'] == 'audio'
+    assert media_of(post)['mime'] == 'audio/mpeg'
+    assert post.url.endswith('.mp3')
+    with open(media_local_path(post), 'rb') as f:
+        assert f.read() == data
+    assert env.probes == [post.id]
+
+
+def test_the_upload_field_is_offered_to_a_permitted_moderator(env):
+    client, _ = env.client_for(env.mod)
+    assert b'name="image_file"' in client.get(submit_url(env.app, env.chan, 'video')).data
+    page = client.get(submit_url(env.app, env.cast, 'audio')).data
+    assert b'name="image_file"' in page and b'name="audio_url"' in page
+
+
+# ---------------------------------------------------------------- 3, 4: the bytes decide
+
+
+def test_a_file_that_is_not_media_is_refused_with_a_form_error(env):
+    response = submit(env, env.mod, env.chan, 'video', 'clip.mp4', fixture_bytes('not_media.mp4'))
+
+    assert response.status_code == 200
+    assert b'not a supported video file' in response.data
+    assert Post.query.count() == 0
+    assert stored_files() == []
+    assert env.probes == []
+
+
+def test_an_mp3_sent_to_the_video_form_is_refused(env):
+    response = submit(env, env.mod, env.chan, 'video', 'clip.mp4', fixture_bytes('audio.mp3'))
+
+    assert response.status_code == 200
+    assert b'not a supported video file' in response.data
+    assert Post.query.count() == 0
+    assert stored_files() == []
+
+
+# ---------------------------------------------------------------- 5, 6, 7: the size limit
+
+
+def test_a_file_over_the_limit_is_413(env):
+    set_setting('max_video_upload_bytes', 1000)
+    response = submit(env, env.mod, env.chan, 'video', 'clip.mp4', fixture_bytes('video_h264.mp4'))
+
+    assert response.status_code == 413
+    assert Post.query.count() == 0
+    assert stored_files() == []
+
+
+def oversized_video():
+    return fixture_bytes('video_h264.mp4')[:64] + b'\0' * BIG
+
+
+def test_a_body_past_the_cap_is_413_before_the_view_reads_it(env, monkeypatch):
+    """The honest Content-Length is over the cap: Werkzeug refuses it before reading. The route's own exact
+    check is disabled, so the 413 can only come from the request cap."""
+    set_setting('max_video_upload_bytes', 1000)
+    monkeypatch.setattr('app.community.routes.upload_byte_limit', lambda kind: 10 ** 12)
+    response = submit(env, env.mod, env.chan, 'video', 'clip.mp4', oversized_video())
+
+    assert response.status_code == 413
+    assert Post.query.count() == 0
+    assert stored_files() == []
+
+
+class ChunkedBuilder(EnvironBuilder):
+    """A request with no Content-Length whose server terminates the stream, as for chunked encoding."""
+
+    def get_environ(self):
+        environ = super().get_environ()
+        del environ['CONTENT_LENGTH']
+        environ['wsgi.input_terminated'] = True
+        return environ
+
+
+def test_a_chunked_body_past_the_cap_is_413(env, monkeypatch):
+    """No Content-Length (chunked, or a lying client): the cap stops the stream itself."""
+    set_setting('max_video_upload_bytes', 1000)
+    monkeypatch.setattr('app.community.routes.upload_byte_limit', lambda kind: 10 ** 12)
+    client, token = env.client_for(env.mod)
+    builder = ChunkedBuilder(env.app, path=submit_url(env.app, env.chan, 'video'), method='POST',
+                             data=form_data(env, token, env.chan, 'clip.mp4', oversized_video()))
+
+    response = client.open(builder)
+
+    assert response.status_code == 413
+    assert Post.query.count() == 0
+    assert stored_files() == []
+
+
+def test_a_file_exactly_at_the_limit_is_accepted_and_one_byte_more_is_413(env):
+    data = fixture_bytes('video_h264.mp4')
+    set_setting('max_video_upload_bytes', len(data) - 1)
+    assert submit(env, env.mod, env.chan, 'video', 'clip.mp4', data).status_code == 413
+    assert Post.query.count() == 0
+    assert stored_files() == []
+
+    set_setting('max_video_upload_bytes', len(data))
+    assert submit(env, env.mod, env.chan, 'video', 'clip.mp4', data).status_code == 302
+    assert media_of(Post.query.one())['bytes'] == len(data)
+
+
+def test_the_cap_applies_only_to_media_submissions(env):
+    """The hook leaves every other request on the global limit."""
+    with env.app.test_request_context(submit_url(env.app, env.chan, 'image'), method='POST'):
+        env.app.preprocess_request()
+        assert request.max_content_length == env.app.config['MAX_CONTENT_LENGTH']
+    with env.app.test_request_context(submit_url(env.app, env.chan, 'video'), method='GET'):
+        env.app.preprocess_request()
+        assert request.max_content_length == env.app.config['MAX_CONTENT_LENGTH']
+    with env.app.test_request_context('/auth/login', method='POST'):
+        env.app.preprocess_request()
+        assert request.max_content_length == env.app.config['MAX_CONTENT_LENGTH']
+    with env.app.test_request_context(submit_url(env.app, env.cast, 'audio'), method='POST'):
+        env.app.preprocess_request()
+        assert request.max_content_length == 209715200 + 1024 * 1024
+
+
+# ---------------------------------------------------------------- 8, 9, 10: who may upload
+
+
+@pytest.fixture
+def linked_video(http_mock):
+    link = 'https://example.com/clip.mp4'
+    http_mock.head(link).respond(200, headers={'Content-Type': 'video/mp4'})
+    http_mock.get(link).respond(200, html='')
+    return link
+
+
+def assert_ignored_upload(env, response, link):
+    post = Post.query.one()
+    assert response.status_code == 302
+    assert media_of(post) is None and post.status == POST_STATUS_PUBLISHED
+    assert post.url == link
+    assert env.probes == []
+    assert stored_files() == []
+
+
+def test_a_member_who_is_not_a_moderator_cannot_upload(env, linked_video):
+    client, _ = env.client_for(env.stranger)
+    assert b'name="image_file"' not in client.get(submit_url(env.app, env.chan, 'video')).data
+
+    response = submit(env, env.stranger, env.chan, 'video', 'clip.mp4', fixture_bytes('video_h264.mp4'),
+                      video_url=linked_video)
+    assert_ignored_upload(env, response, linked_video)
+
+
+def test_a_moderator_the_switch_does_not_admit_cannot_upload(env, linked_video):
+    set_setting('allow_video_file_uploads', 'no')
+    client, _ = env.client_for(env.mod)
+    assert b'name="image_file"' not in client.get(submit_url(env.app, env.chan, 'video')).data
+
+    response = submit(env, env.mod, env.chan, 'video', 'clip.mp4', fixture_bytes('video_h264.mp4'),
+                      video_url=linked_video)
+    assert_ignored_upload(env, response, linked_video)
+
+
+def test_a_discussion_community_takes_no_upload(env, linked_video):
+    client, _ = env.client_for(env.mod)
+    assert b'name="image_file"' not in client.get(submit_url(env.app, env.talk, 'video')).data
+
+    response = submit(env, env.mod, env.talk, 'video', 'clip.mp4', fixture_bytes('video_h264.mp4'),
+                      video_url=linked_video)
+    assert_ignored_upload(env, response, linked_video)
+
+
+def test_an_ignored_upload_without_a_link_is_the_forms_ordinary_error(env):
+    response = submit(env, env.stranger, env.chan, 'video', 'clip.mp4', fixture_bytes('video_h264.mp4'))
+    assert response.status_code == 200
+    assert b'Give a URL or upload a file.' in response.data
+    assert Post.query.count() == 0
+    assert stored_files() == []
+
+    response = submit(env, env.mod, env.cast, 'audio')
+    assert response.status_code == 200
+    assert b'Give a URL or upload a file.' in response.data
+    assert Post.query.count() == 0
+    assert stored_files() == []
+
+
+def test_an_audio_link_is_an_ordinary_link_post(env, http_mock):
+    link = 'https://example.com/episode.mp3'
+    http_mock.head(link).respond(200, headers={'Content-Type': 'audio/mpeg'})
+    http_mock.get(link).respond(200, html='')
+    response = submit(env, env.stranger, env.cast, 'audio', audio_url=link)
+
+    post = Post.query.one()
+    assert response.status_code == 302
+    assert post.type == POST_TYPE_LINK and post.url == link and media_of(post) is None
+
+
+# ---------------------------------------------------------------- 11: no replacement on edit
+
+
+def ready_post(env):
+    post = stored_post(env, env.chan)
+    post.status = POST_STATUS_PUBLISHED
+    with_media(post, status='ready')
+    db.session.commit()
+    return post
+
+
+def edit(env, post, filename=None, payload=b'', **fields):
+    client, token = env.client_for(env.mod)
+    data = {'title': 'Renamed', 'body': 'about it', 'video_url': post.url, 'language_id': str(env.english.id),
+            'notify_author': 'y', 'timezone': 'Europe/London', 'submit': 'Publish', 'csrf_token': token}
+    if filename is not None:
+        data['image_file'] = (io.BytesIO(payload), filename)
+    data.update(fields)
+    return client.post(f'/post/{post.id}/edit', data=data, content_type='multipart/form-data')
+
+
+def test_editing_a_media_post_cannot_replace_its_file(env):
+    post = ready_post(env)
+    url, record = post.url, dict(media_of(post))
+    with open(media_local_path(post), 'rb') as f:
+        before = f.read()
+
+    client, _ = env.client_for(env.mod)
+    assert b'name="image_file"' not in client.get(f'/post/{post.id}/edit').data
+    response = edit(env, post, 'other.mp4', fixture_bytes('video_vp9.webm'))
+
+    db.session.expire_all()
+    post = db.session.get(Post, post.id)
+    assert response.status_code == 200
+    assert b'cannot be replaced' in response.data
+    assert post.url == url and media_of(post) == record and post.title == 'Processing'
+    with open(media_local_path(post), 'rb') as f:
+        assert f.read() == before
+
+
+def test_an_edit_of_a_media_post_keeps_its_url(env):
+    post = ready_post(env)
+    url, record = post.url, dict(media_of(post))
+
+    response = edit(env, post, video_url='https://example.com/other.mp4')
+
+    db.session.expire_all()
+    post = db.session.get(Post, post.id)
+    assert response.status_code == 302
+    assert post.title == 'Renamed' and post.url == url and media_of(post) == record
+
+
+def test_an_audio_media_post_edit_cannot_replace_its_file_either(env):
+    post = stored_post(env, env.cast, 'audio.mp3', 'audio', POST_TYPE_LINK)
+    url = post.url
+    client, token = env.client_for(env.mod)
+    response = client.post(f'/post/{post.id}/edit', content_type='multipart/form-data', data={
+        'title': 'Renamed', 'body': 'about it', 'link_url': url, 'language_id': str(env.english.id),
+        'timezone': 'Europe/London', 'csrf_token': token, 'image_file': (io.BytesIO(b'x'), 'a.mp3')})
+
+    db.session.expire_all()
+    assert response.status_code == 200 and b'cannot be replaced' in response.data
+    assert db.session.get(Post, post.id).url == url
+
+
+# ---------------------------------------------------------------- 12: a processing post is hidden
+
+
+def page_for(env, user, path):
+    if user is None:
+        g.pop('_login_user', None)   # see client_for
+        return env.app.test_client().get(path)
+    return env.client_for(user)[0].get(path)
+
+
+def test_a_processing_post_is_seen_only_by_its_author_moderators_and_admins(env):
+    post = stored_post(env, env.chan)
+    other_mod = make_user(env.local, 'othermod', local=True)
+    make_community_member(other_mod, env.chan, is_moderator=True)
+    db.session.commit()
+    path = f'/post/{post.id}'
+
+    assert page_for(env, None, path).status_code == 404
+    assert page_for(env, env.stranger, path).status_code == 404
+    page = page_for(env, env.mod, path)   # the author, who is also the community's moderator
+    assert page.status_code == 200 and b'is still being processed' in page.data
+    assert page_for(env, env.founder, path).status_code == 200
+    assert page_for(env, other_mod, path).status_code == 200
+
+
+def test_a_failed_post_shows_its_reason(env):
+    post = stored_post(env, env.chan)
+    with_media(post, status='failed', error='The video codec is not supported.')
+    db.session.commit()
+
+    author, _ = env.client_for(env.mod)
+    assert b'The video codec is not supported.' in author.get(f'/post/{post.id}').data
+
+
+def test_a_processing_post_is_not_listed_anywhere(env, monkeypatch):
+    post = stored_post(env, env.chan, title='HIDDENCLIP')
+    shown = make_post(env.chan, env.mod, ap_id='https://test.piefed.local/post/shown', title='SHOWNCLIP')
+    db.session.commit()
+    monkeypatch.setitem(env.app.config, 'ENABLE_ALPHA_API', 'true')
+    author, _ = env.client_for(env.mod)
+
+    community_page = author.get('/c/chan').data
+    assert b'SHOWNCLIP' in community_page and b'HIDDENCLIP' not in community_page
+
+    titles = [p['post']['title'] for p in author.get('/api/alpha/post/list',
+                                                     query_string={'community_id': env.chan.id}).get_json()['posts']]
+    assert 'SHOWNCLIP' in titles and 'HIDDENCLIP' not in titles
+
+    home = author.get('/', query_string={'sort': 'new'}).data
+    assert b'HIDDENCLIP' not in home
+    assert post.status == POST_STATUS_PROCESSING
+
+
+def test_the_activitypub_representation_of_a_processing_post_is_403(env):
+    post = stored_post(env, env.chan)
+    response = env.app.test_client().get(f'/post/{post.id}', headers={'Accept': 'application/activity+json'})
+    assert response.status_code == 403
+
+
+def test_send_post_delivers_nothing_until_the_media_is_ready(env, monkeypatch):
+    post = stored_post(env, env.chan)
+    env.chan.ap_profile_id = env.chan.ap_public_url = 'https://peer.example/c/chan'
+    env.chan.ap_inbox_url = 'https://peer.example/inbox'
+    env.chan.ap_id = 'chan@peer.example'
+    db.session.commit()
+    sent = []
+    monkeypatch.setattr('app.shared.tasks.pages.send_post_request', lambda inbox, *a, **k: sent.append(inbox))
+
+    send_post(post.id, session=db.session)
+    assert sent == []
+
+    post.status = POST_STATUS_PUBLISHED
+    with_media(post, status='ready')
+    db.session.commit()
+    send_post(post.id, session=db.session)
+    assert 'https://peer.example/inbox' in sent
+
+
+# ---------------------------------------------------------------- the helpers
+
+
+def test_store_uploaded_media_refuses_what_it_cannot_accept(env):
+    post = make_post(env.chan, env.mod, ap_id='https://test.piefed.local/post/x')
+    bad = FileStorage(stream=io.BytesIO(fixture_bytes('not_media.mp4')), filename='x.mp4')
+    assert store_uploaded_media(post, bad, 'video') == 'This is not a supported video file.'
+
+    set_setting('max_audio_upload_bytes', 10)
+    big = FileStorage(stream=io.BytesIO(fixture_bytes('audio.mp3')), filename='x.mp3')
+    assert store_uploaded_media(post, big, 'audio') == 'This audio file is too large.'
+    assert post.url is None and media_of(post) is None
+
+
+def test_media_local_path_is_only_for_local_media(env):
+    post = make_post(env.chan, env.mod, ap_id='https://test.piefed.local/post/y')
+    assert media_local_path(post) is None
+    post.url = 'https://example.com/static/media/posts/ab/cd/x.mp4'
+    assert media_local_path(post) is None
+    post.url = env.app.config['SERVER_URL'] + '/static/media/posts/ab/cd/x.mp4'
+    assert media_local_path(post) == 'app/static/media/posts/ab/cd/x.mp4'
+
+
+def test_queue_probe_queues_the_probe_task(monkeypatch):
+    calls = []
+    monkeypatch.setattr(media_module, 'task_selector', lambda key, **kw: calls.append((key, kw)))
+    queue_probe(42)
+    assert calls == [('probe_media', {'post_id': 42})]
+
+
+def test_media_upload_kind_needs_the_kind_the_type_and_the_permission(env):
+    upload = FileStorage(stream=io.BytesIO(b'x'), filename='x.mp4')
+    assert media_upload_kind(env.mod, env.chan, POST_TYPE_VIDEO, upload) == 'video'
+    assert media_upload_kind(env.mod, env.cast, POST_TYPE_LINK, upload) == 'audio'
+    assert media_upload_kind(env.stranger, env.chan, POST_TYPE_VIDEO, upload) is None
+    assert media_upload_kind(env.mod, env.talk, POST_TYPE_VIDEO, upload) is None
+    assert media_upload_kind(env.mod, env.chan, POST_TYPE_IMAGE, upload) is None
+    assert media_upload_kind(env.mod, env.chan, POST_TYPE_VIDEO, None) is None
+
+
+def test_a_video_sent_to_the_image_form_of_a_video_channel_takes_the_image_path(env):
+    """The image form keeps its own extension list: a video there is refused, not stored as media."""
+    response = submit(env, env.mod, env.chan, 'image', 'clip.mp4', fixture_bytes('video_h264.mp4'))
+
+    assert response.status_code == 302 and '/submit' not in response.headers['Location']
+    assert Post.query.count() == 0
+    assert stored_files() == []
+
+
+def test_an_edit_does_not_schedule_a_processing_post(env):
+    post = stored_post(env, env.chan)
+    response = edit(env, post, scheduled_for='2099-01-01T10:00')
+
+    db.session.expire_all()
+    assert response.status_code == 302
+    assert db.session.get(Post, post.id).status == POST_STATUS_PROCESSING
+
+
+def test_the_audio_form_prefills_its_own_link_field(env):
+    client, _ = env.client_for(env.mod)
+    page = client.get(submit_url(env.app, env.cast, 'audio'), query_string={'link': 'https://example.com/e.mp3'})
+    assert b'value="https://example.com/e.mp3"' in page.data
+
+    source = make_post(env.cast, env.mod, ap_id='https://test.piefed.local/post/src', title='Source')
+    source.url = 'https://example.com/source.mp3'
+    db.session.commit()
+    page = client.get(submit_url(env.app, env.cast, 'audio'), query_string={'source': source.id})
+    assert b'value="https://example.com/source.mp3"' in page.data
+
+
+def test_a_quicktime_upload_is_stored_as_mov(env):
+    post = make_post(env.chan, env.mod, ap_id='https://test.piefed.local/post/qt')
+    upload = FileStorage(stream=io.BytesIO(b'\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  '), filename='clip.bin')
+    assert store_uploaded_media(post, upload, 'video') is None
+    db.session.commit()
+    assert post.url.endswith('.mov') and media_of(post)['mime'] == 'video/quicktime'
+    assert os.path.exists(media_local_path(post))

@@ -24,7 +24,7 @@ import app.api.alpha.views as alpha_views
 from app.community.forms import SearchRemoteCommunity, CreateDiscussionForm, CreateImageForm, CreateLinkForm, \
     ReportCommunityForm, \
     DeleteCommunityForm, AddCommunityForm, EditCommunityForm, AddModeratorForm, BanUserCommunityForm, \
-    EscalateReportForm, ResolveReportForm, CreateVideoForm, CreatePollForm, EditCommunityWikiPageForm, \
+    EscalateReportForm, ResolveReportForm, CreateVideoForm, CreateAudioForm, CreatePollForm, EditCommunityWikiPageForm, \
     InviteCommunityForm, MoveCommunityForm, EditCommunityFlairForm, SetMyFlairForm, FindAndBanUserCommunityForm, \
     CreateEventForm, InviteAcceptForm, EditCommunityMembership, CommunityRssFeedEdit, DeleteCommunityRssFeedForm
 from app.community.live import LIVE_COMMUNITY, is_live_community, is_local_microblogs, live_available, live_posts, \
@@ -38,7 +38,7 @@ from app.constants import SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, POST_TYPE_LIN
     SUBSCRIPTION_PENDING, SUBSCRIPTION_MODERATOR, REPORT_STATE_NEW, REPORT_STATE_ESCALATED, REPORT_STATE_RESOLVED, \
     REPORT_STATE_DISCARDED, POST_TYPE_VIDEO, NOTIF_COMMUNITY, POST_TYPE_POLL, SRC_WEB, \
     NOTIF_REPORT, NOTIF_BAN, NOTIF_UNBAN, NOTIF_REPORT_ESCALATION, NOTIF_MENTION, POST_STATUS_REVIEWING, \
-    POST_TYPE_EVENT, REPORT_TYPE_COMMUNITY
+    POST_TYPE_EVENT, REPORT_TYPE_COMMUNITY, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO
 from app.email import send_email
 from app.inoculation import inoculation
 from app.models import User, Community, CommunityMember, CommunityJoinRequest, CommunityBan, Post, Site, \
@@ -64,7 +64,7 @@ from app.utils import user_banned_from_community, back, get_setting, render_temp
     possible_communities, reported_posts, user_notes, login_required, get_task_session, patch_db_session, \
     approval_required, permission_required, aged_account_required, communities_banned_from_all_users, \
     moderating_communities_ids_all_users, block_honey_pot, user_pronouns, community_membership_private, \
-    show_reason_why_no_federation, can_upload_video, banned_instances, is_invalid_get_request_uri, user_ip_banned, \
+    show_reason_why_no_federation, banned_instances, is_invalid_get_request_uri, user_ip_banned, \
     check_anoobis, \
     community_link_markup, \
     sanitise_posting_warning, \
@@ -73,6 +73,7 @@ from app.utils import user_banned_from_community, back, get_setting, render_temp
 # The module, not the names: app.shared.post reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.post)
 import app.shared.post as shared_post
+from app.shared.media import MediaRefused, can_upload_media, media_kind_for, upload_byte_limit, uploaded_size
 from app.shared.tasks import task_selector
 # The module, not the names: app.shared.feed reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.feed)
@@ -1249,6 +1250,9 @@ def add_post(actor, type=None):
     elif type == 'video':
         post_type = POST_TYPE_VIDEO
         form = CreateVideoForm()
+    elif type == 'audio':
+        post_type = POST_TYPE_LINK   # A13.5: an audio post is a link with extensions.media_type 'audio'
+        form = CreateAudioForm()
     elif type == 'poll':
         post_type = POST_TYPE_POLL
         form = CreatePollForm()
@@ -1278,7 +1282,19 @@ def add_post(actor, type=None):
     else:
         del form.flair
 
+    # A13.6: a media file is taken only from a moderator of a video or podcast community whom the upload switch
+    # admits, on the form of that community's kind. Everyone else's form has no file field, so it is never read.
+    media_upload = type == media_kind_for(community) and can_upload_media(current_user, community)
+    if type in (MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO) and not media_upload:
+        del form.image_file
+
     if form.validate_on_submit():
+        if type == 'image' or type == 'event' or media_upload:
+            uploaded_file = request.files.get('image_file')
+        else:
+            uploaded_file = None
+        if media_upload and uploaded_file and uploaded_size(uploaded_file) > upload_byte_limit(type):
+            abort(413)   # A13.2: the exact limit, after parsing; the request cap allows the form's slack
         try:
             # Fire before_post_create hook for plugins
             post_data = {
@@ -1295,13 +1311,9 @@ def add_post(actor, type=None):
             if hasattr(form, 'body'):
                 form.body.data = post_data.get('content', form.body.data)
 
-            if type == 'image' or type == 'event':
-                uploaded_file = request.files.get('image_file')
-            elif type == 'video' and can_upload_video():
-                uploaded_file = request.files.get('image_file')
-            else:
-                uploaded_file = None
             post = shared_post.make_post(form, community, post_type, SRC_WEB, uploaded_file=uploaded_file)
+        except MediaRefused as refusal:   # the bytes are not the kind the form takes: a field error, not a 500
+            form.image_file.errors.append(str(refusal))
         except Exception as ex:
             # The exception text is LOGGED, not flashed. make_post reaches
             # image processing, remote fetches and the plugin hooks, so str(ex)
@@ -1319,25 +1331,25 @@ def add_post(actor, type=None):
                 raise ex
             return redirect(url_for('activitypub.community_profile',
                                     actor=community.ap_id if community.ap_id is not None else community.name))
+        else:
+            current_user.language_id = form.language_id.data
 
-        current_user.language_id = form.language_id.data
+            if form.timezone.data:
+                db.session.execute(text('UPDATE "user" SET timezone = :timezone WHERE id = :user_id'),
+                                   {'user_id': current_user.id, 'timezone': form.timezone.data})
+                db.session.commit()
 
-        if form.timezone.data:
-            db.session.execute(text('UPDATE "user" SET timezone = :timezone WHERE id = :user_id'),
-                               {'user_id': current_user.id, 'timezone': form.timezone.data})
-            db.session.commit()
+            if post.sticky:
+                shared_post.sticky_post(post.id, True, SRC_WEB)  # federating post's stickiness is separate from creating it
 
-        if post.sticky:
-            shared_post.sticky_post(post.id, True, SRC_WEB)  # federating post's stickiness is separate from creating it
+            flash(Markup(_('Your post has been created. <a href="/post/%(post_id)d/edit">Edit it</a> if you notice any typos!', post_id=post.id)))
 
-        flash(Markup(_('Your post has been created. <a href="/post/%(post_id)d/edit">Edit it</a> if you notice any typos!', post_id=post.id)))
-
-        resp = make_response(redirect(post.slug))
-        # remove cookies used to maintain state when switching post type
-        resp.delete_cookie('post_title')
-        resp.delete_cookie('post_description')
-        resp.delete_cookie('post_tags')
-        return resp
+            resp = make_response(redirect(post.slug))
+            # remove cookies used to maintain state when switching post type
+            resp.delete_cookie('post_title')
+            resp.delete_cookie('post_description')
+            resp.delete_cookie('post_tags')
+            return resp
     elif request.method == 'GET':
         # D1002 -- D907's shape again, the fifth instance the campaign has
         # found. This was `else:`, so a submission the form REFUSED fell in
@@ -1393,14 +1405,18 @@ def add_post(actor, type=None):
             form.nsfl.data = source_post.nsfl
             form.ai_generated.data = source_post.ai_generated
             form.language_id.data = source_post.language_id
-            if post_type == POST_TYPE_LINK:
+            if type == 'audio':
+                form.audio_url.data = source_post.url
+            elif post_type == POST_TYPE_LINK:
                 form.link_url.data = source_post.url
             elif post_type == POST_TYPE_VIDEO:
                 form.video_url.data = source_post.url
             form.tags.data = form_tags_string(source_post)
 
         if (post_type == POST_TYPE_LINK or post_type == POST_TYPE_VIDEO) and request.args.get('link'):
-            if post_type == POST_TYPE_LINK:
+            if type == 'audio':
+                form.audio_url.data = request.args.get('link')
+            elif post_type == POST_TYPE_LINK:
                 form.link_url.data = request.args.get('link')
             elif post_type == POST_TYPE_VIDEO:
                 form.video_url.data = request.args.get('link')
