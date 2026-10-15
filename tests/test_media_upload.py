@@ -289,9 +289,52 @@ def test_the_cap_applies_only_to_media_submissions(env):
     with env.app.test_request_context('/auth/login', method='POST'):
         env.app.preprocess_request()
         assert request.max_content_length == env.app.config['MAX_CONTENT_LENGTH']
+    with env.app.test_request_context('/community/nosuch/submit/video', method='POST'):
+        env.app.preprocess_request()   # an unknown community keeps the global cap
+        assert request.max_content_length == env.app.config['MAX_CONTENT_LENGTH']
+    g.pop('_login_user', None)
     with env.app.test_request_context(submit_url(env.app, env.cast, 'audio'), method='POST'):
-        env.app.preprocess_request()
-        assert request.max_content_length == 209715200 + 1024 * 1024
+        env.app.preprocess_request()   # anonymous: never above the global cap
+        assert request.max_content_length == min(env.app.config['MAX_CONTENT_LENGTH'], 209715200 + 1024 * 1024)
+
+
+SMALL_GLOBAL = 64 * 1024   # the global cap, made small so a body over it stays cheap
+
+
+def padded_video(size=SMALL_GLOBAL + 32 * 1024):
+    return fixture_bytes('video_h264.mp4')[:64] + b'\0' * size
+
+
+def test_the_cap_is_raised_only_for_a_permitted_moderator(env, monkeypatch):
+    """Finding 1 (security): the media cap is above the global one, so it is given only to a user who may upload
+    media to the community the URL names. Everyone else keeps the global cap."""
+    monkeypatch.setitem(env.app.config, 'MAX_CONTENT_LENGTH', SMALL_GLOBAL)
+
+    response = submit(env, env.stranger, env.chan, 'video', 'clip.mp4', padded_video())
+    assert response.status_code == 413   # a member, not a moderator
+
+    response = submit(env, env.mod, env.talk, 'audio', 'episode.mp3', padded_video())
+    assert response.status_code == 413   # a moderator, of a discussion community
+
+    set_setting('allow_video_file_uploads', 'no')
+    response = submit(env, env.mod, env.chan, 'video', 'clip.mp4', padded_video())
+    assert response.status_code == 413   # a moderator the switch does not admit
+    set_setting('allow_video_file_uploads', 'users')
+    assert Post.query.count() == 0 and stored_files() == []
+
+    response = submit(env, env.mod, env.chan, 'video', 'clip.mp4', padded_video())
+    assert response.status_code == 302   # the permitted moderator still gets the raised cap
+    assert media_of(Post.query.one())['bytes'] == SMALL_GLOBAL + 32 * 1024 + 64
+
+
+def test_an_anonymous_upload_is_stopped_as_before(env, monkeypatch):
+    monkeypatch.setitem(env.app.config, 'MAX_CONTENT_LENGTH', SMALL_GLOBAL)
+    g.pop('_login_user', None)
+    client = env.app.test_client()
+    response = client.post(submit_url(env.app, env.chan, 'video'), content_type='multipart/form-data',
+                           data={'title': 'x', 'image_file': (io.BytesIO(padded_video()), 'clip.mp4')})
+    assert response.status_code in (302, 413)   # login_required, or the global cap: never a stored upload
+    assert Post.query.count() == 0 and stored_files() == []
 
 
 # ---------------------------------------------------------------- 8, 9, 10: who may upload

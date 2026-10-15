@@ -523,6 +523,7 @@ Each step gets its own implementation plan and its own commits, and each ends wi
        - The AP route refuses it with 403, the existing answer for unpublished posts, not the 404 that §5.3 said.
      - A processing post is not listed anywhere, not even for its author. After upload the author is redirected to the post page, which shows a "processing" notice.
   2. **Size limit.** The limit is enforced per request. A `before_request` hook sets `request.max_content_length = limit + 1 MiB` on the two upload endpoints.
+     - The cap is raised above the global limit only for a user who may upload media to that community; everyone else keeps the global limit.
      - Werkzeug refuses a larger `Content-Length` with 413 before reading anything, and stops a lying or chunked body at the cap.
      - After parsing, the file's exact size is checked against the limit.
      - The global `MAX_CONTENT_LENGTH` (env, default 100 MB) is unchanged; §2's "no `MAX_CONTENT_LENGTH`" was wrong.
