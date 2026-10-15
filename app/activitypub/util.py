@@ -955,6 +955,10 @@ def community_actor_data(community: Community) -> dict:
                   "postUrlType": community.post_url_type if community.post_url_type else "friendly",
                   "defaultHashtag": community.default_hashtag,
                   }
+    owner = db.session.get(User, community.user_id) if community.user_id else None
+    if community.kind == COMMUNITY_KIND_VIDEO_CHANNEL and owner is not None:
+        # PeerTube subscribes only to a Group naming its owner Person, the channel's account (spec 2026-10-14 §6.2)
+        actor_data['attributedTo'] = [{'type': 'Person', 'id': owner.public_url()}]
     if community.description_html:
         actor_data["summary"] = community.description_html
         actor_data['source'] = {'content': community.description, 'mediaType': 'text/markdown'}
