@@ -11,6 +11,7 @@ stores media. Every test that stores media removes the files (the static leak ga
 """
 import io
 import os
+import re
 import uuid
 from types import SimpleNamespace
 
@@ -450,16 +451,49 @@ def test_editing_a_media_post_cannot_replace_its_file(env):
         assert f.read() == before
 
 
-def test_an_edit_of_a_media_post_keeps_its_url(env):
+def test_a_url_edit_of_a_media_post_is_refused_out_loud(env):
+    """Finding 3: a changed URL used to be dropped silently under a success flash. The field is read-only on the
+    form, and a changed URL is refused with a message; nothing is saved."""
     post = ready_post(env)
     url, record = post.url, dict(media_of(post))
+
+    client, _ = env.client_for(env.mod)
+    page = client.get(f'/post/{post.id}/edit').data
+    assert re.search(rb'<input[^>]*name="video_url"[^>]*readonly', page)
 
     response = edit(env, post, video_url='https://example.com/other.mp4')
 
     db.session.expire_all()
     post = db.session.get(Post, post.id)
+    assert response.status_code == 200
+    assert b'The media of this post cannot be changed.' in response.data
+    assert post.title == 'Processing' and post.url == url and media_of(post) == record
+
+
+def test_an_unchanged_url_edit_of_a_media_post_is_saved(env):
+    post = ready_post(env)
+    url, record = post.url, dict(media_of(post))
+
+    response = edit(env, post)
+
+    db.session.expire_all()
+    post = db.session.get(Post, post.id)
     assert response.status_code == 302
     assert post.title == 'Renamed' and post.url == url and media_of(post) == record
+
+
+def test_a_failure_after_the_store_leaves_no_file(env, monkeypatch):
+    """Finding 4: when anything raises after store_uploaded_media wrote the file, make_post removes the post and
+    the file with it."""
+    def fail(post_id):
+        raise RuntimeError('probe queue down')
+    monkeypatch.setattr('app.shared.post.queue_probe', fail)
+
+    response = submit(env, env.mod, env.chan, 'video', 'clip.mp4', fixture_bytes('video_h264.mp4'))
+
+    assert response.status_code == 302 and '/submit' not in response.headers['Location']
+    assert Post.query.count() == 0
+    assert stored_files() == []
 
 
 def test_an_audio_media_post_edit_cannot_replace_its_file_either(env):

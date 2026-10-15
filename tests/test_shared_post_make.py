@@ -819,23 +819,12 @@ def test_an_allowed_image_extension_passes(db_session):
 
 
 def test_a_video_upload_is_refused_when_video_uploads_are_off(db_session):
-    """`:200`'s SECOND conjunct taken false, with the first TRUE -- arc
-    `200->202`.
+    """A video file sent down the image path is refused with `allow_video_file_uploads` at its default ('no').
 
-    `can_upload_video` (app/utils.py:2586-2589) returns False when
-    `allow_video_file_uploads` is 'no', which is the default the test suite
-    leaves in place, so `:201` never runs and '.mp4' stays out of the
-    allowed list. A regression dropping the `can_upload_video()` conjunct
-    (leaving bare `if type == POST_TYPE_VIDEO:`) would let '.mp4' through
-    for a POST_TYPE_VIDEO post regardless of the setting.
-
-    `edit_post` IS STUBBED TO IDENTITY, load-bearing for the same reason as
-    `test_a_disallowed_extension_is_refused`: `edit_post:464` reimplements
-    `:200`'s exact compound against its own re-derived `type`, so with
-    `edit_post` left to run for real, a mutant dropping `:200`'s second
-    conjunct would go quiet in `make_post` but `edit_post`'s untouched copy
-    would independently raise the same message one call later -- verified
-    empirically as the required verification step below.
+    Since spec A13.6 the switch no longer widens the image extension list at all: a video file is stored only as
+    media, from a moderator of a video_channel creating a post (`media_upload_kind`). This is the default-setting
+    half; the setting-on half is the `..._even_with_uploads_on` test in this file. `edit_post` is stubbed or the
+    file is checked so that the refusal witnessed is the extension list's, and nothing is written.
     """
     s = seed_make_context()
 
@@ -909,36 +898,6 @@ def test_a_media_upload_is_not_judged_by_its_extension(db_session):
 
     assert post.title == 'a title'
     assert db.session.query(Post).count() == 1
-
-def test_a_non_video_post_ignores_can_upload_video_even_when_enabled(db_session):
-    """An ARTICLE post with an `.mp4` is refused with uploads switched on for everyone. Before spec A13.6 this
-    separated `and` from `or` in `if type == POST_TYPE_VIDEO and can_upload_video()`; that widening is gone, and
-    `media_upload_kind` also requires the post type its community's kind takes. `edit_post` is stubbed to identity
-    as in the tests above, so the refusal witnessed is `make_post`'s own.
-    """
-    s = seed_make_context()
-
-    original_setting = get_setting('allow_video_file_uploads', 'no')
-    set_setting('allow_video_file_uploads', 'yes')
-    original_edit_post = post_module.edit_post
-    post_module.edit_post = lambda *args, **kwargs: args[1]
-    try:
-        with pytest.raises(Exception, match='filetype not allowed'):
-            make_post(_api_input(), s.community, POST_TYPE_ARTICLE, SRC_API,
-                      auth=bearer(s.author),
-                      uploaded_file=SimpleNamespace(filename='clip.mp4'))
-    finally:
-        post_module.edit_post = original_edit_post
-        set_setting('allow_video_file_uploads', original_setting)
-
-    assert db.session.query(Post).count() == 0
-
-
-# ---------------------------------------------------------------------------
-# Group D, Task 5: state mutations (:211-228), the rollback (:233-236, which
-# has NO branch arc at all), and the notify guard (:238-239 / :238->241).
-# ---------------------------------------------------------------------------
-
 
 def test_a_bot_authors_post_is_flagged_from_bot(db_session):
     """`:206`'s `from_bot=user.bot or user.bot_override`, unmutated by
