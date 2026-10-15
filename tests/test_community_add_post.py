@@ -1051,3 +1051,23 @@ def test_a_remote_community_still_accepts_images(app, poster):
                         content_type='multipart/form-data')
 
     assert make.call_args is not None, render.call_args.kwargs['form'].errors
+
+
+def test_a_post_with_no_timezone_left_on_the_form_skips_the_timezone_update(app, poster):
+    """The false arm of `if form.timezone.data:` after a created post. `timezone` is DataRequired, so only a
+    `make_post` (or plugin) that clears it reaches this arm; the user's stored timezone is then left alone."""
+    client, token, community, author, english = poster
+    author.timezone = 'Europe/Paris'
+    db.session.commit()
+
+    def clearing_make_post(form, *args, **kwargs):
+        form.timezone.data = ''
+        return FakePost()
+
+    with patch('app.shared.post.make_post', side_effect=clearing_make_post):
+        response = client.post(url(app, 'community.add_post', actor=community.name, type='discussion'),
+                               data=_post_payload(token, english, community), content_type='multipart/form-data')
+
+    assert response.status_code == 302
+    db.session.expire_all()
+    assert db.session.get(type(author), author.id).timezone == 'Europe/Paris'

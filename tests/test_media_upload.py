@@ -725,3 +725,10 @@ def test_a_quicktime_upload_is_stored_as_mov(env):
     db.session.commit()
     assert post.url.endswith('.mov') and media_of(post)['mime'] == 'video/quicktime'
     assert os.path.exists(media_local_path(post))
+
+
+def test_an_audio_link_that_is_not_http_is_the_forms_ordinary_error(env):
+    response = submit(env, env.mod, env.cast, 'audio', audio_url='ftp://example.com/e.mp3')
+    assert response.status_code == 200
+    assert b'Submitted links need to start with' in response.data
+    assert Post.query.count() == 0
