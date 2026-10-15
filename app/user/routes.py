@@ -2682,7 +2682,7 @@ def user_follow_request_accept(user_id):
                                  "object": current_user.public_url(), "type": "Follow", "id": f'{current_app.config["SERVER_URL"]}/activities/follow/{gibberish(32)}'},
                       "type": "Accept",
                       "id": f"{current_app.config['SERVER_URL']}/activities/accept/" + gibberish(32)}
-            send_post_request(remote_user.ap_inbox_url, accept, current_user.private_key,
+            send_post_request(remote_user.follow_answer_inbox(), accept, current_user.private_key,
                               f"{current_user.public_url()}#main-key")
     return 'Done'
 
@@ -2716,7 +2716,7 @@ def user_follow_request_reject(user_id):
                                  "id": f'{current_app.config["SERVER_URL"]}/activities/follow/{gibberish(32)}'},
                       "type": "Reject",
                       "id": f"{current_app.config['SERVER_URL']}/activities/reject/" + gibberish(32)}
-            send_post_request(remote_user.ap_inbox_url, accept, current_user.private_key,
+            send_post_request(remote_user.follow_answer_inbox(), accept, current_user.private_key,
                               f"{current_user.public_url()}#main-key")
     return 'Done'
 

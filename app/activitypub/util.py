@@ -1158,6 +1158,15 @@ def delivery_inbox_of(actor_json: dict, actor_id: str) -> str | None:
     return None
 
 
+def own_inbox_of(actor_json: dict) -> str | None:
+    """The actor's own `inbox`, where the Accept or Reject of its Follow goes (spec 2026-10-14 §10 A12): a non-empty
+    string that fits the column, else None. Its host is not checked here: actor_json_to_model refuses an actor whose
+    inbox is on another host (off_host_inbox), and a refresh stores it only when delivery_inbox_of found no inbox
+    off the actor's host."""
+    inbox = actor_json.get('inbox')
+    return inbox if isinstance(inbox, str) and inbox and len(inbox) <= INBOX_URL_MAX else None
+
+
 def names_actor(candidate, actor) -> bool:
     """Whether `candidate`, an id taken from a peer's document, names `actor`.
 
@@ -1367,6 +1376,8 @@ def refresh_user_profile_task(user_id, activity_json=None):
                     refreshed_inbox = delivery_inbox_of(activity_json, user.ap_profile_id)   # interop C1 item 2: absent or off-host keeps the old one
                     if refreshed_inbox:
                         user.ap_inbox_url = refreshed_inbox
+                        # an actor stored before ap_own_inbox_url existed gets it here, on its next refresh (A12)
+                        user.ap_own_inbox_url = own_inbox_of(activity_json) or user.ap_own_inbox_url
                     user.accept_private_messages = activity_json['acceptPrivateMessages'] if 'acceptPrivateMessages' in activity_json else 3
                     user.indexable = new_indexable
 
@@ -2177,6 +2188,7 @@ def actor_json_to_model(activity_json, address, server):
                     ap_public_url=activity_json['id'],
                     ap_profile_id=activity_json['id'].lower(),
                     ap_inbox_url=shared_inbox_of(activity_json) or activity_json.get('inbox') or '',
+                    ap_own_inbox_url=own_inbox_of(activity_json),
                     ap_followers_url=activity_json['followers'] if 'followers' in activity_json else None,
                     ap_preferred_username=actor_name,
                     ap_manually_approves_followers=activity_json['manuallyApprovesFollowers'] if 'manuallyApprovesFollowers' in activity_json else False,

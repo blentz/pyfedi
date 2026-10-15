@@ -1793,7 +1793,8 @@ class User(UserMixin, db.Model):
     ap_preferred_username = db.Column(db.String(255))
     ap_manually_approves_followers = db.Column(db.Boolean, default=False)
     ap_deleted_at = db.Column(db.DateTime)
-    ap_inbox_url = db.Column(db.String(255))
+    ap_inbox_url = db.Column(db.String(255))                 # where activities are delivered: the shared inbox if any
+    ap_own_inbox_url = db.Column(db.String(255))             # the actor's own `inbox`, where a Follow is answered
     ap_domain = db.Column(db.String(255))
 
     search_vector = db.Column(TSVectorType('user_name', 'about', 'keywords', auto_index=False))
@@ -2189,6 +2190,12 @@ class User(UserMixin, db.Model):
 
     def public_url(self):
         return self.ap_public_url if self.ap_public_url else f"{current_app.config['SERVER_URL']}/u/{self.user_name}"
+
+    def follow_answer_inbox(self):
+        """Where the Accept or Reject of this remote user's Follow goes: their own `inbox` (spec 2026-10-14 §10 A12).
+        PeerTube ignores one at its shared inbox. An actor stored before the own inbox was is answered at
+        `ap_inbox_url` until its next refresh stores it."""
+        return self.ap_own_inbox_url or self.ap_inbox_url
 
     def created_recently(self):
         return self.created and self.created > utcnow() - timedelta(days=7)
