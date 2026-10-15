@@ -1,0 +1,95 @@
+# Interop harness (spec 2026-10-14 §8.1): PieFed built from this tree, and Mastodon, behind Caddy with an internal
+# CA on *.test names. Run via interop/run.sh, never by hand. Nothing here is published to the host network.
+x-trust: &trust
+  volumes:
+    - caddy-data:/caddy-data:ro
+    - ./interop/trust_ca.sh:/trust_ca.sh:ro
+  env_file: ./interop/.env.interop
+  networks: [interop]
+
+services:
+  caddy:
+    image: docker.io/library/caddy:2.10@sha256:d8c17a862962def15cde69863a3a463f25a2664942eafd7bdbf050e9c3116b83
+    # Caddy writes its CA dir 0700/0600 root, but the app containers run as non-root users. Publish a world-readable
+    # copy of the public root certificate (never the keys) at /data/harness-root.crt for trust_ca.sh.
+    entrypoint: ["sh", "-c", "caddy run --config /etc/caddy/Caddyfile --adapter caddyfile & pid=$$!; trap 'kill $$pid' TERM INT; r=/data/caddy/pki/authorities/local/root.crt; until [ -s $$r ]; do sleep 0.5; done; cp $$r /data/harness-root.crt.tmp; chmod 644 /data/harness-root.crt.tmp; chmod 755 /data; mv /data/harness-root.crt.tmp /data/harness-root.crt; wait $$pid"]
+    volumes:
+      - ./interop/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    networks:
+      interop:
+        aliases: [piefed.test, mastodon.test]
+
+  piefed-db:
+    image: docker.io/library/postgres:17.11@sha256:3cec7eb015ba8adb28139fa5c83b8489cdf0e666e53dfdf20f598ae0cc8739e3
+    environment: {POSTGRES_USER: piefed, POSTGRES_PASSWORD: piefed, POSTGRES_DB: piefed}
+    tmpfs: [/var/lib/postgresql/data]
+    networks: [interop]
+
+  piefed-redis:
+    image: docker.io/library/redis:8.10@sha256:6e9101032a2126aeeb4b1e862ac77d2fcf26b831ae37e5ff2e69169f82ddd411
+    networks: [interop]
+
+  piefed-web:
+    <<: *trust
+    environment:
+      DATABASE_URL: postgresql+psycopg2://piefed:piefed@piefed-db/piefed   # not in .env.interop: Mastodon reads DATABASE_URL too
+    build: {context: ., target: runtime}
+    image: localhost/piefed-interop:latest
+    entrypoint: ["/trust_ca.sh", "/usr/bin/tini", "--", "/app/entrypoint.sh"]
+    depends_on: [caddy, piefed-db, piefed-redis]
+
+  piefed-celery:
+    <<: *trust
+    environment:
+      DATABASE_URL: postgresql+psycopg2://piefed:piefed@piefed-db/piefed   # not in .env.interop: Mastodon reads DATABASE_URL too
+    image: localhost/piefed-interop:latest
+    entrypoint: ["/trust_ca.sh", "/app/entrypoint_celery.sh"]
+    depends_on: [piefed-web]
+
+  mastodon-db:
+    image: docker.io/library/postgres:17.11@sha256:3cec7eb015ba8adb28139fa5c83b8489cdf0e666e53dfdf20f598ae0cc8739e3
+    environment: {POSTGRES_USER: mastodon, POSTGRES_PASSWORD: mastodon, POSTGRES_DB: mastodon}
+    tmpfs: [/var/lib/postgresql/data]
+    networks: [interop]
+
+  mastodon-redis:
+    image: docker.io/library/redis:8.10@sha256:6e9101032a2126aeeb4b1e862ac77d2fcf26b831ae37e5ff2e69169f82ddd411
+    networks: [interop]
+
+  mastodon-web:
+    <<: *trust
+    image: ghcr.io/mastodon/mastodon:v4.5@sha256:c64a30678a0e6591d7dbcb0924b4aa98eb1fe54ced5b8fe558449d00915bdb42
+    entrypoint: ["/trust_ca.sh"]
+    command: ["bash", "-c", "bundle exec rails db:prepare && exec bundle exec puma -C config/puma.rb"]
+    depends_on: [caddy, mastodon-db, mastodon-redis]
+
+  mastodon-sidekiq:
+    <<: *trust
+    image: ghcr.io/mastodon/mastodon:v4.5@sha256:c64a30678a0e6591d7dbcb0924b4aa98eb1fe54ced5b8fe558449d00915bdb42
+    entrypoint: ["/trust_ca.sh"]
+    command: ["bundle", "exec", "sidekiq"]
+    depends_on: [mastodon-web]
+
+  interop-runner:
+    <<: *trust
+    environment:
+      DATABASE_URL: postgresql+psycopg2://piefed:piefed@piefed-db/piefed   # not in .env.interop: Mastodon reads DATABASE_URL too
+    build: {context: ., target: test}
+    image: localhost/piefed-interop-runner:latest
+    entrypoint: ["/trust_ca.sh"]
+    working_dir: /app
+    volumes:
+      - caddy-data:/caddy-data:ro
+      - ./interop/trust_ca.sh:/trust_ca.sh:ro
+      - ./interop:/app/interop:ro
+    profiles: [runner]
+
+volumes:
+  caddy-data:
+
+networks:
+  interop:
+    ipam:
+      config:
+        - subnet: 10.90.0.0/16
