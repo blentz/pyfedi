@@ -328,7 +328,19 @@ def test_hashtag_glued_to_a_word_is_ignored(db_session):
 
 def test_hashtag_after_punctuation_counts(db_session):
     note = microblog_note(_local(title='Hi', body='b', body_html='<p>(#one) "#two", #_no #3</p>'), [])
-    assert [t['name'] for t in _hashtags(note)] == ['#one', '#two', '#3']
+    assert [t['name'] for t in _hashtags(note)] == ['#one', '#two']
+
+
+def test_an_all_digit_hashtag_is_not_a_hashtag(db_session):
+    note = microblog_note(_local(title='Hi', body='b', body_html='<p>#1 and #2024</p>'), [])
+    assert _hashtags(note) == []
+    assert note['content'] == '<p>Hi</p><p>#1 and #2024</p>'
+
+
+def test_a_hashtag_with_a_letter_among_digits_is_one(db_session):
+    note = microblog_note(_local(title='Hi', body='b', body_html='<p>#2024cats #café</p>'), [])
+    assert [t['name'] for t in _hashtags(note)] == ['#2024cats', '#café']
+    assert _hashtag_link('2024cats') in note['content'] and _hashtag_link('café') in note['content']
 
 
 def test_hashtags_differing_in_case_are_one_tag_and_both_linked(db_session):
