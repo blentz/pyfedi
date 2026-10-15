@@ -581,6 +581,14 @@ Anonymous visitors get 403 for remote videos of a host the instance does not fol
 (`server/core/middlewares/validators/videos/videos.ts:298-305`); this is PeerTube's default and applies to any
 remote video.
 
+Production check (2026-10-15): `https://hell.cloud/static/media/posts/...` is served by gunicorn behind Caddy
+(`server: gunicorn`, `via: 1.1 Caddy`), not by S3 or a Caddy file server. It answers with
+`access-control-allow-origin: *` and `accept-ranges: bytes`, and a `Range` request gets 206. In Chromium
+(Playwright MCP) on `https://example.com`, a `mode: 'cors'` fetch with `Range: bytes=0-1023` returned 206 and
+1024 bytes, and an image loaded with `crossOrigin = 'anonymous'` drew to a canvas that stayed readable. The
+header comes from the global `after_request` hook (`app/request_hooks.py:149`), so it covers every Flask-served
+media type, including video. hell.cloud has no local video yet, so a video file was not loaded.
+
 ### 11.4 Inbound
 
 A real PieFed post served a `Video` at its own id. The PeerTube user then acted on it.
