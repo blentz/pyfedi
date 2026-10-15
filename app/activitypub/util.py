@@ -5684,6 +5684,20 @@ def announcer_is_followed(user_id: int) -> bool:
         UserFollower.is_accepted.isnot(False)).first() is not None
 
 
+def announcer_follows_author(user_id: int, post: Union[Post, None]) -> bool:
+    """True when `user_id` is an accepted follower of the local author of `post`.
+
+    A boost of a local post by someone who follows its author is what a Mastodon follower's boost looks like: the
+    announcer follows us, and no local user follows the announcer, so announcer_is_followed does not apply.
+    Only an accepted follow counts, and it can only exist for a local author (UserFollower.is_inward).
+    """
+    return post is not None and db.session.query(UserFollower.id).filter(
+        UserFollower.local_user_id == post.user_id,
+        UserFollower.remote_user_id == user_id,
+        UserFollower.is_inward == True,
+        UserFollower.is_accepted == True).first() is not None
+
+
 def record_boost(post: Post, user: User) -> None:
     """Record that `user` boosted `post`, idempotently, and refresh the cache.
 
@@ -5815,13 +5829,14 @@ def process_microblog_announce(request_json, id, store_ap_json) -> Union[Post, N
     if announcer.banned:
         log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, f'{announcer.ap_id} is banned')
         return None
-    if not announcer_is_followed(announcer.id):
+    # Local posts carry a full ap_id from Post.generate_ap_id(), so this resolves
+    # both already-ingested remote posts and posts authored on this instance.
+    # A database lookup, so it may sit above the trust gate's refusal.
+    post = Post.get_by_ap_id(uri)
+    if not announcer_is_followed(announcer.id) and not announcer_follows_author(announcer.id, post):
         log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, 'Announce from unfollowed actor')
         return None
 
-    # Local posts carry a full ap_id from Post.generate_ap_id(), so this resolves
-    # both already-ingested remote posts and posts authored on this instance.
-    post = Post.get_by_ap_id(uri)
     if post:
         # Local ap_ids are guessable (https://<server>/post/<id>), so any remote
         # actor a single local user follows could otherwise Announce an arbitrary

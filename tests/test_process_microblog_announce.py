@@ -347,3 +347,77 @@ def test_rejection_reasons_are_all_distinct(db_session, fetch_spy, followed_boos
 
     reasons = [message for (_aplog_type, _aplog_result, message) in log_spy]
     assert len(reasons) == len(set(reasons)), f'duplicate reason strings logged: {reasons}'
+
+
+# --------------------------------------------------------------------------
+# A follower of a local author boosting that author's post (interop: Mastodon follower boosts a microblog)
+# --------------------------------------------------------------------------
+
+
+def _local_microblogger_and_follower(is_accepted=True):
+    """A local author with a post, and a remote account that follows that author and that no local user follows.
+    This is what a Mastodon user who follows a PieFed account looks like when they boost its post."""
+    booster_instance = make_instance('mastodon.example')   # first, so a local user's instance_id=1 resolves
+    author = make_user(None, 'alice', local=True)
+    booster = make_user(booster_instance, 'bob')
+    make_follow(author, booster, is_accepted=is_accepted, is_inward=True)
+    post = make_post(make_community(), author, 'https://piefed.example/post/1')
+    return author, booster, post
+
+
+def test_a_follower_of_the_local_author_boosts_that_authors_post(db_session, fetch_spy):
+    """Spec 2026-10-14 §6.4: an Announce of our object counts as a boost. The announcer follows the author, not the
+    other way round, so announcer_is_followed does not open the gate; following the author does."""
+    from app.activitypub.util import process_microblog_announce
+    from app.models import PostBoost
+    _, calls = fetch_spy
+    _, booster, post = _local_microblogger_and_follower()
+
+    result = process_microblog_announce(announce(booster.ap_public_url, post.ap_id), 'f1', False)
+
+    assert result is not None and result.id == post.id
+    assert calls == [], 'a post we hold must not be fetched'
+    assert PostBoost.query.filter_by(post_id=post.id, user_id=booster.id).count() == 1
+
+
+def test_a_follower_of_one_local_author_cannot_boost_another_authors_post(db_session, fetch_spy, log_spy):
+    from app.activitypub.util import process_microblog_announce
+    from app.models import PostBoost
+    _, calls = fetch_spy
+    _, booster, _ = _local_microblogger_and_follower()
+    other = make_user(None, 'carol', local=True)
+    others_post = make_post(make_community('other-club'), other, 'https://piefed.example/post/2')
+
+    result = process_microblog_announce(announce(booster.ap_public_url, others_post.ap_id), 'f2', False)
+
+    assert result is None
+    assert calls == []
+    assert PostBoost.query.filter_by(post_id=others_post.id).count() == 0
+    assert log_spy[-1][2] == 'Announce from unfollowed actor'
+
+
+def test_a_follow_the_author_has_not_accepted_does_not_open_the_gate(db_session, fetch_spy, log_spy):
+    from app.activitypub.util import process_microblog_announce
+    from app.models import PostBoost
+    _, booster, post = _local_microblogger_and_follower(is_accepted=None)
+
+    result = process_microblog_announce(announce(booster.ap_public_url, post.ap_id), 'f3', False)
+
+    assert result is None
+    assert PostBoost.query.filter_by(post_id=post.id).count() == 0
+    assert log_spy[-1][2] == 'Announce from unfollowed actor'
+
+
+def test_a_follower_of_the_local_author_still_cannot_boost_into_a_private_community(db_session, fetch_spy, log_spy):
+    from app import db
+    from app.activitypub.util import process_microblog_announce
+    from app.models import PostBoost
+    _, booster, post = _local_microblogger_and_follower()
+    post.community.private = True
+    db.session.commit()
+
+    result = process_microblog_announce(announce(booster.ap_public_url, post.ap_id), 'f4', False)
+
+    assert result is None
+    assert PostBoost.query.filter_by(post_id=post.id).count() == 0
+    assert log_spy[-1][2] == 'Boosted post belongs to a private or local_only community'
