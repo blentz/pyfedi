@@ -20,6 +20,10 @@ POST_STATUS_SCHEDULED = -2
 POST_STATUS_DRAFT = -1
 POST_STATUS_REVIEWING = 0
 POST_STATUS_PUBLISHED = 1
+POST_STATUS_PROCESSING = -3   # uploaded video/audio awaiting ffprobe/ffmpeg
+
+MEDIA_KIND_VIDEO = 'video'
+MEDIA_KIND_AUDIO = 'audio'
 
 # ActivityPub audience of a Post or PostReply, classified at ingest by
 # app.activitypub.util.activitypub_visibility and enforced by app/visibility.py.
