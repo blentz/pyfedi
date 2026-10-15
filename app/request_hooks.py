@@ -9,6 +9,7 @@ from flask_wtf.csrf import generate_csrf
 from app import db
 from app.activitypub.entitlement import secure_mode_cache_headers, signed_fetch_refusal
 from app.community.live import post_community_link
+from app.community.util import actor_to_community
 import pendulum
 from flask import before_render_template, session, g, json, request, current_app
 from sqlalchemy import text
@@ -107,12 +108,24 @@ def register_request_hooks(app):
     def cap_media_upload():
         """A13.2: a media upload is refused at its kind's limit, before the body is read past it. Werkzeug answers
         413 for a larger Content-Length and stops a chunked or lying body at the cap. Registered first, so nothing
-        has read the stream under the global MAX_CONTENT_LENGTH yet."""
+        has read the stream under the global MAX_CONTENT_LENGTH yet.
+
+        The cap is raised above the global limit only for a user who may upload media to the community the URL
+        names; everyone else keeps the global limit (or the kind's, if that is lower). An unknown community keeps
+        the global cap: add_post answers it with a 404."""
         if request.method != 'POST' or request.endpoint != 'community.add_post':
             return
         kind = request.view_args.get('type')
-        if kind in (MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO):
-            request.max_content_length = upload_byte_limit(kind) + MEDIA_UPLOAD_SLACK
+        if kind not in (MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO):
+            return
+        community = actor_to_community(request.view_args['actor'])
+        if community is None:
+            return
+        limit = upload_byte_limit(kind) + MEDIA_UPLOAD_SLACK
+        if not (current_user.is_authenticated and kind == media_kind_for(community)
+                and can_upload_media(current_user, community)):
+            limit = min(current_app.config['MAX_CONTENT_LENGTH'], limit)
+        request.max_content_length = limit
 
     @app.before_request
     def before_request():
