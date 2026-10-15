@@ -1,0 +1,53 @@
+{
+    "@context": [
+        "https://www.w3.org/ns/activitystreams",
+        "https://w3id.org/security/v1",
+        {
+            "RsaSignature2017": "https://w3id.org/security#RsaSignature2017"
+        },
+        {
+            "pt": "https://joinpeertube.org/ns#",
+            "replyApproval": "pt:replyApproval",
+            "sc": "http://schema.org/"
+        }
+    ],
+    "actor": "https://peertube.test/accounts/carol",
+    "cc": [
+        "https://peertube.test/accounts/carol/followers",
+        "https://piefed.test/u/alice",
+        "https://piefed.test/c/vc2"
+    ],
+    "id": "https://peertube.test/videos/watch/fd748738-26a0-4ca8-bf5b-c3b9494a04aa/comments/1/activity",
+    "object": {
+        "attributedTo": "https://peertube.test/accounts/carol",
+        "audience": "https://piefed.test/c/vc2",
+        "cc": [
+            "https://peertube.test/accounts/carol/followers",
+            "https://piefed.test/u/alice",
+            "https://piefed.test/c/vc2"
+        ],
+        "content": "Comment from carol on PeerTube",
+        "id": "https://peertube.test/videos/watch/fd748738-26a0-4ca8-bf5b-c3b9494a04aa/comments/1",
+        "inReplyTo": "https://piefed.test/c/vc2@piefed.test/p/1/real-post-video",
+        "mediaType": "text/markdown",
+        "published": "2026-10-15T14:09:37.740Z",
+        "replyApproval": null,
+        "tag": [],
+        "to": [
+            "https://www.w3.org/ns/activitystreams#Public"
+        ],
+        "type": "Note",
+        "updated": "2026-10-15T14:09:37.742Z",
+        "url": "https://peertube.test/videos/watch/fd748738-26a0-4ca8-bf5b-c3b9494a04aa/comments/1"
+    },
+    "signature": {
+        "created": "2026-10-15T14:09:37.777Z",
+        "creator": "https://peertube.test/accounts/carol",
+        "signatureValue": "CqRs3iv8l7Zplc+dcmI0E6LR2Wx4ZlZ8vk745Db+n9QIsl5zNINjh1JCPKvmUgCUFbdpGjS+PRWGE6Ec3AlzykINYyM8z8WUgfexEVa4sGf6DGIRJ1Vrci6EPgZbH48DtwGGcuaFiiWQWtgTbOxwSbimjIMC659JmEWMb8qIm1wZ+k2/NRWHraSKewb1P7xcMNaDp6R+9TwJGJfRKZBA2iFd1J52XZ2ow5cHSVoYwgNtaH/5LI8BATdXITl7DQlmbJgROEL6P5r9Jn363V2Z09OmliQLTAnWcQt/SArp0PL+wlg+/YuuGJY80CnN1cftOhrJdUKNL9obiTsZpLbknA==",
+        "type": "RsaSignature2017"
+    },
+    "to": [
+        "https://www.w3.org/ns/activitystreams#Public"
+    ],
+    "type": "Create"
+}

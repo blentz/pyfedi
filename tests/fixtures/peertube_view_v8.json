@@ -1,0 +1,37 @@
+{
+    "@context": [
+        "https://www.w3.org/ns/activitystreams",
+        "https://w3id.org/security/v1",
+        {
+            "RsaSignature2017": "https://w3id.org/security#RsaSignature2017"
+        },
+        {
+            "InteractionCounter": "sc:InteractionCounter",
+            "WatchAction": "sc:WatchAction",
+            "interactionType": "sc:interactionType",
+            "pt": "https://joinpeertube.org/ns#",
+            "sc": "http://schema.org/",
+            "userInteractionCount": "sc:userInteractionCount"
+        }
+    ],
+    "actor": "https://peertube.test/accounts/peertube",
+    "cc": [],
+    "expires": "2026-10-15T14:11:53.827Z",
+    "id": "https://peertube.test/accounts/peertube/views/videos/32/50d540dcd786a3592c5378193f8d296e0f916f45cda1fe3a5b1d2cfd5ab59827-fd748738-26a0-4ca8-bf5b-c3b9494a04aa",
+    "object": "https://piefed.test/c/vc2@piefed.test/p/1/real-post-video",
+    "result": {
+        "interactionType": "WatchAction",
+        "type": "InteractionCounter",
+        "userInteractionCount": 1
+    },
+    "signature": {
+        "created": "2026-10-15T14:09:53.829Z",
+        "creator": "https://peertube.test/accounts/peertube",
+        "signatureValue": "HxYi1XyGHHYcmC3Axgb+DESoSTQxAjL46LeUYbotmo1YY+0toDoPRBVXOh5SUGzXER8e1h7Bt6dAJwbkCW2vSBp26/qg+zgA7mL2+hZy4pbIN4Uo+Wqzz15QHQ9KcOvnYshnxvrIyx+s5eL7cDsu6NwctgSOh5hO+rkgBIQ6ug8HzH/Pfs1VqaPpxgivHueSr+G+XK7QJPf1IvIAspppx9Gt0hP1+wzvRzF1748jQ8O/KnLBQ5zutfI0cG/QAGyUyzeU7KYIE3g9CC49F/mOvgxzXGdjZAeDg5KM8htn3wq/rGRA3UEJROa/v1x6kVP8vP+vO1tbFv4lZTxzGm/YOw==",
+        "type": "RsaSignature2017"
+    },
+    "to": [
+        "https://piefed.test/u/alice"
+    ],
+    "type": "View"
+}

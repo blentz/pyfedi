@@ -1,0 +1,23 @@
+{
+    "@context": [
+        "https://www.w3.org/ns/activitystreams",
+        "https://w3id.org/security/v1",
+        {
+            "RsaSignature2017": "https://w3id.org/security#RsaSignature2017"
+        }
+    ],
+    "actor": "https://peertube.test/accounts/carol",
+    "cc": [],
+    "id": "https://peertube.test/accounts/carol/dislikes/32",
+    "object": "https://piefed.test/c/vc2@piefed.test/p/1/real-post-video",
+    "signature": {
+        "created": "2026-10-15T14:09:45.806Z",
+        "creator": "https://peertube.test/accounts/carol",
+        "signatureValue": "PO7IXr2pmsqYmI7T1//YmhAT5Ix3SEGgqYtBg5asF7Y4MiyHDgrvpPMm9BHJWaEhuU5kBeuZdZL3ZXqlKeTRLcJN7BKTzMGlsxNNIg9j2U8kiRGF1qLuZ1iCEirtRu5fpJVJHRK6Yfb3zkAg0htZLzl3CxdfGVccmceklPdNuW7upZvCa3+1+G5IjIggbJxaMaBg15Hcw/JRCqXsaD2niHBshL8+w3QqhRKeV0D2asfGCMynsyqNIO1KNiFRcDafqJsGnDrkPgoX+3gQoMKoiyJ+rXnJ7tbKmY/2lMH1CUOiLkSGSTehgvxSNHuixRCKgf35BaBHXBM+DAL5Ld2Ghg==",
+        "type": "RsaSignature2017"
+    },
+    "to": [
+        "https://piefed.test/u/alice"
+    ],
+    "type": "Dislike"
+}
