@@ -15,7 +15,8 @@ from sqlalchemy import text, Integer
 from sqlalchemy.orm.exc import NoResultFound
 
 from app import db, cache, plugins, limiter
-from app.activitypub.util import make_image_sizes, notify_about_post, host_of
+from app.activitypub.serializers.microblog import link_hashtags
+from app.activitypub.util import find_hashtag_or_create, make_image_sizes, notify_about_post, host_of
 from app.community.util import tags_from_string_old, end_poll_date, flair_from_form, flairs_from_string
 from app.constants import *
 from app.models import File, Notification, NotificationSubscription, Poll, PollChoice, PollChoiceVote, Post, \
@@ -217,6 +218,17 @@ def requested_visibility(input, src, community) -> str:
     if visibility == VISIBILITY_FOLLOWERS and not is_local_microblogs(community):
         raise Exception('invalid visibility')
     return visibility
+
+
+def with_body_hashtags(tags: list, body_html) -> list:
+    """`tags` and then each `#word` of `body_html` that is not among them, as stored Tags (spec 2026-10-14 §10 A12).
+    The words are the ones the Note links in its content (link_hashtags), so what is linked is what is tagged."""
+    names = {tag.name for tag in tags}
+    for name in link_hashtags(body_html or '')[1]:
+        if name not in names:
+            names.add(name)
+            tags.append(find_hashtag_or_create(name))
+    return tags
 
 
 def make_post(input, community, type, src, auth=None, uploaded_file=None):
@@ -848,6 +860,8 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         db.session.commit()
 
     # add tags & flair
+    if is_local_microblogs(post.community):
+        tags = with_body_hashtags(tags, post.body_html)
     post.tags = tags
     post.flair = flair
 

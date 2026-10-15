@@ -118,11 +118,7 @@ def microblog_note(post, mentions: list) -> dict:
     server_url = current_app.config['SERVER_URL']
     addressing = note_addressing(post, mentions)
     content = note_content(post)
-    tag = post.tags_for_activitypub()
-    explicit = {entry['name'].lower() for entry in tag if entry.get('type') == 'Hashtag'}
-    for name in link_hashtags(post.body_html or '')[1]:
-        if f'#{name}' not in explicit:
-            tag.append({'type': 'Hashtag', 'href': _hashtag_href(name), 'name': f'#{name}'})
+    tag = post.tags_for_activitypub()    # body hashtags are stored in post.tags on create and edit (§10 A12)
     for mention in mentions:
         tag.append({'href': mention.public_url(), 'name': mention.mention_tag(), 'type': 'Mention'})
     note = {
