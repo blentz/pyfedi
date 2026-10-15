@@ -514,6 +514,36 @@ Each step gets its own implementation plan and its own commits, and each ends wi
       `delivery_inbox_of`. Its `inbox` is then stored and used. If the fetch fails, the answer goes to the shared
       inbox.
 
+- **A13 (§2, §5.1, §5.3, §5.5), step 3 media pipeline; the code survey of 2026-10-15 found those sections out of line with the code:**
+  - A3 is superseded by A12 for `Community.kind`: the column landed with step 2, not step 4.
+  1. **Processing state.** A post whose media is processing has `Post.status = POST_STATUS_PROCESSING` (new constant, -3), as well as `extensions.media.status = 'processing'`.
+     - Every existing unpublished-post gate then applies unchanged:
+       - Listings and feeds filter `status > POST_STATUS_REVIEWING`.
+       - `refuse_unpublished_post` (`app/post/routes.py`) shows the post only to its author, the community's moderators and admins/staff, and returns 404 to everyone else.
+       - The AP route refuses it with 403, the existing answer for unpublished posts, not the 404 that §5.3 said.
+     - A processing post is not listed anywhere, not even for its author. After upload the author is redirected to the post page, which shows a "processing" notice.
+  2. **Size limit.** The limit is enforced per request. A `before_request` hook sets `request.max_content_length = limit + 1 MiB` on the two upload endpoints.
+     - Werkzeug refuses a larger `Content-Length` with 413 before reading anything, and stops a lying or chunked body at the cap.
+     - After parsing, the file's exact size is checked against the limit.
+     - The global `MAX_CONTENT_LENGTH` (env, default 100 MB) is unchanged; §2's "no `MAX_CONTENT_LENGTH`" was wrong.
+  3. **Sandbox mechanism.** A `preexec_fn` calls `resource.setrlimit(RLIMIT_AS, 512 MiB)`. No `prlimit` binary is used, which avoids an extra dependency with the same effect.
+  4. **File storage.**
+     - The media file is stored at `Post.url`, under `app/static/media/posts/xx/yy/<gibberish15>.<ext>`, with no `File` row.
+     - The thumbnail is an ordinary `File` that is also `post.image`, so listings show it and the existing image delete paths remove it. `extensions.media.thumbnail_file_id` equals `post.image_id`.
+  5. **Post types.** A video upload is `POST_TYPE_VIDEO`. An audio upload is `POST_TYPE_LINK` with `extensions.media_type = 'audio'`, the same shape inbound `Audio` objects already get.
+  6. **Who may upload.**
+     - Video: moderators of a `video_channel` community whom `allow_video_file_uploads` admits. Audio: moderators of a `podcast` community whom `allow_audio_file_uploads` admits.
+     - Video uploads in other communities end. Video links are unaffected.
+     - No form sets `Community.kind` before step 4, so step 3 must not be deployed without step 4.
+  7. **Edits.** Editing a media post cannot replace its file; the edit form shows no upload field for it. A post with a schedule becomes `POST_STATUS_SCHEDULED` instead of published when its media is ready.
+  8. **Deletion** (corrects §5.5).
+     - Soft delete keeps files, as for every post today.
+     - Purge (`Post.delete_dependencies`) removes the media file locally or in S3, plus the thumbnail through `post.image`.
+     - The old purge path removed only a video stored on S3. Local and audio media are new.
+  9. **Failure.** `probe_media` runs on the `background` celery queue. A failure sets `extensions.media.status = 'failed'` with an `error`, leaves the post unpublished, and notifies the author with a `Notification` of `notif_type=NOTIF_DEFAULT`, `subtype='media_failed'`.
+  10. **Container image.** `ffmpeg` goes into the Dockerfile `builder` stage, which `test` inherits, and the `runtime` stage. It is also added to `INSTALL.md`.
+      - `deploy/DEPLOY_GUIDE.md` and `INSTALL.md` document the matching reverse-proxy body limit: Caddy `request_body { max_size 510MB }`; nginx `client_max_body_size 510M`.
+
 ## 11. Evidence: PeerTube spike (2026-10-15)
 
 PeerTube `docker.io/chocobozzz/peertube:v8.3.1-trixie@sha256:1f161d08b113d77410b8051f764d16a05267692f3b0a3a7b2f0cf887f80ed082`
