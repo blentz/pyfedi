@@ -5896,6 +5896,9 @@ def process_microblog_announce(request_json, id, store_ap_json) -> Union[Post, N
     if not isinstance(resolved, Post):
         log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, 'Boosted object did not resolve to a post')
         return None
+    if not is_open(resolved):   # stored with the visibility its audience gives, which may be followers-only (A12)
+        log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, 'Boosted post is not public')
+        return None
 
     record_boost(resolved, announcer)
     return resolved
