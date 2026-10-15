@@ -220,12 +220,16 @@ def requested_visibility(input, src, community) -> str:
     return visibility
 
 
+# Tag.name and Tag.display_as are String(256): a longer body #word is linked in the Note but not stored as a tag.
+TAG_NAME_MAX = 256
+
+
 def with_body_hashtags(tags: list, body_html) -> list:
     """`tags` and then each `#word` of `body_html` that is not among them, as stored Tags (spec 2026-10-14 §10 A12).
     The words are the ones the Note links in its content (link_hashtags), so what is linked is what is tagged."""
     names = {tag.name for tag in tags}
     for name in link_hashtags(body_html or '')[1]:
-        if name not in names:
+        if name not in names and len(name) <= TAG_NAME_MAX:
             names.add(name)
             tags.append(find_hashtag_or_create(name))
     return tags
