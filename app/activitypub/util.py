@@ -5849,6 +5849,11 @@ def process_microblog_announce(request_json, id, store_ap_json) -> Union[Post, N
             log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json,
                             'Boosted post belongs to a private or local_only community')
             return None
+        # A block outlives the follow it was made after: the accepted UserFollower row is still there
+        if post.author.has_blocked_user(announcer.id) or post.author.has_blocked_instance(announcer.instance_id):
+            log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json,
+                            'Boosted post author has blocked the announcer or its instance')
+            return None
         record_boost(post, announcer)
         return post
 
